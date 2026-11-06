@@ -328,6 +328,9 @@ export async function whileSaving<T>(key: string, fn: () => Promise<T>): Promise
     release();
   }
 }
+/* Test-only: forget every hold, so a test's release is observed on its own
+   rather than through a key an earlier test left behind. */
+export const resetSavingKeysForTests = (): void => savingKeys.clear();
 const savesOf = (key: string): { active: number; begun: number } => ({ ...(savingKeys.get(key) ?? { active: 0, begun: 0 }) });
 
 /* P11-5 — the render was discarded because the row's voice changed under it. */

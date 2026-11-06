@@ -107,6 +107,7 @@ let workspaceRoot: string;
 let audioDir: string;
 let app: Express;
 let previewVoiceIdFor: typeof import('./qwen-voice.js').previewVoiceIdFor;
+let resetSavingKeysForTests: typeof import('./qwen-voice.js').resetSavingKeysForTests;
 let withBookOp: typeof import('../workspace/book-op-lock.js').withBookOp;
 let moveBookFolder: typeof import('../workspace/book-op-lock.js').moveBookFolder;
 const ids = {} as Record<Title, string>;
@@ -207,7 +208,9 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', fetchMock);
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
   ({ previewVoiceIdFor } = await import('./qwen-voice.js'));
+  ({ resetSavingKeysForTests } = await import('./qwen-voice.js'));
   const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
+  const { castDesignRouter } = await import('./cast-design.js');
   const { makeBookId } = await import('../workspace/paths.js');
   ({ withBookOp, moveBookFolder } = await import('../workspace/book-op-lock.js'));
   for (const t of TITLES) ids[t] = makeBookId(AUTHOR, SERIES, t);
@@ -215,9 +218,11 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/books', castDeclineVoiceLinkRouter);
+  app.use('/api/books', castDesignRouter);
 });
 
 beforeEach(() => {
+  resetSavingKeysForTests();
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -511,6 +516,48 @@ describe('#4026 — the teardown\'s before/during/after check against a design i
     expect((await deleting).status).toBe(200);
     expect(yAngry()).toBe('qwen-narrator__angry');
     expect(existsSync(pt('qwen-narrator__angry')), 'deleted a file Y names').toBe(true);
+  });
+});
+
+describe('#4026 — the bulk job (Design full cast → Emotion variants) holds its landed variant', () => {
+  const bulk = () =>
+    request(app)
+      .post(`/api/books/${ids['Book One']}/cast/design`)
+      .send({ modelKey: QWEN_KEY, scope: 'variants', characterIds: [], variantTasks: [{ characterId: 'wren', emotions: ['angry'] }] });
+  /* One has no angry slot, Two names it: the bulk job designs One's. */
+  const seedBulk = () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_bulk', overrideTtsVoices: { qwen: { name: 'qwen-u_bulk' } } }]);
+    writeBook('Book Two', [designedOn('u_bulk', { angry: { name: 'qwen-u_bulk__angry' } })]);
+    writeFileSync(pt('qwen-u_bulk'), Buffer.from('BASE'));
+    writeFileSync(pt('qwen-u_bulk__angry'), ANGRY);
+  };
+
+  it('a DELETE between the job\'s landing and its slot write keeps the file (the landing is held)', async () => {
+    seedBulk();
+    walkGate.armed = true;
+    const walk = gate(walkGate);
+    const job = bulk().then((r) => r);
+    await walk.entered; // landed, slot not written
+    const landed = readFileSync(pt('qwen-u_bulk__angry'));
+    expect(landed.equals(ANGRY)).toBe(false);
+    expect((await del('Book Two')).status).toBe(200);
+    walk.release();
+    const done = await job;
+    expect(done.status, done.text).toBe(200);
+    expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_bulk__angry');
+    expect(readFileSync(pt('qwen-u_bulk__angry')).equals(landed), 'the just-designed variant file was deleted').toBe(true);
+  });
+
+  it('the hold is released when the job writes the slot: the next sole-owner DELETE deletes the file', async () => {
+    seedBulk();
+    const done = await bulk();
+    expect(done.status, done.text).toBe(200);
+    expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_bulk__angry');
+    expect((await del('Book Two')).status).toBe(200); // One still names it
+    expect(existsSync(pt('qwen-u_bulk__angry'))).toBe(true);
+    expect((await del('Book One')).status).toBe(200); // the last holder
+    expect(existsSync(pt('qwen-u_bulk__angry')), 'hold leaked: the file outlived its last holder').toBe(false);
   });
 });
 
