@@ -39,6 +39,28 @@ vi.mock('../gpu/gpu-load.js', () => ({
 }));
 vi.mock('../gpu/sidecar-vram-sample.js', () => ({ maybeSampleSidecarEngine: async () => {} }));
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+/* Holds persistEmotionVariant's series walk (its fresh clone re-check, the only
+   2-argument call; the route's own pre-GPU check passes 4) between a variant's
+   landing and the slot writes, so a DELETE can run in that span. */
+const walkGate = vi.hoisted(() => ({
+  armed: false,
+  entered: null as null | (() => void),
+  release: null as null | Promise<void>,
+}));
+vi.mock('./voices.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voices.js')>();
+  return {
+    ...actual,
+    hasClonedSlotAmongMatches: async (...args: Parameters<typeof actual.hasClonedSlotAmongMatches>) => {
+      if (walkGate.armed && args.length <= 2) {
+        walkGate.armed = false;
+        walkGate.entered?.();
+        await walkGate.release;
+      }
+      return actual.hasClonedSlotAmongMatches(...args);
+    },
+  };
+});
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -272,6 +294,35 @@ describe('#4026 — variant DELETE keeps a file another row still names', () => 
     writeFileSync(castPath('Book One'), JSON.stringify({ characters: [{ ...legacy, voiceUuid: 'u_one' }] }));
     expect((await del('Book Two')).status).toBe(200);
     expect(kept()).toBe(false);
+  });
+});
+
+describe('#4026 — the holder check against a linked variant design in flight', () => {
+  it("a DELETE while a linked book's design has landed but not yet written its slot keeps the file; both books render it", async () => {
+    /* Two names the angry variant, One has no angry slot (a divergence the series
+       walk's unconfirmed-cast skip can leave). One re-designs angry. */
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_shared', overrideTtsVoices: { qwen: { name: 'qwen-u_shared' } } }]);
+    writeBook('Book Two', [designedOn('u_shared')]);
+    writeFileSync(pt('qwen-u_shared'), Buffer.from('BOOK-ONE-BASE'));
+    writeFileSync(pt('qwen-u_shared__angry'), ANGRY);
+    let release!: () => void;
+    walkGate.release = new Promise<void>((r) => (release = r));
+    const entered = new Promise<void>((r) => (walkGate.entered = r));
+    walkGate.armed = true;
+    const designing = design('Book One', { emotion: 'angry' }).then((r) => r);
+    await entered; // landed (the file now holds One's new bytes); no slot written yet
+    const landed = readFileSync(pt('qwen-u_shared__angry'));
+    expect(landed.equals(ANGRY)).toBe(false);
+    const res = await del('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    release();
+    const done = await designing;
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_shared__angry');
+    expect(variantsOf('Book Two')?.angry?.name).toBe('qwen-u_shared__angry');
+    expect(existsSync(pt('qwen-u_shared__angry')), 'the just-designed variant file was deleted').toBe(true);
+    expect(readFileSync(pt('qwen-u_shared__angry')).equals(landed)).toBe(true);
   });
 });
 

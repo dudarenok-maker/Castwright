@@ -642,7 +642,7 @@ async function runDesignJob(
              applyOverrideToCastFiles/persistEmotionVariant — not escape the
              loop and halt the whole job on the first contended character
              (#3027 follow-up, N1). */
-          const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
+          const { voiceId, fellBackToDesignVoice, fallbackReason, releaseLanding } = await designQwenVoiceForCharacter({
             bookId: job.bookId,
             bookDir: job.bookDir,
             seriesFilter,
@@ -654,6 +654,8 @@ async function runDesignJob(
             language,
             emotion,
             persistSlot: !emotion,
+            /* #4026 — a variant stays "saving" until its slot is written below. */
+            holdLanding: !!emotion,
             signal: job.controller.signal,
           });
 
@@ -692,7 +694,12 @@ async function runDesignJob(
           } else {
             /* Variant path — record the slot and propagate it across the
                series (linked cast), the same scope the base voice uses. */
-            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
+            let outcome: Awaited<ReturnType<typeof persistEmotionVariant>>;
+            try {
+              outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
+            } finally {
+              releaseLanding?.();
+            }
             if (outcome === 'skippedClone') {
               job.skipped += 1;
               job.clonedSkips.push({ characterId, name: character.name ?? characterId });

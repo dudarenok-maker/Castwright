@@ -305,15 +305,27 @@ const watchTag = (bookId: string, characterId: string): string => `${bookId}|${c
    small entry per key saved by this process; never pruned, so `begun` is never
    reset under a reader. */
 const savingKeys = new Map<string, { active: number; begun: number }>();
-export async function whileSaving<T>(key: string, fn: () => Promise<T>): Promise<T> {
+/* #4026 — begin a hold on `key` and return its (idempotent) release; for a span
+   that does not nest as one callback (a landing that is released only after the
+   caller's follow-up write). */
+function holdSaving(key: string): () => void {
   const s = savingKeys.get(key) ?? { active: 0, begun: 0 };
   savingKeys.set(key, s);
   s.active++;
   s.begun++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    s.active--;
+  };
+}
+export async function whileSaving<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const release = holdSaving(key);
   try {
     return await fn();
   } finally {
-    s.active--;
+    release();
   }
 }
 const savesOf = (key: string): { active: number; begun: number } => ({ ...(savingKeys.get(key) ?? { active: 0, begun: 0 }) });
@@ -971,6 +983,12 @@ export interface DesignQwenVoiceParams {
       under its lock, so a decline right after it moves a row that has one (pass 11,
       Y1). The caller's series-wide applyOverrideToCastFiles still follows. */
   persistSlot?: boolean;
+  /** A non-preview emotion variant whose caller writes the slot afterwards
+      (persistEmotionVariant): the landed variant stays "saving" (whileSaving's
+      registry) until the result's `releaseLanding` is called, so a variant
+      DELETE's holder scan never reads the cast between the landing and the slot
+      (#4026). The caller must release it in a `finally`. */
+  holdLanding?: boolean;
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
@@ -988,6 +1006,9 @@ export interface DesignQwenVoiceResult {
   voiceUuid?: string;
   fellBackToDesignVoice?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
+  /** Present when the call asked for `holdLanding`: ends the hold. The caller
+      calls it in a `finally` once its slot writes are done. */
+  releaseLanding?: () => void;
 }
 
 /* #4028 — the staged artifact family a render writes (the sidecar's design and
@@ -1219,10 +1240,11 @@ async function landStagedDesign(
   staging: string,
   calibrationText: string,
   watcher: { key: string },
-): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
+): Promise<{ voiceId: string; url: string; voiceUuid?: string; releaseLanding?: () => void }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
   const moved = () => new RetryableForkError('This book moved while the voice was being designed; try again.');
+  let held: (() => void) | undefined;
   const mayShare = !p.emotion && !p.preview && !!p.seriesFilter;
   /* The first-design rule for a row: on an ordinary series voice (its own uuid,
      not one "Don't reuse" created), and no file at its key yet (this write creates
@@ -1242,6 +1264,11 @@ async function landStagedDesign(
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     const sharing = await firstDesignOf(row); // decided before the move creates the file
+    /* #4026 — a variant's landing stays "saving" until the caller's slot writes
+       are done (releaseLanding), so a variant DELETE's scan cannot read the cast
+       in the span between the file landing and the slot naming it. */
+    held?.();
+    if (p.holdLanding) held = holdSaving(voiceId);
     await whileSaving(voiceId, () => moveStaged(staging, voiceId)); // P11-2
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
@@ -1263,25 +1290,32 @@ async function landStagedDesign(
   );
   const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
-  if (shareIds.length) {
-    out = await withBookOps([p.bookId, ...shareIds], async (books) => {
-      const own = books.find((b) => b.bookId === p.bookId);
-      if (!own || resolve(own.bookDir) !== resolve(p.bookDir)) throw moved();
-      const others = books.filter((b) => b !== own);
-      return withCastLocks([own.bookDir, ...others.map((b) => b.bookDir)], () =>
-        land(others, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)),
-      );
-    });
+  try {
+    if (shareIds.length) {
+      out = await withBookOps([p.bookId, ...shareIds], async (books) => {
+        const own = books.find((b) => b.bookId === p.bookId);
+        if (!own || resolve(own.bookDir) !== resolve(p.bookDir)) throw moved();
+        const others = books.filter((b) => b !== own);
+        return withCastLocks([own.bookDir, ...others.map((b) => b.bookDir)], () =>
+          land(others, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)),
+        );
+      });
+    }
+    if (out === BOOK_GONE) {
+      out = await withBookOp(p.bookId, async (located) => {
+        if (resolve(located.bookDir) !== resolve(p.bookDir)) throw moved();
+        return withCastLock(p.bookDir, () => land([], (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)));
+      });
+    }
+    if (out === BOOK_GONE) throw new CharacterGoneError('Book no longer exists.');
+    await evictSidecarVoices([staging, out.voiceId]);
+    /* Handed to the caller, who releases it; any throw above releases it here. */
+    const handoff = held;
+    held = undefined;
+    return handoff ? { ...out, releaseLanding: handoff } : out;
+  } finally {
+    held?.();
   }
-  if (out === BOOK_GONE) {
-    out = await withBookOp(p.bookId, async (located) => {
-      if (resolve(located.bookDir) !== resolve(p.bookDir)) throw moved();
-      return withCastLock(p.bookDir, () => land([], (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)));
-    });
-  }
-  if (out === BOOK_GONE) throw new CharacterGoneError('Book no longer exists.');
-  await evictSidecarVoices([staging, out.voiceId]);
-  return out;
 }
 
 export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Promise<DesignQwenVoiceResult> {
@@ -1648,7 +1682,7 @@ qwenVoiceRouter.post(
        (#1057). #4028: the design lands on the row's key as it stands when the
        render finishes (designQwenVoiceForCharacter). */
     try {
-      const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+      const { voiceId, url, voiceUuid, releaseLanding } = await designQwenVoiceForCharacter({
         bookId,
         bookDir,
         seriesFilter: seriesInfo ?? undefined,
@@ -1662,38 +1696,45 @@ qwenVoiceRouter.post(
         preview: body.preview === true,
         progressToken: typeof body.progressToken === 'string' ? body.progressToken : undefined,
         progressUrl: typeof body.progressUrl === 'string' ? body.progressUrl : undefined,
+        /* fs-25 — a non-preview variant is held "saving" until its slot is
+           written below (#4026: see DesignQwenVoiceParams.holdLanding). */
+        holdLanding: !!emotion && body.preview !== true,
       });
-      /* fs-25 — record a (non-preview) emotion variant onto the character's
-         qwen slot so generation can resolve it (Wave 2) and the cast UI can show
-         the Variants badge. The base-voice design itself still persists via the
-         drawer's Save. */
-      if (emotion && body.preview !== true) {
-        /* Propagate the variant across the series (linked cast) — book-scoped
-           only for a standalone. Mirrors the base-voice series scope. */
-        const outcome = await persistEmotionVariant(
-          bookDir,
-          characterId,
-          emotion,
-          voiceId,
-          seriesInfo ?? undefined,
-        );
-        if (outcome === 'skippedClone') {
-          return res.status(409).json({
-            error: clonedVariantRefusal(character.name ?? characterId),
-            code: 'clone_protected',
-          });
+      try {
+        /* fs-25 — record a (non-preview) emotion variant onto the character's
+           qwen slot so generation can resolve it (Wave 2) and the cast UI can show
+           the Variants badge. The base-voice design itself still persists via the
+           drawer's Save. */
+        if (emotion && body.preview !== true) {
+          /* Propagate the variant across the series (linked cast) — book-scoped
+             only for a standalone. Mirrors the base-voice series scope. */
+          const outcome = await persistEmotionVariant(
+            bookDir,
+            characterId,
+            emotion,
+            voiceId,
+            seriesInfo ?? undefined,
+          );
+          if (outcome === 'skippedClone') {
+            return res.status(409).json({
+              error: clonedVariantRefusal(character.name ?? characterId),
+              code: 'clone_protected',
+            });
+          }
+          /* 'notFound' (no confirmed-cast book in scope matched this
+             character at write time — a genuinely empty write, not a
+             refusal) falls through to the same 200 as 'applied' below.
+             This is NOT a new gap this task introduces: before this task,
+             persistEmotionVariant returned void unconditionally and the
+             route always answered 200 regardless of whether anything was
+             actually written for this exact case — this branch makes that
+             pre-existing disposition explicit rather than changing it. Only
+             'skippedClone' is new, deliberate refusal-reporting behaviour;
+             'notFound' intentionally keeps today's behaviour, named rather
+             than left as a silent fallthrough. */
         }
-        /* 'notFound' (no confirmed-cast book in scope matched this
-           character at write time — a genuinely empty write, not a
-           refusal) falls through to the same 200 as 'applied' below.
-           This is NOT a new gap this task introduces: before this task,
-           persistEmotionVariant returned void unconditionally and the
-           route always answered 200 regardless of whether anything was
-           actually written for this exact case — this branch makes that
-           pre-existing disposition explicit rather than changing it. Only
-           'skippedClone' is new, deliberate refusal-reporting behaviour;
-           'notFound' intentionally keeps today's behaviour, named rather
-           than left as a silent fallthrough. */
+      } finally {
+        releaseLanding?.();
       }
       /* srv-43 — return voiceUuid so the drawer can stamp it locally without
          a refetch; the /sample player needs it to hit the uuid-keyed cache. */
@@ -1785,9 +1826,14 @@ async function tearDownEmotionVariant(designedId: string): Promise<void> {
    linked book, a declined or declining book, a same-book sibling; see
    isVariantStillNamed). The slot is already dropped from this row's cast by the
    caller; only the file deletion is skipped. The scan is read-only and runs
-   outside any cast lock. */
+   outside any cast lock, so it is checked against the variant's saving registry:
+   a design that has landed this file but not yet written its slot (or whose
+   landing began during the scan) is a holder the cast cannot show yet. */
 async function tearDownVariantUnlessShared(variantId: string): Promise<void> {
-  if (await isVariantStillNamed(variantId)) {
+  const before = savesOf(variantId);
+  const unshared = before.active === 0 && !(await isVariantStillNamed(variantId));
+  const after = savesOf(variantId);
+  if (!unshared || after.active > 0 || after.begun !== before.begun) {
     console.warn(`[qwen-voice] keeping variant "${variantId}": another voice still uses it`);
     return;
   }
