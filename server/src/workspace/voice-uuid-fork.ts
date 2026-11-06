@@ -31,7 +31,7 @@
 
 import { join, resolve } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
-import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
+import { BOOKS_ROOT, castJsonPath, castReuseCarryoverJsonPath, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
@@ -341,37 +341,80 @@ export function mustSeparateOnDesign(row: MarkedRow, scan: VoiceScan): boolean {
   return declined.some((id) => scan.holderBookIds.has(id));
 }
 
-/* #3992 — read-only: does some OTHER character, under a DIFFERENT base voice
-   than `ownKey` (its storage key, `qwen-<uuid>` or the legacy
-   `qwen-<voiceId ?? id>`), still name `variantId` among its
-   `overrideTtsVoices.qwen.variants[*].name`? After a fork the declined row keeps
-   the shared variant names, so tearing one down would delete the earlier book's
-   `.pt`. A still-linked pair shares the base key, so it does NOT count (their
-   shared variants go stale together and are deleted as before). A row with no
-   uuid counts by its legacy key (P10-2: a legacy earlier book's variant). Scans
-   every book under BOOKS_ROOT, takes no lock, writes nothing. */
-export async function isVariantUsedByOtherVoiceUuid(variantId: string, ownKey: string): Promise<boolean> {
-  for (const authorName of listDirs(BOOKS_ROOT)) {
-    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
-      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
-        const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
-        const cast = await readOtherBookCast<VariantCastFile>(dir);
-        /* The other way round from the holder scans: this one gates a DELETE, so a
-           book it cannot read counts as a possible holder and the file is kept
-           (an orphan at worst, never a deleted take). */
-        if (cast === UNREADABLE) return true;
-        for (const y of cast?.characters ?? []) {
-          if (qwenStorageKey(y, y.id ?? '') === ownKey) continue;
-          const variants = y.overrideTtsVoices?.qwen?.variants;
-          if (!variants) continue;
-          for (const v of Object.values(variants)) {
-            if (v?.name === variantId) return true;
+/* #4026 — the directories under `path`, or null when it cannot be listed (a
+   missing `path` is an empty list). The orphan-variant sweep fails closed on a
+   library it cannot see whole; listDirs' silent [] would hide a book. */
+function listDirsOrNull(path: string): string[] | null {
+  if (!existsSync(path)) return [];
+  try {
+    return readdirSync(path, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch (e) {
+    console.warn(`[voice-uuid-fork] cannot list ${path}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/* #4026 — the cast rows of one book that can name a variant: cast.json's, or,
+   when it is absent or has no characters (a reparse deletes it and the next
+   analysis restores the slots from the carryover), the reuse carryover's: the
+   same either-or as readPriorCastForMerge (routes/analysis.ts), the only reader
+   that restores a cast-shaped file into cast.json. No other file under
+   .audiobook/ holds voice slots (PR #4038 pass 4). UNREADABLE when either file
+   that decides cannot be read. */
+async function readCastRowsForVariants(dir: string): Promise<NonNullable<VariantCastFile['characters']> | typeof UNREADABLE> {
+  const cast = await readOtherBookCast<VariantCastFile>(dir);
+  if (cast === UNREADABLE) return UNREADABLE;
+  if (cast?.characters?.length) return cast.characters;
+  try {
+    return (await readJson<VariantCastFile>(castReuseCarryoverJsonPath(dir)))?.characters ?? [];
+  } catch (e) {
+    console.warn(`[voice-uuid-fork] skipping unreadable cast-reuse-carryover.json in ${dir}: ${(e as Error).message}`);
+    return UNREADABLE;
+  }
+}
+
+/* #4026 — read-only: every qwen voice name a cast row in the library names, for
+   the startup sweep of variant files nothing names (sweepOrphanVariantFiles). A
+   row names a variant by a slot's stored `name`, or by the key the render path
+   derives (`<qwenStorageKey>__<emotion>`, which for a row with no uuid is its
+   legacy `qwen-<voiceId ?? id>` key, P10-2; a row with a uuid never reads the
+   legacy key). Its base names (the slot's `name` and its storage key) are in the
+   set too, so a base whose key happens to end in `__<emotion>` is never taken for
+   a variant. No marker, link or uuid comparison decides it: a file a row names is
+   kept. null when a library folder cannot be listed or a cast.json cannot be read:
+   the caller then deletes nothing (an orphan at worst, never a deleted take).
+   Scans every book under BOOKS_ROOT, takes no lock, writes nothing. */
+export async function namedQwenVoices(): Promise<Set<string> | null> {
+  const named = new Set<string>();
+  const authors = listDirsOrNull(BOOKS_ROOT);
+  if (!authors) return null;
+  for (const authorName of authors) {
+    const series = listDirsOrNull(join(BOOKS_ROOT, authorName));
+    if (!series) return null;
+    for (const seriesName of series) {
+      const titles = listDirsOrNull(join(BOOKS_ROOT, authorName, seriesName));
+      if (!titles) return null;
+      for (const titleName of titles) {
+        const cast = await readCastRowsForVariants(join(BOOKS_ROOT, authorName, seriesName, titleName));
+        if (cast === UNREADABLE) return null;
+        for (const y of cast) {
+          const qwen = y.overrideTtsVoices?.qwen;
+          /* The render path's key: a uuid row's own, or (no uuid) the legacy one. */
+          const key = qwenStorageKey(y, y.id ?? '');
+          named.add(key);
+          if (qwen?.name) named.add(qwen.name);
+          for (const [emotion, v] of Object.entries(qwen?.variants ?? {})) {
+            if (!v) continue;
+            if (v.name) named.add(v.name);
+            named.add(`${key}__${emotion}`);
           }
         }
       }
     }
   }
-  return false;
+  return named;
 }
 
 interface VariantCastFile {
@@ -379,6 +422,6 @@ interface VariantCastFile {
     id?: string;
     voiceId?: string | null;
     voiceUuid?: string | null;
-    overrideTtsVoices?: { qwen?: { variants?: Record<string, { name?: string } | undefined> } };
+    overrideTtsVoices?: { qwen?: { name?: string; variants?: Record<string, { name?: string } | undefined> } };
   }>;
 }

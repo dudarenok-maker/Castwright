@@ -63,8 +63,8 @@ import {
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import {
-  isVariantUsedByOtherVoiceUuid,
   legacyKeyHolderBookIds,
+  namedQwenVoices,
   scanVoiceHolders,
   voiceHeldBy,
   mustSeparateOnDecline,
@@ -1048,6 +1048,48 @@ export async function sweepStaleDesignStaging(
   return stale.length;
 }
 
+/* #4026 (owner decision) — at startup, before the server listens: remove the
+   emotion-variant files (`qwen-…__<emotion>` plus the family's suffixes) that no
+   cast row in the library names (namedQwenVoices: a slot's stored name, or the
+   render path's `<qwenStorageKey>__<emotion>`). The variant DELETE and promote
+   only drop a row's slot and never delete a file, since a live check cannot see
+   every writer adding a holder; this sweep runs while no request is in flight.
+   Fails closed: a library folder or cast.json it cannot read deletes nothing this
+   round (logged once). A name a row uses as its base is kept, a staging or
+   preview file never matches, and an entry younger than an hour is kept (a second
+   server on the same workspace may be mid-design, as sweepStaleDesignStaging).
+   Returns how many files it removed; never throws. */
+const VARIANT_FILE = new RegExp(
+  `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:\\.pt|\\.json|__master\\.wav|__1\\.7b\\.pt)$`,
+);
+export async function sweepOrphanVariantFiles(
+  maxAgeMs: number = STAGING_MAX_AGE_MS,
+  now: number = Date.now(),
+): Promise<number> {
+  let names: string[];
+  try {
+    names = await readdir(qwenVoicesDir());
+  } catch {
+    return 0;
+  }
+  const candidates = names.filter((n) => VARIANT_FILE.test(n) && !STAGED_FILE.test(n));
+  if (candidates.length === 0) return 0;
+  const named = await namedQwenVoices().catch(() => null);
+  if (!named) {
+    console.warn('[variant-sweep] a book could not be read; keeping every variant file this round.');
+    return 0;
+  }
+  const stale: string[] = [];
+  for (const n of candidates) {
+    const stem = VARIANT_FILE.exec(n)?.[1];
+    if (!stem || named.has(stem)) continue;
+    const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
+    if (s && now - s.mtimeMs > maxAgeMs) stale.push(n);
+  }
+  await removeFiles(stale.map((n) => join(qwenVoicesDir(), n)));
+  return stale.length;
+}
+
 /* #4028 — move a staged family onto `target`, rm-then-rename like promote (a
    Windows rename over an existing file can EPERM). Only what was staged replaces
    anything; with a `.pt` staged, the target's derived `__1.7b` prompt (built from
@@ -1749,7 +1791,7 @@ qwenVoiceRouter.post(
   },
 );
 
-/* #2127 — bound for the sidecar cache-evict fetches below. Node's undici
+/* #2127 — bound for the sidecar cache-evict fetches (evictSidecarVoices). Node's undici
    defaults to a 300s fetch timeout; a sidecar that accepts the TCP connection
    but is blocked (mid model load or recycle — routine on this box) would
    otherwise hang the caller for up to five minutes even though eviction is
@@ -1757,42 +1799,6 @@ qwenVoiceRouter.post(
    `evictSidecarVoice` in workspace/purge-clone-artifacts.ts for the same
    endpoint's cost analysis). Single-digit seconds is generous for that. */
 export const EVICT_FETCH_TIMEOUT_MS = 3_000;
-
-/* Tear down a designed emotion variant: delete its `.pt`/`.json` embedding +
-   persona sidecar and evict it from the sidecar's in-memory prompt cache.
-   Best-effort throughout — a missing file, unreachable sidecar, or timed-out
-   evict (see EVICT_FETCH_TIMEOUT_MS) is non-fatal: `fetch` rejecting with an
-   AbortError lands in the same bare `catch` as a network failure. Does NOT
-   touch cast.json; the caller owns the slot mutation + atomic write so it can
-   batch multiple removals into a single write. Shared by the per-emotion
-   DELETE route and the redesign-invalidation in promote-voice. */
-async function tearDownEmotionVariant(designedId: string): Promise<void> {
-  await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
-  await rm(qwenVoiceSidecarPath(designedId), { force: true }).catch(() => {});
-  try {
-    await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ voiceId: designedId }),
-      signal: AbortSignal.timeout(EVICT_FETCH_TIMEOUT_MS),
-    });
-  } catch {
-    /* sidecar unreachable, or the evict timed out (AbortError) — non-fatal */
-  }
-}
-
-/* #3992 — tear a variant down unless a character under a DIFFERENT base voice
-   (storage key) still names it (a declined row that forked keeps the earlier
-   book's variant names; a legacy earlier book is counted by its legacy key). The
-   slot is already dropped from this row's cast by the caller; only the file
-   deletion is skipped. The scan is read-only and runs outside any cast lock. */
-async function tearDownVariantUnlessShared(variantId: string, ownKey: string): Promise<void> {
-  if (await isVariantUsedByOtherVoiceUuid(variantId, ownKey)) {
-    console.warn(`[qwen-voice] keeping variant "${variantId}": another voice still uses it`);
-    return;
-  }
-  await tearDownEmotionVariant(variantId);
-}
 
 /* POST /api/books/:bookId/cast/:characterId/promote-voice
 
@@ -1842,22 +1848,19 @@ qwenVoiceRouter.post(
     /* A redesign replaces the base embedding in place, so every emotion variant
        minted from the OLD embedding is now stale (each was anchored to a PT that
        no longer exists). Invalidate them: drop the whole `variants` map from
-       cast.json FIRST — so a mid-teardown failure can never leave cast.json
-       referencing a `.pt` we've already deleted — then delete each variant's
-       `.pt`/`.json` + evict it from the sidecar, addressing each by its stored
-       `name` (the authoritative on-disk id) rather than reconstructing it. The
-       character's tagged emotions then re-register as missing demand, so the
-       cast's "Design full cast → Emotion variants" scope re-mints the ones the
-       user still wants from the new base. */
-    let staleVariantIds: string[] = [];
+       cast.json. The character's tagged emotions then re-register as missing
+       demand, so the cast's "Design full cast → Emotion variants" scope re-mints
+       the ones the user still wants from the new base. #4026 — the variant FILES
+       stay: another row (a linked book, a declined one, a sibling) may still name
+       them, and no lock-free check here can see every writer adding a holder. The
+       startup sweep (sweepOrphanVariantFiles) removes the ones nothing names. */
     /* The read, the preview-id check, the artifact moves and the variant drop all
        sit inside the cast lock (rule 2: every decision derived from the read goes
-       inside it). The sidecar evict and the variant teardown stay OUTSIDE: those
-       are best-effort network calls (#2127 — bounded by EVICT_FETCH_TIMEOUT_MS,
+       inside it). The sidecar evict stays OUTSIDE: it is a best-effort network call (#2127 — bounded by EVICT_FETCH_TIMEOUT_MS,
        but still no reason to pin the lock for even that bounded worst case).
        Global order: design -> book-op -> cast (cast-lock.ts rule 4). */
     const moved = await withCastLock(located.bookDir, async (): Promise<
-      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; ownKey: string; voiceUuid?: string; first?: FirstKeptDesign }
+      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; voiceUuid?: string; first?: FirstKeptDesign }
     > => {
       const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = fresh?.characters?.find((c) => c.id === characterId);
@@ -1937,9 +1940,6 @@ qwenVoiceRouter.post(
          when the character has no emotion variants, which is the common path.
          Evaluated against the FRESH slot, per rule 2. */
       if (freshSlot?.variants && Object.keys(freshSlot.variants).length > 0) {
-        staleVariantIds = Object.values(freshSlot.variants)
-          .map((v) => v?.name)
-          .filter((n): n is string => !!n);
         delete freshSlot.variants;
         await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
       }
@@ -1947,7 +1947,7 @@ qwenVoiceRouter.post(
         firstFile && seriesInfo && character.voiceUuid && (await isOrdinarySeriesVoice(character))
           ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
           : undefined;
-      return { realVoiceId, realFileName, ownKey: realVoiceId, voiceUuid: character.voiceUuid ?? undefined, first };
+      return { realVoiceId, realFileName, voiceUuid: character.voiceUuid ?? undefined, first };
     });
     if ('status' in moved) return res.status(moved.status).json(moved.body);
     /* Still under the book-ops (and this book's design lock): the first real file of
@@ -1958,14 +1958,9 @@ qwenVoiceRouter.post(
     /* Evict the real id from the sidecar's in-memory prompt cache. Best-effort:
        a down/empty sidecar has nothing cached, and generation reads the fresh
        `.pt` from disk regardless. #2127 — bounded by EVICT_FETCH_TIMEOUT_MS
-       (see tearDownEmotionVariant above), so a blocked-but-listening sidecar
+       (evictSidecarVoices), so a blocked-but-listening sidecar
        can't hold this open for undici's 300s default. */
     await evictSidecarVoices([moved.realVoiceId]);
-    /* Teardown stays outside the cast lock: filesystem work, and holding the lock
-       across it reintroduces exactly the stall the narrowing above avoids. */
-    for (const variantId of staleVariantIds) {
-      await tearDownVariantUnlessShared(variantId, moved.ownKey);
-    }
 
     /* srv-43 — return voiceUuid so the drawer can stamp it locally; the
        /sample player needs it to hit the uuid-keyed cache on the next play. */
@@ -2073,11 +2068,15 @@ qwenVoiceRouter.post(
 /* DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion
 
    fs-34 (fs-25 Wave 5e) — drop a designed emotion variant. Removes the
-   `overrideTtsVoices.qwen.variants[emotion]` slot from cast.json and deletes the
-   variant's `.pt` + `.json` on disk, so a bad design is discardable without
-   touching the base voice. The base `qwen.name` and every other variant are
-   preserved; an empty `variants` map is cleaned up so the Variants badge clears.
-   Idempotent: removing an absent variant still returns 200. */
+   `overrideTtsVoices.qwen.variants[emotion]` slot from cast.json, so a bad
+   design is discardable without touching the base voice. The base `qwen.name`
+   and every other variant are preserved; an empty `variants` map is cleaned up
+   so the Variants badge clears. Idempotent: removing an absent variant still
+   returns 200. #4026 — the variant's `.pt`/`.json` stay on disk: another row (a
+   linked book, a declined one, a same-book sibling) may still name them, and a
+   lock-free "does anyone else name it" check here kept racing writers that add a
+   holder. The startup sweep (sweepOrphanVariantFiles) removes the files no cast
+   row names. */
 qwenVoiceRouter.delete(
   '/:bookId/cast/:characterId/emotion-variant/:emotion',
   async (req: Request, res: Response) => {
@@ -2089,49 +2088,27 @@ qwenVoiceRouter.delete(
       });
     }
 
-    /* #3711 — quick (the teardown's evict is bounded by EVICT_FETCH_TIMEOUT_MS);
-       book-op is held for the whole span, outside the cast lock below. */
+    /* #3711 — quick (one cast.json write); book-op is held for the whole span,
+       outside the cast lock below. */
     const outcome = await withBookOp(bookId, async (located) => {
-    /* C1 fix — mirrors promote-voice above (qwen-voice.ts, the
-       "Narrow by design" comment on its own withCastLock call): the read is
-       inside the lock, and the 404 + the variant-map mutation are both
-       decisions derived from it (rule 2), but `tearDownEmotionVariant`'s
-       sidecar `fetch` is a best-effort network call (#2127 — now bounded by
-       EVICT_FETCH_TIMEOUT_MS rather than Node's undici ~300s default), so
-       holding the lock across it would still needlessly pin this book's cast
-       lock for that bounded worst case — and, per cast-lock.ts rule 4, stall
-       a request queued behind it for `library-voice:<uuid>` too. Compute the
-       designed id from the locked read, close the lock, then run the
-       teardown after — filesystem work + a best-effort network call, nothing
-       that needs the lock. */
-    let ownKey = '';
-    const designedId = await withCastLock(located.bookDir, async (): Promise<string | undefined> => {
+    const found = await withCastLock(located.bookDir, async (): Promise<boolean> => {
       const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = cast?.characters?.find((c) => c.id === characterId);
-      if (!character || !cast) return undefined;
-      ownKey = qwenStorageKey(character, characterId);
+      if (!character || !cast) return false;
 
       /* Drop the slot from cast.json (preserving base + sibling variants). */
       const qwenSlot = character.overrideTtsVoices?.qwen;
-      /* #3992 — the stored `name` is the authoritative on-disk id (a forked row
-         still names the earlier book's file); reconstruct only as a fallback. */
-      const storedName = qwenSlot?.variants?.[emotion as Exclude<Emotion, 'neutral'>]?.name;
       if (qwenSlot?.variants && emotion in qwenSlot.variants) {
         delete qwenSlot.variants[emotion as Exclude<Emotion, 'neutral'>];
         if (Object.keys(qwenSlot.variants).length === 0) delete qwenSlot.variants;
         await writeJsonAtomic(castJsonPath(located.bookDir), cast);
       }
-
-      return storedName || `${qwenStorageKey(character, characterId)}__${emotion}`;
+      return true;
     });
 
-    if (designedId === undefined) {
+    if (!found) {
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
     }
-
-    /* Delete the designed embedding + persona sidecar and evict it (best-effort),
-       outside the lock — see the comment above. */
-    await tearDownVariantUnlessShared(designedId, ownKey);
 
     return res.status(200).json({ ok: true, removed: emotion });
     });

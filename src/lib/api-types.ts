@@ -3397,10 +3397,12 @@ export interface paths {
         post?: never;
         /**
          * Remove a designed emotion variant (fs-34)
-         * @description Drops `overrideTtsVoices.qwen.variants[emotion]` from cast.json and
-         *     deletes the variant's `.pt` + `.json` on disk, leaving the base voice and
-         *     every sibling variant intact. An empty `variants` map is cleaned up so the
-         *     Variants badge clears. Idempotent — removing an absent variant still 200s.
+         * @description Drops `overrideTtsVoices.qwen.variants[emotion]` from cast.json only; it
+         *     never deletes a file (#4026). The variant's `.pt` + `.json` stay on disk
+         *     and the next server startup removes those no cast row names. The base voice
+         *     and every sibling variant are untouched. An empty `variants` map is cleaned
+         *     up so the Variants badge clears. Idempotent — removing an absent variant
+         *     still 200s.
          */
         delete: operations["deleteCharacterEmotionVariant"];
         options?: never;

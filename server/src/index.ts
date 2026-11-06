@@ -45,7 +45,7 @@ import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { sweepStaleStaging } from './workspace/portable-staging.js';
-import { sweepStaleDesignStaging } from './routes/qwen-voice.js';
+import { sweepOrphanVariantFiles, sweepStaleDesignStaging } from './routes/qwen-voice.js';
 import { repairDuplicateBookIds } from './workspace/duplicate-bookid-sweep.js';
 import { loadRepairedBookGate } from './workspace/repaired-book-gate.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
@@ -207,6 +207,12 @@ async function main(): Promise<void> {
   const sweptDesignStaging = await sweepStaleDesignStaging();
   if (sweptDesignStaging > 0) {
     console.log(`[staging] removed ${sweptDesignStaging} stale voice-design staging file(s).`);
+  }
+  /* #4026 — emotion-variant files no cast row names (a variant DELETE or a
+     promote drops only the slot; before listen, so no request is adding a holder). */
+  const sweptVariants = await sweepOrphanVariantFiles();
+  if (sweptVariants > 0) {
+    console.log(`[variant-sweep] removed ${sweptVariants} emotion-variant file(s) no character uses.`);
   }
 
   /* #2192 — heal venvs bootstrapped before the ORT marker existed: record that
