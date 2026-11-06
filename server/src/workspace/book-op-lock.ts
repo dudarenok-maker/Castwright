@@ -511,15 +511,6 @@ function assertNotBusy(bookId: string): void {
   if (kinds.length > 0) throw new BookBusyError(kinds);
 }
 
-/* #4026 — how many folder renames `moveBookFolder` has started or finished in this
-   process. A lock-free walk of the library (the variant teardown's holder scan)
-   cannot see a book whose folder moves between its listing and its read, or into
-   a directory it has already passed: it reads this before and after and treats a
-   change as "a holder may have been missed". Bumped on both sides of the rename
-   so a walk that overlaps any part of a move sees a different number. */
-let bookFolderMoves = 0;
-export const bookFolderMoveCount = (): number => bookFolderMoves;
-
 /** Rename a book's folder to `newDir`, writing `buildNext(fresh)` as its new
  *  state.json. Refuses (BookBusyError) while a long job is registered, and
  *  (BookPathTakenError) if `newDir` exists. EPERM/EBUSY/EACCES from the rename
@@ -562,14 +553,11 @@ export async function moveBookFolder(
          held (the old path): take the new key too so any writer of either path
          serialises. Old-held-then-new is the only nesting any caller does. */
       await withStateJsonLock(stateJsonPath(newDir), async () => {
-        bookFolderMoves++;
         try {
           await renameWithRetry(oldDir, newDir);
         } catch (err) {
           if (isInUse(err)) throw new BookFolderInUseError();
           throw err;
-        } finally {
-          bookFolderMoves++;
         }
         if (duplicateBookIds.has(book.bookId)) bookDirById.delete(book.bookId);
         else bookDirById.set(book.bookId, newDir);

@@ -11,7 +11,7 @@ let onDesign: Mod['mustSeparateOnDesign'];
 let holdsUuid: Mod['holdsUuid'];
 let holdsLegacyKey: Mod['holdsLegacyKey'];
 let voiceHeldBy: Mod['voiceHeldBy'];
-let variantUsed: Mod['isVariantStillNamed'];
+let namedQwenVoices: Mod['namedQwenVoices'];
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -48,7 +48,7 @@ beforeAll(async () => {
     holdsUuid,
     holdsLegacyKey,
     voiceHeldBy,
-    isVariantStillNamed: variantUsed,
+    namedQwenVoices,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -213,35 +213,33 @@ describe('mustSeparateOnDesign (#3992 — rows declined before the route separat
   });
 });
 
-describe('isVariantStillNamed (#3992 P10-2, #4026)', () => {
-  const angry = (name: string) => ({ overrideTtsVoices: { qwen: { variants: { angry: { name } } } } });
-  it('counts any row naming the file by its stored name, whatever key, link or marker it has', async () => {
+describe('namedQwenVoices (#3992 P10-2, #4026)', () => {
+  const angry = (name: string) => ({ overrideTtsVoices: { qwen: { name: 'base', variants: { angry: { name } } } } });
+  const names = async () => [...((await namedQwenVoices()) ?? new Set(['<null>']))].sort();
+  it('names a variant by its stored name, whatever key, link or marker the row has', async () => {
     reset();
-    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]); // legacy earlier book
-    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'own', ...angry('qwen-v__angry') }]);
-    expect(await variantUsed('qwen-v__angry')).toBe(true);
-    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, ...angry('stored-elsewhere') }]);
     /* #4026 — an unforked declined row and the book it declined share one uuid */
-    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, ...angry(`qwen-${U}__angry`) }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, declinedVoiceFrom: [ONE_ID] }]);
-    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true);
+    expect(await names()).toEqual(['base', `qwen-${U}`, `qwen-${U}__angry`, 'stored-elsewhere']);
   });
-  it('counts a row whose slot is present under another stored name by the key the render path reads', async () => {
+  it("names the render path's derived key: a uuid row's own, a legacy row's legacy key, never a uuid row's legacy key", async () => {
     reset();
-    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, ...angry('elsewhere') }]);
-    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true); // a uuid row's key
-    expect(await variantUsed(`qwen-${U}__sad`)).toBe(false); // no sad slot
-    /* the legacy key is the render path's only for a row with no uuid (#4026) */
-    expect(await variantUsed('qwen-v__angry')).toBe(false);
-    reset();
-    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('elsewhere') }]);
-    expect(await variantUsed('qwen-v__angry')).toBe(true);
+    book('One', ONE_ID, [
+      { id: 'c', voiceId: 'v', voiceUuid: U, ...angry('x') },
+      { id: 'd', voiceId: 'w', ...angry('y') },
+    ]);
+    const n = await names();
+    expect(n).toContain(`qwen-${U}__angry`);
+    expect(n).toContain('qwen-w__angry'); // no uuid: the legacy key is the render key
+    expect(n).not.toContain('qwen-v__angry'); // a uuid row never reads its legacy key
+    expect(n).not.toContain(`qwen-${U}__sad`); // no sad slot
   });
-  it('is false when no row names it, and true when a book cannot be read', async () => {
+  it('is null when a book cannot be read', async () => {
     reset();
     const dir = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U }]);
-    expect(await variantUsed(`qwen-${U}__angry`)).toBe(false);
+    expect(await names()).toEqual([`qwen-${U}`]);
     tornCast(dir);
-    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true);
+    expect(await namedQwenVoices()).toBeNull();
   });
 });

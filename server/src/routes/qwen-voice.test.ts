@@ -997,11 +997,13 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(false);
   });
 
-  it('promote-voice invalidates the redesigned character’s stale emotion variants (slots + .pt/.json + sidecar evict)', async () => {
+  it('promote-voice invalidates the redesigned character’s stale emotion variants (slots dropped; files left for the startup sweep)', async () => {
     /* A redesign replaces the base embedding, so every variant minted from the
        OLD embedding is now stale. Seed maerin with a live base + two designed
-       variants, stage a new preview, and promote it: all variants must be torn
-       down (cast.json slots + .pt/.json + sidecar eviction), base preserved. */
+       variants, stage a new preview, and promote it: every variant slot goes from
+       cast.json, base preserved. #4026 — the variant files stay on disk (another
+       row may still name them); sweepOrphanVariantFiles removes them at the next
+       startup once nothing names them. */
     stagedPreviewArtifacts(PREVIEW);
     for (const id of ['qwen-v_maerin__angry', 'qwen-v_maerin__sad']) {
       writeFileSync(join(qwenDir(), `${id}.pt`), 'STALE');
@@ -1038,17 +1040,52 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     const qwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
     expect(qwen.qwen.variants).toBeUndefined();
     expect(qwen.qwen.name).toBe('qwen-v_maerin');
-    /* Variant embeddings gone from disk. */
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(false);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(false);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__sad.pt'))).toBe(false);
-    /* Each variant id evicted from the sidecar cache (alongside the base). */
+    /* #4026 — the variant files are not deleted by the promote. */
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__sad.pt'))).toBe(true);
+    /* The base is evicted from the sidecar cache (its embedding was replaced). */
     const evicted = fetchMock.mock.calls
       .filter(([u]) => String(u).endsWith('/qwen/evict-voice'))
       .map(([, init]) => JSON.parse((init as { body: string }).body).voiceId);
     expect(evicted).toContain('qwen-v_maerin');
-    expect(evicted).toContain('qwen-v_maerin__angry');
-    expect(evicted).toContain('qwen-v_maerin__sad');
+  });
+
+  /* #2127 — the evict fetch had no AbortSignal, so a sidecar that accepts the
+     TCP connection but never responds (blocked mid model load/recycle — routine
+     on this box) hung the triggering request for up to undici's ~300s default,
+     even though cast.json and the files were already written. A sidecar mock
+     that never settles on its own must still let the promote respond, bounded
+     by EVICT_FETCH_TIMEOUT_MS. The mock settles only via the real AbortSignal
+     the route passes, so this passes only if the signal is wired through. (It
+     was pinned on the variant DELETE until #4026 removed that route's evict.) */
+  it('#2127 — a sidecar evict that never responds does not hang promote-voice past the eviction timeout', async () => {
+    stagedPreviewArtifacts(PREVIEW);
+    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
+    fetchMock.mockImplementation((url: unknown, init?: unknown) => {
+      if (String(url).endsWith('/qwen/evict-voice')) {
+        return new Promise((_resolve, reject) => {
+          const signal = (init as { signal?: AbortSignal } | undefined)?.signal;
+          signal?.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted.');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const start = Date.now();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(200);
+    expect(elapsed).toBeGreaterThanOrEqual(EVICT_FETCH_TIMEOUT_MS - 200);
+    expect(elapsed).toBeLessThan(EVICT_FETCH_TIMEOUT_MS + 2_000);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true);
   });
 
   it('promote-voice 409s when nothing was staged', async () => {
@@ -1530,8 +1567,9 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     );
   }
 
-  it('drops the variant from cast.json + deletes its .pt/.json, leaving base + siblings intact', async () => {
+  it('drops the variant from cast.json, leaving base + siblings intact; deletes no file and calls no sidecar (#4026)', async () => {
     seedVariants();
+    fetchMock.mockClear();
     const res = await request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`);
 
     expect(res.status).toBe(200);
@@ -1542,11 +1580,15 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(qwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
     expect(qwen.qwen.name).toBe('qwen-v_maerin'); // base untouched
 
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(false);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(false);
-    // Sibling + base files survive.
+    /* #4026 — the variant's files stay (another row may still name them; the
+       startup sweep removes them once nothing does), and with no file deleted
+       there is nothing to evict: the route makes no sidecar call at all, so it
+       never holds a lock across one (the C1 / #2127 concern on this route). */
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__sad.pt'))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('clears the whole variants map (and badge) when the last variant is removed', async () => {
@@ -1708,9 +1750,8 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
      Since #3711 book-op serialises the two DELETEs on its own — the
      cast-lock-alone test above is the cast-lock proof. `nopersona` gets its own qwen override
      here (it has none by default) purely so it has a second, independent
-     variant to delete; tearDownEmotionVariant's own file/sidecar cleanup is
-     `{ force: true }` / try-catch best-effort, so this doesn't need matching
-     .pt/.json fixtures on disk. */
+     variant to delete; the route touches no variant file (#4026), so this
+     doesn't need matching .pt/.json fixtures on disk. */
   it('#1981 — keeps both deletions when two emotion-variant deletes for one book overlap (end-to-end through book-op AND the cast lock)', async () => {
     /* Route-level coverage only: BOTH handlers hold `book-op:<bookId>`, which
        by itself serialises them — this stays green with a no-op cast lock
@@ -1753,155 +1794,6 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
     /* nopersona: its only variant (sad) removed → whole map cleaned up. */
     expect(nopersonaQwen.qwen.variants).toBeUndefined();
-  });
-
-  /* C1 — the teardown's sidecar `fetch` (inside tearDownEmotionVariant) has
-     no reason to hold the cast lock across it: it's a best-effort network
-     call (#2127 bounds it with EVICT_FETCH_TIMEOUT_MS, but even that bounded
-     wait shouldn't pin the lock) — the same defect class promote-voice's own
-     "Narrow by design" comment (above, on its withCastLock call) already
-     fixes for its teardown. Proves the fix with an order-based proof, the way
-     voice-style.test.ts's #1981 lock-narrowing races do: the mocked evict
-     signals on entry and then parks on a gate only the test releases, a
-     concurrent cast-lock acquisition on the SAME book runs while the evict is
-     parked, and the test records whether it had landed by the time the evict
-     resumed. No milliseconds are asserted, so box load cannot flip it (the
-     earlier `elapsed < 200` budget went red under 250 ms of extra lock
-     latency). The 8 s race is a hang detector only: under the pre-fix shape
-     the lock acquisition queues behind the parked evict and fails loudly
-     there instead of hanging. */
-  it('C1 — releases the cast lock before the sidecar evict, so a concurrent cast-lock acquisition on the same book lands while the evict is still pending', async () => {
-    seedVariants();
-    let releaseEvict!: () => void;
-    const gate = new Promise<void>((r) => {
-      releaseEvict = r;
-    });
-    let evictStarted!: () => void;
-    const entered = new Promise<void>((r) => {
-      evictStarted = r;
-    });
-    /* Witness: set once the cast-lock acquisition has completed, read by the
-       evict the moment it resumes from the gate. */
-    let lockLanded = false;
-    let lockLandedWhenEvictResumed: boolean | undefined;
-    fetchMock.mockImplementation(async (url: unknown) => {
-      if (String(url).endsWith('/qwen/evict-voice')) {
-        evictStarted();
-        await gate;
-        lockLandedWhenEvictResumed = lockLanded;
-      }
-      return { ok: true };
-    });
-
-    const deletePromise = request(app).delete(
-      `/api/books/${bookId}/cast/maerin/emotion-variant/angry`,
-    );
-    deletePromise.catch(() => {}); // supertest is lazy — force real dispatch now
-
-    try {
-      // Wait until the evict fetch has actually been invoked, bounded so a
-      // route that never gets there fails loudly instead of hanging.
-      let enteredTimer!: ReturnType<typeof setTimeout>;
-      try {
-        await Promise.race([
-          entered,
-          new Promise<never>((_, rej) => {
-            enteredTimer = setTimeout(
-              () => rej(new Error('DEADLOCK: route never reached the sidecar evict')),
-              8_000,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(enteredTimer);
-      }
-
-      /* #3711 — the route now holds the book's BOOK-OP lock across the (bounded)
-         evict, so a concurrent add-alias HTTP request would queue on book-op by
-         design. The invariant this test pins is about the CAST lock, so acquire
-         that directly: under the pre-fix shape (evict inside the cast lock) the
-         acquisition could not start until the evict resolved. */
-      const { withCastLock } = await import('../workspace/cast-lock.js');
-      let lockTimer!: ReturnType<typeof setTimeout>;
-      try {
-        await Promise.race([
-          withCastLock(join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK), async () => {}),
-          new Promise<never>((_, rej) => {
-            lockTimer = setTimeout(
-              () => rej(new Error('DEADLOCK: cast lock blocked behind the sidecar evict')),
-              8_000,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(lockTimer);
-      }
-      lockLanded = true;
-    } finally {
-      // Release the evict even on a failed run so the DELETE is never left
-      // dangling on the gate.
-      releaseEvict();
-    }
-
-    const deleteRes = await deletePromise;
-    expect(deleteRes.status).toBe(200);
-    /* The ordering witness: the cast lock had already been acquired when the
-       parked evict resumed, i.e. it was free while the evict was pending. */
-    expect(lockLandedWhenEvictResumed).toBe(true);
-    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
-    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
-    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
-  });
-
-  /* #2127 — the evict fetches (inside tearDownEmotionVariant, and
-     promote-voice's own direct evict) had no AbortSignal, so a sidecar that
-     accepts the TCP connection but never responds (blocked mid model
-     load/recycle — routine on this box) hung the triggering request for up
-     to undici's ~300s default, even though cast.json had already been
-     written successfully before the teardown ran. Proves the fix directly: a
-     sidecar mock that never resolves (and never rejects) on its own must
-     still let the DELETE respond, bounded by EVICT_FETCH_TIMEOUT_MS rather
-     than that ~300s hang. The mock only settles via the real `AbortSignal`
-     the route passes — exactly how undici itself behaves — so this only
-     passes if the signal is genuinely wired through, not just present. */
-  it('#2127 — a sidecar evict that never responds does not hang the DELETE past the eviction timeout', async () => {
-    seedVariants();
-    const { EVICT_FETCH_TIMEOUT_MS } = await import('./qwen-voice.js');
-    fetchMock.mockImplementation((url: unknown, init?: unknown) => {
-      if (String(url).endsWith('/qwen/evict-voice')) {
-        return new Promise((_resolve, reject) => {
-          const signal = (init as { signal?: AbortSignal } | undefined)?.signal;
-          signal?.addEventListener('abort', () => {
-            const err = new Error('The operation was aborted.');
-            err.name = 'AbortError';
-            reject(err);
-          });
-          // Deliberately never settles on its own — mimics a sidecar that
-          // accepted the connection but is blocked.
-        });
-      }
-      return Promise.resolve({ ok: true });
-    });
-
-    const start = Date.now();
-    const res = await request(app).delete(
-      `/api/books/${bookId}/cast/maerin/emotion-variant/angry`,
-    );
-    const elapsed = Date.now() - start;
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, removed: 'angry' });
-    /* Bounded by the timeout, not by undici's ~300s default. Generous
-       headroom above EVICT_FETCH_TIMEOUT_MS for the abort machinery + route
-       handling itself; nowhere near the untimed-out hang this closes. */
-    expect(elapsed).toBeGreaterThanOrEqual(EVICT_FETCH_TIMEOUT_MS - 200);
-    expect(elapsed).toBeLessThan(EVICT_FETCH_TIMEOUT_MS + 2_000);
-
-    /* cast.json was still written successfully — a timed-out best-effort
-       evict must never turn a successful write into an error response. */
-    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
-    const maerinQwen = maerin.overrideTtsVoices as { qwen: { variants?: Record<string, unknown> } };
-    expect(maerinQwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
   });
 });
 

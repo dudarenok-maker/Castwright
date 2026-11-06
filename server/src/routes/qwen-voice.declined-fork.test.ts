@@ -929,13 +929,14 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
     expect(gone()).toBe(false);
   });
 
-  it('Sole owner: no other row names the variant, so it is deleted as before', async () => {
+  it('Sole owner: no other row names the variant; the DELETE still leaves the file for the startup sweep (#4026)', async () => {
     seedBoth('u_new');
     const one = { ...readRow('Book One') };
     delete one.overrideTtsVoices;
     writeFileSync(castPath('Book One'), JSON.stringify({ characters: [one] }));
     const res = await del();
     expect(res.status).toBe(200);
-    expect(gone()).toBe(true);
+    expect(slotOf('Book Two')).toBeUndefined();
+    expect(gone()).toBe(false);
   });
 });

@@ -1,19 +1,23 @@
-/* #4026 — an emotion variant's `.pt` is never deleted while another cast row
-   still names it, whether that row is a linked book, a book that declined (or was
-   declined by) this one, or a same-book sibling, and whatever it names it by: the
-   stored variant `name`, its uuid-derived key (`qwen-<uuid>__<emotion>`, what the
-   render path reads) or, for a row with no uuid, its legacy key (`qwen-<voiceId ?? id>__<emotion>`).
+/* #4026 — an emotion variant's `.pt` is never deleted while a cast row still
+   names it. The two routes that tear a variant down (the variant DELETE, and
+   promote-voice, which drops the row's now-stale variants) only drop the row's
+   own slot: they never delete a file, because a lock-free check of "does any
+   other row name it" kept racing another writer adding a holder (a linked
+   design, a book rename, a cast PUT's reuse hydration, the analysis series
+   linker; PR #4038 review passes 1-3). The file is removed instead by a startup
+   sweep (sweepOrphanVariantFiles), before the server listens, of the variant
+   files no cast row in the library names: by a slot's stored `name`, by its
+   uuid-derived key (`qwen-<uuid>__<emotion>`, what the render path reads) or,
+   for a row with no uuid, by its legacy key (`qwen-<voiceId ?? id>__<emotion>`).
 
-   The two routes that delete a variant file, on real cast.json files: the
-   variant DELETE and promote-voice (which drops the row's now-stale variants).
-   Both drop the slot from THIS row first, then tear the file down unless a row
-   still names it. The sidecar fetch is mocked: it writes distinct bytes for
-   whatever voice it is asked for. */
+   On real cast.json files. The sidecar fetch is mocked: it writes distinct bytes
+   for whatever voice it is asked for. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
@@ -39,63 +43,6 @@ vi.mock('../gpu/gpu-load.js', () => ({
 }));
 vi.mock('../gpu/sidecar-vram-sample.js', () => ({ maybeSampleSidecarEngine: async () => {} }));
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
-/* Holds persistEmotionVariant's series walk (its fresh clone re-check, the only
-   2-argument call; the route's own pre-GPU check passes 4) between a variant's
-   landing and the slot writes, so a DELETE can run in that span. */
-const walkGate = vi.hoisted(() => ({
-  armed: false,
-  entered: null as null | (() => void),
-  release: null as null | Promise<void>,
-}));
-vi.mock('./voices.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./voices.js')>();
-  return {
-    ...actual,
-    hasClonedSlotAmongMatches: async (...args: Parameters<typeof actual.hasClonedSlotAmongMatches>) => {
-      if (walkGate.armed && args.length <= 2) {
-        walkGate.armed = false;
-        walkGate.entered?.();
-        await walkGate.release;
-      }
-      return actual.hasClonedSlotAmongMatches(...args);
-    },
-  };
-});
-
-/* Pauses the variant teardown's holder scan on the Nth read of one cast.json,
-   either just before or just after the read, so a test can change the library
-   mid-scan. */
-const scanGate = vi.hoisted(() => ({
-  path: null as null | string,
-  nth: 1,
-  seen: 0,
-  when: 'after' as 'before' | 'after',
-  entered: null as null | (() => void),
-  release: null as null | Promise<void>,
-}));
-vi.mock('../workspace/state-io.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
-  const { resolve: res } = await import('node:path');
-  const hit = (p: string) => !!scanGate.path && res(p) === scanGate.path && ++scanGate.seen === scanGate.nth;
-  return {
-    ...actual,
-    readJson: async (p: string) => {
-      if (scanGate.when === 'before' && hit(p)) {
-        scanGate.path = null;
-        scanGate.entered?.();
-        await scanGate.release;
-      }
-      const v = await actual.readJson(p);
-      if (scanGate.when === 'after' && hit(p)) {
-        scanGate.path = null;
-        scanGate.entered?.();
-        await scanGate.release;
-      }
-      return v;
-    },
-  };
-});
-
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
@@ -107,9 +54,7 @@ let workspaceRoot: string;
 let audioDir: string;
 let app: Express;
 let previewVoiceIdFor: typeof import('./qwen-voice.js').previewVoiceIdFor;
-let resetSavingKeysForTests: typeof import('./qwen-voice.js').resetSavingKeysForTests;
-let withBookOp: typeof import('../workspace/book-op-lock.js').withBookOp;
-let moveBookFolder: typeof import('../workspace/book-op-lock.js').moveBookFolder;
+let sweepOrphanVariantFiles: typeof import('./qwen-voice.js').sweepOrphanVariantFiles;
 const ids = {} as Record<Title, string>;
 let counter = 0;
 const fetchMock = vi.fn();
@@ -160,9 +105,6 @@ const legacy = {
   ageRange: 'adult',
 };
 const reset = () => {
-  scanGate.path = null;
-  scanGate.seen = 0;
-  walkGate.armed = false;
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
   mkdirSync(qwenDir(), { recursive: true });
@@ -208,21 +150,17 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', fetchMock);
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
   ({ previewVoiceIdFor } = await import('./qwen-voice.js'));
-  ({ resetSavingKeysForTests } = await import('./qwen-voice.js'));
+  ({ sweepOrphanVariantFiles } = await import('./qwen-voice.js'));
   const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
-  const { castDesignRouter } = await import('./cast-design.js');
   const { makeBookId } = await import('../workspace/paths.js');
-  ({ withBookOp, moveBookFolder } = await import('../workspace/book-op-lock.js'));
   for (const t of TITLES) ids[t] = makeBookId(AUTHOR, SERIES, t);
   app = express();
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/books', castDeclineVoiceLinkRouter);
-  app.use('/api/books', castDesignRouter);
 });
 
 beforeEach(() => {
-  resetSavingKeysForTests();
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -283,8 +221,8 @@ describe('#4026 — the issue repro, on the ordinary routes', () => {
   });
 });
 
-describe('#4026 — variant DELETE keeps a file another row still names', () => {
-  it('an unforked declined row (a decline recorded before "Don\'t reuse" separated rows): One keeps its file', async () => {
+describe('#4026 — variant DELETE drops only its own slot, never a file', () => {
+  it('an unforked declined row (a decline recorded before "Don\'t reuse" separated rows): One keeps its file and slot', async () => {
     seedShared({ declinedVoiceFrom: [ids['Book One']] });
     const res = await del('Book Two');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -293,13 +231,7 @@ describe('#4026 — variant DELETE keeps a file another row still names', () => 
     expect(kept(), "Book One's angry variant file was deleted").toBe(true);
   });
 
-  it('the declined book itself (One declined Two) still names it: kept', async () => {
-    seedShared({}, { ...designedOn('u_shared'), declinedVoiceFrom: [ids['Book Two']] });
-    expect((await del('Book Two')).status).toBe(200);
-    expect(kept()).toBe(true);
-  });
-
-  it('a still-linked book (no marker anywhere) still names it: kept', async () => {
+  it('a still-linked book still names it: kept', async () => {
     seedShared();
     expect((await del('Book Two')).status).toBe(200);
     expect(variantsOf('Book Two')).toBeUndefined();
@@ -307,261 +239,20 @@ describe('#4026 — variant DELETE keeps a file another row still names', () => 
     expect(kept()).toBe(true);
   });
 
-  it('a holder that names it only by its uuid-derived key (slot with another stored name): kept', async () => {
-    seedShared({}, designedOn('u_shared', { angry: { name: 'something-else' } }));
-    expect((await del('Book Two')).status).toBe(200);
-    expect(kept()).toBe(true);
-  });
-
-  it('a holder that names it only by its legacy key (a row with no uuid, voiceId v_wren): kept', async () => {
-    reset();
-    writeBook('Book One', [{ ...legacy, overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'other' } } } } }]);
-    writeBook('Book Two', [designedOn('u_shared', { angry: { name: 'qwen-v_wren__angry' } })]);
-    writeFileSync(pt('qwen-v_wren__angry'), ANGRY);
-    expect((await del('Book Two')).status).toBe(200);
-    expect(readFileSync(pt('qwen-v_wren__angry')).equals(ANGRY)).toBe(true);
-  });
-
-  it("a uuid row's legacy-looking key is no holder: deleting a uuid row's angry leaves no orphan behind", async () => {
-    /* Book X's legacy narrator (no uuid) names qwen-narrator__angry; an unrelated
-       book's narrator is on a uuid and renders qwen-<uuid>__angry. The uuid row
-       never reads the legacy key, so it must not be what keeps it (nor strand it
-       once X lets go). */
-    reset();
-    const narrator = { id: 'narrator', name: 'Narrator', role: 'narrator' };
-    writeBook('Book One', [
-      { ...narrator, voiceUuid: 'u_y', overrideTtsVoices: { qwen: { name: 'qwen-u_y', variants: { angry: { name: 'qwen-u_y__angry' } } } } },
-    ]);
-    writeBook('Book Two', [
-      { ...narrator, overrideTtsVoices: { qwen: { name: 'qwen-narrator', variants: { angry: { name: 'qwen-narrator__angry' } } } } },
-    ]);
-    writeFileSync(pt('qwen-u_y__angry'), Buffer.from('Y-ANGRY'));
-    writeFileSync(pt('qwen-narrator__angry'), Buffer.from('X-ANGRY'));
-    /* the legacy row's own delete is the last holder of its file, and the uuid row
-       does not hold it */
-    expect((await del('Book Two', 'angry', 'narrator')).status).toBe(200);
-    expect(existsSync(pt('qwen-narrator__angry'))).toBe(false);
-    expect((await del('Book One', 'angry', 'narrator')).status).toBe(200);
-    expect(existsSync(pt('qwen-u_y__angry'))).toBe(false);
-  });
-
-  it('a same-book sibling on the same key that names it: kept', async () => {
+  it('the sole owner: the slot goes, the file stays (the startup sweep removes it), and no sidecar call is made', async () => {
     seedShared();
     writeFileSync(castPath('Book One'), JSON.stringify({ characters: [{ ...legacy, voiceUuid: 'u_one' }] }));
-    writeFileSync(
-      castPath('Book Two'),
-      JSON.stringify({ characters: [designedOn('u_shared'), { ...designedOn('u_shared'), id: 'wren-young' }] }),
-    );
-    expect((await del('Book Two')).status).toBe(200);
-    expect(variantsOf('Book Two', 'wren-young')?.angry).toBeDefined();
-    expect(kept()).toBe(true);
-  });
-
-  it('control: no other row names it, so it is deleted as before', async () => {
-    seedShared();
-    writeFileSync(castPath('Book One'), JSON.stringify({ characters: [{ ...legacy, voiceUuid: 'u_one' }] }));
-    expect((await del('Book Two')).status).toBe(200);
-    expect(kept()).toBe(false);
-  });
-});
-
-describe('#4026 — the holder check against a linked variant design in flight', () => {
-  it("a DELETE while a linked book's design has landed but not yet written its slot keeps the file; both books render it", async () => {
-    /* Two names the angry variant, One has no angry slot (a divergence the series
-       walk's unconfirmed-cast skip can leave). One re-designs angry. */
-    reset();
-    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_shared', overrideTtsVoices: { qwen: { name: 'qwen-u_shared' } } }]);
-    writeBook('Book Two', [designedOn('u_shared')]);
-    writeFileSync(pt('qwen-u_shared'), Buffer.from('BOOK-ONE-BASE'));
-    writeFileSync(pt('qwen-u_shared__angry'), ANGRY);
-    let release!: () => void;
-    walkGate.release = new Promise<void>((r) => (release = r));
-    const entered = new Promise<void>((r) => (walkGate.entered = r));
-    walkGate.armed = true;
-    const designing = design('Book One', { emotion: 'angry' }).then((r) => r);
-    await entered; // landed (the file now holds One's new bytes); no slot written yet
-    const landed = readFileSync(pt('qwen-u_shared__angry'));
-    expect(landed.equals(ANGRY)).toBe(false);
+    writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.json'), '{}');
     const res = await del('Book Two');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    release();
-    const done = await designing;
-    expect(done.status, JSON.stringify(done.body)).toBe(200);
-    expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_shared__angry');
-    expect(variantsOf('Book Two')?.angry?.name).toBe('qwen-u_shared__angry');
-    expect(existsSync(pt('qwen-u_shared__angry')), 'the just-designed variant file was deleted').toBe(true);
-    expect(readFileSync(pt('qwen-u_shared__angry')).equals(landed)).toBe(true);
+    expect(variantsOf('Book Two')).toBeUndefined();
+    expect(kept(), 'the DELETE deleted a variant file').toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-u_shared__angry.json'))).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
-/* Resolves `entered` when the gated call is reached; holds it until `release()`. */
-function gate(g: typeof scanGate | typeof walkGate) {
-  let release!: () => void;
-  g.release = new Promise<void>((r) => (release = r));
-  const entered = new Promise<void>((r) => (g.entered = r));
-  return { entered, release };
-}
-
-describe('#4026 — a holder book renamed while the teardown scans', () => {
-  it('a folder moved after the scan listed it is not invisible: the file its renamed cast still names is kept', async () => {
-    seedShared({}, designedOn('u_shared')); // One ALSO names it: a still-linked holder
-    scanGate.path = resolve(castPath('Book One'));
-    scanGate.nth = 1;
-    scanGate.seen = 0;
-    scanGate.when = 'before';
-    const g = gate(scanGate);
-    const deleting = del('Book Two').then((r) => r);
-    const newDir = bookDir('Book One Renamed');
-    try {
-      await g.entered; // the scan listed "Book One" and is about to read its cast.json
-      await withBookOp(ids['Book One'], (b) =>
-        moveBookFolder(b, newDir, (s) => ({ ...s, title: 'Book One Renamed' })),
-      );
-    } finally {
-      g.release();
-    }
-    expect((await deleting).status).toBe(200);
-    const renamed = JSON.parse(readFileSync(join(newDir, '.audiobook', 'cast.json'), 'utf8')).characters[0];
-    expect(renamed.overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u_shared__angry');
-    expect(kept(), 'deleted a variant file the renamed book still names').toBe(true);
-  });
-});
-
-/* Two legacy (no-uuid) narrators in different series, both rendering
-   `qwen-narrator__angry`. X (Other Author) names the slot and is deleted; Y (the
-   test series, no angry slot yet) designs angry. Y's design needs none of X's
-   book-ops, so it can land and finish while X's teardown is scanning. The scan
-   reads Y's folder first, so a gate on X's cast.json lands after Y was read. */
-const X_AUTHOR = 'Other Author';
-const X_SERIES = 'Other Series';
-const X_TITLE = 'Book X';
-let xBookId: string;
-const xDir = () => join(workspaceRoot, 'books', X_AUTHOR, X_SERIES, X_TITLE);
-const xCast = () => join(xDir(), '.audiobook', 'cast.json');
-const narr = { id: 'narrator', name: 'Narrator', role: 'narrator', voiceStyle: 'a calm narrator', evidence: [{ quote: '"So."' }], gender: 'male', ageRange: 'adult' };
-function seedCrossSeries() {
-  reset();
-  writeBook('Book One', [{ ...narr, overrideTtsVoices: { qwen: { name: 'qwen-narrator' } } }]); // Y
-  mkdirSync(join(xDir(), '.audiobook'), { recursive: true });
-  writeFileSync(
-    join(xDir(), '.audiobook', 'state.json'),
-    JSON.stringify({
-      bookId: xBookId, manuscriptId: 'm_x', title: X_TITLE, author: X_AUTHOR, series: X_SERIES,
-      seriesPosition: 1, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
-      chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    }),
-  );
-  writeFileSync(join(xDir(), 'manuscript.txt'), 'placeholder');
-  writeFileSync(
-    xCast(),
-    JSON.stringify({ characters: [{ ...narr, overrideTtsVoices: { qwen: { name: 'qwen-narrator', variants: { angry: { name: 'qwen-narrator__angry' } } } } }] }),
-  );
-  writeFileSync(pt('qwen-narrator'), Buffer.from('BASE'));
-  writeFileSync(pt('qwen-narrator__angry'), Buffer.from('OLD-ANGRY'));
-}
-const designY = () =>
-  request(app).post(`/api/books/${ids['Book One']}/cast/narrator/design-voice`).send({ sampleVoiceId: 'v_n', modelKey: QWEN_KEY, emotion: 'angry' });
-const deleteX = () => request(app).delete(`/api/books/${xBookId}/cast/narrator/emotion-variant/angry`);
-const yAngry = () => rowOf('Book One', 'narrator')?.overrideTtsVoices?.qwen?.variants?.angry?.name;
-const pauseScanAfterReadingX = () => {
-  scanGate.path = resolve(xCast());
-  scanGate.nth = 2; // the first read is the teardown's own pre-scan read of X
-  scanGate.seen = 0;
-  scanGate.when = 'after';
-  return gate(scanGate);
-};
-
-describe('#4026 — the teardown\'s before/during/after check against a design in another series', () => {
-  beforeAll(async () => {
-    const { makeBookId } = await import('../workspace/paths.js');
-    xBookId = makeBookId(X_AUTHOR, X_SERIES, X_TITLE);
-  });
-
-  it('a whole design that lands and writes its slot during the scan (begun moved, nothing active at either end): kept', async () => {
-    seedCrossSeries();
-    const scan = pauseScanAfterReadingX();
-    const deleting = deleteX().then((r) => r);
-    try {
-      await scan.entered; // the scan has read Y (no angry slot) and X (dropped)
-      const r = await designY();
-      expect(r.status, JSON.stringify(r.body)).toBe(200);
-    } finally {
-      scan.release();
-    }
-    expect((await deleting).status).toBe(200);
-    expect(yAngry()).toBe('qwen-narrator__angry');
-    expect(existsSync(pt('qwen-narrator__angry')), 'deleted a file Y names').toBe(true);
-  });
-
-  it('a hold already active when the teardown starts and released during its scan (active at the start only): kept', async () => {
-    seedCrossSeries();
-    walkGate.armed = true;
-    const walk = gate(walkGate);
-    const designing = designY().then((r) => r);
-    await walk.entered; // landed, holding
-    const scan = pauseScanAfterReadingX();
-    const deleting = deleteX().then((r) => r);
-    try {
-      /* With the start-of-teardown check the DELETE answers without scanning at
-         all; without it the scan runs and parks here while the hold is released. */
-      await Promise.race([scan.entered, deleting]);
-      walk.release();
-      const r = await designing;
-      expect(r.status, JSON.stringify(r.body)).toBe(200);
-    } finally {
-      walk.release();
-      scan.release();
-    }
-    expect((await deleting).status).toBe(200);
-    expect(yAngry()).toBe('qwen-narrator__angry');
-    expect(existsSync(pt('qwen-narrator__angry')), 'deleted a file Y names').toBe(true);
-  });
-});
-
-describe('#4026 — the bulk job (Design full cast → Emotion variants) holds its landed variant', () => {
-  const bulk = () =>
-    request(app)
-      .post(`/api/books/${ids['Book One']}/cast/design`)
-      .send({ modelKey: QWEN_KEY, scope: 'variants', characterIds: [], variantTasks: [{ characterId: 'wren', emotions: ['angry'] }] });
-  /* One has no angry slot, Two names it: the bulk job designs One's. */
-  const seedBulk = () => {
-    reset();
-    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_bulk', overrideTtsVoices: { qwen: { name: 'qwen-u_bulk' } } }]);
-    writeBook('Book Two', [designedOn('u_bulk', { angry: { name: 'qwen-u_bulk__angry' } })]);
-    writeFileSync(pt('qwen-u_bulk'), Buffer.from('BASE'));
-    writeFileSync(pt('qwen-u_bulk__angry'), ANGRY);
-  };
-
-  it('a DELETE between the job\'s landing and its slot write keeps the file (the landing is held)', async () => {
-    seedBulk();
-    walkGate.armed = true;
-    const walk = gate(walkGate);
-    const job = bulk().then((r) => r);
-    await walk.entered; // landed, slot not written
-    const landed = readFileSync(pt('qwen-u_bulk__angry'));
-    expect(landed.equals(ANGRY)).toBe(false);
-    expect((await del('Book Two')).status).toBe(200);
-    walk.release();
-    const done = await job;
-    expect(done.status, done.text).toBe(200);
-    expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_bulk__angry');
-    expect(readFileSync(pt('qwen-u_bulk__angry')).equals(landed), 'the just-designed variant file was deleted').toBe(true);
-  });
-
-  it('the hold is released when the job writes the slot: the next sole-owner DELETE deletes the file', async () => {
-    seedBulk();
-    const done = await bulk();
-    expect(done.status, done.text).toBe(200);
-    expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_bulk__angry');
-    expect((await del('Book Two')).status).toBe(200); // One still names it
-    expect(existsSync(pt('qwen-u_bulk__angry'))).toBe(true);
-    expect((await del('Book One')).status).toBe(200); // the last holder
-    expect(existsSync(pt('qwen-u_bulk__angry')), 'hold leaked: the file outlived its last holder').toBe(false);
-  });
-});
-
-describe('#4026 — promote keeps a stale variant file another row still names', () => {
+describe('#4026 — promote drops the row\'s stale variant slots, never their files', () => {
   it("an unforked declined row (a pre-#4007 decline): Two's preview is staged through design-voice, which separates it; One keeps its base, file and slot", async () => {
     seedShared({ declinedVoiceFrom: [ids['Book One']] });
     /* Through the real routes: the design separates Two before it stages, so the
@@ -588,11 +279,101 @@ describe('#4026 — promote keeps a stale variant file another row still names',
     expect(kept()).toBe(true);
   });
 
-  it('control: no other row names it, so promote tears it down as before', async () => {
+  it('the sole owner: the slots go, the file stays (the startup sweep removes it)', async () => {
     seedShared();
     writeFileSync(castPath('Book One'), JSON.stringify({ characters: [{ ...legacy, voiceUuid: 'u_one' }] }));
     const res = await promote('Book Two', 'u_shared');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(kept()).toBe(false);
+    expect(variantsOf('Book Two')).toBeUndefined();
+    expect(kept(), 'promote deleted a variant file').toBe(true);
+  });
+});
+
+/* The variant file family a design lands (`.pt`, persona `.json`, reference
+   clip, derived 1.7B prompt). */
+const family = (k: string) => [`${k}.pt`, `${k}.json`, `${k}__master.wav`, `${k}__1.7b.pt`];
+const HOUR_AGO = new Date(Date.now() - 61 * 60_000);
+function plant(names: string[], old = true) {
+  for (const n of names) {
+    writeFileSync(join(qwenDir(), n), 'x');
+    if (old) utimesSync(join(qwenDir(), n), HOUR_AGO, HOUR_AGO);
+  }
+}
+const onDisk = () => readdirSync(qwenDir()).sort();
+const slot = (name: string, variants: Record<string, unknown>) => ({ overrideTtsVoices: { qwen: { name, variants } } });
+
+describe('#4026 — the startup sweep of variant files no cast row names', () => {
+  it('deletes an unnamed variant family and keeps one each naming form still names', async () => {
+    reset();
+    writeBook('Book One', [
+      /* stored name (a name that is not this row's own key) */
+      { ...legacy, voiceUuid: 'u_one', ...slot('qwen-u_one', { angry: { name: 'qwen-u_elsewhere__angry' } }) },
+      /* uuid-derived key: the slot is present under another stored name */
+      { ...legacy, id: 'kit', voiceId: 'v_kit', voiceUuid: 'u_kit', ...slot('qwen-u_kit', { sad: { name: 'other' } }) },
+    ]);
+    writeBook('Book Two', [
+      /* legacy row (no uuid): its legacy key `qwen-<voiceId>__<emotion>` */
+      { ...legacy, ...slot('qwen-v_wren', { whisper: { name: 'other2' } }) },
+      /* a uuid row never reads its legacy key: no holder of qwen-v_ash__excited */
+      { ...legacy, id: 'ash', voiceId: 'v_ash', voiceUuid: 'u_ash', ...slot('qwen-u_ash', { excited: { name: 'qwen-u_ash__excited' } }) },
+    ]);
+    const named = ['qwen-u_elsewhere__angry', 'qwen-u_kit__sad', 'qwen-v_wren__whisper', 'qwen-u_ash__excited'];
+    const unnamed = ['qwen-u_gone__angry', 'qwen-v_ash__excited', 'qwen-u_kit__angry'];
+    plant([...named.flatMap(family), ...unnamed.flatMap(family)]);
+    expect(await sweepOrphanVariantFiles()).toBe(unnamed.length * 4);
+    expect(onDisk()).toEqual(named.flatMap(family).sort());
+  });
+
+  it('fails closed: one unreadable cast.json and nothing is deleted, logged once', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
+    writeBook('Book Two', [{ ...legacy, voiceUuid: 'u_two' }]);
+    writeFileSync(castPath('Book Two'), '{"characters":[');
+    plant(family('qwen-u_gone__angry'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await sweepOrphanVariantFiles()).toBe(0);
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('[variant-sweep]'))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(onDisk()).toEqual(family('qwen-u_gone__angry').sort());
+  });
+
+  it('keeps an unnamed variant file younger than an hour (a second server may be mid-design)', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
+    plant(['qwen-u_fresh__angry.pt'], false);
+    plant(['qwen-u_old__angry.pt']);
+    expect(await sweepOrphanVariantFiles()).toBe(1);
+    expect(onDisk()).toEqual(['qwen-u_fresh__angry.pt']);
+  });
+
+  it('never touches a base voice, a preview, a staging file or a base whose key ends like a variant', async () => {
+    reset();
+    /* a character whose own id ends in `__angry`: its base key looks like a variant */
+    writeBook('Book One', [{ ...legacy, id: 'odd__angry', voiceId: undefined, ...slot('qwen-odd__angry', {}) }]);
+    const untouched = [
+      ...family('qwen-u_orphan_base'), // an unnamed base: not this sweep's business
+      ...family('qwen-odd__angry'), // a named base shaped like a variant
+      'qwen-u_x__angry-preview-abc123.pt', // a staged compare preview
+      'qwen-u_x__angry-preview-abc123.json',
+      'qwen-staging-AbCdEfGhIjKlMn__angry.pt', // a staging key whose nanoid ends in `__angry`
+      'qwen-staging-AbCdEfGhIjKlMn__angry__master.wav',
+      'notes.txt',
+    ];
+    plant(untouched);
+    expect(await sweepOrphanVariantFiles()).toBe(0);
+    expect(onDisk()).toEqual([...untouched].sort());
+  });
+
+  it('index.ts awaits it before the server starts listening', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.ts'), 'utf8');
+    const sweep = src.indexOf('await sweepOrphanVariantFiles()');
+    const listen = src.indexOf('listenWithAutoRebind(server');
+    expect(sweep).toBeGreaterThan(-1);
+    expect(listen).toBeGreaterThan(-1);
+    expect(sweep).toBeLessThan(listen);
+    expect(src).not.toMatch(/void\s+sweepOrphanVariantFiles/);
   });
 });
