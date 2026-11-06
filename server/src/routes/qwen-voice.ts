@@ -32,7 +32,7 @@ import { join, resolve } from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
-import { BOOK_GONE, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, bookFolderMoveCount, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
@@ -1828,12 +1828,16 @@ async function tearDownEmotionVariant(designedId: string): Promise<void> {
    caller; only the file deletion is skipped. The scan is read-only and runs
    outside any cast lock, so it is checked against the variant's saving registry:
    a design that has landed this file but not yet written its slot (or whose
-   landing began during the scan) is a holder the cast cannot show yet. */
+   landing began during the scan) is a holder the cast cannot show yet. A book
+   whose folder moved during the scan is one the scan may have missed (listed
+   under its old name, or moved into a directory already passed), so a move
+   counted on either side keeps the file too. */
 async function tearDownVariantUnlessShared(variantId: string): Promise<void> {
   const before = savesOf(variantId);
+  const movesBefore = bookFolderMoveCount();
   const unshared = before.active === 0 && !(await isVariantStillNamed(variantId));
   const after = savesOf(variantId);
-  if (!unshared || after.active > 0 || after.begun !== before.begun) {
+  if (!unshared || after.active > 0 || after.begun !== before.begun || bookFolderMoveCount() !== movesBefore) {
     console.warn(`[qwen-voice] keeping variant "${variantId}": another voice still uses it`);
     return;
   }

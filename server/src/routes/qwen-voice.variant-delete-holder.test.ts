@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
@@ -62,6 +62,40 @@ vi.mock('./voices.js', async (importOriginal) => {
   };
 });
 
+/* Pauses the variant teardown's holder scan on the Nth read of one cast.json,
+   either just before or just after the read, so a test can change the library
+   mid-scan. */
+const scanGate = vi.hoisted(() => ({
+  path: null as null | string,
+  nth: 1,
+  seen: 0,
+  when: 'after' as 'before' | 'after',
+  entered: null as null | (() => void),
+  release: null as null | Promise<void>,
+}));
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  const { resolve: res } = await import('node:path');
+  const hit = (p: string) => !!scanGate.path && res(p) === scanGate.path && ++scanGate.seen === scanGate.nth;
+  return {
+    ...actual,
+    readJson: async (p: string) => {
+      if (scanGate.when === 'before' && hit(p)) {
+        scanGate.path = null;
+        scanGate.entered?.();
+        await scanGate.release;
+      }
+      const v = await actual.readJson(p);
+      if (scanGate.when === 'after' && hit(p)) {
+        scanGate.path = null;
+        scanGate.entered?.();
+        await scanGate.release;
+      }
+      return v;
+    },
+  };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
@@ -73,6 +107,8 @@ let workspaceRoot: string;
 let audioDir: string;
 let app: Express;
 let previewVoiceIdFor: typeof import('./qwen-voice.js').previewVoiceIdFor;
+let withBookOp: typeof import('../workspace/book-op-lock.js').withBookOp;
+let moveBookFolder: typeof import('../workspace/book-op-lock.js').moveBookFolder;
 const ids = {} as Record<Title, string>;
 let counter = 0;
 const fetchMock = vi.fn();
@@ -123,6 +159,9 @@ const legacy = {
   ageRange: 'adult',
 };
 const reset = () => {
+  scanGate.path = null;
+  scanGate.seen = 0;
+  walkGate.armed = false;
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
   mkdirSync(qwenDir(), { recursive: true });
@@ -170,6 +209,7 @@ beforeAll(async () => {
   ({ previewVoiceIdFor } = await import('./qwen-voice.js'));
   const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
   const { makeBookId } = await import('../workspace/paths.js');
+  ({ withBookOp, moveBookFolder } = await import('../workspace/book-op-lock.js'));
   for (const t of TITLES) ids[t] = makeBookId(AUTHOR, SERIES, t);
   app = express();
   app.use(express.json());
@@ -346,6 +386,39 @@ describe('#4026 — the holder check against a linked variant design in flight',
     expect(variantsOf('Book Two')?.angry?.name).toBe('qwen-u_shared__angry');
     expect(existsSync(pt('qwen-u_shared__angry')), 'the just-designed variant file was deleted').toBe(true);
     expect(readFileSync(pt('qwen-u_shared__angry')).equals(landed)).toBe(true);
+  });
+});
+
+/* Resolves `entered` when the gated call is reached; holds it until `release()`. */
+function gate(g: typeof scanGate | typeof walkGate) {
+  let release!: () => void;
+  g.release = new Promise<void>((r) => (release = r));
+  const entered = new Promise<void>((r) => (g.entered = r));
+  return { entered, release };
+}
+
+describe('#4026 — a holder book renamed while the teardown scans', () => {
+  it('a folder moved after the scan listed it is not invisible: the file its renamed cast still names is kept', async () => {
+    seedShared({}, designedOn('u_shared')); // One ALSO names it: a still-linked holder
+    scanGate.path = resolve(castPath('Book One'));
+    scanGate.nth = 1;
+    scanGate.seen = 0;
+    scanGate.when = 'before';
+    const g = gate(scanGate);
+    const deleting = del('Book Two').then((r) => r);
+    const newDir = bookDir('Book One Renamed');
+    try {
+      await g.entered; // the scan listed "Book One" and is about to read its cast.json
+      await withBookOp(ids['Book One'], (b) =>
+        moveBookFolder(b, newDir, (s) => ({ ...s, title: 'Book One Renamed' })),
+      );
+    } finally {
+      g.release();
+    }
+    expect((await deleting).status).toBe(200);
+    const renamed = JSON.parse(readFileSync(join(newDir, '.audiobook', 'cast.json'), 'utf8')).characters[0];
+    expect(renamed.overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u_shared__angry');
+    expect(kept(), 'deleted a variant file the renamed book still names').toBe(true);
   });
 });
 
