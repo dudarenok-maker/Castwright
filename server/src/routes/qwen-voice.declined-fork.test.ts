@@ -920,12 +920,13 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
     expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
   });
 
-  it('Linked promote: both rows share u_shared, so the shared variant file is deleted', async () => {
+  it('Linked promote: Book One still names the shared variant, so its file is kept (#4026)', async () => {
     seedBoth('u_shared');
     const res = await promote('u_shared');
     expect(res.status).toBe(200);
     expect(slotOf('Book Two')).toBeUndefined();
-    expect(gone()).toBe(true);
+    expect(slotOf('Book One')).toBeDefined();
+    expect(gone()).toBe(false);
   });
 
   it('Sole owner: no other row names the variant, so it is deleted as before', async () => {

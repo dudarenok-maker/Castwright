@@ -11,7 +11,7 @@ let onDesign: Mod['mustSeparateOnDesign'];
 let holdsUuid: Mod['holdsUuid'];
 let holdsLegacyKey: Mod['holdsLegacyKey'];
 let voiceHeldBy: Mod['voiceHeldBy'];
-let variantUsed: Mod['isVariantUsedByOtherVoiceUuid'];
+let variantUsed: Mod['isVariantStillNamed'];
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -48,7 +48,7 @@ beforeAll(async () => {
     holdsUuid,
     holdsLegacyKey,
     voiceHeldBy,
-    isVariantUsedByOtherVoiceUuid: variantUsed,
+    isVariantStillNamed: variantUsed,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -213,17 +213,31 @@ describe('mustSeparateOnDesign (#3992 — rows declined before the route separat
   });
 });
 
-describe('isVariantUsedByOtherVoiceUuid (#3992, P10-2)', () => {
+describe('isVariantStillNamed (#3992 P10-2, #4026)', () => {
   const angry = (name: string) => ({ overrideTtsVoices: { qwen: { variants: { angry: { name } } } } });
-  it('counts a legacy row (no uuid) on a different key, and never a row on the same key', async () => {
+  it('counts any row naming the file by its stored name, whatever key, link or marker it has', async () => {
     reset();
     book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]); // legacy earlier book
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'own', ...angry('qwen-v__angry') }]);
-    expect(await variantUsed('qwen-v__angry', 'qwen-own')).toBe(true); // One still names it
-    expect(await variantUsed('qwen-v__angry', 'qwen-v')).toBe(true); // Two names it under another key
+    expect(await variantUsed('qwen-v__angry')).toBe(true);
     reset();
-    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]);
-    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', ...angry('qwen-v__angry') }]);
-    expect(await variantUsed('qwen-v__angry', 'qwen-v')).toBe(false); // a linked legacy pair shares the key
+    /* #4026 — an unforked declined row and the book it declined share one uuid */
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, ...angry(`qwen-${U}__angry`) }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, declinedVoiceFrom: [ONE_ID] }]);
+    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true);
+  });
+  it('counts a row whose slot is present under another stored name by its uuid-derived or legacy key', async () => {
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, ...angry('elsewhere') }]);
+    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true); // what the render path reads
+    expect(await variantUsed('qwen-v__angry')).toBe(true); // legacy key
+    expect(await variantUsed(`qwen-${U}__sad`)).toBe(false); // no sad slot
+  });
+  it('is false when no row names it, and true when a book cannot be read', async () => {
+    reset();
+    const dir = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U }]);
+    expect(await variantUsed(`qwen-${U}__angry`)).toBe(false);
+    tornCast(dir);
+    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true);
   });
 });

@@ -63,7 +63,7 @@ import {
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import {
-  isVariantUsedByOtherVoiceUuid,
+  isVariantStillNamed,
   legacyKeyHolderBookIds,
   scanVoiceHolders,
   voiceHeldBy,
@@ -1781,13 +1781,13 @@ async function tearDownEmotionVariant(designedId: string): Promise<void> {
   }
 }
 
-/* #3992 — tear a variant down unless a character under a DIFFERENT base voice
-   (storage key) still names it (a declined row that forked keeps the earlier
-   book's variant names; a legacy earlier book is counted by its legacy key). The
-   slot is already dropped from this row's cast by the caller; only the file
-   deletion is skipped. The scan is read-only and runs outside any cast lock. */
-async function tearDownVariantUnlessShared(variantId: string, ownKey: string): Promise<void> {
-  if (await isVariantUsedByOtherVoiceUuid(variantId, ownKey)) {
+/* #3992, #4026 — tear a variant down unless any cast row still names it (a
+   linked book, a declined or declining book, a same-book sibling; see
+   isVariantStillNamed). The slot is already dropped from this row's cast by the
+   caller; only the file deletion is skipped. The scan is read-only and runs
+   outside any cast lock. */
+async function tearDownVariantUnlessShared(variantId: string): Promise<void> {
+  if (await isVariantStillNamed(variantId)) {
     console.warn(`[qwen-voice] keeping variant "${variantId}": another voice still uses it`);
     return;
   }
@@ -1857,7 +1857,7 @@ qwenVoiceRouter.post(
        but still no reason to pin the lock for even that bounded worst case).
        Global order: design -> book-op -> cast (cast-lock.ts rule 4). */
     const moved = await withCastLock(located.bookDir, async (): Promise<
-      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; ownKey: string; voiceUuid?: string; first?: FirstKeptDesign }
+      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; voiceUuid?: string; first?: FirstKeptDesign }
     > => {
       const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = fresh?.characters?.find((c) => c.id === characterId);
@@ -1947,7 +1947,7 @@ qwenVoiceRouter.post(
         firstFile && seriesInfo && character.voiceUuid && (await isOrdinarySeriesVoice(character))
           ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
           : undefined;
-      return { realVoiceId, realFileName, ownKey: realVoiceId, voiceUuid: character.voiceUuid ?? undefined, first };
+      return { realVoiceId, realFileName, voiceUuid: character.voiceUuid ?? undefined, first };
     });
     if ('status' in moved) return res.status(moved.status).json(moved.body);
     /* Still under the book-ops (and this book's design lock): the first real file of
@@ -1964,7 +1964,7 @@ qwenVoiceRouter.post(
     /* Teardown stays outside the cast lock: filesystem work, and holding the lock
        across it reintroduces exactly the stall the narrowing above avoids. */
     for (const variantId of staleVariantIds) {
-      await tearDownVariantUnlessShared(variantId, moved.ownKey);
+      await tearDownVariantUnlessShared(variantId);
     }
 
     /* srv-43 — return voiceUuid so the drawer can stamp it locally; the
@@ -2104,12 +2104,10 @@ qwenVoiceRouter.delete(
        designed id from the locked read, close the lock, then run the
        teardown after — filesystem work + a best-effort network call, nothing
        that needs the lock. */
-    let ownKey = '';
     const designedId = await withCastLock(located.bookDir, async (): Promise<string | undefined> => {
       const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = cast?.characters?.find((c) => c.id === characterId);
       if (!character || !cast) return undefined;
-      ownKey = qwenStorageKey(character, characterId);
 
       /* Drop the slot from cast.json (preserving base + sibling variants). */
       const qwenSlot = character.overrideTtsVoices?.qwen;
@@ -2131,7 +2129,7 @@ qwenVoiceRouter.delete(
 
     /* Delete the designed embedding + persona sidecar and evict it (best-effort),
        outside the lock — see the comment above. */
-    await tearDownVariantUnlessShared(designedId, ownKey);
+    await tearDownVariantUnlessShared(designedId);
 
     return res.status(200).json({ ok: true, removed: emotion });
     });

@@ -341,16 +341,18 @@ export function mustSeparateOnDesign(row: MarkedRow, scan: VoiceScan): boolean {
   return declined.some((id) => scan.holderBookIds.has(id));
 }
 
-/* #3992 — read-only: does some OTHER character, under a DIFFERENT base voice
-   than `ownKey` (its storage key, `qwen-<uuid>` or the legacy
-   `qwen-<voiceId ?? id>`), still name `variantId` among its
-   `overrideTtsVoices.qwen.variants[*].name`? After a fork the declined row keeps
-   the shared variant names, so tearing one down would delete the earlier book's
-   `.pt`. A still-linked pair shares the base key, so it does NOT count (their
-   shared variants go stale together and are deleted as before). A row with no
-   uuid counts by its legacy key (P10-2: a legacy earlier book's variant). Scans
-   every book under BOOKS_ROOT, takes no lock, writes nothing. */
-export async function isVariantUsedByOtherVoiceUuid(variantId: string, ownKey: string): Promise<boolean> {
+/* #3992, #4026 — read-only: does ANY cast row still name `variantId`? Both
+   callers (the variant DELETE and promote-voice) drop the slot from their own
+   row before asking, so a row that answers yes is another one: a linked book, a
+   book that declined (or was declined by) this one, or a same-book sibling. A row
+   names it by a slot's stored `name` (a forked row keeps the earlier book's
+   name), by the key the render path derives (`<qwenStorageKey>__<emotion>`), or
+   by its legacy key (`qwen-<voiceId ?? id>__<emotion>`, P10-2). No marker, link
+   or uuid comparison decides it: a file a row names is never deleted (#4026: an
+   unforked declined row shared the earlier book's uuid and its delete took that
+   book's take). Scans every book under BOOKS_ROOT, takes no lock, writes
+   nothing. */
+export async function isVariantStillNamed(variantId: string): Promise<boolean> {
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -361,11 +363,13 @@ export async function isVariantUsedByOtherVoiceUuid(variantId: string, ownKey: s
            (an orphan at worst, never a deleted take). */
         if (cast === UNREADABLE) return true;
         for (const y of cast?.characters ?? []) {
-          if (qwenStorageKey(y, y.id ?? '') === ownKey) continue;
           const variants = y.overrideTtsVoices?.qwen?.variants;
           if (!variants) continue;
-          for (const v of Object.values(variants)) {
-            if (v?.name === variantId) return true;
+          const keys = [qwenStorageKey(y, y.id ?? ''), `qwen-${y.voiceId ?? y.id ?? ''}`];
+          for (const [emotion, v] of Object.entries(variants)) {
+            if (!v) continue;
+            if (v.name === variantId) return true;
+            if (keys.some((k) => `${k}__${emotion}` === variantId)) return true;
           }
         }
       }
