@@ -971,7 +971,14 @@ The rule, exactly (`server/src/workspace/repaired-book-gate.ts`):
   id naming no entry stays an idempotent no-op): a stale `/start` can no longer strand a fresh page's entry, a stale
   fail+retry cannot requeue it, and a stale `/complete`, cancel or skip is refused whole like every other write from a
   page that predates the repair. `POST /api/queue/clear` is gated by the bookIds of the entries it would drop (the bulk form of DELETE; a non-force clear that leaves a repaired book's in_progress entry alone needs no epoch for it). Only `reorder` and `pause` stay ungated: neither drops an entry (`reorder` keeps every in_progress entry, #4029), writes a book or starts a render. Each handler
-  settles the gate-file retry BEFORE it reads the queue, so no await sits between the queue's read and its write. `refuseUnreadRepairedBooks` and `refuseGatedSeriesFanOut`
+  settles the gate-file retry BEFORE the span, then does its read, gate check and write inside one `serializeQueueMutation`
+  span (`workspace/queue-mutex.ts`, a single process-local promise chain shared by every `.queue.json` writer: the queue
+  routes, generation's completion/orphan/pause writes and its fallback park `markQueueEntryAwaitingConfirmOnDisk`, and the
+  book-delete prune), so no other queue write can land between the read and the write (#4029). `queue-mutex.test.ts` pins
+  each queue-route site with a same-tick race and `book-state.queue-prune.test.ts` pins the prune; generation's four
+  writers are guarded structurally only (no same-tick test). `queue-write-span.guard.test.ts` fails the build on a write
+  outside such a span, on a span whose write is not made from that span's own read, and on a second
+  `serializeQueueMutation` declaration (#4034). `refuseUnreadRepairedBooks` and `refuseGatedSeriesFanOut`
   retry an unreadable gate file first, the way the mount middlewares do (#4029).
 - **Known limit (#4029 pass 2): a page loaded while the gate file was unreadable at boot.** `GET /api/info` serves
   `repairEpoch: null` in that window, so such a page sends no epoch and the mount gate lets its render of a gated book

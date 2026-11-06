@@ -46,7 +46,7 @@ A sidecar host-RAM leak (plan 141) OOM-killed the Node server mid-run. Two laten
 
 ## Architectural impact
 
-- **New seams:** `onExit` on `SpawnSidecarOpts`; the supervisor module (start/stop/current); `serializeQueueMutation` + `markQueueEntryDoneOnDisk` in `generation.ts`.
+- **New seams:** `onExit` on `SpawnSidecarOpts`; the supervisor module (start/stop/current); `serializeQueueMutation` (now in `workspace/queue-mutex.ts`, #4029) + `markQueueEntryDoneOnDisk` in `generation.ts`.
 - **Invariants preserved:** `spawnSidecar`'s null-return contract; the stale-sidecar handshake; the frontend-owned queue lifecycle still works (server completion is additive + idempotent); the srv-12 orphan-recovery guards (last-subscriber + registration check) are unchanged beyond routing through the serializer.
 - **Reversibility:** revert the four files; no schema/data migration (queue + state shapes unchanged).
 

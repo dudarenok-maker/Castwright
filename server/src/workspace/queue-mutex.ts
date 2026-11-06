@@ -1,7 +1,8 @@
 /* srv-16 / #4029 -- serialise every server-side `.queue.json` read-modify-write through
    one promise chain. There's no file-level lock, and the server mutates the queue from
    several concurrent contexts (the queue routes, per-chapter completion, the srv-12
-   orphan-recovery reset, the recycle-storm pause, the book-delete prune), so without this
+   orphan-recovery reset, the recycle-storm pause, the book-delete prune, the fallback park
+   `markQueueEntryAwaitingConfirmOnDisk`), so without this
    two near-simultaneous mutations could each read the same snapshot and the later write
    would drop the earlier one (a lost `/start` flip, a clear that erases a fresh enqueue).
    The chain swallows errors so one failed mutation can't wedge the next.
