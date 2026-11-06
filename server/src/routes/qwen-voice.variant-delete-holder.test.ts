@@ -158,6 +158,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/books', castDeclineVoiceLinkRouter);
+  const { bookStateRouter } = await import('./book-state.js');
+  app.use('/api/books', bookStateRouter);
 });
 
 beforeEach(() => {
@@ -338,6 +340,47 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
       warn.mockRestore();
     }
     expect(onDisk()).toEqual(family('qwen-u_gone__angry').sort());
+  });
+
+  /* PR #4038 pass 4 — a reparse deletes cast.json after copying its voice slots to
+     cast-reuse-carryover.json, which the next analysis restores. Until it does, the
+     carryover is the only thing naming the book's variants. */
+  it('a reparsed book (cast.json gone, slots in cast-reuse-carryover.json) still names its variants', async () => {
+    reset();
+    writeBook('Book One', [designedOn('u_solo')]);
+    plant([...family('qwen-u_solo'), ...family('qwen-u_shared__angry'), ...family('qwen-u_gone__angry')]);
+    const res = await request(app).post(`/api/books/${ids['Book One']}/reparse`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(existsSync(castPath('Book One'))).toBe(false);
+    expect(existsSync(join(bookDir('Book One'), '.audiobook', 'cast-reuse-carryover.json'))).toBe(true);
+    expect(await sweepOrphanVariantFiles()).toBe(4);
+    expect(onDisk()).toEqual([...family('qwen-u_solo'), ...family('qwen-u_shared__angry')].sort());
+  });
+
+  it('fails closed when the carryover exists but cannot be read: nothing is deleted', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
+    rmSync(castPath('Book One'));
+    writeFileSync(join(bookDir('Book One'), '.audiobook', 'cast-reuse-carryover.json'), '{"characters":[');
+    plant(family('qwen-u_gone__angry'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await sweepOrphanVariantFiles()).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(onDisk()).toEqual(family('qwen-u_gone__angry').sort());
+  });
+
+  it('a non-empty cast.json decides alone: a stale carryover beside it names nothing', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
+    writeFileSync(
+      join(bookDir('Book One'), '.audiobook', 'cast-reuse-carryover.json'),
+      JSON.stringify({ characters: [{ id: 'wren', name: 'Wren', voiceUuid: 'u_old', ...slot('qwen-u_old', { angry: { name: 'qwen-u_old__angry' } }) }] }),
+    );
+    plant(family('qwen-u_old__angry'));
+    expect(await sweepOrphanVariantFiles()).toBe(4);
   });
 
   it('keeps an unnamed variant file younger than an hour (a second server may be mid-design)', async () => {

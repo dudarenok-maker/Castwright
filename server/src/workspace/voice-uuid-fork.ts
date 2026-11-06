@@ -31,7 +31,7 @@
 
 import { join, resolve } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
-import { BOOKS_ROOT, castJsonPath, stateJsonPath } from './paths.js';
+import { BOOKS_ROOT, castJsonPath, castReuseCarryoverJsonPath, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
@@ -356,6 +356,25 @@ function listDirsOrNull(path: string): string[] | null {
   }
 }
 
+/* #4026 — the cast rows of one book that can name a variant: cast.json's, or,
+   when it is absent or has no characters (a reparse deletes it and the next
+   analysis restores the slots from the carryover), the reuse carryover's: the
+   same either-or as readPriorCastForMerge (routes/analysis.ts), the only reader
+   that restores a cast-shaped file into cast.json. No other file under
+   .audiobook/ holds voice slots (PR #4038 pass 4). UNREADABLE when either file
+   that decides cannot be read. */
+async function readCastRowsForVariants(dir: string): Promise<NonNullable<VariantCastFile['characters']> | typeof UNREADABLE> {
+  const cast = await readOtherBookCast<VariantCastFile>(dir);
+  if (cast === UNREADABLE) return UNREADABLE;
+  if (cast?.characters?.length) return cast.characters;
+  try {
+    return (await readJson<VariantCastFile>(castReuseCarryoverJsonPath(dir)))?.characters ?? [];
+  } catch (e) {
+    console.warn(`[voice-uuid-fork] skipping unreadable cast-reuse-carryover.json in ${dir}: ${(e as Error).message}`);
+    return UNREADABLE;
+  }
+}
+
 /* #4026 — read-only: every qwen voice name a cast row in the library names, for
    the startup sweep of variant files nothing names (sweepOrphanVariantFiles). A
    row names a variant by a slot's stored `name`, or by the key the render path
@@ -378,9 +397,9 @@ export async function namedQwenVoices(): Promise<Set<string> | null> {
       const titles = listDirsOrNull(join(BOOKS_ROOT, authorName, seriesName));
       if (!titles) return null;
       for (const titleName of titles) {
-        const cast = await readOtherBookCast<VariantCastFile>(join(BOOKS_ROOT, authorName, seriesName, titleName));
+        const cast = await readCastRowsForVariants(join(BOOKS_ROOT, authorName, seriesName, titleName));
         if (cast === UNREADABLE) return null;
-        for (const y of cast?.characters ?? []) {
+        for (const y of cast) {
           const qwen = y.overrideTtsVoices?.qwen;
           /* The render path's key: a uuid row's own, or (no uuid) the legacy one. */
           const key = qwenStorageKey(y, y.id ?? '');
