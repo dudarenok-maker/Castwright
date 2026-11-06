@@ -44,6 +44,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
+import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -482,9 +483,20 @@ export async function separateVoiceLocked(
 
   if (!separate) {
     const marked = withDeclineMark(x, decline?.fromBookId, undefined);
+    /* PR #4007 pass 13 — a decline that needed no separation leaves the row on a
+       uuid no other book's row holds but its followers: the decliner's own voice,
+       recorded like a separation's (separated-voices.ts) before the marker lands. A
+       failed write takes back only a record this step made. */
+    const own = decline && x.voiceUuid && !(await isSeparatedVoice(x.voiceUuid)) ? x.voiceUuid : undefined;
+    if (own) await recordSeparatedVoice(own);
     if (JSON.stringify(marked) !== JSON.stringify(x)) {
       fresh.characters[idx] = marked;
-      await writeCast(bookDir, fresh);
+      try {
+        await writeCast(bookDir, fresh);
+      } catch (e) {
+        if (own) await forgetSeparatedVoice(own);
+        throw e;
+      }
     }
     return { voiceUuid: x.voiceUuid ?? undefined, separated: false, row: marked, movedSameBook: [] };
   }
@@ -509,7 +521,17 @@ export async function separateVoiceLocked(
   const newUuid = nanoid();
   const oldKey = oldUuid ? `qwen-${oldUuid}` : `qwen-${linkId}`;
   const savesBefore = savesOf(oldKey);
-  const copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
+  /* PR #4007 pass 13 — U' is recorded as separated before any row moves onto it
+     (separated-voices.ts): a first design by any row on it is never shared. Every
+     failure below that leaves no row on U' takes the record back. */
+  await recordSeparatedVoice(newUuid);
+  let copied: string[];
+  try {
+    copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
+  } catch (e) {
+    await forgetSeparatedVoice(newUuid);
+    throw e;
+  }
   /* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — a missing
      source `.pt` is a voice nobody designed (or one deleted by hand), and the row
      moves onto the empty key like any other, UNLESS a landing, promote or mint of
@@ -519,6 +541,7 @@ export async function separateVoiceLocked(
     const savesAfter = savesOf(oldKey);
     if (savesBefore.active > 0 || savesAfter.active > 0 || savesAfter.begun !== savesBefore.begun) {
       await removeFiles(copied);
+      await forgetSeparatedVoice(newUuid);
       throw new RetryableForkError("This character's voice is being saved right now; try again.");
     }
   }
@@ -573,7 +596,10 @@ export async function separateVoiceLocked(
         console.error('[qwen-voice] separation: could not roll a follower back', restoreErr);
       }
     }
-    if (restored) await removeFiles(copied);
+    if (restored) {
+      await removeFiles(copied);
+      await forgetSeparatedVoice(newUuid);
+    }
     throw e;
   }
   /* P11-5 — a design in flight on a moved row follows it to the new voice. */
@@ -1073,11 +1099,21 @@ interface FirstDesignShare {
 /* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
 const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
 
+/* PR #4007 pass 13 (owner decision: a voice "Don't reuse" created is never shared
+   with anyone outside the chain that moved with it) — may a first design of this
+   row's voice be shared at all? Only an ordinary series voice: the row is on a
+   uuid that no separation recorded (separated-voices.ts), whichever row on it
+   designs, and the row itself declined nothing (a row marked before decline
+   recorded its uuid is on a voice of its own too). */
+async function isOrdinarySeriesVoice(c: CastCharacter | undefined): Promise<boolean> {
+  return !!c?.voiceUuid && !hasDeclineMarker(c) && !(await isSeparatedVoice(c.voiceUuid));
+}
+
 /* Under the landing's locks, after its file landed: stamp `share.uuid` (and, for a
    design the caller persists, the slot) onto the rows still on the never-designed
    key in the row's own book and in `others` (each locked, in the series, its cast
-   confirmed), so the series keeps one shared voice. Nothing at all when the
-   designing row carries a decline marker (P12-1); never a row that declined the
+   confirmed), so the series keeps one shared voice. Nothing at all unless the
+   voice is an ordinary series voice (isOrdinarySeriesVoice: P12-1, pass 13); never a row that declined the
    designing book; never a row on another voice (a uuid, a cloned or library slot,
    a slot naming another key); nothing when the row has left the uuid or the
    legacy key gained a file. A write
@@ -1093,10 +1129,10 @@ async function shareFirstDesign(
 ): Promise<void> {
   const series = p.seriesFilter;
   if (landed.voiceUuid !== share.uuid || !series) return;
-  /* P12-1 — a row that declined a book holds a voice of its own: it is shared with
-     no other row, in any book (the declined book's rows and the rows still on the
-     voice it left are the same voice). */
-  if (hasDeclineMarker(landed)) return;
+  /* P12-1, pass 13 — a voice "Don't reuse" created is shared with no other row, in
+     any book (the declined book's rows and the rows still on the voice it left are
+     the same voice), whichever row on it designs. Re-checked under the locks. */
+  if (!(await isOrdinarySeriesVoice(landed))) return;
   if (!(await exists(qwenVoicePtPath(`qwen-${share.uuid}`)))) return;
   const legacyKey = `qwen-${share.linkId}`;
   if (await exists(qwenVoicePtPath(legacyKey))) return;
@@ -1174,8 +1210,8 @@ async function shareKeptDesign(
    A base design that writes the first file of the row's uuid key (P12-4: however
    the uuid was minted, a Cancel or a discarded landing included) also takes the
    book-ops and cast locks of the other books with a row on the never-designed
-   legacy key, and shares the design with them (shareFirstDesign), unless the row
-   carries a decline marker (P12-1). The holders are planned lock-free and the
+   legacy key, and shares the design with them (shareFirstDesign), unless the
+   voice is not an ordinary series voice (isOrdinarySeriesVoice: P12-1, pass 13). The holders are planned lock-free and the
    rule is re-decided under the locks. When one of those books is gone by then,
    it lands on the row's own book alone. */
 async function landStagedDesign(
@@ -1188,10 +1224,11 @@ async function landStagedDesign(
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
   const moved = () => new RetryableForkError('This book moved while the voice was being designed; try again.');
   const mayShare = !p.emotion && !p.preview && !!p.seriesFilter;
-  /* The first-design rule for a row: on its own uuid, no decline marker, and no
-     file at its key yet (this write creates it). */
+  /* The first-design rule for a row: on an ordinary series voice (its own uuid,
+     not one "Don't reuse" created), and no file at its key yet (this write creates
+     it). */
   const firstDesignOf = async (c: CastCharacter | undefined): Promise<FirstDesignShare | undefined> =>
-    mayShare && c?.voiceUuid && !hasDeclineMarker(c) && !(await exists(qwenVoicePtPath(`qwen-${c.voiceUuid}`)))
+    mayShare && c?.voiceUuid && (await isOrdinarySeriesVoice(c)) && !(await exists(qwenVoicePtPath(`qwen-${c.voiceUuid}`)))
       ? { linkId: c.voiceId ?? c.id, uuid: c.voiceUuid }
       : undefined;
   /* The landing proper; the caller holds the row's book's cast lock (and those of
@@ -1907,8 +1944,8 @@ qwenVoiceRouter.post(
         await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
       }
       const first =
-        firstFile && seriesInfo && character.voiceUuid && !hasDeclineMarker(character)
-          ?{ linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
+        firstFile && seriesInfo && character.voiceUuid && (await isOrdinarySeriesVoice(character))
+          ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
           : undefined;
       return { realVoiceId, realFileName, ownKey: realVoiceId, voiceUuid: character.voiceUuid ?? undefined, first };
     });
@@ -1941,7 +1978,7 @@ qwenVoiceRouter.post(
       const row = seriesInfo
         ? (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId)
         : undefined;
-      const shareIds = row?.voiceUuid && !hasDeclineMarker(row) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id, seriesInfo ?? undefined) : [];
+      const shareIds = row?.voiceUuid && (await isOrdinarySeriesVoice(row)) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id, seriesInfo ?? undefined) : [];
       let out: Awaited<ReturnType<typeof promoteIn>> | typeof BOOK_GONE = BOOK_GONE;
       if (shareIds.length) {
         out = await withBookOps([bookId, ...shareIds], async (books) => {

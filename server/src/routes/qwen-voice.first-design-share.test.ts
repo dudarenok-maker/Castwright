@@ -3,9 +3,10 @@
    routes, against real cast.json files.
 
    One rule for the landing and for promote: share only when THIS write creates
-   the key's first `.pt` AND the designing row carries no decline marker. A
-   decliner's voice is never shared (P12-1); a Cancel before a plain first design
-   does not lose the share (P12-4).
+   the key's first `.pt` AND the voice is an ordinary series voice (the designing
+   row carries no decline marker, and no separation recorded its uuid: pass 13,
+   qwen-voice.separated-voice-share.test.ts). A decliner's voice is never shared
+   (P12-1); a Cancel before a plain first design does not lose the share (P12-4).
 
    A fresh series: One, Two and Three never designed, Two and Three linked to One,
    all on the legacy key `qwen-v_wren` with no `.pt`. The sidecar mock writes
