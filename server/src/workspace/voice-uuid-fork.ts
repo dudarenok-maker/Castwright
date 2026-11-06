@@ -345,8 +345,8 @@ export function mustSeparateOnDesign(row: MarkedRow, scan: VoiceScan): boolean {
    callers (the variant DELETE and promote-voice) drop the slot from their own
    row before asking, so a row that answers yes is another one: a linked book, a
    book that declined (or was declined by) this one, or a same-book sibling. A row
-   names it by a slot's stored `name` (a forked row keeps the earlier book's
-   name), or by the key the render path derives
+   names it by a slot's stored `name` (a forked row kept the earlier book's
+   name only on pre-#4007 data: withForkedUuid now drops `variants`), or by the key the render path derives
    (`<qwenStorageKey>__<emotion>`, which for a row with no uuid is its legacy
    `qwen-<voiceId ?? id>` key, P10-2; a row with a uuid never reads the legacy key
    again). No marker, link

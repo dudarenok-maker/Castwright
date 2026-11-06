@@ -350,12 +350,19 @@ describe('#4026 — the holder check against a linked variant design in flight',
 });
 
 describe('#4026 — promote keeps a stale variant file another row still names', () => {
-  it('an unforked declined row: Two drops its variants, One keeps its file and slot', async () => {
+  it("an unforked declined row (a pre-#4007 decline): Two's preview is staged through design-voice, which separates it; One keeps its base, file and slot", async () => {
     seedShared({ declinedVoiceFrom: [ids['Book One']] });
-    const res = await promote('Book Two', 'u_shared');
-    /* The decline makes this promote a separate-or-refuse case; either way One's
-       variant file must survive. */
-    expect([200, 409]).toContain(res.status);
+    /* Through the real routes: the design separates Two before it stages, so the
+       preview id carries Two's new key and promote follows it. */
+    const staged = await design('Book Two', { preview: true });
+    expect(staged.status, JSON.stringify(staged.body)).toBe(200);
+    const res = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: staged.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two').voiceUuid, 'Two was separated from One').not.toBe('u_shared');
+    expect(rowOf('Book One').voiceUuid).toBe('u_shared');
+    expect(readFileSync(pt('qwen-u_shared')).toString(), "Book One's base was overwritten").toBe('BOOK-ONE-BASE');
     expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_shared__angry');
     expect(kept(), "Book One's angry variant file was deleted").toBe(true);
   });
