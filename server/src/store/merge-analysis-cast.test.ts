@@ -966,6 +966,19 @@ describe('seedReuseGuardsFromPriorCast', () => {
     expect(existing[1].notLinkedTo).toHaveLength(1);
   });
 
+  it('the ambiguous-name union also carries the decline markers, not just notLinkedTo (#3965, #3992)', () => {
+    const existing: C[] = [
+      { id: 'old-tom', name: 'Old Tom', declinedVoiceFrom: ['book-1'], declinedVoiceUuids: ['u1'] },
+      { id: 'old-tom-b', name: 'Old Tom', declinedVoiceFrom: ['book-1', 'book-3'], declinedVoiceUuids: ['u2'] },
+    ];
+    const fresh: C[] = [{ id: 'old-tom-2', name: 'Old Tom' }];
+    seedReuseGuardsFromPriorCast(existing, fresh);
+    expect(fresh[0].declinedVoiceFrom).toEqual(['book-1', 'book-3']);
+    expect(fresh[0].declinedVoiceUuids).toEqual(['u1', 'u2']);
+    // Inputs untouched.
+    expect(existing[0].declinedVoiceFrom).toEqual(['book-1']);
+  });
+
   it('the ambiguous-name union is skipped for the narrator id (#3965)', () => {
     const existing: C[] = [
       { id: 'a', name: 'Olga', notLinkedTo: [{ bookId: 'b1', characterId: 'x' }] },
@@ -1385,6 +1398,28 @@ describe('dedupePriorCastByName', () => {
     expect(cast.map((r) => r.id)).toEqual(['tom']);
     expect(cast[0].notLinkedTo).toEqual([shared, { bookId: 'book-3', characterId: 'x' }]);
     expect(prior[0].notLinkedTo).toEqual([shared]);
+  });
+
+  it('the collapse carries both decline markers of every dropped row onto the survivor (#3992)', () => {
+    const prior: C[] = [
+      { id: 'tom', name: 'Old Tom', voiceState: 'locked', lines: 0, declinedVoiceFrom: ['book-1'], declinedVoiceUuids: ['u1'] },
+      { id: 'tom-2', name: 'Old Tom', lines: 3, declinedVoiceFrom: ['book-1', 'book-3'], declinedVoiceUuids: ['u2'] },
+    ];
+    const { cast } = dedupePriorCastByName(prior, 'book-2');
+    expect(cast.map((r) => r.id)).toEqual(['tom']);
+    expect(cast[0].declinedVoiceFrom).toEqual(['book-1', 'book-3']);
+    expect(cast[0].declinedVoiceUuids).toEqual(['u1', 'u2']);
+    expect(prior[0].declinedVoiceFrom).toEqual(['book-1']);
+  });
+
+  it('a collapse where no row declined a voice adds no marker keys (#3992)', () => {
+    const prior: C[] = [
+      { id: 'tom', name: 'Old Tom', voiceState: 'locked', lines: 0 },
+      { id: 'tom-2', name: 'Old Tom', lines: 3 },
+    ];
+    const { cast } = dedupePriorCastByName(prior, 'book-2');
+    expect(cast[0]).not.toHaveProperty('declinedVoiceFrom');
+    expect(cast[0]).not.toHaveProperty('declinedVoiceUuids');
   });
 
   it("a row's own SAME-book self-naming edge still blocks the collapse; a cross-book one does not (#3965)", () => {

@@ -76,6 +76,12 @@ export function createCastDesignMiddleware(): Middleware {
       return snap && snap.characterId === cid ? snap.currentName : null;
     };
 
+    /* The cast slice holds ONE book (open-book.ts), and series books share
+       character ids, so a single-design result for a book that is not the open one
+       must not be mirrored into it. The server already persisted it. */
+    const holdsBook = (bookId: string): boolean =>
+      (store.getState() as { manuscript: { bookId: string | null } }).manuscript.bookId === bookId;
+
     const buildCallbacks = (bookId: string, controller: AbortController): CastDesignCallbacks => ({
       signal: controller.signal,
       /* Cold-boot re-subscribe: seed the snapshot from the server's replay so
@@ -93,11 +99,15 @@ export function createCastDesignMiddleware(): Middleware {
       onCharacterDesigned: ({ characterId, voiceId }) => {
         /* Mirror the persisted override into the cast slice so the row flips
            "Needs voice" → "Designed" live. */
-        dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
+        if (holdsBook(bookId)) {
+          dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
+        }
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
       onVariantDesigned: ({ characterId, emotion, voiceId, viaFallback }) => {
-        dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        if (holdsBook(bookId)) {
+          dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        }
         if (viaFallback) {
           dispatch(castDesignActions.variantFellBack({ bookId, characterId, emotion, lastTickAt: Date.now() }));
         }
@@ -226,10 +236,12 @@ export function createCastDesignMiddleware(): Middleware {
         /* Mirror the persisted override into the cast slice so the row flips
            "Needs voice" → "Designed" live. (The `designed` event may carry an
            extra `url` now — ignored; we don't auto-play on first design in v1.) */
-        dispatch(castActions.setQwenOverrideName({ characterId: cid, voiceId }));
-        /* srv-43: mirror the voiceUuid so "Play 12s" right after a first design
-           resolves the uuid-keyed cache entry without waiting for a cast refetch. */
-        if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
+        if (holdsBook(bookId)) {
+          dispatch(castActions.setQwenOverrideName({ characterId: cid, voiceId }));
+          /* srv-43: mirror the voiceUuid so "Play 12s" right after a first design
+             resolves the uuid-keyed cache entry without waiting for a cast refetch. */
+          if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
+        }
         dispatch(
           notificationsActions.pushToast({
             kind: 'info',
@@ -246,6 +258,11 @@ export function createCastDesignMiddleware(): Middleware {
         dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
       },
       onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona, voiceUuid }) => {
+        /* #3992 — the server forks a declined row's shared uuid BEFORE the preview,
+           so a Cancel (which never approves) must still learn the new uuid here. */
+        if (voiceUuid && holdsBook(bookId)) {
+          dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
+        }
         dispatch(
           castDesignActions.previewReady({
             bookId,

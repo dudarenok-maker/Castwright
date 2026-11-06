@@ -588,7 +588,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
       expect(intercepted).toBe(true);
       expect(castReads).toBe(1); // only the parked PUT read so far
 
-      secondPromise = persistEmotionVariant(raceBookDir, 'nova', 'angry', 'qwen-v_nova__angry');
+      secondPromise = persistEmotionVariant(raceBookDir, 'nova', 'angry', 'qwen-nova__angry');
       secondPromise.catch(() => {}); // force dispatch now
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind the PUT's still-held lock when locked.
@@ -615,7 +615,7 @@ describe('book-state PUT cast — #1981 race: stale cast PUT vs concurrent /assi
     const qwen = (nova.overrideTtsVoices as
       | { qwen?: { variants?: Record<string, { name: string }> } }
       | undefined)?.qwen;
-    expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_nova__angry' });
+    expect(qwen?.variants?.angry).toEqual({ name: 'qwen-nova__angry' });
   });
 });
 
@@ -746,5 +746,112 @@ describe('book-state PUT state — titleSynthesized survives the chapters replac
 
     const after = JSON.parse(readFileSync(statePath, 'utf8'));
     expect(after.chapters[0].titleSynthesized).toBe(true);
+  });
+});
+
+/* #3992 — `declinedVoiceFrom` ("Don't reuse") is server-owned like notLinkedTo:
+   the redux row never carries it, so a routine autosave must not erase it, and a
+   client cannot forge one. */
+describe('book-state PUT cast — declinedVoiceFrom is server-owned (#3992)', () => {
+  const char = (extra: Record<string, unknown> = {}) => ({
+    id: 'mairin',
+    name: 'Mairin',
+    role: 'character',
+    color: '#abc',
+    ...extra,
+  });
+  const put = (characters: object[]) =>
+    request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'cast', patch: { characters } });
+
+  it('keeps the on-disk marker when the client omits it (the autosave that follows declineMatch)', async () => {
+    writeBook(bookDir, bookId, [char({ declinedVoiceFrom: ['earlier-book'] })]);
+    const res = await put([char({ name: 'Mairin Renamed' })]);
+    expect(res.status).toBe(200);
+    const mairin = onDiskCast().characters.find((c) => c.id === 'mairin')!;
+    expect(mairin.declinedVoiceFrom).toEqual(['earlier-book']);
+    expect(mairin.name).toBe('Mairin Renamed');
+  });
+
+  it('ignores a client-forged or client-cleared marker', async () => {
+    writeBook(bookDir, bookId, [char({ declinedVoiceFrom: ['earlier-book'] })]);
+    await put([char({ declinedVoiceFrom: ['HIJACK'] })]);
+    expect(onDiskCast().characters[0].declinedVoiceFrom).toEqual(['earlier-book']);
+    await put([char({ declinedVoiceFrom: [] })]);
+    expect(onDiskCast().characters[0].declinedVoiceFrom).toEqual(['earlier-book']);
+  });
+
+  it('cannot plant a marker on a row that has none', async () => {
+    writeBook(bookDir, bookId, [char()]);
+    await put([char({ declinedVoiceFrom: ['HIJACK'], declinedVoiceUuids: ['HIJACK'] })]);
+    expect(onDiskCast().characters[0].declinedVoiceFrom).toBeUndefined();
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toBeUndefined();
+  });
+
+  it('keeps the declined voice uuids the same way (pass-2 V)', async () => {
+    writeBook(bookDir, bookId, [char({ declinedVoiceFrom: ['earlier-book'], declinedVoiceUuids: ['u_shared'] })]);
+    await put([char({ name: 'Renamed' })]);
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
+    await put([char({ declinedVoiceUuids: ['HIJACK'] })]);
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
+    await put([char({ declinedVoiceUuids: [] })]);
+    expect(onDiskCast().characters[0].declinedVoiceUuids).toEqual(['u_shared']);
+  });
+});
+
+/* #3992 pass-3 — a fork drops the forked row's qwen `variants` on disk, but the
+   redux row the client still holds carries them. The whole-roster cast PUT must
+   not write them back under the NEW uuid (the render key `qwen-<new>__<emotion>`
+   has no `.pt`, so every such line fails at synth). */
+describe('book-state PUT cast — a forked row’s dropped variants stay dropped (#3992 pass 3)', () => {
+  const stale = (extra: Record<string, unknown> = {}) => ({
+    id: 'wren',
+    name: 'Wren',
+    role: 'character',
+    color: '#abc',
+    voiceUuid: 'u_shared',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+    },
+    ...extra,
+  });
+  const forked = (qwen: Record<string, unknown>) => ({
+    id: 'wren',
+    name: 'Wren',
+    role: 'character',
+    color: '#abc',
+    voiceUuid: 'u_forked',
+    overrideTtsVoices: { qwen },
+  });
+  const put = (characters: object[]) =>
+    request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'cast', patch: { characters } });
+
+  it('takes the qwen slot from disk when the incoming row carries the pre-fork uuid', async () => {
+    writeBook(bookDir, bookId, [forked({ name: 'qwen-u_forked' })]);
+    expect((await put([stale()])).status).toBe(200);
+    const wren = onDiskCast().characters[0] as Record<string, any>;
+    expect(wren.voiceUuid).toBe('u_forked');
+    expect(wren.overrideTtsVoices.qwen).toEqual({ name: 'qwen-u_forked' });
+  });
+
+  it('control: an incoming row on the SAME uuid keeps its variants (incoming wins)', async () => {
+    writeBook(bookDir, bookId, [forked({ name: 'qwen-u_forked' })]);
+    const row = stale({ voiceUuid: 'u_forked' });
+    expect((await put([row])).status).toBe(200);
+    const wren = onDiskCast().characters[0] as Record<string, any>;
+    expect(wren.overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u_shared__angry');
+  });
+
+  it('failure path: a disk row with no qwen slot leaves the incoming one alone (no crash, no invention)', async () => {
+    writeBook(bookDir, bookId, [{ ...forked({}), overrideTtsVoices: undefined }]);
+    expect((await put([stale()])).status).toBe(200);
+    const wren = onDiskCast().characters[0] as Record<string, any>;
+    expect(wren.voiceUuid).toBe('u_forked');
+    expect(wren.overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
   });
 });

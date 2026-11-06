@@ -954,7 +954,7 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
       }
       expect(castReads).toBe(1);
 
-      secondPromise = persistEmotionVariant(raceBookDir, 'race-y', 'angry', 'qwen-v_race-y__angry');
+      secondPromise = persistEmotionVariant(raceBookDir, 'race-y', 'angry', 'qwen-race-y__angry');
       secondPromise.catch(() => {}); // force dispatch now (see above)
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind the route's still-held lock when locked.
@@ -991,7 +991,7 @@ describe('#1981 — two reject-orphan-match calls for one book overlap', () => {
     expect(x.notLinkedTo).toEqual([{ bookId: raceBookId, characterId: 'race-x-orphan' }]);
     /* the second writer's own mutation survived too — the lost-update this
        test pins. */
-    expect(y.overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_race-y__angry' });
+    expect(y.overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-race-y__angry' });
   });
 
   it('keeps both notLinkedTo edges when two reject-orphan-match calls for one book overlap (end-to-end through book-op AND the cast lock)', async () => {

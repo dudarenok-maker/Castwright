@@ -28,6 +28,7 @@
 
 import { normaliseForMatch } from '../util/text-match.js';
 import { normaliseNameKey } from '../util/safe-id.js';
+import { declinesVoice } from './declined-voice.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { notLinkedToId } from './not-linked-to-scope.js';
@@ -43,6 +44,8 @@ export const PRESERVED_VOICE_FIELDS = [
   'ttsEngine',
   'voiceStyle',
   'notLinkedTo',
+  'declinedVoiceFrom',
+  'declinedVoiceUuids',
 ] as const;
 
 type CastRecord = { id: string } & Record<string, unknown>;
@@ -65,6 +68,9 @@ export interface Retirement {
     Coalfall voice-strip incident: `fresh` set the merge's prior to `[]` and so
     overwrote cast.json voiceless). */
 const REUSE_CONTINUITY_FIELDS = ['voiceId', 'matchedFrom', 'notLinkedTo'] as const;
+/* #3992: `declinedVoiceFrom` is deliberately NOT in this list. "Don't reuse" is a
+   durable record of a user decision, not a re-derivable link, so Start fresh keeps
+   it (the linker would otherwise re-link the declined book on the next run). */
 
 /** Strip reuse continuity from a prior cast while KEEPING each character's
     bespoke designed voice — the transform applied to the prior cast before a
@@ -455,8 +461,22 @@ function mergeCore<T extends { id: string }>(
     // different Book One character — and an unpinned overlay copies only the
     // keys the prior row has, so that foreign link's designed-voice fields
     // would graft onto the prior row's own link.
+    // #3992: a fresh link to a book the prior row DECLINED ("Don't reuse") is
+    // never grafted on. The linker and the seed already honour the marker, so
+    // this is the backstop for a join they did not see (roster dedup moved it);
+    // the prior row's own voice is then taken whole, exactly like a pinned row.
+    const freshMatchedBookId = (f as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId;
+    const declinedFreshLink =
+      typeof freshMatchedBookId === 'string' &&
+      declinesVoice(old, {
+        bookId: freshMatchedBookId,
+        voiceUuid: (f as { voiceUuid?: string | null }).voiceUuid,
+      });
     const takesVoiceWhole =
-      old.voiceState === 'locked' || old.voiceState === 'tuned' || old.matchedFrom !== undefined;
+      old.voiceState === 'locked' ||
+      old.voiceState === 'tuned' ||
+      old.matchedFrom !== undefined ||
+      declinedFreshLink;
     for (const key of PRESERVED_VOICE_FIELDS) {
       if (old[key] !== undefined) merged[key] = old[key];
       else if (takesVoiceWhole) delete merged[key];
@@ -594,7 +614,13 @@ export function applyRewriteToPriorCast<T extends CastRecord>(
     from the UNIQUE prior narrator-id row by id class, whatever either is named
     (two or more prior narrator-id rows are ambiguous: nothing is bridged). */
 export function seedReuseGuardsFromPriorCast<
-  T extends { id: string; notLinkedTo?: unknown; matchedFrom?: unknown },
+  T extends {
+    id: string;
+    notLinkedTo?: unknown;
+    matchedFrom?: unknown;
+    declinedVoiceFrom?: unknown;
+    declinedVoiceUuids?: unknown;
+  },
 >(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
   if (!existing.length) return;
   const byId = new Map(existing.map((c) => [c.id, c]));
@@ -655,6 +681,12 @@ export function seedReuseGuardsFromPriorCast<
     const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
     if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
       f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
+    // #3992: "Don't reuse" fails safe like notLinkedTo (a spurious copy only
+    // prevents a link), so it takes the same loose candidate set.
+    if (f.declinedVoiceFrom === undefined && nlFrom?.declinedVoiceFrom !== undefined)
+      f.declinedVoiceFrom = nlFrom.declinedVoiceFrom as T['declinedVoiceFrom'];
+    if (f.declinedVoiceUuids === undefined && nlFrom?.declinedVoiceUuids !== undefined)
+      f.declinedVoiceUuids = nlFrom.declinedVoiceUuids as T['declinedVoiceUuids'];
     // #3965: two or more same-name prior rows make the loose bridge ambiguous, so
     // a fresh row with no by-id prior (an id-drifted speaker) would get no
     // decline at all, and the merge's name fallback could then hand it a link a
@@ -662,16 +694,25 @@ export function seedReuseGuardsFromPriorCast<
     // spurious copy can only block a link, never land a wrong one (a wrong decline
     // can block a link the user wanted, #3965's existing trade). That holds for each
     // of several same-name fresh rows too (one speaker held under two roster
-    // ids, #4032), so the union does not wait for a unique fresh name.
-    if (f.notLinkedTo === undefined && !byIdRow && !isNarrator) {
+    // ids, #4032), so the union does not wait for a unique fresh name. #3992: the
+    // decline markers ("not this voice") ride the same union.
+    if (!byIdRow && !isNarrator) {
       const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
       if (key && looseBridge.ambiguous.has(key)) {
         let union: unknown[] | undefined;
+        let fromUnion: string[] | undefined;
+        let uuidUnion: string[] | undefined;
         for (const old of existing) {
           if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
           if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
+          fromUnion = unionStrings(fromUnion, old.declinedVoiceFrom);
+          uuidUnion = unionStrings(uuidUnion, old.declinedVoiceUuids);
         }
-        if (union?.length) f.notLinkedTo = union as T['notLinkedTo'];
+        if (f.notLinkedTo === undefined && union?.length) f.notLinkedTo = union as T['notLinkedTo'];
+        if (f.declinedVoiceFrom === undefined && fromUnion?.length)
+          f.declinedVoiceFrom = fromUnion as T['declinedVoiceFrom'];
+        if (f.declinedVoiceUuids === undefined && uuidUnion?.length)
+          f.declinedVoiceUuids = uuidUnion as T['declinedVoiceUuids'];
       }
     }
     if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
@@ -757,6 +798,15 @@ function unionNotLinkedTo(a: unknown[] | undefined, b: unknown[]): unknown[] {
   return out;
 }
 
+/** `a` plus the strings of `b` it lacks (a decline-marker list); non-array `b`
+    contributes nothing. Never mutates either input. */
+function unionStrings(a: string[] | undefined, b: unknown): string[] | undefined {
+  if (!Array.isArray(b)) return a;
+  const out = [...(a ?? [])];
+  for (const e of b) if (typeof e === 'string' && !out.includes(e)) out.push(e);
+  return out;
+}
+
 /** Collapse same-normalised-name rows in a prior cast to one survivor each so
     the carryover merge cannot re-add a voiced duplicate. Bespoke voice beats a
     reuse link; narrator rows and notLinkedTo-separated pairs are never
@@ -816,6 +866,9 @@ export function dedupePriorCastByName<T extends CastRecord>(
     let notLinkedTo: unknown[] | undefined = Array.isArray(best.notLinkedTo)
       ? (best.notLinkedTo as unknown[])
       : undefined;
+    // #3992: the decline markers ("not this voice") ride onto the survivor too.
+    let declinedVoiceFrom = unionStrings(undefined, best.declinedVoiceFrom);
+    let declinedVoiceUuids = unionStrings(undefined, best.declinedVoiceUuids);
     for (const row of group) {
       if (row === best) continue;
       // Fold the dropped row's alternate names in, but never the survivor's own
@@ -830,6 +883,8 @@ export function dedupePriorCastByName<T extends CastRecord>(
       if (Array.isArray(row.notLinkedTo)) {
         notLinkedTo = unionNotLinkedTo(notLinkedTo, row.notLinkedTo as unknown[]);
       }
+      declinedVoiceFrom = unionStrings(declinedVoiceFrom, row.declinedVoiceFrom);
+      declinedVoiceUuids = unionStrings(declinedVoiceUuids, row.declinedVoiceUuids);
       dropped.push({
         id: row.id,
         ...(typeof row.name === 'string' ? { name: row.name } : {}),
@@ -839,11 +894,13 @@ export function dedupePriorCastByName<T extends CastRecord>(
     }
     survivorByKey.set(
       key,
-      aliases || notLinkedTo
+      aliases || notLinkedTo || declinedVoiceFrom?.length || declinedVoiceUuids?.length
         ? ({
             ...best,
             ...(aliases ? { aliases } : {}),
             ...(notLinkedTo ? { notLinkedTo } : {}),
+            ...(declinedVoiceFrom?.length ? { declinedVoiceFrom } : {}),
+            ...(declinedVoiceUuids?.length ? { declinedVoiceUuids } : {}),
           } as T)
         : best,
     );

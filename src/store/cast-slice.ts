@@ -168,6 +168,23 @@ export const castSlice = createSlice({
         if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
       }
     },
+    /* #3992 — mirror the "Don't reuse" marker the decline route returned, so
+       applyVoiceMatches' own filter (which reads it) works in the session where
+       the decline happened, not only after a re-read. Server-owned: the cast PUT
+       takes both lists from disk, so this is local state only. */
+    setDeclinedVoice: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        declinedVoiceFrom: string[];
+        declinedVoiceUuids: string[];
+      }>,
+    ) => {
+      const c = s.characters.find((x) => x.id === a.payload.characterId);
+      if (!c) return;
+      c.declinedVoiceFrom = a.payload.declinedVoiceFrom;
+      c.declinedVoiceUuids = a.payload.declinedVoiceUuids;
+    },
     /* Pin a character's voice so subsequent regenerates preserve it. The
        Profile Drawer's Lock button dispatches this; the change-log slice
        records the matching voice_lock event. */
@@ -283,6 +300,12 @@ export const castSlice = createSlice({
       const { characterId, voiceUuid } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
+      /* #3992 — a CHANGED uuid is a fork: the server dropped the row's qwen
+         `variants` with it (their `<uuid>__<emotion>` files belong to the old
+         uuid), so the autosave spreads must not write the stale slots back. */
+      if (c.voiceUuid && c.voiceUuid !== voiceUuid && c.overrideTtsVoices?.qwen?.variants) {
+        delete c.overrideTtsVoices.qwen.variants;
+      }
       c.voiceUuid = voiceUuid;
     },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
@@ -798,8 +821,12 @@ export const castSlice = createSlice({
       s.characters = s.characters.map((c) => {
         const m = byId[c.id];
         if (!m || !m.candidates?.length) return c;
-        const top = m.candidates[0];
         if (c.voiceState === 'locked' || c.voiceState === 'tuned') return c;
+        /* #3992 — never re-link a row to a book it declined ("Don't reuse"). The
+           server already drops these from the response; this keeps a stale or
+           third-party response from re-linking a row the client knows is declined. */
+        const top = m.candidates.find((cand) => !(cand.fromBookId && c.declinedVoiceFrom?.includes(cand.fromBookId)));
+        if (!top) return c;
         return {
           ...c,
           voiceId: top.voiceId,

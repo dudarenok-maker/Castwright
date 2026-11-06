@@ -312,6 +312,17 @@ export function qwenVoicesDir(): string {
   return join(WORKSPACE_ROOT, 'voices', 'qwen');
 }
 
+/** Workspace-level record of the voice uuids "Don't reuse" separated (PR #4007
+    pass 13): one empty file per uuid, named by it. Outside every cast.json and
+    outside voices/qwen (which the sidecar lists), so neither re-analysis nor the
+    sidecar ever reads it. See separated-voices.ts. */
+export function separatedVoicePath(voiceUuid: string): string {
+  const dir = join(WORKSPACE_ROOT, 'voices', 'separated');
+  const p = join(dir, sanitizeIdSegment(safeSegment(voiceUuid)));
+  assertContained(dir, p);
+  return p;
+}
+
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
     persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {

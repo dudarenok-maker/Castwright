@@ -21,6 +21,7 @@
    Guards mirror scripts/repair-series-reuse.mjs:
      - skip `unknown-male` / `unknown-female` (per-book buckets, never reused);
      - never link a `notLinkedTo` pair (intentional same-name-different-person);
+     - never link to a book in the row's `declinedVoiceFrom` (#3992, "Don't reuse");
      - only link against EARLIER books (lower seriesPosition) and skip the run
        entirely for the earliest book in the series (nothing prior);
      - never overwrite an existing `matchedFrom`, nor flip a tuned/locked voice
@@ -37,6 +38,7 @@ import { scanLibraryCharacters, type LibraryCharacterRecord } from './library-ca
 import { BOOKS_ROOT, stateJsonPath } from './paths.js';
 import { join } from 'node:path';
 import { readStateJsonWithRecovery } from './state-migrate.js';
+import { declinesVoice } from '../store/declined-voice.js';
 import { scoreOne, type CharacterMatchInput, type LibraryVoice } from '../routes/voice-match.js';
 import { resolveReusedVoiceFields, type CastLoader } from '../tts/hydrate-reused-voice.js';
 import { createWorkspaceCastLoader } from '../tts/hydrate-reused-voice-workspace.js';
@@ -94,6 +96,10 @@ export interface LinkableCharacter {
   } | null;
   matchFactors?: unknown[];
   notLinkedTo?: { bookId: string; characterId: string }[];
+  /** #3992 — earlier books this row's voice link was declined from. */
+  declinedVoiceFrom?: string[];
+  /** #3992 — the voice uuids declined with them. */
+  declinedVoiceUuids?: string[];
 }
 
 /* Walk the books tree once, returning bookId → seriesPosition for every book
@@ -378,7 +384,12 @@ export async function linkSeriesReuseAtAnalysis(
          same person (e.g. teenage vs adult Wren); never auto-link it. */
       (c.notLinkedTo ?? []).some(
         (p) => p.bookId === v.bookId && p.characterId === v.characterId,
-      );
+      ) ||
+      /* #3992 — "Don't reuse": the user declined THIS book's voice for the row.
+         Narrower than the edge above (it says nothing about being the same
+         person), so it skips that one book and any book holding the same voice
+         uuid; a different voice still links. */
+      declinesVoice(c, v);
 
     /* Stable-key pass FIRST: a character that kept its deterministic write key
        (`voiceId ?? id`) across books IS the same voice, even when the analyzer

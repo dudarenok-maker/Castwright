@@ -54,6 +54,13 @@ export const characterSchema = z
           .strict(),
       )
       .optional(),
+    /* #3992 — ids of earlier books this character's series voice link was
+     declined from ("Don't reuse"). Server-owned, written by POST
+     /:bookId/cast/:characterId/decline-voice-link. Optional + additive. */
+    declinedVoiceFrom: z.array(z.string().min(1)).optional(),
+    /* The voiceUuids that were declined, recorded with the books above: "not THIS
+     voice" also excludes another book holding the same uuid. Same ownership. */
+    declinedVoiceUuids: z.array(z.string().min(1)).optional(),
     tone: toneSchema.optional(),
     /* Optional voice-shaping hints. The skill prompt asks for these so the
      TTS picker doesn't have to scrape pronouns out of the description. Kept
@@ -229,10 +236,14 @@ export const requiredToneSchema = z
     `neutral` is always an available enum value, so constrained decoding can
     never deadlock on it. Never used for validation (that stays
     characterSchema, gender + tone optional so old cast.json files load). */
-export const analyzerCharacterSchema = characterSchema.extend({
-  tone: requiredToneSchema,
-  gender: z.enum(['male', 'female', 'neutral']),
-});
+export const analyzerCharacterSchema = characterSchema
+  /* #3992 — `declinedVoiceFrom` is server-owned (the decline route is its only
+     writer); the analyzer is never asked for it, so it stays out of the grammar. */
+  .omit({ declinedVoiceFrom: true, declinedVoiceUuids: true })
+  .extend({
+    tone: requiredToneSchema,
+    gender: z.enum(['male', 'female', 'neutral']),
+  });
 
 /** Grammar variant of stage1ChapterSchema — embeds analyzerCharacterSchema
     so the model must emit tone AND gender on every character it returns. */

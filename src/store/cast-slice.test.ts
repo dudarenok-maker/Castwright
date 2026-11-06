@@ -109,6 +109,32 @@ describe('castSlice — applyVoiceMatches', () => {
     expect(gen.voiceState).toBe('reused');
   });
 
+  it("never re-links a row to a book it declined (Don't reuse, #3992), and takes the next candidate", () => {
+    const cand = (fromBookId: string, score: number) => ({
+      voiceId: `v_${fromBookId}`,
+      fromBookId,
+      fromBookTitle: fromBookId,
+      fromCharacterId: 'wren',
+      score,
+    });
+    const declined = makeChar('wren', { voiceState: 'generated', declinedVoiceFrom: ['book-one'] });
+    const only = castSlice.reducer(
+      baseState([declined]),
+      castActions.applyVoiceMatches(matchResponse([{ characterId: 'wren', candidates: [cand('book-one', 0.9)] }])),
+    ).characters[0];
+    expect(only.matchedFrom).toBeUndefined();
+    expect(only.voiceState).toBe('generated');
+    expect(only.voiceId).toBeUndefined();
+
+    const next = castSlice.reducer(
+      baseState([declined]),
+      castActions.applyVoiceMatches(
+        matchResponse([{ characterId: 'wren', candidates: [cand('book-one', 0.9), cand('book-two', 0.5)] }]),
+      ),
+    ).characters[0];
+    expect(next.matchedFrom?.bookId).toBe('book-two');
+  });
+
   it('leaves characters with no candidates untouched', () => {
     const start = baseState([
       makeChar('halloran', { voiceState: 'generated', voiceId: 'v_old' }),
@@ -1861,6 +1887,68 @@ describe('castSlice — clearCharacterEmotionVariants (redesign invalidation)', 
       castActions.clearCharacterEmotionVariants({ characterId: 'solo' }),
     );
     expect(after.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-v_solo');
+  });
+});
+
+describe('castSlice — setDeclinedVoice (#3992 pass 3)', () => {
+  const payload = { characterId: 'wren', declinedVoiceFrom: ['book-one'], declinedVoiceUuids: ['u_shared'] };
+  it('mirrors both marker lists onto the row', () => {
+    const next = castSlice.reducer(baseState([makeChar('wren', {})]), castActions.setDeclinedVoice(payload));
+    expect(next.characters[0].declinedVoiceFrom).toEqual(['book-one']);
+    expect((next.characters[0] as { declinedVoiceUuids?: string[] }).declinedVoiceUuids).toEqual(['u_shared']);
+  });
+  it('is a no-op for an unknown character', () => {
+    const next = castSlice.reducer(
+      baseState([makeChar('other', {})]),
+      castActions.setDeclinedVoice(payload),
+    );
+    expect(next.characters[0].declinedVoiceFrom).toBeUndefined();
+  });
+});
+
+describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => {
+  const forkedRow = () =>
+    baseState([
+      makeChar('wren', {
+        voiceUuid: 'u_shared',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+        },
+      } as never),
+    ]);
+
+  it('a CHANGED uuid drops the qwen variants the server dropped with the fork', () => {
+    const next = castSlice.reducer(
+      forkedRow(),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_forked' }),
+    );
+    expect(next.characters[0].voiceUuid).toBe('u_forked');
+    expect(next.characters[0].overrideTtsVoices!.qwen!.variants).toBeUndefined();
+    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u_shared');
+  });
+
+  it('the same uuid, a first mint, or an unknown character leaves the variants alone', () => {
+    const same = castSlice.reducer(
+      forkedRow(),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_shared' }),
+    );
+    expect(Object.keys(same.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['angry']);
+
+    const minted = castSlice.reducer(
+      baseState([
+        makeChar('wren', {
+          overrideTtsVoices: { qwen: { name: 'qwen-v', variants: { sad: { name: 'qwen-v__sad' } } } },
+        } as never),
+      ]),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_new' }),
+    );
+    expect(Object.keys(minted.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
+
+    const ghost = castSlice.reducer(
+      forkedRow(),
+      castActions.setCharacterVoiceUuid({ characterId: 'ghost', voiceUuid: 'x' }),
+    );
+    expect(ghost.characters[0].voiceUuid).toBe('u_shared');
   });
 });
 

@@ -6,6 +6,7 @@ import { BuildStamp } from './build-stamp';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
+import { declineMatchFlow } from '../store/decline-match-flow';
 import { resetBookSlices } from '../store/reset-book-slices';
 import { fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
 import { configSlice, fetchConfig } from '../store/config-slice';
@@ -2427,7 +2428,7 @@ export function Layout() {
           onClose={() => dispatch(uiActions.setMatchDetailFor(null))}
           onConfirm={() => dispatch(uiActions.setMatchDetailFor(null))}
           onDecline={() => {
-            if (ui.matchDetailFor) dispatch(castActions.declineMatch(ui.matchDetailFor));
+            if (ui.matchDetailFor) void dispatch(declineMatchFlow(ui.matchDetailFor));
             dispatch(uiActions.setMatchDetailFor(null));
           }}
         />

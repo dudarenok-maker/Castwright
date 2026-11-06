@@ -26,13 +26,17 @@ import request from 'supertest';
    hidden 300s headersTimeout — see DERIVE_DISPATCHER / DESIGN_DISPATCHER),
    while others legitimately stay on the global one. Delegating undici's fetch
    to whatever this file stubs globally keeps every existing mock and
-   assertion working across both transports, with no per-test changes. */
+   assertion working across both transports, with no per-test changes.
+   PR #4007 pass 12, Y2 — a design call also leaves the staged `.pt` the real
+   sidecar writes (a landing without it now fails). */
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
+  const { writesStagedPt } = await import('../test-utils/staged-sidecar-fetch.js');
   return {
     ...actual,
-    fetch: (...args: unknown[]) =>
+    fetch: writesStagedPt((...args: unknown[]) =>
       (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+    ),
   };
 });
 
@@ -49,6 +53,8 @@ let app: Express;
 let bookId: string;
 
 const fetchMock = vi.fn();
+/* #4028 — the sidecar calls a design makes, without the bounded evicts that follow its landing. */
+const sidecarDesignCalls = () => fetchMock.mock.calls.filter((c) => !String(c[0]).includes('evict'));
 const { personaMock, personaSharesGpuMock } = vi.hoisted(() => ({
   personaMock: vi.fn(),
   /* Default false (a Gemini persona) so the pre-pass is a no-op for all the existing tests
@@ -298,7 +304,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
 
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
     expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sidecarDesignCalls()).toHaveLength(2);
   });
 
   it('bug #1411 code-review follow-up: caches a voiceId-less character\'s sample under the book-scoped scope', async () => {
@@ -369,7 +375,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
     // Only the untouched character was designed — the sidecar call count proves
     // the sweep never even attempted zara.
     expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sidecarDesignCalls()).toHaveLength(1);
 
     const idle = events.find((e) => e.type === 'idle');
     expect(idle).toMatchObject({ done: 1, total: 2, skipped: 1 });
@@ -936,6 +942,61 @@ describe('scope + variantTasks (fs-25)', () => {
     const cast = readCast();
     const marlow = cast.characters.find((c) => c.id === 'marlow');
     expect(marlow?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
+  });
+
+  /* #3992 — the bulk variant path forks a declined, shared uuid, exactly as the
+     single route does: the variant lands on the fork's key and the earlier book's
+     row keeps the shared one. #4028: the real core runs (the separation is inside
+     it), against the stubbed sidecar. */
+  it('#3992: scope:variants on a declined row designs under a forked uuid, not the earlier book’s', async () => {
+    const prequelDir = join(workspaceRoot, 'books', AUTHOR, SERIES, 'The Prequel');
+    try {
+      const shared = { ...charWithBase, voiceUuid: 'u_marlow_shared' };
+      writeBookOnDisk([...characters, { ...shared, declinedVoiceFrom: ['prequel-id'] }]);
+      mkdirSync(join(prequelDir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        join(prequelDir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: 'prequel-id',
+          manuscriptId: 'm_prequel',
+          title: 'The Prequel',
+          author: AUTHOR,
+          series: SERIES,
+          seriesPosition: 0,
+          isStandalone: false,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [],
+          language: 'en',
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      writeFileSync(
+        join(prequelDir, '.audiobook', 'cast.json'),
+        JSON.stringify({ characters: [{ ...shared }] }),
+      );
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({
+          modelKey: QWEN_KEY,
+          scope: 'variants',
+          characterIds: [],
+          variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }],
+        });
+      expect(res.status).toBe(200);
+
+      const designedUuid = charById('marlow')?.voiceUuid;
+      expect(designedUuid).toBeTruthy();
+      expect(designedUuid).not.toBe('u_marlow_shared');
+      const variant = parseSse(res.text).find((e) => e.type === 'variant_designed');
+      expect(variant?.voiceId).toBe(`qwen-${designedUuid}__angry`);
+      const prequel = JSON.parse(readFileSync(join(prequelDir, '.audiobook', 'cast.json'), 'utf8'));
+      expect(prequel.characters[0].voiceUuid).toBe('u_marlow_shared');
+    } finally {
+      rmSync(prequelDir, { recursive: true, force: true });
+    }
   });
 
   it('scope:variants skips a variant whose base voice is missing', async () => {
@@ -2060,17 +2121,19 @@ describe('cast-design — per-character reason on a lock timeout (#2292)', () =>
 describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not job-halting (PR #3161 N1)', () => {
   it('records a curated character_failed for the first character and still designs the second', async () => {
     const qwenVoiceMod = await import('./qwen-voice.js');
-    const original = qwenVoiceMod.ensureCharacterVoiceUuid;
+    const original = qwenVoiceMod.designQwenVoiceForCharacter;
     const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
       '../workspace/file-lock.js'
     );
+    /* #4028 — the uuid step runs inside the design core, so its lock timeout
+       surfaces from there. */
     const spy = vi
-      .spyOn(qwenVoiceMod, 'ensureCharacterVoiceUuid')
-      .mockImplementation(async (bookDir: string, characterId: string, seriesFilter) => {
-        if (characterId === 'aria') {
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockImplementation(async (params) => {
+        if (params.characterId === 'aria') {
           throw new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000);
         }
-        return original(bookDir, characterId, seriesFilter);
+        return original(params);
       });
 
     let res;
@@ -2105,6 +2168,61 @@ describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not
        loop did not halt on aria's failure. */
     expect(idle?.done).toBe(1);
     expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
+  });
+});
+
+describe('cast-design — a character that vanishes mid-fork fails alone and is never designed (#3992)', () => {
+  it('records character_failed for it and still designs the next character', async () => {
+    /* #4028 — the race's observable shape: the core (uuid step and landing)
+       throws CharacterGoneError for a row it can no longer find. */
+    const spy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockImplementation(async (params) => {
+        if (params.characterId === 'aria') throw new qwenVoiceMod.CharacterGoneError();
+        return { voiceId: 'qwen-x', url: '/u' };
+      });
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria', 'hart'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+    }
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failed?.errorReason).toBe('Character no longer exists.');
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'hart')).toBe(true);
+  });
+});
+
+describe('cast-design — a node fs error out of a character’s design is curated, not leaked (#3992)', () => {
+  it('reports the path-free fs sentence as the character’s failure reason', async () => {
+    const castLockMod = await import('../workspace/cast-lock.js');
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    /* aria has a voiceStyle, so the first cast lock is the design's own mint. */
+    const spy = vi.spyOn(castLockMod, 'withCastLock').mockImplementationOnce(async () => {
+      throw Object.assign(
+        new Error("EBUSY: resource busy or locked, copyfile 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt'"),
+        { code: 'EBUSY', syscall: 'copyfile', path: 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt' },
+      );
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+      consoleErrorSpy.mockRestore();
+    }
+
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failed).toBeDefined();
+    expect(failed?.errorReason).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(failed?.errorReason).not.toContain('real-name');
   });
 });
 

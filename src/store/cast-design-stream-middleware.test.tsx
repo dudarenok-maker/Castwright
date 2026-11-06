@@ -86,6 +86,7 @@ vi.mock('../lib/api', () => ({
 import { createCastDesignMiddleware } from './cast-design-stream-middleware';
 import { castDesignSlice, castDesignActions } from './cast-design-slice';
 import { castSlice } from './cast-slice';
+import { manuscriptSlice } from './manuscript-slice';
 import { notificationsSlice } from './notifications-slice';
 import { ToastStack } from '../components/toast-stack';
 
@@ -98,11 +99,23 @@ function makeStore(recorded?: { type: string }[]) {
     reducer: {
       castDesign: castDesignSlice.reducer,
       cast: castSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
       notifications: notificationsSlice.reducer,
     },
     middleware: (getDefault) =>
       getDefault().prepend(recorder).concat(createCastDesignMiddleware()),
   });
+}
+
+/* The slices hold ONE book at a time (open-book.ts); a single-design result lands in
+   them only when they hold the book the design ran for. */
+function openBook(store: ReturnType<typeof makeStore>, bookId: string): void {
+  store.dispatch(
+    manuscriptSlice.actions.hydrateFromBookState({
+      state: { bookId, manuscriptId: `m_${bookId}`, title: bookId } as never,
+      sentences: null,
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -118,6 +131,7 @@ afterEach(() => {
 describe('castDesignMiddleware', () => {
   it('start: seeds the snapshot, opens the SSE, and ticks through designs', () => {
     const store = makeStore();
+    openBook(store, 'b1');
     /* Seed two cast rows so the character_designed mirror has somewhere to land. */
     store.dispatch(
       castSlice.actions.setCharacters([
@@ -327,6 +341,7 @@ describe('castDesignMiddleware', () => {
   it('designSingleRequested → phases, mirrors designed into cast, toasts', () => {
     const recorded: { type: string }[] = [];
     const store = makeStore(recorded);
+    openBook(store, 'b1');
     store.dispatch(
       castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
     );
@@ -369,6 +384,36 @@ describe('castDesignMiddleware', () => {
     expect(
       store.getState().cast.characters.find((c) => c.id === 'c1')?.overrideTtsVoices?.qwen?.name,
     ).toBe('qwen-c1');
+  });
+
+  it('a design the server refused as shared (#3992) toasts its message and changes nothing in the cast', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    openBook(store, 'b1');
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'c1', name: 'Aria', voiceUuid: 'u_shared', overrideTtsVoices: { qwen: { name: 'qwen-u_shared' } } } as never,
+      ]),
+    );
+    const castBefore = store.getState().cast;
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    const message = 'Redesign "Book Two" first. This voice is shared with it.';
+    singleStartCalls[0].cb.onError?.({ code: 'design_failed', message });
+
+    const toasts = store.getState().notifications.toasts as Array<{ kind: string; message: string }>;
+    expect(toasts.some((t) => t.kind === 'error' && t.message === message)).toBe(true);
+    expect(store.getState().cast).toBe(castBefore);
+    expect(recorded.map((a) => a.type).filter((t) => t.startsWith('cast/'))).toEqual(['cast/setCharacters']);
   });
 
   it('preview_ready → ready-to-compare + a "ready to compare" toast', () => {
@@ -467,6 +512,7 @@ describe('castDesignMiddleware', () => {
      before a cast refetch, letting the drawer resolve the sample-cache entry. */
   it('onCharacterDesigned mirrors voiceUuid into the cast slice when present', () => {
     const store = makeStore();
+    openBook(store, 'b1');
     store.dispatch(
       castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
     );
@@ -490,8 +536,223 @@ describe('castDesignMiddleware', () => {
     ).toBe('uuid-c1-xyz');
   });
 
+  /* #3992 pass 3: a re-design's preview runs AFTER the server forked a declined
+     row's uuid and dropped its variants; the Cancel path never approves, so the
+     preview is where redux has to learn the new uuid (and drop the stale slots)
+     before an autosave writes them back. */
+  it('onPreviewReady mirrors a forked voiceUuid and drops the variants that went with it', () => {
+    const store = makeStore();
+    openBook(store, 'b1');
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        {
+          id: 'c1',
+          name: 'Aria',
+          voiceUuid: 'u_shared',
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+          },
+        } as never,
+      ]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    singleStartCalls[0].cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'qwen-u_forked-preview',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+      voiceUuid: 'u_forked',
+    });
+    const row = store.getState().cast.characters.find((c) => c.id === 'c1')!;
+    expect(row.voiceUuid).toBe('u_forked');
+    expect(row.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('onPreviewReady without a voiceUuid leaves the row alone', () => {
+    const store = makeStore();
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria', voiceUuid: 'u_keep' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    singleStartCalls[0].cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'p',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+    });
+    expect(store.getState().cast.characters.find((c) => c.id === 'c1')?.voiceUuid).toBe('u_keep');
+  });
+
+  /* #3992 pass 4: the slices hold ONE book. A result for a book that is no longer
+     the open one must not write its uuid into another book's rows (series books
+     share character ids): the server already persisted it, and the next open of
+     that book reads it. */
+  describe('a single design for a book that is not the open one', () => {
+    const seed = () => {
+      const store = makeStore();
+      openBook(store, 'b3'); // Book Three is open ...
+      store.dispatch(
+        castSlice.actions.setCharacters([
+          {
+            id: 'c1',
+            name: 'Aria',
+            voiceUuid: 'u_three',
+            overrideTtsVoices: {
+              qwen: { name: 'qwen-u_three', variants: { angry: { name: 'qwen-u_three__angry' } } },
+            },
+          } as never,
+        ]),
+      );
+      store.dispatch(
+        castDesignActions.designSingleRequested({
+          bookId: 'b2', // ... but the design ran for Book Two
+          characterId: 'c1',
+          name: 'Aria',
+          persona: 'warm',
+          sampleVoiceId: 'char-c1',
+          modelKey: 'qwen3-tts',
+          mode: 'redesign',
+        }),
+      );
+      return store;
+    };
+    const rowOf = (store: ReturnType<typeof makeStore>) =>
+      store.getState().cast.characters.find((c) => c.id === 'c1')!;
+
+    it('onPreviewReady leaves the open book’s row, uuid and variants alone, but still stages the compare', () => {
+      const store = seed();
+      singleStartCalls[0].cb.onPreviewReady?.({
+        characterId: 'c1',
+        name: 'Aria',
+        previewVoiceId: 'qwen-u_two2-preview',
+        previewUrl: '/x.mp3',
+        persona: 'warm',
+        voiceUuid: 'u_two2',
+      });
+      expect(rowOf(store).voiceUuid).toBe('u_three');
+      expect(rowOf(store).overrideTtsVoices?.qwen?.variants).toBeDefined();
+      expect(store.getState().castDesign.active?.state).toBe('ready-to-compare');
+    });
+
+    it('onCharacterDesigned leaves the open book’s row alone, but still settles and toasts', () => {
+      const store = seed();
+      singleStartCalls[0].cb.onCharacterDesigned?.({
+        characterId: 'c1',
+        voiceId: 'qwen-u_two2',
+        voiceUuid: 'u_two2',
+      });
+      expect(rowOf(store).voiceUuid).toBe('u_three');
+      expect(rowOf(store).overrideTtsVoices?.qwen?.name).toBe('qwen-u_three');
+      expect(store.getState().castDesign.active?.state).toBe('done');
+      expect(store.getState().notifications.toasts.length).toBeGreaterThan(0);
+    });
+
+    it('failure path: with no book open at all nothing is written either', () => {
+      const store = makeStore(); // manuscript slice holds no book
+      store.dispatch(castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria', voiceUuid: 'u_keep' } as never]));
+      store.dispatch(
+        castDesignActions.designSingleRequested({
+          bookId: 'b2',
+          characterId: 'c1',
+          name: 'Aria',
+          persona: 'warm',
+          sampleVoiceId: 'char-c1',
+          modelKey: 'qwen3-tts',
+          mode: 'first',
+        }),
+      );
+      singleStartCalls[0].cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-x', voiceUuid: 'u_new' });
+      expect(store.getState().cast.characters.find((c) => c.id === 'c1')?.voiceUuid).toBe('u_keep');
+    });
+  });
+
+  /* #3992 pass 5: the bulk job mirrors into the slices under the same rule. */
+  describe('a bulk design for a book that is not the open one', () => {
+    const seed = (open: string | null) => {
+      const store = makeStore();
+      if (open) openBook(store, open);
+      store.dispatch(
+        castSlice.actions.setCharacters([
+          {
+            id: 'c1',
+            name: 'Aria',
+            overrideTtsVoices: { qwen: { name: 'qwen-u_three' } },
+          } as never,
+        ]),
+      );
+      store.dispatch(
+        castDesignActions.designAllRequested({
+          bookId: 'b2', // the job ran for Book Two
+          characterIds: ['c1'],
+          modelKey: 'qwen3-tts-0.6b',
+          scope: 'both',
+          variantTasks: [{ characterId: 'c1', emotions: ['angry'] }],
+        }),
+      );
+      return store;
+    };
+    const rowOf = (store: ReturnType<typeof makeStore>) =>
+      store.getState().cast.characters.find((c) => c.id === 'c1')!;
+
+    for (const [label, open] of [
+      ['a different book open', 'b3'],
+      ['no book open', null],
+    ] as const) {
+      it(`${label}: onCharacterDesigned leaves the cast slice alone but still counts progress`, () => {
+        const store = seed(open);
+        startCalls[0].cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u_two' });
+        expect(rowOf(store).overrideTtsVoices?.qwen?.name).toBe('qwen-u_three');
+        expect(store.getState().castDesign.active?.done).toBe(1);
+      });
+
+      it(`${label}: onVariantDesigned leaves the cast slice alone but still counts progress and the fallback`, () => {
+        const store = seed(open);
+        startCalls[0].cb.onVariantDesigned?.({
+          characterId: 'c1',
+          emotion: 'angry',
+          voiceId: 'qwen-u_two__angry',
+          viaFallback: true,
+        });
+        expect(rowOf(store).overrideTtsVoices?.qwen?.variants).toBeUndefined();
+        expect(store.getState().castDesign.active?.done).toBe(1);
+        expect(store.getState().castDesign.active?.fallbacks).toEqual([{ characterId: 'c1', emotion: 'angry' }]);
+      });
+    }
+
+    it('the open book still mirrors', () => {
+      const store = seed('b2');
+      startCalls[0].cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u_two' });
+      startCalls[0].cb.onVariantDesigned?.({ characterId: 'c1', emotion: 'angry', voiceId: 'qwen-u_two__angry' });
+      expect(rowOf(store).overrideTtsVoices?.qwen?.name).toBe('qwen-u_two');
+      expect(rowOf(store).overrideTtsVoices?.qwen?.variants?.angry).toEqual({ name: 'qwen-u_two__angry' });
+    });
+  });
+
   it('onVariantDesigned mirrors the variant into the cast slice and bumps done', () => {
     const store = makeStore();
+    openBook(store, 'b');
     /* Seed character 'a' so setCharacterEmotionVariant has somewhere to land. */
     store.dispatch(
       castSlice.actions.setCharacters([{ id: 'a', name: 'Alice' } as never]),

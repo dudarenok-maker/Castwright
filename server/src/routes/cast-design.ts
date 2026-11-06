@@ -44,11 +44,12 @@ import {
   isLockAcquisitionTimeout,
   itemFailureReason,
   requestFailureMessage,
+  requestFailureMessageFs,
 } from '../workspace/file-lock.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
+import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
   applyOverrideToCastFiles,
@@ -627,31 +628,32 @@ async function runDesignJob(
          old key — orphaning it (silent Kokoro fallback on re-render; the variant
          mint then can't load its base). #1057: this is exactly how a bulk
          "Emotion variants" run orphaned every base. A variant anchors on the
-         base's CURRENT key, so it reuses the character's existing voiceUuid. */
+         base's CURRENT key, so it reuses the character's existing voiceUuid
+         (separating a row declined before "Don't reuse" did that first, never
+         minting). */
       let rideouts = 0;
       for (;;) {
         try {
-          /* Moved inside the per-character try (was previously computed once,
-             above the loop): a `LockAcquisitionTimeoutError` (or any other
-             throw) out of ensureCharacterVoiceUuid must land in the SAME
+          /* The uuid step runs inside the per-character try (it was once computed
+             above the loop; since #4028 it runs inside designQwenVoiceForCharacter):
+             a `LockAcquisitionTimeoutError` (or any other throw) out of
+             ensureCharacterVoiceUuid must land in the SAME
              per-character catch below that already covers
              applyOverrideToCastFiles/persistEmotionVariant — not escape the
              loop and halt the whole job on the first contended character
              (#3027 follow-up, N1). */
-          const voiceUuid = emotion
-            ? character.voiceUuid
-            : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
-          const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
-
           const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
+            bookId: job.bookId,
             bookDir: job.bookDir,
-            character: characterForDesign,
+            seriesFilter,
+            character,
             characterId,
             persona,
             sampleVoiceId,
             modelKey,
             language,
             emotion,
+            persistSlot: !emotion,
             signal: job.controller.signal,
           });
 
@@ -777,7 +779,7 @@ async function runDesignJob(
              contention rather than implying the character itself is at fault.
              The same string on both surfaces so the live toast and the
              end-of-job `failures` list can't disagree. */
-          const reason = itemFailureReason(e, message);
+          const reason = itemFailureReason(e, requestFailureMessageFs(e, message));
           job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',

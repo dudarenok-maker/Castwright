@@ -12,13 +12,21 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-vi.mock('./qwen-voice.js', async (orig) => ({
-  ...(await orig<typeof import('./qwen-voice.js')>()),
-  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string }) => ({
-    voiceId: `qwen-${p.characterId}`,
-    url: `/api/voice-sample/${p.characterId}.mp3`,
-  })),
-}));
+vi.mock('./qwen-voice.js', async (orig) => {
+  const actual = await orig<typeof import('./qwen-voice.js')>();
+  return {
+    ...actual,
+    /* The real core runs the series uuid step (#4028: inside its one design-lock span) and names the voice
+       qwen-<voiceUuid> (qwenStorageKey); the Save that follows only writes a row on that uuid (#3992: a designed
+       name for another uuid is not meant for it). Only the sidecar render is skipped. */
+    designQwenVoiceForCharacter: vi.fn(
+      async (p: { bookDir: string; characterId: string; seriesFilter?: { author: string; series: string } }) => {
+        const voiceUuid = await actual.ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter);
+        return { voiceId: `qwen-${voiceUuid ?? p.characterId}`, url: `/api/voice-sample/${p.characterId}.mp3`, voiceUuid };
+      },
+    ),
+  };
+});
 vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona: vi.fn(async () => 'a persona'),
   personaSharesGpu: vi.fn(() => false),
@@ -109,6 +117,8 @@ async function repaired() {
 }
 
 const read = (dir: string) => readFileSync(paths.castJsonPath(dir), 'utf8');
+/* The name the design wrote: qwen-<the uuid it stamped>. */
+const designedName = () => `qwen-${JSON.parse(read(src)).characters[0].voiceUuid}`;
 
 function sse(text: string): Array<Record<string, any>> {
   return text
@@ -148,7 +158,7 @@ describe('single design (SSE) with a repaired series-mate (#3713, pass 6)', () =
     const designed = sse(res.text).find((e) => e.type === 'designed');
     expect(designed).toBeDefined();
     expect(designed).not.toHaveProperty('skippedBooks');
-    expect(read(kept)).toContain('qwen-c0');
+    expect(read(kept)).toContain(designedName());
   });
 
   it('a stale epoch is refused at start too (#4029)', async () => {
@@ -185,7 +195,7 @@ describe('bulk design (SSE) with a repaired series-mate (#3713, pass 6)', () => 
     await repaired();
     const events = sse((await bulk(gate.currentRepairEpoch()!)).text);
     expect(events.filter((e) => e.skippedBooks)).toEqual([]);
-    expect(read(kept)).toContain('qwen-c0');
+    expect(read(kept)).toContain(designedName());
   });
 });
 

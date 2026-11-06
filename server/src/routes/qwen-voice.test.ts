@@ -43,13 +43,17 @@ import { NoCapacityError } from '../tts/tts-errors.js';
    hidden 300s headersTimeout — see DERIVE_DISPATCHER / DESIGN_DISPATCHER),
    while others legitimately stay on the global one. Delegating undici's fetch
    to whatever this file stubs globally keeps every existing mock and
-   assertion working across both transports, with no per-test changes. */
+   assertion working across both transports, with no per-test changes.
+   PR #4007 pass 12, Y2 — a design call also leaves the staged `.pt` the real
+   sidecar writes (a landing without it now fails). */
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
+  const { writesStagedPt } = await import('../test-utils/staged-sidecar-fetch.js');
   return {
     ...actual,
-    fetch: (...args: unknown[]) =>
+    fetch: writesStagedPt((...args: unknown[]) =>
       (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+    ),
   };
 });
 
@@ -89,6 +93,8 @@ let workspaceRoot: string;
 let audioDir: string;
 let app: Express;
 let bookId: string;
+/* #4028 — maerin's own preview id (tagged with its book and character). */
+let PREVIEW: string;
 
 const fetchMock = vi.fn();
 const mockWithCapacityRetry = vi.mocked(withCapacityRetry);
@@ -287,6 +293,7 @@ beforeAll(async () => {
   const { voiceLibraryRouter } = await import('./voice-library.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
+  PREVIEW = (await import('./qwen-voice.js')).previewVoiceIdFor('qwen-v_maerin', bookId, 'maerin');
 
   app = express();
   app.use(express.json());
@@ -352,13 +359,15 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(res.body.url).toMatch(/^\/audio\/voices\/v_maerin-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
 
     /* Sidecar called once with the right payload — including the character's
-       own line as the audition calibration text. */
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+       own line as the audition calibration text. #4028: the render goes to a
+       private staging key and lands on the row's key (the response's voiceId);
+       the only other calls are the bounded evicts after the landing. */
+    expect(fetchMock.mock.calls.filter(([u]) => !String(u).includes('evict'))).toHaveLength(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://127.0.0.1:9000/qwen/design-voice');
     const sent = JSON.parse(init.body);
     expect(sent).toEqual({
-      voiceId: 'qwen-v_maerin',
+      voiceId: expect.stringMatching(/^qwen-staging-/),
       voiceUuid: 'v_maerin',
       instruct: 'a poised, confident teenage girl, clear and warm',
       language: 'English',
@@ -601,8 +610,9 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     const sent = JSON.parse(init.body);
     // baseVoiceId is the real (non-preview, non-emotion) storage key.
     expect(sent.baseVoiceId).toBe('qwen-v_maerin');
-    // variantVoiceId carries the __emotion suffix.
-    expect(sent.variantVoiceId).toBe('qwen-v_maerin__angry');
+    // #4028: the variant renders to a private staging key; it lands on
+    // qwen-v_maerin__angry (the response's voiceId above).
+    expect(sent.variantVoiceId).toMatch(/^qwen-staging-/);
     // emotionInstruct is the delivery clause ONLY — no persona re-description.
     expect(sent.emotionInstruct).toContain('rage');
     expect(sent.emotionInstruct).not.toContain('a poised, confident teenage girl');
@@ -732,6 +742,7 @@ describe('#1954 — emotion variants for a CLONED voice', () => {
 
     await expect(
       designQwenVoiceForCharacter({
+        bookId,
         bookDir: join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK),
         character: clonedCharacter as never,
         characterId: 'lyra',
@@ -755,7 +766,7 @@ describe('#1954 — emotion variants for a CLONED voice', () => {
       .send({ sampleVoiceId: 'v_lyra', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([u]) => !String(u).includes('evict'))).toHaveLength(1);
     expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:9000/qwen/design-voice');
   });
 
@@ -936,17 +947,18 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, preview: true });
     expect(res.status).toBe(200);
-    expect(res.body.voiceId).toBe('qwen-v_maerin-preview');
-    /* The sidecar was asked to design the PREVIEW id, not the live one. */
+    expect(res.body.voiceId).toBe(PREVIEW);
+    /* #4028 — the sidecar renders to a private staging key, never the live id;
+       the design then lands on the row's own preview id. */
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.voiceId).toBe('qwen-v_maerin-preview');
+    expect(sent.voiceId).toMatch(/^qwen-staging-/);
   });
 
   it('promote-voice moves the preview onto the stable id, returns it, and evicts the sidecar cache', async () => {
-    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    stagedPreviewArtifacts(PREVIEW);
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     expect(res.body.voiceId).toBe('qwen-v_maerin');
@@ -954,7 +966,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     /* Files moved: real id now present, preview gone. */
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin.json'))).toBe(true);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), `${PREVIEW}.pt`))).toBe(false);
     /* The sidecar cache for the REAL id was evicted so the swap is seen. */
     const evictCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/qwen/evict-voice'));
     expect(evictCall).toBeTruthy();
@@ -962,24 +974,24 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
   });
 
   it('promote-voice renames the preview’s retained reference clip onto the real key (fix wave, §2.3 consent gap)', async () => {
-    stagedPreviewArtifacts('qwen-v_maerin-preview');
-    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'), 'REF-CLIP');
+    stagedPreviewArtifacts(PREVIEW);
+    writeFileSync(join(qwenDir(), `${PREVIEW}__master.wav`), 'REF-CLIP');
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(true);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'))).toBe(false);
+    expect(existsSync(join(qwenDir(), `${PREVIEW}__master.wav`))).toBe(false);
   });
 
   it('promote-voice still succeeds when the preview has no retained reference clip (pre-fix design, best-effort)', async () => {
-    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    stagedPreviewArtifacts(PREVIEW);
     /* No `-preview__master.wav` seeded at all. */
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(false);
@@ -990,7 +1002,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
        OLD embedding is now stale. Seed maerin with a live base + two designed
        variants, stage a new preview, and promote it: all variants must be torn
        down (cast.json slots + .pt/.json + sidecar eviction), base preserved. */
-    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    stagedPreviewArtifacts(PREVIEW);
     for (const id of ['qwen-v_maerin__angry', 'qwen-v_maerin__sad']) {
       writeFileSync(join(qwenDir(), `${id}.pt`), 'STALE');
       writeFileSync(join(qwenDir(), `${id}.json`), JSON.stringify({ voiceId: id }));
@@ -1018,7 +1030,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     /* Variant map wiped from cast.json (badge clears); base promoted intact. */
@@ -1042,7 +1054,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
   it('promote-voice 409s when nothing was staged', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
     expect(res.status).toBe(409);
     /* PR #3714 review -- the stat error's absolute preview path stays out of the body. */
     expect(res.body.error).toBe('No staged preview voice to promote.');
@@ -1057,7 +1069,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(409);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true); // live artifact must survive
@@ -1072,30 +1084,30 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
   });
 
   it('discard-voice removes the staged preview and never touches the live voice', async () => {
-    stagedPreviewArtifacts('qwen-v_maerin-preview');
+    stagedPreviewArtifacts(PREVIEW);
     /* A live voice exists alongside the preview — it must survive. */
     writeFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'LIVE');
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/discard-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'))).toBe(false);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.json'))).toBe(false);
+    expect(existsSync(join(qwenDir(), `${PREVIEW}.pt`))).toBe(false);
+    expect(existsSync(join(qwenDir(), `${PREVIEW}.json`))).toBe(false);
     expect(readFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'utf8')).toBe('LIVE');
   });
 
   it('discard-voice also erases the preview’s retained reference clip (fix wave, §2.3 consent gap)', async () => {
-    stagedPreviewArtifacts('qwen-v_maerin-preview');
-    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'), 'REF-CLIP');
+    stagedPreviewArtifacts(PREVIEW);
+    writeFileSync(join(qwenDir(), `${PREVIEW}__master.wav`), 'REF-CLIP');
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/discard-voice`)
-      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
-    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview__master.wav'))).toBe(false);
+    expect(existsSync(join(qwenDir(), `${PREVIEW}__master.wav`))).toBe(false);
   });
 });
 
@@ -1135,8 +1147,8 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    The fix that actually reproduces the bug on demand: SCRIPT the
    interleaving deterministically, the same technique
    book-state-preserve-voices.test.ts's own #1981 race test uses for its
-   asymmetric-preamble PUT-vs-assign race. Intercept the SECOND call to
-   `readJson` for this book's cast.json — promote-voice's own "fresh read"
+   asymmetric-preamble PUT-vs-assign race. Intercept the in-lock call to
+   `readJson` for this book's cast.json (since #4028 its only one) — promote-voice's own "fresh read"
    inside its (real) `withCastLock` span, the one whose snapshot the
    teardown write is based on — read the real bytes immediately (so the read
    genuinely happens-before assign's write, matching the bug's precondition)
@@ -1178,8 +1190,8 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
   });
 
   /* Shared scaffold for both race tests below. Seeds maerin with a variants
-     map, then scripts the interleaving: promote-voice's SECOND cast.json
-     `readJson` (its fresh, in-lock read) is held open behind a gate while
+     map, then scripts the interleaving: promote-voice's cast.json
+     `readJson` (its fresh, in-lock read; its only one since #4028) is held open behind a gate while
      `startSecondWriter` runs for a generous head start. `startSecondWriter`
      is only called once promote-voice is parked INSIDE its cast-lock span. */
   async function racePromoteVoiceAgainst(
@@ -1192,10 +1204,10 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
   ): Promise<{ resPromote: request.Response; second: unknown }> {
     const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
     mkdirSync(qwenDir(), { recursive: true });
-    writeFileSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'), 'EMBEDDING');
+    writeFileSync(join(qwenDir(), `${PREVIEW}.pt`), 'EMBEDDING');
     writeFileSync(
-      join(qwenDir(), 'qwen-v_maerin-preview.json'),
-      JSON.stringify({ voiceId: 'qwen-v_maerin-preview', instruct: 'a brand new take' }),
+      join(qwenDir(), `${PREVIEW}.json`),
+      JSON.stringify({ voiceId: PREVIEW, instruct: 'a brand new take' }),
     );
     /* maerin needs a non-empty `variants` map or promote-voice never takes
        the cast lock at all (Task 7 brief — the write is guarded on
@@ -1219,7 +1231,7 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
       JSON.stringify({ characters: withVariants }),
     );
 
-    /* Script the interleaving: hold promote-voice's SECOND `readJson` call
+    /* Script the interleaving: hold promote-voice's in-lock `readJson` call
        for this book's cast.json (its fresh, in-lock read) open until the
        second writer has had a generous chance to write. See this describe's
        header comment for the full rationale. */
@@ -1245,9 +1257,11 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
       callsForCastPath += 1;
-      /* Call #1 is the top-of-handler character lookup, made before any of
-         promote-voice's file-rename dance — let it through untouched. Call
-         #2 is the fresh, in-lock read the teardown write is based on. */
+      /* #4028 — promote-voice's in-lock cast.json read (the read, the preview-id
+         check, the moves and the teardown write all sit inside the cast lock); the
+         second writer only starts once it is parked. Pass 12: a series book's
+         promote first reads the row lock-free to find the books holding a
+         never-designed key (read 1), so the in-lock read is the second. */
       if (callsForCastPath === 2) {
         interceptedSecondRead = true;
         signalSecondRead();
@@ -1265,10 +1279,10 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     try {
       promotePromise = request(app)
         .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
-        .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+        .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
       promotePromise.catch(() => {}); // supertest is lazy — force real dispatch now
-      // Let promote-voice run its file-rename dance and reach (and get stuck
-      // behind) its second, intercepted read. Order-based, not a fixed sleep:
+      // Let promote-voice reach (and get stuck behind) its in-lock, intercepted
+      // read. Order-based, not a fixed sleep:
       // the 8 s race is a hang detector only, never an assertion about speed.
       let reachTimer!: ReturnType<typeof setTimeout>;
       try {
@@ -1326,7 +1340,7 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
        only thing standing between the two is `withCastLock` — a no-op cast
        lock makes this red (#3773). */
     const { resPromote, second } = await racePromoteVoiceAgainst(
-      (bookDir) => persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+      (bookDir) => persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-nopersona__angry'),
       { requireSecondWriterRead: true },
     );
     expect(resPromote.status).toBe(200);
@@ -1344,7 +1358,7 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const nopersonaQwen = nopersona.overrideTtsVoices as
       | { qwen?: { variants?: Record<string, { name: string }> } }
       | undefined;
-    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_nopersona__angry' });
+    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-nopersona__angry' });
   });
 
   it('#1981 — promote-voice and a concurrent /assign on a different character both survive (end-to-end through book-op AND the cast lock)', async () => {
@@ -1667,7 +1681,7 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     seedVariants();
     const { persistEmotionVariant } = await import('./qwen-voice.js');
     const { resDelete, second } = await raceDeleteAgainst((bookDir) =>
-      persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-v_nopersona__angry'),
+      persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-nopersona__angry'),
     );
     expect(resDelete.status).toBe(200);
     expect(second).toBe('applied');
@@ -1683,7 +1697,7 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     const nopersonaQwen = nopersona.overrideTtsVoices as
       | { qwen?: { variants?: Record<string, { name: string }> } }
       | undefined;
-    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_nopersona__angry' });
+    expect(nopersonaQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-nopersona__angry' });
   });
 
   /* #1981 — two concurrent DELETE emotion-variant calls for DIFFERENT
@@ -2373,15 +2387,39 @@ describe('SidecarDesignError', () => {
      error object — the HTTP route maps it to a 502, losing the shape. */
   let designQwenVoiceForCharacter: typeof import('./qwen-voice.js').designQwenVoiceForCharacter;
   let sdeBookDir: string;
+  /* #4028 — the core lands the render under the book's book-op, so the book is a
+     real one in the workspace (its own series, so no other suite book links to it). */
+  let sdeBookId: string;
 
   beforeAll(async () => {
     ({ designQwenVoiceForCharacter } = await import('./qwen-voice.js'));
+    sdeBookId = (await import('../workspace/paths.js')).makeBookId(AUTHOR, 'SDE Series', 'SDE Book');
   });
 
   beforeEach(async () => {
-    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
-    sdeBookDir = await mkdtemp(join(tmpdir(), 'sde-'));
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    sdeBookDir = join(workspaceRoot, 'books', AUTHOR, 'SDE Series', 'SDE Book');
     await mkdir(join(sdeBookDir, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(sdeBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: sdeBookId,
+        manuscriptId: `m_${sdeBookId}`,
+        title: 'SDE Book',
+        author: AUTHOR,
+        series: 'SDE Series',
+        seriesPosition: 1,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        language: 'en',
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    await writeFile(join(sdeBookDir, 'manuscript.txt'), 'placeholder');
     await writeFile(
       join(sdeBookDir, '.audiobook', 'cast.json'),
       JSON.stringify({
@@ -2406,6 +2444,7 @@ describe('SidecarDesignError', () => {
 
   function makeVariantParams(opts: { persona?: string } = {}): import('./qwen-voice.js').DesignQwenVoiceParams {
     return {
+      bookId: sdeBookId,
       bookDir: sdeBookDir,
       character: {
         id: 'char1',
@@ -2452,7 +2491,8 @@ describe('SidecarDesignError', () => {
     // the (long, real) angry clause. The composed instruct is `${persona} ${clause}`.
     expect(sentBody.instruct.startsWith('a warm narrator ')).toBe(true);
     expect(sentBody.instruct.length).toBeGreaterThan('a warm narrator '.length);
-    expect(sentBody.voiceId).toMatch(/__angry$/);
+    expect(sentBody.voiceId).toMatch(/^qwen-staging-/); // #4028: rendered privately
+    expect(r.voiceId).toBe('qwen-uuid-char1__angry'); // and landed on the variant key
     expect(sentBody.mintMethod).toBe('design-voice-fallback');
   });
 
@@ -2506,6 +2546,7 @@ describe('SidecarDesignError', () => {
        override that locally to pin postDesignAndCache's wiring. */
     function makeBaseParams(opts: { persona?: string } = {}): import('./qwen-voice.js').DesignQwenVoiceParams {
       return {
+        bookId: sdeBookId,
         bookDir: sdeBookDir,
         character: {
           id: 'char1',
@@ -2541,7 +2582,8 @@ describe('SidecarDesignError', () => {
 
     it('a doPost that returns a noCapacity 503 once then ok succeeds after the (simulated) evict/retry', async () => {
       let calls = 0;
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (u) => {
+        if (String(u).includes('evict')) return new Response(null, { status: 200 }); // #4028: post-landing evicts
         calls += 1;
         return calls === 1
           ? new Response(JSON.stringify({ noCapacity: true, neededMb: 4_000, deviceKey: 'cuda:0' }), {
@@ -2632,7 +2674,7 @@ describe('srv-43 — qwenStorageKey routing through design-voice', () => {
     /* Storage key is derived from voiceUuid:'v_maerin' → qwen-v_maerin. */
     expect(res.body.voiceId).toBe('qwen-v_maerin');
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.voiceId).toBe('qwen-v_maerin');
+    expect(sent.voiceId).toMatch(/^qwen-staging-/); // #4028: rendered privately, landed on the key above
     /* voiceUuid is unchanged on the character. */
     const cast = readCast();
     const maerin = cast.characters.find((c) => c.id === 'maerin');
@@ -2654,7 +2696,7 @@ describe('srv-43 — qwenStorageKey routing through design-voice', () => {
     expect(res.status).toBe(200);
     expect(res.body.voiceId).toBe(`qwen-${uuid}`);
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.voiceId).toBe(`qwen-${uuid}`);
+    expect(sent.voiceId).toMatch(/^qwen-staging-/); // #4028: rendered privately, landed on the key above
   });
 });
 

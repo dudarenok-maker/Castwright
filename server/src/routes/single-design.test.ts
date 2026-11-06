@@ -10,7 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import {
+  LockAcquisitionTimeoutError,
+  LOCK_CONTENTION_REQUEST_ERROR,
+  FS_FAILURE_REQUEST_ERROR,
+} from '../workspace/file-lock.js';
 
 // Stub the shared design core so the job runs without a sidecar/GPU.
 // vi.mock is hoisted to the top of the file, so it runs before any imports —
@@ -25,6 +29,8 @@ vi.mock('./qwen-voice.js', async (orig) => ({
     return {
       voiceId: p.preview ? `qwen-${p.characterId}-preview` : `qwen-${p.characterId}`,
       url: `/api/voice-sample/${p.characterId}.mp3`,
+      /* #4028 — the core reports the row's uuid as the design landed. */
+      voiceUuid: `u-${p.characterId}`,
     };
   }),
 }));
@@ -224,6 +230,28 @@ describe('single-design job — first design', () => {
   });
 });
 
+describe('single-design job — the character vanishes mid-fork (#3992)', () => {
+  it('ends the job with a not_found error and reports no design', async () => {
+    /* #4028 — the uuid step and the landing run inside the core, which throws
+       CharacterGoneError for a row that vanished. */
+    const qwenMod = await import('./qwen-voice.js');
+    const spy = vi.mocked(qwenMod.designQwenVoiceForCharacter);
+    spy.mockRejectedValueOnce(new qwenMod.CharacterGoneError());
+    try {
+      const res = await request(app)
+        .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+        .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+      expect(res.status).toBe(200);
+      const events = collectSse(res);
+      expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'not_found' });
+      expect(events.some((e) => e.type === 'designed' || e.type === 'preview_ready')).toBe(false);
+    } finally {
+      spy.mockClear();
+    }
+    expect(designLock.isDesignBusy(bookDir)).toBe(false);
+  });
+});
+
 describe('single-design job — preview (re-design)', () => {
   it('emits preview_ready WITHOUT persisting, and previewUrl matches the core stub', async () => {
     const res = await request(app)
@@ -252,8 +280,7 @@ describe('single-design job — preview (re-design)', () => {
     expect(res.status).toBe(200);
     const events = collectSse(res);
     const ready = events.find((e) => e.type === 'preview_ready');
-    expect(typeof ready?.voiceUuid).toBe('string');
-    expect(ready?.voiceUuid).not.toBe('');
+    expect(ready?.voiceUuid).toBe('u-c1'); // the uuid the core landed on (#4028)
   });
 });
 
@@ -665,6 +692,30 @@ describe('single-design job — pre-try cast-read leak (#3171)', () => {
     expect(String(err?.message ?? '')).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
 
     expect(designLock.isDesignBusy(bookDir)).toBe(false);
+  });
+
+  it('curates a node fs error from the design job (a failed fork copy, #3992) into a path-free sentence', async () => {
+    const castPath = castJsonPath(bookDir);
+    readJsonFailAfter = {
+      path: castPath,
+      passThroughCalls: 1,
+      error: Object.assign(
+        new Error("EBUSY: resource busy or locked, copyfile 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt'"),
+        { code: 'EBUSY', syscall: 'copyfile', path: 'C:\\Users\\real-name\\voices\\qwen\\qwen-u.pt' },
+      ),
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b', preview: true });
+    consoleErrorSpy.mockRestore();
+
+    expect(res.status).toBe(200);
+    const err = collectSse(res).find((e) => e.type === 'error');
+    expect(err).toBeTruthy();
+    expect(String(err?.message ?? '')).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(String(err?.message ?? '')).not.toContain('real-name');
   });
 
   it('answers a curated 500 when the design job throws before it responds (#3711 review)', async () => {

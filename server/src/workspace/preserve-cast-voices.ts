@@ -69,7 +69,23 @@ export function preserveDesignedVoicesOnCastWrite<T extends { id: string }>(
        identity could be restamped to an arbitrary value with no consent
        check at all. Scoped to characters that already exist on disk (`old`
        found) — same scope PRESERVED_DESIGN_FIELDS already uses. */
-    if (old.voiceUuid !== undefined) merged.voiceUuid = old.voiceUuid;
+    if (old.voiceUuid !== undefined) {
+      /* #3992 — an incoming row on a DIFFERENT uuid than disk's is a stale one: a
+         fork moved the row to a new uuid and dropped its qwen `variants` (the
+         render key `qwen-<uuid>__<emotion>` would have no `.pt`), while the client's
+         redux row still carries them. The qwen slot, variants included, goes with
+         the uuid it belongs to, so it comes from disk too. */
+      if (merged.voiceUuid !== old.voiceUuid) {
+        const oldQwen = (old.overrideTtsVoices as { qwen?: unknown } | undefined)?.qwen;
+        if (oldQwen !== undefined) {
+          merged.overrideTtsVoices = {
+            ...((merged.overrideTtsVoices as Record<string, unknown> | undefined) ?? {}),
+            qwen: oldQwen,
+          };
+        }
+      }
+      merged.voiceUuid = old.voiceUuid;
+    }
     return merged as T;
   });
 }
@@ -98,6 +114,30 @@ export function preserveNotLinkedToOnCastWrite<T extends { id: string }>(
     const merged = { ...(inc as Record<string, unknown>) };
     if (old.notLinkedTo === undefined) delete merged.notLinkedTo;
     else merged.notLinkedTo = old.notLinkedTo;
+    return merged as T;
+  });
+}
+
+/* #3992 — `declinedVoiceFrom` ("Don't reuse") is server-owned, exactly like
+   `notLinkedTo` above: the decline route is its only writer, so the whole-roster
+   cast PUT takes it from disk unconditionally. The client's redux row never
+   carries it (declineMatch only clears `matchedFrom`), so without this a routine
+   autosave would erase the decline the route just recorded. A row the write is
+   introducing has no on-disk value and passes through. */
+export function preserveDeclinedVoiceFromOnCastWrite<T extends { id: string }>(
+  existing: ReadonlyArray<{ id: string } & Record<string, unknown>>,
+  incoming: T[],
+): T[] {
+  if (!existing.length) return incoming;
+  const byId = new Map(existing.map((c) => [c.id, c]));
+  return incoming.map((inc) => {
+    const old = byId.get(inc.id);
+    if (!old) return inc;
+    const merged = { ...(inc as Record<string, unknown>) };
+    if (old.declinedVoiceFrom === undefined) delete merged.declinedVoiceFrom;
+    else merged.declinedVoiceFrom = old.declinedVoiceFrom;
+    if (old.declinedVoiceUuids === undefined) delete merged.declinedVoiceUuids;
+    else merged.declinedVoiceUuids = old.declinedVoiceUuids;
     return merged as T;
   });
 }

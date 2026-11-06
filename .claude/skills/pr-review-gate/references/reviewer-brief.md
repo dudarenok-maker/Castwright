@@ -980,6 +980,116 @@ recite:
     the guard's false branch (leave the book before the read settles, once
     with a hang and once with a prompt answer) and assert the mark.
 
+77. **A repair keyed on the immediate neighbour's marker, which moves a node
+    without its dependents** — PR #4007 pass 4 (#3992): a row stranded on a
+    declined voice was moved onto its source's new uuid by checking only the
+    source's "declined" marker, and the move took that row and its same-book
+    siblings but not the rows that follow it. The row below it, one hop
+    further, had a source that held the new uuid but carried no marker (it was
+    a follower, not a decliner), so the next hop's check no longer saw why it
+    had to move and its design overwrote the earlier book. Checkable: for every
+    repair that moves a node on the strength of a marker on its direct
+    neighbour, ask what depends on the node and whether the dependents move
+    with it, and what the dependents' own check sees afterwards (the marker is
+    on the neighbour, not on them). Then build a chain one longer than the
+    case the fix was written for and drive the repair from its middle.
+
+78. **A recursive resolver that re-wraps an inner result and overwrites the
+    field the inner level set** — PR #4007 pass 6 (#3992): a walker that
+    resolved a link source recursively returned `{ ...above, forkUuid: uuid }`
+    at every level, so the outer level replaced the `forkUuid` the inner level
+    had already set with its own, and the fork then named the wrong uuid and a
+    guard comparing against that same value passed. Checkable: for every
+    recursive function that decorates the result of its own recursive call,
+    ask which fields the inner call may already have set and whether the outer
+    spread overwrites them; then drive a case one level deeper than the one
+    the fix was written for.
+
+79. **Recursion that starts a fresh visited set at each level, bypassing the
+    loop's cycle guard** — PR #4007 pass 6 (#3992): two functions called each
+    other, and each call began with a new `visited` set, so the "a visited set
+    makes a link cycle terminate" promise held for one function and not for the
+    pair; a cycle where each row declined the other's uuid read the library
+    without end while holding the book busy. Checkable: for every cycle guard,
+    find every function that can re-enter the guarded walk and confirm they
+    share one set; then build the smallest cycle (two rows pointing at each
+    other) and see that the call returns.
+
+80. **A set narrowed for one consumer still feeds a second consumer** — PR
+    #4007 pass 7 (#3992): the followers of a fork were narrowed from a
+    transitive walk to direct links so that fewer rows would MOVE with it, but
+    the same set also decided who counts as an outsider holding the voice, so
+    a row two hops below read as an outsider and the already-forked row forked
+    again, dropping its variants. Checkable: when a set shrinks, list every
+    reader of it, not only the one the change was made for, and for each
+    reader ask what the excluded members now look like.
+
+81. **A fact recorded from the row's state when it was written, where another
+    path into that state breaks the writer's assumption** — PR #4007 pass 8
+    (#3992): the decline route recorded the row's current uuid as "the voice it
+    declined" on the premise that a linked row shares its source's uuid, but
+    `link-prior` re-links a row without moving its uuid, so a row that had
+    already forked and was linked back recorded its OWN uuid. The fork decision
+    then read that list as evidence, forked the row again and dropped its
+    variants. Checkable: for every recorded fact a later decision trusts, list
+    every path that produces the precondition the writer assumes, and confirm
+    each one establishes it. Do NOT answer it by swapping the record for a live
+    check of a proxy: that is entry 82.
+
+82. **A record of a past event replaced by a live check keyed on a proxy for
+    the protected thing** — PR #4007 pass 9 (#3992): to stop trusting the
+    recorded declined uuid (entry 81), the fork was made to ask whether the
+    declined BOOK still holds the row's voice. The protected thing was the
+    earlier VOICE; the book was only where it lived at decline time. Once that
+    book forked away, was deleted or re-imported, the check answered "no" and
+    the decliner's design overwrote the voice another book still held. The
+    owner's resolution moved the decision to the moment the fact is true:
+    "Don't reuse" separates the row at once, so nothing later has to infer what
+    the user declined. Checkable: for every record a change stops reading, list
+    what can move the proxy the new check reads (fork, delete, re-import,
+    rename) and test each move; better, establish the invariant at the event
+    instead of reconstructing it afterwards.
+
+83. **An inclusion set computed by a graph walk that can contain the very
+    party the operation excludes** — PR #4007 pass 10 (#3992): "Don't reuse"
+    moved the decliner together with its FOLLOWERS, the rows whose link chain
+    leads down to it. Confirm's auto-match links an earlier book to a later one
+    too, so a cycle through the declined book made that book's own row a
+    follower: the decline left the decliner on the declined voice, and a later
+    design moved the declined book's row onto the decliner's new voice. The walk
+    was correct as a walk; nothing told it which node the operation is defined
+    against. Checkable: for every set a walk builds and an operation then acts
+    on, name the parties the operation must never touch (the declined book, the
+    source of a copy, the row being excluded) and test a cycle and a back-edge
+    that reach each of them. The fix belongs in the walk (that node cuts the
+    chain), not in a filter afterwards, so what lies past it is not reached
+    either.
+
+84. **A read-back of a fan-out writer's result, where the writer's scope
+    filter can exclude the caller's own record** — PR #4007 pass 11 (#3992,
+    P11-1): the series mint stamped a uuid through
+    `forEachMatchingCastCharacter`, then read the designing row back to learn
+    the uuid it landed on. The walk skips every book whose cast is not
+    confirmed, the designing book included (a design from the Confirm screen),
+    so the read-back was absent, was read as "the character is gone", and the
+    design failed after the walk had already re-keyed other books. Checkable:
+    for every read-back of a fan-out writer's result, list the writer's
+    filters (confirmed, standalone, series match, unreadable, moved) and test
+    the caller's own record outside each one; never read an absent value as
+    "gone" after siblings were written.
+
+85. **A "re-read at commit" rule written for one writer that accepts every
+    writer's change** — PR #4007 pass 11 (#3992, P11-5): the staged-design
+    landing read the row's CURRENT key so a "Don't reuse" made mid-render sent
+    the design to the row's new voice. A link-prior made mid-render also
+    changes that key, to the earlier book's, and the landing followed it there:
+    the earlier book's variant was overwritten with a take anchored on another
+    base. Checkable: list every writer of the field the commit re-reads, and
+    for each ask whether the commit may follow that writer's change; a rule
+    meant for one writer has to say how it recognises that writer's change
+    (here: the in-flight design's key moves only with a separation of the row,
+    and anything else discards the render).
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

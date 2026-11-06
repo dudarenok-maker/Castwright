@@ -253,7 +253,7 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
       }
       expect(intercepted).toBe(true);
 
-      secondPromise = persistEmotionVariant(bookDir, 'narrator', 'angry', 'qwen-v_narrator__angry');
+      secondPromise = persistEmotionVariant(bookDir, 'narrator', 'angry', 'qwen-narrator__angry');
       secondPromise.catch(() => {}); // force dispatch now (see above)
       // Generous head start: completes fully when unlocked (the bug window)
       // or queues behind /create's still-held lock when locked.
@@ -284,7 +284,7 @@ describe('POST /api/books/:bookId/cast/create (fs-58 Unit B)', () => {
     const narratorQwen = narrator['overrideTtsVoices'] as
       | { qwen?: { variants?: Record<string, { name: string }> } }
       | undefined;
-    expect(narratorQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-v_narrator__angry' });
+    expect(narratorQwen?.qwen?.variants?.angry).toEqual({ name: 'qwen-narrator__angry' });
   });
 
   /* #1981 — two concurrent /create calls for the SAME book race cast.json.

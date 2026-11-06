@@ -156,6 +156,19 @@ describe('analyzer grammar schemas — required tone (Task 6)', () => {
     expect(analyzerCharacterSchema.safeParse(charWithoutTone).success).toBe(false);
   });
 
+  it('keeps the server-owned declinedVoiceFrom (#3992) out of the analyzer grammar', () => {
+    expect('declinedVoiceFrom' in characterSchema.shape).toBe(true);
+    expect('declinedVoiceFrom' in analyzerCharacterSchema.shape).toBe(false);
+    /* The grammar schema is strict, so it rejects the key if asked. That is all this
+       proves: analyzer output is validated against characterSchema (the grammar one
+       is never used for validation), which accepts the field, so what keeps a model
+       from emitting it is that the grammar omits it, and nothing downstream rejects
+       it if it does. */
+    expect(
+      analyzerCharacterSchema.safeParse({ ...charWithToneAndGender, declinedVoiceFrom: ['b'] }).success,
+    ).toBe(false);
+  });
+
   it('characterSchema still accepts a character with NO tone (validation tolerant)', () => {
     expect(characterSchema.safeParse(charWithoutTone).success).toBe(true);
   });

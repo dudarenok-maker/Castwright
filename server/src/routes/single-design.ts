@@ -29,9 +29,9 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter, ensureCharacterVoiceUuid } from './qwen-voice.js';
+import { designQwenVoiceForCharacter, CharacterGoneError } from './qwen-voice.js';
 import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
-import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
+import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -122,16 +122,10 @@ async function runSingleDesign(
       endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
       return;
     }
-    /* srv-43 — mint/persist voiceUuid before the core names the .pt, matching
-       the bulk-job and REST-endpoint paths so every design entry point produces
-       the same uuid-keyed cache key. */
-    const seriesFilterForUuid = seriesFilter;
-    const voiceUuid = await ensureCharacterVoiceUuid(
-      job.bookDir,
-      job.characterId,
-      seriesFilterForUuid,
-    );
-    const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
+    /* srv-43 — the core mints/persists voiceUuid for the design, matching the
+       bulk-job and REST-endpoint paths so every design entry point produces the
+       same uuid-keyed cache key. #4028: it lands on the row's key as it stands
+       when the render finishes (designQwenVoiceForCharacter). */
 
     /* Mint a progress token so the sidecar can POST real phase updates back via
        the loopback relay (Task 4). The token is registered before the design
@@ -143,15 +137,18 @@ async function runSingleDesign(
     registerProgressToken(progressToken, job);
     const progressUrl = `${serverLoopbackBaseUrl()}/api/internal/design-progress`;
 
-    const { voiceId, url } = await designQwenVoiceForCharacter({
+    const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+      bookId: job.bookId,
       bookDir: job.bookDir,
-      character: characterForDesign,
+      seriesFilter,
+      character,
       characterId: job.characterId,
       persona,
       sampleVoiceId,
       modelKey,
       language,
       preview: job.preview,
+      persistSlot: !job.preview,
       progressToken,
       progressUrl,
     });
@@ -168,7 +165,7 @@ async function runSingleDesign(
         previewVoiceId: voiceId,
         previewUrl: url,
         persona,
-        voiceUuid: characterForDesign.voiceUuid,
+        voiceUuid,
       });
       return;
     }
@@ -198,9 +195,14 @@ async function runSingleDesign(
       name: job.characterName,
       voiceId,
       url,
-      voiceUuid: characterForDesign.voiceUuid,
+      voiceUuid,
     });
   } catch (e) {
+    /* #3992 — the character vanished between the read above and the fork/mint. */
+    if (e instanceof CharacterGoneError) {
+      endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
+      return;
+    }
     /* #2260 FINAL ROUND (B2) — this try encloses `ensureCharacterVoiceUuid` and
        `applyOverrideToCastFiles`, both of which take cast locks, so the raw
        message here could be the absolute path of the book's cast.json, sent
@@ -215,7 +217,7 @@ async function runSingleDesign(
       name: (e as Error)?.name,
       message: (e as Error)?.message,
     });
-    const message = requestFailureMessage(e, (e as Error).message || 'Voice design failed.');
+    const message = requestFailureMessageFs(e, (e as Error).message || 'Voice design failed.');
     /* #2260 FINAL ROUND (B2) nit — 'design_failed' left this event unable to
        reach the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links
        for a lock-contention failure, same as the analysis path's own

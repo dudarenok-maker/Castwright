@@ -37,6 +37,11 @@ import {
   resolveBookLanguageForBookId,
 } from '../workspace/series-cast-scan.js';
 import { jaccard, nameTokens, normaliseForMatch } from '../util/text-match.js';
+import { peekBook } from '../workspace/book-op-lock.js';
+import { castJsonPath } from '../workspace/paths.js';
+import { readJson } from '../workspace/state-io.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { declinesVoice } from '../store/declined-voice.js';
 
 export const voiceMatchRouter = Router();
 
@@ -319,8 +324,23 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
       }
     }
 
+    /* #3992 — a row the user declined ("Don't reuse") is never offered the voice
+       it declined: not the book, and not another book holding the same voice uuid.
+       The marker lives on disk only (the request body carries none), so it is read
+       from the book's own cast.json: a lock-free, write-free peek whose result
+       feeds no write. A book not on disk has no marker. A cast.json that cannot be
+       read is NOT "no marker": that would re-link the declined row, so the read
+       fails the request (curated below) and Confirm's auto-match simply retries. */
+    const declinedRows = new Map<string, unknown>();
+    const book = await peekBook(bookId);
+    if (book) {
+      const cast = await readJson<{ characters?: Array<{ id: string }> }>(castJsonPath(book.bookDir));
+      for (const row of cast?.characters ?? []) declinedRows.set(row.id, row);
+    }
+
     const matches = characters.map((c) => {
       const scored: Candidate[] = [];
+      const declinedRow = declinedRows.get(c.id);
       for (const v of voices) {
         /* Auto-match is scoped to the current book's same-author + same-series
            mates — for EVERY character, not just generic role-names. Matching a
@@ -330,6 +350,7 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
            stays available as an explicit Voice-library assignment; it is never
            a silent auto-match. */
         if (!sameLanguageBookIds.has(v.bookId)) continue;
+        if (declinesVoice(declinedRow as object | undefined, v)) continue;
         const cand = scoreOne(c, v);
         if (cand) scored.push(cand);
       }
@@ -340,6 +361,6 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
     return res.json({ bookId, matches });
   } catch (e) {
     console.error('[voice-match] scoring failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Voice match failed.' });
+    return res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'Voice match failed.') });
   }
 });

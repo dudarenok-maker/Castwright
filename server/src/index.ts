@@ -45,6 +45,7 @@ import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { sweepStaleStaging } from './workspace/portable-staging.js';
+import { sweepStaleDesignStaging } from './routes/qwen-voice.js';
 import { repairDuplicateBookIds } from './workspace/duplicate-bookid-sweep.js';
 import { loadRepairedBookGate } from './workspace/repaired-book-gate.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
@@ -200,6 +201,12 @@ async function main(): Promise<void> {
   const sweptStaging = await sweepStaleStaging();
   if (sweptStaging.length > 0) {
     console.log(`[staging] removed ${sweptStaging.length} stale portable-import staging dir(s).`);
+  }
+  /* PR #4007 pass 11, Y2 — staged voice-design files a sidecar wrote after its
+     design was aborted or the server stopped (before listen: no design in flight). */
+  const sweptDesignStaging = await sweepStaleDesignStaging();
+  if (sweptDesignStaging > 0) {
+    console.log(`[staging] removed ${sweptDesignStaging} stale voice-design staging file(s).`);
   }
 
   /* #2192 — heal venvs bootstrapped before the ORT marker existed: record that
