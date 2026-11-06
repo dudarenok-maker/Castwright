@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
@@ -30,7 +30,21 @@ vi.mock('undici', async (importOriginal) => {
       (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
   };
 });
-const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+const { synthesize, unlistable } = vi.hoisted(() => ({ synthesize: vi.fn(), unlistable: { dir: null as string | null } }));
+/* PR #4038 pass 4 — makes ONE library folder fail to list, to pin the sweep's fail-closed branch. */
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const { resolve } = await import('node:path');
+  return {
+    ...actual,
+    readdirSync: ((p: unknown, ...rest: unknown[]) => {
+      if (unlistable.dir && resolve(String(p)).toLowerCase() === unlistable.dir.toLowerCase()) {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      }
+      return (actual.readdirSync as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as typeof actual.readdirSync,
+  };
+});
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
   return { ...actual, selectTtsProvider: vi.fn(() => ({ synthesize })) };
@@ -381,6 +395,21 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
     );
     plant(family('qwen-u_old__angry'));
     expect(await sweepOrphanVariantFiles()).toBe(4);
+  });
+
+  it('fails closed when a library folder cannot be listed: nothing is deleted', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
+    plant(family('qwen-u_gone__angry'));
+    unlistable.dir = resolve(workspaceRoot, 'books', AUTHOR, SERIES);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await sweepOrphanVariantFiles()).toBe(0);
+    } finally {
+      unlistable.dir = null;
+      warn.mockRestore();
+    }
+    expect(onDisk()).toEqual(family('qwen-u_gone__angry').sort());
   });
 
   it('keeps an unnamed variant file younger than an hour (a second server may be mid-design)', async () => {
