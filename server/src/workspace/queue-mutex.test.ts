@@ -172,8 +172,13 @@ describe('every serialised queue site holds its read inside the span (#4034)', (
         request(app).post('/api/queue/reorder').send({ order: ['r3', 'r1', 'r2'] }),
         request(app).post('/api/queue/r2/start'),
       ]);
-      expect(rs.map((r) => r.status)).toEqual([200, 200]);
-      expect(onDisk().map((e) => `${e.id}:${e.status}`)).toEqual(['r3:queued', 'r1:queued', 'r2:in_progress']);
+      /* Either serial order is legal: reorder first lands both changes; start first makes reorder refuse (409) because
+         an in_progress entry may not move, and then only the start lands. A hoisted read loses one of them either way. */
+      expect(rs[1].status).toBe(200);
+      expect([200, 409]).toContain(rs[0].status);
+      expect(onDisk().map((e) => `${e.id}:${e.status}`)).toEqual(
+        rs[0].status === 200 ? ['r3:queued', 'r1:queued', 'r2:in_progress'] : ['r1:queued', 'r2:in_progress', 'r3:queued'],
+      );
     }
   });
 });
