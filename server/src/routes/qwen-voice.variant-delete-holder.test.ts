@@ -397,6 +397,18 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
     expect(await sweepOrphanVariantFiles()).toBe(4);
   });
 
+  it('an empty cast.json (characters: []) falls through to the carryover: a variant it names is kept', async () => {
+    reset();
+    writeBook('Book One', []);
+    writeFileSync(
+      join(bookDir('Book One'), '.audiobook', 'cast-reuse-carryover.json'),
+      JSON.stringify({ characters: [{ id: 'wren', name: 'Wren', voiceUuid: 'u_x', ...slot('qwen-u_x', { angry: { name: 'qwen-u_x__angry' } }) }] }),
+    );
+    plant(family('qwen-u_x__angry'));
+    expect(await sweepOrphanVariantFiles()).toBe(0);
+    expect(onDisk()).toEqual(family('qwen-u_x__angry').sort());
+  });
+
   it('fails closed when a library folder cannot be listed: nothing is deleted', async () => {
     reset();
     writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
