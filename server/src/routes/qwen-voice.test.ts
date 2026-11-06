@@ -43,13 +43,17 @@ import { NoCapacityError } from '../tts/tts-errors.js';
    hidden 300s headersTimeout — see DERIVE_DISPATCHER / DESIGN_DISPATCHER),
    while others legitimately stay on the global one. Delegating undici's fetch
    to whatever this file stubs globally keeps every existing mock and
-   assertion working across both transports, with no per-test changes. */
+   assertion working across both transports, with no per-test changes.
+   PR #4007 pass 12, Y2 — a design call also leaves the staged `.pt` the real
+   sidecar writes (a landing without it now fails). */
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
+  const { writesStagedPt } = await import('../test-utils/staged-sidecar-fetch.js');
   return {
     ...actual,
-    fetch: (...args: unknown[]) =>
+    fetch: writesStagedPt((...args: unknown[]) =>
       (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+    ),
   };
 });
 

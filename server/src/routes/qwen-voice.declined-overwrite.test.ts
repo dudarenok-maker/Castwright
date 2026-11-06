@@ -8,7 +8,7 @@
    real cast.json files. The sidecar mock writes NEW bytes for whatever voice it
    is asked for, so an overwrite shows up as bytes. */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -1353,14 +1353,38 @@ describe('pass 11, Y1: a first design stamps its own slot under the landing lock
   });
 });
 describe('pass 11, Y2: staged files a late sidecar write leaves behind are swept', () => {
-  it('startup: every qwen-staging-* file goes, every other voice file stays', async () => {
+  it('startup: a staged family older than an hour goes, every other voice file stays', async () => {
     reset();
-    for (const f of ['qwen-staging-abc.pt', 'qwen-staging-abc.json', 'qwen-staging-abc__master.wav', 'qwen-keep.pt']) {
-      writeFileSync(join(qwenDir(), f), 'x');
+    const old = 'qwen-staging-AbCdEfGhIjKlMnOpQr_-1';
+    const live = 'qwen-staging-ZyXwVuTsRqPoNmLkJi_-2';
+    const stale = [`${old}.pt`, `${old}.json`, `${old}__master.wav`, `${old}__1.7b.pt`];
+    /* The legacy key of a character whose id starts with `staging-` is not a
+       staging key, however old. */
+    const kept = [`${live}.pt`, `${live}__master.wav`, 'qwen-staging-wren.pt', 'qwen-staging-wren.json', 'qwen-keep.pt'];
+    for (const f of [...stale, ...kept]) writeFileSync(join(qwenDir(), f), 'x');
+    const hourAgo = new Date(Date.now() - 61 * 60_000);
+    for (const f of [...stale, 'qwen-staging-wren.pt', 'qwen-staging-wren.json', 'qwen-keep.pt']) {
+      utimesSync(join(qwenDir(), f), hourAgo, hourAgo);
     }
     const { sweepStaleDesignStaging } = await import('./qwen-voice.js');
-    expect(await sweepStaleDesignStaging()).toBe(3);
-    expect(readdirSync(qwenDir())).toEqual(['qwen-keep.pt']);
+    expect(await sweepStaleDesignStaging()).toBe(4);
+    expect(readdirSync(qwenDir()).sort()).toEqual([...kept].sort());
+  });
+
+  it('a landing whose staged .pt is missing fails loudly: no 200, and the voice it would have replaced stays', async () => {
+    seedChain();
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+      arrayBuffer: async () => new Uint8Array(24_000 * 2 * 0.3).buffer,
+      json: async () => ({}),
+    })); // the sidecar answers, but its staged file is gone (another process swept it)
+    const d = await design('Book Two');
+    expect(d.status, JSON.stringify(d.body)).toBeGreaterThanOrEqual(500);
+    expect(d.body.error).toMatch(/not saved/);
+    oneIntact();
   });
 
   it('a render that timed out: the files the sidecar writes afterwards are removed later', async () => {

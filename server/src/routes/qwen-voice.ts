@@ -73,6 +73,7 @@ import {
   RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
+import { STAGING_MAX_AGE_MS } from '../workspace/portable-staging.js';
 
 /* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
    SidecarDesignError shape, and the liveness watchdog now live in the
@@ -995,16 +996,28 @@ function scheduleLateStagingSweep(staging: string, auditionFile: string): void {
   timer.unref?.();
 }
 
-/* Y2 — at startup, before the server listens (no design is in flight): remove
-   every `qwen-staging-*` file a previous run left behind. Never throws. */
-export async function sweepStaleDesignStaging(): Promise<number> {
+/* Y2 — at startup, before the server listens (no design of this process is in
+   flight): remove the staged files a previous run left behind. PR #4007 pass 12,
+   Y2 — only a staging key's exact shape (`qwen-staging-<nanoid>` plus the staged
+   family's suffixes; a character id starting with `staging-` has its own legacy
+   key), and only an entry older than an hour, as sweepStaleStaging: a second
+   server on the same workspace may be mid-design. Never throws. */
+const STAGED_FILE = /^qwen-staging-[A-Za-z0-9_-]{21}(?:\.pt|\.json|__master\.wav|__1\.7b\.pt)$/;
+export async function sweepStaleDesignStaging(
+  maxAgeMs: number = STAGING_MAX_AGE_MS,
+  now: number = Date.now(),
+): Promise<number> {
   let names: string[];
   try {
     names = await readdir(qwenVoicesDir());
   } catch {
     return 0;
   }
-  const stale = names.filter((n) => n.startsWith('qwen-staging-'));
+  const stale: string[] = [];
+  for (const n of names.filter((name) => STAGED_FILE.test(name))) {
+    const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
+    if (s && now - s.mtimeMs > maxAgeMs) stale.push(n);
+  }
   await removeFiles(stale.map((n) => join(qwenVoicesDir(), n)));
   return stale.length;
 }
@@ -1012,9 +1025,14 @@ export async function sweepStaleDesignStaging(): Promise<number> {
 /* #4028 — move a staged family onto `target`, rm-then-rename like promote (a
    Windows rename over an existing file can EPERM). Only what was staged replaces
    anything; with a `.pt` staged, the target's derived `__1.7b` prompt (built from
-   the embedding being replaced) goes too, as the sidecar's own design does. */
+   the embedding being replaced) goes too, as the sidecar's own design does.
+   PR #4007 pass 12, Y2 — a missing staged `.pt` (the sidecar answered but its file
+   is gone, e.g. another server's sweep) fails the landing: it never answers 200
+   having moved nothing. */
 async function moveStaged(staging: string, target: string): Promise<void> {
-  if (!(await exists(qwenVoicePtPath(staging)))) return; // nothing rendered to disk
+  if (!(await exists(qwenVoicePtPath(staging)))) {
+    throw new RetryableForkError('The designed voice was not saved; design it again.');
+  }
   await rm(qwenVoicePtPath(`${target}__1.7b`), { force: true });
   for (const [kind, suffix] of STAGED_FAMILY) {
     const from = familyPath(kind, `${staging}${suffix}`);

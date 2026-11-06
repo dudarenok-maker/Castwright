@@ -14,11 +14,14 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* PR #4007 pass 12, Y2 — a design call also leaves the staged `.pt` the real
+   sidecar writes (a landing without it now fails). */
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
+  const { writesStagedPt } = await import('../test-utils/staged-sidecar-fetch.js');
   return {
     ...actual,
-    fetch: (...args: unknown[]) => (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
+    fetch: writesStagedPt((...args: unknown[]) => (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args)),
   };
 });
 
