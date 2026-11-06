@@ -303,7 +303,7 @@ const watchTag = (bookId: string, characterId: string): string => `${bookId}|${c
    small entry per key saved by this process; never pruned, so `begun` is never
    reset under a reader. */
 const savingKeys = new Map<string, { active: number; begun: number }>();
-async function whileSaving<T>(key: string, fn: () => Promise<T>): Promise<T> {
+export async function whileSaving<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const s = savingKeys.get(key) ?? { active: 0, begun: 0 };
   savingKeys.set(key, s);
   s.active++;
@@ -1064,7 +1064,7 @@ interface FirstDesignShare {
    that fails is logged: the design has landed, and a row it missed keeps its own
    (empty) legacy key. */
 async function shareFirstDesign(
-  p: DesignQwenVoiceParams,
+  p: Pick<DesignQwenVoiceParams, 'bookDir' | 'bookId' | 'seriesFilter' | 'persistSlot'>,
   share: FirstDesignShare,
   landed: MarkedCharacter,
   voiceId: string,
@@ -1118,6 +1118,28 @@ async function shareFirstDesign(
       console.error('[qwen-voice] could not share a first design with a linked book', e);
     }
   }
+}
+
+/* PR #4007 pass 12 — a promote that wrote the first real file for a never-designed
+   key (`first`): the caller holds the book-ops and the cast locks of `own` and
+   `others`. The row is re-read (a decline between the promote's own write and
+   here may have moved it, which shareFirstDesign's uuid check then refuses). No
+   slot is written (no persistSlot): the drawer's Save does, as on the design route. */
+interface FirstKeptDesign extends FirstDesignShare {
+  voiceId: string;
+}
+async function shareKeptDesign(
+  own: BookHandle,
+  others: BookHandle[],
+  seriesFilter: { author: string; series: string } | null,
+  first: FirstKeptDesign,
+  characterId: string,
+  writeCast: CastWriter,
+): Promise<void> {
+  if (!seriesFilter) return;
+  const row = (await readJson<CastFile>(castJsonPath(own.bookDir)))?.characters?.find((c) => c.id === characterId);
+  if (!row) return;
+  await shareFirstDesign({ bookDir: own.bookDir, bookId: own.bookId, seriesFilter }, first, row as MarkedCharacter, first.voiceId, others, writeCast);
 }
 
 /* #4028 — the final step: under the row's book-op and cast lock (the locks a
@@ -1731,10 +1753,17 @@ qwenVoiceRouter.post(
        design lock; the locked handle must resolve to the same folder. */
     const peeked = await peekBook(bookId);
     if (!peeked) return res.status(404).json({ error: 'Book not found.' });
-    const outcome = await withDesignLock(peeked.bookDir, () => withBookOp(bookId, async (located) => {
-    if (resolve(located.bookDir) !== resolve(peeked.bookDir)) {
-      return res.status(500).json({ error: 'This book moved while the voice was being promoted; try again.' });
-    }
+    /* PR #4007 pass 12 (owner decision: share a first design) — a promote that writes
+       the first real file for a never-designed shared key shares it like a landing
+       (shareFirstDesign), so it also takes the book-ops and cast locks of the other
+       books with a row on that key. The holders are found lock-free here and
+       re-decided inside the locks; a gone book falls back to this book alone. */
+    const moved500 = () => res.status(500).json({ error: 'This book moved while the voice was being promoted; try again.' });
+    const promoteIn = async (
+      located: BookHandle,
+      seriesInfo: { author: string; series: string } | null,
+      afterMove: (first: FirstKeptDesign) => Promise<void>,
+    ) => {
     const sampleVoiceId = typeof body.sampleVoiceId === 'string' ? body.sampleVoiceId.trim() : '';
     const previewVoiceId =
       typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '';
@@ -1758,7 +1787,7 @@ qwenVoiceRouter.post(
        but still no reason to pin the lock for even that bounded worst case).
        Global order: design -> book-op -> cast (cast-lock.ts rule 4). */
     const moved = await withCastLock(located.bookDir, async (): Promise<
-      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; ownKey: string; voiceUuid?: string }
+      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; ownKey: string; voiceUuid?: string; first?: FirstKeptDesign }
     > => {
       const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = fresh?.characters?.find((c) => c.id === characterId);
@@ -1789,6 +1818,8 @@ qwenVoiceRouter.post(
         console.warn('[qwen-voice] promote: no staged preview', e);
         return { status: 409, body: { error: 'No staged preview voice to promote.' } };
       }
+      /* Nothing at the real key yet: this promote writes its first real file. */
+      const firstFile = !(await exists(qwenVoicePtPath(realVoiceId)));
       /* P11-2 — the real key is saving between this rm and its rename. */
       await whileSaving(realVoiceId, async () => {
         await rm(qwenVoicePtPath(realVoiceId), { force: true });
@@ -1842,9 +1873,17 @@ qwenVoiceRouter.post(
         delete freshSlot.variants;
         await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
       }
-      return { realVoiceId, realFileName, ownKey: realVoiceId, voiceUuid: character.voiceUuid ?? undefined };
+      const first =
+        firstFile && seriesInfo && character.voiceUuid
+          ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
+          : undefined;
+      return { realVoiceId, realFileName, ownKey: realVoiceId, voiceUuid: character.voiceUuid ?? undefined, first };
     });
     if ('status' in moved) return res.status(moved.status).json(moved.body);
+    /* Still under the book-ops (and this book's design lock): the first real file of
+       a never-designed key is shared with the linked rows, under every involved
+       book's cast lock (the caller's afterMove), re-reading the row. */
+    if (moved.first) await afterMove(moved.first);
 
     /* Evict the real id from the sidecar's in-memory prompt cache. Best-effort:
        a down/empty sidecar has nothing cached, and generation reads the fresh
@@ -1863,7 +1902,39 @@ qwenVoiceRouter.post(
     return res
       .status(200)
       .json({ voiceId: moved.realVoiceId, url: voiceSamplePublicUrl(moved.realFileName), voiceUuid: moved.voiceUuid });
-    }));
+    };
+    const outcome = await withDesignLock(peeked.bookDir, async () => {
+      const seriesInfo = peeked.state?.isStandalone === true ? null : await findAuthorSeriesForBookId(bookId);
+      const row = seriesInfo
+        ? (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId)
+        : undefined;
+      const shareIds = row?.voiceUuid ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id) : [];
+      let out: Awaited<ReturnType<typeof promoteIn>> | typeof BOOK_GONE = BOOK_GONE;
+      if (shareIds.length) {
+        out = await withBookOps([bookId, ...shareIds], async (books) => {
+          const own = books.find((b) => b.bookId === bookId);
+          if (!own || resolve(own.bookDir) !== resolve(peeked.bookDir)) return moved500();
+          const rest = books.filter((b) => b !== own);
+          return promoteIn(own, seriesInfo, (first) =>
+            withCastLocks([own.bookDir, ...rest.map((b) => b.bookDir)], () =>
+              shareKeptDesign(own, rest, seriesInfo, first, characterId, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)),
+            ),
+          );
+        });
+      }
+      if (out === BOOK_GONE) {
+        out = await withBookOp(bookId, async (located) =>
+          resolve(located.bookDir) !== resolve(peeked.bookDir)
+            ? moved500()
+            : promoteIn(located, seriesInfo, (first) =>
+                withCastLock(located.bookDir, () =>
+                  shareKeptDesign(located, [], seriesInfo, first, characterId, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)),
+                ),
+              ),
+        );
+      }
+      return out;
+    });
     if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
     return outcome;
   },

@@ -634,6 +634,65 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(readRow('Book Two').voiceUuid).toBeTruthy();
     expect(readRow('Book One').voiceUuid).toBeUndefined();
   });
+
+  /* The same owner decision for Design & compare: the preview stages under the
+     designing row's own uuid, and promoting it writes the first real file for the
+     never-designed key, so the promote shares it the way the landing does. */
+  const compareThenKeep = async () => {
+    const preview = await design(() => bookTwoId, { preview: true });
+    expect(preview.status).toBe(200);
+    return request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: landedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+  };
+
+  it('Design & compare on Two then Keep: Two and One share the new uuid, with a real .pt', async () => {
+    seed({ declinedVoiceFrom: undefined });
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    const kept = await compareThenKeep();
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(fresh).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBe(fresh);
+    expect(kept.body.voiceId).toBe(`qwen-${fresh}`);
+    expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).equals(NEW_PT)).toBe(true);
+  });
+
+  it('Design & compare then Keep, Book One declined Book Two: only Book Two takes the voice', async () => {
+    seed({ declinedVoiceFrom: undefined });
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined, declinedVoiceFrom: [bookTwoId] });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    const kept = await compareThenKeep();
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(fresh).toBeTruthy();
+    expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).equals(NEW_PT)).toBe(true);
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+  });
+
+  it('Design & compare then Keep, Book Two declined: Book One is not stamped', async () => {
+    seed({});
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    expect((await compareThenKeep()).status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+  });
+
+  it('Keep of a REdesign (the key already had a file) shares nothing', async () => {
+    seed({ declinedVoiceFrom: undefined });
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    expect((await design(() => bookTwoId, { preview: true })).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    writeFileSync(join(qwenDir(), `qwen-${fresh}.pt`), ORIG_PT);
+    const kept = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: landedVoiceIds[0], sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(kept.status).toBe(200);
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+  });
 });
 
 /* Review pass 1, finding 6 — the fork decision and the variant scan read every

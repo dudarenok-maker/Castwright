@@ -45,6 +45,9 @@ const beforeLanding = vi.hoisted(() => ({ bookId: null as string | null, fn: nul
 /* Pass 11, P11-2 — runs (and is awaited) once, inside a landing, between its rm of
    the target `.pt` and the rename onto it. */
 const midLanding = vi.hoisted(() => ({ target: null as string | null, fn: null as (() => Promise<void>) | null }));
+/* Runs (and is awaited) once, inside a separation's copy of the named source file,
+   before the copy: a write that begins and finishes in that window. */
+const duringCopy = vi.hoisted(() => ({ source: null as string | null, fn: null as (() => Promise<void>) | null }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const rename = async (from: unknown, to: unknown) => {
@@ -55,7 +58,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.rename(from as string, to as string);
   };
-  return { ...actual, default: { ...actual, rename }, rename };
+  const copyFile = async (from: unknown, to: unknown, mode?: number) => {
+    if (duringCopy.fn && duringCopy.source && String(from).endsWith(duringCopy.source)) {
+      const run = duringCopy.fn;
+      duringCopy.fn = null;
+      await run();
+    }
+    return actual.copyFile(from as string, to as string, mode);
+  };
+  return { ...actual, default: { ...actual, rename, copyFile }, rename, copyFile };
 });
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
@@ -234,6 +245,8 @@ beforeEach(() => {
   beforeLanding.bookId = null;
   midLanding.fn = null;
   midLanding.target = null;
+  duringCopy.fn = null;
+  duringCopy.source = null;
   afterLanding.fn = null;
   gate.release?.(); // a test that failed while holding a render must not wedge the next
   gate.hold = false;
@@ -1131,6 +1144,26 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(fresh).not.toBe('u_shared');
     expect(row('Book Two').declinedVoiceFrom).toContain(ids['Book One']);
     expect(row('Book One').voiceUuid).toBe('u_shared');
+  });
+
+  it('P11-2: a write that begins and finishes during the decline’s copy of a missing source fails retryably, then the retry succeeds', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    const twoBefore = row('Book Two');
+    const { whileSaving } = await import('./qwen-voice.js');
+    duringCopy.source = 'qwen-v_wren.pt';
+    duringCopy.fn = async () => {
+      await whileSaving('qwen-v_wren', async () => {});
+    };
+    const mid = await decline('Book Two', 'Book One');
+    expect(mid.status, JSON.stringify(mid.body)).toBe(500);
+    expect(mid.body.error).toMatch(/try again/);
+    expect(row('Book Two')).toEqual(twoBefore);
+    expect(readdirSync(qwenDir())).toEqual([]);
+    const after = await decline('Book Two', 'Book One');
+    expect(after.status, JSON.stringify(after.body)).toBe(200);
+    expect(row('Book Two').voiceUuid).toBeTruthy();
   });
 
   it('P11-2: a decline during a landing of the source key fails retryably, then succeeds once it has landed', async () => {

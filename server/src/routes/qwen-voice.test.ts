@@ -1253,10 +1253,12 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
       if (path !== raceCastPath) return actual.readJson(path);
       callsForCastPath += 1;
-      /* #4028 — promote-voice's one cast.json read is the in-lock one (the read,
-         the preview-id check, the moves and the teardown write all sit inside the
-         cast lock); the second writer only starts once it is parked. */
-      if (callsForCastPath === 1) {
+      /* #4028 — promote-voice's in-lock cast.json read (the read, the preview-id
+         check, the moves and the teardown write all sit inside the cast lock); the
+         second writer only starts once it is parked. Pass 12: a series book's
+         promote first reads the row lock-free to find the books holding a
+         never-designed key (read 1), so the in-lock read is the second. */
+      if (callsForCastPath === 2) {
         interceptedSecondRead = true;
         signalSecondRead();
         const value = await actual.readJson(path); // real bytes, now — happens-before the second writer's write
