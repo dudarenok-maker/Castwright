@@ -346,8 +346,10 @@ export function mustSeparateOnDesign(row: MarkedRow, scan: VoiceScan): boolean {
    row before asking, so a row that answers yes is another one: a linked book, a
    book that declined (or was declined by) this one, or a same-book sibling. A row
    names it by a slot's stored `name` (a forked row keeps the earlier book's
-   name), by the key the render path derives (`<qwenStorageKey>__<emotion>`), or
-   by its legacy key (`qwen-<voiceId ?? id>__<emotion>`, P10-2). No marker, link
+   name), or by the key the render path derives
+   (`<qwenStorageKey>__<emotion>`, which for a row with no uuid is its legacy
+   `qwen-<voiceId ?? id>` key, P10-2; a row with a uuid never reads the legacy key
+   again). No marker, link
    or uuid comparison decides it: a file a row names is never deleted (#4026: an
    unforked declined row shared the earlier book's uuid and its delete took that
    book's take). Scans every book under BOOKS_ROOT, takes no lock, writes
@@ -365,11 +367,12 @@ export async function isVariantStillNamed(variantId: string): Promise<boolean> {
         for (const y of cast?.characters ?? []) {
           const variants = y.overrideTtsVoices?.qwen?.variants;
           if (!variants) continue;
-          const keys = [qwenStorageKey(y, y.id ?? ''), `qwen-${y.voiceId ?? y.id ?? ''}`];
+          /* The render path's key: a uuid row's own, or (no uuid) the legacy one. */
+          const key = qwenStorageKey(y, y.id ?? '');
           for (const [emotion, v] of Object.entries(variants)) {
             if (!v) continue;
             if (v.name === variantId) return true;
-            if (keys.some((k) => `${k}__${emotion}` === variantId)) return true;
+            if (`${key}__${emotion}` === variantId) return true;
           }
         }
       }

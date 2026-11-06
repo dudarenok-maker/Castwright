@@ -226,12 +226,16 @@ describe('isVariantStillNamed (#3992 P10-2, #4026)', () => {
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, declinedVoiceFrom: [ONE_ID] }]);
     expect(await variantUsed(`qwen-${U}__angry`)).toBe(true);
   });
-  it('counts a row whose slot is present under another stored name by its uuid-derived or legacy key', async () => {
+  it('counts a row whose slot is present under another stored name by the key the render path reads', async () => {
     reset();
     book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: U, ...angry('elsewhere') }]);
-    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true); // what the render path reads
-    expect(await variantUsed('qwen-v__angry')).toBe(true); // legacy key
+    expect(await variantUsed(`qwen-${U}__angry`)).toBe(true); // a uuid row's key
     expect(await variantUsed(`qwen-${U}__sad`)).toBe(false); // no sad slot
+    /* the legacy key is the render path's only for a row with no uuid (#4026) */
+    expect(await variantUsed('qwen-v__angry')).toBe(false);
+    reset();
+    book('One', ONE_ID, [{ id: 'c', voiceId: 'v', ...angry('elsewhere') }]);
+    expect(await variantUsed('qwen-v__angry')).toBe(true);
   });
   it('is false when no row names it, and true when a book cannot be read', async () => {
     reset();

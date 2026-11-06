@@ -2,7 +2,7 @@
    still names it, whether that row is a linked book, a book that declined (or was
    declined by) this one, or a same-book sibling, and whatever it names it by: the
    stored variant `name`, its uuid-derived key (`qwen-<uuid>__<emotion>`, what the
-   render path reads) or its legacy key (`qwen-<voiceId ?? id>__<emotion>`).
+   render path reads) or, for a row with no uuid, its legacy key (`qwen-<voiceId ?? id>__<emotion>`).
 
    The two routes that delete a variant file, on real cast.json files: the
    variant DELETE and promote-voice (which drops the row's now-stale variants).
@@ -149,8 +149,8 @@ const design = (t: Title, extra: Record<string, unknown> = {}) =>
     .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra });
 const decline = (t: Title, from: Title) =>
   request(app).post(`/api/books/${ids[t]}/cast/wren/decline-voice-link`).send({ fromBookId: ids[from] });
-const del = (t: Title, emotion = 'angry') =>
-  request(app).delete(`/api/books/${ids[t]}/cast/wren/emotion-variant/${emotion}`);
+const del = (t: Title, emotion = 'angry', charId = 'wren') =>
+  request(app).delete(`/api/books/${ids[t]}/cast/${charId}/emotion-variant/${emotion}`);
 const promote = (t: Title, uuid: string) => {
   const previewId = previewVoiceIdFor(`qwen-${uuid}`, ids[t], 'wren');
   writeFileSync(pt(previewId), Buffer.from('PREVIEW'));
@@ -268,13 +268,36 @@ describe('#4026 — variant DELETE keeps a file another row still names', () => 
     expect(kept()).toBe(true);
   });
 
-  it('a holder that names it only by its legacy key (a row on another uuid, voiceId v_wren): kept', async () => {
+  it('a holder that names it only by its legacy key (a row with no uuid, voiceId v_wren): kept', async () => {
     reset();
-    writeBook('Book One', [designedOn('u_one', { angry: { name: 'other' } })]);
+    writeBook('Book One', [{ ...legacy, overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'other' } } } } }]);
     writeBook('Book Two', [designedOn('u_shared', { angry: { name: 'qwen-v_wren__angry' } })]);
     writeFileSync(pt('qwen-v_wren__angry'), ANGRY);
     expect((await del('Book Two')).status).toBe(200);
     expect(readFileSync(pt('qwen-v_wren__angry')).equals(ANGRY)).toBe(true);
+  });
+
+  it("a uuid row's legacy-looking key is no holder: deleting a uuid row's angry leaves no orphan behind", async () => {
+    /* Book X's legacy narrator (no uuid) names qwen-narrator__angry; an unrelated
+       book's narrator is on a uuid and renders qwen-<uuid>__angry. The uuid row
+       never reads the legacy key, so it must not be what keeps it (nor strand it
+       once X lets go). */
+    reset();
+    const narrator = { id: 'narrator', name: 'Narrator', role: 'narrator' };
+    writeBook('Book One', [
+      { ...narrator, voiceUuid: 'u_y', overrideTtsVoices: { qwen: { name: 'qwen-u_y', variants: { angry: { name: 'qwen-u_y__angry' } } } } },
+    ]);
+    writeBook('Book Two', [
+      { ...narrator, overrideTtsVoices: { qwen: { name: 'qwen-narrator', variants: { angry: { name: 'qwen-narrator__angry' } } } } },
+    ]);
+    writeFileSync(pt('qwen-u_y__angry'), Buffer.from('Y-ANGRY'));
+    writeFileSync(pt('qwen-narrator__angry'), Buffer.from('X-ANGRY'));
+    /* the legacy row's own delete is the last holder of its file, and the uuid row
+       does not hold it */
+    expect((await del('Book Two', 'angry', 'narrator')).status).toBe(200);
+    expect(existsSync(pt('qwen-narrator__angry'))).toBe(false);
+    expect((await del('Book One', 'angry', 'narrator')).status).toBe(200);
+    expect(existsSync(pt('qwen-u_y__angry'))).toBe(false);
   });
 
   it('a same-book sibling on the same key that names it: kept', async () => {
