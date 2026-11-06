@@ -1054,13 +1054,17 @@ interface FirstDesignShare {
   uuid: string;
 }
 
+/* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
+const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
+
 /* Under the landing's locks, after its file landed: stamp `share.uuid` (and, for a
    design the caller persists, the slot) onto the rows still on the never-designed
    key in the row's own book and in `others` (each locked, in the series, its cast
-   confirmed), so the series keeps one shared voice. Never a row whose book the
-   designing row declined, or that declined the designing book; never a row on
-   another voice (a uuid, a cloned or library slot, a slot naming another key);
-   nothing when the row has left the uuid or the legacy key gained a file. A write
+   confirmed), so the series keeps one shared voice. Nothing at all when the
+   designing row carries a decline marker (P12-1); never a row that declined the
+   designing book; never a row on another voice (a uuid, a cloned or library slot,
+   a slot naming another key); nothing when the row has left the uuid or the
+   legacy key gained a file. A write
    that fails is logged: the design has landed, and a row it missed keeps its own
    (empty) legacy key. */
 async function shareFirstDesign(
@@ -1073,6 +1077,10 @@ async function shareFirstDesign(
 ): Promise<void> {
   const series = p.seriesFilter;
   if (landed.voiceUuid !== share.uuid || !series) return;
+  /* P12-1 — a row that declined a book holds a voice of its own: it is shared with
+     no other row, in any book (the declined book's rows and the rows still on the
+     voice it left are the same voice). */
+  if (hasDeclineMarker(landed)) return;
   if (!(await exists(qwenVoicePtPath(`qwen-${share.uuid}`)))) return;
   const legacyKey = `qwen-${share.linkId}`;
   if (await exists(qwenVoicePtPath(legacyKey))) return;
@@ -1089,7 +1097,6 @@ async function shareFirstDesign(
       ? { overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...c.overrideTtsVoices?.qwen, name: voiceId } } }
       : {}),
   });
-  const declinedByRow = new Set(landed.declinedVoiceFrom ?? []);
   const books = [
     { dir: p.bookDir, otherBook: false },
     ...others
@@ -1098,8 +1105,7 @@ async function shareFirstDesign(
           b.state.castConfirmed &&
           b.state.isStandalone !== true &&
           b.state.author === series.author &&
-          b.state.series === series.series &&
-          !declinedByRow.has(b.bookId),
+          b.state.series === series.series,
       )
       .map((b) => ({ dir: b.bookDir, otherBook: true })),
   ];
@@ -1874,8 +1880,8 @@ qwenVoiceRouter.post(
         await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
       }
       const first =
-        firstFile && seriesInfo && character.voiceUuid
-          ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
+        firstFile && seriesInfo && character.voiceUuid && !hasDeclineMarker(character)
+          ?{ linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
           : undefined;
       return { realVoiceId, realFileName, ownKey: realVoiceId, voiceUuid: character.voiceUuid ?? undefined, first };
     });
@@ -1908,7 +1914,7 @@ qwenVoiceRouter.post(
       const row = seriesInfo
         ? (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId)
         : undefined;
-      const shareIds = row?.voiceUuid ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id) : [];
+      const shareIds = row?.voiceUuid && !hasDeclineMarker(row) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id) : [];
       let out: Awaited<ReturnType<typeof promoteIn>> | typeof BOOK_GONE = BOOK_GONE;
       if (shareIds.length) {
         out = await withBookOps([bookId, ...shareIds], async (books) => {
