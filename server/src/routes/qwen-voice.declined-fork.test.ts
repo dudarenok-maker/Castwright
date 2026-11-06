@@ -586,10 +586,11 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(readRow('Book One').voiceUuid).toBe(fresh);
   });
 
-  /* Pass 11 (owner decision: the series mint copies before it stamps) — with no
-     designed legacy voice there is nothing to copy, so only the designing row is
-     stamped: no other book is left on a uuid whose file may never exist. */
-  it('Nobody has designed yet, nobody declined: only the designing row is stamped', async () => {
+  /* Pass 11 (owner decisions: the series mint copies before it stamps; a FIRST
+     design is shared) — with no designed legacy voice the mint stamps only the
+     designing row, and the landing, once the file exists, stamps the linked rows
+     still on that never-designed key: the series keeps one shared voice. */
+  it('Nobody has designed yet, nobody declined: the first design is shared by both rows', async () => {
     seed({ declinedVoiceFrom: undefined });
     noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined });
     noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
@@ -597,7 +598,32 @@ describe('#3992 — a declined row with no uuid does not move the earlier book�
     expect(res.status).toBe(200);
     const fresh = readRow('Book Two').voiceUuid;
     expect(fresh).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBe(fresh);
+    expect(landedVoiceIds).toEqual([`qwen-${fresh}`]);
+    expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).equals(NEW_PT)).toBe(true);
+  });
+
+  it('Nobody has designed yet, Book One declined Book Two: only Book Two takes the first design', async () => {
+    seed({ declinedVoiceFrom: undefined });
+    noUuid('Book One', { overrideTtsVoices: undefined, ttsEngine: undefined, declinedVoiceFrom: [bookTwoId] });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(fresh).toBeTruthy();
+    expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).equals(NEW_PT)).toBe(true);
     expect(readRow('Book One').voiceUuid).toBeUndefined();
+  });
+
+  it('Nobody has designed yet: a linked row already on another voice is never moved', async () => {
+    seed({ declinedVoiceFrom: undefined });
+    noUuid('Book One', { ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-elsewhere' } } });
+    noUuid('Book Two', { overrideTtsVoices: undefined, ttsEngine: undefined });
+    const res = await design(() => bookTwoId);
+    expect(res.status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).toBeTruthy();
+    expect(readRow('Book One').voiceUuid).toBeUndefined();
+    expect((readRow('Book One').overrideTtsVoices as { qwen: { name: string } }).qwen.name).toBe('qwen-elsewhere');
   });
 
   it('Nobody has designed yet, Book Two declined: Book Two gets a uuid of its own and Book One is not stamped', async () => {

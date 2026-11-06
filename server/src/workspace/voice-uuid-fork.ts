@@ -265,6 +265,17 @@ export async function scanVoiceHolders(
   return { followers, heldElsewhere, holderBookIds, unreadableDirs };
 }
 
+/* PR #4007 pass 11 (owner decision: share a first design) — the bookIds of the
+   OTHER readable books with a row still on the never-designed legacy key
+   `qwen-<linkId>`: the books a first design of that key may share its new voice
+   with. Planning only; the landing (qwen-voice.ts) locks them and re-decides
+   every row on a fresh read. */
+export async function legacyKeyHolderBookIds(bookDir: string, linkId: string): Promise<string[]> {
+  const { books } = await loadOtherBooks(resolve(bookDir));
+  const holds = holdsLegacyKey(linkId);
+  return [...new Set(books.filter((b) => b.bookId && b.rows.some(holds)).map((b) => b.bookId as string))];
+}
+
 interface MarkedRow {
   voiceUuid?: string | null;
   declinedVoiceFrom?: string[] | null;

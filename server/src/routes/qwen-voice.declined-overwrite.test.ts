@@ -1044,15 +1044,44 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(readFileSync(pt('qwen-v_wren'))).toEqual(ORIG);
   });
 
-  it('P11-3: a never-designed legacy key has nothing to copy, so only the designing row is stamped', async () => {
+  /* Owner decision (share a first design): nothing to copy, so the mint stamps
+     only Two; the landing then shares the landed file with One. */
+  it('P11-3: a never-designed legacy key: the first design lands, then One shares it', async () => {
     reset();
     writeBook('Book One', [{ ...legacy }]);
     writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
     const d = await design('Book Two');
     expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(n).toBeTruthy();
+    expect(row('Book One').voiceUuid).toBe(n);
+    expect(readdirSync(qwenDir()).sort()).toEqual([`qwen-${n}.pt`]);
+    expect(readFileSync(pt(`qwen-${n}`))).toEqual(NEW_PT);
+  });
+
+  it('first design shared: Design & compare shares nothing (no file lands on the real key)', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    const d = await design('Book Two', { preview: true });
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
     expect(row('Book Two').voiceUuid).toBeTruthy();
     expect(row('Book One').voiceUuid).toBeUndefined();
-    expect(readdirSync(qwenDir()).sort()).toEqual([`qwen-${row('Book Two').voiceUuid}.pt`]);
+  });
+
+  it('first design shared through the SSE job: One gets the uuid and the slot', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }]);
+    const res = await request(app)
+      .post(`/api/books/${ids['Book Two']}/cast/wren/design-voice/stream`)
+      .send({ persona: 'a bright voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(n).toBeTruthy();
+    expect(row('Book One').voiceUuid).toBe(n);
+    expect(row('Book One').overrideTtsVoices?.qwen?.name).toBe(`qwen-${n}`);
+    expect(readFileSync(pt(`qwen-${n}`))).toEqual(NEW_PT);
   });
 
   it("P11-2: Don't reuse on Two lands between Three's mint and its landing: One keeps a voice file", async () => {
