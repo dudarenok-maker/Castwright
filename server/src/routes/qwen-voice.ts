@@ -1206,7 +1206,7 @@ async function landStagedDesign(
   const planned = await firstDesignOf(
     (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
   );
-  const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId) : [];
+  const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
   if (shareIds.length) {
     out = await withBookOps([p.bookId, ...shareIds], async (books) => {
@@ -1923,7 +1923,7 @@ qwenVoiceRouter.post(
       const row = seriesInfo
         ? (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId)
         : undefined;
-      const shareIds = row?.voiceUuid && !hasDeclineMarker(row) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id) : [];
+      const shareIds = row?.voiceUuid && !hasDeclineMarker(row) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id, seriesInfo ?? undefined) : [];
       let out: Awaited<ReturnType<typeof promoteIn>> | typeof BOOK_GONE = BOOK_GONE;
       if (shareIds.length) {
         out = await withBookOps([bookId, ...shareIds], async (books) => {

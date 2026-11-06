@@ -93,13 +93,22 @@ async function readOtherBookCast<T>(dir: string): Promise<T | null | typeof UNRE
    pins its stateJsonPath( count per file). Throws like any state read; the scan of
    OTHER books catches it, the row's own book does not. */
 export async function readBookId(dir: string): Promise<string | undefined> {
+  return (await readBookIdentity(dir)).bookId;
+}
+async function readBookIdentity(dir: string): Promise<{ bookId?: string; series?: { author: string; series: string } }> {
   const state = await readStateJsonWithRecovery(stateJsonPath(dir));
-  return state?.bookId || undefined;
+  const inSeries = state && state.isStandalone !== true && state.author && state.series;
+  return {
+    bookId: state?.bookId || undefined,
+    series: inSeries ? { author: state.author as string, series: state.series as string } : undefined,
+  };
 }
 
 interface OtherBook {
   dir: string;
   bookId?: string;
+  /** The book's author and series (none: a standalone book). */
+  series?: { author: string; series: string };
   rows: CastRow[];
 }
 
@@ -121,15 +130,15 @@ async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; un
           continue;
         }
         if (!cast?.characters?.length) continue;
-        let bookId: string | undefined;
+        let identity: Awaited<ReturnType<typeof readBookIdentity>>;
         try {
-          bookId = await readBookId(dir);
+          identity = await readBookIdentity(dir);
         } catch (e) {
           console.warn(`[voice-uuid-fork] skipping unreadable state.json in ${dir}: ${(e as Error).message}`);
           unreadableDirs.push(resolve(dir));
           continue;
         }
-        out.push({ dir, bookId, rows: cast.characters });
+        out.push({ dir, bookId: identity.bookId, series: identity.series, rows: cast.characters });
       }
     }
   }
@@ -269,11 +278,20 @@ export async function scanVoiceHolders(
    OTHER readable books with a row still on the never-designed legacy key
    `qwen-<linkId>`: the books a first design of that key may share its new voice
    with. Planning only; the landing (qwen-voice.ts) locks them and re-decides
-   every row on a fresh read. */
-export async function legacyKeyHolderBookIds(bookDir: string, linkId: string): Promise<string[]> {
+   every row on a fresh read. PR #4007 pass 12, Y1 — given `seriesFilter`, only
+   that series' books: the share writes no other book, so locking one (a narrator
+   row is in every book) only widens the fan-out, and one of them gone by the lock
+   would drop the whole share. */
+export async function legacyKeyHolderBookIds(
+  bookDir: string,
+  linkId: string,
+  seriesFilter?: { author: string; series: string },
+): Promise<string[]> {
   const { books } = await loadOtherBooks(resolve(bookDir));
   const holds = holdsLegacyKey(linkId);
-  return [...new Set(books.filter((b) => b.bookId && b.rows.some(holds)).map((b) => b.bookId as string))];
+  const inScope = (b: OtherBook): boolean =>
+    !seriesFilter || (b.series?.author === seriesFilter.author && b.series?.series === seriesFilter.series);
+  return [...new Set(books.filter((b) => b.bookId && inScope(b) && b.rows.some(holds)).map((b) => b.bookId as string))];
 }
 
 interface MarkedRow {

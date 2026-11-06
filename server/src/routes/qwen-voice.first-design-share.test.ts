@@ -317,3 +317,54 @@ describe('P12-4 — the share does not depend on the mint path', () => {
     expect(row('Book Three').voiceUuid).toBeUndefined();
   });
 });
+
+describe('Y1 — the holder scan stays in the series', () => {
+  const OTHER = { author: 'Other Author', series: 'Other Series', title: 'Elsewhere' };
+  const otherDir = () => join(workspaceRoot, 'books', OTHER.author, OTHER.series, OTHER.title);
+  async function seedUnrelated(): Promise<string> {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const otherId = makeBookId(OTHER.author, OTHER.series, OTHER.title);
+    writeState(otherDir(), { bookId: otherId, ...OTHER, position: 1 });
+    writeFileSync(join(otherDir(), '.audiobook', 'cast.json'), JSON.stringify({ characters: [{ ...legacy }] }));
+    return otherId;
+  }
+
+  it('the scan, given the series, names only the series books on the legacy key', async () => {
+    seedNeverDesigned();
+    const otherId = await seedUnrelated();
+    const { legacyKeyHolderBookIds } = await import('../workspace/voice-uuid-fork.js');
+    expect(await legacyKeyHolderBookIds(bookDir('Book Two'), 'v_wren')).toContain(otherId);
+    const inSeries = await legacyKeyHolderBookIds(bookDir('Book Two'), 'v_wren', { author: AUTHOR, series: SERIES });
+    expect(inSeries.sort()).toEqual([ids['Book One'], ids['Book Three']].sort());
+  });
+
+  it('an unrelated book in another series deleted before the landing locks does not drop the in-series share', async () => {
+    seedNeverDesigned();
+    await seedUnrelated();
+    beforeShareLanding.bookId = ids['Book Two'];
+    beforeShareLanding.fn = async () => {
+      rmSync(otherDir(), { recursive: true, force: true }); // the user deletes an unrelated book
+    };
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(row('Book One').voiceUuid, 'the in-series share was dropped').toBe(n);
+    expect(row('Book Three').voiceUuid).toBe(n);
+  });
+
+  it('the same at promote (Design & compare -> Keep)', async () => {
+    seedNeverDesigned();
+    await seedUnrelated();
+    const preview = await design('Book Two', { preview: true });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    beforeShareLanding.bookId = ids['Book Two'];
+    beforeShareLanding.fn = async () => {
+      rmSync(otherDir(), { recursive: true, force: true });
+    };
+    const kept = await promote('Book Two', preview.body.voiceId);
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    const n = row('Book Two').voiceUuid;
+    expect(row('Book One').voiceUuid, 'the in-series share was dropped').toBe(n);
+    expect(row('Book Three').voiceUuid).toBe(n);
+  });
+});
