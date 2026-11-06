@@ -16,8 +16,10 @@
    NEVER NEST A SPAN. `serializeQueueMutation` inside a span waits on its own tail and wedges the chain for the whole
    process (pinned at runtime below). A helper whose write is flagged `no-span` must NOT be given its own span when a
    span calls it: keep the write in the caller's span and pass the snapshot in. `nested-span` flags a span call whose
-   ancestors include a span callback, and a call from inside a span to a same-file function that (transitively) opens a
-   span. A helper that opens a span and is called from a span in ANOTHER file is not seen (no call graph).
+   ancestors include a span callback, and ANY reference from inside a span to a same-file span helper -- a function
+   (declaration, arrow, wrapped arrow, object-literal method) that (transitively) opens a span: a call, a callback
+   (`ids.map(h)`) or a method call (`o.h()`, matched by method name alone). A helper that opens a span and is
+   referenced from a span in ANOTHER file is not seen (no call graph).
 
    FALSE NEGATIVES (not caught): an aliased `writeQueueFile as w` (the alias call is invisible; an aliased
    `serializeQueueMutation` import IS flagged); a path held in a variable and passed to a bare `writeJsonAtomic`/fs call;
@@ -260,23 +262,53 @@ function scan(
       for (let p: ts.Node | undefined = n.parent; p; p = p.parent) if (isSpanCallback(p)) return true;
       return false;
     };
-    /* Same-file functions that open a span, directly or through another such function (to a fixpoint): calling one
-       from inside a span nests a span. */
-    const helperName = (f: ts.Node): string | undefined =>
-      ts.isFunctionDeclaration(f) && f.name
+    /* Same-file functions that open a span, directly or through another such function (to a fixpoint). Any REFERENCE to
+       one from inside a span nests a span: a call, a callback (`ids.map(h)`), a method call (`o.h()`, matched by name).
+       A helper is a function declaration, a variable whose initializer holds a function that opens a span (an arrow, or
+       a wrapper such as `logged(async () => ...)`), or an object-literal method/property of that shape. */
+    const declName = (f: ts.Node): string | undefined =>
+      (ts.isFunctionDeclaration(f) ||
+        ts.isVariableDeclaration(f) ||
+        ts.isPropertyAssignment(f) ||
+        ts.isMethodDeclaration(f)) &&
+      f.name &&
+      ts.isIdentifier(f.name)
         ? f.name.text
-        : isFn(f) && ts.isVariableDeclaration(f.parent) && ts.isIdentifier(f.parent.name)
-          ? f.parent.name.text
-          : undefined;
+        : undefined;
     const spanHelpers = new Set<string>();
+    /** `id` names a span helper and is a use of it, not the declaration of it. */
+    const isHelperRef = (id: ts.Node): boolean => {
+      if (!ts.isIdentifier(id) || !spanHelpers.has(id.text)) return false;
+      const p = id.parent;
+      return !(
+        (ts.isFunctionDeclaration(p) ||
+          ts.isVariableDeclaration(p) ||
+          ts.isPropertyAssignment(p) ||
+          ts.isMethodDeclaration(p) ||
+          ts.isParameter(p) ||
+          ts.isBindingElement(p)) &&
+        p.name === id
+      );
+    };
+    const hasSpan = (root: ts.Node): boolean => {
+      let found = false;
+      const walk = (n: ts.Node): void => {
+        if (found) return;
+        if ((ts.isCallExpression(n) && isSpanCall(n)) || isHelperRef(n)) {
+          found = true;
+          return;
+        }
+        ts.forEachChild(n, walk);
+      };
+      walk(root);
+      return found;
+    };
+    /** A FUNCTION under `root` (or `root` itself) opens a span: a span evaluated at declaration time is a result, not a helper. */
     const opensSpan = (root: ts.Node): boolean => {
       let found = false;
       const walk = (n: ts.Node): void => {
         if (found) return;
-        if (
-          ts.isCallExpression(n) &&
-          (isSpanCall(n) || (ts.isIdentifier(n.expression) && spanHelpers.has(n.expression.text)))
-        ) {
+        if (isFnLike(n) && hasSpan(n)) {
           found = true;
           return;
         }
@@ -288,7 +320,7 @@ function scan(
     for (let grew = true; grew; ) {
       grew = false;
       const find = (n: ts.Node): void => {
-        const nm = isFnLike(n) ? helperName(n) : undefined;
+        const nm = declName(n);
         if (nm && !spanHelpers.has(nm) && opensSpan(n)) {
           spanHelpers.add(nm);
           grew = true;
@@ -305,11 +337,7 @@ function scan(
       ) {
         declarations.push(rel);
       }
-      if (
-        ts.isCallExpression(n) &&
-        (isSpanCall(n) || (ts.isIdentifier(n.expression) && spanHelpers.has(n.expression.text))) &&
-        insideSpan(n)
-      ) {
+      if (((ts.isCallExpression(n) && isSpanCall(n)) || isHelperRef(n)) && insideSpan(n)) {
         violations.push({ file: rel, line: lineAt(n), why: 'nested-span' });
       }
       if (ts.isCallExpression(n) && isQueueWrite(n)) {
@@ -497,6 +525,46 @@ describe('every .queue.json write sits in a serializeQueueMutation span that hol
       expect(ok.violations).toEqual([]);
     });
 
+    it('a span helper REFERENCED inside a span is nested-span: passed by reference, as a method, wrapped, or declared after its caller', () => {
+      const helperBody = `async (id: string) => { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); }`;
+      const caller = (call: string) =>
+        `export async function f(ids: string[], id: string) { await serializeQueueMutation(async () => { const b = await readQueueFile(p()); if (b.paused) return; ${call} }); }`;
+      const r = run({
+        'routes/by-ref.ts': IMPORT + `async function markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); }\n` + caller('await Promise.all(ids.map(markDone));'),
+        'routes/method.ts': IMPORT + `const h = { async markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); } };\n` + caller('await h.markDone(id);'),
+        /* A class is not itself a helper, so only the METHOD's name can catch this one. */
+        'routes/class-method.ts': IMPORT + `class H { async markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); } }
+` + caller('await new H().markDone(id);'),
+        'routes/prop-fn.ts': IMPORT + `const h = { markDone: ${helperBody} };\n` + caller('await h.markDone(id);'),
+        'routes/wrapped.ts': IMPORT + `const markDone = logged(${helperBody});\n` + caller('await markDone(id);'),
+        /* The caller is declared BEFORE the chain markDone <- viaArrow, so a single pass would miss it. */
+        'routes/reversed.ts':
+          IMPORT +
+          `const viaArrow = async (id: string) => { await markDone(id); };\nasync function markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); }\n` +
+          caller('await viaArrow(id);'),
+        'routes/after-caller.ts':
+          IMPORT + caller('await markDone(id);') + `\nasync function markDone(id: string) { await serializeQueueMutation(async () => { const c = await readQueueFile(p()); await writeQueueFile(p(), done(c, id)); }); }\n`,
+      });
+      /* (`h.markDone(id)` reports both `h` and `markDone`, hence the Set.) */
+      expect([...new Set(r.violations.map((v) => `${v.file}:${v.why}`))].sort()).toEqual([
+        'routes/after-caller.ts:nested-span',
+        'routes/by-ref.ts:nested-span',
+        'routes/class-method.ts:nested-span',
+        'routes/method.ts:nested-span',
+        'routes/prop-fn.ts:nested-span',
+        'routes/reversed.ts:nested-span',
+        'routes/wrapped.ts:nested-span',
+      ]);
+      /* A variable merely HOLDING a span's result is not a helper. */
+      const ok = run({
+        'routes/result.ts':
+          IMPORT +
+          `export async function f() { const res = await serializeQueueMutation(async () => { const b = await readQueueFile(p()); await writeQueueFile(p(), b); return 1; });
+          await serializeQueueMutation(async () => { const b = await readQueueFile(p()); use(res); await writeQueueFile(p(), b); }); }`,
+      });
+      expect(ok.violations).toEqual([]);
+    });
+
     it('a write in a function that is not the span callback (a later callback)', () => {
       const r = run({
         'routes/later.ts':
@@ -647,6 +715,25 @@ describe('every .queue.json write sits in a serializeQueueMutation span that hol
               await writeQueueFile(p(), { ...other, paused: true }); }); }`,
       });
       expect(whys(stale)).toEqual(['stale-snapshot']);
+      /* ...nor is a property ACCESS of an unrelated object that happens to share the name (`o.paused`). */
+      const access = run({
+        'routes/propaccess.ts':
+          IMPORT +
+          `export async function f(o: { paused: boolean }) { await serializeQueueMutation(async () => { const { paused } = await readQueueFile(p()); if (paused) return;
+              await writeQueueFile(p(), setPaused(o.paused)); }); }`,
+      });
+      expect(whys(access)).toEqual(['stale-snapshot']);
+    });
+
+    it('writeJsonAtomicOrdered carries a snapshot too: one made from a hoisted read is stale', () => {
+      const r = run({
+        'routes/ordered-stale.ts':
+          IMPORT +
+          `export async function f(id: string) { const before = await readQueueFile(queueJsonPath());
+            await serializeQueueMutation(async () => { const fresh = await readQueueFile(queueJsonPath()); if (!fresh.entries.length) return;
+              await writeJsonAtomicOrdered(queueJsonPath(), completeEntry(before, id, 'done')); }); }`,
+      });
+      expect(whys(r)).toEqual(['stale-snapshot']);
     });
 
     it('a name re-declared from a fresh read inside the span shadows the hoisted one (documented limit)', () => {
