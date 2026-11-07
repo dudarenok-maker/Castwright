@@ -414,12 +414,67 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     expect(carry.characters[0].voiceId).toBeUndefined();
   });
 
-  it('clears a stale carryover when there is no cast to snapshot', async () => {
+  it('keeps the existing carryover when there is no cast to snapshot (#4039)', async () => {
+    const original = JSON.stringify({ characters: [{ id: 'old', voiceState: 'reused' }] });
+    writeFileSync(carryoverPath(), original);
+    // no cast.json on disk
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    expect(existsSync(carryoverPath())).toBe(true);
+    expect(readFileSync(carryoverPath(), 'utf8')).toBe(original);
+  });
+
+  it('keeps designed voices across reparse -> reparse (#4039)', async () => {
+    writeFileSync(
+      castPath(),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'wren',
+            name: 'Wren',
+            voiceState: 'locked',
+            overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+            ttsEngine: 'qwen',
+          },
+        ],
+      }),
+    );
+
+    expect((await request(app).post(`/api/books/${bookId}/reparse`)).status).toBe(200);
+    expect((await request(app).post(`/api/books/${bookId}/reparse`)).status).toBe(200);
+
+    const carry = JSON.parse(readFileSync(carryoverPath(), 'utf8'));
+    expect(carry.characters).toHaveLength(1);
+    expect(carry.characters[0]).toMatchObject({
+      id: 'wren',
+      overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    });
+    const { readPriorCastForMerge } = await import('./analysis.js');
+    const prior = await readPriorCastForMerge(bookDir);
+    expect(prior.source).toBe('carryover');
+    expect(prior.rows[0].id).toBe('wren');
+  });
+
+  it('keeps the carryover when cast.json is corrupt, and still deletes cast.json (#4039)', async () => {
+    const original = JSON.stringify({ characters: [{ id: 'old', voiceState: 'reused' }] });
+    writeFileSync(carryoverPath(), original);
+    writeFileSync(castPath(), '{not json');
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    expect(existsSync(castPath())).toBe(false);
+    expect(readFileSync(carryoverPath(), 'utf8')).toBe(original);
+  });
+
+  it('clears the carryover when the parsed cast has zero characters (#4039)', async () => {
     writeFileSync(
       carryoverPath(),
       JSON.stringify({ characters: [{ id: 'old', voiceState: 'reused' }] }),
     );
-    // no cast.json on disk
+    writeFileSync(castPath(), JSON.stringify({ characters: [] }));
 
     const res = await request(app).post(`/api/books/${bookId}/reparse`);
     expect(res.status).toBe(200);
