@@ -336,7 +336,7 @@ function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
 }
 
 /* #3992 — copy the base artifact family of `oldKey` to `newKey` (never the
-   emotion variants). Returns the files written, for cleanup. Only an ABSENT
+   emotion variants; the series mint adds those via copyFamilyWithVariants). Returns the files written, for cleanup. Only an ABSENT
    source (ENOENT) is skipped (a voice nobody designed yet has nothing to copy);
    any other failure (EBUSY, EPERM, ENOSPC, or the destination already existing)
    removes what was copied so far and rethrows, so the caller never stamps a uuid
@@ -367,6 +367,42 @@ async function copyBaseFamily(oldKey: string, newKey: string): Promise<string[]>
 const removeFiles = async (files: string[]): Promise<void> => {
   await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
 };
+
+/* #4037 — the series mint's copy: the base family plus every present emotion
+   variant family (`<key>__<emotion>`). An absent variant is skipped like an absent
+   base file. Any failure removes every file gathered so far and rethrows. */
+async function copyFamilyWithVariants(oldKey: string, newKey: string): Promise<string[]> {
+  const copied: string[] = [];
+  try {
+    copied.push(...(await copyBaseFamily(oldKey, newKey)));
+    for (const e of VARIANT_EMOTIONS) {
+      copied.push(...(await copyBaseFamily(`${oldKey}__${e}`, `${newKey}__${e}`)));
+    }
+  } catch (err) {
+    await removeFiles(copied);
+    throw err;
+  }
+  return copied;
+}
+
+/* #4037 — point a stamped row's variant slot names at the minted key: a slot named
+   `<oldKey>__<emotion>` becomes `<newKey>__<emotion>`; any other name is kept. */
+function withRenamedVariants(c: CastCharacter, oldKey: string, newKey: string): CastCharacter {
+  const qwen = c.overrideTtsVoices?.qwen;
+  const variants = qwen?.variants;
+  if (!qwen || !variants) return c;
+  let changed = false;
+  const next: typeof variants = { ...variants };
+  for (const e of Object.keys(variants) as Array<keyof typeof variants>) {
+    const v = variants[e];
+    if (v && v.name === `${oldKey}__${e}`) {
+      next[e] = { ...v, name: `${newKey}__${e}` };
+      changed = true;
+    }
+  }
+  if (!changed) return c;
+  return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants: next } } };
+}
 
 /* #3992 — stamp a new uuid onto one row and drop its qwen `variants` map in the
    same write. Render never reads a stored variant name: `pickEmotionVariantVoice`
@@ -687,6 +723,7 @@ async function stampOwnRow(
   characterId: string,
   uuid: string,
   sameBookLinkId?: string,
+  renameVariantsFrom?: string,
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -698,7 +735,11 @@ async function stampOwnRow(
       const c = fresh.characters[i];
       if (c.voiceUuid) continue;
       if (i === idx || (sameBookLinkId !== undefined && (c.voiceId ?? c.id) === sameBookLinkId)) {
-        fresh.characters[i] = { ...c, voiceUuid: uuid };
+        const stamped = { ...c, voiceUuid: uuid };
+        fresh.characters[i] =
+          renameVariantsFrom === undefined
+            ? stamped
+            : withRenamedVariants(stamped, renameVariantsFrom, `qwen-${uuid}`);
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -744,14 +785,14 @@ export async function ensureCharacterVoiceUuid(
     const uuid = nanoid();
     /* PR #4007 pass 11, P11-3 (owner decision: the mint copies before it stamps) —
        a linked legacy row is stamped only once `qwen-<uuid>` holds a copy of the
-       legacy key's base family, so a stamped row always has its file: a design
+       legacy key's base family and its emotion variants, so a stamped row always has its file: a design
        that never lands (Design & compare then Cancel, a failed landing, a decline
        in between) leaves every stamped book speaking its own voice. With nothing
        to copy (nobody designed the legacy key) only the designing row is stamped.
        The caller holds the design lock. */
     /* P11-2 — the mint's key is saving until its walk ends (savingKeys). */
     return whileSaving(`qwen-${uuid}`, async () => {
-      const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
+      const copied = await copyFamilyWithVariants(`qwen-${linkId}`, `qwen-${uuid}`);
       if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
         await removeFiles(copied);
         /* Owner decision (share a first design): the landing shares it when it
@@ -765,7 +806,7 @@ export async function ensureCharacterVoiceUuid(
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
         stampedAny = true;
-        return { ...c, voiceUuid: uuid };
+        return withRenamedVariants({ ...c, voiceUuid: uuid }, `qwen-${linkId}`, `qwen-${uuid}`);
       };
       try {
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
@@ -783,7 +824,7 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId);
+        return await stampOwnRow(bookDir, characterId, uuid, linkId, `qwen-${linkId}`);
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;
