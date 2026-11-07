@@ -1308,6 +1308,9 @@ async function landStagedDesign(
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     const sharing = await firstDesignOf(row); // decided before the move creates the file
+    /* #4040 — a base design that REPLACES an existing .pt (decided before the move
+       creates/overwrites it) resets the linked rows' emotion variants. */
+    const replacing = !p.emotion && !p.preview && (await exists(qwenVoicePtPath(voiceId)));
     await whileSaving(voiceId, () => moveStaged(staging, voiceId)); // P11-2
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
@@ -1319,6 +1322,7 @@ async function landStagedDesign(
       if (slotted) await writeCast(p.bookDir, { ...cast, characters });
     }
     if (sharing) await shareFirstDesign(p, sharing, row as MarkedCharacter, voiceId, others, writeCast);
+    if (replacing) await resetLinkedVariants(p.bookDir, others, base, writeCast);
     const landedAudition = audition(voiceId);
     await rm(voiceSampleFilePath(landedAudition), { force: true });
     await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
@@ -1328,9 +1332,12 @@ async function landStagedDesign(
     (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
   );
   const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
+  /* #4040 — the books with a row on this key (a base redesign resets their variants) */
+  const resetIds = mayShare ? await storageKeyHolderBookIds(p.bookDir, watcher.key, p.seriesFilter) : [];
+  const lockIds = [...new Set([...shareIds, ...resetIds])];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
-  if (shareIds.length) {
-    out = await withBookOps([p.bookId, ...shareIds], async (books) => {
+  if (lockIds.length) {
+    out = await withBookOps([p.bookId, ...lockIds], async (books) => {
       const own = books.find((b) => b.bookId === p.bookId);
       if (!own || resolve(own.bookDir) !== resolve(p.bookDir)) throw moved();
       const others = books.filter((b) => b !== own);

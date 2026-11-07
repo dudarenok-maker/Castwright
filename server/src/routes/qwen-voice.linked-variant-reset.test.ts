@@ -263,3 +263,52 @@ describe('#4040 — a redesign resets the emotion variants of every linked row',
     expect(readFileSync(castPath(ELSEWHERE)).equals(elsewhere), 'a book of another series was reset').toBe(true);
   });
 });
+
+/* #4040 child 4 — the direct base landing (landStagedDesign): no preview, no emotion. */
+const directDesign = (b: BookSpec, extra: Record<string, unknown> = {}) =>
+  request(app)
+    .post(`/api/books/${ids[b.title]}/cast/wren/design-voice`)
+    .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, ...extra });
+
+describe('#4040 — a direct base redesign (landStagedDesign) resets linked variants too', () => {
+  it('L1: A, B, C share u1 with a base; a direct base design on A drops all three variants maps, keeps the variant file', async () => {
+    seedFiles(true);
+    for (const b of [A, B, C]) writeBook(b, [variantsRow('wren', 'u1')]);
+    const res = await directDesign(A);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+    for (const b of [A, B, C]) expect(hasVariants(b), `${b.title} kept its variants`).toBe(false);
+    expect(existsSync(pt(VARIANT)), 'a variant file was deleted inline').toBe(true);
+  });
+
+  it('L2: the separated book D is untouched', async () => {
+    seedFiles(true);
+    const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
+    await recordSeparatedVoice('u-sep');
+    for (const b of [A, B, C]) writeBook(b, [variantsRow('wren', 'u1')]);
+    writeBook(D, [variantsRow('wren', 'u-sep', { declinedVoiceFrom: [ids[A.title]] })]);
+    const before = readFileSync(castPath(D));
+    const res = await directDesign(A);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(hasVariants(B)).toBe(false);
+    expect(readFileSync(castPath(D)).equals(before), "D's cast.json changed").toBe(true);
+  });
+
+  it("L3: a direct base design that writes the key's FIRST .pt touches no other book", async () => {
+    seedFiles(false);
+    for (const b of [A, B, C]) writeBook(b, [variantsRow('wren', 'u1')]);
+    const before = [B, C].map((b) => readFileSync(castPath(b)));
+    const res = await directDesign(A);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(existsSync(pt(KEY))).toBe(true);
+    [B, C].forEach((b, i) => expect(readFileSync(castPath(b)).equals(before[i]), `${b.title} changed`).toBe(true));
+  });
+
+  it('L4: an emotion design on A leaves every row\'s other variants in place', async () => {
+    seedFiles(true);
+    for (const b of [A, B, C]) writeBook(b, [variantsRow('wren', 'u1')]);
+    const res = await directDesign(A, { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    for (const b of [A, B, C]) expect(hasVariants(b), `${b.title} lost its variants`).toBe(true);
+  });
+});
