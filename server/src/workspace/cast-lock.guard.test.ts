@@ -342,6 +342,51 @@ function scanFile(content: string): ScanResult | null {
   return { writes, rms, details };
 }
 
+/** Every real (non-comment, non-string) `rm(castJsonPath(` site in `content`,
+    locked or not. `scanFile` above only reports UNLOCKED sites, so the
+    carryover-decision guard below needs this wider view; it shares RM_RE and
+    the same opaque-range exclusion, so prose never counts as a site. */
+function collectRmSites(content: string): number[] {
+  if (!content.includes('castJsonPath')) return [];
+  const opaque = computeAstOpaqueRanges(content);
+  const lines: number[] = [];
+  const re = new RegExp(RM_RE.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    if (isOpaque(opaque, m.index)) continue;
+    lines.push(lineOf(content, m.index));
+  }
+  return lines;
+}
+
+/* Why this exists (#4039): a reparse now KEEPS cast-reuse-carryover.json when
+   cast.json is absent. That is only safe while every code path that deletes
+   cast.json also decides what happens to the carryover. A future deleter that
+   forgets it would bring old voice links back on the next analysis. The lock
+   guard above cannot see this (a locked rm is fine for locking), so this map
+   records, per file, how many `rm(castJsonPath(` sites exist and what the file
+   does with the carryover. A new site must be recorded here on purpose.
+   book-state.ts has two sites in ONE reparse path: the early return for an
+   absent/unparseable cast.json (carryover kept), and the final delete after
+   the carryover was rewritten or removed. */
+const CAST_JSON_DELETERS: ReadonlyMap<string, { count: number; carryover: string }> = new Map([
+  [
+    'routes/analysis.ts',
+    {
+      count: 1,
+      carryover: 'Start fresh: removes cast-reuse-carryover.json in the same withCastLock hold',
+    },
+  ],
+  [
+    'routes/book-state.ts',
+    {
+      count: 2,
+      carryover:
+        'reparse/replace-manuscript: rewrites, removes, or (cast.json absent) keeps the carryover before deleting cast.json (#4039)',
+    },
+  ],
+]);
+
 /* One entry by design.
 
    Keyed on file AND expected count, never on file alone, and the count check
@@ -419,6 +464,34 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
         problems.push(
           `${rel}: allowlisted for ${allowed.writes} unlocked write(s) / ${allowed.rms} unlocked rm(s), but the ` +
             'scan now finds ZERO unlocked occurrences there — update or remove this allowlist entry.',
+        );
+      }
+    }
+
+    expect(problems, problems.join('\n\n')).toEqual([]);
+  });
+
+  it('every rm(castJsonPath(...)) site is recorded in CAST_JSON_DELETERS with its carryover decision (#4039)', () => {
+    const problems: string[] = [];
+    const seen = new Set<string>();
+
+    for (const file of collectSourceFiles(SRC_ROOT)) {
+      const rel = relative(SRC_ROOT, file).split(sep).join('/');
+      const sites = collectRmSites(readFileSync(file, 'utf8'));
+      if (sites.length === 0) continue;
+      seen.add(rel);
+      const recorded = CAST_JSON_DELETERS.get(rel);
+      const msg =
+        `${rel} deletes cast.json at ${sites.length} site(s) (lines ${sites.join(', ')}) but CAST_JSON_DELETERS records ${recorded?.count ?? 0}. ` +
+        'A new cast.json deleter must decide what happens to cast-reuse-carryover.json (remove it, keep it, or rewrite it: see #4039) and record that decision here.';
+      if (!recorded) problems.push(`not recorded: ${msg}`);
+      else if (recorded.count !== sites.length) problems.push(`count mismatch: ${msg}`);
+    }
+
+    for (const rel of CAST_JSON_DELETERS.keys()) {
+      if (!seen.has(rel)) {
+        problems.push(
+          `stale entry: ${rel} is in CAST_JSON_DELETERS but has no rm(castJsonPath( site any more; remove or fix the entry.`,
         );
       }
     }
