@@ -294,6 +294,25 @@ export async function legacyKeyHolderBookIds(
   return [...new Set(books.filter((b) => b.bookId && inScope(b) && b.rows.some(holds)).map((b) => b.bookId as string))];
 }
 
+/* #4040 (a linked reset) — the bookIds of the OTHER readable books with at least
+   one cast row whose Qwen storage key is `key` (`qwenStorageKey(row, row.id)`: its
+   uuid key, or the legacy `qwen-<voiceId ?? id>`): the books a base redesign of
+   that key must also reset. A book that declined the link sits on a separated
+   voice of its own (a different uuid, so a different key) and is never a holder.
+   Planning only; the caller locks the books and re-decides every row on a fresh
+   read. Given `seriesFilter`, only that series' books, as `legacyKeyHolderBookIds`. */
+export async function storageKeyHolderBookIds(
+  bookDir: string,
+  key: string,
+  seriesFilter?: { author: string; series: string },
+): Promise<string[]> {
+  const { books } = await loadOtherBooks(resolve(bookDir));
+  const holds = (row: CastRow): boolean => qwenStorageKey(row, row.id) === key;
+  const inScope = (b: OtherBook): boolean =>
+    !seriesFilter || (b.series?.author === seriesFilter.author && b.series?.series === seriesFilter.series);
+  return [...new Set(books.filter((b) => b.bookId && inScope(b) && b.rows.some(holds)).map((b) => b.bookId as string))];
+}
+
 interface MarkedRow {
   voiceUuid?: string | null;
   declinedVoiceFrom?: string[] | null;

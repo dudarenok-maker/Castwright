@@ -12,17 +12,18 @@ let holdsUuid: Mod['holdsUuid'];
 let holdsLegacyKey: Mod['holdsLegacyKey'];
 let voiceHeldBy: Mod['voiceHeldBy'];
 let namedQwenVoices: Mod['namedQwenVoices'];
+let storageKeyHolderBookIds: Mod['storageKeyHolderBookIds'];
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
 const TWO_ID = 'book-two-id';
 const THREE_ID = 'book-three-id';
 
-function book(title: string, bookId: string, chars: object[]): string {
-  const dir = join(root, 'books', 'Author', 'Series', title);
+function book(title: string, bookId: string, chars: object[], series = 'Series'): string {
+  const dir = join(root, 'books', 'Author', series, title);
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({
-    bookId, manuscriptId: `m_${bookId}`, title, author: 'Author', series: 'Series',
+    bookId, manuscriptId: `m_${bookId}`, title, author: 'Author', series,
     seriesPosition: 1, isStandalone: false, manuscriptFile: 'manuscript.txt',
     castConfirmed: true, chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -49,6 +50,7 @@ beforeAll(async () => {
     holdsLegacyKey,
     voiceHeldBy,
     namedQwenVoices,
+    storageKeyHolderBookIds,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -241,5 +243,43 @@ describe('namedQwenVoices (#3992 P10-2, #4026)', () => {
     expect(await names()).toEqual([`qwen-${U}`]);
     tornCast(dir);
     expect(await namedQwenVoices()).toBeNull();
+  });
+});
+
+describe('storageKeyHolderBookIds (#4040)', () => {
+  const S = { author: 'Author', series: 'Series' };
+  const FOUR_ID = 'book-four-id';
+  it('H1: the other books of the series with a row on the key, not those without', async () => {
+    reset();
+    const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
+    book('Three', THREE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u3' }]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([TWO_ID]);
+  });
+  it('H2: a legacy row (no uuid) is found by its legacy key', async () => {
+    reset();
+    const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v_wren' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v_wren' }]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-v_wren', S)).toEqual([TWO_ID]);
+  });
+  it('H3: a book of another series is excluded under a series filter, included without one', async () => {
+    reset();
+    const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
+    book('Four', FOUR_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }], 'Other');
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([TWO_ID]);
+    expect((await storageKeyHolderBookIds(one, 'qwen-u1')).sort()).toEqual([FOUR_ID, TWO_ID]);
+  });
+  it('H4: the self book never appears', async () => {
+    reset();
+    const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u9' }]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([]);
+  });
+  it('H5: a row separated onto its own uuid is not a holder of the old key', async () => {
+    reset();
+    const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
+    book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u-sep' }]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([]);
   });
 });
