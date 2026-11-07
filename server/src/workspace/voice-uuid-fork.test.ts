@@ -13,6 +13,7 @@ let holdsLegacyKey: Mod['holdsLegacyKey'];
 let voiceHeldBy: Mod['voiceHeldBy'];
 let namedQwenVoices: Mod['namedQwenVoices'];
 let storageKeyHolderBookIds: Mod['storageKeyHolderBookIds'];
+let dropLinkedVariants: Mod['dropLinkedVariants'];
 
 const U = 'uuid-shared';
 const ONE_ID = 'book-one-id';
@@ -51,6 +52,7 @@ beforeAll(async () => {
     voiceHeldBy,
     namedQwenVoices,
     storageKeyHolderBookIds,
+    dropLinkedVariants,
   } = await import('./voice-uuid-fork.js'));
 });
 afterAll(() => {
@@ -281,5 +283,59 @@ describe('storageKeyHolderBookIds (#4040)', () => {
     const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u-sep' }]);
     expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([]);
+  });
+});
+
+describe('dropLinkedVariants (#4040)', () => {
+  const V = { angry: { name: 'qwen-u1__angry' } };
+  const row = (id: string, extra: object, qwen: { name?: string; libraryUuid?: string; provenance?: string; variants?: unknown } = { name: 'qwen-u1', variants: V }) => ({
+    id, voiceId: 'v', voiceUuid: 'u1', overrideTtsVoices: { qwen }, ...extra,
+  });
+  it('D1: every row on the key loses its variants and keeps its name', () => {
+    const cast = { characters: [row('a', {}), row('b', {})] };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.changed).toBe(true);
+    for (const c of out.cast.characters) {
+      expect(c.overrideTtsVoices?.qwen).toEqual({ name: 'qwen-u1' });
+      expect('variants' in (c.overrideTtsVoices?.qwen ?? {})).toBe(false);
+    }
+  });
+  it('D2: a row on another voice keeps its variants', () => {
+    const cast = { characters: [row('a', {}), row('b', { voiceUuid: 'u2' }, { variants: V })] };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.cast.characters[1].overrideTtsVoices?.qwen?.variants).toEqual(V);
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+  it('D3: a row on a separated uuid keeps its variants', () => {
+    const cast = { characters: [row('a', { voiceUuid: 'u-sep' }, { name: 'qwen-u-sep', variants: V })] };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.changed).toBe(false);
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.variants).toEqual(V);
+  });
+  it('D4: cloned and library rows keep their variants', () => {
+    const cast = {
+      characters: [
+        row('a', {}, { name: 'qwen-u1', provenance: 'cloned', variants: V }),
+        row('b', {}, { name: 'qwen-u1', libraryUuid: 'lib-1', variants: V }),
+      ],
+    };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.changed).toBe(false);
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.variants).toEqual(V);
+    expect(out.cast.characters[1].overrideTtsVoices?.qwen?.variants).toEqual(V);
+  });
+  it('D5: nothing to drop returns the same cast object', () => {
+    const cast = { characters: [row('a', {}, { name: 'qwen-u1' }), row('b', {}, { name: 'qwen-u1', variants: {} })] };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.changed).toBe(false);
+    expect(out.cast).toBe(cast);
+  });
+  it('D6: a legacy row (no uuid) is reset for the legacy key', () => {
+    const cast = {
+      characters: [{ id: 'c', voiceId: 'v_wren', overrideTtsVoices: { qwen: { variants: V } } }],
+    };
+    const out = dropLinkedVariants(cast, 'qwen-v_wren');
+    expect(out.changed).toBe(true);
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 });

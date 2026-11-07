@@ -37,12 +37,13 @@ import { readStateJsonWithRecovery } from './state-migrate.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
+import { characterHasClonedSlot } from '../tts/clone-engines.js';
 
 interface CastRow {
   id: string;
   voiceId?: string | null;
   voiceUuid?: string | null;
-  overrideTtsVoices?: { qwen?: { name?: string } } | null;
+  overrideTtsVoices?: { qwen?: { name?: string; libraryUuid?: string; variants?: unknown } } | null;
   matchedFrom?: unknown;
   declinedVoiceFrom?: string[] | null;
   declinedVoiceUuids?: string[] | null;
@@ -311,6 +312,35 @@ export async function storageKeyHolderBookIds(
   const inScope = (b: OtherBook): boolean =>
     !seriesFilter || (b.series?.author === seriesFilter.author && b.series?.series === seriesFilter.series);
   return [...new Set(books.filter((b) => b.bookId && inScope(b) && b.rows.some(holds)).map((b) => b.bookId as string))];
+}
+
+/* #4040 (a linked reset) — pure: drop the `overrideTtsVoices.qwen.variants` map of
+   every row linked to the voice `key`, i.e. whose Qwen storage key is `key`
+   (`qwenStorageKey(row, row.id)`), because the base those variants were minted
+   from was just redesigned. Cloned rows, rows on a library voice and rows whose
+   slot names another voice are never touched (the exclusions of
+   `shareFirstDesign`). A row on a separated voice has a different key and is
+   excluded by construction. Returns the input `cast` itself when nothing changed
+   so the caller can skip the write. No I/O, no locks, no file deletion: the
+   startup sweep removes the variant files nothing names any more. */
+export function dropLinkedVariants<T extends { characters: CastRow[] }>(
+  cast: T,
+  key: string,
+): { cast: T; changed: boolean } {
+  let changed = false;
+  const characters = cast.characters.map((row) => {
+    if (qwenStorageKey(row, row.id) !== key) return row;
+    if (characterHasClonedSlot(row)) return row;
+    const slot = row.overrideTtsVoices?.qwen;
+    if (!slot || slot.libraryUuid) return row;
+    if (slot.name && slot.name !== key) return row;
+    const variants = slot.variants;
+    if (!variants || (typeof variants === 'object' && Object.keys(variants).length === 0)) return row;
+    changed = true;
+    const { variants: _dropped, ...rest } = slot;
+    return { ...row, overrideTtsVoices: { ...row.overrideTtsVoices, qwen: rest } };
+  });
+  return changed ? { cast: { ...cast, characters }, changed } : { cast, changed };
 }
 
 interface MarkedRow {
