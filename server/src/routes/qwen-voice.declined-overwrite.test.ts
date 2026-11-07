@@ -70,7 +70,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
-  const withBookOps: typeof actual.withBookOps = (ids, fn, opts) => {
+  const withBookOps: typeof actual.withBookOps = async (ids, fn, opts) => {
+    /* #4040 — a base landing that REPLACES an existing .pt also locks the other books
+       holding the key (to reset their variants), so it takes `withBookOps` rather than
+       the single `withBookOp`; the hook fires there too, still before any lock is held. */
+    if (beforeLanding.fn && !opts && ids[0] === beforeLanding.bookId) {
+      const run = beforeLanding.fn;
+      beforeLanding.fn = null;
+      await run();
+    }
     if (beforeLocks.fn) {
       const run = beforeLocks.fn;
       beforeLocks.fn = null;
@@ -1166,25 +1174,25 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(row('Book Two').voiceUuid).toBeTruthy();
   });
 
-  it('P11-2: a decline during a landing of the source key fails retryably, then succeeds once it has landed', async () => {
+  /* #4040 — a landing that REPLACES the source .pt also holds the book-ops of the other
+     books on that key (it resets their emotion variants), so a decline of one of them
+     started from inside the landing can no longer run (and fail retryably) beside it: it
+     waits for the landing, then runs against the landed file. The decline is therefore
+     started without awaiting it from the hook and asserted after the design. */
+  it('P11-2: a decline during a landing of the source key waits for the landing, then succeeds', async () => {
     reset();
     writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
     writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One') }]);
     writeFileSync(pt('qwen-u_shared'), ORIG);
-    const twoBefore = row('Book Two');
-    let mid: { status: number; body: Record<string, any> } | undefined;
+    let mid: Promise<{ status: number; body: Record<string, any> }> | undefined;
     midLanding.target = 'qwen-u_shared.pt';
     midLanding.fn = async () => {
-      mid = await decline('Book Two', 'Book One');
+      mid = decline('Book Two', 'Book One');
     };
     const d = await design('Book One');
     expect(d.status, JSON.stringify(d.body)).toBe(200);
-    expect(mid?.status, JSON.stringify(mid?.body)).toBe(500);
-    expect(mid?.body.error).toMatch(/try again/);
-    expect(row('Book Two')).toEqual(twoBefore);
-    expect(readdirSync(qwenDir()).filter((f) => f !== 'qwen-u_shared.pt')).toEqual([]);
-    const after = await decline('Book Two', 'Book One');
-    expect(after.status, JSON.stringify(after.body)).toBe(200);
+    const after = await mid;
+    expect(after?.status, JSON.stringify(after?.body)).toBe(200);
     const fresh = row('Book Two').voiceUuid;
     expect(fresh).not.toBe('u_shared');
     expect(readFileSync(pt(`qwen-${fresh}`))).toEqual(NEW_PT);

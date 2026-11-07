@@ -203,6 +203,19 @@ describe('#4040 — a redesign resets the emotion variants of every linked row',
     expect(existsSync(pt(VARIANT)), 'a variant file was deleted inline').toBe(true);
   });
 
+  it('P1b: B and C link to A through matchedFrom (the real shape); the redesign still resets them', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    for (const b of [B, C]) {
+      writeBook(b, [
+        variantsRow('wren', 'u1', { voiceState: 'reused', matchedFrom: { bookTitle: A.title, confidence: 0.9 } }),
+      ]);
+    }
+    await redesign(A);
+    for (const b of [A, B, C]) expect(hasVariants(b), `${b.title} (matchedFrom) kept its variants`).toBe(false);
+    expect(existsSync(pt(VARIANT)), 'a variant file was deleted inline').toBe(true);
+  });
+
   it('P2: a book that declined the link (separated voice u-sep) is untouched', async () => {
     seedFiles(true);
     const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');

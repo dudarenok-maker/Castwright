@@ -1333,7 +1333,8 @@ async function landStagedDesign(
   );
   const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
   /* #4040 — the books with a row on this key (a base redesign resets their variants) */
-  const resetIds = mayShare ? await storageKeyHolderBookIds(p.bookDir, watcher.key, p.seriesFilter) : [];
+  const resetIds =
+    mayShare && (await exists(qwenVoicePtPath(watcher.key))) ? await storageKeyHolderBookIds(p.bookDir, watcher.key, p.seriesFilter) : [];
   const lockIds = [...new Set([...shareIds, ...resetIds])];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
   if (lockIds.length) {
