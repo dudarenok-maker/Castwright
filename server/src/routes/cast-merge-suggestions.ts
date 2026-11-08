@@ -1,7 +1,7 @@
-/* Suggestions routes — list, dismiss, and accept diminutive merge suggestions.
+/* Suggestions routes — list, dismiss, and accept merge suggestions.
 
-   Suggestions are written by the dedup pass (Task 10) and stored in the
-   per-book `cast-merge-suggestions.json` sibling file. These routes let the
+   Suggestions are written by the analysis runs (the dedup pass today) and kept
+   across runs in the per-book `cast-merge-suggestions.json` sibling file. These routes let the
    cast-review UI surface and act on them without touching cast.json directly.
 
    GET  /:bookId/cast/merge-suggestions           → { suggestions }
@@ -193,7 +193,10 @@ castMergeSuggestionsRouter.post(
           return res.status(500).json({ error: 'Internal server error.' });
         }
 
-        /* Drop the suggestion only after a successful merge. */
+        /* Drop the suggestion only after a successful merge. This lock can still
+           time out AFTER the merge applied; the outer catch then answers the curated
+           "reload to see whether it landed" 500 (the `didCastMergeApply` marker
+           above does not cover this site). */
         await withCastLock(bookDir, () =>
           removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]),
         );

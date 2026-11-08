@@ -393,6 +393,27 @@ describe('POST merge-suggestions/dismiss — durable (#4031)', () => {
   });
 });
 
+describe('POST merge-suggestions/dismiss — unreadable cast.json (#4031)', () => {
+  it('a cast.json that does not parse answers a 500 and writes nothing (readJson throws, it does not collapse to null)', async () => {
+    reseed();
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    writeFileSync(castPath, '{ not json');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
+        .send({ sourceId: 'olya', targetId: 'olga' });
+      expect(res.status).toBe(500);
+      // the read is first: no record, no edge, the pair is still open
+      expect(readHistory()).toBeNull();
+      expect(readFileSync(castPath, 'utf8')).toBe('{ not json');
+      expect(readSuggestionsFile().suggestions).toHaveLength(2);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
 describe('POST merge-suggestions/accept — durable (#4031)', () => {
   it('accept folds sourceId into targetId, removes the pair and records no dismissal', async () => {
     reseed();

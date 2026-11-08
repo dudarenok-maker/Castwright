@@ -431,6 +431,26 @@ function legacyDedupToStored(suggestions: MergeSuggestion[]): StoredSuggestion[]
   return suggestions.map((s) => ({ ...s, ...pairKey(s.sourceId, s.targetId), origin: 'dedup' as const }));
 }
 
+/* #4031 — "has the user declined this pair?" for the dedup suggestions, read off
+   cast.json's `notLinkedTo` edges (a dismissal writes one on each row). SAME-BOOK
+   ONLY: an edge naming `bookId` counts, a cross-book edge never does (a series'
+   other book can carry a row with the same slug id). A legacy string entry, or
+   an object entry with no `bookId`, counts as same-book (Task 1's
+   `inheritedDeclines` convention). */
+export function sameBookDeclinePredicate(
+  characters: ReadonlyArray<{ id: string; notLinkedTo?: Array<string | { bookId?: string; characterId: string }> }>,
+  bookId: string | undefined,
+): (a: string, b: string) => boolean {
+  const linked = new Set<string>();
+  for (const c of characters) {
+    for (const e of c.notLinkedTo ?? []) {
+      if (typeof e !== 'string' && e.bookId !== undefined && e.bookId !== bookId) continue;
+      linked.add(`${c.id}\u0000${typeof e === 'string' ? e : e.characterId}`);
+    }
+  }
+  return (a, b) => linked.has(`${a}\u0000${b}`) || linked.has(`${b}\u0000${a}`);
+}
+
 /* #4031 — add the dedup pass's suggestions to the durable file, under the cast
    lock, pruned against `roster` (the PRE-remap fresh roster: `dd.suggestions`
    carries ids in that space, #2040 §4.4). A pair the user dismissed is never
@@ -440,25 +460,19 @@ function legacyDedupToStored(suggestions: MergeSuggestion[]): StoredSuggestion[]
    read. Removed with the adapter above. */
 async function reconcileDedupSuggestions(
   bookDir: string,
+  bookId: string | undefined,
   suggestions: MergeSuggestion[],
   roster: ReadonlyArray<{ id: string }>,
 ): Promise<void> {
   await withCastLock(bookDir, async () => {
     const cast = await readJson<{
-      characters?: Array<{ id: string; notLinkedTo?: Array<string | { characterId: string }> }>;
+      characters?: Array<{ id: string; notLinkedTo?: Array<string | { bookId?: string; characterId: string }> }>;
     }>(castJsonPath(bookDir));
-    const linked = new Set<string>();
-    for (const c of cast?.characters ?? []) {
-      for (const e of c.notLinkedTo ?? []) {
-        const other = typeof e === 'string' ? e : e.characterId;
-        linked.add(`${c.id}\u0000${other}`);
-      }
-    }
     await reconcileSuggestionsLocked(bookDir, {
       add: legacyDedupToStored(pruneSuggestionsToRoster(suggestions, roster)),
       liveIds: new Set(roster.map((c) => c.id)),
       supersededBy: {},
-      declined: (a, b) => linked.has(`${a}\u0000${b}`) || linked.has(`${b}\u0000${a}`),
+      declined: sameBookDeclinePredicate(cast?.characters ?? [], bookId),
     });
   });
 }
@@ -7445,7 +7459,7 @@ export async function runMainAnalyzerJob(
           // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
           // §4.4) — prune against characters0, not the remapped `characters`,
           // or every suggestion fails both id checks and the list empties.
-          await reconcileDedupSuggestions(writeDir, dd.suggestions, characters0);
+          await reconcileDedupSuggestions(writeDir, record.bookId ?? undefined, dd.suggestions, characters0);
         } catch (dedupErr) {
           /* #2295 — same deliberate swallow as the fold journal above, same
              reason: dedup lineage + diminutive suggestions are advisory, and a
@@ -9645,7 +9659,7 @@ export async function runSubsetAnalyzerJob(
           // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
           // §4.4) — prune against enriched0, not the remapped `enriched`, or
           // every suggestion fails both id checks and the list empties.
-          await reconcileDedupSuggestions(writeDir, dd.suggestions, enriched0);
+          await reconcileDedupSuggestions(writeDir, record.bookId ?? undefined, dd.suggestions, enriched0);
         } catch (dedupErr) {
           // #2295 — deliberate swallow, mirroring the main job's handler.
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
