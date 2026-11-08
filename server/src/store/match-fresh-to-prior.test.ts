@@ -86,13 +86,21 @@ describe('matchFreshToPrior', () => {
         }
       });
     }
-    it('wren + wren-2 over twins wren-2 / wren-7 keeps both, each on its own id', () => {
+    it('wren-2 + wren-7', () => {
       const pl = plan(
         [f('wren-2', 'Wren'), f('wren-7', 'Wren')],
         [p('wren-2', 'Wren', { notLinkedTo: ['wren-7'] }), p('wren-7', 'Wren', { notLinkedTo: ['wren-2'] })],
       );
       expect(join(pl.decisions['wren-2']).priorId).toBe('wren-2');
       expect(join(pl.decisions['wren-7']).priorId).toBe('wren-7');
+    });
+    it('wren + wren-2', () => {
+      const pl = plan(
+        [f('wren', 'Wren'), f('wren-2', 'Wren')],
+        [p('wren', 'Wren', { notLinkedTo: ['wren-2'] }), p('wren-2', 'Wren', { notLinkedTo: ['wren'] })],
+      );
+      expect(join(pl.decisions['wren']).priorId).toBe('wren');
+      expect(join(pl.decisions['wren-2']).priorId).toBe('wren-2');
     });
   });
 
@@ -219,14 +227,63 @@ describe('matchFreshToPrior', () => {
     expect(join(pl.decisions['gone'])).toMatchObject({ priorId: 'zed', tier: 'name' });
   });
 
-  it('A25a: total and deterministic', () => {
-    const prior = [p('wren-a', 'Wren'), p('wren-b', 'Wren'), p('js', 'John Smith'), p('narrator', 'Narrator')];
-    const fresh = [f('wren-9', 'Wren'), f('', ''), f('weird', undefined as unknown as string), f('narrator', 'Narrator'), f('wren-9', 'Wren')];
-    const a = plan(fresh, prior);
-    const b = plan([...fresh].reverse(), prior);
-    expect(b).toEqual(a);
-    expect(plan([], [])).toEqual({ version: 1, runToken: 'tok1', decisions: {} });
-    expect(plan(fresh, [])).toBeDefined();
+  describe('A25a: total and deterministic', () => {
+    const twins = [p('wren-a', 'Wren', { notLinkedTo: ['wren-b'] }), p('wren-b', 'Wren', { notLinkedTo: ['wren-a'] })];
+    const merged = hist({ supersededBy: { 'brann-weir': 'old-weir' }, supersededByKind: { 'brann-weir': 'user' } });
+    const fixtures: Array<[string, FreshRow[], PriorRow[], MatchHistory]> = [
+      ['empty', [], [], OK],
+      ['first analysis', [f('a', 'Anna'), f('b', 'Anna'), f('c', 'Cora')], [], hist({ status: 'absent' })],
+      ['twins + wren-9', [f('wren-9', 'Wren'), f('wren-a', 'Wren')], twins, OK],
+      ['twins + wren-b', [f('wren-a', 'Wren'), f('wren-b', 'Wren')], twins, OK],
+      ['wren + wren-2', [f('wren', 'Wren'), f('wren-2', 'Wren')], [p('wren', 'Wren Ash'), p('wren-2', 'Wren')], OK],
+      ['merged-away + same name', [f('brann-weir', 'Brann Weir'), f('ow2', 'Old Weir')], [p('old-weir', 'Old Weir')], merged],
+      ['John', [f('x1', 'John Smith'), f('x2', 'John')], [p('js', 'John Smith'), p('jd', 'John Doe')], OK],
+      ['narrator flip', [f('narrator', 'Narrator')], [p('char-narrator', 'Narrator')], OK],
+      ['degraded', [f('a', 'Anna'), f('n', 'Nobody'), f('narrator', 'Narrator')], [p('a1', 'Anna Kay'), p('a2', 'Anna Lee')], hist({ status: 'degraded' })],
+      ['displaced + superseded raws', [f('ghost', 'Ghost'), f('old', 'Old')], [p('keep', 'Keep')], hist({ displaced: { ghost: 'keep' }, supersededBy: { old: 'keep' }, supersededByKind: { old: 'analyzer' } })],
+      ['junk rows', [f('wren-9', 'Wren'), f('', ''), f('weird', undefined as unknown as string), f('wren-9', 'Wren')], twins, OK],
+    ];
+    for (const [title, fresh, prior, history] of fixtures) {
+      it(title, () => {
+        const a = plan(fresh, prior, { history });
+        const ids = [...new Set(fresh.map((r) => r.id).filter((id) => id !== ''))];
+        expect(Object.keys(a.decisions).sort()).toEqual([...ids].sort());
+        for (const d of Object.values(a.decisions)) expect(['join', 'new']).toContain(d.kind);
+        expect(plan(fresh, prior, { history })).toEqual(a);
+        expect(plan([...fresh].reverse(), prior, { history })).toEqual(a);
+        const newIds = Object.values(a.decisions).flatMap((d) => (d.kind === 'new' ? [d.id] : []));
+        expect(new Set(newIds).size).toBe(newIds.length);
+        const live = new Set(prior.map((r) => r.id));
+        for (const id of newIds) expect(live.has(id)).toBe(false);
+      });
+    }
+  });
+
+  it('a mixed user then analyzer chain is not T1: the analyzer hop stops it and the name decides', () => {
+    const pl = plan([f('a', 'Zed')], [p('live', 'Old'), p('other', 'Zed')], {
+      history: hist({
+        supersededBy: { a: 'b', b: 'live' },
+        supersededByKind: { a: 'user', b: 'analyzer' },
+      }),
+    });
+    expect(join(pl.decisions['a'])).toMatchObject({ priorId: 'other', tier: 'name' });
+  });
+
+  describe('the narrator is never minted', () => {
+    it('degraded history with no prior narrator row keeps the id', () => {
+      const pl = plan([f('narrator', 'Narrator')], [p('a1', 'Anna')], { history: hist({ status: 'degraded' }) });
+      expect(fresh_(pl.decisions['narrator'])).toMatchObject({ id: 'narrator', minted: false });
+    });
+    it('a superseded-to-dead-target or displaced narrator id keeps the id', () => {
+      const pl = plan([f('narrator', 'Narrator')], [p('a1', 'Anna')], {
+        history: hist({ supersededBy: { narrator: 'gone' } }),
+      });
+      expect(fresh_(pl.decisions['narrator'])).toMatchObject({ id: 'narrator', minted: false });
+      const pl2 = plan([f('char-narrator', 'Narrator')], [p('a1', 'Anna')], {
+        history: hist({ displaced: { 'char-narrator': 'a1' } }),
+      });
+      expect(fresh_(pl2.decisions['char-narrator'])).toMatchObject({ id: 'char-narrator', minted: false });
+    });
   });
 
   it('item 13: a cross-book entry whose characterId equals a local id is kept', () => {
@@ -290,7 +347,11 @@ describe('matchFreshToPrior', () => {
     });
     it('a legacy suggestion never makes an open-question row', () => {
       const rows = [p('q', 'Anna Kay'), p('a1', 'Anna Lee')];
-      const pl = plan([f('x', 'Anna')], rows, { openSuggestions: [sug(undefined, undefined), sug(undefined, 'a1')] });
+      const legacy = (sourceId: string, targetId: string): StoredSuggestion => ({
+        // names the real rows but carries no newRow / candidate
+        sourceId, targetId, a: targetId, b: sourceId, reason: 'r', origin: 'plan',
+      });
+      const pl = plan([f('x', 'Anna')], rows, { openSuggestions: [legacy('q', 'a1')] });
       expect(fresh_(pl.decisions['x']).suggest).toEqual(['a1', 'q']);
     });
   });
@@ -416,22 +477,24 @@ describe('extendPlan', () => {
     expect(first.decisions['r2']).toBeUndefined(); // input plan not mutated
   });
 
-  it('extendPlan reserves ids already decided by the plan', () => {
+  it('extendPlan never hands out an id the input plan already minted, even when the minted row left the prior', () => {
     const prior = [p('wren', 'Wren Ash'), p('y', 'Wren')];
     const first = plan([f('wren', 'Wren')], prior);
     expect(fresh_(first.decisions['wren']).id).toBe('wren-n1');
-    const history = OK;
-    const reservedIds = buildReservedIds({ prior, history, plan: first });
-    reservedIds.add('wren-late');
+    const reservedIds = buildReservedIds({ prior, history: OK, plan: first });
     const ext = extendPlan(first, {
-      fresh: [f('wren-late', 'Wren')],
-      prior: [...prior, { id: 'wren-n1', name: 'Wren' }],
-      history,
+      fresh: [f('wren-n1', 'Fresh Face')], // the minted row is not in the re-read prior (deleted mid-run)
+      prior,
+      history: OK,
       openSuggestions: [],
       reservedIds,
       runToken: 'two',
     });
-    expect(fresh_(ext.decisions['wren-late']).id).toBe('wren-late');
+    const d = fresh_(ext.decisions['wren-n1']);
+    expect(d.id).not.toBe('wren-n1');
+    expect(d.minted).toBe(true);
+    const newIds = Object.values(ext.decisions).flatMap((x) => (x.kind === 'new' ? [x.id] : []));
+    expect(new Set(newIds).size).toBe(newIds.length);
   });
 });
 

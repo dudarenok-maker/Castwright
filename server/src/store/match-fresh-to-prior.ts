@@ -130,6 +130,10 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
   }
   for (const raw of rawIds) taken.add(raw);
 
+  // Ids the input plan's `new` decisions already own (extendPlan).
+  const plannedNewIds = new Set<string>();
+  for (const d of Object.values(plan.decisions)) if (d.kind === 'new') plannedNewIds.add(d.id);
+
   /** A row keeps its own raw id unless it is live, superseded, displaced or
       decided. Being in `reservedIds` is not enough: R6 reserves every raw id of
       the run, including this row's own. */
@@ -138,7 +142,7 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
     raw in history.supersededBy ||
     raw in history.displaced ||
     assigned.has(raw) ||
-    plan.decisions[raw] !== undefined;
+    plannedNewIds.has(raw);
 
   /** T1 by history: a user/heal (or untagged) chain to a live survivor. */
   const resolveHistory = (raw: string): string | null => {
@@ -166,7 +170,6 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
     if (degraded || keepBlocked(raw, assigned)) {
       const takenForMint = new Set(taken);
       for (const a of assigned) takenForMint.add(a);
-      takenForMint.delete(raw); // the row's own raw id is never what it mints around
       id = mintId(raw, takenForMint, degraded ? { kind: 'run', runToken } : { kind: 'lowest' });
       minted = true;
     }
@@ -185,6 +188,11 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
     };
   };
 
+  const keepAsNew = (raw: string): void => {
+    assigned.add(raw);
+    out[raw] = { kind: 'new', rawId: raw, id: raw, minted: false, suggest: [], inheritedDeclines: [] };
+  };
+
   for (const r of [...rows].sort((a, b) => byId(a.id, b.id))) {
     if (typeof r.id !== 'string' || r.id === '' || out[r.id] || plan.decisions[r.id]) continue;
     const name = nameOf(r);
@@ -195,7 +203,7 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
       const target = narratorPrior.find((n) => n.id === r.id) ?? narratorPrior[0];
       if (target) joinTo(r.id, target.id, target.id === r.id ? 'id' : 'narrator');
       else if (resolveHistory(r.id)) joinTo(r.id, resolveHistory(r.id) as string, 'history');
-      else newRow(r.id, []);
+      else keepAsNew(r.id); // the narrator keeps its id through Phase 1, never minted
       continue;
     }
 
