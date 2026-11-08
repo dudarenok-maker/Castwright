@@ -99,9 +99,10 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   /* The book the cast/manuscript slices HOLD — not the stage's: the global
      #/voices page keeps a book loaded in memory with none on screen, and its
      next whole-roster cast PUT would revert a rebaseline the slices never saw. */
-  const loadedBookId = useAppSelector((s) => s.manuscript.bookId);
   const store = useStore<RootState>();
-  const targetIsLoadedBook = bookId === loadedBookId;
+  /* Read at the moment of each write, never captured: a book switch while a server
+     call is in flight must not land this book's result on the new book's same-id row. */
+  const loadedBookNow = () => store.getState().manuscript.bookId;
 
   /* Anchor cast (the book the modal is keyed to). For the open book that's
      redux; for a foreign book (the per-series global-view buttons) we fetch
@@ -273,7 +274,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
            character ids, so for another book the write would land on the loaded
            book's row and its next autosave would PUT it into that cast.json. The
            server already persisted it. */
-        if (targetIsLoadedBook) dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
+        if (bookId === loadedBookNow()) dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
       }
       /* Cache the audition under the same identity playCurrent / the cast row
          use, so the proposed preview doubles as the character's 12s sample. */
@@ -458,6 +459,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
            ids, so only rows the server actually wrote in the loaded book qualify:
            the home row when the home book is the loaded one (with the persona),
            plus any linked row the response lists for the loaded book. */
+        const loadedBookId = loadedBookNow();
         const mirrorIds = new Set<string>();
         if (homeBookId === loadedBookId) mirrorIds.add(character.id);
         for (const u of linked.updated) if (u.bookId === loadedBookId) mirrorIds.add(u.characterId);
