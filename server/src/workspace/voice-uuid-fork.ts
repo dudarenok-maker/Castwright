@@ -111,13 +111,18 @@ interface OtherBook {
   /** The book's author and series (none: a standalone book). */
   series?: { author: string; series: string };
   rows: CastRow[];
+  /** The reuse-carryover's rows (#4040), read only when the caller asks for them. */
+  carryoverRows?: CastRow[];
 }
 
 /* Every OTHER book's readable cast, with its bookId: one bounded pass over the
    library. A book whose cast.json OR state.json cannot be read is not in `books`
    (without its bookId no link can be matched to it) and is reported in
    `unreadableDirs` so each caller decides what not knowing means. */
-async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; unreadableDirs: string[] }> {
+async function loadOtherBooks(
+  selfDir: string,
+  withCarryover = false,
+): Promise<{ books: OtherBook[]; unreadableDirs: string[] }> {
   const out: OtherBook[] = [];
   const unreadableDirs: string[] = [];
   for (const authorName of listDirs(BOOKS_ROOT)) {
@@ -130,7 +135,18 @@ async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; un
           unreadableDirs.push(resolve(dir));
           continue;
         }
-        if (!cast?.characters?.length) continue;
+        /* #4040 — a re-parsed book has no cast rows, only a carryover the next analysis
+           restores: with `withCarryover` it is a book too, and an unreadable carryover
+           counts as none (the reset is best-effort for another book). */
+        let carryoverRows: CastRow[] | undefined;
+        if (withCarryover) {
+          try {
+            carryoverRows = (await readJson<CastFile>(castReuseCarryoverJsonPath(dir)))?.characters;
+          } catch (e) {
+            console.warn(`[voice-uuid-fork] skipping unreadable cast-reuse-carryover.json in ${dir}: ${(e as Error).message}`);
+          }
+        }
+        if (!cast?.characters?.length && !carryoverRows?.length) continue;
         let identity: Awaited<ReturnType<typeof readBookIdentity>>;
         try {
           identity = await readBookIdentity(dir);
@@ -139,7 +155,7 @@ async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; un
           unreadableDirs.push(resolve(dir));
           continue;
         }
-        out.push({ dir, bookId: identity.bookId, series: identity.series, rows: cast.characters });
+        out.push({ dir, bookId: identity.bookId, series: identity.series, rows: cast?.characters ?? [], carryoverRows });
       }
     }
   }
@@ -296,7 +312,8 @@ export async function legacyKeyHolderBookIds(
 }
 
 /* #4040 (a linked reset) — the bookIds of the OTHER readable books with at least
-   one cast row whose Qwen storage key is `key` (`qwenStorageKey(row, row.id)`: its
+   one cast row (in cast.json or in the reuse carryover of a re-parsed book waiting
+   for re-analysis) whose Qwen storage key is `key` (`qwenStorageKey(row, row.id)`: its
    uuid key, or the legacy `qwen-<voiceId ?? id>`): the books a base redesign of
    that key must also reset. A book that declined the link sits on a separated
    voice of its own (a different uuid, so a different key) and is never a holder.
@@ -304,9 +321,9 @@ export async function legacyKeyHolderBookIds(
    read. Library-wide, not series-scoped: the render path plays the key whatever
    series (or none) the book sits in, so every book on it is reset. */
 export async function storageKeyHolderBookIds(bookDir: string, key: string): Promise<string[]> {
-  const { books } = await loadOtherBooks(resolve(bookDir));
+  const { books } = await loadOtherBooks(resolve(bookDir), true);
   const holds = (row: CastRow): boolean => qwenStorageKey(row, row.id) === key;
-  return [...new Set(books.filter((b) => b.bookId && b.rows.some(holds)).map((b) => b.bookId as string))];
+  return [...new Set(books.filter((b) => b.bookId && (b.rows.some(holds) || b.carryoverRows?.some(holds))).map((b) => b.bookId as string))];
 }
 
 /* #4040 (a linked reset) — pure: drop the `overrideTtsVoices.qwen.variants` map of

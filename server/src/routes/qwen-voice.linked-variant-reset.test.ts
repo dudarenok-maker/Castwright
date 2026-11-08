@@ -339,3 +339,61 @@ describe('#4040 — a direct base redesign (landStagedDesign) resets linked vari
     for (const b of [A, B, C]) expect(hasVariants(b), `${b.title} lost its variants`).toBe(true);
   });
 });
+
+/* #4040 — a re-parsed book waiting for re-analysis has no cast rows in cast.json: its
+   voice slots sit in the reuse carryover, which the next analysis restores. */
+const carryPath = (b: BookSpec) => join(dirOf(b), '.audiobook', 'cast-reuse-carryover.json');
+const writeCarryover = (b: BookSpec, rows: Array<Record<string, unknown>>) =>
+  writeFileSync(carryPath(b), JSON.stringify({ characters: rows }));
+const carryRows = (b: BookSpec): Array<Record<string, any>> => JSON.parse(readFileSync(carryPath(b), 'utf8')).characters;
+const carryRow = (b: BookSpec, id = 'wren') => carryRows(b).find((r) => r.id === id) as Record<string, any>;
+
+describe('#4040 — a re-parsed book keeps no stale variants in its carryover', () => {
+  it('R1: B has no cast rows, only a carryover on u1; a promote on A clears its variants and nothing else', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    writeBook(B, []);
+    writeCarryover(B, [variantsRow('wren', 'u1'), variantsRow('fern', 'u9')]);
+    const fernBefore = JSON.stringify(carryRow(B, 'fern'));
+    const wrenBefore = carryRow(B);
+    await redesign(A);
+    expect(hasVariants(A)).toBe(false);
+    const wren = carryRow(B);
+    expect(wren.overrideTtsVoices.qwen.variants, 'the carried-over row kept its variants').toBeUndefined();
+    const { variants: _v, ...slotRest } = wrenBefore.overrideTtsVoices.qwen;
+    expect(wren).toEqual({ ...wrenBefore, overrideTtsVoices: { qwen: slotRest } });
+    expect(JSON.stringify(carryRow(B, 'fern')), 'a carried-over row on another voice changed').toBe(fernBefore);
+    expect(existsSync(pt(VARIANT)), 'a variant file was deleted inline').toBe(true);
+  });
+
+  it('R2: a direct base design on A clears the carryover too', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    writeBook(B, []);
+    writeCarryover(B, [variantsRow('wren', 'u1')]);
+    const res = await directDesign(A);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(carryRow(B).overrideTtsVoices.qwen.variants).toBeUndefined();
+  });
+
+  it('R3: B has both a cast.json and a carryover on u1; both are cleared', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    writeBook(B, [variantsRow('wren', 'u1')]);
+    writeCarryover(B, [variantsRow('wren', 'u1')]);
+    await redesign(A);
+    expect(hasVariants(B), 'cast.json kept its variants').toBe(false);
+    expect(carryRow(B).overrideTtsVoices.qwen.variants, 'the carryover kept its variants').toBeUndefined();
+  });
+
+  it('R4: a carryover on another key is not rewritten', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    writeBook(B, [variantsRow('wren', 'u1')]);
+    writeBook(D, []);
+    writeCarryover(D, [variantsRow('wren', 'u9')]);
+    const before = readFileSync(carryPath(D));
+    await redesign(A);
+    expect(readFileSync(carryPath(D)).equals(before)).toBe(true);
+  });
+});

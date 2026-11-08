@@ -37,6 +37,7 @@ import { runBookJob } from '../workspace/book-jobs.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import {
   castJsonPath,
+  castReuseCarryoverJsonPath,
   qwenVoiceSidecarPath,
   qwenVoicePtPath,
   qwenVoiceWavPath,
@@ -1256,12 +1257,21 @@ async function resetLinkedVariants(ownDir: string, others: BookHandle[], key: st
   for (const { dir, own } of dirs) {
     try {
       const cast = await readJson<CastFile>(castJsonPath(dir));
-      if (!cast?.characters) continue;
-      const dropped = dropLinkedVariants(cast, key);
-      if (dropped.changed) await writeCast(dir, dropped.cast);
+      const dropped = cast?.characters ? dropLinkedVariants(cast, key) : undefined;
+      if (dropped?.changed) await writeCast(dir, dropped.cast);
     } catch (e) {
       if (own) throw e;
       console.error('[qwen-voice] could not reset the emotion variants of a linked book', e);
+    }
+    /* A re-parsed book's slots wait in its reuse carryover for the next analysis to
+       restore; the same cast lock guards that file, so it is reset here too. */
+    try {
+      const carry = await readJson<CastFile>(castReuseCarryoverJsonPath(dir));
+      if (!carry?.characters) continue;
+      const dropped = dropLinkedVariants(carry, key);
+      if (dropped.changed) await writeJsonAtomic(castReuseCarryoverJsonPath(dir), dropped.cast);
+    } catch (e) {
+      console.error('[qwen-voice] could not reset the carried-over emotion variants of a book', e);
     }
   }
 }
