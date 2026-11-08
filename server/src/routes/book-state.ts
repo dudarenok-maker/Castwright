@@ -1726,9 +1726,15 @@ async function applyReparse(
        to complete while this arm never deletes cast.json — a worse partial
        state than either succeeding or failing cleanly. The .catch below is
        narrowed to that one case: a JSON parse failure degrades to the same
-       path as a missing cast.json (empty reuseRows, carryover removed,
-       cast.json deleted, reparse succeeds) — a corrupt cast has nothing
-       worth carrying over and reparse exists to discard the cast anyway.
+       path as a missing cast.json (existingCast === null: the carryover is
+       left exactly as it is, cast.json is deleted, reparse succeeds).
+       #4039 — the carryover must survive a second reparse or a
+       replace-manuscript before re-analysis. For an ABSENT cast.json it is
+       the newest record of the cast. For an UNPARSEABLE one it is older than
+       the cast it stands in for, but readPriorCastForMerge (analysis.ts)
+       already falls back to the carryover when cast.json does not parse, so
+       keeping it matches what the next analysis would use anyway, and
+       deleting it would lose the designed voices.
        Any OTHER read failure (EBUSY/EPERM/EACCES/EMFILE, etc. on an
        otherwise-intact cast.json) is logged and re-thrown instead of being
        silently treated as "no cast": the sibling arms have already started
@@ -1750,7 +1756,12 @@ async function applyReparse(
         console.error('[book-state] reparse: cast.json unreadable, refusing to discard it', err);
         throw err;
       });
-      const reuseRows = (existingCast?.characters ?? [])
+      if (existingCast === null) {
+        // Absent or unparseable cast.json: keep the carryover untouched (#4039).
+        await rm(castJsonPath(bookDir), { force: true });
+        return;
+      }
+      const reuseRows = (existingCast.characters ?? [])
         .filter((c) => typeof c.id === 'string')
         .map((c) => {
           const row: Record<string, unknown> = { id: c.id, name: c.name };
