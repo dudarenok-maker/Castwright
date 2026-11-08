@@ -21,6 +21,7 @@ Load-bearing invariants pinned here:
 from __future__ import annotations
 
 import os
+import pickle
 import sys
 import threading
 import time
@@ -207,12 +208,25 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
 
     def _save(obj: Any, path: str) -> None:
         _store[str(path)] = obj
+        # #4040 — a picklable object is written for real, so it survives the
+        # temp-file + os.replace persist (the store is keyed by the temp path)
+        # and a copy of the file; anything else is a bare presence marker.
+        try:
+            data = pickle.dumps(obj)
+        except Exception:
+            data = b"\x00"
         with open(path, "wb") as fh:
-            fh.write(b"\x00")  # presence marker for isfile()
+            fh.write(data)  # presence marker for isfile()
 
     def _load(path: str, **kwargs: Any) -> Any:
         fake_torch._last_load_kwargs = kwargs  # type: ignore[attr-defined]
-        return _store.get(str(path), {"_prompt": True})
+        if str(path) in _store:
+            return _store[str(path)]
+        try:
+            with open(path, "rb") as fh:
+                return pickle.loads(fh.read())
+        except Exception:
+            return {"_prompt": True}
 
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
@@ -2338,6 +2352,122 @@ def test_synth_17b_reuses_disk_cached_prompt_after_restart(
         "the on-disk nadia__1.7b.pt should have been loaded instead of re-derived"
     )
     assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+
+
+def _setup_17b_base_from_disk(eng, monkeypatch, voice_id: str, content: bytes) -> str:
+    """#4040 — design `voice_id`, overwrite its base .pt with `content` (the
+    fake torch.save writes the same marker byte for every voice, so distinct
+    bytes stand in for distinct embeddings), and make the 0.6B prompt carry the
+    base file's bytes as `ref_text` — so each 1.7B derive records, in
+    `_base17.prompt_calls`, which base it was derived from. Returns base_pt."""
+    import types as _types
+
+    eng.design_voice(voice_id, "A calm narrator.", "English", None)
+    base_pt, _json = eng._voice_paths(voice_id)
+    with open(base_pt, "wb") as fh:
+        fh.write(content)
+
+    def _base_from_disk(v):
+        with open(eng._voice_paths(v)[0], "rb") as fh:
+            data = fh.read()
+        return ([_types.SimpleNamespace(ref_code=None, ref_text=data.decode())], "English", False)
+
+    monkeypatch.setattr(eng, "_load_voice_prompt", _base_from_disk)
+    eng._base17 = type(eng._base)("1.7b")
+    return base_pt
+
+
+def _land_redesign(base_pt: str, content: bytes) -> None:
+    """The Node server's moveStaged: a staged .pt renamed over the base, no
+    sidecar evict (it is best-effort and here it never ran)."""
+    staged = base_pt + ".staged"
+    with open(staged, "wb") as fh:
+        fh.write(content)
+    os.replace(staged, base_pt)
+
+
+def test_synth_17b_rederives_from_current_base_after_redesign(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 — a base replaced on disk with no evict must not keep serving the
+    1.7B prompt derived from the OLD base from memory; an unchanged base must
+    keep the cached prompt (no re-derive)."""
+    eng = fake_qwen_runtime["engine"]
+    base_pt = _setup_17b_base_from_disk(eng, monkeypatch, "lena", b"OLD")
+
+    eng.synthesize("1.7b", "lena", "First line.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD"]
+
+    # Control: same base on disk -> in-memory hit, no re-derive.
+    eng.synthesize("1.7b", "lena", "Second line.")
+    assert len(eng._base17.prompt_calls) == 1, "unchanged base must reuse the cached 1.7B prompt"
+
+    _land_redesign(base_pt, b"NEW")
+    eng.synthesize("1.7b", "lena", "Third line.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD", "NEW"], (
+        "the 1.7B prompt must be re-derived from the redesigned base"
+    )
+
+    eng.synthesize("1.7b", "lena", "Fourth line.")
+    assert len(eng._base17.prompt_calls) == 2, "the re-derived prompt must then be reused"
+
+
+def test_synth_17b_stale_disk_prompt_not_reused_after_restart(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 — a `__1.7b.pt` derived from the OLD base that survived on disk
+    (the evict failed) must be re-derived after a restart, not loaded."""
+    eng = fake_qwen_runtime["engine"]
+    base_pt = _setup_17b_base_from_disk(eng, monkeypatch, "mira", b"OLD")
+    eng.synthesize("1.7b", "mira", "First line.")
+    pt_17b, _json = eng._voice_paths("mira__1.7b")
+    assert os.path.isfile(pt_17b)
+
+    _land_redesign(base_pt, b"NEW")
+    eng._prompt_cache.clear()  # simulated restart: in-memory state gone, disk kept
+
+    eng.synthesize("1.7b", "mira", "After restart.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD", "NEW"], (
+        "a stale on-disk 1.7B prompt must not be reused after the base changed"
+    )
+
+
+def test_synth_17b_copied_matching_pair_is_not_rederived(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 control — the series mint COPIES the base family (base .pt and its
+    `__1.7b.pt`) to a new key. The copy has a new file id and path, but the
+    same base content, so its derived prompt is still current: no re-derive."""
+    import shutil
+
+    eng = fake_qwen_runtime["engine"]
+    _setup_17b_base_from_disk(eng, monkeypatch, "olga", b"OLD")
+    eng.synthesize("1.7b", "olga", "First line.")
+    assert len(eng._base17.prompt_calls) == 1
+
+    torch_module = sys.modules["torch"]
+    src_base, src_json = eng._voice_paths("olga")
+    dst_base, dst_json = eng._voice_paths("olga-copy")
+    shutil.copyfile(src_base, dst_base)
+    shutil.copyfile(src_json, dst_json)
+    src_17b, _ = eng._voice_paths("olga__1.7b")
+    dst_17b, _ = eng._voice_paths("olga-copy__1.7b")
+    torch_module.save(torch_module.load(src_17b), dst_17b)  # copyFile, via the fake store
+
+    eng.synthesize("1.7b", "olga-copy", "Copied line.")
+    assert len(eng._base17.prompt_calls) == 1, "a copied matching pair must reuse its 1.7B prompt"
+
+
+def test_synth_17b_legacy_disk_prompt_without_base_record_is_rederived(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#4040 — a `__1.7b.pt` written before the base was recorded alongside it
+    cannot be proven current, so it is re-derived once (then reused)."""
+    eng = fake_qwen_runtime["engine"]
+    _setup_17b_base_from_disk(eng, monkeypatch, "nora", b"OLD")
+    pt_17b, _json = eng._voice_paths("nora__1.7b")
+    with open(pt_17b, "wb") as fh:  # a bare prompt, the pre-#4040 file shape
+        pickle.dump([{"legacy": True}], fh)
+
+    eng.synthesize("1.7b", "nora", "A line.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD"]
+    eng._prompt_cache.clear()
+    eng.synthesize("1.7b", "nora", "After restart.")
+    assert len(eng._base17.prompt_calls) == 1
 
 
 def _seed_stale_17b_disk_cache(eng, vdir: str, voice_id: str) -> str:
