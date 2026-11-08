@@ -28,7 +28,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
@@ -368,6 +368,57 @@ const removeFiles = async (files: string[]): Promise<void> => {
   await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
 };
 
+/* #4037 — copy every emotion variant family of the legacy key `oldKey`
+   (`<oldKey>__<emotion>.pt|.json|__1.7b.pt|__master.wav`) to `<newKey>__<emotion>.*`,
+   for the series mint only (a separation drops its variants on purpose). The
+   emotions are the closed VARIANT_EMOTIONS set, so the base family's own
+   `__1.7b` / `__master` suffixes are never taken for one. Same contract as
+   copyBaseFamily: returns the files written; any failure removes what this call
+   copied and rethrows, so the caller never stamps a row whose variants are
+   half-copied. */
+async function copyVariantFamilies(oldKey: string, newKey: string): Promise<string[]> {
+  const dir = dirname(qwenVoicePtPath(oldKey));
+  const suffixes = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
+  const names = new Set<string>();
+  try {
+    const present = new Set(await readdir(dir));
+    for (const e of VARIANT_EMOTIONS) {
+      for (const s of suffixes) {
+        if (present.has(`${oldKey}__${e}${s}`)) names.add(`${oldKey}__${e}${s}`);
+      }
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  const copied: string[] = [];
+  for (const name of names) {
+    const dest = join(dir, `${newKey}${name.slice(oldKey.length)}`);
+    try {
+      await copyFile(join(dir, name), dest, fsConstants.COPYFILE_EXCL);
+      copied.push(dest);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
+      await removeFiles(copied);
+      throw e;
+    }
+  }
+  return copied;
+}
+
+/* #4037 — point a stamped row's stored variant names at the new key. */
+function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCharacter {
+  const qwen = c.overrideTtsVoices?.qwen;
+  if (!qwen?.variants) return c;
+  const variants = Object.fromEntries(
+    Object.entries(qwen.variants).map(([e, v]) => [
+      e,
+      v && v.name.startsWith(`${from}__`) ? { ...v, name: `${to}${v.name.slice(from.length)}` } : v,
+    ]),
+  );
+  return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants } } };
+}
+
 /* #3992 — stamp a new uuid onto one row and drop its qwen `variants` map in the
    same write. Render never reads a stored variant name: `pickEmotionVariantVoice`
    re-derives `qwen-<uuid>__<emotion>` from the row's uuid, and the copies are the
@@ -687,6 +738,7 @@ async function stampOwnRow(
   characterId: string,
   uuid: string,
   sameBookLinkId?: string,
+  rekey?: { from: string; to: string },
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -698,7 +750,8 @@ async function stampOwnRow(
       const c = fresh.characters[i];
       if (c.voiceUuid) continue;
       if (i === idx || (sameBookLinkId !== undefined && (c.voiceId ?? c.id) === sameBookLinkId)) {
-        fresh.characters[i] = { ...c, voiceUuid: uuid };
+        const stamped = { ...c, voiceUuid: uuid };
+        fresh.characters[i] = rekey ? withRekeyedVariants(stamped, rekey.from, rekey.to) : stamped;
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -751,12 +804,21 @@ export async function ensureCharacterVoiceUuid(
        The caller holds the design lock. */
     /* P11-2 — the mint's key is saving until its walk ends (savingKeys). */
     return whileSaving(`qwen-${uuid}`, async () => {
-      const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
+      const legacyKey = `qwen-${linkId}`;
+      const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
       if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
         await removeFiles(copied);
         /* Owner decision (share a first design): the landing shares it when it
            writes the key's first file, under its locks (shareFirstDesign). */
         return stampOwnRow(bookDir, characterId, uuid);
+      }
+      /* #4037 — the emotion variants travel with the base, before any row is stamped
+         (a failed copy removes its own files; the base copy goes too). */
+      try {
+        copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
+      } catch (e) {
+        await removeFiles(copied);
+        throw e;
       }
       /* A row that already has its own uuid keeps it: a separated row still shares
          `voiceId` with the earlier book, and restamping it would orphan its own
@@ -765,7 +827,7 @@ export async function ensureCharacterVoiceUuid(
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
         stampedAny = true;
-        return { ...c, voiceUuid: uuid };
+        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
       };
       try {
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
@@ -783,7 +845,7 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId);
+        return await stampOwnRow(bookDir, characterId, uuid, linkId, { from: legacyKey, to: `qwen-${uuid}` });
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;
