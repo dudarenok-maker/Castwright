@@ -302,7 +302,9 @@ function isLocked(ranges: LockRange[], index: number): boolean {
 // otherwise silently drop a real occurrence out of coverage (see file
 // header, false negatives).
 const WRITE_RE = /\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/g;
-const RM_RE = /\brm\(\s*castJsonPath\(/g;
+// Every spelling of "remove or move aside cast.json" whose FIRST argument is the
+// castJsonPath(...) call itself (#4039: `rm(` alone let `unlink(`/`rename(` slip by).
+const RM_RE = /\b(?:rm|rmSync|unlink|unlinkSync|rename)\(\s*castJsonPath\(/g;
 
 interface ScanResult {
   writes: number;
@@ -366,6 +368,12 @@ function collectRmSites(content: string): number[] {
    guard above cannot see this (a locked rm is fine for locking), so this map
    records, per file, how many `rm(castJsonPath(` sites exist and what the file
    does with the carryover. A new site must be recorded here on purpose.
+   The scan is SYNTACTIC (rm/rmSync/unlink/unlinkSync/rename called with
+   `castJsonPath(` as its first argument), so it cannot see: a path held in a
+   variable (`const p = castJsonPath(d); rm(p)`), an aliased import, a
+   hand-built path (`join(dotAudiobook(d), 'cast.json')`), or a deleter reached
+   through a helper in another file. Review a new cast.json deleter by hand;
+   do not read a green guard as proof there is none.
    book-state.ts has two sites in ONE reparse path: the early return for an
    absent/unparseable cast.json (carryover kept), and the final delete after
    the carryover was rewritten or removed. */
