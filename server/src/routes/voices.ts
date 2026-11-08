@@ -1106,7 +1106,9 @@ export async function applyOverrideToCastFiles(
         const map = { ...(normalised.overrideTtsVoices ?? {}) };
         /* Preserve any existing slot detail (notably qwen emotion `variants`)
            when (re)assigning the base name — a base re-design, or its series
-           propagation, must NOT wipe designed variants. */
+           propagation, does not clear variants HERE: the redesign that replaced the base
+           already reset the linked rows' variants (#4040, in the landing or promote that
+           ran before this), and an override that only renames the base must keep them. */
         const nextSlot = { ...(map[override.engine] ?? {}), name: override.name };
         /* [DELTA-I5] fs-38 Wave 3c Task 16 — pickVoiceForEngine's clone-engine
            branch now resolves a slot's libraryUuid BEFORE this `name` is ever
