@@ -29,7 +29,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
@@ -335,22 +335,24 @@ function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
       : qwenVoiceWavPath(name);
 }
 
+const BASE_FAMILY: Array<['pt' | 'json' | 'wav', string]> = [
+  ['pt', ''],
+  ['json', ''],
+  ['pt', '__1.7b'],
+  ['wav', '__master'],
+];
+
 /* #3992 — copy the base artifact family of `oldKey` to `newKey` (never the
-   emotion variants; the series mint adds those via copyFamilyWithVariants). Returns the files written, for cleanup. Only an ABSENT
+   emotion variants; the mint adds those via copyFamilyWithVariants). Returns the
+   files written, for cleanup. Only an ABSENT
    source (ENOENT) is skipped (a voice nobody designed yet has nothing to copy);
    any other failure (EBUSY, EPERM, ENOSPC, or the destination already existing)
    removes what was copied so far and rethrows, so the caller never stamps a uuid
    whose `.pt` is missing. The rethrown fs error carries an absolute path: every
    route that reaches it curates it through `requestFailureMessageFs`. */
 async function copyBaseFamily(oldKey: string, newKey: string): Promise<string[]> {
-  const family: Array<['pt' | 'json' | 'wav', string]> = [
-    ['pt', ''],
-    ['json', ''],
-    ['pt', '__1.7b'],
-    ['wav', '__master'],
-  ];
   const copied: string[] = [];
-  for (const [kind, suffix] of family) {
+  for (const [kind, suffix] of BASE_FAMILY) {
     const dest = familyPath(kind, `${newKey}${suffix}`);
     try {
       await copyFile(familyPath(kind, `${oldKey}${suffix}`), dest, fsConstants.COPYFILE_EXCL);
@@ -386,8 +388,14 @@ async function copyFamilyWithVariants(oldKey: string, newKey: string): Promise<s
 }
 
 /* #4037 — point a stamped row's variant slot names at the minted key: a slot named
-   `<oldKey>__<emotion>` becomes `<newKey>__<emotion>`; any other name is kept. */
-function withRenamedVariants(c: CastCharacter, oldKey: string, newKey: string): CastCharacter {
+   `<oldKey>__<emotion>` becomes `<newKey>__<emotion>`; any other name is kept. With
+   `ready`, only a slot whose emotion it accepts is renamed. */
+function withRenamedVariants(
+  c: CastCharacter,
+  oldKey: string,
+  newKey: string,
+  ready: (emotion: string) => boolean = () => true,
+): CastCharacter {
   const qwen = c.overrideTtsVoices?.qwen;
   const variants = qwen?.variants;
   if (!qwen || !variants) return c;
@@ -395,13 +403,38 @@ function withRenamedVariants(c: CastCharacter, oldKey: string, newKey: string): 
   const next: typeof variants = { ...variants };
   for (const e of Object.keys(variants) as Array<keyof typeof variants>) {
     const v = variants[e];
-    if (v && v.name === `${oldKey}__${e}`) {
+    if (v && v.name === `${oldKey}__${e}` && ready(e)) {
       next[e] = { ...v, name: `${newKey}__${e}` };
       changed = true;
     }
   }
   if (!changed) return c;
   return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants: next } } };
+}
+
+/* #4037 — withRenamedVariants for a row read under its book's cast lock: a slot
+   (cast-lock rule 2: the read and every decision derived from it) is renamed only once
+   `<newKey>__<emotion>.pt` exists. One that landed after the mint's copy loop (a
+   variant designed on another book of the series) has its legacy family copied here,
+   synchronously and recorded in `copied` for the caller's rollback; a slot with
+   neither file keeps its name. */
+function withReadyRenamedVariants(c: CastCharacter, oldKey: string, newKey: string, copied: string[]): CastCharacter {
+  return withRenamedVariants(c, oldKey, newKey, (e) => {
+    const dest = `${newKey}__${e}`;
+    if (existsSync(qwenVoicePtPath(dest))) return true;
+    const src = `${oldKey}__${e}`;
+    if (!existsSync(qwenVoicePtPath(src))) return false;
+    for (const [kind, suffix] of BASE_FAMILY) {
+      const to = familyPath(kind, `${dest}${suffix}`);
+      try {
+        copyFileSync(familyPath(kind, `${src}${suffix}`), to, fsConstants.COPYFILE_EXCL);
+        copied.push(to);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err; // source absent
+      }
+    }
+    return existsSync(qwenVoicePtPath(dest));
+  });
 }
 
 /* #3992 — stamp a new uuid onto one row and drop its qwen `variants` map in the
@@ -724,6 +757,7 @@ async function stampOwnRow(
   uuid: string,
   sameBookLinkId?: string,
   renameVariantsFrom?: string,
+  copied: string[] = [],
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -739,7 +773,7 @@ async function stampOwnRow(
         fresh.characters[i] =
           renameVariantsFrom === undefined
             ? stamped
-            : withRenamedVariants(stamped, renameVariantsFrom, `qwen-${uuid}`);
+            : withReadyRenamedVariants(stamped, renameVariantsFrom, `qwen-${uuid}`, copied);
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -755,8 +789,9 @@ async function stampOwnRow(
    mint two uuids. Stamps the SAME uuid onto every linked-cast
    sibling (matching voiceId ?? id) so a series-shared voice keeps one identity
    — series-scoped when seriesFilter is given (mirrors persistEmotionVariant;
-   since pass 11 only after copying the legacy key's designed base family to the
-   new key, and only the designing row when there is nothing to copy: then the
+   since pass 11 only after copying the legacy key's designed base family and its
+   emotion variants to the new key (#4037), and only the designing row when there
+   is nothing to copy: then the
    landing shares the design with the linked rows when it writes the key's first
    file, shareFirstDesign), else book-scoped. Returns
    undefined for an unknown character.
@@ -785,7 +820,9 @@ export async function ensureCharacterVoiceUuid(
     const uuid = nanoid();
     /* PR #4007 pass 11, P11-3 (owner decision: the mint copies before it stamps) —
        a linked legacy row is stamped only once `qwen-<uuid>` holds a copy of the
-       legacy key's base family and its emotion variants, so a stamped row always has its file: a design
+       legacy key's base family and its emotion variants, so a stamped row has its
+       file (a variant slot is renamed only once its file exists, decided inside
+       each book's cast lock, so one landing mid-walk is copied there): a design
        that never lands (Design & compare then Cancel, a failed landing, a decline
        in between) leaves every stamped book speaking its own voice. With nothing
        to copy (nobody designed the legacy key) only the designing row is stamped.
@@ -806,7 +843,7 @@ export async function ensureCharacterVoiceUuid(
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
         stampedAny = true;
-        return withRenamedVariants({ ...c, voiceUuid: uuid }, `qwen-${linkId}`, `qwen-${uuid}`);
+        return withReadyRenamedVariants({ ...c, voiceUuid: uuid }, `qwen-${linkId}`, `qwen-${uuid}`, copied);
       };
       try {
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
@@ -824,7 +861,7 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId, `qwen-${linkId}`);
+        return await stampOwnRow(bookDir, characterId, uuid, linkId, `qwen-${linkId}`, copied);
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;
@@ -839,24 +876,41 @@ export async function ensureCharacterVoiceUuid(
      lock: re-check `voiceUuid` (another concurrent mint may have landed)
      and re-derive the linked-sibling set from a FRESH cast, not the one
      captured above. */
-  return withCastLock(bookDir, async () => {
-    const freshCast = await readJson<CastFile>(castJsonPath(bookDir));
-    const freshChar = freshCast?.characters?.find((c) => c.id === characterId);
-    if (!freshCast || !freshChar) return undefined;
-    if (freshChar.voiceUuid) return freshChar.voiceUuid;
+  const uuid = nanoid();
+  /* #4037, P11-3 — the same owner rule as the series mint: the legacy key's base
+     family and emotion variants are copied to `qwen-<uuid>` before any row is
+     stamped (and the stamped rows' variant slots renamed), so a standalone legacy
+     book keeps its voice under the new key. Nothing to copy: stamped as before. */
+  return whileSaving(`qwen-${uuid}`, () =>
+    withCastLock(bookDir, async () => {
+      const freshCast = await readJson<CastFile>(castJsonPath(bookDir));
+      const freshChar = freshCast?.characters?.find((c) => c.id === characterId);
+      if (!freshCast || !freshChar) return undefined;
+      if (freshChar.voiceUuid) return freshChar.voiceUuid;
 
-    const uuid = nanoid();
-    const linkId = freshChar.voiceId ?? freshChar.id;
-    let dirty = false;
-    for (let i = 0; i < freshCast.characters.length; i++) {
-      if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
-        freshCast.characters[i] = { ...freshCast.characters[i], voiceUuid: uuid };
-        dirty = true;
+      const linkId = freshChar.voiceId ?? freshChar.id;
+      const copied = await copyFamilyWithVariants(`qwen-${linkId}`, `qwen-${uuid}`);
+      const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
+      if (!hasBase) await removeFiles(copied);
+      try {
+        let dirty = false;
+        for (let i = 0; i < freshCast.characters.length; i++) {
+          if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+            const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
+            freshCast.characters[i] = hasBase
+              ? withReadyRenamedVariants(stamped, `qwen-${linkId}`, `qwen-${uuid}`, copied)
+              : stamped;
+            dirty = true;
+          }
+        }
+        if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
+      } catch (e) {
+        if (hasBase) await removeFiles(copied);
+        throw e;
       }
-    }
-    if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
-    return uuid;
-  });
+      return uuid;
+    }),
+  );
 }
 
 /* Preview/promote (plan 161). The A/B "current vs proposed" audition must NOT
