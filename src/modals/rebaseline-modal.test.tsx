@@ -462,6 +462,52 @@ describe('RebaselineModal — stale emotion variants (#4040)', () => {
   });
 });
 
+describe('RebaselineModal — a series rebaseline of a non-loaded book leaves the loaded cast alone', () => {
+  const run = async (targetBookId: string, openBookId: string) => {
+    /* The target book's cast shares character ids with the loaded book (series
+       books share ids) but carries no persona, so Propose generates one. */
+    getBookState.mockResolvedValue({
+      cast: { characters: [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 90)] },
+    });
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId },
+    );
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId={targetBookId} />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalled());
+    await waitFor(() => expect(store.getState().rebaseline.status).not.toBe('approving'));
+    return store.getState().cast.characters.find((c) => c.id === 'marlow')!;
+  };
+
+  it('does not write the persona or the override into the loaded book (design + approve)', async () => {
+    const marlow = await run('book-2', 'book-1');
+    expect(generateVoiceStyle).toHaveBeenCalledWith('book-2', 'marlow');
+    expect(marlow.voiceStyle).toBeUndefined();
+    expect(marlow.ttsEngine).toBeUndefined();
+    expect(marlow.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('still updates the local cast when the rebaselined book IS the loaded one', async () => {
+    const marlow = await run('book-1', 'book-1');
+    expect(marlow.voiceStyle).toBeTruthy();
+    expect(marlow.ttsEngine).toBe('qwen');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+  });
+});
+
 describe('RebaselineModal — propose', () => {
   it('renders a current-vs-proposed row per selected character', async () => {
     const store = makeStore(CHARACTERS, VOICES);

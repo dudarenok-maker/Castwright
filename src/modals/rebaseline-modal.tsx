@@ -262,7 +262,11 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
       if (!persona) {
         const res = await api.generateVoiceStyle(bookId, characterId);
         persona = res.voiceStyle;
-        dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
+        /* Local mirror only when this book is the loaded one: series books share
+           character ids, so for a foreign book the write would land on the loaded
+           book's row and its next autosave would PUT it into that cast.json. The
+           server already persisted it. */
+        if (targetIsOpenBook) dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
       }
       /* Cache the audition under the same identity playCurrent / the cast row
          use, so the proposed preview doubles as the character's 12s sample. */
@@ -453,7 +457,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
             qwen: { name: p.proposedVoiceId },
           },
         };
-        dispatch(castActions.updateCharacter(next));
+        /* Same reason as designOne's voiceStyle write: a foreign book's row must
+           not overwrite the loaded book's same-id character. */
+        if (targetIsOpenBook) dispatch(castActions.updateCharacter(next));
         dispatch(rebaselineActions.proposalApplied({ characterId: p.characterId }));
         applied += 1;
       } catch {
