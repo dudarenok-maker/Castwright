@@ -5778,8 +5778,10 @@ export interface components {
                      *     the base voice. Variants travel with the base across reuse
                      *     links (plan 177 Wave 6a). #4040 — a variant designed against an
                      *     earlier base (the base was redesigned since, from any book on the
-                     *     voice) is stale: the server omits it from every cast it serves,
-                     *     drops it from a cast write, and renders its lines in the base voice.
+                     *     voice) is stale: the book `GET /state` omits it, the cast `PUT
+                     *     /state` drops it, a reparse carryover drops it, and a render uses
+                     *     the base voice for its lines. `GET /series-cast` serves the
+                     *     stored cast and does not filter stale variants.
                      */
                     variants?: {
                         [key: string]: {
