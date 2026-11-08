@@ -1954,7 +1954,9 @@ qwenVoiceRouter.post(
     /* A redesign replaces the base embedding in place, so every emotion variant
        minted from the OLD embedding is now stale (each was anchored to a PT that
        no longer exists). Invalidate them: drop the whole `variants` map from
-       cast.json. The character's tagged emotions then re-register as missing
+       cast.json on the redesigned row, and (#4040) from every row still on the
+       same key in each linked book (resetLinkedVariants). The character's
+       tagged emotions then re-register as missing
        demand, so the cast's "Design full cast → Emotion variants" scope re-mints
        the ones the user still wants from the new base. #4026 — the variant FILES
        stay: another row (a linked book, a declined one, a sibling) may still name
