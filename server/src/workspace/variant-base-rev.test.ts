@@ -79,6 +79,25 @@ describe('#4040 — dropStaleVariants', () => {
   });
 });
 
+describe('#4040 — readBaseRev', () => {
+  it('an absent base json (or one with no rev) is undefined', async () => {
+    expect(await mod.readBaseRev('qwen-nope')).toBeUndefined();
+    write('qwen-u1', { instruct: 'x' });
+    expect(await mod.readBaseRev('qwen-u1')).toBeUndefined();
+  });
+
+  it('a base json that stays unreadable rejects rather than reading as "no rev"', async () => {
+    write('qwen-u1', '{"rev":');
+    await expect(mod.readBaseRev('qwen-u1')).rejects.toThrow();
+  });
+
+  it('a base json unreadable at first but readable on a retry gives its rev', async () => {
+    write('qwen-u1', '{"rev":');
+    setTimeout(() => write('qwen-u1', { rev: 'r1' }), 10);
+    expect(await mod.readBaseRev('qwen-u1')).toBe('r1');
+  });
+});
+
 describe('#4040 — the rev stamps', () => {
   it('a redesign stamp keeps the json’s other fields and changes the rev every time', async () => {
     write('qwen-u1', { instruct: 'a bright voice' });

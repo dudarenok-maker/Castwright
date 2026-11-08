@@ -18,9 +18,12 @@
    it). Copies of a voice family (the #3992 / #4037 mints) copy the json, so both
    fields travel with the files. Nothing here writes a cast.json.
 
-   A json that cannot be read for a reason other than absence (EBUSY, a torn
-   write) decides nothing: the variant is kept, so a transient error never drops a
-   take. */
+   The two sides treat a json that cannot be read for a reason other than absence
+   (EBUSY, a torn write) differently, each in the safe direction. The CHECK
+   (dropStaleVariants) decides nothing: the variant is kept, so a transient error
+   never drops a take. The RECORD (readBaseRev, at a variant design's start)
+   retries briefly and then fails the design, so a variant is never recorded
+   against a base rev that was merely unreadable. */
 
 import { nanoid } from 'nanoid';
 import { qwenVoiceSidecarPath } from './paths.js';
@@ -40,11 +43,24 @@ async function readRevField(key: string, field: 'rev' | 'baseRev'): Promise<Rev>
   }
 }
 
-/** The base's current `rev` (undefined when absent or unreadable), for a variant
-    design to record when its render begins. */
+const BASE_READ_RETRY_DELAYS_MS = [25, 75, 200];
+
+/** The base's current `rev` (undefined only when the json is absent or has none),
+    for a variant design to record when its render begins. A json that cannot be
+    read (EBUSY, a torn write) is retried briefly, then REJECTS: recording
+    `undefined` against a base that has a rev would make the new variant stale
+    from birth. */
 export async function readBaseRev(baseKey: string): Promise<string | undefined> {
-  const rev = await readRevField(baseKey, 'rev');
-  return rev === UNKNOWN ? undefined : rev;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const json = await readJson<Record<string, unknown>>(qwenVoiceSidecarPath(baseKey));
+      const v = json?.rev;
+      return typeof v === 'string' && v ? v : undefined;
+    } catch (err) {
+      if (attempt >= BASE_READ_RETRY_DELAYS_MS.length) throw err;
+      await new Promise<void>((resolve) => setTimeout(resolve, BASE_READ_RETRY_DELAYS_MS[attempt]));
+    }
+  }
 }
 
 async function patchJson(key: string, patch: (json: Record<string, unknown>) => void): Promise<void> {

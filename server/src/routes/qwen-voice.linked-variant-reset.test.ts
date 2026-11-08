@@ -30,6 +30,24 @@ vi.mock('undici', async (importOriginal) => {
   };
 });
 const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+/* Fails the next `times` reads of a file whose path contains `text` (an EBUSY from
+   a scanner); `times: Infinity` is a persistent fault. */
+const failReadIn = vi.hoisted(() => ({ text: null as string | null, times: 0 }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readFile = async (path: unknown, ...rest: unknown[]) => {
+    if (failReadIn.text && failReadIn.times > 0 && String(path).includes(failReadIn.text)) {
+      failReadIn.times--;
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${String(path)}'`), {
+        code: 'EBUSY',
+        syscall: 'open',
+        path: String(path),
+      });
+    }
+    return (actual.readFile as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+  };
+  return { ...actual, default: { ...actual, readFile }, readFile };
+});
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
   return { ...actual, selectTtsProvider: vi.fn(() => ({ synthesize })) };
@@ -373,6 +391,42 @@ describe('#4040 — a linked voice’s base redesign makes the old emotion varia
     expect(baseJson.rev, 'the promote stamped a new base rev').not.toBe('r1');
     expect(variantJson.baseRev, 'the variant recorded the rev read after the render').toBe('r1');
     for (const t of LINKED) await expectStale(t, 'u_shared');
+  });
+
+  it('a base json that stays unreadable fails the variant design retryably and records nothing (#4040)', async () => {
+    writeFileSync(json('qwen-u_shared'), JSON.stringify({ voiceId: 'qwen-u_shared', rev: 'r1' }));
+    const variantBefore = readFileSync(json('qwen-u_shared__angry'), 'utf8');
+    failReadIn.text = 'qwen-u_shared.json';
+    failReadIn.times = Infinity;
+    try {
+      const res = await design('Book B', { emotion: 'angry' });
+      expect(res.status, JSON.stringify(res.body)).toBe(500);
+      expect(JSON.stringify(res.body), 'a path or errno leaked').not.toMatch(/EBUSY|qwen-u_shared|castwright/);
+    } finally {
+      failReadIn.text = null;
+    }
+    expect(readFileSync(json('qwen-u_shared__angry'), 'utf8'), 'the variant json was rewritten').toBe(variantBefore);
+    expect(fetchMock.mock.calls.some(([, init]) => String(init?.body ?? '').includes('variantVoiceId'))).toBe(false);
+  });
+
+  it('a base json unreadable once, then readable, still records the base rev (#4040)', async () => {
+    writeFileSync(json('qwen-u_shared'), JSON.stringify({ voiceId: 'qwen-u_shared', rev: 'r1' }));
+    failReadIn.text = 'qwen-u_shared.json';
+    failReadIn.times = 1;
+    try {
+      const res = await design('Book B', { emotion: 'angry' });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    } finally {
+      failReadIn.text = null;
+    }
+    expect(JSON.parse(readFileSync(json('qwen-u_shared__angry'), 'utf8')).baseRev).toBe('r1');
+  });
+
+  it('an absent base json records no baseRev (#4040)', async () => {
+    rmSync(json('qwen-u_shared'));
+    const res = await design('Book B', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(JSON.parse(readFileSync(json('qwen-u_shared__angry'), 'utf8'))).not.toHaveProperty('baseRev');
   });
 
   it('a legacy variant (no baseRev) on a base with a rev is stale; one recorded against the current rev is current', async () => {
