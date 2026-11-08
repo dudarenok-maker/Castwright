@@ -6425,7 +6425,7 @@ The automated tests prove the decline-time separation against fixture workspaces
 
 *Needs:* the GPU box with the Qwen sidecar and a series of two books (four for step 7) with a linked character. *Criteria:* this row; issues #3992 and #4028 (the separation is `separateVoiceLocked` in `server/src/routes/qwen-voice.ts`, its rule `mustSeparateOnDecline` in `server/src/workspace/voice-uuid-fork.ts`; a design lands in `landStagedDesign`, the series mint is `ensureCharacterVoiceUuid`, the separated-voice record is `server/src/workspace/separated-voices.ts`). Clears when each step is recorded with the cast.json uuids and the file listing that show it.
 
-> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch copy of a real series (*Skulduggery Pleasant*: *Scepter of the Ancients* as Book 1, *Playing with Fire* as Book 2, legacy keys with no `voiceUuid` on the characters used), with the real Qwen sidecar, on `main` at 8fb8c684. Every step was snapshotted: each `cast.json` row, plus the size, mtime and sha1 of every `voices/qwen/` file on the character's keys. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-a120.log`.
+> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch copy of a real series (*Skulduggery Pleasant*: *Scepter of the Ancients* as Book 1, *Playing with Fire* as Book 2, legacy keys with no `voiceUuid` on the characters used), with the real Qwen sidecar, on `main` at 8fb8c684. Every step was snapshotted: each `cast.json` row, plus the size, mtime and sha1 of every `voices/qwen/` file on the character's keys. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-evidence\wt-onbox115-a120.log`.
 >
 > - **Passed:**
 >   - **3.** Design; Design and compare then promote; Design and compare then Cancel; and an `angry` variant. Only Book 2's `qwen-<new>` files changed, Book 1's `qwen-bliss*` stayed byte-identical throughout, and no staging file was left.
@@ -7723,7 +7723,7 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 
 *Needs:* no GPU; a real workspace (a copied book folder is enough) and a running server. *Cost:* ~10 minutes. *Criteria:* the bullets above; plan [`288-book-op-lock.md`](../features/288-book-op-lock.md), "Repair of existing duplicate bookIds (#3713)". Clears when each bullet is recorded.
 
-> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch workspace. The twin `A Lost Art twin` is a copy of a real rendered book, *The Lost Art of World Domination*, without its audio, and it sorts first. The server was `main` at 8fb8c684. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-e116.log`.
+> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch workspace. The twin `A Lost Art twin` is a copy of a real rendered book, *The Lost Art of World Domination*, without its audio, and it sorts first. The server was `main` at 8fb8c684. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-evidence\wt-onbox115-e116.log`.
 >
 > - **Passed:**
 >   - **Which twin keeps the id.** The original, which has the work, kept the id although its folder sorts later.
