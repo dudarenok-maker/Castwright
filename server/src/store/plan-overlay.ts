@@ -252,6 +252,11 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
   ledger: RunAddedLedger;
   currentBookId?: string;
   mode: 'snapshot' | 'persist';
+  /** Ids ANOTHER job's ledger knows as run rows (the subset job's view of the main
+      run's `addedRows`, R2). They count as run rows for the identity/collision and
+      "gone, never re-added" decisions only; drops and fingerprint bookkeeping
+      stay on `ledger` (the subset never deletes by `addedRows`, invariant 6). */
+  knownRunIds?: ReadonlySet<string>;
 }): {
   characters: Array<C | PriorRow>;
   ledger: RunAddedLedger;
@@ -262,6 +267,7 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
   carriedForward: Array<{ id: string; name?: string }>;
 } {
   const { current, roster, plan, resolve, historyStatus, currentBookId, mode } = input;
+  const isRunRow = (id: string): boolean => !!input.ledger[id] || !!input.knownRunIds?.has(id);
   const ledger: RunAddedLedger = { ...input.ledger };
   const currentById = new Map(current.map((r) => [r.id, r]));
   const deletedTargets: string[] = [];
@@ -294,18 +300,18 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
       }
       target = t;
     } else if (currentById.has(c.id)) {
-      if (!ledger[c.id]) {
+      if (!isRunRow(c.id)) {
         if (!collisions.includes(c.id)) collisions.push(c.id);
         continue;
       }
       target = c.id;
-    } else if (ledger[c.id]) {
+    } else if (isRunRow(c.id)) {
       // Added by this run, since gone: merged away resolves to its survivor,
       // otherwise it stays gone and is never re-added. A run-owned entry becomes
       // added-once so clearing the ledger can never let a later run re-add it.
       const t = resolve(c.id);
       if (t === null || t === c.id || !currentById.has(t)) {
-        if (ledger[c.id].state === 'run-owned') ledger[c.id] = { state: 'added-once' };
+        if (ledger[c.id]?.state === 'run-owned') ledger[c.id] = { state: 'added-once' };
         gone(c.id);
         continue;
       }

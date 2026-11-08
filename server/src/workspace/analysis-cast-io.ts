@@ -212,12 +212,16 @@ function remintCollisions<C extends { id: string }>(a: {
   roster: ReadonlyArray<C>;
   current: Rows;
   ledger: RunAddedLedger;
+  /** The other job's ledger (R2): its keys are run rows, not strangers. */
+  mainLedger?: RunAddedLedger;
   history: MatchHistory;
 }): { plan: MatchPlan; roster: C[]; idMap: Record<string, string> } {
   const live = new Set(a.current.map((r) => r.id));
   const colliding = new Map<string, string>(); // live new id -> a raw id to mint from
   for (const d of Object.values(a.plan.decisions)) {
-    if (d.kind === 'new' && live.has(d.id) && !a.ledger[d.id] && !colliding.has(d.id)) colliding.set(d.id, d.rawId);
+    if (d.kind === 'new' && live.has(d.id) && !a.ledger[d.id] && !a.mainLedger?.[d.id] && !colliding.has(d.id)) {
+      colliding.set(d.id, d.rawId);
+    }
   }
   if (colliding.size === 0) return { plan: a.plan, roster: [...a.roster], idMap: {} };
   const taken = buildReservedIds({ prior: a.current, history: a.history, plan: a.plan });
@@ -340,7 +344,14 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
     const current = await readCurrentCast(a.bookDir);
     const historyRead = await loadCastIdHistoryWithStatus(a.bookDir);
     const history = toMatchHistory(historyRead);
-    const re = remintCollisions({ plan: a.plan, roster: a.roster, current, ledger: a.ledger, history });
+    const re = remintCollisions({
+      plan: a.plan,
+      roster: a.roster,
+      current,
+      ledger: a.ledger,
+      mainLedger: a.mainLedger,
+      history,
+    });
     const ov = overlayPlanOntoCast({
       current,
       roster: re.roster,
@@ -348,6 +359,7 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
       resolve: makeResolve(current, historyRead),
       historyStatus: history.status,
       ledger: a.ledger,
+      knownRunIds: new Set(Object.keys(a.mainLedger ?? {})),
       currentBookId: a.bookId,
       mode: 'snapshot',
     });
@@ -434,7 +446,14 @@ export async function persistPlannedCast(a: {
     const history = toMatchHistory(historyRead);
     const resolve = makeResolve(current, historyRead);
 
-    const re = remintCollisions({ plan: a.plan, roster: a.roster, current, ledger: a.ledger, history });
+    const re = remintCollisions({
+      plan: a.plan,
+      roster: a.roster,
+      current,
+      ledger: a.ledger,
+      mainLedger: a.mainLedger,
+      history,
+    });
     const covered = new Set<string>();
     for (const [raw, d] of Object.entries(re.plan.decisions)) {
       covered.add(raw);
@@ -460,17 +479,26 @@ export async function persistPlannedCast(a: {
       });
     }
 
-    const applied = applyMatchPlan(re.roster, plan, current);
+    /* Apply the plan ONLY to the rows `extendPlan` just planned. The covered rows
+       are already in plan-applied ids, and re-applying the whole plan to them is
+       wrong: a joined row's id is a PRIOR id that can also be the raw key of a
+       different `new` decision, which would collapse the two rows. */
+    const addedDecisions = Object.fromEntries(
+      Object.entries(plan.decisions).filter(([raw]) => !Object.hasOwn(re.plan.decisions, raw)),
+    );
+    const applied = applyMatchPlan(uncovered, { ...plan, decisions: addedDecisions }, current);
+    const finalRoster = [...re.roster.filter((c) => covered.has(c.id)), ...applied.characters];
     const idMap: Record<string, string> = { ...re.idMap, ...applied.idMap };
     let sentences = remapSentenceIds(remapSentenceIds(a.sentences, re.idMap), applied.idMap);
 
     const ov = overlayPlanOntoCast({
       current,
-      roster: applied.characters,
+      roster: finalRoster,
       plan,
       resolve,
       historyStatus: history.status,
       ledger: a.ledger,
+      knownRunIds: new Set(Object.keys(a.mainLedger ?? {})),
       currentBookId: a.bookId,
       mode: 'persist',
     });

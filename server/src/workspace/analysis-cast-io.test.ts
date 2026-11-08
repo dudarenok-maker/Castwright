@@ -603,3 +603,92 @@ describe('persistPlannedCast', () => {
     expect(out.mainLedger?.alice).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(readCast()[0]) });
   });
 });
+
+describe('fix round 1 (#4031 Task 8 review)', () => {
+  const persistArgs = (over: Partial<Parameters<typeof persistPlannedCast>[0]> = {}) => ({
+    bookDir,
+    bookId: BOOK_ID,
+    plan: planOf(),
+    roster: roster(),
+    sentences: sentences(),
+    ledger: {} as RunAddedLedger,
+    runSuggestions: [] as StoredSuggestion[],
+    runAddedPairs: [] as Array<[string, string]>,
+    driftRefused: false,
+    ...over,
+  });
+
+  it('C1: a persist over a plan-applied roster never re-applies the plan (a joined prior id that is also a new row\'s raw key)', async () => {
+    // fresh `wren:"Bob"` -> new `wren-n1`; fresh `w2:"Wren"` -> join `wren`.
+    writeCast([row('wren', 'Wren', { lines: 5 }), row('bobby', 'Bob')]);
+    const plan = planOf(
+      { kind: 'new', rawId: 'wren', id: 'wren-n1', minted: true, suggest: ['bobby', 'wren'], inheritedDeclines: [] },
+      join('w2', 'wren', 'name'),
+    );
+    const out = await persistPlannedCast(
+      persistArgs({
+        plan,
+        roster: roster(row('wren-n1', 'Bob'), row('wren', 'Wren')),
+        sentences: sentences('wren-n1', 'wren'),
+      }),
+    );
+    expect(out.sentences.map((s) => s.characterId)).toEqual(['wren-n1', 'wren']);
+    const cast = readCast();
+    expect(cast.find((c) => c.id === 'wren')).toMatchObject({ name: 'Wren', lines: 1 });
+    expect(cast.find((c) => c.id === 'wren-n1')).toMatchObject({ name: 'Bob', lines: 1 });
+    expect(out.idMap).toEqual({});
+  });
+
+  describe('R2: the subset job honours the main run\'s ledger', () => {
+    const dinaRow = row('dina', 'Dina');
+    const mainLedgerFor = (r: Row): RunAddedLedger => ({ dina: { state: 'run-owned', fp: userOwnedFingerprint(r) } });
+
+    it('a snapshot does not re-mint a row the main run added, and refreshes its mainLedger entry', async () => {
+      writeCast([row('alice', 'Alice'), dinaRow]);
+      const out = await writePlanSnapshot({
+        bookDir,
+        bookId: BOOK_ID,
+        roster: roster(row('alice', 'Alice'), row('dina', 'Dina', { aliases: ['D'] })),
+        plan: planOf(join('alice', 'alice'), fresh('dina')),
+        ledger: {},
+        runSuggestions: [],
+        mainLedger: mainLedgerFor(dinaRow),
+      });
+      expect(out.idMap).toEqual({});
+      expect(ids(readCast())).toEqual(['alice', 'dina']);
+      expect(readCast()[1].aliases).toEqual(['D']);
+      expect(out.mainLedger?.dina).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(readCast()[1]) });
+    });
+
+    it('a snapshot never re-adds a main-run row the user deleted (added-once)', async () => {
+      writeCast([row('alice', 'Alice')]);
+      const out = await writePlanSnapshot({
+        bookDir,
+        bookId: BOOK_ID,
+        roster: roster(row('alice', 'Alice'), dinaRow),
+        plan: planOf(join('alice', 'alice'), fresh('dina')),
+        ledger: {},
+        runSuggestions: [],
+        mainLedger: { dina: { state: 'added-once' } },
+      });
+      expect(ids(readCast())).toEqual(['alice']);
+      expect(out.idMap).toEqual({});
+    });
+
+    it('a persist does not re-mint a main-run row either, and keeps its own drops to its own ledger', async () => {
+      writeCast([row('alice', 'Alice'), dinaRow]);
+      const out = await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('alice', 'alice'), fresh('dina')),
+          roster: roster(row('alice', 'Alice'), row('dina', 'Dina', { aliases: ['D'] })),
+          sentences: sentences('alice', 'dina'),
+          mainLedger: mainLedgerFor(dinaRow),
+        }),
+      );
+      expect(ids(readCast())).toEqual(['alice', 'dina']);
+      expect(out.sentences.map((s) => s.characterId)).toEqual(['alice', 'dina']);
+      expect(out.mainLedger?.dina).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(readCast()[1]) });
+      expect(out.droppedRunAdded).toEqual([]);
+    });
+  });
+});

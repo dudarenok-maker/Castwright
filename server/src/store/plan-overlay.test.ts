@@ -36,11 +36,13 @@ type Row = { id: string; name: string } & Record<string, unknown>;
 const overlay = (o: {
   current: PriorRow[]; roster: Row[]; plan: MatchPlan; ledger?: RunAddedLedger;
   resolve?: (id: string) => string | null; historyStatus?: 'ok' | 'absent' | 'degraded'; mode?: 'snapshot' | 'persist';
+  knownRunIds?: string[];
 }) =>
   overlayPlanOntoCast({
     current: o.current, roster: applyMatchPlan(o.roster, o.plan, o.current).characters, plan: o.plan,
     resolve: o.resolve ?? same,
     historyStatus: o.historyStatus ?? 'ok', ledger: o.ledger ?? {}, currentBookId: BOOK, mode: o.mode ?? 'snapshot',
+    knownRunIds: new Set(o.knownRunIds ?? []),
   });
 
 describe('userOwnedFingerprint', () => {
@@ -315,6 +317,25 @@ describe('overlayPlanOntoCast', () => {
     const r = overlay({ current, plan: planOf(nw('wren', 'wren')), roster: [{ id: 'wren', name: 'Other Wren', lines: 1 }] });
     expect(r.collisions).toEqual(['wren']);
     expect(r.characters).toEqual(current);
+  });
+
+  it('R2: a new id live on disk that another job ledger knows is overlaid, not a collision', () => {
+    const current: PriorRow[] = [{ id: 'dina', name: 'Dina' }];
+    const r = overlay({
+      current, plan: planOf(nw('dina')), roster: [{ id: 'dina', name: 'Dina', lines: 3 }], knownRunIds: ['dina'],
+    });
+    expect(r.collisions).toEqual([]);
+    expect(r.characters).toEqual([expect.objectContaining({ id: 'dina', lines: 3 })]);
+    expect(r.ledger).toEqual({});
+  });
+
+  it('R2: a known run row absent from disk is gone, never re-added', () => {
+    const r = overlay({
+      current: [{ id: 'a', name: 'A' }], plan: planOf(nw('dina')), roster: [{ id: 'dina', name: 'Dina', lines: 3 }],
+      knownRunIds: ['dina'],
+    });
+    expect(r.characters.map((c) => c.id)).toEqual(['a']);
+    expect(r.deletedTargets).toEqual(['dina']);
   });
 
   it('F3: a new row persists only cross-book inherited declines', () => {
