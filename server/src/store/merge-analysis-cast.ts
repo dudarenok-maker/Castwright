@@ -759,14 +759,17 @@ export interface DedupeHealOpts {
   openSuggestions: ReadonlyArray<StoredSuggestion>;
   notSamePerson: ReadonlyArray<NotSamePersonRecord>;
   skipIds: ReadonlySet<string>;
+  /** The suggestions could not be read: no group may be healed this run. */
+  healDisabled?: boolean;
 }
 const NO_HEAL_OPTS: DedupeHealOpts = { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
 
-/** True when two members of the group share a dismissal record. */
+/** True when two members of the group share a dismissal record (the set holds
+    both orders of every record). */
 function groupHasDismissal(group: ReadonlyArray<CastRecord>, dismissed: ReadonlySet<string>): boolean {
   for (const x of group) {
     for (const y of group) {
-      if (x.id < y.id && dismissed.has(`${x.id}\u0000${y.id}`)) return true;
+      if (x !== y && dismissed.has(`${x.id}\u0000${y.id}`)) return true;
     }
   }
   return false;
@@ -789,7 +792,8 @@ export function dedupePriorCastByName<T extends CastRecord>(
   dropped: Array<{ id: string; name?: string; voiceState?: string }>;
   retirements: Retirement[];
 } {
-  if (priorCast.length < 2) return { cast: [...priorCast], dropped: [], retirements: [] };
+  if (priorCast.length < 2 || opts.healDisabled)
+    return { cast: [...priorCast], dropped: [], retirements: [] };
 
   const nameKeyOf = (c: CastRecord): string =>
     typeof c.name === 'string' ? normaliseNameKey(c.name) : '';
@@ -815,7 +819,11 @@ export function dedupePriorCastByName<T extends CastRecord>(
   for (const s of opts.openSuggestions) {
     for (const id of [s.sourceId, s.targetId, s.a, s.b]) suggested.add(id);
   }
-  const dismissed = new Set(opts.notSamePerson.map((r) => `${r.a}\u0000${r.b}`));
+  // Either order: the store writes `a < b`, but a hand-edited or older record
+  // must not silently stop protecting its pair.
+  const dismissed = new Set(
+    opts.notSamePerson.flatMap((r) => [`${r.a}\u0000${r.b}`, `${r.b}\u0000${r.a}`]),
+  );
 
   for (const [key, group] of groups) {
     if (

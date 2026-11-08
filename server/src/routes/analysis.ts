@@ -399,27 +399,6 @@ export async function recordRetirements(
    Exported only so analysis-reject-edge-reconcile.test.ts can drive it
    without standing up a full analysis run. */
 
-/* #4031 A11 — what the run-start identical-name heal must not settle: the
-   book's open merge suggestions and its "not the same person" dismissals. Read
-   lock-free next to the lock-free prior read the heal operates on (the heal is an
-   in-memory pass; nothing here writes). A degraded history read yields no
-   dismissals ("undetermined", not evidence) rather than refusing every heal.
-   `skipIds` is empty until the run ledger lands (Task 15). */
-async function loadHealOpts(
-  bookDir: string | undefined,
-): Promise<Parameters<typeof dedupePriorCastByName>[2]> {
-  if (!bookDir) return { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
-  const [openSuggestions, history] = await Promise.all([
-    loadStoredSuggestions(bookDir),
-    loadCastIdHistoryWithStatus(bookDir),
-  ]);
-  return {
-    openSuggestions,
-    notSamePerson: toMatchHistory(history).notSamePerson,
-    skipIds: new Set(),
-  };
-}
-
 /* #2214/#2201 — shared user-facing wording for "cast-id-history.json could
    not be read, nothing changed" so it reads identically no matter which of
    the three call sites emits it: this function's own degraded-read branch
@@ -445,6 +424,37 @@ export function logIfDegradedCastIdHistory(
   if (err instanceof CastIdHistoryUnreadableError) {
     log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
   }
+}
+
+/* #4031 A11 — what the run-start identical-name heal must not settle: the
+   book's open merge suggestions and its "not the same person" dismissals. Read
+   lock-free next to the lock-free prior read the heal operates on (the heal is an
+   in-memory pass; nothing here writes). A degraded history read yields no
+   dismissals ("undetermined", not evidence) rather than refusing every heal.
+   An unreadable suggestions file is different: a heal must never merge across a
+   decision it cannot read, so the heal is switched off for this run (logged
+   server-side only — the error text can carry the workspace path) and the run
+   carries on. `skipIds` is empty until the run ledger lands (Task 15).
+   Exported only so analysis-heal-opts.test.ts can drive it. */
+export async function loadHealOpts(
+  bookDir: string | undefined,
+): Promise<Parameters<typeof dedupePriorCastByName>[2]> {
+  if (!bookDir) return { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
+  let openSuggestions: StoredSuggestion[];
+  try {
+    openSuggestions = await loadStoredSuggestions(bookDir);
+  } catch (err) {
+    console.warn(
+      `[analysis] run-start name heal skipped — cast-merge-suggestions.json could not be read: ${(err as Error)?.message ?? err}`,
+    );
+    return { openSuggestions: [], notSamePerson: [], skipIds: new Set(), healDisabled: true };
+  }
+  const history = await loadCastIdHistoryWithStatus(bookDir);
+  return {
+    openSuggestions,
+    notSamePerson: toMatchHistory(history).notSamePerson,
+    skipIds: new Set(),
+  };
 }
 
 /* #4031 Task 3 — convert the dedup pass's `MergeSuggestion[]` to the durable

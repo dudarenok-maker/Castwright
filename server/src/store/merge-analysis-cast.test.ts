@@ -1786,6 +1786,24 @@ describe('dedupePriorCastByName — suggestions, dismissals and the run ledger (
     expect(retirements).toEqual([]);
   });
 
+  it('A11: a dismissal record is honoured in either order (unsorted record)', () => {
+    const { cast } = dedupePriorCastByName(pair(), undefined, {
+      ...none,
+      notSamePerson: [{ a: 'антон', b: 'anton', at: '2026-01-01T00:00:00.000Z' }],
+    });
+    expect(cast).toHaveLength(2);
+  });
+
+  it('A11: healDisabled returns the prior unchanged', () => {
+    const { cast, dropped, retirements } = dedupePriorCastByName(pair(), undefined, {
+      ...none,
+      healDisabled: true,
+    });
+    expect(cast).toHaveLength(2);
+    expect(dropped).toEqual([]);
+    expect(retirements).toEqual([]);
+  });
+
   it('A11: no heal when either member has an open suggestion, even to a third row', () => {
     const prior: C[] = [...pair(), { id: 'third', name: 'Другой', voiceState: 'tuned' }];
     for (const member of ['anton', 'антон']) {
