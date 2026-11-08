@@ -2040,8 +2040,11 @@ qwenVoiceRouter.post(
       const seriesInfo = peeked.state?.isStandalone === true ? null : await findAuthorSeriesForBookId(bookId);
       const row = (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId);
       const shareIds = seriesInfo && row?.voiceUuid && (await isOrdinarySeriesVoice(row)) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id, seriesInfo ?? undefined) : [];
-      /* #4040 — the books with a row on this key (a redesign resets their variants) */
-      const resetIds = row ? await storageKeyHolderBookIds(peeked.bookDir, qwenStorageKey(row, characterId)) : [];
+      /* #4040 — the books with a row on this key (a redesign resets their variants);
+         none when no base exists there yet (a first design replaces nothing, as in
+         the landing). */
+      const resetKey = row ? qwenStorageKey(row, characterId) : undefined;
+      const resetIds = resetKey && (await exists(qwenVoicePtPath(resetKey))) ? await storageKeyHolderBookIds(peeked.bookDir, resetKey) : [];
       const lockIds = [...new Set([...shareIds, ...resetIds])];
       let out: Awaited<ReturnType<typeof promoteIn>> | typeof BOOK_GONE = BOOK_GONE;
       if (lockIds.length) {

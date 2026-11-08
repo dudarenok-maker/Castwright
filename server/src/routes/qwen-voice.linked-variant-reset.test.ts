@@ -289,6 +289,33 @@ describe('#4040 — a redesign resets the emotion variants of every linked row',
     expect(hasVariants(B)).toBe(true);
   });
 
+  it("P4b: a promote that writes the key's FIRST .pt does not scan the library — a linked book whose book-op is held does not delay it", async () => {
+    seedFiles(false);
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1')]);
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    let release!: () => void;
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withBookOp(ids[B.title], async () => {
+      acquired();
+      await new Promise<void>((r) => (release = r));
+    });
+    await got;
+    try {
+      const preview = await design(A);
+      expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+      const outcome = await Promise.race([
+        promote(A, preview.body.voiceId),
+        new Promise<'blocked'>((r) => setTimeout(() => r('blocked'), 2500)),
+      ]);
+      expect(outcome, "the first-design promote waited on a linked book's operation").not.toBe('blocked');
+      expect((outcome as { status: number }).status).toBe(200);
+    } finally {
+      release();
+      await held;
+    }
+  });
+
   it('P5: a standalone redesign resets its own rows AND a series book on the same key; a book on another key is untouched', async () => {
     seedFiles(true);
     writeBook(SOLO, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1')]);
