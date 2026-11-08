@@ -642,6 +642,44 @@ describe('RebaselineModal — the local mirror follows the LOADED book, not the 
     store.dispatch(castSlice.actions.setCharacters([char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)]));
   };
 
+  it('mirrors the generated persona into the loaded book at design time when no book is on screen', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-2" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    /* Before Approve: only designOne's own mirror can have set it. */
+    expect(store.getState().cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBe('persona for marlow');
+  });
+
+  it('mirrors onto the live row, so an edit landing during the series write survives', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => {
+      const live = store.getState().cast.characters.find((c) => c.id === characterId)!;
+      store.dispatch(castSlice.actions.updateCharacter({ ...live, attributes: ['edited-mid-approve'] }));
+      return { canonicalVoiceId: `v_${characterId}`, updated: [], failed: [] };
+    });
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.attributes).toEqual(['edited-mid-approve']);
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+  });
+
   it('does not write the approve mirror into a different book loaded mid-approve', async () => {
     targetCast();
     const store = makeStore(
