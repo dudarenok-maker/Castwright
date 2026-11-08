@@ -495,6 +495,43 @@ describe('#4040 — an emotion variant rendered against a replaced base is disca
     expect(staged()).toEqual([]);
   });
 
+  it("E4: a stale render must not overwrite the variant file a fresh redesign wrote meanwhile (landing guard)", async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    const entered = holdNextDesign();
+    const designing = directDesign(B, { emotion: 'angry' }).then((r) => r); // renders against OLD-BASE, held
+    await entered;
+    await redesign(A); // replaces the base
+    const fresh = await directDesign(A, { emotion: 'angry' }); // A's angry, from the NEW base
+    expect(fresh.status, JSON.stringify(fresh.body)).toBe(200);
+    const freshBytes = readFileSync(pt(VARIANT)).toString();
+    expect(freshBytes).toMatch(/^DESIGN-/);
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(500);
+    expect(d.body.error).toBe(RETRY);
+    expect(readFileSync(pt(VARIANT)).toString(), "the stale render overwrote A's variant file").toBe(freshBytes);
+    expect(staged()).toEqual([]);
+  });
+
+  it('E5: a standalone book — the base is replaced between the landing and the slot; the retry error, no slot', async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    writeBook(SOLO, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    writeBook(A, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    const entered = holdNextEvict();
+    const designing = directDesign(SOLO, { emotion: 'angry' }).then((r) => r);
+    await entered; // the variant file has landed; SOLO's slot is not recorded yet
+    await redesign(A);
+    expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+    evictGate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(500);
+    expect(d.body.error).toBe(RETRY);
+    expect(JSON.stringify(rowOf(SOLO).overrideTtsVoices), 'SOLO carries the old-base variant').not.toContain('angry');
+  });
+
   it('E2 (control): an emotion design with no base write in between lands on every linked row', async () => {
     seedFiles(true);
     rmSync(pt(VARIANT), { force: true });
