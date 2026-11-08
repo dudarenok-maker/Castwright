@@ -1531,7 +1531,19 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
          mint reads the base `.pt` on disk (its cached copy is checked against
          the file), so a variant that records the new rev was made from the new
          base, even before the redesign's evictSidecarVoices runs or if it fails. */
-      const variantBaseRev = p.emotion ? await readBaseRev(baseVoiceId) : undefined;
+      let variantBaseRev: string | undefined;
+      if (p.emotion) {
+        try {
+          variantBaseRev = await readBaseRev(baseVoiceId);
+        } catch (err) {
+          /* A node fs error (EBUSY) is curated by the route's own fs branch; a
+             torn / unparseable json is not one, and its V8 parse message must not
+             reach the body (nor be mapped as a sidecar failure): a fixed sentence. */
+          if (isFsError(err)) throw err;
+          console.error('[qwen-voice] base json unreadable for a variant design', err);
+          throw new RetryableForkError('The base voice could not be read right now; try again.');
+        }
+      }
       const rendered = await renderStaged();
       /* Before the uuid step: a key some other writer changed during the render
          (a link) would send the mint across the wrong link. */

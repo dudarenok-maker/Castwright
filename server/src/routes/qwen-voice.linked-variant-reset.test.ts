@@ -409,6 +409,17 @@ describe('#4040 — a linked voice’s base redesign makes the old emotion varia
     expect(fetchMock.mock.calls.some(([, init]) => String(init?.body ?? '').includes('variantVoiceId'))).toBe(false);
   });
 
+  it('a torn base json fails the variant design with a curated retryable error, never a raw parse message (#4040)', async () => {
+    writeFileSync(json('qwen-u_shared'), '{"rev":');
+    const variantBefore = readFileSync(json('qwen-u_shared__angry'), 'utf8');
+    const res = await design('Book B', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(500);
+    expect(res.body.error).toMatch(/try again/i);
+    expect(JSON.stringify(res.body), 'a raw parse message leaked').not.toMatch(/JSON|Unexpected|position|qwen-u_shared/);
+    expect(readFileSync(json('qwen-u_shared__angry'), 'utf8'), 'the variant json was rewritten').toBe(variantBefore);
+    expect(fetchMock.mock.calls.some(([, init]) => String(init?.body ?? '').includes('variantVoiceId'))).toBe(false);
+  });
+
   it('a base json unreadable once, then readable, still records the base rev (#4040)', async () => {
     writeFileSync(json('qwen-u_shared'), JSON.stringify({ voiceId: 'qwen-u_shared', rev: 'r1' }));
     failReadIn.text = 'qwen-u_shared.json';
