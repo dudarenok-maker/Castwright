@@ -198,6 +198,57 @@ describe('#4040 — a linked voice’s base redesign resets every linked row’s
     expect(variantsOf('Book D')?.angry).toBeDefined();
   });
 
+  it('a direct non-preview base design on A (design-voice route) clears A, B and C; D keeps its own', async () => {
+    const res = await request(app)
+      .post(`/api/books/${ids['Book A']}/cast/wren/design-voice`)
+      .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt('qwen-u_shared')).toString(), 'the base was replaced').toBe('DESIGNED');
+    for (const t of ['Book A', 'Book B', 'Book C'] as const) {
+      expect(variantsOf(t), `${t} kept stale variants`).toBeUndefined();
+    }
+    expect(variantsOf('Book D')?.angry?.name).toBe('qwen-u_sep__angry');
+    expect(existsSync(pt('qwen-u_shared__angry'))).toBe(true);
+  });
+
+  it('the bulk/SSE landing (persistSlot) on an already-designed key clears every linked row', async () => {
+    const { designQwenVoiceForCharacter } = await import('./qwen-voice.js');
+    const cast = JSON.parse(readFileSync(castPath('Book A'), 'utf8'));
+    await designQwenVoiceForCharacter({
+      bookId: ids['Book A'],
+      bookDir: bookDir('Book A'),
+      seriesFilter: { author: AUTHOR, series: SERIES },
+      character: cast.characters[0],
+      characterId: 'wren',
+      persona: 'a bright voice',
+      sampleVoiceId: 'v_wren',
+      modelKey: QWEN_KEY,
+      language: 'english',
+      persistSlot: true,
+    });
+    for (const t of ['Book A', 'Book B', 'Book C'] as const) {
+      expect(variantsOf(t), `${t} kept stale variants`).toBeUndefined();
+    }
+    expect(variantsOf('Book D')?.angry).toBeDefined();
+  });
+
+  it('a first-ever design (no file at the key yet) clears nothing', async () => {
+    rmSync(pt('qwen-u_shared'), { force: true });
+    const res = await request(app)
+      .post(`/api/books/${ids['Book A']}/cast/wren/design-voice`)
+      .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    for (const t of TITLES) expect(variantsOf(t)?.angry, `${t} lost its variant`).toBeDefined();
+  });
+
+  it('a preview design clears nothing', async () => {
+    const res = await request(app)
+      .post(`/api/books/${ids['Book A']}/cast/wren/design-voice`)
+      .send({ sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, preview: true });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    for (const t of TITLES) expect(variantsOf(t)?.angry, `${t} lost its variant`).toBeDefined();
+  });
+
   it('redesigning an emotion variant (not the base) clears nothing', async () => {
     const res = await request(app)
       .post(`/api/books/${ids['Book A']}/cast/wren/design-voice`)

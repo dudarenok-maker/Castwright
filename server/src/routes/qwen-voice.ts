@@ -71,6 +71,7 @@ import {
   mustSeparateOnDecline,
   mustSeparateOnDesign,
   type LinkFollower,
+  type VoiceHolds,
   readBookId,
   RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
@@ -1375,6 +1376,9 @@ async function landStagedDesign(
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     const sharing = await firstDesignOf(row); // decided before the move creates the file
+    /* #4040 — a base design that replaces an existing file invalidates every emotion
+       variant designed against it (decided before the move, like `sharing`). */
+    const redesign = !p.emotion && !p.preview && (await exists(qwenVoicePtPath(base)));
     await whileSaving(voiceId, () => moveStaged(staging, voiceId)); // P11-2
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
@@ -1386,15 +1390,26 @@ async function landStagedDesign(
       if (slotted) await writeCast(p.bookDir, { ...cast, characters });
     }
     if (sharing) await shareFirstDesign(p, sharing, row as MarkedCharacter, voiceId, others, writeCast);
+    if (redesign) await resetLinkedVariants([p.bookDir, ...others.map((b) => b.bookDir)], base, writeCast);
     const landedAudition = audition(voiceId);
     await rm(voiceSampleFilePath(landedAudition), { force: true });
     await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
     return { voiceId, url: voiceSamplePublicUrl(landedAudition), voiceUuid: row.voiceUuid ?? undefined };
   };
-  const planned = await firstDesignOf(
-    (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
-  );
-  const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
+  const plannedRow = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
+  const planned = await firstDesignOf(plannedRow);
+  const planShare = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
+  /* #4040 — a base redesign also locks every other book with a row on the voice that
+     has emotion variants to reset (a book with none needs no lock). Planned
+     lock-free; re-decided under the locks in `land`. */
+  const heldBy = plannedRow ? voiceHeldBy(plannedRow) : undefined;
+  const hasVariants = (y: Parameters<VoiceHolds>[0]): boolean =>
+    Object.keys((y.overrideTtsVoices?.qwen as { variants?: object } | undefined)?.variants ?? {}).length > 0;
+  const planReset =
+    plannedRow && heldBy && !p.emotion && !p.preview && (await exists(qwenVoicePtPath(qwenStorageKey(plannedRow, p.characterId))))
+      ? await voiceHolderBookIds(p.bookDir, (y) => heldBy(y) && hasVariants(y))
+      : [];
+  const shareIds = [...new Set([...planShare, ...planReset])];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
   if (shareIds.length) {
     out = await withBookOps([p.bookId, ...shareIds], async (books) => {

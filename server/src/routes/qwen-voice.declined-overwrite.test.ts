@@ -543,7 +543,7 @@ describe('pass 8', () => {
 });
 
 describe('pass 7', () => {
-  it('P7-A: a separated decliner whose chain grows a second hop keeps its uuid and variants; One is untouched', async () => {
+  it('P7-A: a separated decliner whose chain grows a second hop keeps its uuid (a base redesign resets the variants of Two and Four); One is untouched', async () => {
     reset();
     writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
     writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One'), ...slot('u_shared') }]);
@@ -558,7 +558,8 @@ describe('pass 7', () => {
     await designSafely('Book Two', { emotion: 'sad' });
     await designSafely('Book Two');
     expect(row('Book Two').voiceUuid).toBe(two);
-    expect(variantsOf('Book Two')).toEqual(['angry', 'sad']);
+    expect(variantsOf('Book Two')).toEqual([]); // #4040 — the last base redesign reset them
+    expect(variantsOf('Book Four')).toEqual([]); // ... on every row linked to the voice
     expect(row('Book Four').voiceUuid).toBe(two);
     expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
   });
@@ -743,12 +744,12 @@ describe('pass 10, P10-1 (owner decision: stop at the declined book)', () => {
     await designSafely('Book Two', { emotion: 'angry' });
     await designSafely('Book Two');
     expect(row('Book Two').voiceUuid).toBe(two); // never re-separated
-    expect(variantsOf('Book Two')).toEqual(['angry']);
+    expect(variantsOf('Book Two')).toEqual([]); // #4040 — the last base redesign reset them
     expect(raw('Book One'), "Book One's cast.json was rewritten").toEqual(oneCast);
     expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
   });
 
-  it("(b) Two <-> Three with One an unlinked holder: Don't reuse on Two (from Three) moves Two alone; Three's voice and cast are unchanged and Two keeps its variants", async () => {
+  it("(b) Two <-> Three with One an unlinked holder: Don't reuse on Two (from Three) moves Two alone; Three's voice and cast are unchanged and Two's base redesign resets its variants", async () => {
     reset();
     writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
     writeBook('Book Two', [{ ...baseRow, ...linkTo('Book Three'), ...slot('u_shared') }]);
@@ -763,7 +764,7 @@ describe('pass 10, P10-1 (owner decision: stop at the declined book)', () => {
     await designSafely('Book Two');
     await designSafely('Book Two');
     expect(row('Book Two').voiceUuid).toBe(two);
-    expect(variantsOf('Book Two')).toEqual(['angry']);
+    expect(variantsOf('Book Two')).toEqual([]); // #4040 — the last base redesign reset them
     expect(raw('Book Three'), "Book Three's cast.json was rewritten").toEqual(threeCast);
     expect(readFileSync(pt('qwen-u_shared'))).toEqual(ORIG);
   });
