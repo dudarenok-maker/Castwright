@@ -35,9 +35,9 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { readJson } from '../workspace/state-io.js';
 import {
+  ANALYSIS_CACHE_VERSION,
   clearAnalysisCache,
-  loadAnalysisCache,
-  saveAnalysisCache,
+  mutateAnalysisCache,
 } from './analysis-cache.js';
 
 interface EditsFile {
@@ -67,7 +67,6 @@ export async function rebuildCacheFromEdits(
     await clearAnalysisCache(manuscriptId);
     return;
   }
-  const prior = await loadAnalysisCache(manuscriptId);
   const chapters: Record<number, SentenceOutput[]> = {};
   for (const s of sentences) {
     (chapters[s.chapterId] ??= []).push(s);
@@ -75,19 +74,33 @@ export async function rebuildCacheFromEdits(
   for (const list of Object.values(chapters)) {
     list.sort((a, b) => a.id - b.id);
   }
-  if (mode === 'overlay') {
-    /* A chapter the edits carry has replaced its prior entry wholesale above, so
-       a sentence the user deleted (tombstoned) cannot come back. A prior chapter
-       the edits do not carry is kept only if it is `[]` or excluded; any other
-       is an intended removal (the user emptied it) and its key goes. */
-    const excluded = new Set(opts.excludedChapterIds ?? []);
-    for (const [key, prevSentences] of Object.entries(prior.chapters ?? {})) {
-      const id = Number(key);
-      if (Object.hasOwn(chapters, id)) continue;
-      if (prevSentences.length === 0 || excluded.has(id)) chapters[id] = prevSentences;
-    }
-  }
-  await saveAnalysisCache(manuscriptId, { ...prior, chapters });
+  /* One atomic op (#4031): the prior is read inside it, so a concurrent write
+     cannot be lost between a load and a save. A file this op creates is stamped
+     v2 (it holds cast-of-record ids only); a loaded cache keeps its own version. */
+  const excluded = new Set(opts.excludedChapterIds ?? []);
+  await mutateAnalysisCache(manuscriptId, {
+    chapters,
+    chaptersMode: mode === 'overlay' ? 'merge' : 'replace',
+    createIfAbsent: true,
+    versionIfCreated: ANALYSIS_CACHE_VERSION,
+    transform:
+      mode === 'overlay'
+        ? (cache) => {
+            /* A chapter the edits carry has replaced its prior entry wholesale, so
+               a sentence the user deleted (tombstoned) cannot come back. A prior
+               chapter the edits do not carry is kept only if it is `[]` or
+               excluded; any other is an intended removal (the user emptied it)
+               and its key goes. */
+            const kept: Record<number, SentenceOutput[]> = {};
+            for (const [key, list] of Object.entries(cache.chapters)) {
+              const id = Number(key);
+              if (Object.hasOwn(chapters, id) || list.length === 0 || excluded.has(id))
+                kept[id] = list;
+            }
+            return { ...cache, chapters: kept };
+          }
+        : undefined,
+  });
 }
 
 /** Rebuild the cache from manuscript-edits.json unless those edits predate the chapter list. */

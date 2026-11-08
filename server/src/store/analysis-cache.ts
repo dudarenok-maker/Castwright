@@ -11,7 +11,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { extractInlineEmotion } from '../handoff/emotion-from-tags.js';
-import { readJson, enqueuePathOp } from '../workspace/state-io.js';
+import type { LedgerEntry, MatchDecision, MatchPlan, RunAddedLedger } from './reanalysis-types.js';
+import { readJson, enqueuePathOp, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { jitteredDelayMs } from '../workspace/atomic-rename.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
@@ -107,7 +108,21 @@ export function normaliseFailureRecords(cache: AnalysisCache): void {
   }
 }
 
+/** Written by every cache the current code creates; anything else classifies `legacy`. */
+export const ANALYSIS_CACHE_VERSION = 2;
+
+export type AnalysisCacheClass =
+  'empty' | 'legacy' | 'current-pre0b' | 'current-unplanned' | 'current-planned';
+
 export interface AnalysisCache {
+  /** #4031 — absent on a cache written before the match plan existed. */
+  version?: number;
+  /** #4031 — the frozen fresh→prior decisions of the run in flight. */
+  matchPlan?: MatchPlan;
+  /** #4031 rule 11 — rows the run added to cast.json, with their last-write fingerprint. */
+  addedRows?: RunAddedLedger;
+  /** #4031 — suggestion pairs the run added, saved with each snapshot. */
+  runAddedPairs?: Array<[string, string]>;
   /** Phase 0a — raw per-chapter character output keyed by chapterId. The
       route replays these in chapter-id order through the merge to rebuild
       the running roster on resume when stage1 isn't yet present. */
@@ -163,6 +178,17 @@ export interface AnalysisCache {
   updatedAt?: string;
 }
 
+/** #4031 cache lifecycle. `legacy` is any non-empty cache whose version is not the current one. */
+export function classifyAnalysisCache(cache: AnalysisCache): AnalysisCacheClass {
+  const hasChapters = Object.keys(cache.chapters ?? {}).length > 0;
+  const hasCast = Object.keys(cache.chapterCast ?? {}).length > 0;
+  if (!cache.stage1 && !hasCast && !hasChapters && (cache.failedChapterIds ?? []).length === 0)
+    return 'empty';
+  if (cache.version !== ANALYSIS_CACHE_VERSION) return 'legacy';
+  if (!cache.stage1) return 'current-pre0b';
+  return cache.matchPlan ? 'current-planned' : 'current-unplanned';
+}
+
 /** plan 287 spec 2.2 — the one per-chapter "done" predicate: the chapter has a
     take (an own key, including `[]`, decision B) that is not pending. */
 export function hasCurrentTake(cache: AnalysisCache, chapterId: number): boolean {
@@ -206,7 +232,10 @@ export function cachePath(manuscriptId: string): string {
 }
 
 export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisCache> {
-  const cache = await readJson<AnalysisCache>(cachePath(manuscriptId));
+  return coerceLoadedCache(await readJson<AnalysisCache>(cachePath(manuscriptId)), manuscriptId);
+}
+
+function coerceLoadedCache(cache: AnalysisCache | null, manuscriptId: string): AnalysisCache {
   if (!cache) return { chapters: {} };
   /* Fail loud + contextful on a corrupt cache (a chapter entry that isn't an
      array) before any phase does work, instead of a context-free TypeError on
@@ -216,6 +245,10 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
      numeric ids. Coerce shape so callers can use cache.chapters[chapterId]
      directly. */
   const loaded: AnalysisCache = {
+    version: cache.version ?? undefined,
+    matchPlan: cache.matchPlan ?? undefined,
+    addedRows: cache.addedRows ?? undefined,
+    runAddedPairs: cache.runAddedPairs ?? undefined,
     chapterCast: cache.chapterCast ?? undefined,
     stage1: cache.stage1,
     chapters: cache.chapters ?? {},
@@ -237,16 +270,155 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
 /* #3427 — saves and clears for one manuscript run through the shared per-path
    op chain (`enqueuePathOp`, workspace/state-io.ts), so they land in call
    order. */
-export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
-  const path = cachePath(manuscriptId);
-  /* Built at call time; `writeJsonAtomicOrdered` then deep-snapshots it, so the
-     bytes written are fixed at call time however long the chain delays them. */
-  const payload = {
+function buildCachePayload(cache: AnalysisCache): AnalysisCache {
+  return {
     ...cache,
     chapters: seedEmotionsFromTags(cache.chapters ?? {}),
     updatedAt: new Date().toISOString(),
   };
-  await writeJsonAtomicOrdered(path, payload);
+}
+
+/* `version` is written exactly as given: a save never stamps it, so a loaded
+   legacy cache stays legacy (plan 291 Review Focus 1). */
+export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
+  const path = cachePath(manuscriptId);
+  /* Built at call time; `writeJsonAtomicOrdered` then deep-snapshots it, so the
+     bytes written are fixed at call time however long the chain delays them. */
+  await writeJsonAtomicOrdered(path, buildCachePayload(cache));
+}
+
+/** A patch applied atomically by `mutateAnalysisCache`. */
+export interface CachePatch {
+  chapters?: Record<number, SentenceOutput[]>;
+  /** Default `'merge'` (per chapter key); `'replace'` swaps the whole map. */
+  chaptersMode?: 'merge' | 'replace';
+  castDurations?: Record<number, number>;
+  stage2Durations?: Record<number, number>;
+  /** Merged per key into `matchPlan.decisions`. Needs a plan on disk or `matchPlan` in this patch. */
+  decisions?: Record<string, MatchDecision>;
+  /** Sets the plan header. A different `runToken` than the stored one starts the decisions over. */
+  matchPlan?: Omit<MatchPlan, 'decisions'>;
+  /** Merged per key into `addedRows`; `null` deletes the key. */
+  ledger?: Record<string, LedgerEntry | null>;
+  /** Unioned into `runAddedPairs`. */
+  runAddedPairs?: Array<[string, string]>;
+  /** Deletes `runAddedPairs` and every `run-owned` ledger entry; `added-once` entries stay (sticky user delete). */
+  clearLedger?: true;
+  stage1?: Stage1Output;
+  /** Written exactly as given. */
+  version?: number;
+  /** Without it an absent file is left absent and the op returns `null`. */
+  createIfAbsent?: true;
+  /** The version of a file this op creates (default `ANALYSIS_CACHE_VERSION`); ignored when the file exists. */
+  versionIfCreated?: number;
+  fields?: Partial<
+    Pick<
+      AnalysisCache,
+      | 'chapterCast'
+      | 'failedChapterIds'
+      | 'failedChapterErrors'
+      | 'pendingAttributionChapterIds'
+      | 'takesPersisted'
+      | 'confirmReached'
+      | 'castDurationsEngine'
+      | 'stage2DurationsEngine'
+    >
+  >;
+  /** Rewrites `characterId` in the chapter takes and the id in `chapterCast`. */
+  remapCharacterIds?: Record<string, string>;
+  /** Runs last, on the patched cache, inside the same op. */
+  transform?: (cache: AnalysisCache) => AnalysisCache;
+}
+
+/* Read-modify-write as ONE `enqueuePathOp` op. The queue is not re-entrant, so
+   the body must never call `saveAnalysisCache` / `writeJsonAtomicOrdered`
+   (both enqueue on this same path and would wait on themselves). */
+export async function mutateAnalysisCache(
+  manuscriptId: string,
+  patch: CachePatch,
+): Promise<AnalysisCache | null> {
+  const path = cachePath(manuscriptId);
+  let result: AnalysisCache | null = null;
+  await enqueuePathOp(path, async () => {
+    const existing = await readJson<AnalysisCache>(path);
+    if (!existing && !patch.createIfAbsent) return;
+    let cache = coerceLoadedCache(existing, manuscriptId);
+    if (!existing) cache.version = patch.versionIfCreated ?? ANALYSIS_CACHE_VERSION;
+    if (patch.version !== undefined) cache.version = patch.version;
+    if (patch.stage1) cache.stage1 = patch.stage1;
+    if (patch.chapters) {
+      cache.chapters =
+        patch.chaptersMode === 'replace'
+          ? { ...patch.chapters }
+          : { ...cache.chapters, ...patch.chapters };
+    }
+    if (patch.castDurations)
+      cache.castDurations = { ...cache.castDurations, ...patch.castDurations };
+    if (patch.stage2Durations)
+      cache.stage2Durations = { ...cache.stage2Durations, ...patch.stage2Durations };
+    if (patch.fields) Object.assign(cache, patch.fields);
+    if (patch.matchPlan) {
+      const keep =
+        cache.matchPlan?.runToken === patch.matchPlan.runToken ? cache.matchPlan.decisions : {};
+      cache.matchPlan = { ...patch.matchPlan, decisions: keep };
+    }
+    if (patch.decisions) {
+      if (!cache.matchPlan)
+        throw new Error('mutateAnalysisCache: decisions patched with no matchPlan');
+      cache.matchPlan = {
+        ...cache.matchPlan,
+        decisions: { ...cache.matchPlan.decisions, ...patch.decisions },
+      };
+    }
+    if (patch.clearLedger) {
+      delete cache.runAddedPairs;
+      cache.addedRows = Object.fromEntries(
+        Object.entries(cache.addedRows ?? {}).filter(([, e]) => e.state !== 'run-owned'),
+      );
+    }
+    if (patch.ledger) {
+      const rows = { ...cache.addedRows };
+      for (const [k, entry] of Object.entries(patch.ledger)) {
+        if (entry === null) delete rows[k];
+        else rows[k] = entry;
+      }
+      cache.addedRows = rows;
+    }
+    if (patch.runAddedPairs) {
+      const seen = new Set((cache.runAddedPairs ?? []).map(([a, b]) => `${a}\u0000${b}`));
+      const merged = [...(cache.runAddedPairs ?? [])];
+      for (const [a, b] of patch.runAddedPairs) {
+        if (!seen.has(`${a}\u0000${b}`)) {
+          seen.add(`${a}\u0000${b}`);
+          merged.push([a, b]);
+        }
+      }
+      cache.runAddedPairs = merged;
+    }
+    if (patch.remapCharacterIds) {
+      const map = patch.remapCharacterIds;
+      const to = (id: string) => map[id] ?? id;
+      cache.chapters = Object.fromEntries(
+        Object.entries(cache.chapters).map(([k, ss]) => [
+          k,
+          ss.map((s) => ({ ...s, characterId: to(s.characterId) })),
+        ]),
+      );
+      if (cache.chapterCast) {
+        cache.chapterCast = Object.fromEntries(
+          Object.entries(cache.chapterCast).map(([k, rows]) => [
+            k,
+            rows.map((r) => ({ ...r, id: to(r.id) })),
+          ]),
+        );
+      }
+    }
+    if (patch.transform) cache = patch.transform(cache);
+    const payload = buildCachePayload(cache);
+    await writeJsonAtomic(path, payload);
+    result = payload;
+  });
+  return result as AnalysisCache | null;
 }
 
 /* Discard any partial progress for a manuscript so the next analysis runs

@@ -215,6 +215,27 @@ describe('rebuildCacheFromEdits — overlay (plan 287 spec 2.2)', () => {
   });
 });
 
+describe('rebuildCacheFromEdits — cache version (#4031)', () => {
+  const edits = { sentences: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'x' }] };
+
+  it('Review Focus 1: rebuilding a loaded legacy cache keeps it legacy; a loaded v2 cache stays v2', async () => {
+    writeFileSync(editsPath, JSON.stringify(edits));
+    await saveAnalysisCache(manuscriptId, { chapters: { 1: [] } });
+    await rebuildCacheFromEdits(manuscriptId, editsPath);
+    expect((await loadAnalysisCache(manuscriptId)).version).toBeUndefined();
+
+    await saveAnalysisCache(manuscriptId, { chapters: { 1: [] }, version: 2 });
+    await rebuildCacheFromEdits(manuscriptId, editsPath);
+    expect((await loadAnalysisCache(manuscriptId)).version).toBe(2);
+  });
+
+  it('rebuilding with no prior cache file stamps version 2', async () => {
+    writeFileSync(editsPath, JSON.stringify(edits));
+    await rebuildCacheFromEdits(manuscriptId, editsPath);
+    expect((await loadAnalysisCache(manuscriptId)).version).toBe(2);
+  });
+});
+
 /* Plan 290 (#3837) — the stale-evidence marker gates the rebuild (M28). */
 describe('refreshCacheFromEdits', () => {
   const s = (id: number, chapterId: number, text: string) => ({ id, chapterId, characterId: 'narr', text });

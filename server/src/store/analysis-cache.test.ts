@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync, rmSync } from 'node:fs';
 import {
   cachePath,
   clearAnalysisCache,
   loadAnalysisCache,
+  mutateAnalysisCache,
   saveAnalysisCache,
   type AnalysisCache,
 } from './analysis-cache.js';
@@ -162,5 +164,217 @@ describe('loadAnalysisCache keeps the plan-287 completeness fields', () => {
     } finally {
       await clearAnalysisCache(id);
     }
+  });
+});
+
+/* #4031 / plan 291 Task 6 — the versioned cache and the atomic mutate op. */
+describe('versioned analysis cache (#4031)', () => {
+  const fresh = () => `m_v2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const stage1 = { characters: [], chapters: [] } as never;
+  const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A take.' }] as never;
+  const plan = { version: 1 as const, runToken: 'run-1', decisions: {} };
+  const dec = (rawId: string, priorId: string) =>
+    ({ kind: 'join', rawId, priorId, tier: 'id' }) as const;
+
+  async function withCache<T>(
+    seed: Partial<AnalysisCache> | null,
+    fn: (id: string) => Promise<T>,
+  ): Promise<T> {
+    const id = fresh();
+    if (seed) await saveAnalysisCache(id, { chapters: {}, ...seed });
+    try {
+      return await fn(id);
+    } finally {
+      await clearAnalysisCache(id);
+    }
+  }
+
+  it('loadAnalysisCache copies version, matchPlan, addedRows and runAddedPairs', async () => {
+    await withCache(
+      {
+        version: 2,
+        matchPlan: plan,
+        addedRows: { x: { state: 'added-once' } },
+        runAddedPairs: [['a', 'b']],
+      },
+      async (id) => {
+        const loaded = await loadAnalysisCache(id);
+        expect(loaded.version).toBe(2);
+        expect(loaded.matchPlan).toEqual(plan);
+        expect(loaded.addedRows).toEqual({ x: { state: 'added-once' } });
+        expect(loaded.runAddedPairs).toEqual([['a', 'b']]);
+      },
+    );
+  });
+
+  it('saveAnalysisCache writes version exactly as given', async () => {
+    await withCache({ version: 7 }, async (id) => {
+      expect((await loadAnalysisCache(id)).version).toBe(7);
+    });
+    await withCache({}, async (id) => {
+      expect((await loadAnalysisCache(id)).version).toBeUndefined();
+    });
+  });
+
+  describe('classifyAnalysisCache — one case per lifecycle row', () => {
+    const cases: Array<[string, Partial<AnalysisCache>, string]> = [
+      ['empty', {}, 'empty'],
+      ['empty even with a stray version', { version: 2 }, 'empty'],
+      ['legacy: not empty, version undefined', { chapters: { 1: take } }, 'legacy'],
+      ['legacy: version 1', { version: 1, stage1 }, 'legacy'],
+      ['legacy: a future version (R10)', { version: 3, stage1 }, 'legacy'],
+      ['current-pre0b', { version: 2, chapterCast: { 1: [] } }, 'current-pre0b'],
+      ['current-unplanned', { version: 2, stage1 }, 'current-unplanned'],
+      ['current-planned', { version: 2, stage1, matchPlan: plan }, 'current-planned'],
+      ['failedChapterIds alone is not empty', { failedChapterIds: [1] }, 'legacy'],
+    ];
+    it.each(cases)('%s', async (_n, seed, expected) => {
+      const { classifyAnalysisCache } = await import('./analysis-cache.js');
+      expect(classifyAnalysisCache({ chapters: {}, ...seed })).toBe(expected);
+    });
+  });
+
+  describe('mutateAnalysisCache', () => {
+    it('merges decisions per key', async () => {
+      await withCache({ version: 2, stage1 }, async (id) => {
+        await mutateAnalysisCache(id, {
+          matchPlan: { version: 1, runToken: 'r' },
+          decisions: { a: dec('a', 'p1') },
+        });
+        const out = await mutateAnalysisCache(id, { decisions: { b: dec('b', 'p2') } });
+        expect(Object.keys(out?.matchPlan?.decisions ?? {}).sort()).toEqual(['a', 'b']);
+        expect(
+          Object.keys((await loadAnalysisCache(id)).matchPlan?.decisions ?? {}).sort(),
+        ).toEqual(['a', 'b']);
+      });
+    });
+
+    it('applies chapters (merge/replace), durations, fields, stage1 and ledger deletes', async () => {
+      await withCache(
+        {
+          version: 2,
+          chapters: { 1: take, 2: take },
+          castDurations: { 1: 5 },
+          addedRows: { gone: { state: 'added-once' } },
+        },
+        async (id) => {
+          await mutateAnalysisCache(id, {
+            chapters: { 3: take },
+            castDurations: { 2: 6 },
+            fields: { failedChapterIds: [9] },
+            stage1,
+            ledger: { gone: null, kept: { state: 'run-owned', fp: 'f' } },
+          });
+          let c = await loadAnalysisCache(id);
+          expect(Object.keys(c.chapters).sort()).toEqual(['1', '2', '3']);
+          expect(c.castDurations).toEqual({ 1: 5, 2: 6 });
+          expect(c.failedChapterIds).toEqual([9]);
+          expect(c.stage1).toBeDefined();
+          expect(c.addedRows).toEqual({ kept: { state: 'run-owned', fp: 'f' } });
+          await mutateAnalysisCache(id, { chapters: { 7: take }, chaptersMode: 'replace' });
+          c = await loadAnalysisCache(id);
+          expect(Object.keys(c.chapters)).toEqual(['7']);
+        },
+      );
+    });
+
+    it('clearLedger drops runAddedPairs and run-owned entries but keeps added-once (R4)', async () => {
+      await withCache(
+        {
+          version: 2,
+          addedRows: { mine: { state: 'run-owned', fp: 'f' }, sticky: { state: 'added-once' } },
+          runAddedPairs: [['a', 'b']],
+        },
+        async (id) => {
+          await mutateAnalysisCache(id, { clearLedger: true });
+          const c = await loadAnalysisCache(id);
+          expect(c.addedRows).toEqual({ sticky: { state: 'added-once' } });
+          expect(c.runAddedPairs).toBeUndefined();
+        },
+      );
+    });
+
+    it('unions runAddedPairs without duplicates', async () => {
+      await withCache({ version: 2, runAddedPairs: [['a', 'b']] }, async (id) => {
+        await mutateAnalysisCache(id, {
+          runAddedPairs: [
+            ['a', 'b'],
+            ['c', 'd'],
+          ],
+        });
+        expect((await loadAnalysisCache(id)).runAddedPairs).toEqual([
+          ['a', 'b'],
+          ['c', 'd'],
+        ]);
+      });
+    });
+
+    it('a transform runs atomically on the patched cache (R7)', async () => {
+      await withCache({ version: 2, chapters: { 1: take } }, async (id) => {
+        const out = await mutateAnalysisCache(id, {
+          chapters: { 2: take },
+          transform: (c) => ({ ...c, chapters: { 2: c.chapters[2] } }),
+        });
+        expect(Object.keys(out?.chapters ?? {})).toEqual(['2']);
+        expect(Object.keys((await loadAnalysisCache(id)).chapters)).toEqual(['2']);
+      });
+    });
+
+    it('remapCharacterIds rewrites sentence and chapterCast ids', async () => {
+      await withCache(
+        {
+          version: 2,
+          chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'old', text: 't' }] as never },
+          chapterCast: { 1: [{ id: 'old', name: 'O', role: 'minor', color: 'halloran' }] as never },
+        },
+        async (id) => {
+          await mutateAnalysisCache(id, { remapCharacterIds: { old: 'new' } });
+          const c = await loadAnalysisCache(id);
+          expect(c.chapters[1][0].characterId).toBe('new');
+          expect(c.chapterCast?.[1][0].id).toBe('new');
+        },
+      );
+    });
+
+    it('serialises against a concurrent save and does not deadlock', async () => {
+      /* Not `withCache`: its cleanup awaits the very path chain a deadlock would wedge. */
+      const id = fresh();
+      await saveAnalysisCache(id, { chapters: {}, version: 2, stage1 });
+      try {
+        const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 2000));
+        const work = Promise.all([
+          saveAnalysisCache(id, { chapters: { 1: take }, version: 2, stage1 }),
+          mutateAnalysisCache(id, { castDurations: { 1: 1 } }),
+          saveAnalysisCache(id, { chapters: { 1: take, 2: take }, version: 2, stage1 }),
+          mutateAnalysisCache(id, { castDurations: { 2: 2 } }),
+        ]).then(() => 'done' as const);
+        expect(await Promise.race([work, timeout])).toBe('done');
+        const c = await loadAnalysisCache(id);
+        /* Ops run in call order: the second save wrote no durations, then the last mutate adds one. */
+        expect(c.castDurations).toEqual({ 2: 2 });
+      } finally {
+        rmSync(cachePath(id), { force: true });
+      }
+    });
+
+    it('a mutate after clearAnalysisCache writes nothing; one with createIfAbsent writes a v2 cache', async () => {
+      const id = fresh();
+      try {
+        await clearAnalysisCache(id);
+        expect(await mutateAnalysisCache(id, { castDurations: { 1: 1 } })).toBeNull();
+        expect(existsSync(cachePath(id))).toBe(false);
+        const out = await mutateAnalysisCache(id, {
+          castDurations: { 1: 1 },
+          createIfAbsent: true,
+        });
+        expect(out?.version).toBe(2);
+        expect((await loadAnalysisCache(id)).version).toBe(2);
+        /* versionIfCreated applies only when the op creates the file (R9). */
+        await mutateAnalysisCache(id, { versionIfCreated: 9 });
+        expect((await loadAnalysisCache(id)).version).toBe(2);
+      } finally {
+        await clearAnalysisCache(id);
+      }
+    });
   });
 });
