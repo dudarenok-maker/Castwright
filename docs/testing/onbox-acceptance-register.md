@@ -6421,9 +6421,38 @@ The automated tests prove the decline-time separation against fixture workspaces
 16. **A legacy series, Design and compare then Cancel.** In step 11's shape (no `voiceUuid`, Book 1 designed), run Design and compare on the linked Book 2 character and press Cancel. Both rows now carry one new `voiceUuid`, `qwen-<new>.pt` exists and is a byte copy of `qwen-<voiceId>.pt`, and a line rendered in either book plays Book 1's voice (no `voice_not_designed`). In a legacy series where nobody designed the character yet, a first design of Book 2 (Design, or Design and compare then Keep) gives Book 2's row a new `voiceUuid` and, once `qwen-<new>.pt` exists (at the landing, or at Keep), the linked Book 1 row the same one: a line rendered in either book plays the new voice. Design and compare alone, or then Cancel, stamps Book 1 with nothing. When Book 1's character had pressed Don't reuse on Book 2 first, only Book 2's row gets it. With `qwen-<uuid>.pt` deleted by hand while no design is saving it, Don't reuse on a linked Book 2 character goes through and gives it its own `voiceUuid`. **A decliner's kept voice (P12-1).** In a never-designed series of three books, Book 2 and Book 3 both linked to Book 1: press Don't reuse on Book 2 (from Book 1), then Design and compare and Keep. Book 1's and Book 3's rows get no `voiceUuid`. Note the bytes of Book 2's `qwen-<x>.pt`, then design Book 3: it lands on a key of its own, Book 2's `qwen-<x>.pt` is byte-identical, and Book 2 still plays the voice it kept. Repeat with Design and compare first, then Don't reuse, then Keep: Book 3's row again gets no `voiceUuid`. **Cancel, then Design (P12-4).** In the same never-designed three-book series with no decline, Design and compare on Book 2, press Cancel, then Design: the rows in Books 1, 2 and 3 all carry Book 2's new `voiceUuid`, `qwen-<new>.pt` exists, and a line rendered in each book plays the new voice. **A follower's design, the linker's default chain (P13-1).** In a never-designed three-book series where Book 3 links to Book 2 and Book 2 to Book 1 (what the linker gives a fresh series), press Don't reuse on Book 2 (from Book 1): Book 2 and Book 3 move to one new `voiceUuid` <x>, and `voices/separated/<x>` exists (an empty file). Design Book 3: it lands on `qwen-<x>.pt`, and Book 1's row gets no `voiceUuid` (its `cast.json` is not rewritten). Note the bytes of `qwen-<x>.pt`, then design Book 1: it lands on a key of its own and `qwen-<x>.pt` is byte-identical; Books 2 and 3 both still play the voice Book 3 designed. Repeat with Design and compare then Keep on Book 3, and with a second character row in Book 2 on the same voice (an alias) designing first: Book 1 again gets no `voiceUuid`. Restart the server between the decline and the design: the same holds. **Control:** with no decline, Book 3's first design is shared with Books 1 and 2.
 17. **A design before Confirm.** Analyse Book 2 and stop on the Confirm screen (cast not confirmed), with its character linked to a legacy, designed Book 1 character. Design the voice from the Confirm drawer (Design, and Design and compare): it goes through (no "Character no longer exists."), Book 2's row has its own `voiceUuid` with `qwen-<that>.pt`, and Book 1's key still has a `.pt` that plays Book 1's voice. A new character in that unconfirmed book, linked to nothing, designs too.
 18. **A link made during a design is not followed.** Book 2's character has its own legacy voice (`qwen-<its voiceId>.pt`) and Book 1's has an emotion variant. Start an emotion design of Book 2's character and, while the sidecar is rendering, link it to Book 1's character (link to an earlier book): the design answers "This character's voice changed while it was being designed. Design it again." and Book 1's `qwen-<voiceId>.pt` and `qwen-<voiceId>__<emotion>.pt` keep their size and mtime; no `qwen-staging-*` file remains. Repeat with a base redesign: the same answer, and Book 1's row gains no `voiceUuid`. Designing again afterwards goes through.
-19. **Nothing staged is left behind.** Press Don't reuse on Book 2 the moment its first design from the drawer (or "Design full cast") finishes: Book 2's row has its own `voiceUuid`, a `.pt` and a qwen voice, and shows as designed after a reload. Cancel a "Design full cast" run mid-design: 15 minutes later no `qwen-staging-*` file is in `voices/qwen/`, and a `qwen-staging-*` file placed there by hand is gone after a server restart.
+19. **Nothing staged is left behind.** Press Don't reuse on Book 2 the moment its first design from the drawer (or "Design full cast") finishes: Book 2's row has its own `voiceUuid`, a `.pt` and a qwen voice, and shows as designed after a reload. Cancel a "Design full cast" run mid-design: 15 minutes later no `qwen-staging-*` file is in `voices/qwen/`. A staging family placed there by hand (a real staging name, `qwen-staging-<21-character id>` with `.pt`, `.json` or `__master.wav`) is gone after a server restart once it is over an hour old; a newer one is kept, because another server on the same workspace may be mid-design.
 
 *Needs:* the GPU box with the Qwen sidecar and a series of two books (four for step 7) with a linked character. *Criteria:* this row; issues #3992 and #4028 (the separation is `separateVoiceLocked` in `server/src/routes/qwen-voice.ts`, its rule `mustSeparateOnDecline` in `server/src/workspace/voice-uuid-fork.ts`; a design lands in `landStagedDesign`, the series mint is `ensureCharacterVoiceUuid`, the separated-voice record is `server/src/workspace/separated-voices.ts`). Clears when each step is recorded with the cast.json uuids and the file listing that show it.
+
+> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch copy of a real series (*Skulduggery Pleasant*: *Scepter of the Ancients* as Book 1, *Playing with Fire* as Book 2, legacy keys with no `voiceUuid` on the characters used), with the real Qwen sidecar, on `main` at 8fb8c684. Every step was snapshotted: each `cast.json` row, plus the size, mtime and sha1 of every `voices/qwen/` file on the character's keys. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-a120.log`.
+>
+> - **Passed:**
+>   - **3.** Design; Design and compare then promote; Design and compare then Cancel; and an `angry` variant. Only Book 2's `qwen-<new>` files changed, Book 1's `qwen-bliss*` stayed byte-identical throughout, and no staging file was left.
+>   - **4.** Book 2's chapter 42 rendered with QA `ok`. All 10 Bliss segments used Book 2's key, with no `voice_not_designed`.
+>   - **5.** The linked `narrator`, redesigned from Book 2, changed the shared `qwen-<uuid>.pt` for all three books. `melissa-edgley`, which shares a uuid with no link, was designed once from each book and stayed on one uuid.
+>   - **8.** A repeat press returned the same uuid, kept the variants and wrote no new file. This also held with an unrelated book's `cast.json` truncated.
+>   - **10.**
+>   - **11.** Book 2 got its own uuid with byte copies of the files, and Book 1 was unchanged. Book 2 was unchanged after Book 1's own redesign.
+>   - **12.** The promote answered `400`, Book 1's `.pt` hashes were unchanged, the preview's files were gone at the decline, and Cancel answered OK.
+>   - **14, except its render clause.** An emotion designed on Book 1 added no slot to Book 2, and the reverse held too. Removing Book 2's `angry` kept Book 1's `qwen-bliss__angry.pt`.
+>   - **15, the case where Book 2's own design is in flight.** The press answered in 0.3 s mid-render. The design landed on Book 2's new uuid, Book 1 was unchanged, and no staging file was left.
+>   - **19's first clause.** Don't reuse right after a design gave Book 2 its own uuid and `.pt`.
+>   - **19's hand-placed staging files.** A `qwen-staging-<21-character id>` family two hours old was removed at restart, and a fresh one was kept.
+> - **Failed, a known bug:**
+>   - **14's render clause.** After Book 1's own redesign, the series mint gave Book 1 a new `voiceUuid`. Its variants still name the legacy `qwen-bliss__*` files, so its emotion lines resolve to a `qwen-<new>__<emotion>` file that does not exist. This is #4037, fixed by PR #4052.
+> - **Wording, owed to the owner:** step 11's "Book 1 still has no `voiceUuid` … also after Book 1 is redesigned" does not hold as written. Book 1's own redesign mints a uuid by design (`ensureCharacterVoiceUuid`), while Book 2 is unaffected. The clause probably means Book 2's redesign.
+> - **Not run:**
+>   - **6, 13 and 17:** each needs a real re-analysis.
+>   - **7, step 9's truncated-chain cases, and 15's Book 3 case:** this series has no Book 3 linked to Book 2.
+>   - **9's server-stopped toast.**
+>   - **16.**
+>   - **18:** no Book 2 row is on its own legacy voice.
+>   - **19's cancelled "Design full cast".**
+>   - **Every by-ear comparison.**
+> - **Found:**
+>   - The scratch server died silently once, during a Design and compare (#4054, not reproduced).
+>   - The rows the series mint stamps keep their legacy slot `name` (e.g. `voiceUuid=rjwz7…`, slot `qwen-bliss`). This is the shape behind a review finding on PR #4057, where the linked-variant reset skips such rows.
 
 ## Group B — local Ollama analyzer only
 
@@ -7693,6 +7722,28 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 - **Idempotent.** Stop and start the server again: no `[duplicate-bookid]` lines, `duplicateBookIdRepairs` is empty, no banner, and neither `state.json` changes (compare mtimes).
 
 *Needs:* no GPU; a real workspace (a copied book folder is enough) and a running server. *Cost:* ~10 minutes. *Criteria:* the bullets above; plan [`288-book-op-lock.md`](../features/288-book-op-lock.md), "Repair of existing duplicate bookIds (#3713)". Clears when each bullet is recorded.
+
+> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch workspace. The twin `A Lost Art twin` is a copy of a real rendered book, *The Lost Art of World Domination*, without its audio, and it sorts first. The server was `main` at 8fb8c684. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-e116.log`.
+>
+> - **Passed:**
+>   - **Which twin keeps the id.** The original, which has the work, kept the id although its folder sorts later.
+>   - **The loser on disk.** Only the twin's `state.json` and `dropped-quotes.json` changed, and the winner's files are byte-identical.
+>   - **Analysis cache.** The cache file was copied to the twin's new `manuscriptId`.
+>   - **Repairs list.** `GET /api/info` listed the repair with relative folders.
+>   - **Idempotent.** A second start logged no `[duplicate-bookid]` line.
+>   - **The gate over HTTP, refused writes.** DELETE with no epoch and DELETE with a wrong epoch both answered `409` with no path in the body. So did a cast patch to `PUT …/state`, `POST /api/library-cast/override`, `POST /api/voice-library/<uuid>/assign`, `add-from-roster` and `link-prior` targeting the repaired id, and a series `PUT /api/voices/<id>/override`. Every `cast.json` hash was unchanged.
+>   - **The gate over HTTP, open writes.** `listen-progress`, `shelf-status` and `listen-stats` got past the gate to body validation and answered `400`.
+>   - **A single voice design.** A design in the series answered `409 book_repaired_reload` before any job, and `cast.json` was unchanged.
+>   - **The gate never expires.** `repairEpoch` stayed the same across five restarts over about 2.5 hours. The days-later clause was not run.
+>   - **A truncated gate file.** With the file truncated inside its `manuscripts` list, the readable entry stayed gated. The file was rewritten whole with the same epoch and an empty `manuscripts` list.
+>   - **Both books open.** `GET /api/books/<id>/state` answered `200` for both ids.
+> - **Not run:**
+>   - **Analyse on either twin.**
+>   - **Every browser item:** the stale-tab reload, Library Delete, Voices Compare, the reload-loop cap, the series change from a stale page, the banner UI and the queue.
+>   - **DELETE with the right epoch** (no throwaway book).
+>   - **The unreadable gate file.**
+>   - **Deleting a gated book.**
+>   - **The loser's queue, backups and exports.**
 
 ## Group G — GitHub Actions itself
 
