@@ -3044,6 +3044,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/{characterId}/promote-voice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit a previewed Qwen voice design onto the character's stable voice — plan 161,
+         * @description Commits the staged `-preview` design from the drawer's A/B "Design &
+         *     compare" onto the character's stable `qwen-<id>` voice: moves the preview
+         *     `.pt` / `.json` / retained reference clip onto the real key, refreshes the
+         *     cached audition under the real key so "Play 12s" serves the approved take,
+         *     and evicts the sidecar's in-memory prompt cache for the real key
+         *     (best-effort, bounded).
+         *
+         *     A redesign replaces the base embedding, so every emotion variant minted
+         *     from the old one is stale. The step drops the `variants` map from the
+         *     designing row and, when it replaced an existing base, from every other row
+         *     on the same voice key (linked rows in this book and in every other book on
+         *     the key); `resetCharacterIds` names the rows of THIS book that were reset so
+         *     the client can mirror exactly them. The variant files stay on disk (another
+         *     row may still name them; the startup sweep removes orphans). A promote that
+         *     writes the first real file of a never-designed shared key shares it with the
+         *     linked rows instead of resetting anything.
+         *
+         *     Runs under the book's design lock, the book-op lock(s) and the cast lock(s).
+         *     Failure bodies carry a fixed, path-free `error` sentence.
+         */
+        post: operations["promoteQwenVoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/{characterId}/discard-voice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Drop a staged Qwen preview design (Cancel in the A/B compare) — plan 161
+         * @description Best-effort cleanup of a staged preview: removes the preview `.pt` /
+         *     `.json` / retained reference clip and, when `sampleVoiceId` and a valid
+         *     `modelKey` are supplied, its cached audition. Never touches the live voice.
+         *     A row may also drop a preview it staged under a key it has since left (a
+         *     "Don't reuse" decline moved it). Always 200 `{ ok: true }` once the preview
+         *     id is validated; removing an absent preview is a no-op.
+         */
+        post: operations["discardQwenVoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/{characterId}/designed-persona": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the persona text of a character's already-designed Qwen voice — plan 149
+         * @description Returns the `instruct` persona stored on the voice sidecar JSON for the
+         *     character's Qwen voice (the per-character override key, else the derived
+         *     storage key, so a reused character resolves to its series-shared sidecar).
+         *     The persona is not always mirrored onto `voiceStyle`; the Profile Drawer
+         *     calls this lazily, only when `voiceStyle` is empty, to seed its "Voice
+         *     persona" textarea. An empty string means no persona on disk (benign).
+         */
+        get: operations["getDesignedPersona"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/decline-voice-link": {
         parameters: {
             query?: never;
@@ -13242,6 +13330,177 @@ export interface operations {
             };
             /** @description Source or other book has no cast on disk yet */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    promoteQwenVoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The staged preview id; must equal the id the server derives for this book and character (the real key plus `-preview`), else 400. */
+                    previewVoiceId: string;
+                    /** @description Cache scope of the audition sample. */
+                    sampleVoiceId: string;
+                    /** @enum {string} */
+                    modelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                };
+            };
+        };
+        responses: {
+            /** @description The preview now lives on the stable voice */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description The committed (stable) voice id. */
+                        voiceId: string;
+                        /** @description Public URL of the audition cached under the committed id. */
+                        url: string;
+                        /** @description The character's immutable voice uuid, when it has one, so the client can stamp it without refetching the cast. */
+                        voiceUuid?: string;
+                        /** @description Ids of this book's rows whose emotion variants the promote reset (the designing row plus linked rows). Empty when nothing was reset. */
+                        resetCharacterIds: string[];
+                    };
+                };
+            };
+            /** @description `previewVoiceId` is not the expected preview id, `sampleVoiceId` is missing, or `modelKey` is not a known model key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /**
+             * @description Either no staged preview voice exists to promote (for example a
+             *     double-promote; nothing was removed), or the book was repaired (#3713)
+             *     and the request lacks the current `X-Repair-Epoch`
+             *     (`BookRepairedReloadError`; nothing was written).
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"] | {
+                        error: string;
+                    };
+                };
+            };
+            /** @description The book moved while the voice was being promoted, or a lock timed out; a fixed sentence, retry can work. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    discardQwenVoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The staged preview id; must be the id derived for this row, or a preview id this row staged under a key it has since left, else 400. */
+                    previewVoiceId: string;
+                    /** @description With a valid `modelKey` */
+                    sampleVoiceId?: string;
+                    /** @enum {string} */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                };
+            };
+        };
+        responses: {
+            /** @description The preview is gone (or never existed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                    };
+                };
+            };
+            /** @description `previewVoiceId` is not this row's preview id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The book was repaired (#3713) and the request lacks the current `X-Repair-Epoch`; nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookRepairedReloadError"];
+                };
+            };
+        };
+    };
+    getDesignedPersona: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The persona, or an empty string when the sidecar or key is absent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        instruct: string;
+                    };
+                };
+            };
+            /** @description Book or character not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
