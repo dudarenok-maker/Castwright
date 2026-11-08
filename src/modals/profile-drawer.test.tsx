@@ -1547,7 +1547,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
        at .pt files that no longer exist). Approve must mirror the server
        teardown by clearing them locally. */
     promoteQwenVoice.mockClear();
-    const { store, dispatchSpy } = renderWithBook({
+    const seeded = {
       ...baseChar,
       ttsEngine: 'qwen',
       voiceId: 'v_hal',
@@ -1556,7 +1556,17 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
         qwen: { name: 'qwen-v_hal', variants: { angry: { name: 'qwen-v_hal__angry' } } },
       },
       voiceStyle: 'a steady adult voice',
+    } as Character;
+    const { store, dispatchSpy } = renderWithBook(seeded);
+    /* Seed the slice with the row — without it the final assertion would pass
+       because the row was never there, not because approve cleared anything. */
+    act(() => {
+      store.dispatch(castActions.setCharacters([seeded]));
     });
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'halloran')?.overrideTtsVoices?.qwen?.variants,
+      'precondition: the variants are seeded',
+    ).toEqual({ angry: { name: 'qwen-v_hal__angry' } });
     selectQwen();
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     act(() => {
