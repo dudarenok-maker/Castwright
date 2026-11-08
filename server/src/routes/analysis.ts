@@ -58,6 +58,7 @@ import {
   reconcileSuggestionsLocked,
   clearSuggestions,
   pairKey,
+  loadStoredSuggestions,
 } from '../store/cast-merge-suggestions.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
@@ -157,6 +158,7 @@ import {
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   loadCastIdHistoryWithStatus,
+  toMatchHistory,
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
@@ -396,6 +398,27 @@ export async function recordRetirements(
 
    Exported only so analysis-reject-edge-reconcile.test.ts can drive it
    without standing up a full analysis run. */
+
+/* #4031 A11 — what the run-start identical-name heal must not settle: the
+   book's open merge suggestions and its "not the same person" dismissals. Read
+   lock-free next to the lock-free prior read the heal operates on (the heal is an
+   in-memory pass; nothing here writes). A degraded history read yields no
+   dismissals ("undetermined", not evidence) rather than refusing every heal.
+   `skipIds` is empty until the run ledger lands (Task 15). */
+async function loadHealOpts(
+  bookDir: string | undefined,
+): Promise<Parameters<typeof dedupePriorCastByName>[2]> {
+  if (!bookDir) return { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
+  const [openSuggestions, history] = await Promise.all([
+    loadStoredSuggestions(bookDir),
+    loadCastIdHistoryWithStatus(bookDir),
+  ]);
+  return {
+    openSuggestions,
+    notSamePerson: toMatchHistory(history).notSamePerson,
+    skipIds: new Set(),
+  };
+}
 
 /* #2214/#2201 — shared user-facing wording for "cast-id-history.json could
    not be read, nothing changed" so it reads identically no matter which of
@@ -4876,7 +4899,11 @@ export async function runMainAnalyzerJob(
        single load point, so all cast.json write sites AND
        seedReuseGuardsFromPriorCast below see one prior row per name. */
     if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(priorCastForMerge, recordRef.bookId ?? undefined);
+      const reconciled = dedupePriorCastByName(
+        priorCastForMerge,
+        recordRef.bookId ?? undefined,
+        await loadHealOpts(recordRef.bookDir),
+      );
       priorCastForMerge = reconciled.cast;
       if (reconciled.dropped.length) {
         log(
@@ -8545,7 +8572,11 @@ export async function runSubsetAnalyzerJob(
        the subset re-analysis path's writes + seed also see one prior row per name. */
     let dedupRetirements: Retirement[] = [];
     if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(priorCastForMerge, record.bookId ?? undefined);
+      const reconciled = dedupePriorCastByName(
+        priorCastForMerge,
+        record.bookId ?? undefined,
+        await loadHealOpts(record.bookDir),
+      );
       priorCastForMerge = reconciled.cast;
       if (reconciled.dropped.length) {
         log(

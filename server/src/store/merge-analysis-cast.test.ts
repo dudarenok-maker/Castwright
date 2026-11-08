@@ -1760,6 +1760,59 @@ describe('dedupePriorCastByName', () => {
   });
 });
 
+describe('dedupePriorCastByName — suggestions, dismissals and the run ledger (#4031 A11)', () => {
+  const pair = (): C[] => [
+    { id: 'anton', name: 'Антон', voiceState: 'tuned', voiceUuid: 'U1', lines: 40 },
+    { id: 'антон', name: 'Антон', voiceState: 'generated', lines: 2 },
+  ];
+  const none = { openSuggestions: [], notSamePerson: [], skipIds: new Set<string>() };
+  const suggestion = (x: string, y: string) => {
+    const [a, b] = x < y ? [x, y] : [y, x];
+    return { sourceId: x, targetId: y, a, b, reason: 'r', origin: 'plan' as const };
+  };
+
+  it('A11: identical names heal and report a retirement', () => {
+    const { cast, retirements } = dedupePriorCastByName(pair(), undefined, none);
+    expect(cast.map((c) => c.id)).toEqual(['anton']);
+    expect(retirements).toEqual([{ from: 'антон', to: 'anton' }]);
+  });
+
+  it('A11: no heal across a dismissal record', () => {
+    const { cast, retirements } = dedupePriorCastByName(pair(), undefined, {
+      ...none,
+      notSamePerson: [{ a: 'anton', b: 'антон', at: '2026-01-01T00:00:00.000Z' }],
+    });
+    expect(cast).toHaveLength(2);
+    expect(retirements).toEqual([]);
+  });
+
+  it('A11: no heal when either member has an open suggestion, even to a third row', () => {
+    const prior: C[] = [...pair(), { id: 'third', name: 'Другой', voiceState: 'tuned' }];
+    for (const member of ['anton', 'антон']) {
+      const { cast } = dedupePriorCastByName(prior, undefined, {
+        ...none,
+        openSuggestions: [suggestion(member, 'third')],
+      });
+      expect(cast).toHaveLength(3);
+    }
+  });
+
+  it('A11: no heal across a notLinkedTo edge', () => {
+    const prior: C[] = pair();
+    prior[0] = { ...prior[0], notLinkedTo: ['антон'] };
+    expect(dedupePriorCastByName(prior, undefined, none).cast).toHaveLength(2);
+  });
+
+  it('the heal never touches a skipIds row', () => {
+    const { cast, retirements } = dedupePriorCastByName(pair(), undefined, {
+      ...none,
+      skipIds: new Set(['антон']),
+    });
+    expect(cast).toHaveLength(2);
+    expect(retirements).toEqual([]);
+  });
+});
+
 describe('mergeAnalysisResultWithExistingCast — locked/tuned voice is taken whole (#3920)', () => {
   // The #3842 owner rule at the re-analysis merge: no voice match, automatic
   // or manual, replaces a voice the user locked or tuned. The series linker

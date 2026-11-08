@@ -33,6 +33,7 @@ import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { notLinkedToId } from './not-linked-to-scope.js';
 import { surnameTolerantMatch, declinesLinkOf, unionNotLinkedTo } from './cast-name-match.js';
+import type { NotSamePersonRecord, StoredSuggestion } from './reanalysis-types.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
@@ -749,6 +750,28 @@ function unionStrings(a: string[] | undefined, b: unknown): string[] | undefined
   return out;
 }
 
+/** What the run-start heal must leave alone (#4031 A11): rows with an open
+    merge suggestion, member pairs the user dismissed (`a < b`, as
+    `recordNotSamePerson` stores them) and rows the run itself added. A degraded
+    history read supplies no dismissals — it is "undetermined", so the heal runs
+    on the other two refusals rather than refusing every group. */
+export interface DedupeHealOpts {
+  openSuggestions: ReadonlyArray<StoredSuggestion>;
+  notSamePerson: ReadonlyArray<NotSamePersonRecord>;
+  skipIds: ReadonlySet<string>;
+}
+const NO_HEAL_OPTS: DedupeHealOpts = { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
+
+/** True when two members of the group share a dismissal record. */
+function groupHasDismissal(group: ReadonlyArray<CastRecord>, dismissed: ReadonlySet<string>): boolean {
+  for (const x of group) {
+    for (const y of group) {
+      if (x.id < y.id && dismissed.has(`${x.id}\u0000${y.id}`)) return true;
+    }
+  }
+  return false;
+}
+
 /** Collapse same-normalised-name rows in a prior cast to one survivor each so
     the carryover merge cannot re-add a voiced duplicate. Bespoke voice beats a
     reuse link; narrator rows and notLinkedTo-separated pairs are never
@@ -760,6 +783,7 @@ function unionStrings(a: string[] | undefined, b: unknown): string[] | undefined
 export function dedupePriorCastByName<T extends CastRecord>(
   priorCast: ReadonlyArray<T>,
   currentBookId: string | undefined,
+  opts: DedupeHealOpts = NO_HEAL_OPTS,
 ): {
   cast: T[];
   dropped: Array<{ id: string; name?: string; voiceState?: string }>;
@@ -785,8 +809,22 @@ export function dedupePriorCastByName<T extends CastRecord>(
   const survivorByKey = new Map<string, T>();
   const collapsedKeys = new Set<string>();
 
+  // #4031 A11 — an open question about a row (to ANY other row, not only a
+  // fellow group member) or a run-ledger row is not the heal's to settle.
+  const suggested = new Set<string>();
+  for (const s of opts.openSuggestions) {
+    for (const id of [s.sourceId, s.targetId, s.a, s.b]) suggested.add(id);
+  }
+  const dismissed = new Set(opts.notSamePerson.map((r) => `${r.a}\u0000${r.b}`));
+
   for (const [key, group] of groups) {
-    if (group.length < 2 || groupHasNotLinkedEdge(group, currentBookId)) continue;
+    if (
+      group.length < 2 ||
+      groupHasNotLinkedEdge(group, currentBookId) ||
+      group.some((c) => suggested.has(c.id) || opts.skipIds.has(c.id)) ||
+      groupHasDismissal(group, dismissed)
+    )
+      continue;
     collapsedKeys.add(key);
 
     let best = group[0];
