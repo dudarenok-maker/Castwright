@@ -4392,6 +4392,14 @@ paths:
         value for a stored cloned slot is refused with `409` and nothing is
         persisted. Removing a cloned assignment has its own dedicated route
         (`DELETE /api/voice-library/{voiceUuid}/assign`).
+
+        Some `cast` fields are server-owned: the on-disk value always wins and
+        this route is never their writer — `voiceUuid`, `notLinkedTo`,
+        `declinedVoiceFrom`, and (#4040) `overrideTtsVoices.qwen.variants`. A
+        base voice redesign clears the emotion variants of every linked row,
+        and a save from a tab that still holds the old rows must not write
+        them back; set or clear variants through the design route and
+        `DELETE /api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}`.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:

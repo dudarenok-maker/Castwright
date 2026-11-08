@@ -839,12 +839,12 @@ describe('book-state PUT cast — a forked row’s dropped variants stay dropped
     expect(wren.overrideTtsVoices.qwen).toEqual({ name: 'qwen-u_forked' });
   });
 
-  it('control: an incoming row on the SAME uuid keeps its variants (incoming wins)', async () => {
+  it('an incoming row on the SAME uuid cannot set variants either (they are server-owned, #4040)', async () => {
     writeBook(bookDir, bookId, [forked({ name: 'qwen-u_forked' })]);
     const row = stale({ voiceUuid: 'u_forked' });
     expect((await put([row])).status).toBe(200);
     const wren = onDiskCast().characters[0] as Record<string, any>;
-    expect(wren.overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u_shared__angry');
+    expect(wren.overrideTtsVoices.qwen).toEqual({ name: 'qwen-u_shared' }); // name: incoming wins; variants: disk
   });
 
   it('failure path: a disk row with no qwen slot leaves the incoming one alone (no crash, no invention)', async () => {
@@ -853,5 +853,39 @@ describe('book-state PUT cast — a forked row’s dropped variants stay dropped
     const wren = onDiskCast().characters[0] as Record<string, any>;
     expect(wren.voiceUuid).toBe('u_forked');
     expect(wren.overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+  });
+});
+
+/* #4040 — a base redesign clears the linked rows' qwen `variants` on disk, but a tab
+   left open holds the old redux row. Its next whole-roster cast PUT must not write
+   them back: `variants` is server-owned on this route, the on-disk value wins. */
+describe('book-state PUT cast — a cleared variants map stays cleared (#4040)', () => {
+  const fern = (qwen: Record<string, unknown>) => ({
+    id: 'fern',
+    name: 'Fern',
+    role: 'character',
+    color: '#abc',
+    voiceUuid: 'u_fern',
+    overrideTtsVoices: { qwen },
+  });
+  const put = (characters: object[]) =>
+    request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({ slice: 'cast', patch: { characters } });
+
+  it('does not write stale variants back onto a row whose variants a redesign cleared', async () => {
+    writeBook(bookDir, bookId, [fern({ name: 'qwen-u_fern' })]);
+    const stalePayload = fern({ name: 'qwen-u_fern', variants: { angry: { name: 'qwen-u_fern__angry' } } });
+    expect((await put([stalePayload])).status).toBe(200);
+    const row = onDiskCast().characters[0] as Record<string, any>;
+    expect(row.overrideTtsVoices.qwen).toEqual({ name: 'qwen-u_fern' });
+  });
+
+  it('control: variants the server holds survive a save whose row omits them', async () => {
+    writeBook(bookDir, bookId, [fern({ name: 'qwen-u_fern', variants: { sad: { name: 'qwen-u_fern__sad' } } })]);
+    expect((await put([fern({ name: 'qwen-u_fern' })])).status).toBe(200);
+    const row = onDiskCast().characters[0] as Record<string, any>;
+    expect(row.overrideTtsVoices.qwen.variants).toEqual({ sad: { name: 'qwen-u_fern__sad' } });
   });
 });

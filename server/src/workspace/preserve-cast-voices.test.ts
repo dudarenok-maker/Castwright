@@ -95,6 +95,48 @@ describe('preserveDesignedVoicesOnCastWrite', () => {
   });
 });
 
+describe('preserveDesignedVoicesOnCastWrite — qwen variants are server-owned (#4040)', () => {
+  const qwen = (o: Record<string, unknown>) => ({ overrideTtsVoices: { qwen: o } });
+  const variantsOf = (c: C) =>
+    (c.overrideTtsVoices as { qwen?: { variants?: unknown } } | undefined)?.qwen?.variants;
+
+  it('[V1] drops incoming variants when disk has none (a redesign cleared them)', () => {
+    const existing: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern' }) }];
+    const incoming: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern', variants: { angry: { name: 'v-angry' } } }) }];
+    const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
+    expect(variantsOf(out[0])).toBeUndefined();
+    expect('variants' in (out[0].overrideTtsVoices as { qwen: object }).qwen).toBe(false);
+  });
+
+  it('[V2] disk variants win over different incoming variants', () => {
+    const existing: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern', variants: { sad: { name: 'v-sad' } } }) }];
+    const incoming: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern', variants: { angry: { name: 'v-angry' } } }) }];
+    const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
+    expect(variantsOf(out[0])).toEqual({ sad: { name: 'v-sad' } });
+  });
+
+  it('[V3] restores disk variants when incoming omits them', () => {
+    const existing: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern', variants: { sad: { name: 'v-sad' } } }) }];
+    const incoming: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern' }) }];
+    const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
+    expect(variantsOf(out[0])).toEqual({ sad: { name: 'v-sad' } });
+  });
+
+  it('[V4] a new row (not on disk) passes its variants through', () => {
+    const existing: C[] = [{ id: 'other' }];
+    const incoming: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern', variants: { angry: { name: 'v-angry' } } }) }];
+    const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
+    expect(variantsOf(out[0])).toEqual({ angry: { name: 'v-angry' } });
+  });
+
+  it('[V5] the rest of the qwen slot keeps incoming-wins (a deliberate re-pin of name)', () => {
+    const existing: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern', variants: { sad: { name: 'v-sad' } } }) }];
+    const incoming: C[] = [{ id: 'fern', ...qwen({ name: 'qwen-fern-v2', variants: { angry: { name: 'v-angry' } } }) }];
+    const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
+    expect(out[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-fern-v2', variants: { sad: { name: 'v-sad' } } } });
+  });
+});
+
 describe('rejectForeignCloneKeys', () => {
   it('[#1899] throws when a character with no existing clone gets a foreign coqui libraryUuid planted', () => {
     const existing: C[] = [{ id: 'x', name: 'X' }]; // no clone at all today

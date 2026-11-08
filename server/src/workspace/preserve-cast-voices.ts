@@ -11,6 +11,9 @@
    This fills each incoming character's missing voice-DESIGN fields from the
    existing on-disk character. INCOMING WINS when present (a deliberate
    re-design still writes its new value); the existing value fills only the gap.
+   The one exception is `overrideTtsVoices.qwen.variants` (#4040), which is
+   server-owned: the on-disk value always wins and this write never sets or
+   clears it.
    Reuse-link fields (`voiceId` / `matchedFrom` / `voiceState`) are deliberately
    NOT preserved — those have legitimate clear flows (unlink) and are hydrated
    separately by `denormaliseCastReusedVoices`. */
@@ -85,6 +88,22 @@ export function preserveDesignedVoicesOnCastWrite<T extends { id: string }>(
         }
       }
       merged.voiceUuid = old.voiceUuid;
+    }
+    /* #4040 — the qwen slot's `variants` are server-owned like `voiceUuid`: their
+       only writers are the design route, `DELETE …/emotion-variant/:emotion`, the
+       fork/decline paths and the linked reset, so a base redesign's clear must not
+       be undone by a stale tab's next whole-roster save. The on-disk value wins
+       (absent on disk = absent in the merge); the rest of the slot keeps
+       incoming-wins. Only an incoming qwen slot is touched. */
+    const mergedMap = merged.overrideTtsVoices as Record<string, unknown> | undefined;
+    const incQwen = mergedMap?.qwen;
+    if (incQwen && typeof incQwen === 'object') {
+      const oldQwen = (old.overrideTtsVoices as { qwen?: { variants?: unknown } } | undefined)?.qwen;
+      const { variants: _incoming, ...slotRest } = incQwen as Record<string, unknown>;
+      merged.overrideTtsVoices = {
+        ...mergedMap,
+        qwen: oldQwen?.variants === undefined ? slotRest : { ...slotRest, variants: oldQwen.variants },
+      };
     }
     return merged as T;
   });
