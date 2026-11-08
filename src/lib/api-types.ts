@@ -2913,10 +2913,14 @@ export interface paths {
          *     writer — `voiceUuid` (only when the stored row carries one),
          *     `notLinkedTo`, `declinedVoiceFrom`, and (#4040)
          *     `overrideTtsVoices.qwen.variants`. A character the request introduces
-         *     passes through as sent. A
-         *     base voice redesign clears the emotion variants of every linked row,
-         *     and a save from a tab that still holds the old rows must not write
-         *     them back; set or clear variants through the design route and
+         *     passes through as sent. For `variants` the rule holds only for a request
+         *     that carries the row's `qwen` slot: the stored `variants` win over
+         *     whatever that slot sends. A request row with no `qwen` slot at all
+         *     does not restore the stored `qwen` slot, so that slot goes with its
+         *     `variants`; send the slot to keep it. A base voice redesign
+         *     clears the emotion variants of every linked row, and a save from a tab
+         *     that still holds the old rows must not write them back; set or clear
+         *     variants through the design route and
          *     `DELETE /api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}`.
          */
         put: operations["putBookState"];
