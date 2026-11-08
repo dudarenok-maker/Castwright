@@ -2410,6 +2410,44 @@ def test_synth_17b_rederives_from_current_base_after_redesign(fake_qwen_runtime,
     assert len(eng._base17.prompt_calls) == 2, "the re-derived prompt must then be reused"
 
 
+def test_synth_17b_unchanged_base_hits_without_rehash_or_reload(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 — the 1.7B in-memory hit is decided by the base's file sig alone:
+    with the base unchanged, repeated renders must neither re-hash the base nor
+    torch.load the `__1.7b.pt` — after a derive, and after a disk load (the
+    post-restart path). Without the recorded sig every Quality render pays both."""
+    eng = fake_qwen_runtime["engine"]
+    _setup_17b_base_from_disk(eng, monkeypatch, "iris", b"OLD")
+    pt_17b, _json = eng._voice_paths("iris__1.7b")
+
+    hashes: list[str] = []
+    real_sha = main._file_sha256
+    monkeypatch.setattr(main, "_file_sha256", lambda p: (hashes.append(p), real_sha(p))[1])
+    loads: list[str] = []
+    torch_module = sys.modules["torch"]
+    real_load = torch_module.load
+    monkeypatch.setattr(
+        torch_module, "load", lambda p, **kw: (loads.append(str(p)), real_load(p, **kw))[1]
+    )
+
+    eng.synthesize("1.7b", "iris", "First line.")  # derive
+    hashes.clear()
+    loads.clear()
+    eng.synthesize("1.7b", "iris", "Second line.")
+    eng.synthesize("1.7b", "iris", "Third line.")
+    assert hashes == [] and pt_17b not in loads, "a hit after a derive must not re-hash or reload"
+
+    eng._prompt_cache.clear()  # simulated restart: in-memory state gone, disk kept
+    eng._prompt17_base.clear()
+    eng.synthesize("1.7b", "iris", "After restart.")  # disk load
+    assert loads.count(pt_17b) == 1
+    hashes.clear()
+    loads.clear()
+    eng.synthesize("1.7b", "iris", "Again.")
+    eng.synthesize("1.7b", "iris", "And again.")
+    assert hashes == [] and pt_17b not in loads, "a hit after a disk load must not re-hash or reload"
+    assert len(eng._base17.prompt_calls) == 1
+
+
 def test_synth_17b_stale_disk_prompt_not_reused_after_restart(fake_qwen_runtime, monkeypatch) -> None:
     """#4040 — a `__1.7b.pt` derived from the OLD base that survived on disk
     (the evict failed) must be re-derived after a restart, not loaded."""
