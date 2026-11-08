@@ -144,6 +144,16 @@ describe('#4037 — the series mint copies a legacy voice’s emotion variants',
     }
   });
 
+  it('re-keys the designing row’s variant names when its book is unconfirmed (stampOwnRow path)', async () => {
+    const statePath = join(bookDir('Book Two'), '.audiobook', 'state.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    writeFileSync(statePath, JSON.stringify({ ...state, castConfirmed: false }));
+    const uuid = await mint();
+    /* the walk skips the unconfirmed designing book; stampOwnRow stamps it */
+    expect(readRow('Book Two').voiceUuid).toBe(uuid);
+    expect(readRow('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
+  });
+
   it('a failed variant copy stamps nothing and leaves no copy behind', async () => {
     failCopyTo.text = '__angry__1.7b.pt';
     await expect(mint()).rejects.toThrow(/EBUSY/);

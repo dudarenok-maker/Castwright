@@ -870,15 +870,41 @@ export async function ensureCharacterVoiceUuid(
 
     const uuid = nanoid();
     const linkId = freshChar.voiceId ?? freshChar.id;
-    let dirty = false;
-    for (let i = 0; i < freshCast.characters.length; i++) {
-      if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
-        freshCast.characters[i] = { ...freshCast.characters[i], voiceUuid: uuid };
-        dirty = true;
+    const legacyKey = `qwen-${linkId}`;
+    /* #4037 — same as the series mint: the legacy key's base family and emotion
+       variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
+       always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
+       sees the copied base). A failed copy removes its own files and rethrows;
+       a failed cast write removes the copies. */
+    return whileSaving(`qwen-${uuid}`, async () => {
+      const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
+      const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
+      if (hasBase) {
+        try {
+          copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
+        } catch (e) {
+          await removeFiles(copied);
+          throw e;
+        }
+      } else {
+        await removeFiles(copied);
       }
-    }
-    if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
-    return uuid;
+      let dirty = false;
+      for (let i = 0; i < freshCast.characters.length; i++) {
+        if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+          const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
+          freshCast.characters[i] = hasBase ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`) : stamped;
+          dirty = true;
+        }
+      }
+      try {
+        if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
+      } catch (e) {
+        await removeFiles(copied);
+        throw e;
+      }
+      return uuid;
+    });
   });
 }
 
