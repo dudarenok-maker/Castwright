@@ -5776,7 +5776,10 @@ export interface components {
                      *     each entry is an independently designed voiceId. `name` above
                      *     stays the neutral base. Absent → every emotion falls back to
                      *     the base voice. Variants travel with the base across reuse
-                     *     links (plan 177 Wave 6a).
+                     *     links (plan 177 Wave 6a). #4040 — a variant designed against an
+                     *     earlier base (the base was redesigned since, from any book on the
+                     *     voice) is stale: the server omits it from every cast it serves,
+                     *     drops it from a cast write, and renders its lines in the base voice.
                      */
                     variants?: {
                         [key: string]: {
@@ -6448,7 +6451,8 @@ export interface components {
                      * @description fs-25 — per-emotion Qwen voice variants (keyed by non-neutral
                      *     `Emotion`); each is an independently designed voiceId. Absent →
                      *     emotions fall back to the base `name`. Travels with the base
-                     *     across reuse links (plan 177 Wave 6a).
+                     *     across reuse links (plan 177 Wave 6a). #4040 — a variant whose base
+                     *     was redesigned since it was designed is stale and is dropped.
                      */
                     variants?: {
                         [key: string]: {

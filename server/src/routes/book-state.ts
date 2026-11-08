@@ -154,6 +154,7 @@ import {
   preserveNotLinkedToOnCastWrite,
   rejectForeignCloneKeys,
 } from '../workspace/preserve-cast-voices.js';
+import { dropStaleVariants } from '../workspace/variant-base-rev.js';
 import {
   collectOrphanedCharacterFallbacks,
   collectRenderedFallbackEngines,
@@ -260,6 +261,18 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
     return rest;
   });
   return { ...cast, characters };
+}
+
+/* #4040 — drop every emotion variant whose base was redesigned since it was
+   designed (variant-base-rev.ts), last, after the guards above have filled gaps
+   from disk: a client tab that still holds a stale variant cannot write it back.
+   Tolerates a non-cast-shaped patch, like its siblings. */
+async function dropStaleCastVariants(patch: unknown): Promise<unknown> {
+  if (!patch || typeof patch !== 'object' || !Array.isArray((patch as { characters?: unknown }).characters)) {
+    return patch;
+  }
+  const cast = patch as { characters: unknown[] };
+  return { ...cast, characters: await dropStaleVariants(cast.characters) };
 }
 
 /* Non-destructive title-only refresh. Invoked transparently from the
@@ -510,6 +523,11 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       manuscript: sliceRevision('manuscript', edits, revisionSalt),
       changeLog: sliceRevision('changeLog', changeLog, revisionSalt),
     };
+    /* #4040 — serve no emotion variant whose base was redesigned since (after the
+       tokens above, which describe the bytes on disk). */
+    if (cast?.characters && Array.isArray(cast.characters)) {
+      cast.characters = await dropStaleVariants(cast.characters);
+    }
 
     /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
        with its own `.catch`, not inline in an argument list.
@@ -1241,7 +1259,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           try {
             const guarded = await preserveDesignedVoices(bookDir, body.patch);
             const denormalised = await denormaliseCastReusedVoices(guarded);
-            toWrite = stripDerivedCharacterFields(denormalised);
+            toWrite = await dropStaleCastVariants(stripDerivedCharacterFields(denormalised));
           } catch (err) {
             if (err instanceof CastVoiceConsentError) {
               assertRevisionFresh('cast', baseRevision, CAST_REVISION_FIELDS, existing, body.patch, salt);

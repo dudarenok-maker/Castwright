@@ -136,8 +136,14 @@ describe('#4037 — the series mint copies a legacy voice’s emotion variants',
     /* the base family copies as before, and the legacy files stay where they were */
     expect(existsSync(join(qwenDir(), `qwen-${uuid}.pt`))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_wren__angry.pt'))).toBe(true);
-    /* the base's `__1.7b` / `__master` suffixes are not taken for emotions */
-    expect(existsSync(join(qwenDir(), `qwen-${uuid}__1.7b__1.7b.pt`))).toBe(false);
+    /* exactly the base family and the angry family were written: the base's
+       `__1.7b` / `__master` files are copied once, as base files, never again
+       as if `1.7b` / `master` were emotions */
+    expect(readdirSync(qwenDir()).filter((f) => f.startsWith(`qwen-${uuid}`)).sort()).toEqual(
+      ['.pt', '.json', '__1.7b.pt', '__master.wav', '__angry.pt', '__angry.json', '__angry__1.7b.pt', '__angry__master.wav']
+        .map((s) => `qwen-${uuid}${s}`)
+        .sort(),
+    );
 
     for (const t of TITLES) {
       expect(readRow(t).overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);

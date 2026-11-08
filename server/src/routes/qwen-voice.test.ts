@@ -997,14 +997,16 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(false);
   });
 
-  it('promote-voice invalidates the redesigned character’s stale emotion variants (slots dropped; files left for the startup sweep)', async () => {
+  it('promote-voice makes the redesigned character’s emotion variants stale (no cast.json write; files left for the startup sweep)', async () => {
     /* A redesign replaces the base embedding, so every variant minted from the
        OLD embedding is now stale. Seed maerin with a live base + two designed
-       variants, stage a new preview, and promote it: every variant slot goes from
-       cast.json, base preserved. #4026 — the variant files stay on disk (another
-       row may still name them); sweepOrphanVariantFiles removes them at the next
-       startup once nothing names them. */
+       variants, stage a new preview, and promote it. #4040 — the promote gives the
+       base a fresh `rev` and writes no cast.json: the slots stay on disk but are
+       stale (dropStaleVariants removes them from every read), base preserved.
+       #4026 — the variant files stay on disk; sweepOrphanVariantFiles removes
+       them at the next startup once nothing names them. */
     stagedPreviewArtifacts(PREVIEW);
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'OLD-BASE'); // a redesign, not a first file
     for (const id of ['qwen-v_maerin__angry', 'qwen-v_maerin__sad']) {
       writeFileSync(join(qwenDir(), `${id}.pt`), 'STALE');
       writeFileSync(join(qwenDir(), `${id}.json`), JSON.stringify({ voiceId: id }));
@@ -1035,11 +1037,16 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
       .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
-    /* Variant map wiped from cast.json (badge clears); base promoted intact. */
+    /* No cast.json write: the slots are still on disk, and stale (the badge
+       clears, since the GET serves the stale-dropped cast); base intact. */
     const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
     const qwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
-    expect(qwen.qwen.variants).toBeUndefined();
+    expect(Object.keys(qwen.qwen.variants as object)).toEqual(['angry', 'sad']);
     expect(qwen.qwen.name).toBe('qwen-v_maerin');
+    const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+    const [served] = await dropStaleVariants([maerin]);
+    expect((served.overrideTtsVoices as { qwen: { variants?: unknown } }).qwen.variants).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_maerin.json'), 'utf8')).rev).toEqual(expect.any(String));
     /* #4026 — the variant files are not deleted by the promote. */
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(true);
@@ -1207,7 +1214,11 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    them on its own, so that test stays green with `withCastLock` replaced by a
    no-op (confirmed: no-op cast lock green; no-op cast lock AND book-op red;
    no-op book-op alone green). The cast-lock proof drives the second writer
-   through `persistEmotionVariant`, which takes the cast lock and no book-op. */
+   through `persistEmotionVariant`, which takes the cast lock and no book-op.
+
+   #4040 — promote-voice no longer writes cast.json (the variants it used to
+   drop are marked stale through the base's `rev`), so there is no teardown
+   write left to race: both tests now pin that none comes back. */
 describe('#1981 — promote-voice races a concurrent cast writer for a different character', () => {
   let vl: typeof import('../workspace/voice-library.js');
   let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
@@ -1246,9 +1257,9 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
       join(qwenDir(), `${PREVIEW}.json`),
       JSON.stringify({ voiceId: PREVIEW, instruct: 'a brand new take' }),
     );
-    /* maerin needs a non-empty `variants` map or promote-voice never takes
-       the cast lock at all (Task 7 brief — the write is guarded on
-       `variants` being non-empty). */
+    /* maerin carries a `variants` map: before #4040 the promote rewrote
+       cast.json to drop it (the teardown write these races pinned); since
+       #4040 the map is left on disk, stale, and nothing is written. */
     const withVariants = characters.map((c) =>
       c.id === 'maerin'
         ? {
@@ -1370,12 +1381,16 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     return { resPromote, second };
   }
 
-  it('#3773 — cast lock alone: promote-voice’s variant teardown and a cast-lock-only writer on a different character both survive', async () => {
+  it('#3773 / #4040 — promote-voice writes no cast.json, so a cast-lock-only writer on a different character survives it', async () => {
     /* The second writer is `persistEmotionVariant` called directly: it takes
        the cast lock and NO book-op, so book-op cannot serialise it against
-       promote-voice (which holds book-op across its whole handler). The
-       only thing standing between the two is `withCastLock` — a no-op cast
-       lock makes this red (#3773). */
+       promote-voice (which holds book-op across its whole handler). Until
+       #4040 the promote rewrote cast.json to drop maerin's variants, and only
+       `withCastLock` kept that write from replaying a stale snapshot over this
+       one (#3773). #4040 marks the variants stale through the base's `rev`
+       instead, so the promote writes no cast.json at all: this pins that no
+       write comes back (a promote that rewrote the file from its held read
+       would lose nopersona's variant without the lock). */
     const { resPromote, second } = await racePromoteVoiceAgainst(
       (bookDir) => persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-nopersona__angry'),
       { requireSecondWriterRead: true },
@@ -1387,10 +1402,10 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const maerin = cast.characters.find((c) => c.id === 'maerin')!;
     const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
     const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
-    /* promote-voice's own mutation survived: variants dropped, base kept. */
-    expect(maerinQwen.qwen.variants).toBeUndefined();
+    /* promote-voice wrote no cast.json: maerin's (now stale) slot is as seeded. */
+    expect(Object.keys(maerinQwen.qwen.variants as object)).toEqual(['angry']);
     expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
-    /* the second writer's own mutation survived too — the lost-update this
+    /* the second writer's own mutation survived — the lost-update this
        test pins. */
     const nopersonaQwen = nopersona.overrideTtsVoices as
       | { qwen?: { variants?: Record<string, { name: string }> } }
@@ -1428,8 +1443,8 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const maerin = cast.characters.find((c) => c.id === 'maerin')!;
     const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
     const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
-    /* promote-voice's own mutation survived: variants dropped, base kept. */
-    expect(maerinQwen.qwen.variants).toBeUndefined();
+    /* promote-voice wrote no cast.json (#4040): maerin's slot is as seeded. */
+    expect(Object.keys(maerinQwen.qwen.variants as object)).toEqual(['angry']);
     expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
     /* assign's own mutation survived too. */
     const nopersonaQwen = nopersona.overrideTtsVoices as { qwen?: { libraryUuid?: string } } | undefined;

@@ -79,6 +79,11 @@ const castPath = (t: string) => join(bookDir(t), '.audiobook', 'cast.json');
 const rowOf = (t: Title, id = 'wren'): Record<string, any> =>
   JSON.parse(readFileSync(castPath(t), 'utf8')).characters.find((c: { id: string }) => c.id === id);
 const variantsOf = (t: Title, id = 'wren') => rowOf(t, id)?.overrideTtsVoices?.qwen?.variants;
+/* #4040 — the variants every read uses: the slots on disk minus the stale ones. */
+const currentVariantsOf = async (t: Title, id = 'wren') => {
+  const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+  return (await dropStaleVariants([rowOf(t, id)]))[0]?.overrideTtsVoices?.qwen?.variants;
+};
 const pt = (k: string) => join(qwenDir(), `${k}.pt`);
 
 function writeBook(t: Title, rows: Array<Record<string, unknown>>) {
@@ -268,7 +273,7 @@ describe('#4026 — variant DELETE drops only its own slot, never a file', () =>
   });
 });
 
-describe('#4026 — promote drops the row\'s stale variant slots, never their files', () => {
+describe('#4026 / #4040 — promote makes the key\'s variants stale, never deletes their files', () => {
   it("an unforked declined row (a pre-#4007 decline): Two's preview is staged through design-voice, which separates it; One keeps its base, file and slot", async () => {
     seedShared({ declinedVoiceFrom: [ids['Book One']] });
     /* Through the real routes: the design separates Two before it stages, so the
@@ -283,24 +288,29 @@ describe('#4026 — promote drops the row\'s stale variant slots, never their fi
     expect(rowOf('Book One').voiceUuid).toBe('u_shared');
     expect(readFileSync(pt('qwen-u_shared')).toString(), "Book One's base was overwritten").toBe('BOOK-ONE-BASE');
     expect(variantsOf('Book One')?.angry?.name).toBe('qwen-u_shared__angry');
+    expect((await currentVariantsOf('Book One'))?.angry?.name, "Book One's variant went stale").toBe('qwen-u_shared__angry');
     expect(kept(), "Book One's angry variant file was deleted").toBe(true);
   });
 
-  it('a still-linked book: #4040 resets One\'s slot with Two\'s, and the file is still not deleted inline', async () => {
+  it('a still-linked book: the variant is stale for One as for Two (#4040), no cast.json is written, and the file is not deleted inline', async () => {
     seedShared();
+    const oneBefore = readFileSync(castPath('Book One'), 'utf8');
+    const twoBefore = readFileSync(castPath('Book Two'), 'utf8');
     const res = await promote('Book Two', 'u_shared');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(variantsOf('Book Two')).toBeUndefined();
-    expect(variantsOf('Book One')).toBeUndefined();
+    expect(await currentVariantsOf('Book Two')).toBeUndefined();
+    expect(await currentVariantsOf('Book One')).toBeUndefined();
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(oneBefore);
+    expect(readFileSync(castPath('Book Two'), 'utf8')).toBe(twoBefore);
     expect(kept()).toBe(true);
   });
 
-  it('the sole owner: the slots go, the file stays (the startup sweep removes it)', async () => {
+  it('the sole owner: its slot is stale, the file stays (the startup sweep removes it)', async () => {
     seedShared();
     writeFileSync(castPath('Book One'), JSON.stringify({ characters: [{ ...legacy, voiceUuid: 'u_one' }] }));
     const res = await promote('Book Two', 'u_shared');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(variantsOf('Book Two')).toBeUndefined();
+    expect(await currentVariantsOf('Book Two')).toBeUndefined();
     expect(kept(), 'promote deleted a variant file').toBe(true);
   });
 });

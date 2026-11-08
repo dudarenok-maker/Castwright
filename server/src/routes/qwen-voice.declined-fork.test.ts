@@ -99,6 +99,13 @@ const bookDir = (title: string) => join(workspaceRoot, 'books', AUTHOR, SERIES, 
 const castPath = (title: string) => join(bookDir(title), '.audiobook', 'cast.json');
 const readRow = (title: string): Record<string, unknown> =>
   JSON.parse(readFileSync(castPath(title), 'utf8')).characters[0];
+/* #4040 — the variants every read uses for a row: its slots minus the stale ones
+   (a base redesign marks them stale instead of rewriting cast.json). */
+const currentVariantsOf = async (title: string): Promise<unknown> => {
+  const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+  const [row] = await dropStaleVariants([readRow(title)]);
+  return (row.overrideTtsVoices as { qwen?: { variants?: unknown } } | undefined)?.qwen?.variants;
+};
 
 function writeBook(title: string, position: number, id: string, row: Record<string, unknown>) {
   const dir = bookDir(title);
@@ -743,7 +750,7 @@ describe('#3992 — an unreadable cast.json elsewhere does not fail a design or 
       .post(`/api/books/${bookOneId}/cast/wren/promote-voice`)
       .send({ previewVoiceId: previewId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
     expect(res.status).toBe(200);
-    expect((readRow('Book One').overrideTtsVoices as { qwen?: { variants?: unknown } }).qwen?.variants).toBeUndefined();
+    expect(await currentVariantsOf('Book One'), 'the redesigned base kept its variant in use').toBeUndefined();
     expect(readFileSync(join(qwenDir(), 'qwen-u_solo__angry.pt')).equals(bytes)).toBe(true);
   });
 
@@ -903,13 +910,14 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
   const del = () =>
     request(app).delete(`/api/books/${bookTwoId}/cast/wren/emotion-variant/angry`);
 
-  it('Forked promote: Book Two’s variants go, Book One’s variant file is byte-identical', async () => {
+  it('Forked promote: Book Two’s variants go stale, Book One’s stay current and its variant file is byte-identical', async () => {
     seedBoth('u_new');
+    writeFileSync(join(qwenDir(), 'qwen-u_new.pt'), ORIG_PT); // a redesign of Two's own key
     const res = await promote('u_new');
     expect(res.status).toBe(200);
-    expect(slotOf('Book Two')).toBeUndefined();
+    expect(await currentVariantsOf('Book Two')).toBeUndefined();
     expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
-    expect(slotOf('Book One')).toBeDefined();
+    expect(await currentVariantsOf('Book One')).toBeDefined();
   });
 
   it('Forked DELETE: Book One’s file byte-identical, Book Two’s slot gone', async () => {
@@ -920,12 +928,13 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
     expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
   });
 
-  it('Linked promote: Book One\'s slot is reset with Book Two\'s (#4040), the file is still not deleted inline (#4026)', async () => {
+  it('Linked promote: Book One\'s variant is stale with Book Two\'s (#4040) though its slot stays on disk; the file is not deleted inline (#4026)', async () => {
     seedBoth('u_shared');
     const res = await promote('u_shared');
     expect(res.status).toBe(200);
-    expect(slotOf('Book Two')).toBeUndefined();
-    expect(slotOf('Book One')).toBeUndefined();
+    expect(await currentVariantsOf('Book Two')).toBeUndefined();
+    expect(await currentVariantsOf('Book One')).toBeUndefined();
+    expect(slotOf('Book One'), "Book One's cast.json was rewritten").toBeDefined();
     expect(gone()).toBe(false);
   });
 
