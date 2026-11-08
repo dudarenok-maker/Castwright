@@ -621,8 +621,12 @@ export async function separateVoiceLocked(
   for (const m of moved) {
     const w = designWatchers.get(watchTag(m.bookId, m.characterId));
     if (w?.key === oldKey) {
+      /* The copy took the old key's CURRENT base: a base replaced since the design
+         began (#4040) must stay replaced for the moved design, so poison the counter
+         (no real one reaches -1) instead of starting it after that write. */
+      const replaced = savesOf(oldKey).begun !== w.begun;
       w.key = `qwen-${newUuid}`;
-      w.begun = savesOf(w.key).begun;
+      w.begun = replaced ? -1 : savesOf(w.key).begun;
     }
   }
   await dropStagedPreviews(oldKey, moved);

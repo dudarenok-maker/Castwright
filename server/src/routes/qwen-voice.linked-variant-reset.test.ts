@@ -166,6 +166,7 @@ beforeAll(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
+  const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
   const { makeBookId } = await import('../workspace/paths.js');
   for (const b of [A, B, C, D, SOLO, ELSEWHERE]) {
     ids[b.title] = makeBookId(b.author ?? AUTHOR, b.series ?? '', b.title);
@@ -173,6 +174,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
+  app.use('/api/books', castDeclineVoiceLinkRouter);
 });
 
 beforeEach(() => {
@@ -519,6 +521,59 @@ describe('#4040 — an emotion variant rendered against a replaced base is disca
     for (const b of [A, B]) {
       expect(rowOf(b).overrideTtsVoices.qwen.variants?.angry, `${b.title} carries the old-base variant`).toBeUndefined();
     }
+  });
+});
+
+/* #4040 — "Don't reuse" in the render window moves the in-flight design to the
+   decliner's new voice. The separation copies the OLD key's CURRENT base, so a
+   base replaced since the design began must still read as replaced after the move. */
+describe("#4040 — a decline mid-render keeps the base-replaced check on the moved design", () => {
+  const RETRY = "This character's voice changed while it was being designed. Design it again.";
+  const linkedB = () =>
+    variantsRow('wren', 'u1', {
+      overrideTtsVoices: { qwen: { name: KEY } },
+      matchedFrom: { bookId: ids[A.title], characterId: 'wren', bookTitle: A.title, confidence: 1 },
+    });
+  const decline = (b: BookSpec, from: BookSpec) =>
+    request(app).post(`/api/books/${ids[b.title]}/cast/wren/decline-voice-link`).send({ fromBookId: ids[from.title] });
+
+  it('N1: the base is replaced by a Keep in A, then B declines; B answers the retry error and no row carries the variant', async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    writeBook(A, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    writeBook(B, [linkedB()]);
+    const entered = holdNextDesign();
+    const designing = directDesign(B, { emotion: 'angry' }).then((r) => r);
+    await entered;
+    await redesign(A);
+    expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+    const declined = await decline(B, A);
+    expect(declined.status, JSON.stringify(declined.body)).toBe(200);
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(500);
+    expect(d.body.error).toBe(RETRY);
+    for (const b of [A, B]) {
+      expect(JSON.stringify(rowOf(b).overrideTtsVoices), `${b.title} carries an old-base variant`).not.toContain('angry');
+    }
+  });
+
+  it('N1 (control): the same decline without the Keep lands the variant on the new voice', async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    writeBook(A, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    writeBook(B, [linkedB()]);
+    const entered = holdNextDesign();
+    const designing = directDesign(B, { emotion: 'angry' }).then((r) => r);
+    await entered;
+    const declined = await decline(B, A);
+    expect(declined.status, JSON.stringify(declined.body)).toBe(200);
+    gate.release!();
+    const d = await designing;
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    const newKey = rowOf(B).overrideTtsVoices.qwen.variants?.angry?.name as string;
+    expect(newKey, 'the variant did not land on the decliner').toMatch(/^qwen-.+__angry$/);
+    expect(newKey).not.toBe(VARIANT);
   });
 });
 
