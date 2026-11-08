@@ -12350,11 +12350,12 @@ async def qwen_evict_voice(req: Request) -> Response:
     synth re-reads its embedding from disk.
 
     Used by the server's voice-design 'promote' step (plan 161), which moves a
-    previewed embedding onto a stable voiceId behind the sidecar's back. Without
-    this, a voiceId already resident in `_prompt_cache` from an earlier
-    generation would keep serving the OLD embedding (the cache has no on-disk
-    mtime check — it's only evicted on (re)design of that id or a full unload).
-    Idempotent: a miss is a no-op `evicted: false`."""
+    previewed embedding onto a stable voiceId behind the sidecar's back. Since
+    #4040 a cached prompt is already re-validated against the .pt on disk on
+    every lookup (`_pt_file_sig`), so a stale embedding is no longer served
+    without this call; it still frees the old entry eagerly and deletes the
+    derived `__1.7b.pt` (which the next 1.7B render would otherwise re-check
+    and re-derive). Idempotent: a miss is a no-op `evicted: false`."""
     try:
         body = await _read_json_body(req)
     except Exception:
