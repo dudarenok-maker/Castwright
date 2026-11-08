@@ -1970,3 +1970,30 @@ describe('selectCastTierByCharacterId (#1308)', () => {
     expect(selectCastTierByCharacterId(s)).toBe(selectCastTierByCharacterId(s));
   });
 });
+
+describe('castSlice — pruneStaleEmotionVariants (#4040)', () => {
+  const row = (id: string) =>
+    makeChar(id, {
+      overrideTtsVoices: {
+        qwen: {
+          name: 'qwen-shared',
+          variants: { angry: { name: 'a' }, sad: { name: 's' } },
+        },
+      },
+    });
+
+  it('keeps only the emotions the fresh read still names, per row, and never adds one', () => {
+    const next = castSlice.reducer(
+      baseState([row('a'), row('b'), row('c')]),
+      castActions.pruneStaleEmotionVariants([
+        { id: 'a', variants: { sad: { name: 's' }, happy: { name: 'h' } } },
+        { id: 'b' },
+      ]),
+    );
+    expect(Object.keys(next.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
+    expect(next.characters[1].overrideTtsVoices!.qwen!.variants).toBeUndefined();
+    expect(next.characters[1].overrideTtsVoices!.qwen!.name).toBe('qwen-shared');
+    // a row the read does not name is untouched
+    expect(Object.keys(next.characters[2].overrideTtsVoices!.qwen!.variants!)).toHaveLength(2);
+  });
+});

@@ -17,6 +17,7 @@ import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
+import { manuscriptSlice } from '../store/manuscript-slice';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
@@ -149,6 +150,7 @@ function makeStore(
       chapters: chaptersSlice.reducer,
       account: accountSlice.reducer,
       config: configSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
     },
     preloadedState: {
       ui,
@@ -399,6 +401,52 @@ describe('RebaselineModal — whole-series aggregation', () => {
       expect(sel).toContain('marlow');
     });
     expect(screen.getByTestId('rebaseline-propose')).not.toBeDisabled();
+  });
+});
+
+describe('RebaselineModal — stale emotion variants (#4040)', () => {
+  it('prunes the variants the server dropped after a base design, on rows sharing the voice key', async () => {
+    /* maerin + marlow have no Qwen voice, so Propose designs them (a non-preview
+       design that lands a fresh base rev). bystander + twin are NOT designed here,
+       but share the redesigned voice key and carry variants minted from the old base. */
+    const withAngry = (c: Character): Character =>
+      ({
+        ...c,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-shared', variants: { angry: { name: 'qwen-shared__angry' } } } },
+      }) as Character;
+    const store = makeStore(
+      [CHARACTERS[0], CHARACTERS[1], CHARACTERS[2], withAngry(CHARACTERS[3]), withAngry(char('twin', 'Twin', 1))],
+      VOICES,
+    );
+    /* The server's /state dropped the now-stale variants from both rows. */
+    getBookState.mockResolvedValue({
+      cast: {
+        characters: ['bystander', 'twin'].map((id) => ({
+          id,
+          overrideTtsVoices: { qwen: { name: 'qwen-shared' } },
+        })),
+      },
+    });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => {
+      for (const id of ['bystander', 'twin']) {
+        const c = store.getState().cast.characters.find((x) => x.id === id);
+        expect(c?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+      }
+    });
+    expect(designQwenVoice).toHaveBeenCalled();
+    expect(store.getState().cast.characters.find((x) => x.id === 'twin')?.overrideTtsVoices?.qwen?.name).toBe(
+      'qwen-shared',
+    );
   });
 });
 

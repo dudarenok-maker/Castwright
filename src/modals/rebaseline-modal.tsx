@@ -43,6 +43,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { designWillGeneratePersona } from '../lib/design-persona';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
+import { refreshEmotionVariants } from '../store/emotion-variants-refresh';
 import { notificationsActions } from '../store/notifications-slice';
 import { rebaselineActions, includedProposals, type Proposal } from '../store/rebaseline-slice';
 import { selectPrincipalCast } from '../lib/principal-cast';
@@ -294,6 +295,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           previewUrl,
         }),
       );
+      /* This non-preview design re-keyed the base, so the server now drops
+         every variant minted from the old one (#4040) — follow it in this tab. */
+      void dispatch(refreshEmotionVariants(bookId));
     } catch (e) {
       dispatch(
         rebaselineActions.proposalFailed({
