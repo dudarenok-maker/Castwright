@@ -43,6 +43,7 @@ import {
   qwenVoicesDir,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
@@ -587,7 +588,8 @@ export async function separateVoiceLocked(
   /* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — a missing
      source `.pt` is a voice nobody designed (or one deleted by hand), and the row
      moves onto the empty key like any other, UNLESS a landing, promote or mint of
-     that key was saving it across the copy (between its rm and its rename): then
+     that key was saving it across the copy (a first save: absent until its
+     rename — a redesign renames over the old file, so its source is whole): then
      the step fails, retryably, before anything is written. */
   if (!copied.includes(qwenVoicePtPath(`qwen-${newUuid}`))) {
     const savesAfter = savesOf(oldKey);
@@ -1179,8 +1181,11 @@ export async function sweepOrphanVariantFiles(
   return stale.length;
 }
 
-/* #4028 — move a staged family onto `target`, rm-then-rename like promote (a
-   Windows rename over an existing file can EPERM). Only what was staged replaces
+/* #4028 — move a staged family onto `target`, each file renamed over the old one
+   like promote (#4040: never rm-then-rename — the sidecar re-validates its cached
+   prompt against the .pt on disk, so a synth landing while the base is absent
+   would fail as undesigned; `renameWithRetry` rides out a transient Windows
+   EPERM/EBUSY on the replace). Only what was staged replaces
    anything; with a `.pt` staged, the target's derived `__1.7b` prompt (built from
    the embedding being replaced) goes too, as the sidecar's own design does.
    PR #4007 pass 12, Y2 — a missing staged `.pt` (the sidecar answered but its file
@@ -1194,9 +1199,7 @@ async function moveStaged(staging: string, target: string): Promise<void> {
   for (const [kind, suffix] of STAGED_FAMILY) {
     const from = familyPath(kind, `${staging}${suffix}`);
     if (!(await exists(from))) continue;
-    const to = familyPath(kind, `${target}${suffix}`);
-    await rm(to, { force: true });
-    await rename(from, to);
+    await renameWithRetry(from, familyPath(kind, `${target}${suffix}`));
   }
 }
 
@@ -2002,8 +2005,9 @@ qwenVoiceRouter.post(
         return { status: 400, body: { error: `modelKey must be one of: ${Object.keys(TTS_MODEL_LABELS).join(', ')}` } };
       }
 
-      /* Move the staged embedding onto the stable id. rm-then-rename so a Windows
-         rename over an existing file can't EPERM. A missing preview `.pt` means
+      /* Move the staged embedding onto the stable id, renamed over the old file so
+         the real `.pt` (and `.json`) is never absent mid-swap (#4040, see
+         moveStaged). A missing preview `.pt` means
          nothing was staged (e.g. a double-promote) → 409 — checked via `stat`
          BEFORE the live `.pt` is removed (#1804), so a double-promote can't
          delete a live artifact when the replacement was never staged. */
@@ -2017,15 +2021,19 @@ qwenVoiceRouter.post(
       }
       /* Nothing at the real key yet: this promote writes its first real file. */
       const firstFile = !(await exists(qwenVoicePtPath(realVoiceId)));
-      /* P11-2 — the real key is saving between this rm and its rename. */
-      await whileSaving(realVoiceId, async () => {
-        await rm(qwenVoicePtPath(realVoiceId), { force: true });
-        await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
-      });
-      await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
-      await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
-        () => {},
+      /* P11-2 — the real key is saving during its rename. */
+      await whileSaving(realVoiceId, () =>
+        renameWithRetry(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId)),
       );
+      /* Best-effort: a preview with no `.json` drops the old one rather than
+         pairing the new embedding with the old voice's manifest. */
+      if (await exists(qwenVoiceSidecarPath(previewVoiceId))) {
+        await renameWithRetry(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
+          () => {},
+        );
+      } else {
+        await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
+      }
       /* #4040 — a promote over an existing base is a redesign: a fresh `rev` makes
          every variant designed against the old base stale. A first file has no
          variants of its own to invalidate. */

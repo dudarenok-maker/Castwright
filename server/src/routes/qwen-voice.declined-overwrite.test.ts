@@ -42,21 +42,35 @@ const beforeLocks = vi.hoisted(() => ({ fn: null as (() => void) | null }));
    row's book-op: the landing is the only single-book book-op taken with no opts
    (the series walk passes `hintDir`). */
 const beforeLanding = vi.hoisted(() => ({ bookId: null as string | null, fn: null as (() => Promise<void>) | null }));
-/* Pass 11, P11-2 — runs (and is awaited) once, inside a landing, between its rm of
-   the target `.pt` and the rename onto it. */
+/* Pass 11, P11-2 — runs (and is awaited) once, inside a landing, just before the
+   rename onto the target `.pt`. */
 const midLanding = vi.hoisted(() => ({ target: null as string | null, fn: null as (() => Promise<void>) | null }));
 /* Runs (and is awaited) once, inside a separation's copy of the named source file,
    before the copy: a write that begins and finishes in that window. */
 const duringCopy = vi.hoisted(() => ({ source: null as string | null, fn: null as (() => Promise<void>) | null }));
+/* #4040 — every watched path found absent around an rm or rename: the points a
+   sidecar synth landing mid-swap could observe. */
+const watch = vi.hoisted(() => ({ paths: [] as string[], absent: [] as string[], withJson: false }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const check = async (when: string) => {
+    for (const p of watch.paths) {
+      if (!(await actual.stat(p).then(() => true, () => false))) watch.absent.push(`${p} ${when}`);
+    }
+  };
   const rename = async (from: unknown, to: unknown) => {
     if (midLanding.fn && midLanding.target && String(to).endsWith(midLanding.target)) {
       const run = midLanding.fn;
       midLanding.fn = null;
       await run();
     }
-    return actual.rename(from as string, to as string);
+    await check(`before rename onto ${String(to)}`);
+    await actual.rename(from as string, to as string);
+    await check(`after rename onto ${String(to)}`);
+  };
+  const rm = async (path: unknown, opts?: Parameters<typeof actual.rm>[1]) => {
+    await actual.rm(path as string, opts);
+    await check(`after rm of ${String(path)}`);
   };
   const copyFile = async (from: unknown, to: unknown, mode?: number) => {
     if (duringCopy.fn && duringCopy.source && String(from).endsWith(duringCopy.source)) {
@@ -66,7 +80,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.copyFile(from as string, to as string, mode);
   };
-  return { ...actual, default: { ...actual, rename, copyFile }, rename, copyFile };
+  return { ...actual, default: { ...actual, rename, rm, copyFile }, rename, rm, copyFile };
 });
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
@@ -254,6 +268,9 @@ beforeEach(() => {
   midLanding.target = null;
   duringCopy.fn = null;
   duringCopy.source = null;
+  watch.paths = [];
+  watch.absent = [];
+  watch.withJson = false;
   afterLanding.fn = null;
   gate.release?.(); // a test that failed while holding a render must not wedge the next
   gate.hold = false;
@@ -284,6 +301,7 @@ beforeEach(() => {
       requested.push(voiceId);
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), NEW_PT);
+      if (watch.withJson) writeFileSync(join(qwenDir(), `${voiceId}.json`), JSON.stringify({ language: 'English' }));
     }
     const bytes = new Uint8Array(24_000 * 2 * 0.3);
     return {
@@ -1181,11 +1199,12 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(row('Book Two').voiceUuid).toBeTruthy();
   });
 
-  it('P11-2: a decline during a landing of the source key fails retryably, then succeeds once it has landed', async () => {
+  /* #4040 — a landing renames over the old `.pt`, so only a FIRST landing has the
+     source missing mid-save; a redesign's source is whole throughout (below). */
+  it('P11-2: a decline during a first landing of the source key fails retryably, then succeeds once it has landed', async () => {
     reset();
     writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
     writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One') }]);
-    writeFileSync(pt('qwen-u_shared'), ORIG);
     const twoBefore = row('Book Two');
     let mid: { status: number; body: Record<string, any> } | undefined;
     midLanding.target = 'qwen-u_shared.pt';
@@ -1206,6 +1225,25 @@ describe('pass 11, P11-3 / P11-2 (owner decision: the series mint copies before 
     expect(fresh).not.toBe('u_shared');
     expect(readFileSync(pt(`qwen-${fresh}`))).toEqual(NEW_PT);
     expect(row('Book One').voiceUuid).toBe('u_shared');
+  });
+
+  it('#4040: a decline during a redesign landing of the source key copies the whole base it finds', async () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeBook('Book Two', [{ ...baseRow, ...linkTo('Book One') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    let mid: { status: number; body: Record<string, any> } | undefined;
+    midLanding.target = 'qwen-u_shared.pt';
+    midLanding.fn = async () => {
+      mid = await decline('Book Two', 'Book One');
+    };
+    const d = await design('Book One');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(mid?.status, JSON.stringify(mid?.body)).toBe(200);
+    const fresh = row('Book Two').voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(readFileSync(pt(`qwen-${fresh}`))).toEqual(ORIG); // the base as it was before the rename
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(NEW_PT);
   });
 });
 describe('pass 11, P11-1: a design in a book whose cast is not confirmed yet', () => {
@@ -1425,5 +1463,40 @@ describe('pass 11, Y2: staged files a late sidecar write leaves behind are swept
     } finally {
       qv.LATE_STAGING_SWEEP.delayMs = delay;
     }
+  });
+});describe('#4040 — a landing never leaves the base .pt or .json absent', () => {
+  /* The sidecar re-validates its cached prompt against the .pt on disk, so a
+     synth that lands while the base is momentarily missing fails as undesigned
+     (409). The swap is a rename over the old file: at no point the server can
+     be observed between is either file gone. */
+  const json = (k: string) => join(qwenDir(), `${k}.json`);
+  const seedBase = () => {
+    reset();
+    writeBook('Book One', [{ ...baseRow, ...slot('u_shared') }]);
+    writeFileSync(pt('qwen-u_shared'), ORIG);
+    writeFileSync(json('qwen-u_shared'), JSON.stringify({ language: 'English' }));
+    watch.withJson = true;
+  };
+
+  it('a direct redesign (moveStaged)', async () => {
+    seedBase();
+    watch.paths = [pt('qwen-u_shared'), json('qwen-u_shared')];
+    const d = await design('Book One');
+    expect(d.status, JSON.stringify(d.body)).toBe(200);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(NEW_PT);
+    expect(watch.absent).toEqual([]);
+  });
+
+  it('a preview promote', async () => {
+    seedBase();
+    const p = await design('Book One', { preview: true });
+    expect(p.status, JSON.stringify(p.body)).toBe(200);
+    watch.paths = [pt('qwen-u_shared'), json('qwen-u_shared')];
+    const promote = await request(app)
+      .post(`/api/books/${ids['Book One']}/cast/wren/promote-voice`)
+      .send({ previewVoiceId: p.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(promote.status, JSON.stringify(promote.body)).toBe(200);
+    expect(readFileSync(pt('qwen-u_shared'))).toEqual(NEW_PT);
+    expect(watch.absent).toEqual([]);
   });
 });
