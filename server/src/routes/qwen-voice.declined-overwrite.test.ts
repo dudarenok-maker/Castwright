@@ -559,12 +559,13 @@ describe('pass 7', () => {
     expect((await decline('Book Two', 'Book One')).status).toBe(200);
     const two = row('Book Two').voiceUuid as string;
     await designSafely('Book Two');
-    await designSafely('Book Two', { emotion: 'angry' });
     // later books analysed: Three links to Two, Four to Three, all on Two's voice
     writeBook('Book Three', [{ ...baseRow, voiceUuid: two, ...linkTo('Book Two'), ...slot(two, ['angry']) }]);
     writeBook('Book Four', [{ ...baseRow, voiceUuid: two, ...linkTo('Book Three'), ...slot(two, ['angry']) }]);
-    await designSafely('Book Two', { emotion: 'sad' });
+    // a base redesign resets the variants made from the old base (#4040), so the emotions come after it
     await designSafely('Book Two');
+    await designSafely('Book Two', { emotion: 'angry' });
+    await designSafely('Book Two', { emotion: 'sad' });
     expect(row('Book Two').voiceUuid).toBe(two);
     expect(variantsOf('Book Two')).toEqual(['angry', 'sad']);
     expect(row('Book Four').voiceUuid).toBe(two);
@@ -748,8 +749,8 @@ describe('pass 10, P10-1 (owner decision: stop at the declined book)', () => {
     expect(two).not.toBe('u_shared');
     expect(res.body.voiceUuid).toBe(two);
     await designSafely('Book Two');
-    await designSafely('Book Two', { emotion: 'angry' });
     await designSafely('Book Two');
+    await designSafely('Book Two', { emotion: 'angry' }); // after the base redesigns: those reset the variants (#4040)
     expect(row('Book Two').voiceUuid).toBe(two); // never re-separated
     expect(variantsOf('Book Two')).toEqual(['angry']);
     expect(raw('Book One'), "Book One's cast.json was rewritten").toEqual(oneCast);
@@ -767,9 +768,9 @@ describe('pass 10, P10-1 (owner decision: stop at the declined book)', () => {
     const two = row('Book Two').voiceUuid;
     expect(two).not.toBe('u_shared');
     expect(row('Book Three').voiceUuid).toBe('u_shared');
-    await designSafely('Book Two', { emotion: 'angry' });
     await designSafely('Book Two');
     await designSafely('Book Two');
+    await designSafely('Book Two', { emotion: 'angry' }); // after the base redesigns: those reset the variants (#4040)
     expect(row('Book Two').voiceUuid).toBe(two);
     expect(variantsOf('Book Two')).toEqual(['angry']);
     expect(raw('Book Three'), "Book Three's cast.json was rewritten").toEqual(threeCast);

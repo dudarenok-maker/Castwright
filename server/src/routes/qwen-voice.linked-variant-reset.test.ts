@@ -1,7 +1,7 @@
 /* #4040 (reset them together) — a promote that REPLACES an existing base `.pt`
    (the approve step of a redesign) drops the emotion variants of every row linked
    to that voice: the designing row, its same-book followers, and the rows on the
-   same storage key in every other book of the series. A declined book is on a
+   same storage key in every other book of the library. A declined book is on a
    separated voice (another key) and is never reached. A first design behaves as
    it always did. No variant FILE is deleted (the startup sweep does that).
 
@@ -254,26 +254,40 @@ describe('#4040 — a redesign resets the emotion variants of every linked row',
     expect(hasVariants(B)).toBe(true);
   });
 
-  it('P5: a standalone redesign resets only its own rows; a series book on the same key is untouched', async () => {
+  it('P5: a standalone redesign resets its own rows AND a series book on the same key; a book on another key is untouched', async () => {
     seedFiles(true);
     writeBook(SOLO, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1')]);
     writeBook(ELSEWHERE, [variantsRow('wren', 'u1')]);
-    const elsewhere = readFileSync(castPath(ELSEWHERE));
+    writeBook(D, [variantsRow('wren', 'u9')]);
+    const other = readFileSync(castPath(D));
     await redesign(SOLO);
     expect(hasVariants(SOLO, 'wren')).toBe(false);
     expect(hasVariants(SOLO, 'fern')).toBe(false);
-    expect(readFileSync(castPath(ELSEWHERE)).equals(elsewhere), 'a series book was touched').toBe(true);
+    expect(hasVariants(ELSEWHERE), 'a book on the same key kept its variants').toBe(false);
+    expect(readFileSync(castPath(D)).equals(other), 'a book on another key was touched').toBe(true);
   });
 
-  it('P5: a series redesign never reaches a book of ANOTHER series on the same key', async () => {
+  it('P5: a series redesign resets a book of ANOTHER series on the same key; a book on another key is untouched', async () => {
     seedFiles(true);
     writeBook(A, [variantsRow('wren', 'u1')]);
     writeBook(B, [variantsRow('wren', 'u1')]);
     writeBook(ELSEWHERE, [variantsRow('wren', 'u1')]);
-    const elsewhere = readFileSync(castPath(ELSEWHERE));
+    writeBook(D, [variantsRow('wren', 'u9')]);
+    const other = readFileSync(castPath(D));
     await redesign(A);
     expect(hasVariants(B)).toBe(false);
-    expect(readFileSync(castPath(ELSEWHERE)).equals(elsewhere), 'a book of another series was reset').toBe(true);
+    expect(hasVariants(ELSEWHERE), 'an out-of-series book on the same key kept its variants').toBe(false);
+    expect(readFileSync(castPath(D)).equals(other), 'a book on another key was touched').toBe(true);
+  });
+
+  it('P6: a linked row whose slot name is a legacy name (series mint left it) is reset by the key it renders from', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    writeBook(B, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: 'qwen-legacy', variants: { angry: { name: 'qwen-u1__angry' } } } } })]);
+    await redesign(A);
+    expect(hasVariants(A)).toBe(false);
+    expect(hasVariants(B), 'a legacy-named linked row kept its variants').toBe(false);
+    expect(rowOf(B).overrideTtsVoices.qwen.name).toBe('qwen-legacy');
   });
 });
 

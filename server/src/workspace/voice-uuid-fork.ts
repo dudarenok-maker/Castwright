@@ -301,25 +301,21 @@ export async function legacyKeyHolderBookIds(
    that key must also reset. A book that declined the link sits on a separated
    voice of its own (a different uuid, so a different key) and is never a holder.
    Planning only; the caller locks the books and re-decides every row on a fresh
-   read. Given `seriesFilter`, only that series' books, as `legacyKeyHolderBookIds`. */
-export async function storageKeyHolderBookIds(
-  bookDir: string,
-  key: string,
-  seriesFilter?: { author: string; series: string },
-): Promise<string[]> {
+   read. Library-wide, not series-scoped: the render path plays the key whatever
+   series (or none) the book sits in, so every book on it is reset. */
+export async function storageKeyHolderBookIds(bookDir: string, key: string): Promise<string[]> {
   const { books } = await loadOtherBooks(resolve(bookDir));
   const holds = (row: CastRow): boolean => qwenStorageKey(row, row.id) === key;
-  const inScope = (b: OtherBook): boolean =>
-    !seriesFilter || (b.series?.author === seriesFilter.author && b.series?.series === seriesFilter.series);
-  return [...new Set(books.filter((b) => b.bookId && inScope(b) && b.rows.some(holds)).map((b) => b.bookId as string))];
+  return [...new Set(books.filter((b) => b.bookId && b.rows.some(holds)).map((b) => b.bookId as string))];
 }
 
 /* #4040 (a linked reset) — pure: drop the `overrideTtsVoices.qwen.variants` map of
    every row linked to the voice `key`, i.e. whose Qwen storage key is `key`
    (`qwenStorageKey(row, row.id)`), because the base those variants were minted
-   from was just redesigned. Cloned rows, rows on a library voice and rows whose
-   slot names another voice are never touched (the exclusions of
-   `shareFirstDesign`). A row on a separated voice has a different key and is
+   from was just redesigned. The match is on the storage key the render path plays,
+   never on the slot's `name` (a series mint leaves an older row's legacy name on a
+   uuid). Cloned rows and rows on a library voice are never touched (the
+   exclusions of `shareFirstDesign`). A row on a separated voice has a different key and is
    excluded by construction. Returns the input `cast` itself when nothing changed
    so the caller can skip the write. No I/O, no locks, no file deletion: the
    startup sweep removes the variant files nothing names any more. */
@@ -333,7 +329,6 @@ export function dropLinkedVariants<T extends { characters: CastRow[] }>(
     if (characterHasClonedSlot(row)) return row;
     const slot = row.overrideTtsVoices?.qwen;
     if (!slot || slot.libraryUuid) return row;
-    if (slot.name && slot.name !== key) return row;
     const variants = slot.variants;
     if (!variants || (typeof variants === 'object' && Object.keys(variants).length === 0)) return row;
     changed = true;

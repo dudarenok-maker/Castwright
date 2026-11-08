@@ -1334,7 +1334,7 @@ async function landStagedDesign(
   const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
   /* #4040 — the books with a row on this key (a base redesign resets their variants) */
   const resetIds =
-    mayShare && (await exists(qwenVoicePtPath(watcher.key))) ? await storageKeyHolderBookIds(p.bookDir, watcher.key, p.seriesFilter) : [];
+    !p.emotion && !p.preview && (await exists(qwenVoicePtPath(watcher.key))) ? await storageKeyHolderBookIds(p.bookDir, watcher.key) : [];
   const lockIds = [...new Set([...shareIds, ...resetIds])];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
   if (lockIds.length) {
@@ -1881,7 +1881,7 @@ qwenVoiceRouter.post(
        minted from the OLD embedding is now stale (each was anchored to a PT that
        no longer exists). Invalidate them: drop the whole `variants` map from
        cast.json — here for the designing row, and (#4040) after the move for every
-       other row linked to the voice, in this book and in the series (afterMove,
+       other row linked to the voice, in this book and in every book on the key (afterMove,
        resetLinkedVariants). The character's tagged emotions then re-register as missing
        demand, so the cast's "Design full cast → Emotion variants" scope re-mints
        the ones the user still wants from the new base. #4026 — the variant FILES
@@ -2005,12 +2005,10 @@ qwenVoiceRouter.post(
     };
     const outcome = await withDesignLock(peeked.bookDir, async () => {
       const seriesInfo = peeked.state?.isStandalone === true ? null : await findAuthorSeriesForBookId(bookId);
-      const row = seriesInfo
-        ? (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId)
-        : undefined;
-      const shareIds = row?.voiceUuid && (await isOrdinarySeriesVoice(row)) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id, seriesInfo ?? undefined) : [];
+      const row = (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId);
+      const shareIds = seriesInfo && row?.voiceUuid && (await isOrdinarySeriesVoice(row)) ? await legacyKeyHolderBookIds(peeked.bookDir, row.voiceId ?? row.id, seriesInfo ?? undefined) : [];
       /* #4040 — the books with a row on this key (a redesign resets their variants) */
-      const resetIds = row && seriesInfo ? await storageKeyHolderBookIds(peeked.bookDir, qwenStorageKey(row, characterId), seriesInfo) : [];
+      const resetIds = row ? await storageKeyHolderBookIds(peeked.bookDir, qwenStorageKey(row, characterId)) : [];
       const lockIds = [...new Set([...shareIds, ...resetIds])];
       let out: Awaited<ReturnType<typeof promoteIn>> | typeof BOOK_GONE = BOOK_GONE;
       if (lockIds.length) {

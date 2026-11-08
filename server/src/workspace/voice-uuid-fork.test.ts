@@ -249,40 +249,38 @@ describe('namedQwenVoices (#3992 P10-2, #4026)', () => {
 });
 
 describe('storageKeyHolderBookIds (#4040)', () => {
-  const S = { author: 'Author', series: 'Series' };
   const FOUR_ID = 'book-four-id';
-  it('H1: the other books of the series with a row on the key, not those without', async () => {
+  it('H1: the other books with a row on the key, not those without', async () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Three', THREE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u3' }]);
-    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([TWO_ID]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1')).toEqual([TWO_ID]);
   });
   it('H2: a legacy row (no uuid) is found by its legacy key', async () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v_wren' }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v_wren' }]);
-    expect(await storageKeyHolderBookIds(one, 'qwen-v_wren', S)).toEqual([TWO_ID]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-v_wren')).toEqual([TWO_ID]);
   });
-  it('H3: a book of another series is excluded under a series filter, included without one', async () => {
+  it('H3: a book of another series is a holder too (library-wide)', async () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Four', FOUR_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }], 'Other');
-    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([TWO_ID]);
     expect((await storageKeyHolderBookIds(one, 'qwen-u1')).sort()).toEqual([FOUR_ID, TWO_ID]);
   });
   it('H4: the self book never appears', async () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u9' }]);
-    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1')).toEqual([]);
   });
   it('H5: a row separated onto its own uuid is not a holder of the old key', async () => {
     reset();
     const one = book('One', ONE_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u1' }]);
     book('Two', TWO_ID, [{ id: 'c', voiceId: 'v', voiceUuid: 'u-sep' }]);
-    expect(await storageKeyHolderBookIds(one, 'qwen-u1', S)).toEqual([]);
+    expect(await storageKeyHolderBookIds(one, 'qwen-u1')).toEqual([]);
   });
 });
 
@@ -329,6 +327,19 @@ describe('dropLinkedVariants (#4040)', () => {
     const out = dropLinkedVariants(cast, 'qwen-u1');
     expect(out.changed).toBe(false);
     expect(out.cast).toBe(cast);
+  });
+  it('D7: a row whose slot name is a legacy name but whose uuid key is replaced is reset (the render path ignores the slot name)', () => {
+    const cast = { characters: [row('a', {}, { name: 'qwen-old', variants: V })] };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.changed).toBe(true);
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.name).toBe('qwen-old');
+  });
+  it('D8: a row named qwen-u1 whose uuid is another voice is not reset', () => {
+    const cast = { characters: [row('a', { voiceUuid: 'v' }, { name: 'qwen-u1', variants: V })] };
+    const out = dropLinkedVariants(cast, 'qwen-u1');
+    expect(out.changed).toBe(false);
+    expect(out.cast.characters[0].overrideTtsVoices?.qwen?.variants).toEqual(V);
   });
   it('D6: a legacy row (no uuid) is reset for the legacy key', () => {
     const cast = {
