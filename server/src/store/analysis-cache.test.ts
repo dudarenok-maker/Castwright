@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import {
   cachePath,
   clearAnalysisCache,
@@ -320,20 +320,75 @@ describe('versioned analysis cache (#4031)', () => {
       });
     });
 
-    it('remapCharacterIds rewrites sentence and chapterCast ids', async () => {
+    it('remapCharacterIds rewrites cached sentence takes only; chapterCast and unmapped ids are left alone', async () => {
       await withCache(
         {
           version: 2,
-          chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'old', text: 't' }] as never },
+          chapters: {
+            1: [
+              { id: 1, chapterId: 1, characterId: 'old', text: 't' },
+              { id: 2, chapterId: 1, characterId: 'other', text: 'u' },
+            ] as never,
+          },
           chapterCast: { 1: [{ id: 'old', name: 'O', role: 'minor', color: 'halloran' }] as never },
         },
         async (id) => {
           await mutateAnalysisCache(id, { remapCharacterIds: { old: 'new' } });
           const c = await loadAnalysisCache(id);
-          expect(c.chapters[1][0].characterId).toBe('new');
-          expect(c.chapterCast?.[1][0].id).toBe('new');
+          expect(c.chapters[1].map((s) => s.characterId)).toEqual(['new', 'other']);
+          expect(c.chapterCast?.[1][0].id).toBe('old');
         },
       );
+    });
+
+    it('clearLedger with no sticky entries removes the addedRows key', async () => {
+      await withCache(
+        { version: 2, addedRows: { mine: { state: 'run-owned', fp: 'f' } } },
+        async (id) => {
+          const out = await mutateAnalysisCache(id, { clearLedger: true });
+          expect(Object.hasOwn(out ?? {}, 'addedRows')).toBe(false);
+          expect((await loadAnalysisCache(id)).addedRows).toBeUndefined();
+        },
+      );
+    });
+
+    describe('plan token handling', () => {
+      const seeded = {
+        version: 2,
+        stage1,
+        matchPlan: { version: 1 as const, runToken: 'T1', decisions: { a: dec('a', 'p1') } },
+      };
+
+      it('the same runToken keeps the stored decisions', async () => {
+        await withCache(seeded, async (id) => {
+          await mutateAnalysisCache(id, { matchPlan: { version: 1, runToken: 'T1' } });
+          expect(Object.keys((await loadAnalysisCache(id)).matchPlan?.decisions ?? {})).toEqual([
+            'a',
+          ]);
+        });
+      });
+
+      it('a different runToken empties the decisions', async () => {
+        await withCache(seeded, async (id) => {
+          await mutateAnalysisCache(id, { matchPlan: { version: 1, runToken: 'T2' } });
+          const plan = (await loadAnalysisCache(id)).matchPlan;
+          expect(plan?.runToken).toBe('T2');
+          expect(plan?.decisions).toEqual({});
+        });
+      });
+
+      it('decisions with no plan on disk rejects, leaves the file alone and does not poison the queue', async () => {
+        await withCache({ version: 2, stage1 }, async (id) => {
+          const before = readFileSync(cachePath(id));
+          await expect(mutateAnalysisCache(id, { decisions: { a: dec('a', 'p1') } })).rejects.toThrow(
+            'mutateAnalysisCache: decisions patched with no matchPlan',
+          );
+          expect(readFileSync(cachePath(id)).equals(before)).toBe(true);
+          const out = await mutateAnalysisCache(id, { castDurations: { 1: 1 } });
+          expect(out?.castDurations).toEqual({ 1: 1 });
+          expect((await loadAnalysisCache(id)).castDurations).toEqual({ 1: 1 });
+        });
+      });
     });
 
     it('serialises against a concurrent save and does not deadlock', async () => {

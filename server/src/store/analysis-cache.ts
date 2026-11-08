@@ -324,7 +324,8 @@ export interface CachePatch {
       | 'stage2DurationsEngine'
     >
   >;
-  /** Rewrites `characterId` in the chapter takes and the id in `chapterCast`. */
+  /** Rewrites `characterId` in the cached sentence takes (`chapters`) ONLY. `chapterCast` is the
+      raw per-chapter output and is deliberately left untouched (see cast-merge.ts). */
   remapCharacterIds?: Record<string, string>;
   /** Runs last, on the patched cache, inside the same op. */
   transform?: (cache: AnalysisCache) => AnalysisCache;
@@ -332,7 +333,8 @@ export interface CachePatch {
 
 /* Read-modify-write as ONE `enqueuePathOp` op. The queue is not re-entrant, so
    the body must never call `saveAnalysisCache` / `writeJsonAtomicOrdered`
-   (both enqueue on this same path and would wait on themselves). */
+   (both enqueue on this same path and would wait on themselves). The returned
+   object is the payload just written; callers must not mutate it. */
 export async function mutateAnalysisCache(
   manuscriptId: string,
   patch: CachePatch,
@@ -372,9 +374,9 @@ export async function mutateAnalysisCache(
     }
     if (patch.clearLedger) {
       delete cache.runAddedPairs;
-      cache.addedRows = Object.fromEntries(
-        Object.entries(cache.addedRows ?? {}).filter(([, e]) => e.state !== 'run-owned'),
-      );
+      const sticky = Object.entries(cache.addedRows ?? {}).filter(([, e]) => e.state !== 'run-owned');
+      if (sticky.length > 0) cache.addedRows = Object.fromEntries(sticky);
+      else delete cache.addedRows;
     }
     if (patch.ledger) {
       const rows = { ...cache.addedRows };
@@ -404,14 +406,6 @@ export async function mutateAnalysisCache(
           ss.map((s) => ({ ...s, characterId: to(s.characterId) })),
         ]),
       );
-      if (cache.chapterCast) {
-        cache.chapterCast = Object.fromEntries(
-          Object.entries(cache.chapterCast).map(([k, rows]) => [
-            k,
-            rows.map((r) => ({ ...r, id: to(r.id) })),
-          ]),
-        );
-      }
     }
     if (patch.transform) cache = patch.transform(cache);
     const payload = buildCachePayload(cache);
