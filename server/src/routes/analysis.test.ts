@@ -6608,131 +6608,6 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
     },
     60_000,
   );
-
-  it(
-    '#4031: a dedup suggestion for a pair the user already declined (a notLinkedTo edge on either row) is not re-suggested - main job',
-    async () => {
-      /* Same Оля / Ольга Tier-2b fixture as the Step-5 test above, but the prior
-         cast holds BOTH rows under the ids this run mints (no remap), so the
-         only thing that can keep the pair out of the suggestions file is the
-         `declined` wiring in reconcileDedupSuggestions. The control case (no
-         edge) proves the fixture does suggest the pair. */
-      const BODY =
-        '“Are you sure this will work,” Оля asked.\n\n“I am certain of it,” Ольга replied.\n\n“Let us proceed,” Ольга added.';
-      const stage1Roster = (): CharacterOutput[] => [
-        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
-        { id: 'olya', name: 'Оля', role: 'supporting', color: '#222222', gender: 'female', evidence: [{ quote: 'Оля asked' }] },
-        { id: 'olga', name: 'Ольга', role: 'lead', color: '#111111', gender: 'female', evidence: [{ quote: 'Ольга replied' }] },
-      ];
-      const sentencesFor = (chapterId: number): SentenceOutput[] => [
-        { id: chapterId * 100 + 1, chapterId, characterId: 'olya', confidence: 0.9, text: 'Are you sure this will work' },
-        { id: chapterId * 100 + 2, chapterId, characterId: 'olga', confidence: 0.9, text: 'I am certain of it' },
-        { id: chapterId * 100 + 3, chapterId, characterId: 'olga', confidence: 0.9, text: 'Let us proceed' },
-      ];
-      const phase0Analyzer: Analyzer = {
-        runStage1: () => Promise.reject(new Error('not used')),
-        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
-          return { characters: stage1Roster() };
-        },
-        runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
-        runEmotionChapter: () => Promise.reject(new Error('not used')),
-        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
-        runStage3Chapter: () => Promise.reject(new Error('not used')),
-        runAttributionEscalation: () => Promise.reject(new Error('not used')),
-      };
-      const phase1Analyzer: Analyzer = {
-        runStage1: () => Promise.reject(new Error('not used')),
-        runStage1Chapter: () => Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
-        async runStage2Chapter(_m: string, chapterId: number, _p: string, _c: StageCall): Promise<Stage2ChapterOutput> {
-          return { sentences: sentencesFor(chapterId) };
-        },
-        runEmotionChapter: () => Promise.reject(new Error('not used')),
-        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
-        runStage3Chapter: () => Promise.reject(new Error('not used')),
-        runAttributionEscalation: () => Promise.reject(new Error('no flagged windows')),
-      };
-
-      /** Run the job against a prior cast whose rows carry `edges`; return the pair ids suggested. */
-      const suggestedAfter = async (edges: { olya?: unknown[]; olga?: unknown[] }): Promise<string[]> => {
-        const manuscriptId = `test-decline-suggestions-main-${Date.now()}-${Math.random()}`;
-        const bookDir = makeBookDir();
-        const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
-        process.env.STAGE2_COVERAGE_RETRIES = '0';
-        seedStateJson(bookDir, manuscriptId);
-        const chapterHints: ChapterHint[] = [
-          { id: 1, title: 'Chapter One', body: BODY },
-          { id: 2, title: 'Chapter Two', body: BODY },
-          { id: 3, title: 'Chapter Three', body: BODY },
-        ];
-        putManuscript({
-          manuscriptId,
-          format: 'plaintext',
-          title: 'Decline Suggestions Test Book',
-          wordCount: 100,
-          byteSize: 1000,
-          uploadedAt: new Date().toISOString(),
-          sourceText: chapterHints.map((c) => c.body).join('\n\n'),
-          chapterHints,
-          bookDir,
-        });
-        writeFileSync(
-          join(bookDir, '.audiobook', 'cast.json'),
-          JSON.stringify({
-            characters: [
-              { id: 'olya', name: 'Оля', ...(edges.olya ? { notLinkedTo: edges.olya } : {}) },
-              { id: 'olga', name: 'Ольга', ...(edges.olga ? { notLinkedTo: edges.olga } : {}) },
-            ],
-          }),
-        );
-        const phase0Selection = buildSelection(phase0Analyzer, 'phase0-model');
-        const phase1Selection = buildSelection(phase1Analyzer, 'phase1-model');
-        setPhase1Selection(phase1Selection);
-        const job: AnalysisJob = {
-          controller: new AbortController(),
-          subscribers: new Set(),
-          manuscriptId,
-          kind: 'main',
-          bookDir,
-          engine: 'gemini',
-          replay: {
-            logs: [],
-            lastPhase: null,
-            lastEta: null,
-            lastCastUpdate: null,
-            failedByChapterId: new Map(),
-            lastSeriesPrior: null,
-            warnings: new Map(),
-          },
-          lastDiskWriteAt: 0,
-        } as unknown as AnalysisJob;
-        try {
-          const recordRef = getManuscript(manuscriptId);
-          if (!recordRef) throw new Error('stub manuscript not found');
-          await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
-            requestedFresh: false,
-            allowStage1Shrink: true,
-            requestedModel: undefined,
-          });
-          const file = await loadSuggestions(bookDir);
-          return file.suggestions.map((s) => [s.sourceId, s.targetId].sort().join('|'));
-        } finally {
-          removeManuscript(manuscriptId);
-          await clearAnalysisCache(manuscriptId);
-          rmSync(bookDir, { recursive: true, force: true });
-          if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
-          else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
-        }
-      };
-
-      // control: no edge -> the pair IS suggested
-      expect(await suggestedAfter({})).toContain('olga|olya');
-      // an object edge (no bookId) on the diminutive's row
-      expect(await suggestedAfter({ olya: [{ characterId: 'olga' }] })).not.toContain('olga|olya');
-      // a legacy string edge on the OTHER row
-      expect(await suggestedAfter({ olga: ['olya'] })).not.toContain('olga|olya');
-    },
-    120_000,
-  );
 });
 
 describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2040 Task 14, spec §4.4 closing paragraph)', () => {
@@ -7453,127 +7328,6 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
       }
     },
     60_000,
-  );
-
-  it(
-    '#4031: a dedup suggestion for a pair the user already declined (a notLinkedTo edge on either row) is not re-suggested - subset job',
-    async () => {
-      /* Same Оля / Ольга Tier-2b fixture as the Step-5 test above, but the prior
-         cast holds BOTH rows under the ids this run mints (no remap), so the
-         only thing that can keep the pair out of the suggestions file is the
-         `declined` wiring in reconcileDedupSuggestions. The control case (no
-         edge) proves the fixture does suggest the pair. */
-      const BODY =
-        '“Are you sure this will work,” Оля asked.\n\n“I am certain of it,” Ольга replied.\n\n“Let us proceed,” Ольга added.';
-      const stage1Roster = (): CharacterOutput[] => [
-        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
-        { id: 'olya', name: 'Оля', role: 'supporting', color: '#222222', gender: 'female', evidence: [{ quote: 'Оля asked' }] },
-        { id: 'olga', name: 'Ольга', role: 'lead', color: '#111111', gender: 'female', evidence: [{ quote: 'Ольга replied' }] },
-      ];
-      const sentencesFor = (chapterId: number): SentenceOutput[] => [
-        { id: chapterId * 100 + 1, chapterId, characterId: 'olya', confidence: 0.9, text: 'Are you sure this will work' },
-        { id: chapterId * 100 + 2, chapterId, characterId: 'olga', confidence: 0.9, text: 'I am certain of it' },
-        { id: chapterId * 100 + 3, chapterId, characterId: 'olga', confidence: 0.9, text: 'Let us proceed' },
-      ];
-      const phase0Analyzer: Analyzer = {
-        runStage1: () => Promise.reject(new Error('not used')),
-        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
-          return { characters: stage1Roster() };
-        },
-        runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
-        runEmotionChapter: () => Promise.reject(new Error('not used')),
-        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
-        runStage3Chapter: () => Promise.reject(new Error('not used')),
-        runAttributionEscalation: () => Promise.reject(new Error('not used')),
-      };
-      const phase1Analyzer: Analyzer = {
-        runStage1: () => Promise.reject(new Error('not used')),
-        runStage1Chapter: () => Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
-        async runStage2Chapter(_m: string, chapterId: number, _p: string, _c: StageCall): Promise<Stage2ChapterOutput> {
-          return { sentences: sentencesFor(chapterId) };
-        },
-        runEmotionChapter: () => Promise.reject(new Error('not used')),
-        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
-        runStage3Chapter: () => Promise.reject(new Error('not used')),
-        runAttributionEscalation: () => Promise.reject(new Error('no flagged windows')),
-      };
-
-      /** Run the job against a prior cast whose rows carry `edges`; return the pair ids suggested. */
-      const suggestedAfter = async (edges: { olya?: unknown[]; olga?: unknown[] }): Promise<string[]> => {
-        const manuscriptId = `test-decline-suggestions-subset-${Date.now()}-${Math.random()}`;
-        const bookDir = makeBookDir();
-        const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
-        process.env.STAGE2_COVERAGE_RETRIES = '0';
-        seedStateJson(bookDir, manuscriptId);
-        const chapterHints: ChapterHint[] = [
-          { id: 1, title: 'Chapter One', body: BODY },
-          { id: 2, title: 'Chapter Two', body: BODY },
-          { id: 3, title: 'Chapter Three', body: BODY },
-        ];
-        putManuscript({
-          manuscriptId,
-          format: 'plaintext',
-          title: 'Decline Suggestions Test Book',
-          wordCount: 100,
-          byteSize: 1000,
-          uploadedAt: new Date().toISOString(),
-          sourceText: chapterHints.map((c) => c.body).join('\n\n'),
-          chapterHints,
-          bookDir,
-        });
-        writeFileSync(
-          join(bookDir, '.audiobook', 'cast.json'),
-          JSON.stringify({
-            characters: [
-              { id: 'olya', name: 'Оля', ...(edges.olya ? { notLinkedTo: edges.olya } : {}) },
-              { id: 'olga', name: 'Ольга', ...(edges.olga ? { notLinkedTo: edges.olga } : {}) },
-            ],
-          }),
-        );
-        await saveAnalysisCache(manuscriptId, {
-          chapters: {},
-          stage1: {
-            characters: stage1Roster(),
-            chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
-          },
-        });
-        const phase0Selection = buildSelection(phase0Analyzer, 'phase0-model-subset');
-        const phase1Selection = buildSelection(phase1Analyzer, 'phase1-model-subset');
-        const job = makeSubsetJob(
-          manuscriptId,
-          bookDir,
-          chapterHints.map((c) => c.id),
-        );
-        try {
-          const recordRef = getManuscript(manuscriptId);
-          if (!recordRef) throw new Error('stub manuscript not found');
-          await runSubsetAnalyzerJob(
-            job,
-            recordRef as never,
-            phase0Selection,
-            phase1Selection,
-            recordRef.chapterHints,
-            true,
-          );
-          const file = await loadSuggestions(bookDir);
-          return file.suggestions.map((s) => [s.sourceId, s.targetId].sort().join('|'));
-        } finally {
-          removeManuscript(manuscriptId);
-          await clearAnalysisCache(manuscriptId);
-          rmSync(bookDir, { recursive: true, force: true });
-          if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
-          else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
-        }
-      };
-
-      // control: no edge -> the pair IS suggested
-      expect(await suggestedAfter({})).toContain('olga|olya');
-      // an object edge (no bookId) on the diminutive's row
-      expect(await suggestedAfter({ olya: [{ characterId: 'olga' }] })).not.toContain('olga|olya');
-      // a legacy string edge on the OTHER row
-      expect(await suggestedAfter({ olga: ['olya'] })).not.toContain('olga|olya');
-    },
-    120_000,
   );
 
   it(
@@ -10669,6 +10423,206 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     });
   }, 60_000);
 });
+
+/* #4031 — the dedup pass's suggestions honour the user's SAME-BOOK declines, wired
+   through the REAL jobs. The record carries a bookId (the predicate unit tests
+   below cannot see the route pass the wrong or an undefined one). The prior cast
+   holds both rows under the ids the run mints (no remap), so only the `declined`
+   wiring can keep the Оля / Ольга pair out of the suggestions file; the control
+   case proves the fixture does suggest it. */
+const DECLINE_BOOK_ID = 'b_decline_wiring_test';
+
+async function suggestedPairsAfterJob(
+  kind: 'main' | 'subset',
+  edges: { olya?: unknown[]; olga?: unknown[] },
+): Promise<string[]> {
+  const BODY =
+    '“Are you sure this will work,” Оля asked.\n\n“I am certain of it,” Ольга replied.\n\n“Let us proceed,” Ольга added.';
+  const stage1Roster = (): CharacterOutput[] => [
+    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+    { id: 'olya', name: 'Оля', role: 'supporting', color: '#222222', gender: 'female', evidence: [{ quote: 'Оля asked' }] },
+    { id: 'olga', name: 'Ольга', role: 'lead', color: '#111111', gender: 'female', evidence: [{ quote: 'Ольга replied' }] },
+  ];
+  const sentencesFor = (chapterId: number): SentenceOutput[] => [
+    { id: chapterId * 100 + 1, chapterId, characterId: 'olya', confidence: 0.9, text: 'Are you sure this will work' },
+    { id: chapterId * 100 + 2, chapterId, characterId: 'olga', confidence: 0.9, text: 'I am certain of it' },
+    { id: chapterId * 100 + 3, chapterId, characterId: 'olga', confidence: 0.9, text: 'Let us proceed' },
+  ];
+  const phase0Analyzer: Analyzer = {
+    runStage1: () => Promise.reject(new Error('not used')),
+    async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+      return { characters: stage1Roster() };
+    },
+    runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
+    runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.reject(new Error('not used')),
+  };
+  const phase1Analyzer: Analyzer = {
+    runStage1: () => Promise.reject(new Error('not used')),
+    runStage1Chapter: () => Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
+    async runStage2Chapter(_m: string, chapterId: number, _p: string, _c: StageCall): Promise<Stage2ChapterOutput> {
+      return { sentences: sentencesFor(chapterId) };
+    },
+    runEmotionChapter: () => Promise.reject(new Error('not used')),
+    runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+    runStage3Chapter: () => Promise.reject(new Error('not used')),
+    runAttributionEscalation: () => Promise.reject(new Error('no flagged windows')),
+  };
+  const select = (analyzer: Analyzer, model: string): AnalyzerSelection => ({
+    analyzer,
+    engine: 'gemini',
+    model,
+    fallbackModel: null,
+    fallbackEngine: null,
+  });
+
+  const manuscriptId = `test-decline-suggestions-${kind}-${Date.now()}-${Math.random()}`;
+  const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-decline-suggestions-test-'));
+  mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+  const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+  process.env.STAGE2_COVERAGE_RETRIES = '0';
+  writeFileSync(
+    join(bookDir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: DECLINE_BOOK_ID,
+      language: 'en',
+      manuscriptId,
+      title: 'Decline Suggestions Test Book',
+      author: 'Test Author',
+      series: 'Standalones',
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.md',
+      castConfirmed: false,
+      chapters: [
+        { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+        { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
+        { id: 3, title: 'Chapter Three', slug: '03-chapter-three' },
+      ],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  const chapterHints: ChapterHint[] = [
+    { id: 1, title: 'Chapter One', body: BODY },
+    { id: 2, title: 'Chapter Two', body: BODY },
+    { id: 3, title: 'Chapter Three', body: BODY },
+  ];
+  putManuscript({
+    manuscriptId,
+    bookId: DECLINE_BOOK_ID,
+    format: 'plaintext',
+    title: 'Decline Suggestions Test Book',
+    wordCount: 100,
+    byteSize: 1000,
+    uploadedAt: new Date().toISOString(),
+    sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+    chapterHints,
+    bookDir,
+  });
+  writeFileSync(
+    join(bookDir, '.audiobook', 'cast.json'),
+    JSON.stringify({
+      characters: [
+        { id: 'olya', name: 'Оля', ...(edges.olya ? { notLinkedTo: edges.olya } : {}) },
+        { id: 'olga', name: 'Ольга', ...(edges.olga ? { notLinkedTo: edges.olga } : {}) },
+      ],
+    }),
+  );
+  const phase0Selection = select(phase0Analyzer, 'phase0-model');
+  const phase1Selection = select(phase1Analyzer, 'phase1-model');
+  const replay = {
+    logs: [],
+    lastPhase: null,
+    lastEta: null,
+    lastCastUpdate: null,
+    failedByChapterId: new Map(),
+    lastSeriesPrior: null,
+    warnings: new Map(),
+  };
+  try {
+    const recordRef = getManuscript(manuscriptId);
+    if (!recordRef) throw new Error('stub manuscript not found');
+    if (kind === 'main') {
+      (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = phase1Selection;
+      const job = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay,
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+      await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+    } else {
+      await saveAnalysisCache(manuscriptId, {
+        chapters: {},
+        stage1: {
+          characters: stage1Roster(),
+          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+        },
+      });
+      const job = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'subset',
+        subsetChapterIds: chapterHints.map((c) => c.id),
+        bookDir,
+        engine: 'gemini',
+        replay,
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+      await runSubsetAnalyzerJob(job, recordRef as never, phase0Selection, phase1Selection, recordRef.chapterHints, true);
+    }
+    const file = await loadSuggestions(bookDir);
+    return file.suggestions.map((s) => [s.sourceId, s.targetId].sort().join('|'));
+  } finally {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+    removeManuscript(manuscriptId);
+    await clearAnalysisCache(manuscriptId);
+    rmSync(bookDir, { recursive: true, force: true });
+    if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+  }
+}
+
+describe.each(['main', 'subset'] as const)(
+  'dedup suggestions honour same-book declines (#4031) - %s job',
+  (kind) => {
+    it('control: with no edge the pair IS suggested', async () => {
+      expect(await suggestedPairsAfterJob(kind, {})).toContain('olga|olya');
+    }, 120_000);
+
+    it('a same-book {bookId, characterId} edge suppresses the suggestion', async () => {
+      const pairs = await suggestedPairsAfterJob(kind, {
+        olya: [{ bookId: DECLINE_BOOK_ID, characterId: 'olga' }],
+      });
+      expect(pairs).not.toContain('olga|olya');
+    }, 120_000);
+
+    it('a cross-book edge naming the same slug id does NOT suppress it', async () => {
+      const pairs = await suggestedPairsAfterJob(kind, {
+        olya: [{ bookId: 'some-other-book', characterId: 'olga' }],
+      });
+      expect(pairs).toContain('olga|olya');
+    }, 120_000);
+
+    it('an edge naming no book (object or legacy string) counts as same-book', async () => {
+      expect(await suggestedPairsAfterJob(kind, { olya: [{ characterId: 'olga' }] })).not.toContain('olga|olya');
+      expect(await suggestedPairsAfterJob(kind, { olga: ['olya'] })).not.toContain('olga|olya');
+    }, 120_000);
+  },
+);
 
 describe('sameBookDeclinePredicate (#4031)', () => {
   const rows = [

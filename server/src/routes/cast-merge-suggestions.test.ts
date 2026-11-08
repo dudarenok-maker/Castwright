@@ -404,6 +404,7 @@ describe('POST merge-suggestions/dismiss — unreadable cast.json (#4031)', () =
         .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
         .send({ sourceId: 'olya', targetId: 'olga' });
       expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'Could not dismiss the suggestion.' });
       // the read is first: no record, no edge, the pair is still open
       expect(readHistory()).toBeNull();
       expect(readFileSync(castPath, 'utf8')).toBe('{ not json');
