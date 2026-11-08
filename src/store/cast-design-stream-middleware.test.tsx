@@ -386,6 +386,37 @@ describe('castDesignMiddleware', () => {
     ).toBe('qwen-c1');
   });
 
+  it('a designed base voice clears the emotion variants of every same-voice row in the open book (#4040)', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    openBook(store, 'b1');
+    const slot = (uuid: string) => ({ qwen: { name: `qwen-${uuid}`, variants: { angry: { name: `qwen-${uuid}__angry` } } } });
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'c1', name: 'Aria', voiceUuid: 'u1', overrideTtsVoices: slot('u1') } as never,
+        { id: 'c2', name: 'Fern', voiceUuid: 'u1', overrideTtsVoices: slot('u1') } as never,
+        { id: 'c3', name: 'Other', voiceUuid: 'u2', overrideTtsVoices: slot('u2') } as never,
+      ]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    singleStartCalls[0].cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u1', voiceUuid: 'u1' });
+    const variants = (id: string) =>
+      store.getState().cast.characters.find((c) => c.id === id)?.overrideTtsVoices?.qwen?.variants;
+    expect(variants('c1')).toBeUndefined();
+    expect(variants('c2'), 'a same-voice row kept its variants').toBeUndefined();
+    expect(variants('c3'), 'a row on another voice lost its variants').toBeDefined();
+  });
+
   it('a design the server refused as shared (#3992) toasts its message and changes nothing in the cast', () => {
     const recorded: { type: string }[] = [];
     const store = makeStore(recorded);

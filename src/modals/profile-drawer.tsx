@@ -1524,9 +1524,10 @@ export function ProfileDrawer({
                        off cast.json + disk by promote-voice. Mirror that in redux
                        so the save-path spreads don't re-persist the stale slots
                        and the cast's "Emotion variants" demand re-surfaces them.
-                       No-op on a first design (no variants existed). */
+                       Every same-book row on the same voice is cleared too (the
+                       server reset them all). No-op on a first design. */
                     dispatch(
-                      castActions.clearCharacterEmotionVariants({ characterId: character.id }),
+                      castActions.clearEmotionVariantsOnKey({ characterId: character.id }),
                     );
                     setVoiceCompareInitial(null);
                     /* Resolving the compare ends the single-design lifecycle —
