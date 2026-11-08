@@ -8,7 +8,7 @@
    Real design (preview) and promote routes against real cast.json files. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -484,6 +484,58 @@ describe('#4040 — an emotion variant rendered against a replaced base is disca
     expect(d.body.error).toBe(RETRY);
     for (const b of [A, B]) {
       expect(rowOf(b).overrideTtsVoices.qwen.variants?.angry, `${b.title} carries the old-base variant`).toBeUndefined();
+    }
+  });
+});
+
+/* #4040 — a write failure in ANOTHER book is logged and does not fail the redesign
+   (the base has landed); this book's variants are cleared regardless. */
+describe('#4040 — a linked reset that fails in another book does not fail the redesign', () => {
+  const locked = (b: BookSpec) => chmodSync(castPath(b), 0o444);
+  const unlocked = (b: BookSpec) => chmodSync(castPath(b), 0o666);
+  const noLeak = (body: unknown) => {
+    const text = JSON.stringify(body);
+    expect(text).not.toContain(workspaceRoot);
+    expect(text).not.toMatch(/EPERM|EACCES|EBUSY|EROFS/);
+  };
+
+  it('F1: promote — B cannot be written; the promote answers 200, A is cleared, B keeps its variants', async () => {
+    seedFiles(true);
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1')]);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    locked(B);
+    try {
+      const preview = await design(A);
+      expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+      const kept = await promote(A, preview.body.voiceId);
+      expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+      noLeak(kept.body);
+      expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+      expect(hasVariants(A), "the designing book's variants were not cleared").toBe(false);
+      expect(hasVariants(B), 'the unwritable book was somehow rewritten').toBe(true);
+      expect(err.mock.calls.some((c) => String(c[0]).includes('could not reset the emotion variants')), 'the failure was not logged').toBe(true);
+    } finally {
+      unlocked(B);
+      err.mockRestore();
+    }
+  });
+
+  it('F2: direct landing — B cannot be written; the design answers 200, A is cleared', async () => {
+    seedFiles(true);
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1')]);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    locked(B);
+    try {
+      const res = await directDesign(A);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      noLeak(res.body);
+      expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+      expect(hasVariants(A), "the designing book's variants were not cleared").toBe(false);
+      expect(hasVariants(B), 'the unwritable book was somehow rewritten').toBe(true);
+      expect(err.mock.calls.some((c) => String(c[0]).includes('could not reset the emotion variants')), 'the failure was not logged').toBe(true);
+    } finally {
+      unlocked(B);
+      err.mockRestore();
     }
   });
 });
