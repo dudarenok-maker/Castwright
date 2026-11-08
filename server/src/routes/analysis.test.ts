@@ -45,6 +45,7 @@ import {
   attributeChapterStage2,
   type AnalysisJob,
 } from './analysis.js';
+import { EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
 import type { Stage2CoverageVerdict } from '../analyzer/stage2-coverage.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
@@ -3270,13 +3271,13 @@ describe('dedupAndPrepare — dedup BEFORE fold, sentence rewrite + capture for 
       sentence({ id: 3, characterId: 'narrator' }),
     ];
 
-    const dd = dedupAndPrepare(characters, sentences, 'ru');
+    const dd = dedupAndPrepare(characters, sentences, 'ru', EMPTY_DEDUP_CONSTRAINTS);
 
-    // ONE Ольга survives, with the safeId-derived canonical id.
+    // ONE Ольга survives, under the lowest member id (#4031: was the safeId-derived 'ольга').
     const olgas = dd.characters.filter((c) => c.name === 'Ольга');
     expect(olgas).toHaveLength(1);
     const canonical = olgas[0].id;
-    expect(canonical).toBe('ольга');
+    expect(canonical).toBe('olga');
 
     // Every sentence that was attributed to either source now points at the canonical id.
     expect(dd.sentences.find((s) => s.id === 1)!.characterId).toBe(canonical);
@@ -3286,7 +3287,7 @@ describe('dedupAndPrepare — dedup BEFORE fold, sentence rewrite + capture for 
 
     // A non-empty rewrites map drove the collapse.
     expect(Object.keys(dd.rewrites).length).toBeGreaterThan(0);
-    expect(dd.rewrites['olga']).toBe(canonical);
+    expect(dd.rewrites['ольга']).toBe(canonical);
 
     // preDedupSentences captured the ORIGINAL ids (pre-rewrite) for the journal.
     expect(dd.preDedupSentences.find((s) => s.id === 1)!.characterId).toBe('olga');
@@ -3306,7 +3307,7 @@ describe('dedupAndPrepare — dedup BEFORE fold, sentence rewrite + capture for 
       sentence({ id: 2, characterId: 'olga' }),
     ];
 
-    const dd = dedupAndPrepare(characters, sentences, 'ru');
+    const dd = dedupAndPrepare(characters, sentences, 'ru', EMPTY_DEDUP_CONSTRAINTS);
 
     expect(dd.characters).toHaveLength(2);
     expect(Object.keys(dd.rewrites)).toHaveLength(0);
@@ -5127,7 +5128,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
 
      - Site 1 (`applyRewriteToPriorCast`): the prior cast carries a voiced row
        under id `anton-x`. THIS run's own fresh roster introduces two
-       same-name rows across chapters (`anton-x` in chapter 1, `anton-y` in
+       same-name rows across chapters (`anton-x` in chapter 1, `anton-a` in
        chapters 2-3, both "Anton Prime" — mirroring the analyzer's documented
        non-determinism) that `dedupeRosterByName`'s Tier-1 collapses to a
        third canonical id, producing a real `dd.rewrites` hit. Because the
@@ -5148,7 +5149,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
      (call site 5) — those remain unit-pinned above / in cast-merge.test.ts. */
   const CHAPTER_BODY = '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
 
-  /* Chapter 1 introduces 'anton-x'; chapters 2-3 introduce 'anton-y' — same
+  /* Chapter 1 introduces 'anton-x'; chapters 2-3 introduce 'anton-a' — same
      name, different id, exactly the drift dedupeRosterByName's Tier-1
      collapses. mergeRosterChapter merges by id, so both survive as distinct
      rows in the whole-book roster dedupAndPrepare receives. Combined lines
@@ -5156,7 +5157,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
      survivor isn't folded into the unknown-male bucket before this reaches
      the merge. */
   function stage1RosterForChapter(chapterId: number): CharacterOutput[] {
-    const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
+    const antonId = chapterId === 1 ? 'anton-x' : 'anton-a';
     return [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
       {
@@ -5171,7 +5172,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   }
 
   function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
-    const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
+    const antonId = chapterId === 1 ? 'anton-x' : 'anton-a';
     return [
       {
         id: chapterId * 100 + 1,
@@ -5388,18 +5389,18 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         });
 
         // The fresh roster's Tier-1 name-dedup actually collapsed anton-x/
-        // anton-y to a THIRD canonical id (sanity check — if this fails the
-        // fixture itself is wrong, not the history wiring).
+        // anton-a onto the lowest member id, anton-a (#4031: it was a third,
+        // safeId(name) id before) — sanity check: if this fails the fixture
+        // itself is wrong, not the history wiring. The prior anton-x row is the
+        // LOSER, so it is still a dedup rewrite key.
         const castAfter = JSON.parse(
           readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
         ) as { characters: Array<{ id: string; name: string }> };
         const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
         expect(antonPrime).toBeDefined();
         const antonPrimeId = antonPrime!.id;
-        expect(antonPrimeId).not.toBe('anton-x');
-        expect(antonPrimeId).not.toBe('anton-y');
+        expect(antonPrimeId).toBe('anton-a');
         expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-x');
-        expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-y');
 
         const history = await loadCastIdHistory(bookDir);
         // The pre-existing entry from before this run survived the run.
@@ -5508,7 +5509,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         //
         // NOT a sufficient check on its own: the PER-CHAPTER interim write
         // (buildInterimCast -> previewFoldForLiveView -> dedupeRosterByName)
-        // ALSO Tier-1-collapses anton-x/anton-y under a `lines: 0` PLACEHOLDER
+        // ALSO Tier-1-collapses anton-x/anton-a under a `lines: 0` PLACEHOLDER
         // — so an id-only assertion would pass even if the AUTHORITATIVE
         // final write were skipped entirely by the outer persistErr catch
         // (confirmed by direct experiment: this exact assertion shape passed
@@ -5546,7 +5547,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
     'site 4 (#2040 Task 10 round 3): the convergence-skip records nothing, even though Site 1 records its own entry for the same fresh survivor',
     async () => {
       /* Same roster/attribution shape as the sibling tests above (anton-x
-         ch1 / anton-y ch2-3, both "Anton Prime" — Tier-1-deduped to a fresh
+         ch1 / anton-a ch2-3, both "Anton Prime" — Tier-1-deduped to a fresh
          canonical id), but the prior 'anton-x' row's NAME matches "Anton
          Prime" (unlike the FIRST sibling test above, which deliberately
          diverges the name so Site 3/Task 10's name-matcher never even
@@ -5660,21 +5661,27 @@ describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wirin
      the exact real-box shape (`docs/testing` / PR #2640 review): the
      analyzer's own non-determinism mints THREE fresh candidate rows across
      three chapters for one character ("Одуван" as `oduvan`, `owdovan`,
-     `одуван`), which dedupeRosterByName's Tier-1 exact-name pass collapses
-     to `одуван` as its own internal survivor — coincidentally colliding with
+     `a_oduvan`), which dedupeRosterByName's Tier-1 exact-name pass collapses
+     to `a_oduvan` as its own internal survivor — coincidentally colliding with
      the established prior cast row's stable ASCII id `oduvan`. Without the
      strip at both main-route sites (5615 `cumulativeForRemap` / 5804
      `cumulative`), the established `oduvan` row is wrongly retired in favour
-     of the non-canonical `одуван` survivor. */
+     of the non-canonical `a_oduvan` survivor.
+
+     #4031: the dedup survivor is now the LOWEST member id, so the original
+     Cyrillic third id (which sorts after `oduvan`) no longer reproduces the
+     collision — `oduvan` would simply win. The third id is `a_oduvan`
+     (non-kebab, sorts below `oduvan`), which keeps the #2584 shape: a
+     non-ASCII-kebab survivor beating the established kebab id. */
   const CHAPTER_BODY = '“Are you sure this will work,” Одуван asked.\n\nOlga nodded and looked away.';
 
-  // Chapter 1 introduces 'oduvan', chapter 2 'owdovan', chapter 3 'одуван' —
+  // Chapter 1 introduces 'oduvan', chapter 2 'owdovan', chapter 3 'a_oduvan' —
   // all named "Одуван". mergeRosterChapter merges by id, so all three
   // survive as distinct rows in the whole-book roster dedupAndPrepare
   // receives, exactly the same-run duplication dedupeRosterByName's Tier-1
   // collapses onto one of its own choosing.
   function stage1RosterForChapter(chapterId: number): CharacterOutput[] {
-    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'a_oduvan';
     return [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
       {
@@ -5689,7 +5696,7 @@ describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wirin
   }
 
   function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
-    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'a_oduvan';
     return [
       {
         id: chapterId * 100 + 1,
@@ -5887,7 +5894,7 @@ describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wirin
         // fresh dedup's own non-canonical choice. This is exactly what a
         // revert of either main-route call site (5615/5804) breaks.
         expect(oduvanRows[0].id).toBe('oduvan');
-        expect(castAfter.characters.map((c) => c.id)).not.toContain('одуван');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('a_oduvan');
         expect(castAfter.characters.map((c) => c.id)).not.toContain('owdovan');
 
         // The established voice rode onto the surviving row — proves Site 1
@@ -5897,12 +5904,12 @@ describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wirin
         expect(oduvanRows[0].voiceUuid).toBe('U-oduvan');
         expect(oduvanRows[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-U-oduvan' } });
 
-        // cast-id-history: the fresh survivor 'одуван' was retired ONTO the
+        // cast-id-history: the fresh survivor 'a_oduvan' was retired ONTO the
         // established id (Task 10 early remap, site 4) — but 'oduvan' itself
         // was never retired (Site 1 must not fire on it, since the strip
         // removed it from the composed rewrite table it consumes).
         const history = await loadCastIdHistory(bookDir);
-        expect(history.supersededBy).toHaveProperty('одуван', 'oduvan');
+        expect(history.supersededBy).toHaveProperty('a_oduvan', 'oduvan');
         expect(history.supersededBy).not.toHaveProperty('oduvan');
       } finally {
         removeManuscript(manuscriptId);
@@ -7334,7 +7341,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
     "site 4 convergence-skip on the subset path: no spurious retirement when the prior row already converged via this run's own dedup (mirrors the Task 8 / Task-10-round-3 guard)",
     async () => {
       /* Same roster/attribution shape as the main-path Task 8 guard fixture:
-         chapter 1 introduces 'anton-x', chapters 2-3 introduce 'anton-y' —
+         chapter 1 introduces 'anton-x', chapters 2-3 introduce 'anton-a' —
          same name "Anton Prime", different id, which dedupeRosterByName's
          Tier-1 collapses to a third canonical id (dd.rewrites hit). The
          prior 'anton-x' row's NAME matches "Anton Prime" exactly, so
@@ -7348,7 +7355,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
 
       function convergeStage1RosterForChapter(chapterId: number): CharacterOutput[] {
-        const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
+        const antonId = chapterId === 1 ? 'anton-x' : 'anton-a';
         return [
           { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
           {
@@ -7363,7 +7370,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
       }
 
       function convergeSentencesForChapter(chapterId: number): SentenceOutput[] {
-        const antonId = chapterId === 1 ? 'anton-x' : 'anton-y';
+        const antonId = chapterId === 1 ? 'anton-x' : 'anton-a';
         return [
           {
             id: chapterId * 100 + 1,
@@ -7518,12 +7525,12 @@ describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wir
      the subset (already-analysed) path, Phase 0's `runStage1Chapter` is
      still called per requested chapter (a fresh per-chapter cast probe
      merged with the cache), so it must resolve, not reject — chapter 1
-     contributes `oduvan`, chapter 2 `owdovan`, chapter 3 `одуван`, all named
+     contributes `oduvan`, chapter 2 `owdovan`, chapter 3 `a_oduvan`, all named
      "Одуван", exactly the same-run duplicate shape as the main-path test. */
   const CHAPTER_BODY = '“Are you sure this will work,” Одуван asked.\n\nOlga nodded and looked away.';
 
   function stage1RosterForChapter(chapterId: number): CharacterOutput[] {
-    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'a_oduvan';
     return [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
       {
@@ -7538,7 +7545,7 @@ describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wir
   }
 
   function mockAttributionSentencesForChapter(chapterId: number): SentenceOutput[] {
-    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'одуван';
+    const oduvanId = chapterId === 1 ? 'oduvan' : chapterId === 2 ? 'owdovan' : 'a_oduvan';
     return [
       {
         id: chapterId * 100 + 1,
@@ -7692,7 +7699,7 @@ describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wir
 
       // stage1Existed === true so Phase 1 (and the persist block the strip
       // guards) actually runs this pass. The per-chapter runStage1Chapter
-      // mock (above) still contributes the owdovan/одуван duplicate rows as
+      // mock (above) still contributes the owdovan/a_oduvan duplicate rows as
       // each requested chapter runs; this seed only needs to be a valid
       // starting roster so the "already analysed" gate is satisfied.
       await saveAnalysisCache(manuscriptId, {
@@ -7743,14 +7750,14 @@ describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wir
 
         // Core N7 assertion for the subset-path pair of call sites.
         expect(oduvanRows[0].id).toBe('oduvan');
-        expect(castAfter.characters.map((c) => c.id)).not.toContain('одуван');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('a_oduvan');
         expect(castAfter.characters.map((c) => c.id)).not.toContain('owdovan');
         expect(oduvanRows[0].voiceState).toBe('tuned');
         expect(oduvanRows[0].voiceUuid).toBe('U-oduvan');
         expect(oduvanRows[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-U-oduvan' } });
 
         const history = await loadCastIdHistory(bookDir);
-        expect(history.supersededBy).toHaveProperty('одуван', 'oduvan');
+        expect(history.supersededBy).toHaveProperty('a_oduvan', 'oduvan');
         expect(history.supersededBy).not.toHaveProperty('oduvan');
       } finally {
         removeManuscript(manuscriptId);

@@ -1,11 +1,11 @@
 import type { CharacterOutput } from '../handoff/schemas.js';
-import { safeId, normaliseNameKey } from '../util/safe-id.js';
+import { normaliseNameKey } from '../util/safe-id.js';
 import { normaliseForMatch } from '../util/text-match.js';
 import { mergeCharacterFields } from './roster-merge-fields.js';
 import { diminutiveCanonical } from './ru-diminutives.js';
 import { conventionsFor } from './dialogue-structure/lang/index.js';
-
-export interface MergeSuggestion { sourceId: string; targetId: string; reason: string }
+import type { DedupConstraints, NotLinkedEntry, StoredSuggestion } from '../store/reanalysis-types.js';
+import { pairKey } from '../store/cast-merge-suggestions.js';
 
 const NARRATOR_ID = 'narrator';
 
@@ -148,14 +148,58 @@ export function stripEstablishedAsciiRewrites<
 
 // ── dedupeRosterByName ───────────────────────────────────────────────────────
 
+/** No plan: every row is an unminted `new` row with no candidates and no
+    declines, so today's name-tier behaviour holds (only the survivor id rule
+    differs). Used by the Phase-0a callers until Task 16 wires the real plan. */
+export const EMPTY_DEDUP_CONSTRAINTS: DedupConstraints = { planned: new Map() };
+
+export type RefusalReason = 'different-prior' | 'join-vs-new' | 'declined' | 'matched-from-conflict';
+/** A pair the name tiers wanted to merge but the plan forbids. `a` < `b`. */
+export interface RefusedPair { a: string; b: string; why: RefusalReason }
+/** A group of `new` rows that merged into one survivor. `inheritedDeclines` is
+    the CROSS-BOOK union (a same-book decline is stripped: it is moot once the
+    rows are one). The caller applies it to the survivor's plan decision. */
+export interface MergedNewGroup {
+  survivor: string;
+  merged: string[];
+  candidates: string[];
+  declinedIds: string[];
+  inheritedDeclines: NotLinkedEntry[];
+}
+
+/** What the plan says about one (possibly already merged) roster node. */
+interface NodeState {
+  /** The prior row the node joined; null for a `new` node. */
+  priorId: string | null;
+  /** The node's CURRENT id is a minted id. */
+  minted: boolean;
+  /** Every raw fresh id folded into the node (its own included). */
+  members: Set<string>;
+  candidates: Set<string>;
+  declinedIds: Set<string>;
+  inherited: NotLinkedEntry[];
+  matchedFrom: unknown;
+}
+
+const compareIds = (x: string, y: string): number =>
+  x.localeCompare(y, 'en', { numeric: true }) || (x < y ? -1 : x > y ? 1 : 0);
+
+const declineKey = (e: NotLinkedEntry): string =>
+  typeof e === 'string' ? `\u0000${e}` : `${e.bookId ?? ''}\u0000${e.characterId}`;
+
 export function dedupeRosterByName(
   characters: CharacterOutput[],
   sentences: ReadonlyArray<{ characterId: string }>,
-  opts: { language?: string } = {},
+  opts: { language?: string; constraints: DedupConstraints },
 ): {
   characters: CharacterOutput[];
   rewrites: Record<string, string>;
-  suggestions: MergeSuggestion[];
+  suggestions: StoredSuggestion[];
+  /** Pairs the name tiers wanted to merge that the plan refused (each also
+      appears in `suggestions`). */
+  refused: RefusedPair[];
+  /** `new`+`new` merges, for the caller to fold into the plan's decisions. */
+  mergedNew: MergedNewGroup[];
   /** The subset of `rewrites`' keys produced by Tier-1 (exact normalised
       name) — i.e. this run's OWN fresh roster contained 2+ rows sharing the
       exact same name and Tier-1 arbitrarily collapsed them onto one
@@ -168,10 +212,142 @@ export function dedupeRosterByName(
   tier1RewriteKeys: Set<string>;
 } {
   const lines = lineCounts(sentences);
+  const { constraints } = opts;
   const rewrites: Record<string, string> = {};
   const tier1RewriteKeys = new Set<string>();
   // Work on shallow clones so callers keep their input; preserve insertion order.
   let roster: CharacterOutput[] = characters.map((ch) => ({ ...ch }));
+  // Rows consumed (merged away) by a tier; compared by identity because a
+  // survivor's id can change as it absorbs members.
+  const dropped = new Set<CharacterOutput>();
+  const refusals: Array<{ x: string; y: string; why: RefusalReason; reason: string }> = [];
+
+  // ── Plan state per node ──────────────────────────────────────────────────
+  const state = new Map<CharacterOutput, NodeState>();
+  for (const ch of roster) {
+    const info = constraints.planned.get(ch.id);
+    state.set(
+      ch,
+      info?.kind === 'join'
+        ? { priorId: info.priorId, minted: false, members: new Set([ch.id]), candidates: new Set(), declinedIds: new Set(), inherited: [], matchedFrom: undefined }
+        : {
+            priorId: null,
+            minted: info?.minted ?? false,
+            members: new Set([ch.id]),
+            candidates: new Set(info?.candidates ?? []),
+            declinedIds: new Set(info?.declinedIds ?? []),
+            inherited: [...(info?.inheritedDeclines ?? [])],
+            matchedFrom: info?.matchedFrom,
+          },
+    );
+  }
+  const sameBook = (e: NotLinkedEntry): boolean =>
+    typeof e === 'string' || e.bookId === undefined || e.bookId === constraints.currentBookId;
+  const holds = (s: NodeState, id: string): boolean => s.members.has(id) || s.candidates.has(id);
+  /** `x` declines `y`: a declined id (or a same-book inherited decline) names a member or candidate of `y`. */
+  const declines = (x: NodeState, y: NodeState): boolean =>
+    [...x.declinedIds].some((id) => holds(y, id)) ||
+    x.inherited.some((e) => sameBook(e) && holds(y, typeof e === 'string' ? e : e.characterId));
+  /** Why two nodes may not merge, or null when they may. */
+  const refusal = (a: CharacterOutput, b: CharacterOutput): RefusalReason | null => {
+    const x = state.get(a)!;
+    const y = state.get(b)!;
+    if (x.priorId !== null || y.priorId !== null) {
+      if (x.priorId !== null && y.priorId !== null) return x.priorId === y.priorId ? null : 'different-prior';
+      return 'join-vs-new';
+    }
+    if (declines(x, y) || declines(y, x)) return 'declined';
+    if (
+      x.matchedFrom !== undefined &&
+      y.matchedFrom !== undefined &&
+      JSON.stringify(x.matchedFrom) !== JSON.stringify(y.matchedFrom)
+    ) {
+      return 'matched-from-conflict';
+    }
+    return null;
+  };
+  const refuse = (a: CharacterOutput, b: CharacterOutput, why: RefusalReason, reason: string): void => {
+    refusals.push({ x: a.id, y: b.id, why, reason });
+  };
+
+  // ── First-person phantom detection (needed by the survivor rule) ─────────
+  const nameKeyOf = (ch: CharacterOutput): string => normaliseNameKey(ch.name);
+  // A "character" whose NAME is the language's bare first-person pronoun (the
+  // model rostering «Я»/«I» as its own entity) is never real — it's the
+  // narrator-protagonist's self-reference. Force it to a STRONG edge so it
+  // merges into whichever real character claims that pronoun as an alias,
+  // overriding the single-token weak-link gate that protects role-word minors.
+  const firstPersonRx = conventionsFor(opts.language)?.pronouns.firstPerson ?? null;
+  const isFirstPersonName = (ch: CharacterOutput): boolean =>
+    firstPersonRx !== null && firstPersonRx.test(` ${nameKeyOf(ch)} `);
+
+  /** The id a merge of `a` and `b` keeps. Always one of the two nodes' own ids:
+      the prior id, else a minted id, else (never a first-person phantom's)
+      the lowest raw id, numeric-aware. Never `safeId(name)`, never line
+      counts — so the prompt call (no sentences) and the post-stage-2 call
+      agree (A25c). */
+  const survivorId = (a: CharacterOutput, b: CharacterOutput): string => {
+    const prior = state.get(a)!.priorId ?? state.get(b)!.priorId;
+    const rank = (ch: CharacterOutput): [number, number, number] => [
+      prior !== null && ch.id === prior ? 0 : 1,
+      state.get(ch)!.minted ? 0 : 1,
+      isFirstPersonName(ch) ? 1 : 0,
+    ];
+    const ra = rank(a);
+    const rb = rank(b);
+    for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] < rb[i] ? a.id : b.id;
+    return compareIds(a.id, b.id) <= 0 ? a.id : b.id;
+  };
+
+  /** Fold `victim` into `base` (which stays in the roster; the caller drops
+      `victim`). `base` supplies the surviving fields; the id follows `survivorId`. */
+  const mergeNodes = (base: CharacterOutput, victim: CharacterOutput, tier1: boolean): void => {
+    const winner = survivorId(base, victim);
+    const sb = state.get(base)!;
+    const sv = state.get(victim)!;
+    const winnerMinted = winner === base.id ? sb.minted : sv.minted;
+    const oldIds = [base.id, victim.id];
+    mergeCharacterFields(base, victim);
+    base.id = winner;
+    for (const old of oldIds) {
+      if (old === winner) continue;
+      rewrites[old] = winner;
+      if (tier1) tier1RewriteKeys.add(old);
+    }
+    const seen = new Set(sb.inherited.map(declineKey));
+    for (const e of sv.inherited) if (!seen.has(declineKey(e))) sb.inherited.push(e);
+    for (const m of sv.members) sb.members.add(m);
+    for (const m of sv.candidates) sb.candidates.add(m);
+    for (const m of sv.declinedIds) sb.declinedIds.add(m);
+    sb.priorId = sb.priorId ?? sv.priorId;
+    sb.minted = winnerMinted;
+    sb.matchedFrom = sb.matchedFrom ?? sv.matchedFrom;
+    dropped.add(victim);
+  };
+
+  /** Merge `order` into clusters: each row joins the first cluster base the
+      plan lets it merge with, else starts its own. A refused pairing is
+      recorded (it becomes a suggestion). */
+  const absorbGreedy = (order: CharacterOutput[], reasonFor: (a: CharacterOutput, b: CharacterOutput) => string, tier1: boolean): void => {
+    const bases: CharacterOutput[] = [];
+    for (const m of order) {
+      let placed = false;
+      for (const b of bases) {
+        const why = refusal(b, m);
+        if (why === null) {
+          mergeNodes(b, m, tier1);
+          placed = true;
+          break;
+        }
+        refuse(b, m, why, reasonFor(b, m));
+      }
+      if (!placed) bases.push(m);
+    }
+  };
+
+  /** Attributed lines of a node: its own plus every row folded into it. */
+  const linesOf = (ch: CharacterOutput): number =>
+    [...state.get(ch)!.members].reduce((n, id) => n + (lines.get(id) ?? 0), 0);
 
   // ── Tier-1: exact normalised name, gender-gated, never narrator ──────────
   const byKey = new Map<string, CharacterOutput[]>();
@@ -183,11 +359,6 @@ export function dedupeRosterByName(
     byKey.get(key)!.push(ch);
   }
 
-  // tier1Survivors: canonicalId → merged survivor node.
-  const tier1Survivors = new Map<string, CharacterOutput>();
-  // ids that have been consumed (should not appear in the rebuilt roster).
-  const dropped = new Set<string>();
-
   for (const group of byKey.values()) {
     if (group.length < 2) continue;
 
@@ -195,57 +366,16 @@ export function dedupeRosterByName(
     const genders = new Set(group.map((g) => g.gender).filter(Boolean));
     if (genders.size > 1) continue;
 
-    const canonicalId = safeId(group[0].name);
-    // Never remap onto the special narrator id.
-    if (canonicalId === NARRATOR_ID) continue;
-
-    // Build the survivor: start from the first group member, assign canonical id.
-    const survivor: CharacterOutput = { ...group[0], id: canonicalId };
-
-    // Record rewrite for the first member if its id differs from canonical.
-    if (group[0].id !== canonicalId) {
-      rewrites[group[0].id] = canonicalId;
-      tier1RewriteKeys.add(group[0].id);
-    }
-
-    // Merge remaining members into survivor.
-    for (const member of group.slice(1)) {
-      mergeCharacterFields(survivor, member);
-      if (member.id !== canonicalId) {
-        rewrites[member.id] = canonicalId;
-        tier1RewriteKeys.add(member.id);
-      }
-      dropped.add(member.id);
-    }
-
-    // Drop the first member too if it was replaced by the canonical id.
-    if (group[0].id !== canonicalId) dropped.add(group[0].id);
-
-    tier1Survivors.set(canonicalId, survivor);
+    absorbGreedy(group, (a) => `Same name «${a.name}»`, true);
   }
-
-  // Rebuild roster: for each original slot, either keep it or replace the
-  // first occurrence of its group with the survivor.
-  const emittedT1 = new Set<string>();
-  roster = roster.flatMap((ch) => {
-    if (ch.id === NARRATOR_ID) return [ch];
-    const canonicalId = rewrites[ch.id] ?? ch.id;
-    const survivor = tier1Survivors.get(canonicalId);
-    if (!survivor) return [ch]; // not part of any Tier-1 group
-    if (emittedT1.has(canonicalId)) return []; // already emitted this group's survivor
-    emittedT1.add(canonicalId);
-    return [survivor];
-  });
+  roster = roster.filter((ch) => !dropped.has(ch));
 
   // ── Tier-2a: full-vs-short token subset, single superset, auto-merge ─────
-  const linesOf = (ch: CharacterOutput): number => lines.get(ch.id) ?? 0;
-
-  // Iterate a stable snapshot; track which ids were consumed this tier.
+  // Iterate a stable snapshot; track which rows were consumed this tier.
   const snapshot = [...roster];
-  const droppedT2 = new Set<string>();
 
   for (const short of snapshot) {
-    if (short.id === NARRATOR_ID || droppedT2.has(short.id)) continue;
+    if (short.id === NARRATOR_ID || dropped.has(short)) continue;
     const sTok = tokens(short.name);
     if (sTok.length === 0) continue;
 
@@ -254,7 +384,7 @@ export function dedupeRosterByName(
       (long) =>
         long !== short &&
         long.id !== NARRATOR_ID &&
-        !droppedT2.has(long.id) &&
+        !dropped.has(long) &&
         tokens(long.name).length > sTok.length &&
         sTok.every((t, i) => tokens(long.name)[i] === t) &&
         !gendersConflict(short.gender, long.gender),
@@ -264,28 +394,17 @@ export function dedupeRosterByName(
     if (supersets.length !== 1) continue;
 
     const long = supersets[0];
-    // Survivor = more lines; tie → earlier in roster (snapshot) order.
-    // When tied, prefer the one that appears earlier in snapshot order.
-    const longLines = linesOf(long);
-    const shortLines = linesOf(short);
-    let survivor: CharacterOutput;
-    let victim: CharacterOutput;
-    const shortIdx = snapshot.indexOf(short);
-    const longIdx = snapshot.indexOf(long);
-    if (longLines > shortLines || (longLines === shortLines && longIdx < shortIdx)) {
-      survivor = long;
-      victim = short;
-    } else {
-      survivor = short;
-      victim = long;
+    const why = refusal(long, short);
+    if (why !== null) {
+      refuse(long, short, why, `«${short.name}» may be «${long.name}»`);
+      continue;
     }
-
-    mergeCharacterFields(survivor, victim);
-    rewrites[victim.id] = survivor.id;
-    droppedT2.add(victim.id);
+    // The full name supplies the surviving fields (no line counts: the prompt
+    // call has none); the id follows the survivor rule.
+    mergeNodes(long, short, false);
   }
 
-  roster = roster.filter((ch) => !droppedT2.has(ch.id));
+  roster = roster.filter((ch) => !dropped.has(ch));
 
   // ── Tier-3: alias coreference — strong auto-merge via union-find ──────────
   // A candidate link X→Y := X's normalised name appears in Y's alias set.
@@ -294,25 +413,23 @@ export function dedupeRosterByName(
   // name). A one-sided SINGLE-token (bare-word) link is left to the weak pass
   // so a role-word-named minor (`шеф`) is never directionally absorbed into a
   // principal. Hoisted so Tier-3 and Tier-2b share one suggestions array.
-  const suggestions: MergeSuggestion[] = [];
-
-  const nameKeyOf = (ch: CharacterOutput): string => normaliseNameKey(ch.name);
-
-  // A "character" whose NAME is the language's bare first-person pronoun (the
-  // model rostering «Я»/«I» as its own entity) is never real — it's the
-  // narrator-protagonist's self-reference. Force it to a STRONG edge so it
-  // merges into whichever real character claims that pronoun as an alias,
-  // overriding the single-token weak-link gate that protects role-word minors.
-  const firstPersonRx = conventionsFor(opts.language)?.pronouns.firstPerson ?? null;
-  const isFirstPersonName = (ch: CharacterOutput): boolean =>
-    firstPersonRx !== null && firstPersonRx.test(` ${nameKeyOf(ch)} `);
+  const suggestions: StoredSuggestion[] = [];
+  const toStored = (source: string, target: string, reason: string): StoredSuggestion => ({
+    sourceId: source,
+    targetId: target,
+    ...pairKey(source, target),
+    reason,
+    origin: 'dedup',
+  });
 
   const aliasKeysOf = (ch: CharacterOutput): Set<string> =>
     new Set((ch.aliases ?? []).map((a) => normaliseNameKey(a)).filter(Boolean));
 
   const t3nodes = roster.filter((ch) => ch.id !== NARRATOR_ID);
-  const t3aliases = new Map<string, Set<string>>();
-  for (const ch of t3nodes) t3aliases.set(ch.id, aliasKeysOf(ch));
+  // Keyed by the row object: a merge below can change a survivor's id, and this
+  // is the PRE-merge alias snapshot the weak pass reads.
+  const t3aliases = new Map<CharacterOutput, Set<string>>();
+  for (const ch of t3nodes) t3aliases.set(ch, aliasKeysOf(ch));
 
   // Union-find over strong edges (roster is tiny — plain find, no compression).
   // The tuple annotation keeps `new Map<string,string>(...)` type-checking
@@ -339,8 +456,8 @@ export function dedupeRosterByName(
       const x = t3nodes[i];
       const y = t3nodes[j];
       if (gendersConflict(x.gender, y.gender)) continue;
-      const linkXY = t3aliases.get(y.id)!.has(nameKeyOf(x)); // x's name ∈ y aliases
-      const linkYX = t3aliases.get(x.id)!.has(nameKeyOf(y)); // y's name ∈ x aliases
+      const linkXY = t3aliases.get(y)!.has(nameKeyOf(x)); // x's name ∈ y aliases
+      const linkYX = t3aliases.get(x)!.has(nameKeyOf(y)); // y's name ∈ x aliases
       const mutual = linkXY && linkYX;
       const strong =
         mutual ||
@@ -357,7 +474,6 @@ export function dedupeRosterByName(
     if (!t3components.has(root)) t3components.set(root, []);
     t3components.get(root)!.push(ch);
   }
-  const droppedT3 = new Set<string>();
   for (const members of t3components.values()) {
     if (members.length < 2) continue;
     // Component-consistency guard (defense-in-depth). The per-edge gate only
@@ -377,34 +493,25 @@ export function dedupeRosterByName(
       members.map((m) => m.gender).filter((g) => g === 'male' || g === 'female' || g === 'neutral'),
     );
     if (concreteGenders.size > 1) continue;
-    // Survivor = most name tokens (prefer real name), then most lines, then
-    // earliest roster order — deterministic regardless of union order.
-    // (Secondary line-count tiebreak can undercount a Tier-1/Tier-2a survivor
-    // whose id was renamed or whose victim's sentences aren't rewritten until
-    // dedupAndPrepare, so `lines.get(id)` can read 0 for it; only bites on a
-    // token-count tie, so it never changes which real name wins.)
+    // Field base = most name tokens (prefer real name), then earliest roster
+    // order — deterministic regardless of union order, and independent of
+    // line counts (the id follows the survivor rule, not this ranking).
     const ranked = members
-      .map((m) => ({ m, idx: roster.indexOf(m), tok: tokens(m.name).length, ln: lines.get(m.id) ?? 0 }))
+      .map((m) => ({ m, idx: roster.indexOf(m), tok: tokens(m.name).length }))
       .sort(
         (a, b) =>
           (isFirstPersonName(a.m) ? 1 : 0) - (isFirstPersonName(b.m) ? 1 : 0) ||
           b.tok - a.tok ||
-          b.ln - a.ln ||
           a.idx - b.idx,
       );
-    const survivor = ranked[0].m;
     // Merge victims in roster order for deterministic field-merge results.
     const victims = ranked
       .slice(1)
       .map((r) => r.m)
       .sort((a, b) => roster.indexOf(a) - roster.indexOf(b));
-    for (const victim of victims) {
-      mergeCharacterFields(survivor, victim);
-      rewrites[victim.id] = survivor.id;
-      droppedT3.add(victim.id);
-    }
+    absorbGreedy([ranked[0].m, ...victims], (a, b) => `Possibly the same character as «${a.name}» / «${b.name}»`, false);
   }
-  roster = roster.filter((ch) => !droppedT3.has(ch.id));
+  roster = roster.filter((ch) => !dropped.has(ch));
 
   // Fallback: a bare first-person-pronoun character that STILL stands (no
   // roster peer aliased it above) is never a real character — route it and its
@@ -429,7 +536,7 @@ export function dedupeRosterByName(
   // iterated, so they never count toward rowCountOfKey.
   const t3survivors = roster.filter((ch) => ch.id !== NARRATOR_ID);
   const rowCountOfKey = (key: string): number =>
-    t3survivors.filter((ch) => nameKeyOf(ch) === key || t3aliases.get(ch.id)!.has(key)).length;
+    t3survivors.filter((ch) => nameKeyOf(ch) === key || t3aliases.get(ch)!.has(key)).length;
   const displayForKey = (ch: CharacterOutput, key: string): string | undefined =>
     normaliseNameKey(ch.name) === key
       ? ch.name
@@ -441,8 +548,8 @@ export function dedupeRosterByName(
       const y = t3survivors[j];
       if (gendersConflict(x.gender, y.gender)) continue;
 
-      const linkXY = t3aliases.get(y.id)!.has(nameKeyOf(x));
-      const linkYX = t3aliases.get(x.id)!.has(nameKeyOf(y));
+      const linkXY = t3aliases.get(y)!.has(nameKeyOf(x));
+      const linkYX = t3aliases.get(x)!.has(nameKeyOf(y));
 
       let key: string | undefined;
       let display: string | undefined;
@@ -455,7 +562,7 @@ export function dedupeRosterByName(
         display = linkXY ? x.name : y.name;
       } else {
         // Shared third-party alias (neither name links the other).
-        const shared = [...t3aliases.get(x.id)!].find((k) => t3aliases.get(y.id)!.has(k));
+        const shared = [...t3aliases.get(x)!].find((k) => t3aliases.get(y)!.has(k));
         if (shared) {
           key = shared;
           display = displayForKey(x, shared) ?? displayForKey(y, shared) ?? shared;
@@ -465,15 +572,11 @@ export function dedupeRosterByName(
       if (rowCountOfKey(key) !== 2) continue;
 
       // source = fewer lines, target = more lines (tie → i<j, so y is source).
-      const xln = lines.get(x.id) ?? 0;
-      const yln = lines.get(y.id) ?? 0;
+      const xln = linesOf(x);
+      const yln = linesOf(y);
       const target = xln >= yln ? x : y;
       const source = target === x ? y : x;
-      suggestions.push({
-        sourceId: source.id,
-        targetId: target.id,
-        reason: `Both known as «${display}»`,
-      });
+      suggestions.push(toStored(source.id, target.id, `Both known as «${display}»`));
     }
   }
 
@@ -511,20 +614,52 @@ export function dedupeRosterByName(
       // Source = fewer lines; target = more lines (ties → i < j so b is target).
       const target = linesOf(a) >= linesOf(b) ? a : b;
       const source = target === a ? b : a;
-      suggestions.push({ sourceId: source.id, targetId: target.id, reason: `Diminutive of «${target.name}»` });
+      suggestions.push(toStored(source.id, target.id, `Diminutive of «${target.name}»`));
     }
   }
 
-  return { characters: roster, rewrites, suggestions, tier1RewriteKeys };
+  // ── Refused merges → fresh↔fresh suggestions ─────────────────────────────
+  // Ids were recorded when the tier refused; a later merge may have renamed
+  // either side, so resolve through the final rewrites. A pair that ended up
+  // as one node (or was routed to the narrator) is no longer a question.
+  const refused: RefusedPair[] = [];
+  const seenPairs = new Set(suggestions.map((s) => `${s.a}\u0000${s.b}`));
+  for (const r of refusals) {
+    const x = rewrites[r.x] ?? r.x;
+    const y = rewrites[r.y] ?? r.y;
+    if (x === y || x === NARRATOR_ID || y === NARRATOR_ID) continue;
+    const { a, b } = pairKey(x, y);
+    if (refused.some((p) => p.a === a && p.b === b)) continue;
+    refused.push({ a, b, why: r.why });
+    if (seenPairs.has(`${a}\u0000${b}`)) continue;
+    seenPairs.add(`${a}\u0000${b}`);
+    suggestions.push(toStored(x, y, r.reason));
+  }
+
+  // ── new+new merges: union the declines onto the survivor ─────────────────
+  const mergedNew: MergedNewGroup[] = [];
+  for (const ch of roster) {
+    const s = state.get(ch);
+    if (!s || s.priorId !== null || s.members.size < 2) continue;
+    mergedNew.push({
+      survivor: ch.id,
+      merged: [...s.members].filter((m) => m !== ch.id),
+      candidates: [...s.candidates],
+      declinedIds: [...s.declinedIds],
+      inheritedDeclines: s.inherited.filter((e) => !sameBook(e)),
+    });
+  }
+
+  return { characters: roster, rewrites, suggestions, refused, mergedNew, tier1RewriteKeys };
 }
 
 /** Drop suggestions whose source OR target id is not a standing character in the
     final (post-fold) roster — the fold may have collapsed a low-line diminutive
     into a bucket, which would leave a suggestion pointing at a gone id. */
-export function pruneSuggestionsToRoster(
-  suggestions: MergeSuggestion[],
+export function pruneSuggestionsToRoster<S extends { sourceId: string; targetId: string }>(
+  suggestions: S[],
   characters: ReadonlyArray<{ id: string }>,
-): MergeSuggestion[] {
+): S[] {
   const ids = new Set(characters.map((c) => c.id));
   return suggestions.filter((s) => ids.has(s.sourceId) && ids.has(s.targetId));
 }

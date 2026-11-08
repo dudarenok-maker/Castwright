@@ -33,10 +33,12 @@ import {
   loadCastIdHistoryWithStatus,
   recordNotSamePerson,
 } from './cast-id-history.js';
-import type { MergeSuggestion } from '../analyzer/roster-dedup.js';
 import type { NotLinkedEntry, StoredSuggestion } from './reanalysis-types.js';
 
-export type { MergeSuggestion };
+/** The `{ sourceId, targetId, reason }` shape the GET route serves. Defined here
+    (it used to live in `roster-dedup.ts`) so the dedup can import `pairKey`
+    without an import cycle. */
+export interface MergeSuggestion { sourceId: string; targetId: string; reason: string }
 
 export interface CastMergeSuggestionsFile {
   suggestions: MergeSuggestion[];

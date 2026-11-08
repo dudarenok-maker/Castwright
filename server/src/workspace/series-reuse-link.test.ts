@@ -28,6 +28,7 @@ import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
 import {
   composeRewrites,
   dedupeRosterByName,
+  EMPTY_DEDUP_CONSTRAINTS,
   stripEstablishedAsciiRewrites,
 } from '../analyzer/roster-dedup.js';
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
@@ -777,7 +778,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     await linkSeriesReuseAtAnalysis(BOOK2, fresh, options);
     const postLink = fresh.map((c) => ({ ...c }));
     const dd = sentences
-      ? dedupeRosterByName(fresh as never, sentences)
+      ? dedupeRosterByName(fresh as never, sentences, { constraints: EMPTY_DEDUP_CONSTRAINTS })
       : { characters: fresh as never as LinkableCharacter[], rewrites: {} };
     const roster = dd.characters as unknown as LinkableCharacter[];
     const cumulative = stripEstablishedAsciiRewrites(
@@ -1013,12 +1014,14 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
 
   it('dedup moves the join onto a row the seed refused: the prior notLinkedTo separation survives, no link is stamped', async () => {
     /* Prior brann is separated from Book One's Brann. The stage-1 roster mints
-       brann ("Brann Weir", 1 line) and brann-2 ("Brann", 3 lines). The seed
+       brann ("Brann Weir", 1 line) and a-brann ("Brann", 3 lines). The seed
        runs BEFORE dedup: brann claims the prior row by id, so the strict
-       matchedFrom candidate set refuses brann-2. Tier-2a then collapses
-       brann into brann-2 (rewrite {brann: 'brann-2'}) and the rewritten prior
-       joins brann-2 by id — a row that must still carry the prior's
-       notLinkedTo, or the linker re-links the pair the user separated. */
+       matchedFrom candidate set refuses a-brann. Tier-2a then collapses
+       brann into a-brann (rewrite {brann: 'a-brann'}) and the rewritten prior
+       joins a-brann by id — a row that must still carry the prior's
+       notLinkedTo, or the linker re-links the pair the user separated.
+       (#4031: the survivor is the lowest member id, not the row with more
+       lines — the refused row is id'd `a-brann` so it still wins.) */
     const prior: PriorRow[] = [
       {
         id: 'brann',
@@ -1029,7 +1032,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     ];
     const fresh: LinkableCharacter[] = [
       { id: 'brann', name: 'Brann Weir', gender: 'male', ageRange: 'adult' },
-      { id: 'brann-2', name: 'Brann', gender: 'male', ageRange: 'adult' },
+      { id: 'a-brann', name: 'Brann', gender: 'male', ageRange: 'adult' },
     ];
     const library: LibraryCharacterRecord[] = [
       ...PRIOR_LIBRARY,
@@ -1041,13 +1044,13 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     ];
     const sentences = [
       { characterId: 'brann' },
-      { characterId: 'brann-2' },
-      { characterId: 'brann-2' },
-      { characterId: 'brann-2' },
+      { characterId: 'a-brann' },
+      { characterId: 'a-brann' },
+      { characterId: 'a-brann' },
     ];
     const { merged } = await runReAnalysis(prior, fresh, routeOptions(library), sentences);
 
-    const brann = merged.find((c) => c.id === 'brann-2');
+    const brann = merged.find((c) => c.id === 'a-brann');
     expect(brann).toBeTruthy();
     expect(merged.some((c) => c.id === 'brann')).toBe(false); // dedup really collapsed it
     expect(brann?.matchedFrom).toBeUndefined();
@@ -1058,8 +1061,8 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
   it('dedup moves the join onto a row the strict seed refused: a linked unpinned prior row takes its voice fields whole, no stamp from another Book One character leaks', async () => {
     /* Prior brann (unpinned, reused) is linked to Book One's "The Smith". The
        strict matchedFrom seed gives that link to brann ("Brann Weir") by id and
-       refuses brann-2 ("Brann"); dedup then collapses brann into brann-2, so
-       the rewritten prior joins brann-2 — which the linker stamped with Book
+       refuses a-brann ("Brann"); dedup then collapses brann into a-brann, so
+       the rewritten prior joins a-brann — which the linker stamped with Book
        One's separate Brann (and its Qwen design). A linked prior row must take
        its voice fields whole, as a pinned one does. */
     const smithLink = {
@@ -1079,7 +1082,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     ];
     const fresh: LinkableCharacter[] = [
       { id: 'brann', name: 'Brann Weir', gender: 'male', ageRange: 'adult' },
-      { id: 'brann-2', name: 'Brann', gender: 'male', ageRange: 'adult' },
+      { id: 'a-brann', name: 'Brann', gender: 'male', ageRange: 'adult' },
     ];
     const library: LibraryCharacterRecord[] = [
       ...PRIOR_LIBRARY,
@@ -1111,16 +1114,16 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     };
     const sentences = [
       { characterId: 'brann' },
-      { characterId: 'brann-2' },
-      { characterId: 'brann-2' },
-      { characterId: 'brann-2' },
+      { characterId: 'a-brann' },
+      { characterId: 'a-brann' },
+      { characterId: 'a-brann' },
     ];
     const { merged, postLink } = await runReAnalysis(prior, fresh, options, sentences);
 
-    // the linker really stamped Book One's Brann onto brann-2 (the leak source)
-    expect(postLink.find((c) => c.id === 'brann-2')?.matchedFrom?.characterId).toBe('brann');
+    // the linker really stamped Book One's Brann onto a-brann (the leak source)
+    expect(postLink.find((c) => c.id === 'a-brann')?.matchedFrom?.characterId).toBe('brann');
     expect(merged.some((c) => c.id === 'brann')).toBe(false); // dedup really collapsed it
-    const brann = merged.find((c) => c.id === 'brann-2');
+    const brann = merged.find((c) => c.id === 'a-brann');
     expect(brann?.matchedFrom?.characterId).toBe('smith');
     expect(brann?.voiceId).toBe('v_b1_smith');
     expect(brann?.ttsEngine).toBeUndefined();

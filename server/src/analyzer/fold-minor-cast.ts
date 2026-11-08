@@ -77,6 +77,9 @@ export interface FoldOptions {
       descriptor detection in `isDescriptorName`. Missing / English → the
       existing English behaviour. Normalised via `normaliseBookLanguage`. */
   language?: string;
+  /** Ids that joined a prior cast character (#4031): never folded and never
+      dropped, whatever their line count or name. */
+  protectIds?: ReadonlySet<string>;
 }
 
 export interface FoldResult {
@@ -226,6 +229,7 @@ export function foldMinorCast(
   for (const c of characters) {
     if (c.id === NARRATOR_ID) continue;
     if (c.id === MALE_BUCKET_ID || c.id === FEMALE_BUCKET_ID) continue;
+    if (opts.protectIds?.has(c.id)) continue;
     const isDescriptor = isDescriptorName(c.name, language);
     const lines = lineCount.get(c.id) ?? 0;
     const isProtected =

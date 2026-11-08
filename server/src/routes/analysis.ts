@@ -43,7 +43,7 @@ import {
   type ThirdPartyGuardChapter,
 } from '../analyzer/third-party-front-matter-guard.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
-import { dedupeRosterByName, composeRewrites, stripEstablishedAsciiRewrites, pruneSuggestionsToRoster, type MergeSuggestion } from '../analyzer/roster-dedup.js';
+import { dedupeRosterByName, composeRewrites, stripEstablishedAsciiRewrites, pruneSuggestionsToRoster, EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
 import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
 import {
   loadCastMerges,
@@ -57,7 +57,6 @@ import {
 import {
   reconcileSuggestionsLocked,
   clearSuggestions,
-  pairKey,
   loadStoredSuggestions,
 } from '../store/cast-merge-suggestions.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
@@ -162,7 +161,7 @@ import {
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
-import type { StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
+import type { DedupConstraints, StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -401,13 +400,6 @@ export async function loadHealOpts(
   };
 }
 
-/* #4031 Task 3 — convert the dedup pass's `MergeSuggestion[]` to the durable
-   store shape at the call site. Task 5 changes the dedup suggestion shape and
-   removes this adapter (ruling R15). */
-function legacyDedupToStored(suggestions: MergeSuggestion[]): StoredSuggestion[] {
-  return suggestions.map((s) => ({ ...s, ...pairKey(s.sourceId, s.targetId), origin: 'dedup' as const }));
-}
-
 /* #4031 — "has the user declined this pair?" for the dedup suggestions, read off
    cast.json's `notLinkedTo` edges (a dismissal writes one on each row). SAME-BOOK
    ONLY: an edge naming `bookId` counts, a cross-book edge never does (a series'
@@ -434,11 +426,11 @@ export function sameBookDeclinePredicate(
    re-suggested: the dismissal's `notLinkedTo` edge on either row is the signal
    read here. cast-id-history is deliberately NOT read — this runs before the
    persist's `statusBeforePersist` capture, which must stay that file's first
-   read. Removed with the adapter above. */
+   read. */
 async function reconcileDedupSuggestions(
   bookDir: string,
   bookId: string | undefined,
-  suggestions: MergeSuggestion[],
+  suggestions: StoredSuggestion[],
   roster: ReadonlyArray<{ id: string }>,
 ): Promise<void> {
   await withCastLock(bookDir, async () => {
@@ -446,7 +438,7 @@ async function reconcileDedupSuggestions(
       characters?: Array<{ id: string; notLinkedTo?: Array<string | { bookId?: string; characterId: string }> }>;
     }>(castJsonPath(bookDir));
     await reconcileSuggestionsLocked(bookDir, {
-      add: legacyDedupToStored(pruneSuggestionsToRoster(suggestions, roster)),
+      add: pruneSuggestionsToRoster(suggestions, roster),
       liveIds: new Set(roster.map((c) => c.id)),
       supersededBy: {},
       declined: sameBookDeclinePredicate(cast?.characters ?? [], bookId),
@@ -1101,7 +1093,7 @@ export function buildInterimCast(
     }
   }
   if (roster.size === 0) return [];
-  const folded = previewFoldForLiveView(Array.from(roster.values()), language);
+  const folded = previewFoldForLiveView(Array.from(roster.values()), language, EMPTY_DEDUP_CONSTRAINTS);
   return attachLinesAndScenes(assignPaletteColors(folded), []);
 }
 
@@ -1170,11 +1162,12 @@ export function dedupAndPrepare(
   characters: CharacterOutput[],
   sentences: SentenceOutput[],
   language: string | undefined,
+  constraints: DedupConstraints,
 ): {
   characters: CharacterOutput[];
   sentences: SentenceOutput[];
   rewrites: Record<string, string>;
-  suggestions: MergeSuggestion[];
+  suggestions: StoredSuggestion[];
   preDedupSentences: { id: number; chapterId: number; characterId: string }[];
   preDedupRoster: { id: string; name: string }[];
   /** #2584/#2570 (PR #2640 N6) — no longer consumed by
@@ -1192,7 +1185,7 @@ export function dedupAndPrepare(
   }));
   const preDedupRoster = characters.map((c) => ({ id: c.id, name: c.name }));
 
-  const dd = dedupeRosterByName(characters, sentences, { language });
+  const dd = dedupeRosterByName(characters, sentences, { language, constraints });
   const rewrittenSentences = sentences.map((s) =>
     dd.rewrites[s.characterId] ? { ...s, characterId: dd.rewrites[s.characterId] } : s,
   );
@@ -1210,14 +1203,16 @@ export function dedupAndPrepare(
 
 function previewFoldForLiveView(
   characters: CharacterOutput[],
-  language?: string,
+  language: string | undefined,
+  constraints: DedupConstraints,
+  protectIds?: ReadonlySet<string>,
 ): CharacterOutput[] {
   // Fix 1 — dedup by name BEFORE the fold (mirroring finalization order at
   // dedupAndPrepare) so the live "Cast so far" SSE and the interim cast.json
-  // dedup consistently with the final cast. Empty sentences: Tier-1 is
-  // name/gender-only; Tier-2a survivor degrades to deterministic snapshot order.
-  const deduped = dedupeRosterByName(characters, [], { language }).characters;
-  return foldMinorCast(deduped, [], { nameOnly: true, language }).characters;
+  // dedup consistently with the final cast. Empty sentences: the survivor id
+  // never depends on line counts, so this agrees with the post-stage-2 call.
+  const deduped = dedupeRosterByName(characters, [], { language, constraints }).characters;
+  return foldMinorCast(deduped, [], { nameOnly: true, language, protectIds }).characters;
 }
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
@@ -2585,7 +2580,7 @@ export async function attributeChapterStage2(opts: {
      row carries «я» as an alias. */
   const stage1: Stage1Output = {
     ...opts.stage1,
-    characters: dedupeRosterByName(opts.stage1.characters, [], { language: opts.stageCall.language })
+    characters: dedupeRosterByName(opts.stage1.characters, [], { language: opts.stageCall.language, constraints: EMPTY_DEDUP_CONSTRAINTS })
       .characters,
   };
   /* RC3 — thread the known first-person narrator id into the stage-2 prompt
@@ -5329,7 +5324,7 @@ export async function runMainAnalyzerJob(
             await persistDroppedQuotesBatch(bookDir, manuscriptId, 'analysis-stream', verified);
           },
         );
-      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
+      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS) });
       /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
          the finalised stage1 is the canonical roster for any Phase 1
          worker that asks for a snapshot. Flip the flag so
@@ -5399,7 +5394,7 @@ export async function runMainAnalyzerJob(
            Unknown female buckets in the live view — same contract the
            on-disk interim cast.json uses, kept in lockstep so the user
            sees one consistent roster across SSE + .audiobook/. */
-        const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage);
+        const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage, EMPTY_DEDUP_CONSTRAINTS);
         send({ kind: 'cast-update', characters: folded });
       };
 
@@ -6061,7 +6056,7 @@ export async function runMainAnalyzerJob(
           },
         );
         stage1ActualMs = Date.now() - stage0Start;
-        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
+        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS) });
         /* Cast.json reflects the verified Phase 0b state before Phase 1's
            attribution pass starts (which can be the longest phase by far
            on a long book). We apply the name-only fold here too — the
@@ -6078,7 +6073,7 @@ export async function runMainAnalyzerJob(
         if (recordRef.bookDir) {
           try {
             const stage1Cast = attachLinesAndScenes(
-              assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage)),
+              assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS)),
               [],
             );
             // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
@@ -7197,7 +7192,7 @@ export async function runMainAnalyzerJob(
        duplicates and rewrite their sentences onto the canonical id, so the fold
        counts lines against deduped ids. Captures pre-dedup lineage for the
        journal + diminutive suggestions for the sibling file. */
-    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage);
+    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage, EMPTY_DEDUP_CONSTRAINTS);
     stage1.characters = dd.characters;
     recovered.sentences = dd.sentences;
     /* #1447 — strip a real third-party person named/quoted only in a non-story
@@ -8735,7 +8730,7 @@ export async function runSubsetAnalyzerJob(
     };
     const emitCastUpdate = (): void => {
       const roster = rebuildRoster();
-      const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage);
+      const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage, EMPTY_DEDUP_CONSTRAINTS);
       send({ kind: 'cast-update', characters: folded });
     };
 
@@ -9000,7 +8995,7 @@ export async function runSubsetAnalyzerJob(
         await persistDroppedQuotesBatch(bookDir, manuscriptId, 'analysis-chapters', verified);
       },
     );
-    send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage) });
+    send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS) });
     send({ kind: 'phase', phaseId: 0, progress: 1, label: PHASES[0].label, model: subsetModelId });
 
     /* ── Phase 1 (subset). Sentence attribution for the new chapters only.
@@ -9430,7 +9425,7 @@ export async function runSubsetAnalyzerJob(
     /* srv-1 — dedup BEFORE the re-fold (see the main route's same block):
        collapse same-name / token-subset duplicates and rewrite their sentences
        onto the canonical id so the fold counts deduped lines. */
-    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage);
+    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage, EMPTY_DEDUP_CONSTRAINTS);
     stage1.characters = dd.characters;
     recovered.sentences = dd.sentences;
     /* #1447 — strip a real third-party person named/quoted only in a non-story
