@@ -4393,9 +4393,12 @@ paths:
         persisted. Removing a cloned assignment has its own dedicated route
         (`DELETE /api/voice-library/{voiceUuid}/assign`).
 
-        Some `cast` fields are server-owned: the on-disk value always wins and
-        this route is never their writer — `voiceUuid`, `notLinkedTo`,
-        `declinedVoiceFrom`, and (#4040) `overrideTtsVoices.qwen.variants`. A
+        Some `cast` fields are server-owned: for a character that already
+        exists on disk, the stored value wins and this route is never their
+        writer — `voiceUuid` (only when the stored row carries one),
+        `notLinkedTo`, `declinedVoiceFrom`, and (#4040)
+        `overrideTtsVoices.qwen.variants`. A character the request introduces
+        passes through as sent. A
         base voice redesign clears the emotion variants of every linked row,
         and a save from a tab that still holds the old rows must not write
         them back; set or clear variants through the design route and
