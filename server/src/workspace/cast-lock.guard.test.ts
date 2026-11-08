@@ -8,7 +8,8 @@
    WHAT IT CHECKS: walks every `.ts` file under `server/src` (recursively,
    excluding `*.test.ts`) that mentions `castJsonPath`, and for each
    `writeJsonAtomic(castJsonPath(` (or `writeJsonAtomicOrdered(castJsonPath(`) /
-   `rm(castJsonPath(` occurrence, asserts it
+   cast.json delete occurrence (`rm`, `rmSync`, `unlink`, `unlinkSync` or `rename`
+   whose first argument is `castJsonPath(`), asserts it
    sits inside a `withCastLock(...)` / `withCastLocks(...)` call. Only those
    two are accepted — `withLibraryVoiceLock` guards a DIFFERENT map key
    (`library-voice:<uuid>`), so a cast write enclosed by it and nothing else
@@ -46,9 +47,9 @@
         a hand-rolled partial parser with the bugs to match. The one real site
         it existed for is now on the pinned allowlist below instead, with an
         honest "can't prove it, human-verified" `why`.
-     3. Each `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence
+     3. Each `writeJsonAtomic(castJsonPath(` / cast.json delete occurrence
         is a match of `/\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/` /
-        `/\brm\(\s*castJsonPath\(/` (whitespace-tolerant between the two
+        `/\b(?:rm|rmSync|unlink|unlinkSync|rename)\(\s*castJsonPath\(/` (whitespace-tolerant between the two
         opening parens — see "Prettier-wrap" in the false-negatives list
         below for why the earlier exact-adjacency version was itself a hole)
         whose start index (a) falls inside some lock range for that file, per
@@ -302,7 +303,9 @@ function isLocked(ranges: LockRange[], index: number): boolean {
 // otherwise silently drop a real occurrence out of coverage (see file
 // header, false negatives).
 const WRITE_RE = /\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/g;
-const RM_RE = /\brm\(\s*castJsonPath\(/g;
+// Every spelling of "remove or move aside cast.json" whose FIRST argument is the
+// castJsonPath(...) call itself (#4039: `rm(` alone let `unlink(`/`rename(` slip by).
+const RM_RE = /\b(?:rm|rmSync|unlink|unlinkSync|rename)\(\s*castJsonPath\(/g;
 
 interface ScanResult {
   writes: number;
@@ -341,6 +344,57 @@ function scanFile(content: string): ScanResult | null {
   if (writes === 0 && rms === 0) return null;
   return { writes, rms, details };
 }
+
+/** Every real (non-comment, non-string) cast.json delete site (`rm`, `rmSync`, `unlink`, `unlinkSync` or `rename` of `castJsonPath(`) in `content`,
+    locked or not. `scanFile` above only reports UNLOCKED sites, so the
+    carryover-decision guard below needs this wider view; it shares RM_RE and
+    the same opaque-range exclusion, so prose never counts as a site. */
+function collectRmSites(content: string): number[] {
+  if (!content.includes('castJsonPath')) return [];
+  const opaque = computeAstOpaqueRanges(content);
+  const lines: number[] = [];
+  const re = new RegExp(RM_RE.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    if (isOpaque(opaque, m.index)) continue;
+    lines.push(lineOf(content, m.index));
+  }
+  return lines;
+}
+
+/* Why this exists (#4039): a reparse now KEEPS cast-reuse-carryover.json when
+   cast.json is absent or unparseable. That is only safe while every code path that deletes
+   cast.json also decides what happens to the carryover. A future deleter that
+   forgets it would bring old voice links back on the next analysis. The lock
+   guard above cannot see this (a locked rm is fine for locking), so this map
+   records, per file, how many cast.json delete sites exist and what the file
+   does with the carryover. A new site must be recorded here on purpose.
+   The scan is SYNTACTIC (rm/rmSync/unlink/unlinkSync/rename called with
+   `castJsonPath(` as its first argument), so it cannot see: a path held in a
+   variable (`const p = castJsonPath(d); rm(p)`), an aliased import, a
+   hand-built path (`join(dotAudiobook(d), 'cast.json')`), or a deleter reached
+   through a helper in another file. Review a new cast.json deleter by hand;
+   do not read a green guard as proof there is none.
+   book-state.ts has two sites in ONE reparse path: the early return for an
+   absent/unparseable cast.json (carryover kept), and the final delete after
+   the carryover was rewritten or removed. */
+const CAST_JSON_DELETERS: ReadonlyMap<string, { count: number; carryover: string }> = new Map([
+  [
+    'routes/analysis.ts',
+    {
+      count: 1,
+      carryover: 'Start fresh: removes cast-reuse-carryover.json in the same withCastLock hold',
+    },
+  ],
+  [
+    'routes/book-state.ts',
+    {
+      count: 2,
+      carryover:
+        'reparse/replace-manuscript: rewrites, removes, or (cast.json absent or unparseable) keeps the carryover before deleting cast.json (#4039)',
+    },
+  ],
+]);
 
 /* One entry by design.
 
@@ -385,7 +439,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     expect(actualRoot).toBe(declaredRoot);
   });
 
-  it('every writeJsonAtomic(castJsonPath(...)) / rm(castJsonPath(...)) site sits inside withCastLock/withCastLocks, except the pinned allowlist', () => {
+  it('every writeJsonAtomic(castJsonPath(...)) / cast.json delete (rm, rmSync, unlink, unlinkSync, rename of castJsonPath(...)) site sits inside withCastLock/withCastLocks, except the pinned allowlist', () => {
     const files = collectSourceFiles(SRC_ROOT);
     const problems: string[] = [];
     const matchedAllowlistKeys = new Set<string>();
@@ -419,6 +473,34 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
         problems.push(
           `${rel}: allowlisted for ${allowed.writes} unlocked write(s) / ${allowed.rms} unlocked rm(s), but the ` +
             'scan now finds ZERO unlocked occurrences there — update or remove this allowlist entry.',
+        );
+      }
+    }
+
+    expect(problems, problems.join('\n\n')).toEqual([]);
+  });
+
+  it('every cast.json delete (rm, rmSync, unlink, unlinkSync, rename of castJsonPath(...)) site is recorded in CAST_JSON_DELETERS with its carryover decision (#4039)', () => {
+    const problems: string[] = [];
+    const seen = new Set<string>();
+
+    for (const file of collectSourceFiles(SRC_ROOT)) {
+      const rel = relative(SRC_ROOT, file).split(sep).join('/');
+      const sites = collectRmSites(readFileSync(file, 'utf8'));
+      if (sites.length === 0) continue;
+      seen.add(rel);
+      const recorded = CAST_JSON_DELETERS.get(rel);
+      const msg =
+        `${rel} deletes cast.json at ${sites.length} site(s) (lines ${sites.join(', ')}) but CAST_JSON_DELETERS records ${recorded?.count ?? 0}. ` +
+        'A new cast.json deleter must decide what happens to cast-reuse-carryover.json (remove it, keep it, or rewrite it: see #4039) and record that decision here.';
+      if (!recorded) problems.push(`not recorded: ${msg}`);
+      else if (recorded.count !== sites.length) problems.push(`count mismatch: ${msg}`);
+    }
+
+    for (const rel of CAST_JSON_DELETERS.keys()) {
+      if (!seen.has(rel)) {
+        problems.push(
+          `stale entry: ${rel} is in CAST_JSON_DELETERS but has no cast.json deleter (rm, rmSync, unlink, unlinkSync or rename of castJsonPath(...)) site any more; remove or fix the entry.`,
         );
       }
     }

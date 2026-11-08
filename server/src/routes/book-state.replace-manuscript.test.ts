@@ -166,6 +166,23 @@ describe('replace-manuscript handler', () => {
     expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(false);
   });
 
+  it('keeps designed voices across reparse -> replace-manuscript (#4039)', async () => {
+    expect((await request(app).post(`/api/books/${bookId}/reparse`)).status).toBe(200);
+    const carryoverPath = join(bookDir, '.audiobook', 'cast-reuse-carryover.json');
+    expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(false);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    expect(res.status).toBe(200);
+
+    const carryover = JSON.parse(readFileSync(carryoverPath, 'utf8'));
+    expect(carryover.characters[0]).toMatchObject({
+      id: 'wren',
+      overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    });
+  });
+
   it('swaps the on-disk file and updates manuscriptFile when the extension changes', async () => {
     await request(app)
       .post(`/api/books/${bookId}/replace-manuscript`)
