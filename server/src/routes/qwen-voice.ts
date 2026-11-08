@@ -1523,11 +1523,11 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       });
       /* #4040 — the base `rev` this variant is recorded against, read before the
          render: a base redesign that lands DURING the render leaves the variant
-         stale (recorded against the old rev), the safe direction. This does not
-         cover the sidecar's cached base embedding: a redesign stamps its new rev,
-         but the cached old embedding is evicted only after the locks are released
-         (evictSidecarVoices), so a variant started in that gap can anchor on the
-         old embedding yet record the new rev, and read as current (#4040 known gap). */
+         stale (recorded against the old rev), the safe direction. A redesign
+         stamps its new rev only after its `.pt` is in place, and the sidecar's
+         mint reads the base `.pt` on disk (its cached copy is checked against
+         the file), so a variant that records the new rev was made from the new
+         base, even before the redesign's evictSidecarVoices runs or if it fails. */
       const variantBaseRev = p.emotion ? await readBaseRev(baseVoiceId) : undefined;
       const rendered = await renderStaged();
       /* Before the uuid step: a key some other writer changed during the render

@@ -1980,6 +1980,109 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     assert meta["voiceUuid"] == "uuid-1"
 
 
+def _content_keyed_torch_load(monkeypatch) -> None:
+    """Make the fake torch.load return a prompt whose `ref_code` is the .pt
+    file's own bytes, so a test can tell WHICH file on disk a prompt came from
+    (the shared fake returns one sentinel for every path)."""
+    def _load(path: str, **_kw: Any) -> Any:
+        with open(path, "rb") as fh:
+            code = fh.read().decode("ascii")
+        return [types.SimpleNamespace(ref_code=code, ref_text="calib")]
+
+    monkeypatch.setattr(sys.modules["torch"], "load", _load)
+
+
+def _replace_on_disk(pt_path: str, content: bytes) -> None:
+    """Swap a new .pt into place the way the Node server lands a staged base
+    redesign (`moveStaged` — a rename over the old file), behind the sidecar's
+    back: nothing evicts the sidecar's in-memory cache."""
+    staging = pt_path + ".staged"
+    with open(staging, "wb") as fh:
+        fh.write(content)
+    os.replace(staging, pt_path)
+
+
+def test_mint_variant_anchors_on_the_base_on_disk_not_a_stale_cache(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#4040 — a base redesign the server lands by renaming a staged .pt over
+    the base (and stamping the base's new `rev`) evicts the sidecar's cached
+    base prompt only afterwards, best-effort. A variant minted in that gap (or
+    after a failed evict) used the OLD cached embedding while the server
+    recorded it against the NEW rev, so it read as current. The anchor must
+    come from the base .pt currently on disk."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda device=None: None)
+    monkeypatch.setattr(
+        eng, "_icl_instruct_synth",
+        lambda items, text, instr, lang: (np.zeros(6000, "float32"), 24000),
+    )
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    base_pt, _ = eng._voice_paths("v1")
+    with open(base_pt, "wb") as fh:
+        fh.write(b"OLD")
+    eng._load_voice_prompt("v1")  # a render warmed the cache with the old base
+
+    _replace_on_disk(base_pt, b"NEW")
+
+    eng._base = _FakeQwenModel("0.6b")
+    eng._base17 = _FakeQwenModel("1.7b")
+    decoded: list[Any] = []
+    monkeypatch.setattr(
+        eng._base17.model.speech_tokenizer, "decode",
+        lambda codes: (decoded.append(codes[0]["audio_codes"]), ([np.zeros(6000, "float32")], 24000))[1],
+    )
+    eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, None)
+    assert decoded == ["NEW"]
+
+
+def test_cached_voice_prompt_is_reloaded_when_the_pt_changes_on_disk(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """The same staleness on the ordinary render path: a voice whose .pt was
+    replaced on disk without an evict must not keep rendering from the old
+    cached embedding — while an unchanged .pt is still a cache hit."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    pt, _ = eng._voice_paths("v1")
+    with open(pt, "wb") as fh:
+        fh.write(b"OLD")
+    first, _lang, hit = eng._load_voice_prompt("v1")
+    assert first[0].ref_code == "OLD" and hit is False
+    _again, _lang, hit = eng._load_voice_prompt("v1")
+    assert hit is True  # unchanged file: still served from the cache
+
+    _replace_on_disk(pt, b"NEW")  # a rename: a different file
+    renamed, _lang, hit = eng._load_voice_prompt("v1")
+    assert renamed[0].ref_code == "NEW" and hit is False
+
+    with open(pt, "wb") as fh:  # an in-place rewrite of the same file
+        fh.write(b"NEWER")
+    rewritten, _lang, hit = eng._load_voice_prompt("v1")
+    assert rewritten[0].ref_code == "NEWER" and hit is False
+
+
+def test_cached_voice_prompt_for_a_deleted_pt_is_not_served(fake_qwen_runtime, monkeypatch) -> None:
+    """A cached prompt whose .pt is gone from disk fails like an undesigned
+    voice rather than rendering the deleted voice from memory."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    pt, _ = eng._voice_paths("v1")
+    with open(pt, "wb") as fh:
+        fh.write(b"OLD")
+    eng._load_voice_prompt("v1")
+    os.remove(pt)
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng._load_voice_prompt("v1")
+
+
 def test_mint_variant_raises_when_base_absent(fake_qwen_runtime) -> None:
     """mint_variant() raises VoiceNotDesignedError when the base .pt is absent."""
     eng = fake_qwen_runtime["engine"]
