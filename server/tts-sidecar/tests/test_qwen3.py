@@ -2081,6 +2081,32 @@ def test_cached_voice_prompt_is_reloaded_when_the_pt_changes_on_disk(
     assert rewritten[0].ref_code == "NEWER" and hit is False
 
 
+def test_cached_voice_prompt_is_reloaded_after_a_same_size_in_place_rewrite(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#4040 — an in-place rewrite keeps the file id, and a same-length one
+    keeps the size too, so only the mtime tells it apart: it must reload."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    pt, _ = eng._voice_paths("v1")
+    with open(pt, "wb") as fh:
+        fh.write(b"AAAA")
+    first, _lang, hit = eng._load_voice_prompt("v1")
+    assert first[0].ref_code == "AAAA" and hit is False
+    before = os.stat(pt)
+
+    with open(pt, "r+b") as fh:  # same file, same byte length, new content
+        fh.write(b"BBBB")
+    os.utime(pt, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    after = os.stat(pt)
+    assert (after.st_ino, after.st_size) == (before.st_ino, before.st_size)
+
+    rewritten, _lang, hit = eng._load_voice_prompt("v1")
+    assert rewritten[0].ref_code == "BBBB" and hit is False
+
+
 def test_cached_voice_prompt_for_a_deleted_pt_is_not_served(fake_qwen_runtime, monkeypatch) -> None:
     """A cached prompt whose .pt is gone from disk fails like an undesigned
     voice rather than rendering the deleted voice from memory."""
