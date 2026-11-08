@@ -293,6 +293,7 @@ describe('dropLinkedVariants (#4040)', () => {
     const cast = { characters: [row('a', {}), row('b', {})] };
     const out = dropLinkedVariants(cast, 'qwen-u1');
     expect(out.changed).toBe(true);
+    expect(out.ids).toEqual(['a', 'b']);
     for (const c of out.cast.characters) {
       expect(c.overrideTtsVoices?.qwen).toEqual({ name: 'qwen-u1' });
       expect('variants' in (c.overrideTtsVoices?.qwen ?? {})).toBe(false);

@@ -683,3 +683,68 @@ describe('#4040 — a linked reset that fails in another book does not fail the 
     }
   });
 });
+
+/* #4040 pass 3 (P3-1) — the response names the designing book's rows whose variants
+   the server reset, so the open tab mirrors exactly those. */
+describe('#4040 — the designing book’s reset rows are returned (resetCharacterIds)', () => {
+  const legacyRow = (id: string) =>
+    variantsRow(id, 'unused', {
+      voiceUuid: undefined,
+      voiceId: 'v_wren',
+      overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } },
+    });
+
+  it('RC1: a promote on a legacy voice names the designing row AND the sibling the mint stamped', async () => {
+    seedFiles(false);
+    writeFileSync(pt('qwen-v_wren'), Buffer.from('OLD-LEGACY-BASE'));
+    writeBook(A, [legacyRow('wren'), legacyRow('wren2'), variantsRow('moss', 'u9')]);
+    const preview = await design(A);
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    const kept = await promote(A, preview.body.voiceId);
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    expect([...kept.body.resetCharacterIds].sort()).toEqual(['wren', 'wren2']);
+    expect(hasVariants(A, 'wren2'), 'the sibling kept its variants on disk').toBe(false);
+  });
+
+  it('RC2: a promote that replaces a shared base names this book’s rows only, not another book’s', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1'), variantsRow('moss', 'u9')]);
+    writeBook(B, [variantsRow('wren', 'u1'), variantsRow('ash', 'u1')]);
+    const preview = await design(A);
+    const kept = await promote(A, preview.body.voiceId);
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    expect([...kept.body.resetCharacterIds].sort()).toEqual(['fern', 'wren']);
+  });
+
+  it('RC3: a first-file promote names only the designing row (a same-key sibling keeps its variants)', async () => {
+    seedFiles(false);
+    writeBook(A, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1')]);
+    const preview = await design(A);
+    const kept = await promote(A, preview.body.voiceId);
+    expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+    expect(kept.body.resetCharacterIds).toEqual(['wren']);
+    expect(hasVariants(A, 'fern')).toBe(true);
+  });
+
+  it('RC4: a direct base design that replaces the base names the reset rows; a first design names none', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1')]);
+    const replaced = await directDesign(A);
+    expect(replaced.status, JSON.stringify(replaced.body)).toBe(200);
+    expect([...replaced.body.resetCharacterIds].sort()).toEqual(['fern', 'wren']);
+
+    seedFiles(false);
+    writeBook(A, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1')]);
+    const first = await directDesign(A);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.resetCharacterIds).toEqual([]);
+  });
+
+  it('RC5: an emotion design resets nothing', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    const res = await directDesign(A, { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.resetCharacterIds).toEqual([]);
+  });
+});

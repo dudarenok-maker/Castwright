@@ -230,6 +230,26 @@ describe('single-design job — first design', () => {
   });
 });
 
+describe('single-design job — the rows a base design reset (#4040)', () => {
+  it('forwards the core’s resetCharacterIds on the designed event (an empty list too), and omits it when the core reports none', async () => {
+    const qwenMod = await import('./qwen-voice.js');
+    const spy = vi.mocked(qwenMod.designQwenVoiceForCharacter);
+    spy.mockResolvedValueOnce({ voiceId: 'qwen-u-c1', url: '/api/voice-sample/c1.mp3', voiceUuid: 'u-c1', resetCharacterIds: ['c1', 'c1b'] });
+    const body = { persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' };
+    const named = await request(app).post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`).send(body);
+    expect(collectSse(named).find((e) => e.type === 'designed')).toMatchObject({ resetCharacterIds: ['c1', 'c1b'] });
+
+    designLock.clearDesignBusy(bookDir);
+    spy.mockResolvedValueOnce({ voiceId: 'qwen-u-c1', url: '/api/voice-sample/c1.mp3', voiceUuid: 'u-c1', resetCharacterIds: [] });
+    const empty = await request(app).post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`).send(body);
+    expect(collectSse(empty).find((e) => e.type === 'designed')).toMatchObject({ resetCharacterIds: [] });
+
+    designLock.clearDesignBusy(bookDir);
+    const plain = await request(app).post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`).send(body);
+    expect(collectSse(plain).find((e) => e.type === 'designed')).not.toHaveProperty('resetCharacterIds');
+  });
+});
+
 describe('single-design job — the character vanishes mid-fork (#3992)', () => {
   it('ends the job with a not_found error and reports no design', async () => {
     /* #4028 — the uuid step and the landing run inside the core, which throws

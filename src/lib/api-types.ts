@@ -3871,6 +3871,14 @@ export interface components {
             /** @description designed only. */
             url?: string;
             /**
+             * @description designed only (#4040) — the ids of the designing book's rows whose
+             *     `overrideTtsVoices.qwen.variants` the landing dropped because it
+             *     replaced an existing base voice (`[]` when it replaced nothing).
+             *     The open tab clears exactly these rows' variants. Absent from an
+             *     older server: clear the designing row only.
+             */
+            resetCharacterIds?: string[];
+            /**
              * @description error only. `language_unset` (Task 6, #2246) fires when the
              *     book never stated a language — the honest pre-work abort
              *     replacing a silent English design; `unsupported_language`

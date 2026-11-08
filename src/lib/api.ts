@@ -635,6 +635,9 @@ export interface PromoteQwenVoiceResponse {
       The drawer stamps this onto the in-memory voice so the /sample player
       can resolve the uuid-keyed storage key without a full cast refetch. */
   voiceUuid?: string;
+  /** #4040 — the ids of the book's rows whose emotion variants the promote reset;
+      absent from an older server. */
+  resetCharacterIds?: string[];
 }
 
 /** Optional scope for a voice-override write (plan 108). Default
@@ -2424,8 +2427,8 @@ async function realPromoteQwenVoice(
   }
   /* srv-43: voiceUuid is now in the promote response so the drawer can
      stamp the in-memory voice and /sample resolves the uuid-keyed cache. */
-  const data = (await res.json()) as { voiceId?: string; url?: string; voiceUuid?: string };
-  return { voiceId: data.voiceId ?? '', url: data.url ?? '', voiceUuid: data.voiceUuid };
+  const data = (await res.json()) as { voiceId?: string; url?: string; voiceUuid?: string; resetCharacterIds?: string[] };
+  return { voiceId: data.voiceId ?? '', url: data.url ?? '', voiceUuid: data.voiceUuid, resetCharacterIds: data.resetCharacterIds };
 }
 
 async function realDiscardQwenPreview(
@@ -6639,7 +6642,7 @@ export interface CastDesignCallbacks {
   onHeartbeat?: (e: { characterId: string }) => void;
   /** A character was designed + persisted; `voiceId` is the bespoke qwen name.
       srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
-  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string; resetCharacterIds?: string[] }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
@@ -6785,6 +6788,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId,
             voiceId: e.voiceId,
             voiceUuid: e.voiceUuid,
+            resetCharacterIds: e.resetCharacterIds,
           });
         break;
       case 'preview_ready':

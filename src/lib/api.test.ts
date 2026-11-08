@@ -247,6 +247,32 @@ describe('readCastDesignStream — variant_designed fallback fields (srv-52)', (
   });
 });
 
+describe('readCastDesignStream — the single-design designed event (#4040)', () => {
+  const streamOf = (sseText: string): Response => {
+    const encoded = new TextEncoder().encode(sseText);
+    let consumed = false;
+    const body = {
+      getReader: () => ({
+        read: async () => (consumed ? { done: true, value: undefined } : ((consumed = true), { done: false, value: encoded })),
+      }),
+    };
+    return { ok: true, status: 200, body } as unknown as Response;
+  };
+
+  it('passes resetCharacterIds through onCharacterDesigned, and leaves it undefined when the server sends none', async () => {
+    const got: Array<Record<string, unknown>> = [];
+    await readCastDesignStream(
+      streamOf(
+        'data: {"type":"designed","characterId":"c","voiceId":"v","voiceUuid":"u","resetCharacterIds":["c","d"]}\n\n' +
+          'data: {"type":"designed","characterId":"c","voiceId":"v"}\n\n',
+      ),
+      { onCharacterDesigned: (e) => got.push(e as Record<string, unknown>) },
+    );
+    expect(got[0]).toMatchObject({ resetCharacterIds: ['c', 'd'] });
+    expect(got[1].resetCharacterIds).toBeUndefined();
+  });
+});
+
 describe('readE2eUpdateOverride (fe-27 update override)', () => {
   it('defaults update fields off when the param is absent', () => {
     expect(readE2eUpdateOverride('')).toEqual({ updateAvailable: false, latestVersion: null });

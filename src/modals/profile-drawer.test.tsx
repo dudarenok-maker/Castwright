@@ -1597,64 +1597,92 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
 
     /* Approve dispatched the redux mirror of the server teardown… */
     expect(dispatchSpy).toHaveBeenCalledWith(
-      castActions.clearEmotionVariantsOnKey({ characterId: 'halloran' }),
+      castActions.clearEmotionVariantsOf({ characterIds: ['halloran'] }),
     );
     /* …and the variants are actually gone from the slice. */
     const hal = store.getState().cast.characters.find((c) => c.id === 'halloran');
     expect(hal?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 
-  it('approving a redesign also clears the variants of another row in the book on the same voice (#4040)', async () => {
-    promoteQwenVoice.mockClear();
-    const slot = {
-      qwen: { name: 'qwen-v_hal', variants: { angry: { name: 'qwen-v_hal__angry' } } },
+  describe('approving a redesign mirrors the rows the server reset (#4040)', () => {
+    const approveWith = async (reset: string[] | undefined) => {
+      promoteQwenVoice.mockClear();
+      promoteQwenVoice.mockImplementationOnce(async (_b, _c, args) => ({
+        voiceId: String((args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran').replace(/-preview$/, ''),
+        url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
+        ...(reset ? { resetCharacterIds: reset } : {}),
+      }));
+      const slot = {
+        qwen: { name: 'qwen-v_hal', variants: { angry: { name: 'qwen-v_hal__angry' } } },
+      };
+      const hal = {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        voiceId: 'v_hal',
+        voiceUuid: 'v_hal',
+        overrideTtsVoices: slot,
+        voiceStyle: 'a steady adult voice',
+      } as Character;
+      const { store } = renderWithBook(hal);
+      act(() => {
+        store.dispatch(
+          castActions.setCharacters([
+            hal,
+            { ...hal, id: 'fern', name: 'Fern', overrideTtsVoices: JSON.parse(JSON.stringify(slot)) },
+            /* a legacy sibling: the server's mint stamped it with the new uuid, redux still keys it on the legacy id */
+            { ...hal, id: 'wren2', name: 'Wren', voiceUuid: undefined, voiceId: 'v_legacy', overrideTtsVoices: JSON.parse(JSON.stringify(slot)) },
+          ]),
+        );
+      });
+      selectQwen();
+      fireEvent.click(screen.getByTestId('qwen-design-voice'));
+      act(() => {
+        store.dispatch(
+          castDesignActions.beginSingle({
+            bookId: 'book-1',
+            characterId: 'halloran',
+            name: 'Captain Halloran',
+            mode: 'redesign',
+            lastTickAt: 1,
+          }),
+        );
+        store.dispatch(
+          castDesignActions.previewReady({
+            bookId: 'book-1',
+            characterId: 'halloran',
+            previewVoiceId: 'qwen-halloran-preview',
+            previewUrl: '/audio/voices/char-halloran-preview.mp3',
+            persona: 'a steady adult voice',
+            lastTickAt: 2,
+          }),
+        );
+      });
+      await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('voice-compare-approve'));
+      await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByTestId('voice-compare-overlay')).toBeNull());
+      const rows = store.getState().cast.characters;
+      return (id: string) => rows.find((c) => c.id === id)?.overrideTtsVoices?.qwen?.variants;
     };
-    const hal = {
-      ...baseChar,
-      ttsEngine: 'qwen',
-      voiceId: 'v_hal',
-      voiceUuid: 'v_hal',
-      overrideTtsVoices: slot,
-      voiceStyle: 'a steady adult voice',
-    } as Character;
-    const { store } = renderWithBook(hal);
-    act(() => {
-      store.dispatch(
-        castActions.setCharacters([
-          hal,
-          { ...hal, id: 'fern', name: 'Fern', overrideTtsVoices: JSON.parse(JSON.stringify(slot)) },
-        ]),
-      );
+
+    it("clears every row the server's response names, including a legacy sibling redux keys differently", async () => {
+      const variants = await approveWith(['halloran', 'fern', 'wren2']);
+      expect(variants('halloran')).toBeUndefined();
+      expect(variants('fern'), 'a named row kept its variants').toBeUndefined();
+      expect(variants('wren2'), 'a named legacy sibling kept its variants').toBeUndefined();
     });
-    selectQwen();
-    fireEvent.click(screen.getByTestId('qwen-design-voice'));
-    act(() => {
-      store.dispatch(
-        castDesignActions.beginSingle({
-          bookId: 'book-1',
-          characterId: 'halloran',
-          name: 'Captain Halloran',
-          mode: 'redesign',
-          lastTickAt: 1,
-        }),
-      );
-      store.dispatch(
-        castDesignActions.previewReady({
-          bookId: 'book-1',
-          characterId: 'halloran',
-          previewVoiceId: 'qwen-halloran-preview',
-          previewUrl: '/audio/voices/char-halloran-preview.mp3',
-          persona: 'a steady adult voice',
-          lastTickAt: 2,
-        }),
-      );
+
+    it('leaves a same-voice row the server did not name alone', async () => {
+      const variants = await approveWith(['halloran']);
+      expect(variants('halloran')).toBeUndefined();
+      expect(variants('fern'), 'a row the server did not reset was cleared').toBeDefined();
     });
-    await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('voice-compare-approve'));
-    await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
-    const rows = store.getState().cast.characters;
-    expect(rows.find((c) => c.id === 'fern')?.overrideTtsVoices?.qwen?.variants, 'the linked row kept its variants').toBeUndefined();
-    expect(rows.find((c) => c.id === 'halloran')?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+
+    it('an older server (no field) clears the designing row only', async () => {
+      const variants = await approveWith(undefined);
+      expect(variants('halloran')).toBeUndefined();
+      expect(variants('fern')).toBeDefined();
+    });
   });
 
   it('persists the freshly-approved voiceUuid on Save (regression: srv-43 uuid was staged in-drawer only, dropped on Save)', async () => {

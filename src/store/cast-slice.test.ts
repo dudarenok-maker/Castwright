@@ -1846,7 +1846,7 @@ describe('castSlice — removeCharacterEmotionVariant (fs-34)', () => {
   });
 });
 
-describe('castSlice — clearEmotionVariantsOnKey (redesign invalidation, #4040)', () => {
+describe('castSlice — clearEmotionVariantsOf (redesign invalidation, #4040)', () => {
   const vars = (uuid: string) => ({
     qwen: {
       name: `qwen-${uuid}`,
@@ -1862,46 +1862,36 @@ describe('castSlice — clearEmotionVariantsOnKey (redesign invalidation, #4040)
   const variantsOf = (s: ReturnType<typeof withVariants>, id: string) =>
     s.characters.find((c) => c.id === id)!.overrideTtsVoices?.qwen?.variants;
 
-  it("drops the designing row's whole variants map, leaving the base name intact", () => {
-    const next = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOnKey({ characterId: 'maerin' }));
+  it('drops the whole variants map of exactly the listed rows, leaving the base name intact', () => {
+    const next = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOf({ characterIds: ['maerin', 'fern'] }));
     expect(variantsOf(next, 'maerin')).toBeUndefined();
+    expect(variantsOf(next, 'fern')).toBeUndefined();
     expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u1');
+    expect(Object.keys(variantsOf(next, 'other')!), 'an unlisted row lost its variants').toHaveLength(2);
   });
 
-  it('also drops the variants of every other row on the same storage key, and only those', () => {
-    const next = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOnKey({ characterId: 'maerin' }));
-    expect(variantsOf(next, 'fern'), 'a same-key row kept its variants').toBeUndefined();
-    expect(Object.keys(variantsOf(next, 'other')!), 'a row on another key lost its variants').toHaveLength(2);
+  it('does not infer rows from a shared key: a same-key row the server left alone keeps its variants', () => {
+    const next = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOf({ characterIds: ['maerin'] }));
+    expect(variantsOf(next, 'maerin')).toBeUndefined();
+    expect(Object.keys(variantsOf(next, 'fern')!), 'a same-key row the server did not reset was cleared').toHaveLength(2);
   });
 
-  it('matches legacy rows (no uuid) by qwen-<voiceId ?? id>', () => {
+  it('clears a legacy sibling the redux row key no longer matches (the server named it)', () => {
     const st = baseState([
-      makeChar('a', { voiceId: 'v_shared', overrideTtsVoices: vars('x') }),
-      makeChar('b', { voiceId: 'v_shared', overrideTtsVoices: vars('x') }),
-      makeChar('c', { voiceId: 'v_else', overrideTtsVoices: vars('x') }),
+      makeChar('wren', { voiceId: 'v_wren', voiceUuid: 'U', overrideTtsVoices: vars('x') }),
+      makeChar('wren2', { voiceId: 'v_wren', overrideTtsVoices: vars('x') }),
     ]);
-    const next = castSlice.reducer(st, castActions.clearEmotionVariantsOnKey({ characterId: 'a' }));
+    const next = castSlice.reducer(st, castActions.clearEmotionVariantsOf({ characterIds: ['wren', 'wren2'] }));
     expect(next.characters[1].overrideTtsVoices!.qwen!.variants).toBeUndefined();
-    expect(next.characters[2].overrideTtsVoices!.qwen!.variants).toBeDefined();
   });
 
-  it('leaves a cloned row and a library-voice row on the key alone', () => {
-    const st = baseState([
-      makeChar('a', { voiceUuid: 'u1', overrideTtsVoices: vars('u1') }),
-      makeChar('cloned', { voiceUuid: 'u1', overrideTtsVoices: { qwen: { ...vars('u1').qwen, provenance: 'cloned' } } }),
-      makeChar('lib', { voiceUuid: 'u1', overrideTtsVoices: { qwen: { ...vars('u1').qwen, libraryUuid: 'lib-1' } } }),
-    ]);
-    const next = castSlice.reducer(st, castActions.clearEmotionVariantsOnKey({ characterId: 'a' }));
-    expect(next.characters[0].overrideTtsVoices!.qwen!.variants).toBeUndefined();
-    expect(next.characters[1].overrideTtsVoices!.qwen!.variants).toBeDefined();
-    expect(next.characters[2].overrideTtsVoices!.qwen!.variants).toBeDefined();
-  });
-
-  it('is a no-op for an unknown character or a character with no variants', () => {
-    const unknown = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOnKey({ characterId: 'ghost' }));
+  it('ignores unknown ids, an empty list and rows with no variants', () => {
+    const unknown = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOf({ characterIds: ['ghost'] }));
     expect(Object.keys(variantsOf(unknown, 'maerin')!)).toHaveLength(2);
+    const none = castSlice.reducer(withVariants(), castActions.clearEmotionVariantsOf({ characterIds: [] }));
+    expect(Object.keys(variantsOf(none, 'maerin')!)).toHaveLength(2);
     const noVariants = baseState([makeChar('solo', { overrideTtsVoices: { qwen: { name: 'qwen-v_solo' } } })]);
-    const after = castSlice.reducer(noVariants, castActions.clearEmotionVariantsOnKey({ characterId: 'solo' }));
+    const after = castSlice.reducer(noVariants, castActions.clearEmotionVariantsOf({ characterIds: ['solo'] }));
     expect(after.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-v_solo');
   });
 });

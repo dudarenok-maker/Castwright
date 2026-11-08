@@ -45,7 +45,14 @@ interface Props {
   /** The proposed (preview) voice the drawer just designed before opening this
       form — `voiceId` is the staged `…-preview` id. */
   initial: { voiceId: string; previewUrl: string; persona: string };
-  onApprove: (next: { voiceId: string; persona: string; previewUrl: string; voiceUuid?: string }) => void;
+  onApprove: (next: {
+    voiceId: string;
+    persona: string;
+    previewUrl: string;
+    voiceUuid?: string;
+    /** #4040 — the rows whose emotion variants the promote reset (absent from an older server). */
+    resetCharacterIds?: string[];
+  }) => void;
   onClose: () => void;
 }
 
@@ -187,12 +194,12 @@ export function VoiceCompareModal({
       /* Commit the staged preview onto the character's stable voiceId, then
          hand the REAL id + persona back to the drawer to stage; the drawer's
          Save persists the override series-scoped. */
-      const { voiceId, url, voiceUuid } = await api.promoteQwenVoice(bookId, character.id, {
+      const { voiceId, url, voiceUuid, resetCharacterIds } = await api.promoteQwenVoice(bookId, character.id, {
         previewVoiceId: proposed.voiceId,
         sampleVoiceId,
         modelKey: designModelKey,
       });
-      onApprove({ voiceId, persona: persona.trim(), previewUrl: url, voiceUuid });
+      onApprove({ voiceId, persona: persona.trim(), previewUrl: url, voiceUuid, resetCharacterIds });
     } catch (e) {
       setError((e as Error).message || 'Could not keep the proposed voice.');
     } finally {

@@ -325,29 +325,18 @@ export const castSlice = createSlice({
       if (Object.keys(variants).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
     },
     /* Redesign invalidation (#4040) — clear the designed Qwen emotion variants of
-       the character AND of every other row in the cast on the same Qwen storage
-       key when a base voice is replaced. The server already tore them off every
-       linked book's cast.json (they were minted from the base embedding the
-       redesign replaces); this mirrors that so the save-path spreads don't
-       re-persist the stale slots and the cast's "Emotion variants" demand
-       re-surfaces them live. The key mirrors the server's `qwenStorageKey`
-       (`qwen-<voiceUuid>`, else `qwen-<voiceId ?? id>`); cloned and library-voice
-       rows are skipped like the server does. Local-only. No-op for an unknown
-       character / no variants. */
-    clearEmotionVariantsOnKey: (s, a: PayloadAction<{ characterId: string }>) => {
-      const designing = s.characters.find((x) => x.id === a.payload.characterId);
-      if (!designing) return;
-      const keyOf = (c: { id: string; voiceUuid?: string | null; voiceId?: string | null }) =>
-        c.voiceUuid ? `qwen-${c.voiceUuid}` : `qwen-${c.voiceId ?? c.id}`;
-      const key = keyOf(designing);
-      for (const c of s.characters) {
-        const slots = c.overrideTtsVoices;
-        if (!slots?.qwen?.variants) continue;
-        if (c !== designing) {
-          if (keyOf(c) !== key || slots.qwen.libraryUuid) continue;
-          if (Object.values(slots).some((v) => (v as { provenance?: string } | undefined)?.provenance === 'cloned')) continue;
-        }
-        delete slots.qwen.variants;
+       exactly the rows the server reset when a base voice was replaced. The server
+       already tore them off cast.json (they were minted from the base embedding the
+       redesign replaces) and names the open book's rows in `resetCharacterIds`; this
+       mirrors that so the save-path spreads don't re-persist the stale slots and the
+       cast's "Emotion variants" demand re-surfaces them live. The ids come from the
+       server, never from a key recomputed here: a legacy voice's same-book siblings
+       were re-keyed by the design's own mint, which redux never hears about. Local-only.
+       Unknown ids / rows with no variants are no-ops. */
+    clearEmotionVariantsOf: (s, a: PayloadAction<{ characterIds: string[] }>) => {
+      for (const id of a.payload.characterIds) {
+        const slot = s.characters.find((x) => x.id === id)?.overrideTtsVoices?.qwen;
+        if (slot?.variants) delete slot.variants;
       }
     },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema

@@ -5776,6 +5776,15 @@ components:
         voiceUuid: { type: string, description: preview_ready / designed only. }
         voiceId: { type: string, description: designed only. }
         url: { type: string, description: designed only. }
+        resetCharacterIds:
+          type: array
+          items: { type: string }
+          description: |
+            designed only (#4040) — the ids of the designing book's rows whose
+            `overrideTtsVoices.qwen.variants` the landing dropped because it
+            replaced an existing base voice (`[]` when it replaced nothing).
+            The open tab clears exactly these rows' variants. Absent from an
+            older server: clear the designing row only.
         code:
           type: string
           enum: [not_found, design_failed, unsupported_language, lock-contention, clone_protected, language_unset]

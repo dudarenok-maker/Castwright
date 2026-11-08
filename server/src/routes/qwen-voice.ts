@@ -1010,6 +1010,8 @@ export interface DesignQwenVoiceResult {
   voiceUuid?: string;
   /** #4040 — the base key's write count when the design began (emotion designs): hand it to persistEmotionVariant. */
   begun?: number;
+  /** #4040 — a base design: the ids of this book's rows whose emotion variants the landing reset (empty when it replaced nothing). */
+  resetCharacterIds?: string[];
   fellBackToDesignVoice?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
 }
@@ -1272,14 +1274,19 @@ async function shareKeptDesign(
    and the cast locks of `ownDir` and `others` (and passes `writeCast` from inside them); each cast.json is re-read here and
    written only when it changed. A failure in ANOTHER book is logged and does not
    fail the promote (the base has landed); one in this book propagates. No variant
-   file is deleted: the startup sweep removes the ones nothing names. */
-async function resetLinkedVariants(ownDir: string, others: BookHandle[], key: string, writeCast: CastWriter): Promise<void> {
+   file is deleted: the startup sweep removes the ones nothing names. Returns the
+   ids of THIS book's rows it dropped (the client mirrors exactly those). */
+async function resetLinkedVariants(ownDir: string, others: BookHandle[], key: string, writeCast: CastWriter): Promise<string[]> {
+  const ownIds: string[] = [];
   const dirs = [{ dir: ownDir, own: true }, ...others.map((b) => ({ dir: b.bookDir, own: false }))];
   for (const { dir, own } of dirs) {
     try {
       const cast = await readJson<CastFile>(castJsonPath(dir));
       const dropped = cast?.characters ? dropLinkedVariants(cast, key) : undefined;
-      if (dropped?.changed) await writeCast(dir, dropped.cast);
+      if (dropped?.changed) {
+        await writeCast(dir, dropped.cast);
+        if (own) ownIds.push(...dropped.ids);
+      }
     } catch (e) {
       if (own) throw e;
       console.error('[qwen-voice] could not reset the emotion variants of a linked book', e);
@@ -1295,6 +1302,7 @@ async function resetLinkedVariants(ownDir: string, others: BookHandle[], key: st
       console.error('[qwen-voice] could not reset the carried-over emotion variants of a book', e);
     }
   }
+  return ownIds;
 }
 
 /* #4028 — the final step: under the row's book-op and cast lock (the locks a
@@ -1316,7 +1324,7 @@ async function landStagedDesign(
   staging: string,
   calibrationText: string,
   watcher: { key: string; begun: number },
-): Promise<{ voiceId: string; url: string; voiceUuid?: string; begun: number }> {
+): Promise<{ voiceId: string; url: string; voiceUuid?: string; begun: number; resetCharacterIds: string[] }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
   const moved = () => new RetryableForkError('This book moved while the voice was being designed; try again.');
@@ -1357,11 +1365,11 @@ async function landStagedDesign(
       if (slotted) await writeCast(p.bookDir, { ...cast, characters });
     }
     if (sharing) await shareFirstDesign(p, sharing, row as MarkedCharacter, voiceId, others, writeCast);
-    if (replacing) await resetLinkedVariants(p.bookDir, others, base, writeCast);
+    const resetCharacterIds = replacing ? await resetLinkedVariants(p.bookDir, others, base, writeCast) : [];
     const landedAudition = audition(voiceId);
     await rm(voiceSampleFilePath(landedAudition), { force: true });
     await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
-    return { voiceId, url: voiceSamplePublicUrl(landedAudition), voiceUuid: row.voiceUuid ?? undefined, begun: watcher.begun };
+    return { voiceId, url: voiceSamplePublicUrl(landedAudition), voiceUuid: row.voiceUuid ?? undefined, begun: watcher.begun, resetCharacterIds };
   };
   const planned = await firstDesignOf(
     (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
@@ -1758,7 +1766,7 @@ qwenVoiceRouter.post(
        (#1057). #4028: the design lands on the row's key as it stands when the
        render finishes (designQwenVoiceForCharacter). */
     try {
-      const { voiceId, url, voiceUuid, begun } = await designQwenVoiceForCharacter({
+      const { voiceId, url, voiceUuid, begun, resetCharacterIds } = await designQwenVoiceForCharacter({
         bookId,
         bookDir,
         seriesFilter: seriesInfo ?? undefined,
@@ -1808,7 +1816,7 @@ qwenVoiceRouter.post(
       }
       /* srv-43 — return voiceUuid so the drawer can stamp it locally without
          a refetch; the /sample player needs it to hit the uuid-keyed cache. */
-      return res.status(200).json({ voiceId, url, voiceUuid });
+      return res.status(200).json({ voiceId, url, voiceUuid, resetCharacterIds });
     } catch (e) {
       if (e instanceof CharacterGoneError) return res.status(404).json({ error: e.message });
       /* A fixed, path-free sentence that says a retry can work (a book that was
@@ -1907,7 +1915,7 @@ qwenVoiceRouter.post(
     const promoteIn = async (
       located: BookHandle,
       seriesInfo: { author: string; series: string } | null,
-      afterMove: (step: { first?: FirstKeptDesign; replacedKey?: string }) => Promise<void>,
+      afterMove: (step: { first?: FirstKeptDesign; replacedKey?: string }) => Promise<string[]>,
     ) => {
     const sampleVoiceId = typeof body.sampleVoiceId === 'string' ? body.sampleVoiceId.trim() : '';
     const previewVoiceId =
@@ -1931,7 +1939,7 @@ qwenVoiceRouter.post(
        but still no reason to pin the lock for even that bounded worst case).
        Global order: design -> book-op -> cast (cast-lock.ts rule 4). */
     const moved = await withCastLock(located.bookDir, async (): Promise<
-      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; voiceUuid?: string; first?: FirstKeptDesign; replaced?: boolean }
+      { status: number; body: Record<string, unknown> } | { realVoiceId: string; realFileName: string; voiceUuid?: string; first?: FirstKeptDesign; replaced?: boolean; resetIds: string[] }
     > => {
       const fresh = await readJson<CastFile>(castJsonPath(located.bookDir));
       const character = fresh?.characters?.find((c) => c.id === characterId);
@@ -2010,22 +2018,30 @@ qwenVoiceRouter.post(
          encloses the write. Without it every promote-voice writes cast.json even
          when the character has no emotion variants, which is the common path.
          Evaluated against the FRESH slot, per rule 2. */
+      const resetIds: string[] = [];
       if (freshSlot?.variants && Object.keys(freshSlot.variants).length > 0) {
         delete freshSlot.variants;
         await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
+        resetIds.push(character.id);
       }
       const first =
         firstFile && seriesInfo && character.voiceUuid && (await isOrdinarySeriesVoice(character))
           ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }
           : undefined;
-      return { realVoiceId, realFileName, voiceUuid: character.voiceUuid ?? undefined, first, replaced: !firstFile };
+      return { realVoiceId, realFileName, voiceUuid: character.voiceUuid ?? undefined, first, replaced: !firstFile, resetIds };
     });
     if ('status' in moved) return res.status(moved.status).json(moved.body);
     /* Still under the book-ops (and this book's design lock): the first real file of
        a never-designed key is shared with the linked rows, under every involved
        book's cast lock (the caller's afterMove), re-reading the row. */
+    /* #4040 — the ids of this book's rows whose variants the server reset: the designing
+       row (dropped above) plus the rows the linked reset dropped. The client mirrors
+       exactly these. */
+    let resetCharacterIds = moved.resetIds;
     if (moved.first) await afterMove({ first: moved.first });
-    else if (moved.replaced) await afterMove({ replacedKey: moved.realVoiceId });
+    else if (moved.replaced) {
+      resetCharacterIds = [...new Set([...resetCharacterIds, ...(await afterMove({ replacedKey: moved.realVoiceId }))])];
+    }
 
     /* Evict the real id from the sidecar's in-memory prompt cache. Best-effort:
        a down/empty sidecar has nothing cached, and generation reads the fresh
@@ -2038,7 +2054,7 @@ qwenVoiceRouter.post(
        /sample player needs it to hit the uuid-keyed cache on the next play. */
     return res
       .status(200)
-      .json({ voiceId: moved.realVoiceId, url: voiceSamplePublicUrl(moved.realFileName), voiceUuid: moved.voiceUuid });
+      .json({ voiceId: moved.realVoiceId, url: voiceSamplePublicUrl(moved.realFileName), voiceUuid: moved.voiceUuid, resetCharacterIds });
     };
     const outcome = await withDesignLock(peeked.bookDir, async () => {
       const seriesInfo = peeked.state?.isStandalone === true ? null : await findAuthorSeriesForBookId(bookId);
@@ -2059,7 +2075,7 @@ qwenVoiceRouter.post(
           return promoteIn(own, seriesInfo, (step) =>
             withCastLocks([own.bookDir, ...rest.map((b) => b.bookDir)], () =>
               step.first
-                ? shareKeptDesign(own, rest, seriesInfo, step.first, characterId, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast))
+                ? shareKeptDesign(own, rest, seriesInfo, step.first, characterId, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)).then((): string[] => [])
                 : resetLinkedVariants(own.bookDir, rest, step.replacedKey as string, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)),
             ),
           );
@@ -2072,7 +2088,7 @@ qwenVoiceRouter.post(
             : promoteIn(located, seriesInfo, (step) =>
                 withCastLock(located.bookDir, () =>
                   step.first
-                    ? shareKeptDesign(located, [], seriesInfo, step.first, characterId, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast))
+                    ? shareKeptDesign(located, [], seriesInfo, step.first, characterId, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)).then((): string[] => [])
                     : resetLinkedVariants(located.bookDir, [], step.replacedKey as string, (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast)),
                 ),
               ),

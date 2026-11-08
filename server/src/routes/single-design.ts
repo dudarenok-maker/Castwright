@@ -137,7 +137,7 @@ async function runSingleDesign(
     registerProgressToken(progressToken, job);
     const progressUrl = `${serverLoopbackBaseUrl()}/api/internal/design-progress`;
 
-    const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+    const { voiceId, url, voiceUuid, resetCharacterIds } = await designQwenVoiceForCharacter({
       bookId: job.bookId,
       bookDir: job.bookDir,
       seriesFilter,
@@ -196,6 +196,9 @@ async function runSingleDesign(
       voiceId,
       url,
       voiceUuid,
+      /* #4040 — the rows whose emotion variants the landing reset (a base redesign
+         through this route); `[]` when it reset none. */
+      ...(resetCharacterIds ? { resetCharacterIds } : {}),
     });
   } catch (e) {
     /* #3992 — the character vanished between the read above and the fork/mint. */

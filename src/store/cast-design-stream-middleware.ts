@@ -232,7 +232,7 @@ export function createCastDesignMiddleware(): Middleware {
         ),
       onHeartbeat: () =>
         dispatch(castDesignActions.heartbeat({ bookId, lastTickAt: Date.now() })),
-      onCharacterDesigned: ({ characterId: cid, voiceId, voiceUuid }) => {
+      onCharacterDesigned: ({ characterId: cid, voiceId, voiceUuid, resetCharacterIds }) => {
         /* Mirror the persisted override into the cast slice so the row flips
            "Needs voice" → "Designed" live. (The `designed` event may carry an
            extra `url` now — ignored; we don't auto-play on first design in v1.) */
@@ -241,9 +241,10 @@ export function createCastDesignMiddleware(): Middleware {
           /* srv-43: mirror the voiceUuid so "Play 12s" right after a first design
              resolves the uuid-keyed cache entry without waiting for a cast refetch. */
           if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
-          /* #4040 — a base (re)design resets the emotion variants of every row on
-             the voice; mirror it for the open book's rows. No-op on a first design. */
-          dispatch(castActions.clearEmotionVariantsOnKey({ characterId: cid }));
+          /* #4040 — a base (re)design resets the emotion variants of the rows the
+             server names; mirror exactly those. An older server names none: clear
+             the designing row only. */
+          dispatch(castActions.clearEmotionVariantsOf({ characterIds: resetCharacterIds ?? [cid] }));
         }
         dispatch(
           notificationsActions.pushToast({

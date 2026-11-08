@@ -334,13 +334,14 @@ export async function storageKeyHolderBookIds(bookDir: string, key: string): Pro
    uuid). Cloned rows and rows on a library voice are never touched (the
    exclusions of `shareFirstDesign`). A row on a separated voice has a different key and is
    excluded by construction. Returns the input `cast` itself when nothing changed
-   so the caller can skip the write. No I/O, no locks, no file deletion: the
+   so the caller can skip the write; `ids` names the rows it dropped. No I/O, no locks, no file deletion: the
    startup sweep removes the variant files nothing names any more. */
 export function dropLinkedVariants<T extends { characters: CastRow[] }>(
   cast: T,
   key: string,
-): { cast: T; changed: boolean } {
+): { cast: T; changed: boolean; ids: string[] } {
   let changed = false;
+  const ids: string[] = [];
   const characters = cast.characters.map((row) => {
     if (qwenStorageKey(row, row.id) !== key) return row;
     if (characterHasClonedSlot(row)) return row;
@@ -349,10 +350,11 @@ export function dropLinkedVariants<T extends { characters: CastRow[] }>(
     const variants = slot.variants;
     if (!variants || (typeof variants === 'object' && Object.keys(variants).length === 0)) return row;
     changed = true;
+    ids.push(row.id);
     const { variants: _dropped, ...rest } = slot;
     return { ...row, overrideTtsVoices: { ...row.overrideTtsVoices, qwen: rest } };
   });
-  return changed ? { cast: { ...cast, characters }, changed } : { cast, changed };
+  return changed ? { cast: { ...cast, characters }, changed, ids } : { cast, changed, ids };
 }
 
 interface MarkedRow {

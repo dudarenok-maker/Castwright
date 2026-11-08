@@ -1504,7 +1504,7 @@ export function ProfileDrawer({
                   designModelKey={effectiveSampleModelKey}
                   sampleVoiceId={sampleVoiceId}
                   initial={voiceCompareInitial}
-                  onApprove={({ voiceId, persona: approvedPersona, previewUrl, voiceUuid: approvedUuid }) => {
+                  onApprove={({ voiceId, persona: approvedPersona, previewUrl, voiceUuid: approvedUuid, resetCharacterIds }) => {
                     /* Stage the PROMOTED (stable) voice into the drawer; Save
                        persists it series-scoped exactly as before. */
                     setPersona(approvedPersona);
@@ -1524,10 +1524,13 @@ export function ProfileDrawer({
                        off cast.json + disk by promote-voice. Mirror that in redux
                        so the save-path spreads don't re-persist the stale slots
                        and the cast's "Emotion variants" demand re-surfaces them.
-                       Every same-book row on the same voice is cleared too (the
-                       server reset them all). No-op on a first design. */
+                       Exactly the rows the server reset are cleared (its
+                       `resetCharacterIds`); an older server names none, so only
+                       this row. */
                     dispatch(
-                      castActions.clearEmotionVariantsOnKey({ characterId: character.id }),
+                      castActions.clearEmotionVariantsOf({
+                        characterIds: resetCharacterIds ?? [character.id],
+                      }),
                     );
                     setVoiceCompareInitial(null);
                     /* Resolving the compare ends the single-design lifecycle —
