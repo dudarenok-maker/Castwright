@@ -278,8 +278,8 @@ its rebuild half was withdrawn.)
   `readPriorCastForMerge`'s unguarded parse (`server/src/routes/
   analysis.ts:179-181`), though that precedent is weaker justification now
   that this catch is narrower than a blanket swallow. A parse failure
-  degrades a corrupt `cast.json` to the same path as a missing one: empty
-  `reuseRows`, `cast.json` deleted, reparse succeeds, and the carryover is
+  degrades a corrupt `cast.json` to the same path as a missing one: `cast.json`
+  deleted, reparse succeeds, and the carryover is
   **kept** as it is (#4039; it was removed before). For an unparseable cast
   `readPriorCastForMerge` already falls back to the carryover, so keeping it
   matches what the next analysis would read, and deleting it would lose the
