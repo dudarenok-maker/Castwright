@@ -65,6 +65,7 @@ import {
 import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
 import { bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
@@ -266,8 +267,8 @@ voiceLibraryRouter.post('/design', async (req: Request, res: Response) => {
 
 /* GATE 1 fix (C1) — persona redesign is a DESIGNED-voice operation and must
    never touch a cloned one. Both `/redesign` and `/redesign/promote` write to
-   the `qwen-<uuid>` storage key: promote does `rm(qwen-<uuid>.pt)` +
-   `rename(qwen-<uuid>-preview.pt → qwen-<uuid>.pt)`, replacing a cloned
+   the `qwen-<uuid>` storage key: promote renames
+   `qwen-<uuid>-preview.pt` over `qwen-<uuid>.pt`, replacing a cloned
    voice's artifact in place with a persona-instruct design that has nothing
    to do with the person's clip. Nothing downstream re-checks — PATCH refuses
    to change `provenance`, promote's own `updateEntry` only touches `persona`,
@@ -350,7 +351,7 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
 /* POST /api/voice-library/:voiceUuid/redesign/promote
 
    Commit a staged redesign onto the live voice: move the preview `.pt`/`.json`
-   onto the stable `qwen-<uuid>` id (rm-then-rename for Windows EPERM safety),
+   onto the stable `qwen-<uuid>` id (renamed over the old file, never rm-then-rename, #4040),
    THEN best-effort evict the sidecar's in-memory prompt cache — the same
    file-op-first ordering as qwen-voice.ts's promote-voice. Purges the cached
    auditions and bumps persona/updatedAt on the manifest. A missing preview
@@ -363,7 +364,7 @@ voiceLibraryRouter.post('/:voiceUuid/redesign', async (req: Request, res: Respon
    that actually overwrites the live `.pt`, so it must refuse on its own even
    if a preview were staged some other way (a pre-fix preview still sitting on
    disk, a direct API call, a future stager). Placed BEFORE the preview `stat`
-   so a cloned entry can never reach the `rm`+`rename`. */
+   so a cloned entry can never reach the rename. */
 voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res: Response) => {
   try {
     const { voiceUuid } = req.params;
@@ -384,10 +385,17 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
       return res.status(409).json({ error: 'No staged preview voice to promote.' });
     }
     const hadBase = existsSync(qwenVoicePtPath(storageKey));
-    await rm(qwenVoicePtPath(storageKey), { force: true });
-    await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
-    await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
-    await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
+    /* #4040 — rename over the old files, never rm-then-rename: the sidecar
+       re-validates its cached prompt against the `.pt` on disk, so a synth
+       landing while the base is absent would fail as undesigned (409). */
+    await renameWithRetry(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
+    /* Best-effort: a preview with no `.json` drops the old one rather than
+       pairing the new embedding with the old voice's manifest. */
+    if (existsSync(qwenVoiceSidecarPath(previewKey))) {
+      await renameWithRetry(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
+    } else {
+      await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
+    }
     /* #4040 — a promote over an existing base is a redesign: a fresh `rev` makes
        every emotion variant designed against the old base stale, in every book on
        the key (same stamp as qwen-voice.ts's promote-voice). */
