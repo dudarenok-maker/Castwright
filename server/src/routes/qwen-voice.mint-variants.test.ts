@@ -12,6 +12,8 @@ import { join } from 'node:path';
 const failing = vi.hoisted(() => ({ on: false }));
 /* T7 — runs just before a copy, so a variant can land inside the mint's copy-to-walk window. */
 const hook = vi.hoisted(() => ({ fn: null as null | ((dest: string) => Promise<void>) }));
+/* T14 — makes the cast.json write (its tmp file) fail with ENOSPC. */
+const castWriteFails = vi.hoisted(() => ({ on: false }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
@@ -23,7 +25,25 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       }
       return (actual.copyFile as (...a: unknown[]) => Promise<void>)(src, dest, ...rest);
     }) as typeof actual.copyFile,
+    writeFile: (async (path: unknown, ...rest: unknown[]) => {
+      if (castWriteFails.on && /cast\.json\.tmp-/.test(String(path))) {
+        return Promise.reject(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }));
+      }
+      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
+    }) as typeof actual.writeFile,
   };
+});
+/* T13 — makes a synchronous copy of an `__excited.json` member fail with EBUSY. */
+const syncCopyFails = vi.hoisted(() => ({ on: false }));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const copyFileSync = ((src: string, dest: string, mode?: number) => {
+    if (syncCopyFails.on && /__excited\.json/.test(String(dest))) {
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    }
+    return actual.copyFileSync(src, dest, mode);
+  }) as typeof actual.copyFileSync;
+  return { ...actual, default: { ...actual, copyFileSync }, copyFileSync };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -124,6 +144,8 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   failing.on = false;
+  castWriteFails.on = false;
+  syncCopyFails.on = false;
   hook.fn = null;
 });
 afterAll(() => {
@@ -228,6 +250,116 @@ describe('series mint copies emotion variants (#4037)', () => {
     expect(existsSync(file('qwen-v_wren__sad.pt'))).toBe(true);
   });
 
+  it('T11: a variant REdesign landing between the copy and the walk reaches the renamed slot', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, sad: { name: 'qwen-v_wren__sad' } }));
+    plantBase();
+    plantAngry();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plant('qwen-v_wren__sad.json', 'SAD-OLD-J');
+    let fired = false;
+    hook.fn = async (dest) => {
+      /* the copy loop's last attempt: the old sad family is already copied */
+      if (!fired && /qwen-[^\\/]+__sad__master\.wav$/.test(dest)) {
+        fired = true;
+        /* the user's sad redesign on Book One lands (same size as the old bytes), then persists */
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+        plant('qwen-v_wren__sad.json', 'SAD-NEW-J');
+        const out = await persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-v_wren__sad', {
+          author: AUTHOR,
+          series: SERIES,
+        });
+        expect(out).toBe('applied');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-NEW');
+    expect(readFileSync(file(`qwen-${uuid}__sad.json`), 'utf8')).toBe('SAD-NEW-J');
+    expect(readFileSync(file('qwen-v_wren__sad.pt'), 'utf8')).toBe('SAD-NEW');
+  });
+
+  it('T12: a landing straddling one emotion of the copy loop (.json copied, .pt not) completes cleanly', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest) => {
+      /* between the mint's sad.pt attempt (nothing there yet) and its sad.json attempt */
+      if (!fired && /qwen-[^\\/]+__sad\.json$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__sad.pt', 'SAD-PT');
+        plant('qwen-v_wren__sad.json', 'SAD-JSON');
+        const out = await persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-v_wren__sad', {
+          author: AUTHOR,
+          series: SERIES,
+        });
+        expect(out).toBe('applied');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book One').voiceUuid).toBe(uuid);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-PT');
+    expect(readFileSync(file(`qwen-${uuid}__sad.json`), 'utf8')).toBe('SAD-JSON');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
+  });
+
+  it('T13: a failing in-lock copy with nothing stamped removes every copy, the in-lock ones too', async () => {
+    /* sad and excited land after the copy loop; in the walk, sad's in-lock copy
+       succeeds and excited's .json copy fails, before any row is stamped. */
+    seed(
+      withVariants({
+        angry: { name: 'qwen-v_wren__angry' },
+        sad: { name: 'qwen-v_wren__sad' },
+        excited: { name: 'qwen-v_wren__excited' },
+      }),
+    );
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__sad__master\.wav$/.test(dest)) {
+        fired = true;
+        for (const e of ['sad', 'excited']) {
+          plant(`qwen-v_wren__${e}.pt`, `${e}-PT`);
+          plant(`qwen-v_wren__${e}.json`, `${e}-JSON`);
+        }
+      }
+    };
+    syncCopyFails.on = true;
+    await expect(mint()).rejects.toThrow(/EBUSY/);
+    expect(fired).toBe(true);
+    const extra = ['sad', 'excited'].flatMap((e) => [`qwen-v_wren__${e}.pt`, `qwen-v_wren__${e}.json`]);
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles, ...extra].sort());
+    expect(rowOf('Book One').voiceUuid).toBeUndefined();
+    expect(rowOf('Book Two').voiceUuid).toBeUndefined();
+  });
+
+  it('T15: a new-key variant file the mint did not write is never overwritten', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, sad: { name: 'qwen-v_wren__sad' } }));
+    plantBase();
+    plantAngry();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    let fired = false;
+    hook.fn = async (dest) => {
+      const m = /qwen-([^\\/]+)__sad__master\.wav$/.exec(dest);
+      if (!fired && m) {
+        fired = true;
+        /* something else designed sad on the new key, and the legacy key changed too */
+        plant(`qwen-${m[1]}__sad.pt`, 'SAD-OWN');
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-OWN');
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+  });
+
   it('T7b: a slot whose legacy file is gone keeps its legacy name', async () => {
     seed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, sad: { name: 'qwen-v_wren__sad' } }));
     plantBase();
@@ -274,6 +406,16 @@ describe('book-scoped mint copies the legacy family too (#4037)', () => {
     plantAngry();
     failing.on = true;
     await expect(ensure(bookDir('Solo', SOLO_SERIES), 'wren')).rejects.toThrow(/EBUSY/);
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
+    expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
+  });
+
+  it('T14: a failing cast write removes the copies and stamps nothing', async () => {
+    soloSeed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    plantBase();
+    plantAngry();
+    castWriteFails.on = true;
+    await expect(ensure(bookDir('Solo', SOLO_SERIES), 'wren')).rejects.toThrow(/ENOSPC/);
     expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
     expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
   });
