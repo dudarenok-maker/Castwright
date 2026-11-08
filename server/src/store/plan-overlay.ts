@@ -25,6 +25,8 @@ export const ANALYSIS_OWNED = ['lines', 'scenes', 'evidence', 'attributes', 'det
 type Rec = Record<string, unknown>;
 
 const isNarratorId = (id: string): boolean => NARRATOR_CHARACTER_IDS.includes(id);
+// `''` counts as absent: older writers persisted empty-string placeholders, and the spec
+// says a joined row keeps "the prior value when present".
 const isAbsent = (v: unknown): boolean => v === undefined || v === null || v === '';
 const outputIdOf = (d: MatchDecision): string => (d.kind === 'join' ? d.priorId : d.id);
 
@@ -101,6 +103,27 @@ function collapseInto(base: Rec, other: Rec): Rec {
   return out;
 }
 
+/** Decisions grouped by the id their row carries after `applyMatchPlan` (R29): the
+    prior id of a join, the final id of a `new` row. The narrator is the one raw
+    fallback - its row keeps `'narrator'` through Phase 1. */
+function decisionsByOutput(plan: MatchPlan): Map<string, MatchDecision[]> {
+  const out = new Map<string, MatchDecision[]>();
+  for (const d of Object.values(plan.decisions)) {
+    const key = isNarratorId(d.rawId) ? d.rawId : outputIdOf(d);
+    const list = out.get(key);
+    if (list) list.push(d);
+    else out.set(key, [d]);
+  }
+  return out;
+}
+
+/** Every cross-book entry the `new` decisions inherited, unioned. */
+function inheritedOf(ds: ReadonlyArray<MatchDecision>): NotLinkedEntry[] {
+  let acc: unknown[] = [];
+  for (const d of ds) if (d.kind === 'new') acc = unionNotLinkedTo(acc, d.inheritedDeclines);
+  return acc as NotLinkedEntry[];
+}
+
 /** Apply the plan to the analyzer roster: each row takes its output id, rows that
     map to one output id collapse, and a joined row takes the prior id and display
     name with `aliases` = prior ∪ analyzer names. A `new` row gets no
@@ -127,6 +150,11 @@ export function applyMatchPlan<C extends { id: string; name: string; aliases?: s
         const display = typeof p?.name === 'string' ? p.name : c.name;
         row.name = display;
         row.aliases = addAliases(display, p?.aliases ?? [], [c.name, ...(c.aliases ?? [])]);
+        // Identity links come from the prior row alone (R28), never the fresh row.
+        delete row.matchedFrom;
+        delete row.notLinkedTo;
+        if (p?.matchedFrom !== undefined) row.matchedFrom = p.matchedFrom;
+        if (p?.notLinkedTo !== undefined) row.notLinkedTo = p.notLinkedTo;
       }
     }
     const i = at.get(row.id as string);
@@ -148,7 +176,8 @@ export function remapSentenceIds<S extends { characterId: string }>(s: S[], idMa
 /** Per roster row, what the plan says about it - the dedup's constraints. A `new`
     row's `declinedIds` are the ids X a same-book decline (a `notLinkedTo` edge on
     a prior row, or a `notSamePerson` record) pairs with its raw/output id or any
-    of its candidates (item 1). */
+    of its candidates (item 1). The roster is the plan-applied one (R29): `planned`
+    is keyed by output id, and decisions sharing an output id are unioned. */
 export function planConstraintsFor(a: {
   roster: ReadonlyArray<{ id: string; matchedFrom?: unknown }>;
   plan: MatchPlan;
@@ -180,23 +209,27 @@ export function planConstraintsFor(a: {
   }
   for (const rec of history.notSamePerson) link(rec.a, rec.b);
 
+  const byOutput = decisionsByOutput(plan);
   const planned = new Map<string, PlannedRowInfo>();
   for (const row of roster) {
-    const d = plan.decisions[row.id];
-    if (!d) continue;
-    if (d.kind === 'join') {
-      planned.set(row.id, { kind: 'join', priorId: d.priorId });
+    const ds = byOutput.get(row.id);
+    if (!ds) continue;
+    const joined = ds.find((d) => d.kind === 'join');
+    if (joined && joined.kind === 'join') {
+      planned.set(row.id, { kind: 'join', priorId: joined.priorId });
       continue;
     }
+    const news = ds.filter((d): d is Extract<MatchDecision, { kind: 'new' }> => d.kind === 'new');
+    const candidates = [...new Set(news.flatMap((d) => d.suggest))];
     const declined = new Set<string>();
-    for (const s of [d.rawId, d.id, ...d.suggest]) {
+    for (const s of [...news.flatMap((d) => [d.rawId, d.id]), ...candidates]) {
       for (const x of adj.get(s) ?? []) if (x !== s) declined.add(x);
     }
     planned.set(row.id, {
       kind: 'new',
-      minted: d.minted,
-      candidates: d.suggest,
-      inheritedDeclines: d.inheritedDeclines,
+      minted: news.some((d) => d.minted),
+      candidates,
+      inheritedDeclines: inheritedOf(news),
       declinedIds: [...declined].sort(),
       matchedFrom: row.matchedFrom,
     });
@@ -240,13 +273,17 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
   };
 
   // Group the roster rows by the cast row they land on.
-  const groups = new Map<string, { row: Rec; decision: MatchDecision; fresh: boolean }>();
+  const byOutput = decisionsByOutput(plan);
+  const groups = new Map<string, { row: Rec; fresh: boolean; declines: NotLinkedEntry[] }>();
   for (const c of roster) {
-    let d: MatchDecision | undefined = plan.decisions[c.id];
-    if (!d) {
+    const ds = byOutput.get(c.id);
+    if (!ds) {
       if (mode === 'snapshot') continue;
-      d = { kind: 'new', rawId: c.id, id: c.id, minted: false, suggest: [], inheritedDeclines: [] };
+      // Persist plans any row created since Phase 0b first (spec persist step 2), so an
+      // undecided row here is a caller bug; writing it would risk re-creating a retired id.
+      throw new Error(`overlayPlanOntoCast: persist roster row "${c.id}" has no plan decision`);
     }
+    const d = ds.find((x) => x.kind === 'join') ?? ds[0];
     let target: string;
     let fresh = false;
     if (d.kind === 'join') {
@@ -256,39 +293,47 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
         continue;
       }
       target = t;
-    } else if (currentById.has(d.id)) {
-      if (!ledger[d.id]) {
-        if (!collisions.includes(d.id)) collisions.push(d.id);
+    } else if (currentById.has(c.id)) {
+      if (!ledger[c.id]) {
+        if (!collisions.includes(c.id)) collisions.push(c.id);
         continue;
       }
-      target = d.id;
-    } else if (ledger[d.id]) {
+      target = c.id;
+    } else if (ledger[c.id]) {
       // Added by this run, since gone: merged away resolves to its survivor,
-      // otherwise it stays gone and is never re-added.
-      const t = resolve(d.id);
-      if (t === null || t === d.id || !currentById.has(t)) {
-        gone(d.id);
+      // otherwise it stays gone and is never re-added. A run-owned entry becomes
+      // added-once so clearing the ledger can never let a later run re-add it.
+      const t = resolve(c.id);
+      if (t === null || t === c.id || !currentById.has(t)) {
+        if (ledger[c.id].state === 'run-owned') ledger[c.id] = { state: 'added-once' };
+        gone(c.id);
         continue;
       }
       target = t;
     } else {
-      target = d.id;
+      target = c.id;
       fresh = true;
     }
     const prev = groups.get(target);
     const row = { ...(c as unknown as Rec) };
-    if (prev) groups.set(target, { ...prev, row: collapseInto(prev.row, row) });
-    else groups.set(target, { row, decision: d, fresh });
+    const declines = inheritedOf(ds);
+    if (prev) {
+      groups.set(target, {
+        ...prev,
+        row: collapseInto(prev.row, row),
+        declines: unionNotLinkedTo(prev.declines, declines) as NotLinkedEntry[],
+      });
+    } else groups.set(target, { row, fresh, declines });
   }
 
   const written = new Map<string, Rec>();
   const added: Rec[] = [];
-  for (const [target, { row, decision, fresh }] of groups) {
+  for (const [target, { row, fresh, declines }] of groups) {
     if (fresh) {
       const out: Rec = { ...row, id: target };
       const nl = unionNotLinkedTo(
         crossBookOnly(out.notLinkedTo as unknown[] | undefined, currentBookId),
-        crossBookOnly(decision.kind === 'new' ? decision.inheritedDeclines : [], currentBookId),
+        crossBookOnly(declines, currentBookId),
       );
       if (nl.length > 0) out.notLinkedTo = nl;
       else delete out.notLinkedTo;
@@ -304,7 +349,7 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
     const out: Rec = { ...cur };
     for (const k of ANALYSIS_OWNED) if (k in row) out[k] = row[k];
     for (const [k, v] of Object.entries(row)) {
-      if (k === 'id' || k === 'name' || k === 'aliases' || k === 'notLinkedTo') continue;
+      if (k === 'id' || k === 'name' || k === 'aliases' || k === 'notLinkedTo' || k === 'matchedFrom') continue;
       if ((ANALYSIS_OWNED as readonly string[]).includes(k)) continue;
       if (isAbsent(out[k]) && !isAbsent(v)) out[k] = v;
     }
