@@ -388,7 +388,7 @@ describe('dedupeRosterByName Tier-3 (alias coreference — strong merge)', () =>
       c({ id: 'boris', name: 'Борис Игнатьевич', gender: 'male', aliases: ['Гесер', 'шеф'] }),
       c({ id: 'geser', name: 'Гесер', gender: 'male', aliases: ['Борис Игнатьевич'] }),
     ];
-    // шеф has the MOST lines, yet the multi-token real name must win the survivor.
+    // шеф has the MOST lines, yet lines play no part: the multi-token real name supplies the row, and boris (< boss) is the surviving id.
     const r = dedupeRosterByName(chars as any, [...sent('boss', 100), ...sent('boris', 10), ...sent('geser', 5)], { constraints: none });
     expect(r.characters).toHaveLength(1);
     expect(r.characters[0].id).toBe('boris');
@@ -565,7 +565,7 @@ describe('dedupeRosterByName — first-person pronoun phantom (RC1)', () => {
       c({ id: 'я', name: 'Я', gender: 'male', aliases: [] }),
     ];
     const r = dedupeRosterByName(chars as any, [...sent('антон', 196), ...sent('я', 7)], { language: 'ru', constraints: none });
-    expect(r.characters.map((x) => x.id)).toEqual(['антон']); // phantom gone, Антон survives (more lines)
+    expect(r.characters.map((x) => x.id)).toEqual(['антон']); // phantom gone, Антон survives (lowest non-phantom id)
     expect(r.rewrites['я']).toBe('антон');
   });
 
@@ -586,7 +586,7 @@ describe('dedupeRosterByName — first-person pronoun phantom (RC1)', () => {
       c({ id: 'антон', name: 'Антон', gender: 'male', aliases: ['Я'] }),
       c({ id: 'я', name: 'Я', gender: 'male', aliases: [] }),
     ];
-    // phantom has FAR more lines than антон — this is what triggers the inversion.
+    // phantom has FAR more lines than антон — lines must still never make the phantom win.
     const r = dedupeRosterByName(chars as any, [...sent('антон', 20), ...sent('я', 300)], { language: 'ru', constraints: none });
     expect(r.characters.map((x) => x.id)).toEqual(['антон']); // real protagonist survives, keeps id антон
     expect(r.rewrites['я']).toBe('антон');                    // phantom merged INTO антон
@@ -858,6 +858,17 @@ describe('dedupeRosterByName — fix round 1 (#4031)', () => {
     expect(r.suggestions[0]).toMatchObject({ sourceId: 'a2', targetId: 'a1', a: 'a1', b: 'a2' });
   });
 
+  it('narrator-named non-narrator rows stay separate, as before', () => {
+    const chars = [
+      c({ id: 'narrator', name: 'Narrator' }),
+      c({ id: 'narrator-2', name: 'Narrator' }),
+      c({ id: 'narrator-3', name: 'Narrator' }),
+    ];
+    const r = dedupeRosterByName(chars as any, [], { constraints: none });
+    expect(r.characters.map((x) => x.id)).toEqual(['narrator', 'narrator-2', 'narrator-3']);
+    expect(r.rewrites).toEqual({});
+  });
+
   it.each([
     ['decline on the first row', 'a1', 'a2'],
     ['decline on the second row', 'a2', 'a1'],
@@ -869,5 +880,15 @@ describe('dedupeRosterByName — fix round 1 (#4031)', () => {
     });
     expect(r.characters.map((x) => x.id)).toEqual(['a1', 'a2']);
     expect(r.refused).toEqual([{ a: 'a1', b: 'a2', why: 'declined' }]);
+  });
+
+  it('a first-person phantom never takes the survivor id, even when its id sorts lowest', () => {
+    const chars = [
+      c({ id: 'антон', name: 'Антон', gender: 'male', aliases: ['Я'] }),
+      c({ id: 'ya', name: 'Я', gender: 'male' }),
+    ];
+    const r = dedupeRosterByName(chars as any, [], { language: 'ru', constraints: none });
+    expect(r.characters.map((x) => x.id)).toEqual(['антон']);
+    expect(r.rewrites).toEqual({ ya: 'антон' });
   });
 });

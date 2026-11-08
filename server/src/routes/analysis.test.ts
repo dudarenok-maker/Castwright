@@ -5130,8 +5130,8 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
        under id `anton-x`. THIS run's own fresh roster introduces two
        same-name rows across chapters (`anton-x` in chapter 1, `anton-a` in
        chapters 2-3, both "Anton Prime" — mirroring the analyzer's documented
-       non-determinism) that `dedupeRosterByName`'s Tier-1 collapses to a
-       third canonical id, producing a real `dd.rewrites` hit. Because the
+       non-determinism) that `dedupeRosterByName`'s Tier-1 collapses to
+       the lowest member id (anton-a), producing a real `dd.rewrites` hit. Because the
        prior row's id is a REWRITE KEY (not just a same-run collision that
        never touches the prior cast), `applyRewriteToPriorCast` remaps it —
        exercising the same-run-collision path a unit test can't reach without
@@ -7343,7 +7343,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
       /* Same roster/attribution shape as the main-path Task 8 guard fixture:
          chapter 1 introduces 'anton-x', chapters 2-3 introduce 'anton-a' —
          same name "Anton Prime", different id, which dedupeRosterByName's
-         Tier-1 collapses to a third canonical id (dd.rewrites hit). The
+         Tier-1 collapses to the lowest member id (dd.rewrites hit). The
          prior 'anton-x' row's NAME matches "Anton Prime" exactly, so
          remapFreshToPriorIds attempts the pair — and because 'anton-x' is
          ALSO a same-run dedup rewrite key, priorIdAfter('anton-x') already

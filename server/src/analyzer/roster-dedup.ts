@@ -1,5 +1,5 @@
 import type { CharacterOutput } from '../handoff/schemas.js';
-import { normaliseNameKey } from '../util/safe-id.js';
+import { safeId, normaliseNameKey } from '../util/safe-id.js';
 import { normaliseForMatch } from '../util/text-match.js';
 import { mergeCharacterFields } from './roster-merge-fields.js';
 import { diminutiveCanonical } from './ru-diminutives.js';
@@ -376,6 +376,9 @@ export function dedupeRosterByName(
     // Gender conflict → leave the whole group un-merged (conservative).
     const genders = new Set(group.map((g) => g.gender).filter(Boolean));
     if (genders.size > 1) continue;
+
+    // A non-narrator row named "Narrator" must never be merged (as before #4031).
+    if (safeId(group[0].name) === NARRATOR_ID) continue;
 
     absorbGreedy(group, (a) => `Same name «${a.name}»`, true);
   }
