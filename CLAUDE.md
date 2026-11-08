@@ -719,12 +719,13 @@ Design rationale:
   too; ENOSPC / EACCES / EROFS get a sentence that does not promise a retry)
   and is what the whole-request handlers in `book-state`,
   `chapters-restructure`, `cover`, `voice-library`, `voices`, `import`,
-  `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link` and
+  `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link`,
+  `cast-merge-suggestions` (its dismiss) and
   `voice-match` (and `voice-style`'s single generate and the per-item reason in
   `cast-design`'s job) whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-one call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-two call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -732,7 +733,7 @@ Design rationale:
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
-  `cast-decline-voice-link`, `voice-match`),
+  `cast-decline-voice-link`, `cast-merge-suggestions`, `voice-match`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since
@@ -759,7 +760,7 @@ Design rationale:
   deferred rethrow binds the CALLER too**: by the time it escapes, the work is
   applied, so a caller with follow-up writes of its own must finish them before
   letting it surface (`cast-merge-suggestions.ts`'s accept route and its
-  `dismissSuggestion`) — otherwise the skipped write just moves up one frame.
+  `removeSuggestionPairsLocked` follow-up) — otherwise the skipped write just moves up one frame.
   `server/src/workspace/cast-lock.guard.test.ts`
   fails the build on a new unlocked site. Two allowlisted exceptions, each
   keyed on file **and** count so a further unlocked write in either still

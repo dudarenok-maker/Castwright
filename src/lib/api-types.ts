@@ -1239,8 +1239,10 @@ export interface paths {
          * Accept a merge suggestion (merge + dismiss)
          * @description Performs the cast merge (`sourceId` folded into `targetId`, where
          *     `targetId` is the canonical survivor), then drops the suggestion so it
-         *     never resurfaces. Equivalent to calling `POST /cast/merge` followed by
-         *     `POST /cast/merge-suggestions/dismiss`.
+         *     never resurfaces. Equivalent to calling `POST /cast/merge`, then removing
+         *     the pair from the suggestions file. Unlike
+         *     `POST /cast/merge-suggestions/dismiss`, it records no "not the same
+         *     person" decision.
          */
         post: operations["acceptCastMergeSuggestion"];
         delete?: never;

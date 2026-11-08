@@ -76,8 +76,8 @@ export interface CastMergeResult {
 
    Round 4's accept route discriminated on the error CLASS alone and dismissed
    the suggestion on both, which destroys the suggestion for a merge that never
-   happened (`dismissSuggestion` is a load-filter-write; only a fresh dedup pass
-   can put it back). Contention on `cast:<bookDir>` — the very condition #2260
+   happened (`removeSuggestionPairsLocked` is a load-filter-write; only a later analysis
+   run can put it back). Contention on `cast:<bookDir>` — the very condition #2260
    exists to surface — was enough to reach it.
 
    Stamped as an own property on the parked error rather than returned in the
@@ -433,7 +433,7 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        must perform them BEFORE letting it escape — otherwise the deferred
        rethrow just moves the skipped-write bug up one frame, which is exactly
        what it happened to do at the second caller,
-       `cast-merge-suggestions.ts`'s accept route (its `dismissSuggestion`
+       `cast-merge-suggestions.ts`'s accept route (its `removeSuggestionPairsLocked`
        never ran, so the merged-away character kept a live suggestion that
        404'd on every subsequent Accept). Both callers turn this into a 500
        carrying the curated `LOCK_CONTENTION_REQUEST_ERROR` (round 5 — NOT the
