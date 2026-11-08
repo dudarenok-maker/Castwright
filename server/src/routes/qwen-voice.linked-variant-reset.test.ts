@@ -345,6 +345,36 @@ describe('#4040 — a linked voice’s base redesign makes the old emotion varia
     for (const t of LINKED) await expectCurrent(t, 'u_shared');
   });
 
+  it('a variant records the base rev read BEFORE its render: a base redesigned during the render leaves it stale (#4040)', async () => {
+    writeFileSync(json('qwen-u_shared'), JSON.stringify({ voiceId: 'qwen-u_shared', rev: 'r1' }));
+    /* Hold only the variant's sidecar render; everything else answers as usual. */
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let renderStarted!: () => void;
+    const started = new Promise<void>((r) => (renderStarted = r));
+    const normal = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
+      if (String(init?.body ?? '').includes('variantVoiceId')) {
+        renderStarted();
+        await gate;
+      }
+      return normal(url, init);
+    });
+    /* B designs an angry variant (the route, so its real design lock and render
+       ordering run); A's promote is a different book, so no lock serialises them. */
+    const variantRes = design('Book B', { emotion: 'angry' }).then((r) => r);
+    await started;
+    expect((await promote('Book A', 'u_shared')).status).toBe(200);
+    release();
+    const res = await variantRes;
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const variantJson = JSON.parse(readFileSync(json('qwen-u_shared__angry'), 'utf8'));
+    const baseJson = JSON.parse(readFileSync(json('qwen-u_shared'), 'utf8'));
+    expect(baseJson.rev, 'the promote stamped a new base rev').not.toBe('r1');
+    expect(variantJson.baseRev, 'the variant recorded the rev read after the render').toBe('r1');
+    for (const t of LINKED) await expectStale(t, 'u_shared');
+  });
+
   it('a legacy variant (no baseRev) on a base with a rev is stale; one recorded against the current rev is current', async () => {
     writeFileSync(json('qwen-u_shared'), JSON.stringify({ voiceId: 'qwen-u_shared', rev: 'r1' }));
     for (const t of LINKED) await expectStale(t, 'u_shared');
