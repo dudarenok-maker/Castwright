@@ -1552,7 +1552,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
        at .pt files that no longer exist). Approve must mirror the server
        teardown by clearing them locally. */
     promoteQwenVoice.mockClear();
-    const { store, dispatchSpy } = renderWithBook({
+    const withVariant: Character = {
       ...baseChar,
       ttsEngine: 'qwen',
       voiceId: 'v_hal',
@@ -1561,7 +1561,16 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
         qwen: { name: 'qwen-v_hal', variants: { angry: { name: 'qwen-v_hal__angry' } } },
       },
       voiceStyle: 'a steady adult voice',
+    };
+    const { store, dispatchSpy } = renderWithBook(withVariant);
+    /* Seed the slice — the drawer's character prop alone never reaches redux. */
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters([withVariant]));
     });
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'halloran')?.overrideTtsVoices?.qwen
+        ?.variants?.angry,
+    ).toBeTruthy();
     selectQwen();
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     act(() => {
@@ -1596,6 +1605,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     );
     /* …and the variants are actually gone from the slice. */
     const hal = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(hal).toBeTruthy();
     expect(hal?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 
