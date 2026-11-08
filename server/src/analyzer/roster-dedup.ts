@@ -275,9 +275,10 @@ export function dedupeRosterByName(
     }
     return null;
   };
+  const isJoined = (ch: CharacterOutput): boolean => state.get(ch)!.priorId !== null;
   const refuse = (a: CharacterOutput, b: CharacterOutput, why: RefusalReason, reason: string): void => {
     // A join-vs-new pair points the NEW row (source) at the established one (target).
-    const [x, y] = why === 'join-vs-new' && state.get(a)!.priorId !== null ? [b, a] : [a, b];
+    const [x, y] = why === 'join-vs-new' && isJoined(a) ? [b, a] : [a, b];
     refusals.push({ x: x.id, y: y.id, why, reason });
   };
 
@@ -421,6 +422,9 @@ export function dedupeRosterByName(
   roster = roster.filter((ch) => !dropped.has(ch));
 
   // ── Tier-3: alias coreference — strong auto-merge via union-find ──────────
+  // Union-find builds the candidate components from strong edges the plan allows;
+  // the greedy clustering in `absorbGreedy` then re-checks refusals against the
+  // MERGED state, so a component can still split.
   // A candidate link X→Y := X's normalised name appears in Y's alias set.
   // Strong (auto-merge) when MUTUAL, or one-directional via a MULTI-token name
   // (a full proper name is unlikely to also be a different character's whole
@@ -435,6 +439,16 @@ export function dedupeRosterByName(
     reason,
     origin: 'dedup',
   });
+  /** The one direction rule for every suggestion: a row that joined a prior
+      character is the TARGET against one that did not (accepting must never fold
+      an established character into a fresh row); otherwise fewer lines is the
+      source, and a tie makes `x` the target. */
+  const orient = (x: CharacterOutput, y: CharacterOutput): { source: CharacterOutput; target: CharacterOutput } => {
+    const xj = isJoined(x);
+    const yj = isJoined(y);
+    const yTarget = xj !== yj ? yj : linesOf(y) > linesOf(x);
+    return yTarget ? { source: x, target: y } : { source: y, target: x };
+  };
 
   const aliasKeysOf = (ch: CharacterOutput): Set<string> =>
     new Set((ch.aliases ?? []).map((a) => normaliseNameKey(a)).filter(Boolean));
@@ -589,11 +603,7 @@ export function dedupeRosterByName(
       if (!key) continue;
       if (rowCountOfKey(key) !== 2) continue;
 
-      // source = fewer lines, target = more lines (tie → i<j, so y is source).
-      const xln = linesOf(x);
-      const yln = linesOf(y);
-      const target = xln >= yln ? x : y;
-      const source = target === x ? y : x;
+      const { source, target } = orient(x, y);
       suggestions.push(toStored(source.id, target.id, `Both known as «${display}»`));
     }
   }
@@ -629,9 +639,7 @@ export function dedupeRosterByName(
       // Multi-gender diminutive requires both sides to have concrete, agreeing gender.
       if (da.multiGender && (!a.gender || !b.gender)) continue;
 
-      // Source = fewer lines; target = more lines (ties → i < j so b is target).
-      const target = linesOf(a) >= linesOf(b) ? a : b;
-      const source = target === a ? b : a;
+      const { source, target } = orient(a, b);
       suggestions.push(toStored(source.id, target.id, `Diminutive of «${target.name}»`));
     }
   }

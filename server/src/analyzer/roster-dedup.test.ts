@@ -892,3 +892,36 @@ describe('dedupeRosterByName — fix round 1 (#4031)', () => {
     expect(r.rewrites).toEqual({ ya: 'антон' });
   });
 });
+
+describe('dedupeRosterByName — every suggestion targets the established row (#4031 fix round 2)', () => {
+  it.each([
+    ['joined row first', ['j', 'n']],
+    ['joined row last', ['n', 'j']],
+  ])('a weak alias suggestion points the new row at the joined one, whatever the lines (%s)', (_l, order) => {
+    const rows: Record<string, any> = {
+      j: c({ id: 'j', name: 'Анна', gender: 'female' }),
+      n: c({ id: 'n', name: 'Мария', gender: 'female', aliases: ['Анна'] }),
+    };
+    const r = dedupeRosterByName(order.map((id) => rows[id]) as any, [...sent('n', 5)], {
+      constraints: planned({ j: joined('p1'), n: newRow() }),
+    });
+    expect(r.characters).toHaveLength(2);
+    expect(r.suggestions).toHaveLength(1);
+    expect(r.suggestions[0]).toMatchObject({ sourceId: 'n', targetId: 'j' });
+  });
+
+  it.each([
+    ['joined row first', ['olya', 'ольга']],
+    ['joined row last', ['ольга', 'olya']],
+  ])('a diminutive suggestion points the new row at the joined one, whatever the lines (%s)', (_l, order) => {
+    const rows: Record<string, any> = {
+      olya: c({ id: 'olya', name: 'Оля', gender: 'female' }),
+      'ольга': c({ id: 'ольга', name: 'Ольга', gender: 'female' }),
+    };
+    const r = dedupeRosterByName(order.map((id) => rows[id]) as any, [...sent('ольга', 30)], {
+      constraints: planned({ olya: joined('p1'), 'ольга': newRow() }),
+    });
+    expect(r.suggestions).toHaveLength(1);
+    expect(r.suggestions[0]).toMatchObject({ sourceId: 'ольга', targetId: 'olya' });
+  });
+});
