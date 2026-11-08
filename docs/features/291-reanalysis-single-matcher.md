@@ -1781,7 +1781,6 @@ Each task is one cold implementer plus one fresh reviewer. Every task ends with 
   release; `castBase?.noteExternalWrite` until Task 28.
 - **Identity:** rule 3 wins; `inheritedDeclines` is plan-only, and only cross-book entries persist.
 - **Rule 11:** fingerprint over user-owned fields = the job's own last write; compared before, refreshed after each job write (incl. the subset's writes to `addedRows` rows); `added-once` is sticky.
-  `added-once` is sticky.
 - **Cache:** `mutateAnalysisCache` is one non-re-entrant op; the version is written as given.
 - **Tests:** analysis-route tests run with `OLLAMA_URL=http://127.0.0.1:1`; server tests never
   import root `src/`; every deleted test names its replacement; #4023 expectations are re-derived.
