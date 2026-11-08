@@ -8,12 +8,13 @@
    Real design (preview) and promote routes against real cast.json files. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { writeJsonAtomic } from '../workspace/state-io.js';
 
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
@@ -36,6 +37,12 @@ vi.mock('../gpu/gpu-load.js', () => ({
 }));
 vi.mock('../gpu/sidecar-vram-sample.js', () => ({ maybeSampleSidecarEngine: async () => {} }));
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+/* Passthrough wrapper so #4040's F1/F2 can fail ONE book's cast.json write by
+   injection (file modes do not stop a temp-file rename on Linux). */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...actual, writeJsonAtomic: vi.fn(actual.writeJsonAtomic) };
+});
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -518,8 +525,16 @@ describe('#4040 — an emotion variant rendered against a replaced base is disca
 /* #4040 — a write failure in ANOTHER book is logged and does not fail the redesign
    (the base has landed); this book's variants are cleared regardless. */
 describe('#4040 — a linked reset that fails in another book does not fail the redesign', () => {
-  const locked = (b: BookSpec) => chmodSync(castPath(b), 0o444);
-  const unlocked = (b: BookSpec) => chmodSync(castPath(b), 0o666);
+  /* Fails every write of b's cast.json with an fs-shaped error; all else passes through. */
+  let real: typeof writeJsonAtomic;
+  const locked = (b: BookSpec) => {
+    real = vi.mocked(writeJsonAtomic).getMockImplementation()!;
+    vi.mocked(writeJsonAtomic).mockImplementation(async (p, ...rest) => {
+      if (p === castPath(b)) throw Object.assign(new Error(`EACCES: permission denied, rename '${p}'`), { code: 'EACCES', syscall: 'rename', path: p });
+      return real(p, ...rest);
+    });
+  };
+  const unlocked = () => vi.mocked(writeJsonAtomic).mockImplementation(real);
   const noLeak = (body: unknown) => {
     const text = JSON.stringify(body);
     expect(text).not.toContain(workspaceRoot);
@@ -542,7 +557,7 @@ describe('#4040 — a linked reset that fails in another book does not fail the 
       expect(hasVariants(B), 'the unwritable book was somehow rewritten').toBe(true);
       expect(err.mock.calls.some((c) => String(c[0]).includes('could not reset the emotion variants')), 'the failure was not logged').toBe(true);
     } finally {
-      unlocked(B);
+      unlocked();
       err.mockRestore();
     }
   });
@@ -561,7 +576,7 @@ describe('#4040 — a linked reset that fails in another book does not fail the 
       expect(hasVariants(B), 'the unwritable book was somehow rewritten').toBe(true);
       expect(err.mock.calls.some((c) => String(c[0]).includes('could not reset the emotion variants')), 'the failure was not logged').toBe(true);
     } finally {
-      unlocked(B);
+      unlocked();
       err.mockRestore();
     }
   });
