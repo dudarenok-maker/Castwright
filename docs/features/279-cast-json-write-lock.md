@@ -279,9 +279,11 @@ its rebuild half was withdrawn.)
   analysis.ts:179-181`), though that precedent is weaker justification now
   that this catch is narrower than a blanket swallow. A parse failure
   degrades a corrupt `cast.json` to the same path as a missing one: empty
-  `reuseRows`, carryover removed, `cast.json` deleted, reparse succeeds. A
-  corrupt cast has nothing worth carrying over and reparse exists to
-  discard the cast regardless. Any *other* read failure
+  `reuseRows`, `cast.json` deleted, reparse succeeds, and the carryover is
+  **kept** as it is (#4039; it was removed before). For an unparseable cast
+  `readPriorCastForMerge` already falls back to the carryover, so keeping it
+  matches what the next analysis would read, and deleting it would lose the
+  designed voices. Any *other* read failure
   (EBUSY/EPERM/EACCES/EMFILE, etc., on an otherwise-intact `cast.json`) is
   logged and re-thrown instead: a blanket `.catch(() => null)` would treat
   a transient error on an intact cast identically to "no cast", silently

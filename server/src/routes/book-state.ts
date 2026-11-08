@@ -1710,9 +1710,13 @@ async function applyReparse(
        narrowed to that one case: a JSON parse failure degrades to the same
        path as a missing cast.json (existingCast === null: the carryover is
        left exactly as it is, cast.json is deleted, reparse succeeds).
-       #4039 — with no readable cast.json nothing is newer than the existing
-       carryover, so it is the newest record of the cast and must survive a
-       second reparse or a replace-manuscript before re-analysis.
+       #4039 — the carryover must survive a second reparse or a
+       replace-manuscript before re-analysis. For an ABSENT cast.json it is
+       the newest record of the cast. For an UNPARSEABLE one it is older than
+       the cast it stands in for, but readPriorCastForMerge (analysis.ts)
+       already falls back to the carryover when cast.json does not parse, so
+       keeping it matches what the next analysis would use anyway, and
+       deleting it would lose the designed voices.
        Any OTHER read failure (EBUSY/EPERM/EACCES/EMFILE, etc. on an
        otherwise-intact cast.json) is logged and re-thrown instead of being
        silently treated as "no cast": the sibling arms have already started
