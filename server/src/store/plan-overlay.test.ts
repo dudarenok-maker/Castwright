@@ -305,6 +305,11 @@ describe('overlayPlanOntoCast', () => {
     expect(out[0]).toEqual({ characterId: 'narrator', priorCharacterId: 'gone' });
   });
 
+  it('rerouteDeletedTargets sends a deleted target to the book\'s own narrator id', () => {
+    const out = rerouteDeletedTargets([{ characterId: 'gone' }], new Set(['gone']), 'char-narrator');
+    expect(out[0]).toEqual({ characterId: 'char-narrator', priorCharacterId: 'gone' });
+  });
+
   it('item 12: a new id live on disk but not in the ledger is reported as a collision', () => {
     const current: PriorRow[] = [{ id: 'wren', name: 'Wren', voice: 'live' }];
     const r = overlay({ current, plan: planOf(nw('wren', 'wren')), roster: [{ id: 'wren', name: 'Other Wren', lines: 1 }] });

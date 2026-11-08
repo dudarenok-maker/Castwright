@@ -12,8 +12,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  applyStaleLinkPrune,
   linkSeriesReuseAtAnalysis,
   pruneStaleReuseLinks,
+  staleReuseLinkKeys,
   type LinkableCharacter,
   type LinkSeriesReuseOptions,
 } from './series-reuse-link.js';
@@ -1378,5 +1380,57 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(remappedSentences).toHaveLength(1);
     expect(remappedSentences[0].characterId).toBe(tom.id);
     expect(tom.matchedFrom).toBeUndefined();
+  });
+});
+
+/* #4031 Task 8 — the prune split in two so the slow half (library scans) runs
+   OUTSIDE the cast lock and the cheap half is applied to the cast.json re-read
+   UNDER it: `staleReuseLinkKeys` decides, `applyStaleLinkPrune` applies. */
+describe('staleReuseLinkKeys / applyStaleLinkPrune', () => {
+  const HOME = 'castwright__standalones__coalfall';
+  const OTHER_SERIES = 'shannon__keeper__bonus';
+  const META: Record<string, { author: string; series: string } | null> = {
+    [HOME]: { author: 'Castwright', series: 'Standalones' },
+    [OTHER_SERIES]: { author: 'Della Renwick', series: 'The Hollow Tide' },
+  };
+  const opts = (): LinkSeriesReuseOptions => ({
+    resolveAuthorSeries: async (id) => META[id] ?? null,
+    positions: async () => new Map<string, number | null>([[OTHER_SERIES, 1], [HOME, null]]),
+  });
+  const staleRow = (): LinkableCharacter => ({
+    id: 'narrator',
+    name: 'Narrator',
+    voiceId: 'narrator',
+    voiceState: 'reused',
+    matchedFrom: { bookId: OTHER_SERIES, characterId: 'narrator', bookTitle: 'Bonus', confidence: 0.9 },
+  });
+
+  it('staleReuseLinkKeys does not mutate its input', async () => {
+    const chars = [staleRow()];
+    const before = JSON.parse(JSON.stringify(chars));
+    const keys = await staleReuseLinkKeys(HOME, chars, opts());
+    expect(keys.size).toBe(1);
+    expect(chars).toEqual(before);
+  });
+
+  it('applyStaleLinkPrune clears only the links the keys name', async () => {
+    const keys = await staleReuseLinkKeys(HOME, [staleRow()], opts());
+    // The row as RE-READ under the lock: same stale link, plus one the user has
+    // since re-pointed at a different book (its key is not in the set).
+    const reread: LinkableCharacter[] = [
+      staleRow(),
+      { id: 'tom', name: 'Tom', matchedFrom: { bookId: 'some__other__book', characterId: 'tom' } },
+    ];
+    const pruned = applyStaleLinkPrune(reread, keys);
+    expect(pruned).toBe(1);
+    expect(reread[0].matchedFrom).toBeFalsy();
+    expect(reread[0].voiceState).toBe('generated');
+    expect(reread[1].matchedFrom?.bookId).toBe('some__other__book');
+  });
+
+  it('pruneStaleReuseLinks is the two halves composed', async () => {
+    const chars = [staleRow()];
+    expect(await pruneStaleReuseLinks(HOME, chars, opts())).toBe(1);
+    expect(chars[0].matchedFrom).toBeFalsy();
   });
 });

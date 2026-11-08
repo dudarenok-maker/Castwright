@@ -256,9 +256,22 @@ export async function pruneStaleReuseLinks(
   characters: LinkableCharacter[],
   options: LinkSeriesReuseOptions = {},
 ): Promise<number> {
-  if (!bookId || characters.length === 0) return 0;
+  return applyStaleLinkPrune(characters, await staleReuseLinkKeys(bookId, characters, options));
+}
+
+/* #4031 — the slow half of the prune, split out so it can run before a lock is
+   taken: which (row, link) pairs are stale. A key is `<row id>\0<link's bookId>`,
+   so a row the user re-linked since the keys were computed no longer matches and
+   is left alone by `applyStaleLinkPrune`. Does not mutate `characters`. */
+export async function staleReuseLinkKeys(
+  bookId: string,
+  characters: ReadonlyArray<LinkableCharacter>,
+  options: LinkSeriesReuseOptions = {},
+): Promise<Set<string>> {
+  const stale = new Set<string>();
+  if (!bookId || characters.length === 0) return stale;
   const linked = characters.filter((c) => c.matchedFrom?.bookId);
-  if (linked.length === 0) return 0;
+  if (linked.length === 0) return stale;
 
   const resolveAuthorSeries = memoizeAsync(options.resolveAuthorSeries ?? findAuthorSeriesForBookId);
   const isStandalone = memoizeAsync(options.isStandaloneBookId ?? isStandaloneBookId);
@@ -266,13 +279,12 @@ export async function pruneStaleReuseLinks(
     options.resolveBookLanguage ?? resolveBookLanguageForBookId,
   );
   const meta = await resolveAuthorSeries(bookId);
-  if (!meta) return 0; // can't resolve the current book — don't guess
+  if (!meta) return stale; // can't resolve the current book — don't guess
   const myLanguage = await resolveBookLanguage(bookId);
 
   const positions = await (options.positions ?? seriesPositionByBookId)();
   const myPos = positions.get(bookId) ?? null;
 
-  let dropped = 0;
   for (const c of linked) {
     const targetBookId = c.matchedFrom!.bookId!;
     const targetMeta = await resolveAuthorSeries(targetBookId);
@@ -294,6 +306,20 @@ export async function pruneStaleReuseLinks(
     const earlierOk = myPos === null || targetPos === null || targetPos < myPos;
     if (sameSeries && earlierOk) continue;
 
+    stale.add(staleLinkKey(c.id, targetBookId));
+  }
+  return stale;
+}
+
+const staleLinkKey = (rowId: string, linkBookId: string): string => `${rowId}\u0000${linkBookId}`;
+
+/* #4031 — the cheap half: revert every row whose current link `keys` names.
+   Mutates in place; returns the count reverted. */
+export function applyStaleLinkPrune(characters: LinkableCharacter[], keys: ReadonlySet<string>): number {
+  let dropped = 0;
+  for (const c of characters) {
+    const linkBookId = c.matchedFrom?.bookId;
+    if (!linkBookId || !keys.has(staleLinkKey(c.id, linkBookId))) continue;
     clearStaleLink(c);
     dropped++;
   }

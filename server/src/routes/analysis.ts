@@ -54,11 +54,7 @@ import {
   replaceDedupEntries,
   buildDedupJournalEntries,
 } from '../store/cast-merges.js';
-import {
-  reconcileSuggestionsLocked,
-  clearSuggestions,
-  loadStoredSuggestions,
-} from '../store/cast-merge-suggestions.js';
+import { reconcileSuggestionsLocked, clearSuggestions } from '../store/cast-merge-suggestions.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
   runStage2ChapterChunked,
@@ -130,10 +126,7 @@ import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { withBookLock } from '../workspace/book-lock.js';
 import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
-import {
-  readJsonWithFingerprint,
-  describeFingerprintForLog,
-} from '../workspace/cast-fingerprint.js';
+import { describeFingerprintForLog } from '../workspace/cast-fingerprint.js';
 import { createCastMergeBase, type CastMergeBase } from '../workspace/cast-merge-base.js';
 import {
   BookDirUnresolvedError,
@@ -157,11 +150,16 @@ import {
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   loadCastIdHistoryWithStatus,
-  toMatchHistory,
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
 import type { DedupConstraints, StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
+import {
+  readHealOpts,
+  readPriorCastLockFree,
+  sameBookDeclinePredicate,
+  type PriorCastSnapshot,
+} from '../workspace/analysis-cast-io.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -235,39 +233,10 @@ import { GeminiAnalyzer } from '../analyzer/gemini.js';
 
    Rule 1 (one level only) holds: both production callers sit at the top of
    their run outside any lock, and applyReparse never calls this. */
-export interface PriorCastSnapshot {
-  rows: Array<{ id: string } & Record<string, unknown>>;
-  /** sha256 of cast.json's raw bytes when the rows came from it. `null` means
-      "no compare-and-set is available for this run" — carryover-sourced or
-      empty. A null fingerprint DISABLES conflict detection rather than
-      producing a wrong verdict (design §1a). */
-  fingerprint: string | null;
-  source: 'cast' | 'carryover' | 'none';
-}
+export type { PriorCastSnapshot };
 
 export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastSnapshot> {
-  type Rows = Array<{ id: string } & Record<string, unknown>>;
-  return withCastLock(bookDir, async () => {
-    const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
-    const fromCast = cast.value?.characters;
-    if (fromCast?.length) {
-      /* fingerprint is a hash, never ABSENT, on this branch — the file
-         demonstrably parsed. The guard is for the type, not the case. */
-      return {
-        rows: fromCast,
-        fingerprint: typeof cast.fingerprint === 'string' ? cast.fingerprint : null,
-        source: 'cast' as const,
-      };
-    }
-    const carry = await readJsonWithFingerprint<{ characters?: Rows }>(
-      castReuseCarryoverJsonPath(bookDir),
-    );
-    const fromCarryover = carry.value?.characters;
-    if (fromCarryover) {
-      return { rows: fromCarryover, fingerprint: null, source: 'carryover' as const };
-    }
-    return { rows: [], fingerprint: null, source: 'none' as const };
-  });
+  return withCastLock(bookDir, () => readPriorCastLockFree(bookDir));
 }
 
 /* §4.4 — the choke point every id-retiring call site records through.
@@ -369,56 +338,21 @@ export function logIfDegradedCastIdHistory(
   }
 }
 
-/* #4031 A11 — what the run-start identical-name heal must not settle: the
-   book's open merge suggestions and its "not the same person" dismissals. Read
-   lock-free next to the lock-free prior read the heal operates on (the heal is an
-   in-memory pass; nothing here writes). A degraded history read yields no
-   dismissals ("undetermined", not evidence) rather than refusing every heal.
-   An unreadable suggestions file is different: a heal must never merge across a
-   decision it cannot read, so the heal is switched off for this run (logged
-   server-side only — the error text can carry the workspace path) and the run
-   carries on. `skipIds` is empty until the run ledger lands (Task 15).
-   Exported only so analysis-heal-opts.test.ts can drive it. */
+/* #4031 A11 — the run-start heal's refusals (open suggestions, dismissals, an
+   unreadable suggestions file switching the heal off), read by the shared
+   `readHealOpts` in workspace/analysis-cast-io.ts. This wrapper is the read for
+   the call sites that still run OUTSIDE the cast lock; `materialisePriorAtRunStart`
+   makes the same read inside it, and Task 15 moves these call sites over.
+   `skipIds` is empty until the run ledger lands (Task 15). Exported only so
+   analysis-heal-opts.test.ts can drive it. */
 export async function loadHealOpts(
   bookDir: string | undefined,
 ): Promise<Parameters<typeof dedupePriorCastByName>[2]> {
-  if (!bookDir) return { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
-  let openSuggestions: StoredSuggestion[];
-  try {
-    openSuggestions = await loadStoredSuggestions(bookDir);
-  } catch (err) {
-    console.warn(
-      `[analysis] run-start name heal skipped — cast-merge-suggestions.json could not be read: ${(err as Error)?.message ?? err}`,
-    );
-    return { openSuggestions: [], notSamePerson: [], skipIds: new Set(), healDisabled: true };
-  }
-  const history = await loadCastIdHistoryWithStatus(bookDir);
-  return {
-    openSuggestions,
-    notSamePerson: toMatchHistory(history).notSamePerson,
-    skipIds: new Set(),
-  };
+  return readHealOpts(bookDir);
 }
 
-/* #4031 — "has the user declined this pair?" for the dedup suggestions, read off
-   cast.json's `notLinkedTo` edges (a dismissal writes one on each row). SAME-BOOK
-   ONLY: an edge naming `bookId` counts, a cross-book edge never does (a series'
-   other book can carry a row with the same slug id). A legacy string entry, or
-   an object entry with no `bookId`, counts as same-book (Task 1's
-   `inheritedDeclines` convention). */
-export function sameBookDeclinePredicate(
-  characters: ReadonlyArray<{ id: string; notLinkedTo?: Array<string | { bookId?: string; characterId: string }> }>,
-  bookId: string | undefined,
-): (a: string, b: string) => boolean {
-  const linked = new Set<string>();
-  for (const c of characters) {
-    for (const e of c.notLinkedTo ?? []) {
-      if (typeof e !== 'string' && e.bookId !== undefined && e.bookId !== bookId) continue;
-      linked.add(`${c.id}\u0000${typeof e === 'string' ? e : e.characterId}`);
-    }
-  }
-  return (a, b) => linked.has(`${a}\u0000${b}`) || linked.has(`${b}\u0000${a}`);
-}
+// Moved to workspace/analysis-cast-io.ts (the snapshot/persist reconcile needs it too).
+export { sameBookDeclinePredicate };
 
 /* #4031 — add the dedup pass's suggestions to the durable file, under the cast
    lock, pruned against `roster` (the PRE-remap fresh roster: `dd.suggestions`

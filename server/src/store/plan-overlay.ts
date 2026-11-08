@@ -385,14 +385,16 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
   return { characters, ledger, deletedTargets, droppedRunAdded, unresolved, collisions, carriedForward };
 }
 
-/** Lines whose speaker was a deleted target go to the narrator, with the id they
-    overwrote recorded in `priorCharacterId`. */
+/** Lines whose speaker was a deleted target go to the narrator (`narratorId`, the
+    book's own narrator row - `'narrator'` unless the cast holds `char-narrator`),
+    with the id they overwrote recorded in `priorCharacterId`. */
 export function rerouteDeletedTargets<S extends { characterId: string; priorCharacterId?: string }>(
   s: S[],
   deleted: ReadonlySet<string>,
+  narratorId = 'narrator',
 ): S[] {
   return s.map((x) =>
-    deleted.has(x.characterId) ? { ...x, characterId: 'narrator', priorCharacterId: x.characterId } : x,
+    deleted.has(x.characterId) ? { ...x, characterId: narratorId, priorCharacterId: x.characterId } : x,
   );
 }
 
