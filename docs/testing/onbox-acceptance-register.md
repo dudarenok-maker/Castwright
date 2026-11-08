@@ -722,7 +722,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 42 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 9 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -732,11 +732,16 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**76 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**77 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-05 (#3992, PR #4007), 75 → 76.** Row **A120** ("Don't reuse" moves a
+> **Last change: 2026-11-08 (#4037, PR #4052), 76 → 77.** Row **A121** (a series or
+> book-scoped voice mint copies the emotion variants: a legacy-keyed `angry` line still speaks
+> the variant, with no `voice_not_designed`) added. Group A 42 → 43. `next-id` bumped A121 → A122
+> in the same change. Row is owed; not run here.
+>
+> **Prior change: 2026-11-05 (#3992, PR #4007), 75 → 76.** Row **A120** ("Don't reuse" moves a
 > declined series character onto a voice of its own at once, with every later book whose link
 > chain leads down to it; redesigning it afterwards never touches the earlier book's voice and is never refused; the
 > decline survives re-analysis) added. Group A 41 → 42. `next-id` bumped A120 → A121 in the same
@@ -1885,7 +1890,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A121 -->
+<!-- next-id: A122 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6424,6 +6429,16 @@ The automated tests prove the decline-time separation against fixture workspaces
 19. **Nothing staged is left behind.** Press Don't reuse on Book 2 the moment its first design from the drawer (or "Design full cast") finishes: Book 2's row has its own `voiceUuid`, a `.pt` and a qwen voice, and shows as designed after a reload. Cancel a "Design full cast" run mid-design: 15 minutes later no `qwen-staging-*` file is in `voices/qwen/`, and a `qwen-staging-*` file placed there by hand is gone after a server restart.
 
 *Needs:* the GPU box with the Qwen sidecar and a series of two books (four for step 7) with a linked character. *Criteria:* this row; issues #3992 and #4028 (the separation is `separateVoiceLocked` in `server/src/routes/qwen-voice.ts`, its rule `mustSeparateOnDecline` in `server/src/workspace/voice-uuid-fork.ts`; a design lands in `landStagedDesign`, the series mint is `ensureCharacterVoiceUuid`, the separated-voice record is `server/src/workspace/separated-voices.ts`). Clears when each step is recorded with the cast.json uuids and the file listing that show it.
+
+### A121 · A series or book-scoped voice mint copies the emotion variants, so a legacy-keyed `angry` line still speaks ([#4037](https://github.com/dudarenok-maker/Castwright/issues/4037), PR #4052) · **one GPU box: Qwen sidecar, two linked series books**
+
+The automated tests (`server/src/routes/qwen-voice.mint-variants.test.ts`) prove the mint copies the variant files and rewrites the variant names against fixture workspaces. Only a real Qwen sidecar shows the copied variant is audibly the angry voice and renders with no `voice_not_designed`. Take a listing of `voices/qwen/` (names, sizes and mtimes) before step 1.
+
+1. **The series mint copies the variants.** Two linked series books. Book 1's character has a designed `angry` emotion variant on a legacy (uuid-less) voice key (`qwen-<legacy>.pt` and `qwen-<legacy>__angry.pt`, its `cast.json` row has no `voiceUuid`). Design Book 2's linked character (the series mint). Book 1's row now has a `voiceUuid` and its `overrideTtsVoices.qwen.variants.angry.name` is `qwen-<uuid>__angry`; `qwen-<uuid>__angry.*` exists under `voices/qwen/`; the legacy `qwen-<legacy>__angry.*` files still exist, unchanged in size and mtime.
+2. **The angry line speaks the variant.** Render a chapter in Book 1 with a line tagged `angry`. It plays the angry variant (audibly angry, not the base voice) and neither the sidecar log nor the server log has `voice_not_designed`. A neutral line in Book 1 plays its base voice.
+3. **A standalone book, book-scoped mint.** On a standalone (non-series) book, take a character with a legacy-keyed voice and an `angry` variant, and redesign its base voice (the book-scoped mint). Render a neutral line and an `angry` line: both speak, with no `voice_not_designed` in either log, and the row's variant name points at a `qwen-<uuid>__angry` that exists under `voices/qwen/`.
+
+*Needs:* the GPU box with the Qwen sidecar, a two-book linked series and a standalone book, each with a legacy-keyed character that has a designed `angry` variant. *Criteria:* this row; issue [#4037](https://github.com/dudarenok-maker/Castwright/issues/4037); the test file `server/src/routes/qwen-voice.mint-variants.test.ts`. Clears when each step is recorded with the cast.json variant name and the `voices/qwen/` listing that show it. Owed; not run here.
 
 ## Group B — local Ollama analyzer only
 
