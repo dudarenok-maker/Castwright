@@ -286,12 +286,12 @@ describe('#4026 — promote drops the row\'s stale variant slots, never their fi
     expect(kept(), "Book One's angry variant file was deleted").toBe(true);
   });
 
-  it('a still-linked book: One still names it, so it is kept', async () => {
+  it('a still-linked book: #4040 resets One\'s slot with Two\'s, and the file is still not deleted inline', async () => {
     seedShared();
     const res = await promote('Book Two', 'u_shared');
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(variantsOf('Book Two')).toBeUndefined();
-    expect(variantsOf('Book One')?.angry).toBeDefined();
+    expect(variantsOf('Book One')).toBeUndefined();
     expect(kept()).toBe(true);
   });
 

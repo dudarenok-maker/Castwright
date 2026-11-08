@@ -294,6 +294,15 @@ export async function legacyKeyHolderBookIds(
   return [...new Set(books.filter((b) => b.bookId && inScope(b) && b.rows.some(holds)).map((b) => b.bookId as string))];
 }
 
+/* #4040 — the bookIds of the OTHER readable books with a row that holds the voice
+   (`holds`): the books a base redesign of it leaves with stale emotion variants.
+   Planning only; the promote locks them and re-decides every row on a fresh
+   read. A declined book is on a voice of its own, so it never holds this one. */
+export async function voiceHolderBookIds(bookDir: string, holds: VoiceHolds): Promise<string[]> {
+  const { books } = await loadOtherBooks(resolve(bookDir));
+  return [...new Set(books.filter((b) => b.bookId && b.rows.some(holds)).map((b) => b.bookId as string))];
+}
+
 interface MarkedRow {
   voiceUuid?: string | null;
   declinedVoiceFrom?: string[] | null;

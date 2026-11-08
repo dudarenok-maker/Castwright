@@ -920,12 +920,12 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
     expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
   });
 
-  it('Linked promote: Book One still names the shared variant, so its file is kept (#4026)', async () => {
+  it('Linked promote: Book One\'s slot is reset with Book Two\'s (#4040), the file is still not deleted inline (#4026)', async () => {
     seedBoth('u_shared');
     const res = await promote('u_shared');
     expect(res.status).toBe(200);
     expect(slotOf('Book Two')).toBeUndefined();
-    expect(slotOf('Book One')).toBeDefined();
+    expect(slotOf('Book One')).toBeUndefined();
     expect(gone()).toBe(false);
   });
 
