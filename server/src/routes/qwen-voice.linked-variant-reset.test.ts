@@ -351,6 +351,16 @@ describe('#4040 — a redesign resets the emotion variants of every linked row',
     expect(readFileSync(castPath(D)).equals(other), 'a book on another key was touched').toBe(true);
   });
 
+  it('P5: a series redesign resets a STANDALONE book holding the same key (a holder, not a designer)', async () => {
+    seedFiles(true);
+    writeBook(A, [variantsRow('wren', 'u1')]);
+    writeBook(SOLO, [variantsRow('wren', 'u1'), variantsRow('fern', 'u1')]);
+    await redesign(A);
+    expect(hasVariants(A)).toBe(false);
+    expect(hasVariants(SOLO, 'wren'), 'a standalone holder kept its variants').toBe(false);
+    expect(hasVariants(SOLO, 'fern'), 'a standalone holder kept its variants').toBe(false);
+  });
+
   it('P6: a linked row whose slot name is a legacy name (series mint left it) is reset by the key it renders from', async () => {
     seedFiles(true);
     writeBook(A, [variantsRow('wren', 'u1')]);
