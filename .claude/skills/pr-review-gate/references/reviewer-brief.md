@@ -1090,6 +1090,21 @@ recite:
     (here: the in-flight design's key moves only with a separation of the row,
     and anything else discards the render).
 
+86. **A staleness token re-based when its subject moves to a new key, losing
+    a change the old subject saw between the capture and the move** — PR #4057
+    pass 2 (#4040, N1): an emotion design captured the base key's write counter
+    when it began and discarded its render if the base was written since. A
+    decline mid-render moved the design onto a fresh key and re-captured the
+    counter from that key (`w.begun = savesOf(newKey).begun`), so a Keep that
+    had replaced the old base before the move was invisible: the copy took the
+    post-write state and the stale variant landed. Checkable: for every guard
+    whose baseline is re-captured when the guarded thing moves (a re-key, a
+    fork, a rename), ask whether the move carries state taken after a change
+    the old baseline would have caught; if it does, carry the violation across
+    (poison the new baseline) rather than re-baselining, and check every re-key
+    site carries the staleness. Test by making the change before the move. Near
+    entries 42 and 85, which are not this shape.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
