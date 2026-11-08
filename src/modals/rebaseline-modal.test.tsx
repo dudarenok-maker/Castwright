@@ -124,7 +124,10 @@ const voice = (id: string, characterId: string): Voice =>
 function makeStore(
   characters: Character[],
   voices: Voice[],
-  { openBookId = 'book-1' as string | null } = {},
+  {
+    openBookId = 'book-1' as string | null,
+    loadedBookId = openBookId,
+  }: { openBookId?: string | null; loadedBookId?: string | null } = {},
 ) {
   const baseUi = { ...uiSlice.getInitialState(), rebaselineModalOpen: true };
   const ui =
@@ -156,6 +159,9 @@ function makeStore(
       ui,
       cast: { characters },
       voices: { ...voicesSlice.getInitialState(), voices },
+      /* The book the cast/manuscript slices HOLD — independent of the stage (the
+         global #/voices page loads a book in memory with none on screen). */
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: loadedBookId },
     },
   });
 }
@@ -181,6 +187,11 @@ beforeEach(() => {
   generateVoiceStyle.mockClear();
   generateAllVoiceStyles.mockClear();
   setVoiceOverrideLinked.mockClear();
+  setVoiceOverrideLinked.mockImplementation(async (_bookId: string, characterId: string) => ({
+    canonicalVoiceId: `v_${characterId}`,
+    updated: [],
+    failed: [],
+  }));
   getBookState.mockClear();
   getBookState.mockResolvedValue(null);
   getSeriesCast.mockClear();
@@ -505,6 +516,86 @@ describe('RebaselineModal — a series rebaseline of a non-loaded book leaves th
     expect(marlow.voiceStyle).toBeTruthy();
     expect(marlow.ttsEngine).toBe('qwen');
     expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+  });
+});
+
+describe('RebaselineModal — the local mirror follows the LOADED book, not the stage', () => {
+  const approve = async (store: ReturnType<typeof makeStore>, targetBookId: string) => {
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId={targetBookId} />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalled());
+    await waitFor(() => expect(store.getState().rebaseline.status).not.toBe('approving'));
+    return store.getState().cast.characters.find((c) => c.id === 'marlow')!;
+  };
+  const targetCast = () =>
+    getBookState.mockResolvedValue({
+      cast: { characters: [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 90)] },
+    });
+
+  it('mirrors into the loaded book when no book is on screen (global #/voices)', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.ttsEngine).toBe('qwen');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    expect(marlow.voiceStyle).toBeTruthy();
+  });
+
+  it('mirrors a linked update that lands in the loaded book when rebaselining another', async () => {
+    targetCast();
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => ({
+      canonicalVoiceId: 'v_unified',
+      updated: [
+        { bookId: 'book-2', bookTitle: 'Book Two', characterId },
+        { bookId: 'book-1', bookTitle: 'Book One', characterId },
+      ],
+      failed: [],
+    }));
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.voiceId).toBe('v_unified');
+    expect(marlow.ttsEngine).toBe('qwen');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    /* The persona is the rebaselined book's own; a linked-in row only gets the voice. */
+    expect(marlow.voiceStyle).toBeUndefined();
+  });
+
+  it('leaves the loaded book alone when no linked update reaches it', async () => {
+    targetCast();
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => ({
+      canonicalVoiceId: 'v_unified',
+      updated: [{ bookId: 'book-2', bookTitle: 'Book Two', characterId }],
+      failed: [],
+    }));
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.voiceId).toBe('voice-marlow');
+    expect(marlow.ttsEngine).toBeUndefined();
+    expect(marlow.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(marlow.voiceStyle).toBeUndefined();
   });
 });
 

@@ -38,7 +38,8 @@ import {
 import { Avatar, Checkbox } from '../components/primitives';
 import { api } from '../lib/api';
 import { within, BOOK_READ_TIMEOUT_MS } from '../lib/book-read';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { designWillGeneratePersona } from '../lib/design-persona';
 import { uiActions } from '../store/ui-slice';
@@ -95,6 +96,12 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   const playback = useSamplePlayback();
 
   const targetIsOpenBook = bookId === currentBookId;
+  /* The book the cast/manuscript slices HOLD — not the stage's: the global
+     #/voices page keeps a book loaded in memory with none on screen, and its
+     next whole-roster cast PUT would revert a rebaseline the slices never saw. */
+  const loadedBookId = useAppSelector((s) => s.manuscript.bookId);
+  const store = useStore<RootState>();
+  const targetIsLoadedBook = bookId === loadedBookId;
 
   /* Anchor cast (the book the modal is keyed to). For the open book that's
      redux; for a foreign book (the per-series global-view buttons) we fetch
@@ -263,10 +270,10 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
         const res = await api.generateVoiceStyle(bookId, characterId);
         persona = res.voiceStyle;
         /* Local mirror only when this book is the loaded one: series books share
-           character ids, so for a foreign book the write would land on the loaded
+           character ids, so for another book the write would land on the loaded
            book's row and its next autosave would PUT it into that cast.json. The
            server already persisted it. */
-        if (targetIsOpenBook) dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
+        if (targetIsLoadedBook) dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
       }
       /* Cache the audition under the same identity playCurrent / the cast row
          use, so the proposed preview doubles as the character's 12s sample. */
@@ -445,21 +452,31 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           );
           continue;
         }
-        /* Mirror the engine + persona + override (and the now-unified voiceId)
-           into redux so the cast view is correct without a full re-hydrate. */
-        const next: Character = {
-          ...character,
-          voiceId: linked.canonicalVoiceId ?? character.voiceId,
-          ttsEngine: 'qwen',
-          voiceStyle: p.persona,
-          overrideTtsVoices: {
-            ...(character.overrideTtsVoices ?? {}),
-            qwen: { name: p.proposedVoiceId },
-          },
-        };
-        /* Same reason as designOne's voiceStyle write: a foreign book's row must
-           not overwrite the loaded book's same-id character. */
-        if (targetIsOpenBook) dispatch(castActions.updateCharacter(next));
+        /* Mirror into the LOADED book's redux row (engine, override, the
+           now-unified voiceId) so nothing re-reads it and a later whole-roster
+           cast PUT cannot revert the server's write. Series books share character
+           ids, so only rows the server actually wrote in the loaded book qualify:
+           the home row when the home book is the loaded one (with the persona),
+           plus any linked row the response lists for the loaded book. */
+        const mirrorIds = new Set<string>();
+        if (homeBookId === loadedBookId) mirrorIds.add(character.id);
+        for (const u of linked.updated) if (u.bookId === loadedBookId) mirrorIds.add(u.characterId);
+        for (const id of mirrorIds) {
+          const cur = store.getState().cast.characters.find((c) => c.id === id);
+          if (!cur) continue;
+          dispatch(
+            castActions.updateCharacter({
+              ...cur,
+              voiceId: linked.canonicalVoiceId ?? cur.voiceId,
+              ttsEngine: 'qwen',
+              ...(id === character.id && homeBookId === loadedBookId ? { voiceStyle: p.persona } : {}),
+              overrideTtsVoices: {
+                ...(cur.overrideTtsVoices ?? {}),
+                qwen: { name: p.proposedVoiceId },
+              },
+            }),
+          );
+        }
         dispatch(rebaselineActions.proposalApplied({ characterId: p.characterId }));
         applied += 1;
       } catch {
