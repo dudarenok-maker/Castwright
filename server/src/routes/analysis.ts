@@ -343,62 +343,6 @@ export async function recordRetirements(
   }
 }
 
-/* #2166 — the per-persist half of the reject-edge invariant. Its sibling
-   (`clearNotLinkedEdgesForDroppedRejections`, #2133 — moved to
-   `store/not-linked-edges.ts` by #2239) is PER-RETIREMENT and driven by
-   `droppedSelfLoopRejections`; this one is PER-PERSIST and
-   derived purely from state, which is what lets it heal a reject that failed
-   between its two writes — a state no retirement ever reports. The two are
-   compatible in either order: after the #2133 helper runs, pair and edge are
-   both gone, so this sees nothing to do.
-
-   Its OWN withCastLock, and the write is TEXTUALLY inside it, in this file.
-   That is not stylistic: `cast-lock.guard.test.ts` is syntactic and
-   call-graph-blind, and this file's allowlist entry is keyed on file AND
-   count, so a write that lived in reject-edge-reconcile.ts (however well
-   locked by its caller) would read as a sixth unlocked write here and redden
-   the build. reject-edge-reconcile.ts is therefore PURE and this function
-   owns the read, the lock and the write.
-
-   Best-effort, mirroring every other id-history write in this file: a failure
-   must not fail the analysis. A surviving stale edge merely re-suppresses one
-   future §4.4 name-match until the next persist tries again.
-
-   Fails SAFE on either read (final-review Critical, #2166). An unreadable
-   cast.json already did — the roster is empty, so nothing is reconciled. An
-   unreadable cast-id-history.json used to fail DESTRUCTIVE, because the empty
-   history it degrades to is indistinguishable from "nothing was ever
-   rejected", which is exactly the evidence the removal pass acts on. It now
-   reads the history through `loadCastIdHistoryWithStatus` and refuses to act
-   at all on `degraded`. See the comment at that call below.
-
-   `castBase` (#2694, optional/nullable) is the run's `CastMergeBase`. This
-   function's write is textually locked in this file (see above) rather than
-   routed through `writeChecked` — for the same cast-lock-rule-1 reason
-   `clearNotLinkedEdgesForDroppedRejections` isn't — so it must advance the
-   baseline itself when it writes, or the next `writeChecked` reports this
-   run's own reconciliation as a foreign conflict. See cast-merge-base.ts's
-   file-header invariant.
-
-   `statusBeforePersist` exists because that local read is NOT sufficient on
-   its own at the two persist call sites (PR #2202 gate review, Critical). The
-   steps that run earlier in the same try block — `recordRetirements`,
-   `dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`
-   — all read through the COLLAPSING `loadCastIdHistory` and write back
-   unconditionally, so a cast-id-history.json that was degraded when the
-   persist began has already been REPLACED with a valid, empty file by the time
-   this function reads it. The local read then says `ok`, the guard never
-   fires, and every same-book reject edge is deleted — both records of a real
-   user decision gone, deterministically, on the next analysis. So the callers
-   inside the persist decide the verdict BEFORE the first rewriting step and
-   hand it in here; a `degraded` verdict wins over whatever the file says by
-   now. Direct callers that pass nothing keep the local read as their only
-   check, which is correct for them — nothing has laundered the file underneath
-   them.
-
-   Exported only so analysis-reject-edge-reconcile.test.ts can drive it
-   without standing up a full analysis run. */
-
 /* #2214/#2201 — shared user-facing wording for "cast-id-history.json could
    not be read, nothing changed" so it reads identically no matter which of
    the three call sites emits it: this function's own degraded-read branch
@@ -510,6 +454,61 @@ async function reconcileDedupSuggestions(
   });
 }
 
+/* #2166 — the per-persist half of the reject-edge invariant. Its sibling
+   (`clearNotLinkedEdgesForDroppedRejections`, #2133 — moved to
+   `store/not-linked-edges.ts` by #2239) is PER-RETIREMENT and driven by
+   `droppedSelfLoopRejections`; this one is PER-PERSIST and
+   derived purely from state, which is what lets it heal a reject that failed
+   between its two writes — a state no retirement ever reports. The two are
+   compatible in either order: after the #2133 helper runs, pair and edge are
+   both gone, so this sees nothing to do.
+
+   Its OWN withCastLock, and the write is TEXTUALLY inside it, in this file.
+   That is not stylistic: `cast-lock.guard.test.ts` is syntactic and
+   call-graph-blind, and this file's allowlist entry is keyed on file AND
+   count, so a write that lived in reject-edge-reconcile.ts (however well
+   locked by its caller) would read as a sixth unlocked write here and redden
+   the build. reject-edge-reconcile.ts is therefore PURE and this function
+   owns the read, the lock and the write.
+
+   Best-effort, mirroring every other id-history write in this file: a failure
+   must not fail the analysis. A surviving stale edge merely re-suppresses one
+   future §4.4 name-match until the next persist tries again.
+
+   Fails SAFE on either read (final-review Critical, #2166). An unreadable
+   cast.json already did — the roster is empty, so nothing is reconciled. An
+   unreadable cast-id-history.json used to fail DESTRUCTIVE, because the empty
+   history it degrades to is indistinguishable from "nothing was ever
+   rejected", which is exactly the evidence the removal pass acts on. It now
+   reads the history through `loadCastIdHistoryWithStatus` and refuses to act
+   at all on `degraded`. See the comment at that call below.
+
+   `castBase` (#2694, optional/nullable) is the run's `CastMergeBase`. This
+   function's write is textually locked in this file (see above) rather than
+   routed through `writeChecked` — for the same cast-lock-rule-1 reason
+   `clearNotLinkedEdgesForDroppedRejections` isn't — so it must advance the
+   baseline itself when it writes, or the next `writeChecked` reports this
+   run's own reconciliation as a foreign conflict. See cast-merge-base.ts's
+   file-header invariant.
+
+   `statusBeforePersist` exists because that local read is NOT sufficient on
+   its own at the two persist call sites (PR #2202 gate review, Critical). The
+   steps that run earlier in the same try block — `recordRetirements`,
+   `dropSupersededIdsReclaimedByLiveCast`, `dropSupersededTargetsNoLongerLive`
+   — all read through the COLLAPSING `loadCastIdHistory` and write back
+   unconditionally, so a cast-id-history.json that was degraded when the
+   persist began has already been REPLACED with a valid, empty file by the time
+   this function reads it. The local read then says `ok`, the guard never
+   fires, and every same-book reject edge is deleted — both records of a real
+   user decision gone, deterministically, on the next analysis. So the callers
+   inside the persist decide the verdict BEFORE the first rewriting step and
+   hand it in here; a `degraded` verdict wins over whatever the file says by
+   now. Direct callers that pass nothing keep the local read as their only
+   check, which is correct for them — nothing has laundered the file underneath
+   them.
+
+   Exported only so analysis-reject-edge-reconcile.test.ts can drive it
+   without standing up a full analysis run. */
 export async function reconcileRejectEdgesOnDisk(
   bookDir: string,
   bookId: string | undefined,
