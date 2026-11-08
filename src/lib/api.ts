@@ -6708,6 +6708,7 @@ interface CastDesignStreamEvent {
   previewUrl?: string;
   persona?: string;
   voiceUuid?: string;
+  resetCharacterIds?: string[];
   mode?: 'first' | 'redesign';
   url?: string;
   viaFallback?: boolean;
