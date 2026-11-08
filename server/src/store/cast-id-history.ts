@@ -58,10 +58,23 @@
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock } from '../workspace/file-lock.js';
+import type { MatchHistory, NotSamePersonRecord, SupersededKind } from './reanalysis-types.js';
+
+const SUPERSEDED_KINDS: ReadonlySet<string> = new Set<SupersededKind>(['user', 'heal', 'analyzer']);
 
 export interface CastIdHistory {
   schema: 1;
   supersededBy: Record<string, string>;
+  /** #4031 (rule 12) — who made each `supersededBy` entry. An untagged entry
+   *  (every file written before this field) reads as `'user'`. Keys are always
+   *  a subset of `supersededBy`'s: `bumpSeqAndStamp` prunes any that outlive
+   *  theirs. Additive: optional, never bumps `schema`. */
+  supersededByKind?: Record<string, SupersededKind>;
+  /** #4031 — durable, undirected, same-book "not the same person" records
+   *  (`a < b`). Not a `rejectedPairs` entry: that means "orphaned id is not this
+   *  live id". Repointed by `retireCharacterId`; a record whose two sides merge
+   *  into each other is dropped and reported. Additive, optional. */
+  notSamePerson?: NotSamePersonRecord[];
   /** #2040 Task 14 review item 2b — ids dropped from `supersededBy` because a
    *  fresh roster reclaimed the KEY as a live cast id
    *  (`dropSupersededIdsReclaimedByLiveCast`), OR because the entry's TARGET
@@ -192,6 +205,9 @@ export interface RejectedPair {
    *  itself). `applyRestoreSupersededId` is what checks liveness before
    *  writing this value back — see its own doc comment. */
   forgotSupersededTo?: string;
+  /** #4031 — the kind of the entry `forgotSupersededTo` was forgotten from,
+   *  so an Undo restores it with the provenance it had. */
+  forgotSupersededKind?: SupersededKind;
 }
 
 export function castIdHistoryPath(bookDir: string): string {
@@ -265,6 +281,23 @@ function isWellFormedHistory(raw: unknown): raw is CastIdHistory {
     typeof h.supersededBy === 'object' &&
     !Array.isArray(h.supersededBy) &&
     h.supersededBy !== null &&
+    /* #4031 — same all-or-nothing conjunction: a malformed provenance map or
+       dismissal list degrades the whole file rather than being half-trusted. */
+    (h.supersededByKind === undefined ||
+      (typeof h.supersededByKind === 'object' &&
+        !Array.isArray(h.supersededByKind) &&
+        h.supersededByKind !== null &&
+        Object.values(h.supersededByKind).every((k) => SUPERSEDED_KINDS.has(k)))) &&
+    (h.notSamePerson === undefined ||
+      (Array.isArray(h.notSamePerson) &&
+        h.notSamePerson.every(
+          (r) =>
+            typeof r === 'object' &&
+            r !== null &&
+            typeof r.a === 'string' &&
+            typeof r.b === 'string' &&
+            typeof r.at === 'string',
+        ))) &&
     (h.displaced === undefined ||
       (typeof h.displaced === 'object' && !Array.isArray(h.displaced) && h.displaced !== null)) &&
     (h.rejected === undefined || Array.isArray(h.rejected)) &&
@@ -344,6 +377,27 @@ export async function loadCastIdHistoryWithStatus(
     );
   }
   return { status: 'degraded', history: { schema: 1, supersededBy: {} } };
+}
+
+/** #4031 — adapt a status-carrying read to what `matchFreshToPrior` consumes.
+ *  An untagged `supersededBy` entry is filled in as `'user'` (rule 12), so the
+ *  matcher never has to know the field is optional on disk. A `degraded` read
+ *  is EMPTY with `status: 'degraded'`: it is "could not be determined", never
+ *  evidence — the matcher reads the status, not the emptiness. */
+export function toMatchHistory(read: CastIdHistoryReadResult): MatchHistory {
+  if (read.status === 'degraded') {
+    return { status: 'degraded', supersededBy: {}, supersededByKind: {}, displaced: {}, notSamePerson: [] };
+  }
+  const h = read.history;
+  const supersededByKind: Record<string, SupersededKind> = {};
+  for (const k of Object.keys(h.supersededBy)) supersededByKind[k] = h.supersededByKind?.[k] ?? 'user';
+  return {
+    status: read.status,
+    supersededBy: { ...h.supersededBy },
+    supersededByKind,
+    displaced: { ...(h.displaced ?? {}) },
+    notSamePerson: [...(h.notSamePerson ?? [])],
+  };
 }
 
 /** Thrown by every mutating helper below when the read that would decide
@@ -427,6 +481,14 @@ function bumpSeqAndStamp(history: CastIdHistory, stampedKeys: readonly string[])
     if (!(k in seqMap)) {
       seqMap[k] = next;
       isoMap[k] = iso;
+    }
+  }
+
+  /* #4031 — `supersededByKind` keys stay a subset of `supersededBy`'s, whatever
+     dropped, forgot or repointed the entry. */
+  if (history.supersededByKind) {
+    for (const k of Object.keys(history.supersededByKind)) {
+      if (!(k in history.supersededBy)) delete history.supersededByKind[k];
     }
   }
 
@@ -530,16 +592,49 @@ function repointRejectedPairs(history: CastIdHistory, from: string, newTarget: s
  *  report the drop — cleanup is necessarily the caller's job. */
 export interface RetireCharacterIdResult {
   droppedSelfLoopRejections: RejectedPair[];
+  /** #4031 — `notSamePerson` records whose two sides this retirement merged
+   *  into each other (a `(to, to)` after repointing). Dropped, and reported so
+   *  a caller with cast.json access can remove the matching `notLinkedTo`
+   *  edges, exactly as for `droppedSelfLoopRejections`. */
+  droppedNotSamePerson: NotSamePersonRecord[];
+}
+
+/** #4031 — repoint `notSamePerson` records naming `from` onto `newTarget`,
+ *  the same "a decision about a person survives the person's id changing"
+ *  reasoning as `repointRejectedPairs`. A record that becomes `(x, x)` is
+ *  dropped and returned; two records that collide on the same pair are
+ *  deduped, first wins. Sides stay sorted (`a < b`). */
+function repointNotSamePerson(history: CastIdHistory, from: string, newTarget: string): NotSamePersonRecord[] {
+  if (!history.notSamePerson?.length) return [];
+  const dropped: NotSamePersonRecord[] = [];
+  const seen = new Set<string>();
+  const next: NotSamePersonRecord[] = [];
+  for (const rec of history.notSamePerson) {
+    const x = rec.a === from ? newTarget : rec.a;
+    const y = rec.b === from ? newTarget : rec.b;
+    if (x === y) {
+      dropped.push(rec);
+      continue;
+    }
+    const [a, b] = x < y ? [x, y] : [y, x];
+    const key = JSON.stringify([a, b]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push({ a, b, at: rec.at });
+  }
+  history.notSamePerson = next;
+  return dropped;
 }
 
 export async function retireCharacterId(
   bookDir: string,
   from: string,
   to: string,
+  kind: SupersededKind = 'user',
 ): Promise<RetireCharacterIdResult> {
   // No-op if from === to
   if (from === to) {
-    return { droppedSelfLoopRejections: [] };
+    return { droppedSelfLoopRejections: [], droppedNotSamePerson: [] };
   }
 
   // Serialize writes per-book
@@ -572,10 +667,12 @@ export async function retireCharacterId(
         }
       }
       history.supersededBy[from] = to;
+      history.supersededByKind = { ...(history.supersededByKind ?? {}), [from]: kind };
       const droppedSelfLoopRejections = repointRejectedPairs(history, from, to);
+      const droppedNotSamePerson = repointNotSamePerson(history, from, to);
       bumpSeqAndStamp(history, [from, ...repointed]);
       await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-      return { droppedSelfLoopRejections };
+      return { droppedSelfLoopRejections, droppedNotSamePerson };
     }
 
     // Dereference 'to' through any existing chain first, so the repoint
@@ -587,7 +684,7 @@ export async function retireCharacterId(
     // branch above already covers the only way resolvedTo can equal `from`,
     // but keep this as a defensive guard against future changes here.
     if (from === resolvedTo) {
-      return { droppedSelfLoopRejections: [] };
+      return { droppedSelfLoopRejections: [], droppedNotSamePerson: [] };
     }
 
     /* #2128 — a retirement that changes nothing must not write. This mirrors
@@ -605,8 +702,12 @@ export async function retireCharacterId(
     const alreadyRecorded =
       history.supersededBy[from] === resolvedTo &&
       !Object.values(history.supersededBy).includes(from);
-    if (alreadyRecorded && !history.rejectedPairs?.some((p) => p.to === from)) {
-      return { droppedSelfLoopRejections: [] };
+    if (
+      alreadyRecorded &&
+      !history.rejectedPairs?.some((p) => p.to === from) &&
+      !history.notSamePerson?.some((r) => r.a === from || r.b === from)
+    ) {
+      return { droppedSelfLoopRejections: [], droppedNotSamePerson: [] };
     }
 
     // Find all keys that currently point to 'from' and update them to 'to'
@@ -620,13 +721,15 @@ export async function retireCharacterId(
 
     // Add/update the new mapping
     history.supersededBy[from] = resolvedTo;
+    history.supersededByKind = { ...(history.supersededByKind ?? {}), [from]: kind };
 
     const droppedSelfLoopRejections = repointRejectedPairs(history, from, resolvedTo);
+    const droppedNotSamePerson = repointNotSamePerson(history, from, resolvedTo);
     bumpSeqAndStamp(history, [from, ...repointed]);
 
     // Write back
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
-    return { droppedSelfLoopRejections };
+    return { droppedSelfLoopRejections, droppedNotSamePerson };
   });
 }
 
@@ -940,6 +1043,7 @@ export async function restoreSupersededId(
   id: string,
   target: string,
   liveIds: ReadonlyArray<string>,
+  kind?: SupersededKind,
 ): Promise<{ restored: boolean; supersededByOther?: string; targetNotLive?: boolean }> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
     // #2214 — throws CastIdHistoryUnreadableError on a degraded read, refusing to
@@ -950,6 +1054,7 @@ export async function restoreSupersededId(
       id,
       target,
       new Set(liveIds),
+      kind,
     );
     if (changed) {
       bumpSeqAndStamp(history, touchedKeys);
@@ -1006,6 +1111,7 @@ function applyRestoreSupersededId(
   id: string,
   target: string,
   liveIds: ReadonlySet<string>,
+  kind?: SupersededKind,
 ): {
   result: { restored: boolean; supersededByOther?: string; targetNotLive?: boolean };
   changed: boolean;
@@ -1055,6 +1161,7 @@ function applyRestoreSupersededId(
     return { result: { restored: false, targetNotLive: true }, changed: true, touchedKeys: [] };
   }
   history.supersededBy[id] = target;
+  if (kind !== undefined) history.supersededByKind = { ...(history.supersededByKind ?? {}), [id]: kind };
   return { result: { restored: true }, changed: true, touchedKeys: [id] };
 }
 
@@ -1121,9 +1228,41 @@ export async function rejectOrphanedPair(
     const history = await loadHistoryOrThrow(bookDir);
     const pairs = history.rejectedPairs ?? [];
     if (pairs.some((p) => p.from === from && p.to === to)) return;
+    /* #4031 — the kind of the entry about to be forgotten is read here, inside
+       the lock and while the entry still exists (the route records the pair
+       BEFORE it forgets the entry), so an Undo can restore the provenance. An
+       untagged entry stashes nothing and restores as untagged (= user). */
+    const forgotSupersededKind =
+      forgotSupersededTo !== undefined && history.supersededBy[from] === forgotSupersededTo
+        ? history.supersededByKind?.[from]
+        : undefined;
     const entry: RejectedPair =
-      forgotSupersededTo === undefined ? { from, to } : { from, to, forgotSupersededTo };
+      forgotSupersededTo === undefined
+        ? { from, to }
+        : forgotSupersededKind === undefined
+          ? { from, to, forgotSupersededTo }
+          : { from, to, forgotSupersededTo, forgotSupersededKind };
     history.rejectedPairs = [...pairs, entry];
+    bumpSeqAndStamp(history, []);
+    await writeJsonAtomic(castIdHistoryPath(bookDir), history);
+  });
+}
+
+/** #4031 — record that `a` and `b` are NOT the same person (the dismiss
+ *  action's durable half). Undirected: stored sorted (`a < b`), so
+ *  `(x, y)` and `(y, x)` are one record. Idempotent — an existing record is
+ *  not rewritten. `a === b` is a no-op. Lives here, not on cast.json, because
+ *  the carryover drops anything cast.json holds beyond voice fields. Callers
+ *  take the cast lock first (lock order: cast -> cast-id-history). */
+export async function recordNotSamePerson(bookDir: string, a: string, b: string): Promise<void> {
+  if (a === b) return;
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  return withKeyLock(`cast-id-history:${bookDir}`, async () => {
+    // #2214 — throws CastIdHistoryUnreadableError on a degraded read.
+    const history = await loadHistoryOrThrow(bookDir);
+    const records = history.notSamePerson ?? [];
+    if (records.some((r) => r.a === lo && r.b === hi)) return;
+    history.notSamePerson = [...records, { a: lo, b: hi, at: new Date().toISOString() }];
     bumpSeqAndStamp(history, []);
     await writeJsonAtomic(castIdHistoryPath(bookDir), history);
   });
@@ -1250,7 +1389,12 @@ export interface UndoRejectedPairResult {
  *  doc comment. */
 export async function undoRejectedPairs(
   bookDir: string,
-  pairs: ReadonlyArray<{ from: string; to: string; forgotSupersededTo?: string }>,
+  pairs: ReadonlyArray<{
+    from: string;
+    to: string;
+    forgotSupersededTo?: string;
+    forgotSupersededKind?: SupersededKind;
+  }>,
   liveIds: ReadonlyArray<string>,
 ): Promise<UndoRejectedPairResult[]> {
   return withKeyLock(`cast-id-history:${bookDir}`, async () => {
@@ -1272,7 +1416,13 @@ export async function undoRejectedPairs(
       let supersededByOther: string | undefined;
       let targetNotLive: boolean | undefined;
       if (pair.forgotSupersededTo !== undefined) {
-        const applied = applyRestoreSupersededId(history, pair.from, pair.forgotSupersededTo, live);
+        const applied = applyRestoreSupersededId(
+          history,
+          pair.from,
+          pair.forgotSupersededTo,
+          live,
+          pair.forgotSupersededKind,
+        );
         restored = applied.result.restored;
         supersededByOther = applied.result.supersededByOther;
         targetNotLive = applied.result.targetNotLive;

@@ -159,6 +159,7 @@ import {
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
+import type { SupersededKind } from '../store/reanalysis-types.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -309,6 +310,7 @@ export async function recordRetirements(
   liveIds: ReadonlyArray<string> | null,
   log: (phaseId: number, message: string) => void,
   castBase: CastMergeBase | null,
+  kind: SupersededKind,
 ): Promise<void> {
   if (!bookDir || !retirements.length) return;
   const { keep, refused } = liveIds
@@ -326,7 +328,7 @@ export async function recordRetirements(
     );
   }
   for (const { from, to } of keep) {
-    const result = await retireCharacterId(bookDir, from, to);
+    const result = await retireCharacterId(bookDir, from, to, kind);
     if (result.droppedSelfLoopRejections.length && bookId) {
       const written = await clearNotLinkedEdgesForDroppedRejections(
         bookDir,
@@ -4858,6 +4860,7 @@ export async function runMainAnalyzerJob(
               null,
               log,
               castBase,
+              'heal',
             );
           },
         );
@@ -7514,8 +7517,8 @@ export async function runMainAnalyzerJob(
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
               writeDir,
             );
-            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log, castBase);
-            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log, castBase, 'analyzer');
+            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log, castBase, 'analyzer');
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -7525,7 +7528,7 @@ export async function runMainAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase, 'analyzer');
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
@@ -8534,6 +8537,7 @@ export async function runSubsetAnalyzerJob(
             null,
             log,
             castBase,
+            'heal',
           );
         },
       );
@@ -9668,8 +9672,8 @@ export async function runSubsetAnalyzerJob(
             const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
               writeDir,
             );
-            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log, castBase);
-            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, subsetBookId, remapped.retirements, liveIds, log, castBase, 'analyzer');
+            await recordRetirements(writeDir, subsetBookId, mergedFinal.retirements, liveIds, log, castBase, 'analyzer');
             /* §4.4 call site 4 — the early remap (Task 11) also retires an
                id, one entry per `remappedToPrior.rewrites` key. The fresh id
                it retires never lands on disk, but the analysis cache is
@@ -9679,7 +9683,7 @@ export async function runSubsetAnalyzerJob(
             const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
               ([from, to]) => ({ from, to }),
             );
-            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase);
+            await recordRetirements(writeDir, subsetBookId, remapRetirements, liveIds, log, castBase, 'analyzer');
             /* #2040 Task 14, spec §4.4 closing paragraph — mirrors the main
                path's same-named block above; see its comment for the
                ordering (last, so a same-run retirement that happened to
