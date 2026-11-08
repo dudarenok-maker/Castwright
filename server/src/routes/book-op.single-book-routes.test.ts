@@ -579,6 +579,8 @@ describe('#3711 task 5 -- qwen-voice promote / discard / emotion-variant routes'
     const { previewVoiceIdFor } = await import('./qwen-voice.js');
     const previewVoiceId = previewVoiceIdFor('qwen-alice', book.bookId, 'alice'); // #4028: the row's own preview
     writeFileSync(paths.qwenVoicePtPath(previewVoiceId), 'PT');
+    /* A base already exists, so the promote is a redesign (#4040): it stamps a fresh `rev`. */
+    writeFileSync(paths.qwenVoicePtPath('qwen-alice'), 'OLD');
     const r = await renameBehind(
       book,
       castGate(book.bookDir),
@@ -586,7 +588,10 @@ describe('#3711 task 5 -- qwen-voice promote / discard / emotion-variant routes'
       'Single Promote Renamed',
     );
     expectLandedInNewFolder(r, book);
-    expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    /* #4040: no cast.json rewrite -- the variant slot stays, marked stale by the base's new `rev`. */
+    expect(castOf(r.newDir).find((c) => c.id === 'alice')?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
+    expect(readFileSync(paths.qwenVoicePtPath('qwen-alice'), 'utf8')).toBe('PT');
+    expect(typeof readJsonFile<{ rev?: unknown }>(paths.qwenVoiceSidecarPath('qwen-alice')).rev).toBe('string');
   });
 
   it('POST discard-voice', async () => {
