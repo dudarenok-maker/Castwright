@@ -472,7 +472,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
               ...(id === character.id && homeBookId === loadedBookId ? { voiceStyle: p.persona } : {}),
               overrideTtsVoices: {
                 ...(cur.overrideTtsVoices ?? {}),
-                qwen: { name: p.proposedVoiceId },
+                /* The server writes `{ ...slot, name }`; keep the variants/uuid/provenance
+                   so the next whole-roster PUT does not delete the takes on disk. */
+                qwen: { ...(cur.overrideTtsVoices?.qwen ?? {}), name: p.proposedVoiceId },
               },
             }),
           );

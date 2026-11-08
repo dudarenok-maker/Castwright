@@ -579,6 +579,61 @@ describe('RebaselineModal — the local mirror follows the LOADED book, not the 
     expect(marlow.voiceStyle).toBeUndefined();
   });
 
+  /* The server writes `{ ...slot, name }` (voice-override-linked.ts), so the slot's
+     variants/libraryUuid/provenance survive; the mirror must not rebuild it as
+     `{ name }` or the next whole-roster PUT deletes the takes on disk. */
+  const SLOT_EXTRAS = {
+    libraryUuid: 'lib-1',
+    provenance: 'designed',
+    variants: { angry: { name: 'qwen-old__angry' } },
+  };
+
+  it('keeps the slot extras on the home row of the loaded book', async () => {
+    targetCast();
+    const store = makeStore(
+      [
+        char('narrator', 'Narrator', 400),
+        {
+          ...char('marlow', 'Marlow', 60),
+          overrideTtsVoices: { qwen: { name: 'qwen-old', ...SLOT_EXTRAS } },
+        } as unknown as Character,
+      ],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    expect(marlow.overrideTtsVoices?.qwen).toMatchObject(SLOT_EXTRAS);
+  });
+
+  it('keeps the slot extras (and other engines) on a linked row of the loaded book', async () => {
+    targetCast();
+    setVoiceOverrideLinked.mockImplementation(async () => ({
+      canonicalVoiceId: 'v_unified',
+      updated: [{ bookId: 'book-1', bookTitle: 'Book One', characterId: 'det-marlow' }],
+      failed: [],
+    }));
+    const store = makeStore(
+      [
+        char('narrator', 'Narrator', 400),
+        {
+          ...char('det-marlow', 'Marlow', 60),
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-old', ...SLOT_EXTRAS },
+            kokoro: { name: 'af_heart' },
+          },
+        } as unknown as Character,
+      ],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    await approve(store, 'book-2');
+    const row = store.getState().cast.characters.find((c) => c.id === 'det-marlow')!;
+    expect(row.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    expect(row.overrideTtsVoices?.qwen).toMatchObject(SLOT_EXTRAS);
+    expect(row.overrideTtsVoices?.kokoro?.name).toBe('af_heart');
+  });
+
   it('leaves the loaded book alone when no linked update reaches it', async () => {
     targetCast();
     setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => ({
