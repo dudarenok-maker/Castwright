@@ -31,8 +31,8 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { withCastLock } from './cast-lock.js';
 import { withBookLock } from './book-lock.js';
-import { readJsonWithFingerprint } from './cast-fingerprint.js';
-import { applyStaleLinkPrune } from './series-reuse-link.js';
+import { ABSENT, readJsonWithFingerprint } from './cast-fingerprint.js';
+import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link.js';
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
 import {
   loadCastIdHistoryWithStatus,
@@ -77,11 +77,31 @@ export interface PriorCastSnapshot {
   source: CastSource;
 }
 
-/** The prior cast: cast.json, otherwise the reuse-carryover a Re-parse left.
+/** cast.json exists but could not be read (EBUSY/EPERM) or parsed. The run stops
+    before writing anything: falling back to the stale carryover would replace
+    every edit since the Re-parse. The message is fixed and path-free - it can
+    reach a client. */
+export class PriorCastUnreadableError extends Error {
+  constructor() {
+    super('The cast could not be read right now, so the re-analysis was stopped before changing anything. Try again.');
+    this.name = 'PriorCastUnreadableError';
+  }
+}
+
+/** The prior cast: cast.json, otherwise the reuse-carryover a Re-parse left - but
+    the carryover is used ONLY when cast.json is absent or parses with no
+    characters; an unreadable or unparseable cast.json throws
+    `PriorCastUnreadableError`.
     CALLER HOLDS THE CAST LOCK - this is the lock-free inner read (it moved here
     from `readPriorCastForMerge`, which wraps it in the lock). */
 export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastSnapshot> {
   const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
+  if (cast.fingerprint !== ABSENT) {
+    const chars = cast.value?.characters;
+    if (cast.value === null || typeof cast.value !== 'object' || (chars !== undefined && !Array.isArray(chars))) {
+      throw new PriorCastUnreadableError();
+    }
+  }
   const fromCast = cast.value?.characters;
   if (fromCast?.length) {
     /* fingerprint is a hash, never ABSENT, on this branch - the file
@@ -289,7 +309,8 @@ export async function materialisePriorAtRunStart(a: {
     const snap = await readPriorCastLockFree(a.bookDir);
     const before = snap.rows;
     let rows: Rows = JSON.parse(JSON.stringify(before));
-    applyStaleLinkPrune(rows as never, a.staleLinkKeys);
+    // cast.json rows are JSON cast records, a superset of the linker's slice.
+    applyStaleLinkPrune(rows as unknown as LinkableCharacter[], a.staleLinkKeys);
     let healRetirements: Retirement[] = [];
     let healDropped: Array<{ id: string; name?: string; voiceState?: string }> = [];
     if (rows.length > 1) {
@@ -370,16 +391,24 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
       await writeJsonAtomic(castJsonPath(a.bookDir), written);
     }
 
-    const storedBefore = new Set((await loadStoredSuggestions(a.bookDir)).map((s) => `${s.a}\u0000${s.b}`));
-    await reconcileSuggestionsLocked(a.bookDir, {
-      add: remapSuggestions(a.runSuggestions, re.idMap),
-      liveIds: new Set(characters.map((c) => c.id)),
-      supersededBy: history.supersededBy,
-      declined: declinedPredicate(characters, a.bookId, history.notSamePerson),
-    });
-    const addedPairs: Array<[string, string]> = (await loadStoredSuggestions(a.bookDir))
-      .filter((s) => !storedBefore.has(`${s.a}\u0000${s.b}`))
-      .map((s) => [s.a, s.b]);
+    /* Advisory, like the persist's: cast.json has already landed, so a suggestions
+       fault must not throw away the ledger/plan/idMap the caller patches into the
+       cache (the next snapshot would re-mint this run's rows). */
+    let addedPairs: Array<[string, string]> = [];
+    try {
+      const storedBefore = new Set((await loadStoredSuggestions(a.bookDir)).map((s) => `${s.a}\u0000${s.b}`));
+      await reconcileSuggestionsLocked(a.bookDir, {
+        add: remapSuggestions(a.runSuggestions, re.idMap),
+        liveIds: new Set(characters.map((c) => c.id)),
+        supersededBy: history.supersededBy,
+        declined: declinedPredicate(characters, a.bookId, history.notSamePerson),
+      });
+      addedPairs = (await loadStoredSuggestions(a.bookDir))
+        .filter((s) => !storedBefore.has(`${s.a}\u0000${s.b}`))
+        .map((s) => [s.a, s.b]);
+    } catch (err) {
+      console.warn('[analysis] failed to write merge suggestions at the plan snapshot', err);
+    }
 
     return {
       ledger: ov.ledger,
@@ -411,7 +440,14 @@ export interface PersistOutcome {
   idMap: Record<string, string>;
 }
 
-/** The run's terminal write. Under the cast lock:
+/** What `persistPlannedCast` throws when the manuscript-edits write fails AFTER
+    cast.json landed: the computed outcome rides on the error so the caller can
+    still record the retirements and patch the cache. */
+export type PersistOutcomeError = Error & { persistOutcome?: PersistOutcome };
+
+/** The run's terminal write. A `LockAcquisitionTimeoutError` from the cast lock
+    propagates untouched (nothing was written); a failed edits write rethrows with
+    `persistOutcome` attached (see `PersistOutcomeError`). Under the cast lock:
     1. re-read cast.json and the history;
     2. re-mint colliding `new` ids (item 12), then `extendPlan` over every roster
        row the plan does not cover (rows created after Phase 0b, e.g. the fold's
@@ -465,8 +501,12 @@ export async function persistPlannedCast(a: {
       let openSuggestions: StoredSuggestion[] = [];
       try {
         openSuggestions = await loadStoredSuggestions(a.bookDir);
-      } catch {
-        // Unreadable: an open question can only join MORE rows, never fewer wrongly.
+      } catch (err) {
+        // Unreadable: carry on without open questions (a row can then only be planned
+        // as a new one), but say so - same as the run-start heal. Server-side only.
+        console.warn(
+          `[analysis] persist planned new rows without the open suggestions - cast-merge-suggestions.json could not be read: ${(err as Error)?.message ?? err}`,
+        );
       }
       plan = extendPlan(plan, {
         fresh: uncovered.map((c) => ({ id: c.id, name: c.name, aliases: c.aliases })),
@@ -530,19 +570,39 @@ export async function persistPlannedCast(a: {
       }
       const live = new Set([...current.map((r) => r.id), ...finalChars.map((r) => r.id)]);
       const seen = new Set<string>();
+      const candidates: Retirement[] = [];
       for (const d of Object.values(plan.decisions)) {
-        if (d.kind !== 'join' || d.rawId === d.priorId || live.has(d.rawId) || seen.has(d.rawId)) continue;
-        if (Object.hasOwn(history.supersededBy, d.rawId)) continue;
+        // The narrator join is structural ('narrator' -> the prior narrator id), never a retirement.
+        if (d.kind !== 'join' || d.rawId === d.priorId || isNarratorId(d.rawId)) continue;
+        if (live.has(d.rawId) || seen.has(d.rawId) || Object.hasOwn(history.supersededBy, d.rawId)) continue;
         const to = resolve(d.priorId);
         if (!to || to === d.rawId) continue;
         seen.add(d.rawId);
-        retirements.push({ from: d.rawId, to });
+        candidates.push({ from: d.rawId, to });
+      }
+      if (history.status === 'degraded') {
+        // Spec: with an unreadable history, retirements are skipped and logged.
+        if (candidates.length) {
+          console.warn(
+            `[analysis] ${candidates.length} character-id retirement(s) skipped - cast-id-history.json could not be read`,
+          );
+        }
+      } else {
+        retirements.push(...candidates);
       }
     }
 
+    /* A failed edits write must not discard what the caller needs after cast.json
+       has landed (retirements, ledger, idMap): park it, finish the suggestions step,
+       and rethrow it carrying the outcome (`persistOutcome`). */
+    let editsErr: unknown = null;
     const writeEdits = (): Promise<void> =>
       writeJsonAtomicOrdered(manuscriptEditsJsonPath(a.bookDir), { sentences });
-    await (a.bookId ? withBookLock(a.bookId, writeEdits) : writeEdits());
+    try {
+      await (a.bookId ? withBookLock(a.bookId, writeEdits) : writeEdits());
+    } catch (err) {
+      editsErr = err ?? new Error('manuscript-edits.json write failed');
+    }
 
     try {
       if (a.driftRefused) {
@@ -561,7 +621,7 @@ export async function persistPlannedCast(a: {
       console.warn('[analysis] failed to write merge suggestions', err);
     }
 
-    return {
+    const outcome: PersistOutcome = {
       characters: finalChars,
       sentences,
       retirements,
@@ -577,5 +637,10 @@ export async function persistPlannedCast(a: {
       droppedRunAdded: a.driftRefused ? [] : ov.droppedRunAdded,
       idMap,
     };
+    if (editsErr !== null) {
+      if (typeof editsErr === 'object') (editsErr as PersistOutcomeError).persistOutcome = outcome;
+      throw editsErr;
+    }
+    return outcome;
   });
 }

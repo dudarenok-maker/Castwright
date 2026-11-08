@@ -9,6 +9,7 @@ import { join as pathJoin } from 'node:path';
 
 const hooks = vi.hoisted(() => ({
   castFault: null as unknown,
+  fingerprintFault: false,
   castDepth: 0,
   maxCastDepth: 0,
   bookLockCastDepths: [] as number[],
@@ -30,6 +31,17 @@ vi.mock('./cast-lock.js', async (importOriginal) => {
         }
       });
     },
+  };
+});
+
+vi.mock('./cast-fingerprint.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./cast-fingerprint.js')>();
+  return {
+    ...actual,
+    readJsonWithFingerprint: async (path: string) =>
+      hooks.fingerprintFault
+        ? { value: null, fingerprint: actual.UNREADABLE }
+        : actual.readJsonWithFingerprint(path),
   };
 });
 
@@ -127,6 +139,7 @@ beforeEach(() => {
   bookDir = pathJoin(workspaceRoot, 'books', 'A', 'Standalones', 'Book');
   mkdirSync(pathJoin(bookDir, '.audiobook'), { recursive: true });
   hooks.castFault = null;
+  hooks.fingerprintFault = false;
   hooks.castDepth = 0;
   hooks.maxCastDepth = 0;
   hooks.bookLockCastDepths = [];
@@ -690,5 +703,130 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
       expect(out.mainLedger?.dina).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(readCast()[1]) });
       expect(out.droppedRunAdded).toEqual([]);
     });
+  });
+
+  it('I2: a corrupt suggestions file does not make the snapshot throw after cast.json is written; the next snapshot does not re-mint', async () => {
+    writeCast([row('alice', 'Alice')]);
+    writeFileSync(castMergeSuggestionsJsonPath(bookDir), '{ nope');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const args = {
+        bookDir,
+        bookId: BOOK_ID,
+        roster: roster(row('alice', 'Alice'), row('dina', 'Dina')),
+        plan: planOf(join('alice', 'alice'), fresh('dina', 'dina', ['alice'])),
+        runSuggestions: [sug('dina', 'alice')],
+      };
+      const first = await writePlanSnapshot({ ...args, ledger: {} });
+      expect(first.addedPairs).toEqual([]);
+      expect(first.ledger.dina?.state).toBe('run-owned');
+      const second = await writePlanSnapshot({ ...args, plan: first.plan, ledger: first.ledger });
+      expect(second.idMap).toEqual({});
+      expect(ids(readCast())).toEqual(['alice', 'dina']);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  describe('I3: run start never overwrites an unreadable cast.json with a stale carryover', () => {
+    const base = { staleLinkKeys: new Set<string>(), runOwnedIds: new Set<string>(), ledger: {} as RunAddedLedger };
+    const stale = (): void =>
+      writeFileSync(castReuseCarryoverJsonPath(bookDir), JSON.stringify({ characters: [row('old', 'Old')] }));
+
+    it('an unparseable cast.json fails the run with a curated message and writes nothing', async () => {
+      writeFileSync(castJsonPath(bookDir), '{"characters": [');
+      stale();
+      const before = readFileSync(castJsonPath(bookDir), 'utf8');
+      await expect(materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base })).rejects.toMatchObject({
+        name: 'PriorCastUnreadableError',
+        message: expect.not.stringContaining(workspaceRoot),
+      });
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
+    });
+
+    it('an unreadable (EBUSY-style) cast.json does the same', async () => {
+      writeCast([row('alice', 'Alice')]);
+      stale();
+      const before = readFileSync(castJsonPath(bookDir), 'utf8');
+      hooks.fingerprintFault = true;
+      await expect(materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base })).rejects.toMatchObject({
+        name: 'PriorCastUnreadableError',
+      });
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
+    });
+
+    it('a cast.json that parses with no characters still takes the carryover', async () => {
+      writeCast([]);
+      stale();
+      const out = await materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base });
+      expect(out.source).toBe('carryover');
+      expect(ids(readCast())).toEqual(['old']);
+    });
+  });
+
+  it('Minor 1: an edits-write failure after cast.json landed still hands the caller the outcome', async () => {
+    writeCast([row('olga', 'Ольга')]);
+    mkdirSync(manuscriptEditsJsonPath(bookDir)); // a directory where the file goes: the write fails
+    const err = await persistPlannedCast(
+      persistArgs({
+        plan: planOf(join('olya', 'olga', 'name')),
+        roster: roster(row('olga', 'Ольга', { aliases: ['Оля'] })),
+        sentences: sentences('olga'),
+      }),
+    ).then(
+      () => null,
+      (e: unknown) => e as { persistOutcome?: { retirements: unknown; written: unknown } },
+    );
+    expect(err).not.toBeNull();
+    expect(err?.persistOutcome?.retirements).toEqual([{ from: 'olya', to: 'olga' }]);
+    expect(err?.persistOutcome?.written).not.toBeNull();
+    expect(readCast()[0].aliases).toEqual(['Оля']);
+  });
+
+  it('Minor 2: a degraded history records no retirements, and says so server-side', async () => {
+    writeCast([row('olga', 'Ольга')]);
+    writeFileSync(castIdHistoryPath(bookDir), '{ not json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const out = await persistPlannedCast(
+        persistArgs({ plan: planOf(join('olya', 'olga', 'name')), roster: roster(row('olga', 'Ольга')), sentences: sentences('olga') }),
+      );
+      expect(out.retirements).toEqual([]);
+      expect(warn.mock.calls.some((c) => /retirement/i.test(String(c[0])))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('Minor 2: the narrator join records no retirement', async () => {
+    writeCast([row('char-narrator', 'Narrator')]);
+    const out = await persistPlannedCast(
+      persistArgs({
+        plan: planOf(join('narrator', 'char-narrator', 'narrator')),
+        roster: roster(row('narrator', 'Narrator')),
+        sentences: sentences('narrator'),
+      }),
+    );
+    expect(out.retirements).toEqual([]);
+    expect(out.sentences[0].characterId).toBe('char-narrator');
+  });
+
+  it('Minor 3: an unreadable suggestions file is warned about when the persist plans a new row', async () => {
+    writeCast([row('alice', 'Alice')]);
+    writeFileSync(castMergeSuggestionsJsonPath(bookDir), '{ nope');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('alice', 'alice')),
+          roster: roster(row('alice', 'Alice'), row('unknown-male', 'Unknown male')),
+          sentences: sentences('alice'),
+        }),
+      );
+      expect(warn.mock.calls.some((c) => /could not be read/i.test(String(c[0])))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
