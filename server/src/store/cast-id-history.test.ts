@@ -1650,6 +1650,52 @@ describe('#4031 — the not-same-person record (notSamePerson)', () => {
   });
 });
 
+describe('#4031 — notSamePerson repoint seams', () => {
+  it('re-retiring an already-recorded entry still repoints a record naming it', async () => {
+    await retireCharacterId(dir, 'x', 'z', 'user');
+    await recordNotSamePerson(dir, 'x', 'y');
+    await retireCharacterId(dir, 'x', 'z', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'y', b: 'z' });
+  });
+
+  it('the reversal branch repoints a record naming the retiring id', async () => {
+    await retireCharacterId(dir, 'b', 'a', 'user');
+    await recordNotSamePerson(dir, 'a', 'y');
+    await retireCharacterId(dir, 'a', 'b', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ a: 'b' });
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'b', b: 'y' });
+  });
+
+  it('two records that collapse to one after repointing are deduped', async () => {
+    await recordNotSamePerson(dir, 'x', 'y');
+    await recordNotSamePerson(dir, 'y', 'z');
+    await retireCharacterId(dir, 'x', 'z', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'y', b: 'z' });
+  });
+
+  it('an Undo with a hand-corrupted forgotSupersededKind restores as user rather than degrading the file', async () => {
+    writeTestHistoryFile(
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin', forgotSupersededKind: 'bogus' }],
+      }),
+    );
+    const loaded = await loadCastIdHistory(dir);
+    await undoRejectedPairs(dir, loaded.rejectedPairs!, ['mairin']);
+    const read = await loadCastIdHistoryWithStatus(dir);
+    expect(read.status).toBe('ok');
+    expect(read.history.supersededBy).toEqual({ mayrin: 'mairin' });
+    expect(read.history.supersededByKind).toEqual({ mayrin: 'user' });
+  });
+});
+
 describe('#4031 — history shape', () => {
   it('F10: a malformed notSamePerson or supersededByKind degrades the whole file', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

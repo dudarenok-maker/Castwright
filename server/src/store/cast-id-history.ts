@@ -1161,7 +1161,14 @@ function applyRestoreSupersededId(
     return { result: { restored: false, targetNotLive: true }, changed: true, touchedKeys: [] };
   }
   history.supersededBy[id] = target;
-  if (kind !== undefined) history.supersededByKind = { ...(history.supersededByKind ?? {}), [id]: kind };
+  /* A hand-corrupted stash value must not write an invalid kind (that would
+     degrade the whole file on the next read); it restores as `user`. */
+  if (kind !== undefined) {
+    history.supersededByKind = {
+      ...(history.supersededByKind ?? {}),
+      [id]: SUPERSEDED_KINDS.has(kind) ? kind : 'user',
+    };
+  }
   return { result: { restored: true }, changed: true, touchedKeys: [id] };
 }
 
