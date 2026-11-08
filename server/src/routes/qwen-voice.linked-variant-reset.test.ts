@@ -52,6 +52,13 @@ const fetchMock = vi.fn();
 const ids: Record<string, string> = {};
 /* Holds the next design sidecar call until `release`. */
 const gate = { hold: false, entered: null as null | (() => void), release: null as null | (() => void) };
+/* Holds the next sidecar evict call (the landing's last step, after the file has
+   moved and before the caller records the emotion slot) until `release`. */
+const evictGate = { hold: false, entered: null as null | (() => void), release: null as null | (() => void) };
+const holdNextEvict = (): Promise<void> => {
+  evictGate.hold = true;
+  return new Promise<void>((r) => (evictGate.entered = r));
+};
 const holdNextDesign = (): Promise<void> => {
   gate.hold = true;
   return new Promise<void>((r) => (gate.entered = r));
@@ -166,8 +173,19 @@ beforeEach(() => {
   gate.hold = false;
   gate.entered = null;
   gate.release = null;
+  evictGate.release?.();
+  evictGate.hold = false;
+  evictGate.entered = null;
+  evictGate.release = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
+    if (evictGate.hold && String(url).includes('evict')) {
+      evictGate.hold = false;
+      await new Promise<void>((r) => {
+        evictGate.release = r;
+        evictGate.entered?.();
+      });
+    }
     let voiceId: string | undefined;
     try {
       const b = JSON.parse(init?.body ?? '{}');
@@ -449,5 +467,23 @@ describe('#4040 — an emotion variant rendered against a replaced base is disca
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     for (const b of [A, B]) expect(rowOf(b).overrideTtsVoices.qwen.variants?.angry, `${b.title} missing the variant`).toBeDefined();
     expect(staged()).toEqual([]);
+  });
+
+  it('E3: a base write that begins after the emotion landed but before its slot is recorded stops the slot; the retry error, no row carries it', async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    const entered = holdNextEvict();
+    const designing = directDesign(B, { emotion: 'angry' }).then((r) => r);
+    await entered; // the variant file has landed; its slot is not recorded yet
+    await redesign(A);
+    expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+    evictGate.release!();
+    const d = await designing;
+    expect(d.status).toBe(500);
+    expect(d.body.error).toBe(RETRY);
+    for (const b of [A, B]) {
+      expect(rowOf(b).overrideTtsVoices.qwen.variants?.angry, `${b.title} carries the old-base variant`).toBeUndefined();
+    }
   });
 });

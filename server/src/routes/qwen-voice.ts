@@ -173,6 +173,11 @@ export async function persistEmotionVariant(
   emotion: Exclude<Emotion, 'neutral'>,
   variantVoiceId: string,
   seriesFilter?: { author: string; series: string },
+  /* #4040 — the base's write count when the design began (`designed.begun`): a
+     base write since replaced the file the variant was minted from and has already
+     cleared every row's variants, so the slot is not recorded (re-checked inside each
+     cast lock, as a base write holds the locks of every row on its key). */
+  startBegun?: number,
 ): Promise<PersistEmotionVariantOutcome> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
@@ -231,7 +236,12 @@ export async function persistEmotionVariant(
        (rather than discarding it, as an earlier revision did) is what lets
        'applied' and 'notFound' be told apart below. */
     let residualSkip = false;
+    let baseReplaced = false;
     const updated = await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) => {
+      if (startBegun !== undefined && savesOf(baseVoiceId).begun !== startBegun) {
+        baseReplaced = true;
+        return c;
+      }
       if (characterHasClonedSlot(c)) {
         residualSkip = true;
         return c; // unchanged — this book's own write correctly declined
@@ -243,6 +253,7 @@ export async function persistEmotionVariant(
       if (qwenStorageKey(c, c.id) !== baseVoiceId) return c;
       return addVariant(c, baseVoiceId);
     });
+    if (baseReplaced) throw new DesignVoiceChangedError();
     if (residualSkip) {
       console.warn(
         `[persistEmotionVariant] residual-window skip: a clone appeared on a linked book for ${characterId} between the series-wide scan and this walk reaching it (${updated} linked character(s) still received the variant).`,
@@ -274,6 +285,7 @@ export async function persistEmotionVariant(
     if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
     if (baseVoiceId !== landedBase) return 'notFound'; // moved since the variant landed
+    if (startBegun !== undefined && savesOf(baseVoiceId).begun !== startBegun) throw new DesignVoiceChangedError();
     fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
     return 'applied';
@@ -992,6 +1004,8 @@ export interface DesignQwenVoiceResult {
   url: string;
   /** The row's voiceUuid when the design landed. */
   voiceUuid?: string;
+  /** #4040 — the base key's write count when the design began (emotion designs): hand it to persistEmotionVariant. */
+  begun?: number;
   fellBackToDesignVoice?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
 }
@@ -1298,7 +1312,7 @@ async function landStagedDesign(
   staging: string,
   calibrationText: string,
   watcher: { key: string; begun: number },
-): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
+): Promise<{ voiceId: string; url: string; voiceUuid?: string; begun: number }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
   const moved = () => new RetryableForkError('This book moved while the voice was being designed; try again.');
@@ -1343,7 +1357,7 @@ async function landStagedDesign(
     const landedAudition = audition(voiceId);
     await rm(voiceSampleFilePath(landedAudition), { force: true });
     await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
-    return { voiceId, url: voiceSamplePublicUrl(landedAudition), voiceUuid: row.voiceUuid ?? undefined };
+    return { voiceId, url: voiceSamplePublicUrl(landedAudition), voiceUuid: row.voiceUuid ?? undefined, begun: watcher.begun };
   };
   const planned = await firstDesignOf(
     (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
@@ -1740,7 +1754,7 @@ qwenVoiceRouter.post(
        (#1057). #4028: the design lands on the row's key as it stands when the
        render finishes (designQwenVoiceForCharacter). */
     try {
-      const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+      const { voiceId, url, voiceUuid, begun } = await designQwenVoiceForCharacter({
         bookId,
         bookDir,
         seriesFilter: seriesInfo ?? undefined,
@@ -1768,6 +1782,7 @@ qwenVoiceRouter.post(
           emotion,
           voiceId,
           seriesInfo ?? undefined,
+          begun,
         );
         if (outcome === 'skippedClone') {
           return res.status(409).json({
