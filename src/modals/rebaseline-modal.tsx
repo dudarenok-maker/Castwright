@@ -297,7 +297,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
       );
       /* This non-preview design re-keyed the base, so the server now drops
          every variant minted from the old one (#4040) — follow it in this tab. */
-      void dispatch(refreshEmotionVariants(bookId));
+      void dispatch(refreshEmotionVariants(bookId, characterId));
     } catch (e) {
       dispatch(
         rebaselineActions.proposalFailed({

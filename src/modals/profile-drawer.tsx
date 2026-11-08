@@ -1528,11 +1528,13 @@ export function ProfileDrawer({
                        "Emotion variants" demand re-surfaces them (the instant
                        half, and the only one a mock backend serves), then prune
                        every OTHER row on the same voice key from the server's
-                       read. No-op on a first design (no variants existed). */
+                       read (only rows of the loaded book on this voice key, and
+                       only variants present now). No-op on a first design (no
+                       variants existed). */
                     dispatch(
                       castActions.clearCharacterEmotionVariants({ characterId: character.id }),
                     );
-                    if (bookId) void dispatch(refreshEmotionVariants(bookId));
+                    if (bookId) void dispatch(refreshEmotionVariants(bookId, character.id));
                     setVoiceCompareInitial(null);
                     /* Resolving the compare ends the single-design lifecycle —
                        clear the slice so the Design pill / ready-to-compare state

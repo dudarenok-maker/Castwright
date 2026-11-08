@@ -338,21 +338,23 @@ export const castSlice = createSlice({
     /* #4040 — a base redesign makes every emotion variant minted from the OLD
        base stale on the server (dropped from the book GET, the cast PUT and
        render) on EVERY row sharing the voice key, not just the redesigned one.
-       Reconcile the open tab with a fresh read: a row named in the payload keeps
-       a local variant only if the payload still carries that emotion. Prune-only
-       and variants-only, so unsaved edits to other cast fields survive and a
-       row the read does not name is untouched. Not a persisted action: the
-       server already holds this state. */
+       Reconcile the open tab with a fresh read: for each named row, of the
+       `emotions` the caller saw in the store at dispatch time, drop those the
+       payload's `variants` no longer carries. Prune-only and variants-only, so
+       unsaved edits to other cast fields survive, a row the read does not name
+       is untouched, and a variant that arrived after dispatch is never in
+       `emotions`, so it survives. Not a persisted action: the server already
+       holds this state. */
     pruneStaleEmotionVariants: (
       s,
-      a: PayloadAction<Array<{ id: string; variants?: Record<string, unknown> }>>,
+      a: PayloadAction<Array<{ id: string; emotions: string[]; variants?: Record<string, unknown> }>>,
     ) => {
       for (const fresh of a.payload) {
         const c = s.characters.find((x) => x.id === fresh.id);
         const local = c?.overrideTtsVoices?.qwen?.variants;
         if (!local) continue;
         const keep = fresh.variants ?? {};
-        for (const emotion of Object.keys(local)) {
+        for (const emotion of fresh.emotions) {
           if (!(emotion in keep)) delete local[emotion as keyof typeof local];
         }
         if (Object.keys(local).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;

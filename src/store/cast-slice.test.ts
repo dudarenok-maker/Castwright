@@ -1983,11 +1983,12 @@ describe('castSlice — pruneStaleEmotionVariants (#4040)', () => {
     });
 
   it('keeps only the emotions the fresh read still names, per row, and never adds one', () => {
+    const both = ['angry', 'sad'];
     const next = castSlice.reducer(
       baseState([row('a'), row('b'), row('c')]),
       castActions.pruneStaleEmotionVariants([
-        { id: 'a', variants: { sad: { name: 's' }, happy: { name: 'h' } } },
-        { id: 'b' },
+        { id: 'a', emotions: both, variants: { sad: { name: 's' }, happy: { name: 'h' } } },
+        { id: 'b', emotions: both },
       ]),
     );
     expect(Object.keys(next.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
@@ -1995,5 +1996,13 @@ describe('castSlice — pruneStaleEmotionVariants (#4040)', () => {
     expect(next.characters[1].overrideTtsVoices!.qwen!.name).toBe('qwen-shared');
     // a row the read does not name is untouched
     expect(Object.keys(next.characters[2].overrideTtsVoices!.qwen!.variants!)).toHaveLength(2);
+  });
+
+  it('never prunes an emotion outside the dispatch-time snapshot', () => {
+    const next = castSlice.reducer(
+      baseState([row('a')]),
+      castActions.pruneStaleEmotionVariants([{ id: 'a', emotions: ['angry'] }]),
+    );
+    expect(Object.keys(next.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
   });
 });

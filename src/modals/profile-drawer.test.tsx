@@ -1624,6 +1624,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
       voiceStyle: 'a steady adult voice',
     });
     getBookState.mockResolvedValueOnce({
+      state: { manuscriptId: 'mns_book1' },
       cast: {
         characters: [
           { id: 'halloran', overrideTtsVoices: { qwen: { name: 'qwen-v_hal' } } },
@@ -1633,6 +1634,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     });
     const { store } = renderWithBook(row('halloran', 'Captain Halloran'));
     act(() => {
+      store.dispatch(manuscriptSlice.actions.uploadComplete({ manuscriptId: 'mns_book1', title: 't', format: 'md', wordCount: 1, sourceText: '' } as never));
       store.dispatch(
         castActions.hydrateCharacters([
           row('halloran', 'Captain Halloran'),

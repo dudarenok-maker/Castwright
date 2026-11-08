@@ -413,14 +413,26 @@ describe('RebaselineModal — stale emotion variants (#4040)', () => {
       ({
         ...c,
         ttsEngine: 'qwen',
+        voiceUuid: 'shared',
         overrideTtsVoices: { qwen: { name: 'qwen-shared', variants: { angry: { name: 'qwen-shared__angry' } } } },
       }) as Character;
+    /* maerin + marlow (designed here) share the voice key with bystander + twin. */
     const store = makeStore(
-      [CHARACTERS[0], CHARACTERS[1], CHARACTERS[2], withAngry(CHARACTERS[3]), withAngry(char('twin', 'Twin', 1))],
+      [
+        CHARACTERS[0],
+        { ...CHARACTERS[1], voiceUuid: 'shared' } as Character,
+        { ...CHARACTERS[2], voiceUuid: 'shared' } as Character,
+        withAngry(CHARACTERS[3]),
+        withAngry(char('twin', 'Twin', 1)),
+      ],
       VOICES,
+    );
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({ manuscriptId: 'mns_b1', title: 't', format: 'md', wordCount: 1, sourceText: '' } as never),
     );
     /* The server's /state dropped the now-stale variants from both rows. */
     getBookState.mockResolvedValue({
+      state: { manuscriptId: 'mns_b1' },
       cast: {
         characters: ['bystander', 'twin'].map((id) => ({
           id,
