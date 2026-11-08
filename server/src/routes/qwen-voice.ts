@@ -1205,7 +1205,7 @@ async function moveStaged(staging: string, target: string): Promise<void> {
    key (variant-base-rev.ts). Best-effort after the move: the redesign has landed,
    so a failed write is logged (those variants then stay in use until the next
    redesign) and never fails the request. */
-async function markBaseRedesigned(baseKey: string): Promise<void> {
+export async function markBaseRedesigned(baseKey: string): Promise<void> {
   try {
     await stampBaseRedesign(baseKey);
   } catch (e) {

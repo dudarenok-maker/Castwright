@@ -42,7 +42,7 @@ import {
 import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
-import { qwenVoicePtPath } from './qwen-voice.js';
+import { markBaseRedesigned, qwenVoicePtPath } from './qwen-voice.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import {
   selectTtsProvider,
@@ -383,10 +383,15 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
       console.warn('[voice-library] promote: no staged preview', e);
       return res.status(409).json({ error: 'No staged preview voice to promote.' });
     }
+    const hadBase = existsSync(qwenVoicePtPath(storageKey));
     await rm(qwenVoicePtPath(storageKey), { force: true });
     await rename(qwenVoicePtPath(previewKey), qwenVoicePtPath(storageKey));
     await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
     await rename(qwenVoiceSidecarPath(previewKey), qwenVoiceSidecarPath(storageKey)).catch(() => {});
+    /* #4040 — a promote over an existing base is a redesign: a fresh `rev` makes
+       every emotion variant designed against the old base stale, in every book on
+       the key (same stamp as qwen-voice.ts's promote-voice). */
+    if (hadBase) await markBaseRedesigned(storageKey);
 
     /* Fix wave (consent-erasure gap, mirrors qwen-voice.ts's promote-voice) —
        carry the preview's retained reference clip (§2.3) onto the live key too.

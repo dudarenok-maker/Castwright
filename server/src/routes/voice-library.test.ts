@@ -4086,6 +4086,36 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     );
   });
 
+  it('redesign/promote stamps a fresh base rev, so an emotion variant designed against the old base goes stale (#4040)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'promo-rev',
+        provenance: 'designed',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+    // A legacy base (no rev) with a legacy variant (no baseRev): both undefined, so current.
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-rev'), 'LIVE');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-rev'), JSON.stringify({ instruct: 'old' }));
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-rev__angry'), JSON.stringify({ voiceId: 'qwen-promo-rev__angry' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-rev-preview'), 'PREVIEW');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-rev-preview'), JSON.stringify({ instruct: 'new' }));
+    const row = { id: 'c1', overrideTtsVoices: { qwen: { libraryUuid: 'promo-rev', variants: { angry: { name: 'a' } } } } };
+    const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+    expect((await dropStaleVariants([row]))[0]).toBe(row); // current before the redesign
+
+    const res = await request(app).post('/api/voice-library/promo-rev/redesign/promote').send({});
+
+    expect(res.status).toBe(200);
+    const live = JSON.parse(readFileSync(paths.qwenVoiceSidecarPath('qwen-promo-rev'), 'utf8'));
+    expect(live.instruct).toBe('new');
+    expect(typeof live.rev).toBe('string');
+    expect((await dropStaleVariants([row]))[0].overrideTtsVoices.qwen.variants).toBeUndefined();
+  });
+
   it('redesign/promote carries the preview’s retained reference clip onto the live key (fix wave, §2.3 consent gap)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
     const { writeFileSync: wf } = await import('node:fs');
