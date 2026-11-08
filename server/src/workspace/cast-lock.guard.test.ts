@@ -8,7 +8,8 @@
    WHAT IT CHECKS: walks every `.ts` file under `server/src` (recursively,
    excluding `*.test.ts`) that mentions `castJsonPath`, and for each
    `writeJsonAtomic(castJsonPath(` (or `writeJsonAtomicOrdered(castJsonPath(`) /
-   `rm(castJsonPath(` occurrence, asserts it
+   cast.json delete occurrence (`rm`, `rmSync`, `unlink`, `unlinkSync` or `rename`
+   whose first argument is `castJsonPath(`), asserts it
    sits inside a `withCastLock(...)` / `withCastLocks(...)` call. Only those
    two are accepted — `withLibraryVoiceLock` guards a DIFFERENT map key
    (`library-voice:<uuid>`), so a cast write enclosed by it and nothing else
@@ -46,9 +47,9 @@
         a hand-rolled partial parser with the bugs to match. The one real site
         it existed for is now on the pinned allowlist below instead, with an
         honest "can't prove it, human-verified" `why`.
-     3. Each `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence
+     3. Each `writeJsonAtomic(castJsonPath(` / cast.json delete occurrence
         is a match of `/\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/` /
-        `/\brm\(\s*castJsonPath\(/` (whitespace-tolerant between the two
+        `/\b(?:rm|rmSync|unlink|unlinkSync|rename)\(\s*castJsonPath\(/` (whitespace-tolerant between the two
         opening parens — see "Prettier-wrap" in the false-negatives list
         below for why the earlier exact-adjacency version was itself a hole)
         whose start index (a) falls inside some lock range for that file, per
@@ -344,7 +345,7 @@ function scanFile(content: string): ScanResult | null {
   return { writes, rms, details };
 }
 
-/** Every real (non-comment, non-string) `rm(castJsonPath(` site in `content`,
+/** Every real (non-comment, non-string) cast.json delete site (`rm`, `rmSync`, `unlink`, `unlinkSync` or `rename` of `castJsonPath(`) in `content`,
     locked or not. `scanFile` above only reports UNLOCKED sites, so the
     carryover-decision guard below needs this wider view; it shares RM_RE and
     the same opaque-range exclusion, so prose never counts as a site. */
@@ -362,11 +363,11 @@ function collectRmSites(content: string): number[] {
 }
 
 /* Why this exists (#4039): a reparse now KEEPS cast-reuse-carryover.json when
-   cast.json is absent. That is only safe while every code path that deletes
+   cast.json is absent or unparseable. That is only safe while every code path that deletes
    cast.json also decides what happens to the carryover. A future deleter that
    forgets it would bring old voice links back on the next analysis. The lock
    guard above cannot see this (a locked rm is fine for locking), so this map
-   records, per file, how many `rm(castJsonPath(` sites exist and what the file
+   records, per file, how many cast.json delete sites exist and what the file
    does with the carryover. A new site must be recorded here on purpose.
    The scan is SYNTACTIC (rm/rmSync/unlink/unlinkSync/rename called with
    `castJsonPath(` as its first argument), so it cannot see: a path held in a
@@ -390,7 +391,7 @@ const CAST_JSON_DELETERS: ReadonlyMap<string, { count: number; carryover: string
     {
       count: 2,
       carryover:
-        'reparse/replace-manuscript: rewrites, removes, or (cast.json absent) keeps the carryover before deleting cast.json (#4039)',
+        'reparse/replace-manuscript: rewrites, removes, or (cast.json absent or unparseable) keeps the carryover before deleting cast.json (#4039)',
     },
   ],
 ]);
@@ -438,7 +439,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     expect(actualRoot).toBe(declaredRoot);
   });
 
-  it('every writeJsonAtomic(castJsonPath(...)) / rm(castJsonPath(...)) site sits inside withCastLock/withCastLocks, except the pinned allowlist', () => {
+  it('every writeJsonAtomic(castJsonPath(...)) / cast.json delete (rm, rmSync, unlink, unlinkSync, rename of castJsonPath(...)) site sits inside withCastLock/withCastLocks, except the pinned allowlist', () => {
     const files = collectSourceFiles(SRC_ROOT);
     const problems: string[] = [];
     const matchedAllowlistKeys = new Set<string>();
@@ -479,7 +480,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     expect(problems, problems.join('\n\n')).toEqual([]);
   });
 
-  it('every rm(castJsonPath(...)) site is recorded in CAST_JSON_DELETERS with its carryover decision (#4039)', () => {
+  it('every cast.json delete (rm, rmSync, unlink, unlinkSync, rename of castJsonPath(...)) site is recorded in CAST_JSON_DELETERS with its carryover decision (#4039)', () => {
     const problems: string[] = [];
     const seen = new Set<string>();
 
@@ -499,7 +500,7 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     for (const rel of CAST_JSON_DELETERS.keys()) {
       if (!seen.has(rel)) {
         problems.push(
-          `stale entry: ${rel} is in CAST_JSON_DELETERS but has no rm(castJsonPath( site any more; remove or fix the entry.`,
+          `stale entry: ${rel} is in CAST_JSON_DELETERS but has no cast.json deleter (rm, rmSync, unlink, unlinkSync or rename of castJsonPath(...)) site any more; remove or fix the entry.`,
         );
       }
     }

@@ -1,7 +1,7 @@
 /** The real scan scope of cast-lock.guard.test.ts: every non-test `.ts` file
     under `server/src` is read at runtime (readFileSync via
     `collectSourceFiles`) and scanned for `writeJsonAtomic(castJsonPath(` /
-    `rm(castJsonPath(` call sites. No module-graph edge exists to any of
+    cast.json delete call sites (`rm`, `rmSync`, `unlink`, `unlinkSync` or `rename` of `castJsonPath(`). No module-graph edge exists to any of
     these files, so vitest's `--changed` cannot select this guard on their
     diff — this constant, expressed relative to the repo root in the same
     brace-glob style `server/vitest.config.ts`'s other `forceRerunTriggers`
