@@ -831,3 +831,43 @@ describe('dedupeRosterByName — new+new merges (#4031)', () => {
     ]);
   });
 });
+
+describe('dedupeRosterByName — fix round 1 (#4031)', () => {
+  it('a refused bridge row does not chain its two neighbours into one character', () => {
+    const chars = [
+      c({ id: 'boss', name: 'шеф', gender: 'male', aliases: ['Борис Игнатьевич'] }),
+      c({ id: 'boris', name: 'Борис Игнатьевич', gender: 'male' }),
+      c({ id: 'geser', name: 'Гесер', gender: 'male', aliases: ['Борис Игнатьевич'] }),
+    ];
+    const r = dedupeRosterByName(chars as any, [], {
+      constraints: planned({ boris: joined('p-boris'), boss: newRow(), geser: newRow() }),
+    });
+    expect(r.characters.map((x) => x.id)).toEqual(['boss', 'boris', 'geser']);
+    expect(r.rewrites).toEqual({});
+  });
+
+  it.each([
+    ['joined row first', ['a1', 'a2']],
+    ['joined row last', ['a2', 'a1']],
+  ])('a join-vs-new suggestion points the new row at the established one (%s)', (_label, order) => {
+    const rows = order.map((id) => c({ id, name: 'Анна', gender: 'female' }));
+    const r = dedupeRosterByName(rows as any, [], {
+      constraints: planned({ a1: joined('p1'), a2: newRow() }),
+    });
+    expect(r.suggestions).toHaveLength(1);
+    expect(r.suggestions[0]).toMatchObject({ sourceId: 'a2', targetId: 'a1', a: 'a1', b: 'a2' });
+  });
+
+  it.each([
+    ['decline on the first row', 'a1', 'a2'],
+    ['decline on the second row', 'a2', 'a1'],
+  ])('a cross-book decline against the other row\'s matchedFrom link refuses the merge (%s)', (_label, decliner, linker) => {
+    const mf = { bookId: 'b1', characterId: 'x' };
+    const chars = [c({ id: 'a1', name: 'Анна', gender: 'female' }), c({ id: 'a2', name: 'Анна', gender: 'female' })];
+    const r = dedupeRosterByName(chars as any, [], {
+      constraints: planned({ [decliner]: newRow({ inheritedDeclines: [mf] }), [linker]: newRow({ matchedFrom: mf }) }, 'cur'),
+    });
+    expect(r.characters.map((x) => x.id)).toEqual(['a1', 'a2']);
+    expect(r.refused).toEqual([{ a: 'a1', b: 'a2', why: 'declined' }]);
+  });
+});

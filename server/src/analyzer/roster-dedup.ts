@@ -244,10 +244,19 @@ export function dedupeRosterByName(
   const sameBook = (e: NotLinkedEntry): boolean =>
     typeof e === 'string' || e.bookId === undefined || e.bookId === constraints.currentBookId;
   const holds = (s: NodeState, id: string): boolean => s.members.has(id) || s.candidates.has(id);
-  /** `x` declines `y`: a declined id (or a same-book inherited decline) names a member or candidate of `y`. */
-  const declines = (x: NodeState, y: NodeState): boolean =>
-    [...x.declinedIds].some((id) => holds(y, id)) ||
-    x.inherited.some((e) => sameBook(e) && holds(y, typeof e === 'string' ? e : e.characterId));
+  /** `x` declines `y`: a declined id names a member or candidate of `y`, or a cross-book decline
+      names the series link `y` carries (never takes a link either row declined). The same-book
+      inherited arm is near-vacuous (the producer strips same-book entries); `declinedIds` is
+      the real same-book guard. */
+  const declines = (x: NodeState, y: NodeState): boolean => {
+    const mf = y.matchedFrom as { bookId?: string; characterId?: string } | undefined;
+    return (
+      [...x.declinedIds].some((id) => holds(y, id)) ||
+      x.inherited.some((e) => sameBook(e) && holds(y, typeof e === 'string' ? e : e.characterId)) ||
+      (mf !== undefined &&
+        x.inherited.some((e) => typeof e !== 'string' && e.bookId === mf.bookId && e.characterId === mf.characterId))
+    );
+  };
   /** Why two nodes may not merge, or null when they may. */
   const refusal = (a: CharacterOutput, b: CharacterOutput): RefusalReason | null => {
     const x = state.get(a)!;
@@ -267,7 +276,9 @@ export function dedupeRosterByName(
     return null;
   };
   const refuse = (a: CharacterOutput, b: CharacterOutput, why: RefusalReason, reason: string): void => {
-    refusals.push({ x: a.id, y: b.id, why, reason });
+    // A join-vs-new pair points the NEW row (source) at the established one (target).
+    const [x, y] = why === 'join-vs-new' && state.get(a)!.priorId !== null ? [b, a] : [a, b];
+    refusals.push({ x: x.id, y: y.id, why, reason });
   };
 
   // ── First-person phantom detection (needed by the survivor rule) ─────────
@@ -463,7 +474,11 @@ export function dedupeRosterByName(
         mutual ||
         (linkXY && (tokens(x.name).length >= 2 || isFirstPersonName(x))) ||
         (linkYX && (tokens(y.name).length >= 2 || isFirstPersonName(y)));
-      if (strong) union(x.id, y.id);
+      if (!strong) continue;
+      // A refused edge links nothing: otherwise its two neighbours would chain through it.
+      const why = refusal(x, y);
+      if (why === null) union(x.id, y.id);
+      else refuse(x, y, why, `Possibly the same character as «${x.name}» / «${y.name}»`);
     }
   }
 
