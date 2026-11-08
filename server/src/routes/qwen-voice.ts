@@ -298,7 +298,7 @@ export class CharacterGoneError extends Error {
    that changes the row's key (a link made mid-render, a re-analysis) leaves it
    behind, and the landing then discards the render instead of following it onto
    another book's voice. */
-const designWatchers = new Map<string, { key: string; linkId: string }>();
+const designWatchers = new Map<string, { key: string; linkId: string; begun: number }>();
 const watchTag = (bookId: string, characterId: string): string => `${bookId}|${characterId}`;
 
 /* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — the voice keys
@@ -608,7 +608,10 @@ export async function separateVoiceLocked(
   /* P11-5 — a design in flight on a moved row follows it to the new voice. */
   for (const m of moved) {
     const w = designWatchers.get(watchTag(m.bookId, m.characterId));
-    if (w?.key === oldKey) w.key = `qwen-${newUuid}`;
+    if (w?.key === oldKey) {
+      w.key = `qwen-${newUuid}`;
+      w.begun = savesOf(w.key).begun;
+    }
   }
   await dropStagedPreviews(oldKey, moved);
   console.log(
@@ -1294,7 +1297,7 @@ async function landStagedDesign(
   p: DesignQwenVoiceParams,
   staging: string,
   calibrationText: string,
-  watcher: { key: string },
+  watcher: { key: string; begun: number },
 ): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
@@ -1315,6 +1318,10 @@ async function landStagedDesign(
     if (!row) throw new CharacterGoneError();
     const base = qwenStorageKey(row, p.characterId);
     if (base !== watcher.key) throw new DesignVoiceChangedError();
+    /* #4040 — a variant was rendered against the base on disk when the design
+       began; a base write since (a landing, a promote, a mint: all whileSaving)
+       replaced it, and the reset has already cleared every row's variants. */
+    if (p.emotion && savesOf(base).begun !== watcher.begun) throw new DesignVoiceChangedError();
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     const sharing = await firstDesignOf(row); // decided before the move creates the file
@@ -1443,7 +1450,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
         const start = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
         if (!start) throw new CharacterGoneError();
         baseVoiceId = qwenStorageKey(start, p.characterId);
-        const w = { key: baseVoiceId, linkId: start.voiceId ?? start.id };
+        const w = { key: baseVoiceId, linkId: start.voiceId ?? start.id, begun: savesOf(baseVoiceId).begun };
         designWatchers.set(tag, w);
         return w;
       });
@@ -1467,6 +1474,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       if (uuid && `qwen-${uuid}` !== watcher.key) {
         if (now.voiceUuid) throw new DesignVoiceChangedError();
         watcher.key = `qwen-${uuid}`;
+        watcher.begun = savesOf(watcher.key).begun;
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();

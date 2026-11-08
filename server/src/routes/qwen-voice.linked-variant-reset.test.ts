@@ -8,7 +8,7 @@
    Real design (preview) and promote routes against real cast.json files. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -50,6 +50,12 @@ let app: Express;
 let counter = 0;
 const fetchMock = vi.fn();
 const ids: Record<string, string> = {};
+/* Holds the next design sidecar call until `release`. */
+const gate = { hold: false, entered: null as null | (() => void), release: null as null | (() => void) };
+const holdNextDesign = (): Promise<void> => {
+  gate.hold = true;
+  return new Promise<void>((r) => (gate.entered = r));
+};
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 const pt = (k: string) => join(qwenDir(), `${k}.pt`);
@@ -156,6 +162,10 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  gate.release?.(); // a test that failed while holding a render must not wedge the next
+  gate.hold = false;
+  gate.entered = null;
+  gate.release = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -166,6 +176,13 @@ beforeEach(() => {
       /* not JSON */
     }
     if (voiceId && String(url).includes('/qwen/') && !String(url).includes('evict')) {
+      if (gate.hold) {
+        gate.hold = false;
+        await new Promise<void>((r) => {
+          gate.release = r;
+          gate.entered?.();
+        });
+      }
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), Buffer.from(`DESIGN-${++counter}`));
     }
@@ -395,5 +412,42 @@ describe('#4040 — a re-parsed book keeps no stale variants in its carryover', 
     const before = readFileSync(carryPath(D));
     await redesign(A);
     expect(readFileSync(carryPath(D)).equals(before)).toBe(true);
+  });
+});
+
+/* #4040 — an emotion variant still rendering against the OLD base when another book
+   replaces that base must not land: the reset already cleared every row, and the
+   landing would spread an old-base variant across the library again. */
+describe('#4040 — an emotion variant rendered against a replaced base is discarded', () => {
+  const RETRY = "This character's voice changed while it was being designed. Design it again.";
+  const staged = () => readdirSync(qwenDir()).filter((f) => f.startsWith('qwen-staging-'));
+
+  it('E1: B renders angry against u1; A promotes a new u1 base; B answers the retry error, no row carries it, nothing staged', async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    const entered = holdNextDesign();
+    const designing = directDesign(B, { emotion: 'angry' }).then((r) => r);
+    await entered;
+    await redesign(A);
+    expect(readFileSync(pt(KEY)).toString(), 'the base was not replaced').not.toBe('OLD-BASE');
+    gate.release!();
+    const d = await designing;
+    expect(d.status).toBe(500);
+    expect(d.body.error).toBe(RETRY);
+    for (const b of [A, B]) {
+      expect(rowOf(b).overrideTtsVoices.qwen.variants?.angry, `${b.title} carries the old-base variant`).toBeUndefined();
+    }
+    expect(staged()).toEqual([]);
+  });
+
+  it('E2 (control): an emotion design with no base write in between lands on every linked row', async () => {
+    seedFiles(true);
+    rmSync(pt(VARIANT), { force: true });
+    for (const b of [A, B]) writeBook(b, [variantsRow('wren', 'u1', { overrideTtsVoices: { qwen: { name: KEY } } })]);
+    const res = await directDesign(B, { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    for (const b of [A, B]) expect(rowOf(b).overrideTtsVoices.qwen.variants?.angry, `${b.title} missing the variant`).toBeDefined();
+    expect(staged()).toEqual([]);
   });
 });
