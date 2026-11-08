@@ -158,8 +158,8 @@ vi.mock('../workspace/cast-merge-base.js', async (importOriginal) => {
 });
 
 /* The journal seam for the other half of #2295's discrimination: a lock
-   timeout out of `writeSuggestions` must STILL be swallowed, because that
-   write is lineage rather than identity. Aimed at `writeSuggestions` (rather
+   timeout out of `reconcileSuggestionsLocked` must STILL be swallowed, because
+   that write is lineage rather than identity. Aimed at `reconcileSuggestionsLocked` (rather
    than `writeFoldJournal`/`writeDedupJournal`, which live in analysis.ts
    itself and so cannot be mocked) — it sits under the same
    `catch (dedupErr)`. */
@@ -169,10 +169,10 @@ vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-merge-suggestions.js')>();
   return {
     ...actual,
-    writeSuggestions: async (...args: Parameters<typeof actual.writeSuggestions>) => {
+    reconcileSuggestionsLocked: async (...args: Parameters<typeof actual.reconcileSuggestionsLocked>) => {
       suggestionsWrite.calls += 1;
       if (suggestionsWrite.toThrow) throw suggestionsWrite.toThrow;
-      return actual.writeSuggestions(...args);
+      return actual.reconcileSuggestionsLocked(...args);
     },
   };
 });
@@ -815,7 +815,7 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
  * it — which is why these fixtures aim at write SITES through the
  * `createCastMergeBase` seam rather than at the handler. The journal fixture
  * below is the other half and the reason the handler cannot be the
- * discriminator: `writeFoldJournal` / `writeDedupJournal` / `writeSuggestions`
+ * discriminator: `writeFoldJournal` / `writeDedupJournal` / `reconcileSuggestionsLocked`
  * report to the very same `catch (persistErr)` (via their own inner handlers)
  * and must keep being swallowed.
  *
@@ -915,7 +915,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     'a lock timeout on the SUGGESTIONS write under the same handler is STILL swallowed',
     async () => {
       /* The reason the discrimination cannot be "the outer handler saw a
-         timeout": `writeSuggestions` reports into the same
+         timeout": `reconcileSuggestionsLocked` reports into the same
          `catch (persistErr)` chain, and it is lineage, not identity. */
       suggestionsWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/journal', 10_000);
 

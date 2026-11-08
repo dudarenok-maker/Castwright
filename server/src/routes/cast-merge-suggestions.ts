@@ -5,7 +5,8 @@
    cast-review UI surface and act on them without touching cast.json directly.
 
    GET  /:bookId/cast/merge-suggestions           → { suggestions }
-   POST /:bookId/cast/merge-suggestions/dismiss   → 200 (removes one pair)
+   POST /:bookId/cast/merge-suggestions/dismiss   → 200 (removes one pair, records a
+                                                    durable "not the same person")
    POST /:bookId/cast/merge-suggestions/accept    → 200 (merges + removes pair)
 
    bookDir resolution mirrors cast-merge.ts: `findBookByBookId`, 404 when the
@@ -16,8 +17,17 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { loadSuggestions, dismissSuggestion } from '../store/cast-merge-suggestions.js';
-import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import {
+  loadSuggestions,
+  dismissSuggestionDurably,
+  removeSuggestionPairsLocked,
+} from '../store/cast-merge-suggestions.js';
+import { withCastLock } from '../workspace/cast-lock.js';
+import {
+  isLockAcquisitionTimeout,
+  LOCK_CONTENTION_REQUEST_ERROR,
+  requestFailureMessageFs,
+} from '../workspace/file-lock.js';
 import { performCastMerge, didCastMergeApply } from './cast-merge.js';
 
 export const castMergeSuggestionsRouter = Router();
@@ -45,8 +55,10 @@ castMergeSuggestionsRouter.get(
 );
 
 /* POST /:bookId/cast/merge-suggestions/dismiss
-   Removes the matching (sourceId, targetId) pair from the suggestions file.
-   No-op when the pair is not present. */
+   A durable "not the same person" decision (#4031): records the pair in
+   cast-id-history, writes the `notLinkedTo` edge on each row, and removes the
+   pair from the suggestions file — all under the cast lock. No-op for a pair
+   that is not present. */
 castMergeSuggestionsRouter.post(
   '/:bookId/cast/merge-suggestions/dismiss',
   async (req: Request, res: Response) => {
@@ -59,12 +71,21 @@ castMergeSuggestionsRouter.post(
       return res.status(400).json({ error: 'sourceId and targetId are required.' });
     }
 
-    /* #3711 — book-op outermost so the write lands in the book's current folder. */
-    const outcome = await withBookOp(bookId, (located) =>
-      dismissSuggestion(located.bookDir, sourceId, targetId),
-    );
-    if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
-    return res.json({});
+    try {
+      /* #3711 — book-op outermost so the write lands in the book's current folder. */
+      const outcome = await withBookOp(bookId, (located) =>
+        dismissSuggestionDurably(located.bookDir, bookId, sourceId, targetId, (m) =>
+          console.warn(`[cast-merge-suggestions] ${m}`),
+        ),
+      );
+      if (outcome === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+      return res.json({});
+    } catch (err) {
+      console.error('[cast-merge-suggestions] dismiss failed', err);
+      return res
+        .status(500)
+        .json({ error: requestFailureMessageFs(err, 'Could not dismiss the suggestion.') });
+    }
   },
 );
 
@@ -104,7 +125,7 @@ castMergeSuggestionsRouter.post(
          written (see that function's own deferred-rethrow comment, which
          states this as a contract on its callers). So at THAT point the merge
          is fully applied and `sourceId` is gone from cast.json — but the
-         `dismissSuggestion` below is skipped, and `loadSuggestions` does no
+         `removeSuggestionPairsLocked` below is skipped, and `loadSuggestions` does no
          roster filtering, so the suggestion survives for a character that no
          longer exists. Pressing Accept again then 404s on
          `performCastMerge`'s own `if (!source)` guard and skips the dismiss
@@ -122,7 +143,7 @@ castMergeSuggestionsRouter.post(
          is itself `withCastLock(bookDir, …)`, so this class reaches here from
          two opposite states: the OUTER acquisition expiring (the callback never
          ran — cast.json untouched, `sourceId` still live) and the deferred
-         rethrow (fully applied). `dismissSuggestion` is a plain
+         rethrow (fully applied). `removeSuggestionPairsLocked` is a plain
          load-filter-`writeJsonAtomic`, so on the first of those a user who hit
          Accept while something else held `cast:<bookDir>` — ordinary
          contention, the exact condition #2260 exists to surface — lost the
@@ -138,7 +159,9 @@ castMergeSuggestionsRouter.post(
          dismiss is no worse than not attempting one. */
           if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
             try {
-              await dismissSuggestion(bookDir, sourceId, targetId);
+              await withCastLock(bookDir, () =>
+                removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]),
+              );
             } catch (dismissErr) {
               console.warn(
                 '[cast-merge-suggestions] merge applied but the suggestion could not be dismissed',
@@ -171,7 +194,9 @@ castMergeSuggestionsRouter.post(
         }
 
         /* Drop the suggestion only after a successful merge. */
-        await dismissSuggestion(bookDir, sourceId, targetId);
+        await withCastLock(bookDir, () =>
+          removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]),
+        );
         return res.json({});
       });
     } catch (err) {

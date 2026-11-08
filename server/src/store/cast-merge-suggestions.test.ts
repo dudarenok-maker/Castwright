@@ -1,10 +1,24 @@
 /* Unit tests for the cast-merge-suggestions sibling-file store. */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import type { StoredSuggestion } from './reanalysis-types.js';
+
+/** A dedup-origin stored suggestion, pair key derived the way the store does. */
+function stored(
+  sourceId: string,
+  targetId: string,
+  reason = `diminutive of ${targetId}`,
+  extra: Partial<StoredSuggestion> = {},
+): StoredSuggestion {
+  const [a, b] = sourceId < targetId ? [sourceId, targetId] : [targetId, sourceId];
+  return { sourceId, targetId, a, b, reason, origin: 'dedup', ...extra };
+}
+
+const never = () => false;
 
 describe('cast-merge-suggestions store', () => {
   let workspaceRoot: string;
@@ -28,37 +42,116 @@ describe('cast-merge-suggestions store', () => {
     expect(result).toEqual({ suggestions: [] });
   });
 
-  it('write→load round-trip preserves all fields', async () => {
-    const { writeSuggestions, loadSuggestions } = await import('./cast-merge-suggestions.js');
-    const suggestions = [
-      { sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' },
-      { sourceId: 'ваня', targetId: 'иван', reason: 'Diminutive of «Иван»' },
-    ];
-    await writeSuggestions(bookDir, suggestions);
-    const result = await loadSuggestions(bookDir);
-    expect(result).toEqual({ suggestions });
+  it('stores one entry per unordered pair and keeps its direction', async () => {
+    const { reconcileSuggestionsLocked, loadStoredSuggestions, pairKey } = await import(
+      './cast-merge-suggestions.js'
+    );
+    expect(pairKey('olya', 'olga')).toEqual({ a: 'olga', b: 'olya' });
+    expect(pairKey('olga', 'olya')).toEqual({ a: 'olga', b: 'olya' });
+
+    await reconcileSuggestionsLocked(bookDir, {
+      add: [stored('olya', 'olga'), stored('olga', 'olya')],
+      liveIds: new Set(['olya', 'olga']),
+      supersededBy: {},
+      declined: never,
+    });
+    // a later run offering the same pair the other way round does not flip it
+    await reconcileSuggestionsLocked(bookDir, {
+      add: [stored('olga', 'olya', 'a later reason')],
+      liveIds: new Set(['olya', 'olga']),
+      supersededBy: {},
+      declined: never,
+    });
+
+    const result = await loadStoredSuggestions(bookDir);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ sourceId: 'olya', targetId: 'olga', a: 'olga', b: 'olya' });
   });
 
-  it('writeSuggestions overwrites the whole file on second write', async () => {
-    const { writeSuggestions, loadSuggestions } = await import('./cast-merge-suggestions.js');
-    await writeSuggestions(bookDir, [
-      { sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' },
-    ]);
-    await writeSuggestions(bookDir, [
-      { sourceId: 'ваня', targetId: 'иван', reason: 'Diminutive of «Иван»' },
-    ]);
-    const result = await loadSuggestions(bookDir);
-    expect(result.suggestions).toHaveLength(1);
-    expect(result.suggestions[0].sourceId).toBe('ваня');
+  it('a legacy entry loads with no newRow', async () => {
+    const { loadStoredSuggestions, loadSuggestions } = await import('./cast-merge-suggestions.js');
+    const { castMergeSuggestionsJsonPath } = await import('../workspace/paths.js');
+    writeFileSync(
+      castMergeSuggestionsJsonPath(bookDir),
+      JSON.stringify({
+        suggestions: [{ sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' }],
+      }),
+    );
+    const result = await loadStoredSuggestions(bookDir);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      sourceId: 'оля',
+      targetId: 'ольга',
+      reason: 'Diminutive of «Ольга»',
+      origin: 'dedup',
+      a: 'ольга',
+      b: 'оля',
+    });
+    expect('newRow' in result[0]).toBe(false);
+    expect(await loadSuggestions(bookDir)).toEqual({
+      suggestions: [{ sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' }],
+    });
+  });
+
+  it('reconcile keeps an open suggestion and drops one once a row is gone, merged or declined', async () => {
+    const { reconcileSuggestionsLocked, loadStoredSuggestions } = await import(
+      './cast-merge-suggestions.js'
+    );
+    const all = ['o1', 'o2', 'g1', 'g2', 'm1', 'm2', 'd1', 'd2', 'k1', 'k2'];
+    await reconcileSuggestionsLocked(bookDir, {
+      add: [
+        stored('k1', 'k2'), // stays open
+        stored('o1', 'o2'), // o2 will vanish
+        stored('m1', 'm2'), // m1 was merged into m2
+        stored('d1', 'd2'), // declined
+      ],
+      liveIds: new Set(all),
+      supersededBy: {},
+      declined: never,
+    });
+    expect(await loadStoredSuggestions(bookDir)).toHaveLength(4);
+
+    // a second reconcile adds nothing: the open one is kept, the rest resolve
+    await reconcileSuggestionsLocked(bookDir, {
+      add: [],
+      liveIds: new Set(all.filter((id) => id !== 'o2')),
+      supersededBy: { m1: 'm2' },
+      declined: (x, y) => x === 'd1' && y === 'd2',
+    });
+    const kept = await loadStoredSuggestions(bookDir);
+    expect(kept.map((s) => s.sourceId)).toEqual(['k1']);
+  });
+
+  it('reconcile removes the pairs it is told to, whichever way round', async () => {
+    const { reconcileSuggestionsLocked, removeSuggestionPairsLocked, loadStoredSuggestions } =
+      await import('./cast-merge-suggestions.js');
+    await reconcileSuggestionsLocked(bookDir, {
+      add: [stored('ваня', 'иван'), stored('оля', 'ольга'), stored('саша', 'александр')],
+      liveIds: new Set(['ваня', 'иван', 'оля', 'ольга', 'саша', 'александр']),
+      supersededBy: {},
+      declined: never,
+    });
+    await removeSuggestionPairsLocked(bookDir, [['иван', 'ваня']]);
+    const result = await loadStoredSuggestions(bookDir);
+    expect(result).toHaveLength(2);
+    expect(result.find((s) => s.sourceId === 'ваня')).toBeUndefined();
+    expect(result.find((s) => s.sourceId === 'оля')).toBeDefined();
+    expect(result.find((s) => s.sourceId === 'саша')).toBeDefined();
+
+    await removeSuggestionPairsLocked(bookDir, [['nonexistent', 'target']]);
+    expect(await loadStoredSuggestions(bookDir)).toHaveLength(2);
   });
 
   it('clearSuggestions removes the file; subsequent load returns empty', async () => {
-    const { writeSuggestions, loadSuggestions, clearSuggestions } = await import(
+    const { reconcileSuggestionsLocked, loadSuggestions, clearSuggestions } = await import(
       './cast-merge-suggestions.js'
     );
-    await writeSuggestions(bookDir, [
-      { sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' },
-    ]);
+    await reconcileSuggestionsLocked(bookDir, {
+      add: [stored('оля', 'ольга')],
+      liveIds: new Set(['оля', 'ольга']),
+      supersededBy: {},
+      declined: never,
+    });
     const { castMergeSuggestionsJsonPath } = await import('../workspace/paths.js');
     expect(existsSync(castMergeSuggestionsJsonPath(bookDir))).toBe(true);
     await clearSuggestions(bookDir);
@@ -70,36 +163,5 @@ describe('cast-merge-suggestions store', () => {
   it('clearSuggestions is a no-op when file is absent', async () => {
     const { clearSuggestions } = await import('./cast-merge-suggestions.js');
     await expect(clearSuggestions(bookDir)).resolves.toBeUndefined();
-  });
-
-  it('dismissSuggestion drops only the matching sourceId+targetId pair', async () => {
-    const { writeSuggestions, loadSuggestions, dismissSuggestion } = await import(
-      './cast-merge-suggestions.js'
-    );
-    const suggestions = [
-      { sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' },
-      { sourceId: 'ваня', targetId: 'иван', reason: 'Diminutive of «Иван»' },
-      { sourceId: 'саша', targetId: 'александр', reason: 'Diminutive of «Александр»' },
-    ];
-    await writeSuggestions(bookDir, suggestions);
-    await dismissSuggestion(bookDir, 'ваня', 'иван');
-    const result = await loadSuggestions(bookDir);
-    expect(result.suggestions).toHaveLength(2);
-    expect(result.suggestions.find((s) => s.sourceId === 'ваня')).toBeUndefined();
-    expect(result.suggestions.find((s) => s.sourceId === 'оля')).toBeDefined();
-    expect(result.suggestions.find((s) => s.sourceId === 'саша')).toBeDefined();
-  });
-
-  it('dismissSuggestion is a no-op when sourceId+targetId is not found', async () => {
-    const { writeSuggestions, loadSuggestions, dismissSuggestion } = await import(
-      './cast-merge-suggestions.js'
-    );
-    const suggestions = [
-      { sourceId: 'оля', targetId: 'ольга', reason: 'Diminutive of «Ольга»' },
-    ];
-    await writeSuggestions(bookDir, suggestions);
-    await dismissSuggestion(bookDir, 'nonexistent', 'target');
-    const result = await loadSuggestions(bookDir);
-    expect(result.suggestions).toHaveLength(1);
   });
 });

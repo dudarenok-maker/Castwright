@@ -1211,8 +1211,13 @@ export interface paths {
         put?: never;
         /**
          * Dismiss a merge suggestion
-         * @description Removes the matching `(sourceId, targetId)` pair from the suggestions
-         *     file. No-op when the pair is already absent. Does NOT perform any merge.
+         * @description A durable "not the same person" decision. Records the pair (undirected)
+         *     in the book's cast-id-history, writes a `notLinkedTo` edge on each of
+         *     the two characters that exists, and removes the matching
+         *     `(sourceId, targetId)` pair from the suggestions file, so a later
+         *     re-analysis never re-suggests or joins it. When the history file cannot
+         *     be read the record is skipped (the edges and the removal still apply).
+         *     Does NOT perform any merge.
          */
         post: operations["dismissCastMergeSuggestion"];
         delete?: never;
@@ -9855,7 +9860,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Suggestion removed (or was already absent) */
+            /** @description Dismissal recorded and suggestion removed (or was already absent) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9871,6 +9876,13 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dismissal could not be written; the body carries a curated sentence with no filesystem path */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -55,8 +55,9 @@ import {
   buildDedupJournalEntries,
 } from '../store/cast-merges.js';
 import {
-  writeSuggestions,
+  reconcileSuggestionsLocked,
   clearSuggestions,
+  pairKey,
 } from '../store/cast-merge-suggestions.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
@@ -159,7 +160,7 @@ import {
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
-import type { SupersededKind } from '../store/reanalysis-types.js';
+import type { StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -421,6 +422,45 @@ export function logIfDegradedCastIdHistory(
   if (err instanceof CastIdHistoryUnreadableError) {
     log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
   }
+}
+
+/* #4031 Task 3 — convert the dedup pass's `MergeSuggestion[]` to the durable
+   store shape at the call site. Task 5 changes the dedup suggestion shape and
+   removes this adapter (ruling R15). */
+function legacyDedupToStored(suggestions: MergeSuggestion[]): StoredSuggestion[] {
+  return suggestions.map((s) => ({ ...s, ...pairKey(s.sourceId, s.targetId), origin: 'dedup' as const }));
+}
+
+/* #4031 — add the dedup pass's suggestions to the durable file, under the cast
+   lock, pruned against `roster` (the PRE-remap fresh roster: `dd.suggestions`
+   carries ids in that space, #2040 §4.4). A pair the user dismissed is never
+   re-suggested: the dismissal's `notLinkedTo` edge on either row is the signal
+   read here. cast-id-history is deliberately NOT read — this runs before the
+   persist's `statusBeforePersist` capture, which must stay that file's first
+   read. Removed with the adapter above. */
+async function reconcileDedupSuggestions(
+  bookDir: string,
+  suggestions: MergeSuggestion[],
+  roster: ReadonlyArray<{ id: string }>,
+): Promise<void> {
+  await withCastLock(bookDir, async () => {
+    const cast = await readJson<{
+      characters?: Array<{ id: string; notLinkedTo?: Array<string | { characterId: string }> }>;
+    }>(castJsonPath(bookDir));
+    const linked = new Set<string>();
+    for (const c of cast?.characters ?? []) {
+      for (const e of c.notLinkedTo ?? []) {
+        const other = typeof e === 'string' ? e : e.characterId;
+        linked.add(`${c.id}\u0000${other}`);
+      }
+    }
+    await reconcileSuggestionsLocked(bookDir, {
+      add: legacyDedupToStored(pruneSuggestionsToRoster(suggestions, roster)),
+      liveIds: new Set(roster.map((c) => c.id)),
+      supersededBy: {},
+      declined: (a, b) => linked.has(`${a}\u0000${b}`) || linked.has(`${b}\u0000${a}`),
+    });
+  });
 }
 
 export async function reconcileRejectEdgesOnDisk(
@@ -7405,7 +7445,7 @@ export async function runMainAnalyzerJob(
           // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
           // §4.4) — prune against characters0, not the remapped `characters`,
           // or every suggestion fails both id checks and the list empties.
-          await writeSuggestions(writeDir, pruneSuggestionsToRoster(dd.suggestions, characters0));
+          await reconcileDedupSuggestions(writeDir, dd.suggestions, characters0);
         } catch (dedupErr) {
           /* #2295 — same deliberate swallow as the fold journal above, same
              reason: dedup lineage + diminutive suggestions are advisory, and a
@@ -9605,7 +9645,7 @@ export async function runSubsetAnalyzerJob(
           // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
           // §4.4) — prune against enriched0, not the remapped `enriched`, or
           // every suggestion fails both id checks and the list empties.
-          await writeSuggestions(writeDir, pruneSuggestionsToRoster(dd.suggestions, enriched0));
+          await reconcileDedupSuggestions(writeDir, dd.suggestions, enriched0);
         } catch (dedupErr) {
           // #2295 — deliberate swallow, mirroring the main job's handler.
           console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);

@@ -315,7 +315,7 @@ describe('performCastMerge — lock timeout vs disk fault (#2260 C2)', () => {
  *
  * `POST /:bookId/cast/merge-suggestions/accept` does
  * `try { performCastMerge() } catch (err) { …; throw err }` and then
- * `await dismissSuggestion(...)`. The round-3 rethrow fires with the merge
+ * `await removeSuggestionPairsLocked(...)` (inside `withCastLock`). The round-3 rethrow fires with the merge
  * FULLY APPLIED — so the dismiss is skipped for a merge that landed,
  * `loadSuggestions` does no roster filtering, and the suggestion survives
  * naming a character that is no longer in cast.json. Pressing Accept again
@@ -412,7 +412,7 @@ describe('POST merge-suggestions/accept — a deferred timeout still dismisses (
  * THE BUG. Round 4's accept route discriminated on `isLockAcquisitionTimeout`
  * alone, and its own comment stated the assumption out loud ("Dismissing here
  * is correct precisely BECAUSE the merge landed"). True of one origin, false of
- * the other. `dismissSuggestion` is a plain load-filter-`writeJsonAtomic`, so
+ * the other. `removeSuggestionPairsLocked` is a plain load-filter-`writeJsonAtomic`, so
  * contention on `cast:<bookDir>` — the exact condition #2260 exists to surface
  * — meant: user presses Accept, the outer lock expires at 10s, NOTHING is
  * written, the suggestion is dismissed anyway, and the curated body tells them
