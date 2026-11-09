@@ -1828,13 +1828,16 @@ async function patchCacheInFailureCatch(
    ids the plan has already decided, so an id is rewritten only when it is a prior-row id
    from the run-start prior AND `buildCastResolver` resolves it through its `'history'`
    tier to a live target; the resolver's normalised tiers and analyzer-tagged chains
-   would otherwise override the plan. Lock-free reads of cast.json and the history, so it
+   would otherwise override the plan. An id the plan made `new` (a T1 conflict: it is minted
+   `X-n1`) is left alone too; only an id with no decision yet, or a join of itself, follows
+   the merge. Lock-free reads of cast.json and the history, so it
    is safe under the `book` lock and inside the cache op. */
 export async function resolveCurrentIds<S extends { characterId: string }>(
   bookDir: string | undefined,
   remint: Readonly<Record<string, string>>,
   sentences: S[],
   priorIds: ReadonlySet<string>,
+  decisions?: Readonly<Record<string, { kind: string; priorId?: string }>>,
 ): Promise<S[]> {
   const reminted = remapSentenceIds(sentences, remint);
   if (!bookDir) return reminted;
@@ -1847,6 +1850,8 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
   const idMap: Record<string, string> = {};
   for (const { characterId } of reminted) {
     if (!priorIds.has(characterId)) continue;
+    const decision = decisions?.[characterId];
+    if (decision && !(decision.kind === 'join' && decision.priorId === characterId)) continue;
     const hit = resolver.resolve(characterId);
     if (hit?.via === 'history' && hit.character.id !== characterId) idMap[characterId] = hit.character.id;
   }
@@ -7089,7 +7094,7 @@ export async function runMainAnalyzerJob(
           try {
             out.chapters = {
               ...c.chapters,
-              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id], priorIds),
+              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id], priorIds, c.matchPlan?.decisions),
             };
           } catch (e) {
             /* The persist resolves every id again; the take keeps the run's own ids until then. */
@@ -7139,6 +7144,7 @@ export async function runMainAnalyzerJob(
                 remintIdMap,
                 sentences,
                 new Set(priorCastForMerge.map((r) => r.id)),
+                cache.matchPlan?.decisions,
               ),
             /* #3435 — a chapter not attributed this run falls back to its cached take where
                the file has none, so a pending take stays in the edits until it is replaced. */

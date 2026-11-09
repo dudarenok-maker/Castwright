@@ -1466,6 +1466,19 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
         'the-torment',
       );
     });
+    it('R33: a prior id that is only a separator variant of a live row is not rewritten (the history-tier gate)', async () => {
+      const dir = mkDir([{ id: 'p_x' }], {});
+      expect((await resolveCurrentIds(dir, {}, take('p-x'), ids('p-x')))[0].characterId).toBe('p-x');
+    });
+    it('a prior id the plan made new is not rewritten; no decision, or a join of itself, still follows the merge', async () => {
+      const dir = mkDir([{ id: 'y' }], { x: 'y' });
+      const asNew = { x: { kind: 'new', rawId: 'x', id: 'x-n1' } };
+      const asJoin = { x: { kind: 'join', rawId: 'x', priorId: 'x' } };
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), asNew))[0].characterId).toBe('x');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), asJoin))[0].characterId).toBe('y');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), {}))[0].characterId).toBe('y');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), undefined))[0].characterId).toBe('y');
+    });
     it('R33: a raw analyzer-chain key that is not a prior id stays itself', async () => {
       const dir = mkDir([{ id: 'b' }], { raw: 'b' });
       expect((await resolveCurrentIds(dir, {}, take('raw'), ids('b')))[0].characterId).toBe('raw');
