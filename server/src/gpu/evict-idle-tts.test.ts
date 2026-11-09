@@ -13,6 +13,7 @@ describe('evictIdleQwenBase', () => {
       modelKey: 'qwen3-tts-1.7b',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => false,
+      _probeHealth: async () => ({ qwenLoaded: true }),
     });
 
     expect(freed).toBe(true);
@@ -43,6 +44,7 @@ describe('evictIdleQwenBase', () => {
       modelKey: 'qwen3-tts-1.7b',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => false,
+      _probeHealth: async () => ({ qwenLoaded: true }),
     });
 
     expect(freed).toBe(false);
@@ -267,20 +269,37 @@ describe('evictIdleQwenBase', () => {
       expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'] });
     });
 
-    it('does not drop the event when the health probe fails — the notice comes from what reconcile unloaded', async () => {
+    it.each([
+      ['the probe throws', async () => { throw new Error('health down'); }],
+      ['the probe is unregistered (null)', async () => null],
+      ['the probe reports the sidecar unreachable', async () => ({ status: 'unreachable' as const })],
+    ])('declines a heavy op when %s — an unreadable probe cannot rule out an in-flight design', async (_name, probe) => {
       const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
-      const freed = await evictIdleQwenBase({
+      const result = await evictIdleQwenBase({
         modelKey: 'qwen3-tts-0.6b',
         purpose: 'design',
         _reconcile: reconcile,
         _isAnyGenerationActive: () => false,
-        _probeHealth: async () => {
-          throw new Error('health down');
-        },
+        _probeHealth: probe,
+      });
+
+      expect(result).toBe('declined');
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(getLastTtsAutoFree()).toBeNull();
+    });
+
+    it('a light (non-Qwen) op does not need a readable probe — it never consults it', async () => {
+      const reconcile = vi.fn(async () => true);
+      const probeHealth = vi.fn(async () => null);
+      const freed = await evictIdleQwenBase({
+        modelKey: 'coqui-xtts-v2',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: probeHealth,
       });
 
       expect(freed).toBe(true);
-      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'] });
+      expect(probeHealth).not.toHaveBeenCalled();
     });
 
     it('declines when a VoiceDesign model is resident on the denied device — unloading would kill another design', async () => {
@@ -357,6 +376,7 @@ describe('evictIdleQwenBase', () => {
     const freed = await evictIdleQwenBase({
       modelKey: 'qwen3-tts-1.7b',
       _isAnyGenerationActive: () => false,
+      _probeHealth: async () => ({ qwenLoaded: true }),
     });
 
     expect(freed).toBe(false);

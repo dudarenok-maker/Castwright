@@ -185,14 +185,20 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   const heavy = isDesign || wants17;
   if (heavy) {
     const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
+    /* Fail CLOSED on an unreadable probe (throw, unregistered, or the
+       sidecar's own 2 s timeout reporting `unreachable`): a slow-but-alive
+       sidecar is exactly when another design sits between its ensure and its
+       forward, and reconcile's own `/health` read has no such bound. Declining
+       re-arms the caller's latch, so the next poll asks again. */
+    if (!health || health.status === 'unreachable') return 'declined';
     /* Designs are not globally serialised and `QwenEngine.unload()` clears
        the VoiceDesign model along with the base, so unloading under another
        design resident on the denied device would kill it mid-forward. Hold
        off; the caller keeps its latch armed and asks again on a later poll. */
-    if (health?.qwenDesignResident === true && (!opts.deviceKey || health.qwenDeviceKey === opts.deviceKey)) {
+    if (health.qwenDesignResident === true && (!opts.deviceKey || health.qwenDeviceKey === opts.deviceKey)) {
       return 'declined';
     }
-    if (health?.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
+    if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
     if (anyGenerationActive()) return false;
   }

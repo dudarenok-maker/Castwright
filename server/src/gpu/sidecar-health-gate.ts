@@ -36,6 +36,9 @@
     header for the same call). `SidecarHealthResult` is a structural superset
     of this, so the registered `probeSidecarHealth` satisfies it as-is. */
 export interface SidecarHealthSnapshot {
+  /** `probeSidecarHealth` answers `unreachable` (not a throw) when its own
+      2 s bound elapses; an absent value means a reachable reading. */
+  status?: 'reachable' | 'unreachable';
   modelLoaded?: boolean;
   kokoroLoaded?: boolean;
   qwenLoaded?: boolean;
