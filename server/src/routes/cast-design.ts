@@ -49,7 +49,12 @@ import {
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant } from './qwen-voice.js';
+import {
+  DesignSlotTakenError,
+  VARIANT_EMOTIONS,
+  designQwenVoiceForCharacter,
+  persistEmotionVariant,
+} from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
   applyOverrideToCastFiles,
@@ -654,6 +659,7 @@ async function runDesignJob(
             language,
             emotion,
             persistSlot: !emotion,
+            skipIfSlotted: !emotion,
             signal: job.controller.signal,
           });
 
@@ -664,12 +670,20 @@ async function runDesignJob(
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            const { updated, skipped } = await applyOverrideToCastFiles(
+            const { updated, skipped, keptOwnSlot } = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
               seriesFilter,
               job.bookDir,
+              { bookDir: job.bookDir, characterId },
             );
+            /* #4031 -- a voice picked after the landing released its lock: the
+               override declined this row under the book's lock. */
+            if (keptOwnSlot) {
+              job.skipped += 1;
+              broadcast(job, { type: 'character_skipped', characterId, name: character.name ?? characterId });
+              break;
+            }
             /* Series-wide veto, mirroring the variant branch's own clone-skip
                reporting below: a cloned slot exists somewhere in the scope,
                caught fresh at write time (residual window after the upfront
@@ -714,6 +728,13 @@ async function runDesignJob(
           }
           break;
         } catch (e) {
+          /* #4031 -- a voice picked while the render ran, caught under the lock at the
+             landing: the same freshness skip as above, not a failure. */
+          if (e instanceof DesignSlotTakenError) {
+            job.skipped += 1;
+            broadcast(job, { type: 'character_skipped', characterId, name: character.name ?? characterId });
+            break;
+          }
           const message = (e as Error).message || 'Voice design failed.';
           if (isSidecarRestartClass(e, message)) {
             /* Sidecar down/recycling/poison-restarting. Ride out the respawn

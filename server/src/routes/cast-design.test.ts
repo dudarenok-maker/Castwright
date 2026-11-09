@@ -15,7 +15,7 @@
      - status + pause + bare-resubscribe(idle) endpoints. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -223,6 +223,7 @@ let designLock: typeof import('../tts/design-lock.js');
 let qwenVoiceMod: typeof import('./qwen-voice.js');
 let ensureMod: typeof import('../tts/ensure-sidecar-loaded.js');
 let MAX_RECYCLE_RIDEOUTS: number;
+let voicesMod: typeof import('./voices.js');
 
 /* Turn VRAM sampling off so the new /health probe doesn't inflate fetch-mock call counts. */
 beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
@@ -254,6 +255,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', castDesignRouter);
   app.use('/api/books', qwenVoice.qwenVoiceRouter);
+  app.use('/api/books', (await import('./book-state.js')).bookStateRouter);
+  voicesMod = await import('./voices.js');
 });
 
 beforeEach(() => {
@@ -2275,5 +2278,69 @@ describe('cast-design — persona-write lock timeout is curated, not leaked (PR 
     /* Not escalated: the loop carried on and designed the other character. */
     expect(idle?.done).toBe(1);
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+  });
+});
+
+describe('cast-design — bulk design never overwrites a voice picked mid-synthesis (#4031 Task 10)', () => {
+  const USER_PICK = 'qwen-user-pick';
+
+  /** The whole-slice cast PUT the client makes, setting aria's qwen slot. */
+  async function userPicksVoiceForAria(): Promise<void> {
+    const cast = readCast();
+    const characters = cast.characters.map((c) =>
+      c.id === 'aria' ? { ...c, overrideTtsVoices: { qwen: { name: USER_PICK } } } : c,
+    );
+    const put = await request(app).put(`/api/books/${bookId}/state`).send({ slice: 'cast', patch: { characters } });
+    expect(put.status).toBe(200);
+  }
+
+  async function waitFor(pred: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while (!pred()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  it('a slot picked while the sidecar synthesises is kept, and the character is reported skipped', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    fetchMock.mockImplementation(async (url: unknown) => {
+      if (!String(url).includes('evict')) await gate;
+      return okSidecarResponse();
+    });
+    const run = request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY })
+      .then((r) => r);
+    await waitFor(() => sidecarDesignCalls().length === 1, 'the design call to block');
+    await userPicksVoiceForAria();
+    release();
+    const res = await run;
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'aria')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(false);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
+    /* The landing itself declined: the staged render was discarded, never moved onto the key. */
+    const { qwenVoicePtPath } = await import('../workspace/paths.js');
+    expect(existsSync(qwenVoicePtPath('qwen-v_aria'))).toBe(false);
+  });
+
+  it('a slot picked after the landing, before the series-wide override, is kept too', async () => {
+    const real = voicesMod.applyOverrideToCastFiles;
+    vi.spyOn(voicesMod, 'applyOverrideToCastFiles').mockImplementationOnce(async (...args) => {
+      await userPicksVoiceForAria();
+      return real(...args);
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'aria')).toBe(true);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
   });
 });

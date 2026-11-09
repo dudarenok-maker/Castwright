@@ -326,6 +326,15 @@ export class DesignVoiceChangedError extends RetryableForkError {
   }
 }
 
+/* #4031 — a `skipIfSlotted` landing found the row already carrying a qwen slot
+   (picked while the render was in flight): the render is discarded, not landed. */
+export class DesignSlotTakenError extends Error {
+  constructor() {
+    super('This character was given a voice while it was being designed.');
+    this.name = 'DesignSlotTakenError';
+  }
+}
+
 /* #3992 — the base artifact family of one voice key (no emotion variants). */
 function familyPath(kind: 'pt' | 'json' | 'wav', name: string): string {
   return kind === 'pt'
@@ -971,6 +980,10 @@ export interface DesignQwenVoiceParams {
       under its lock, so a decline right after it moves a row that has one (pass 11,
       Y1). The caller's series-wide applyOverrideToCastFiles still follows. */
   persistSlot?: boolean;
+  /** The bulk job's freshness rule, re-checked under the lock at the landing: a row
+      that already carries a qwen slot then throws DesignSlotTakenError, before
+      anything lands (#4031). */
+  skipIfSlotted?: boolean;
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
@@ -1281,6 +1294,7 @@ async function landStagedDesign(
     if (!row) throw new CharacterGoneError();
     const base = qwenStorageKey(row, p.characterId);
     if (base !== watcher.key) throw new DesignVoiceChangedError();
+    if (p.skipIfSlotted && row.overrideTtsVoices?.qwen?.name) throw new DesignSlotTakenError();
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     const sharing = await firstDesignOf(row); // decided before the move creates the file
