@@ -6440,7 +6440,7 @@ The automated tests prove the decline-time separation against fixture workspaces
 >   - **5.** The linked `narrator`, redesigned from Book 2, changed the shared `qwen-<uuid>.pt` for all three books. `melissa-edgley`, which shares a uuid with no link, was designed once from each book and stayed on one uuid.
 >   - **8.** A repeat press returned the same uuid, kept the variants and wrote no new file. This also held with an unrelated book's `cast.json` truncated.
 >   - **10.**
->   - **11.** Book 2 got its own uuid with byte copies of the files, and Book 1 was unchanged. Book 2 was unchanged after Book 1's own redesign.
+>   - **11, except its "also after Book 1 is redesigned" clause.** Book 2 got its own uuid with byte copies of the files, and Book 1 was unchanged. Book 2 was unchanged after Book 1's own redesign, but Book 1 got a `voiceUuid` in that redesign (`rjwz7…`), so the clause does not hold as written (see Wording below).
 >   - **12.** The promote answered `400`, Book 1's `.pt` hashes were unchanged, the preview's files were gone at the decline, and Cancel answered OK.
 >   - **14, except its render clause.** An emotion designed on Book 1 added no slot to Book 2, and the reverse held too. Removing Book 2's `angry` kept Book 1's `qwen-bliss__angry.pt`.
 >   - **15, the case where Book 2's own design is in flight.** The press answered in 0.3 s mid-render. The design landed on Book 2's new uuid, Book 1 was unchanged, and no staging file was left.
@@ -7737,11 +7737,11 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 >   - **The loser on disk.** Only the twin's `state.json` and `dropped-quotes.json` changed, and the winner's files are byte-identical.
 >   - **Analysis cache.** The cache file was copied to the twin's new `manuscriptId`.
 >   - **Repairs list.** `GET /api/info` listed the repair with relative folders.
->   - **Idempotent.** A second start logged no `[duplicate-bookid]` line.
+>   - **Idempotent, except the banner and the mtimes.** A later start logged no `[duplicate-bookid]` line and `duplicateBookIdRepairs` was empty (`repairs=[]` in the log). The banner is a browser item and was not run, and the two `state.json` mtimes were not compared.
 >   - **The gate over HTTP, refused writes.** DELETE with no epoch and DELETE with a wrong epoch both answered `409` with no path in the body. So did a cast patch to `PUT …/state`, `POST /api/library-cast/override`, `POST /api/voice-library/<uuid>/assign`, `add-from-roster` and `link-prior` targeting the repaired id, and a series `PUT /api/voices/<id>/override`. Every `cast.json` hash was unchanged.
 >   - **The gate over HTTP, open writes.** `listen-progress`, `shelf-status` and `listen-stats` got past the gate to body validation and answered `400`.
 >   - **A single voice design.** A design in the series answered `409 book_repaired_reload` before any job, and `cast.json` was unchanged.
->   - **The gate never expires.** `repairEpoch` stayed the same across five restarts over about 2.5 hours. The days-later clause was not run.
+>   - **The gate never expires, except four clauses.** `repairEpoch` stayed the same across five restarts over about 2.5 hours. Not run or not recorded: the days-later clause; the gate file's contents (the id, the repair time and the epoch, with no path); that nothing a client does ends it early; and that a tab from before the upgrade stays refused (a browser item).
 >   - **A truncated gate file.** With the file truncated inside its `manuscripts` list, the readable entry stayed gated. The file was rewritten whole with the same epoch and an empty `manuscripts` list.
 >   - **Both books open.** `GET /api/books/<id>/state` answered `200` for both ids.
 > - **Not run:**
