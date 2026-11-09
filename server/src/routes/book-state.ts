@@ -1076,7 +1076,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
 
 export function busySentence(
   kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore',
+  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore' | 'cast-save',
 ): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
@@ -1101,6 +1101,10 @@ export function busySentence(
      the analysis cache under a job that may still be saving it. */
   if (action === 'restore') {
     return `This book is busy (${what}). Stop it or wait for it to finish, then restore the backup.`;
+  }
+  /* #4031 — a whole-slice cast PUT is refused while an analysis runs. */
+  if (action === 'cast-save') {
+    return `This book is busy (${what}). Its cast is read-only until the analysis finishes, so this change was not saved.`;
   }
   /* #3717 — reparse / replace-manuscript are refused like the movers: both
      delete cast.json and the audio/ directory under a job still writing them. */
@@ -1224,6 +1228,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const { bookDir } = book;
     switch (body.slice) {
       case 'cast': {
+        /* #4031 — while an analysis job is registered the cast is read-only: the
+           job re-reads cast.json under the lock and a whole-slice write from a
+           client holding a pre-run slice would clobber its rows. Checked inside
+           book-op (a registration cannot race it) and before any read or write,
+           so a refusal touches nothing. One slice per PUT, so this refuses the
+           whole request. */
+        const kinds = bookJobKinds(book.bookId);
+        if (kinds.includes('analysis')) {
+          return { status: 409, body: { error: busySentence(kinds, 'cast-save'), code: 'book_busy' } };
+        }
         /* #1981 — the read inside `preserveDesignedVoices` (the on-disk
            `existing` cast that feeds the clone-consent guards) and the write
            below it must be one atomic span: locking only the write would

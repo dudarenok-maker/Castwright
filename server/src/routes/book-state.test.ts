@@ -3011,3 +3011,66 @@ describe('book-state router — analysis completeness fields (plan 287 T6)', () 
     });
   });
 });
+
+describe('book-state router — PUT /state cast is read-only while an analysis runs (#4031 Task 10)', () => {
+  const castPath = () => join(bookDir, '.audiobook', 'cast.json');
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let originalCast: string | null;
+  let originalState: string;
+  beforeEach(() => {
+    originalCast = existsSync(castPath()) ? readFileSync(castPath(), 'utf8') : null;
+    originalState = readFileSync(statePath(), 'utf8');
+    writeFileSync(castPath(), JSON.stringify({ characters: [{ id: 'wren', name: 'Wren' }] }));
+  });
+  afterEach(() => {
+    if (originalCast === null) rmSync(castPath(), { force: true });
+    else writeFileSync(castPath(), originalCast);
+    writeFileSync(statePath(), originalState);
+  });
+
+  const patch = { characters: [{ id: 'wren', name: 'Wren (edited)' }] };
+
+  /** Register an analysis job the real way (`runBookJob`), never `__addBookJobToken`. */
+  async function holdAnalysis(): Promise<{ finish: () => Promise<void> }> {
+    const { runBookJob } = await import('../workspace/book-jobs.js');
+    const bookOp = await import('../workspace/book-op-lock.js');
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const reg = await runBookJob(bookId, 'analysis', () => gate);
+    if (reg === bookOp.BOOK_GONE) throw new Error('test setup: book not found');
+    return {
+      finish: async () => {
+        open();
+        await reg.done;
+      },
+    };
+  }
+
+  it("PUT /state cast answers 409 book_busy with kinds ['analysis'] while an analysis job is registered, writing nothing", async () => {
+    const { bookJobKinds } = await import('../workspace/book-op-lock.js');
+    const castBefore = readFileSync(castPath(), 'utf8');
+    const stateBefore = readFileSync(statePath(), 'utf8');
+    const job = await holdAnalysis();
+    try {
+      const res = await request(app).put(`/api/books/${bookId}/state`).send({ slice: 'cast', patch });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(res.body.error).toMatch(/analysing/);
+      expect(res.text).not.toContain(workspaceRoot);
+      expect(readFileSync(castPath(), 'utf8')).toBe(castBefore);
+      expect(readFileSync(statePath(), 'utf8')).toBe(stateBefore);
+      expect(bookJobKinds(bookId)).toEqual(['analysis']);
+    } finally {
+      await job.finish();
+    }
+  });
+
+  it("PUT /state cast behaves as today once the job's token is released", async () => {
+    const job = await holdAnalysis();
+    await job.finish();
+    const res = await request(app).put(`/api/books/${bookId}/state`).send({ slice: 'cast', patch });
+    expect(res.status).toBe(200);
+    const onDisk = JSON.parse(readFileSync(castPath(), 'utf8')) as { characters: Array<{ name: string }> };
+    expect(onDisk.characters[0].name).toBe('Wren (edited)');
+  });
+});
