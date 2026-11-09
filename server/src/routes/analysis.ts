@@ -7005,7 +7005,9 @@ export async function runMainAnalyzerJob(
               for (const order of recordRef.chapterHints) {
                 if (order.excluded) continue;
                 const arr = sentencesByChapter.get(order.id) ?? cachedChapters[order.id];
-                if (arr) running.push(...arr);
+                /* R8: a take captured before a Phase-0b re-mint still carries the old
+                   id, which may now be a user's row. */
+                if (arr) running.push(...remapSentenceIds(arr, remintIdMap));
               }
               return running;
             },

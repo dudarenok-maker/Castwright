@@ -72,6 +72,24 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
+/* Passthrough; a test may observe each per-chapter roll (`planned`: was the plan on
+   disk when the roll was called). */
+const rollSpy = vi.hoisted(() => ({
+  isPlanned: undefined as undefined | (() => boolean),
+  after: undefined as undefined | ((planned: boolean) => void),
+}));
+vi.mock('../workspace/edits-roll.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/edits-roll.js')>();
+  return {
+    ...actual,
+    rollManuscriptEdits: async (...a: Parameters<typeof actual.rollManuscriptEdits>) => {
+      const planned = rollSpy.isPlanned?.() ?? false;
+      const out = await actual.rollManuscriptEdits(...a);
+      rollSpy.after?.(planned);
+      return out;
+    },
+  };
+});
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
   return { ...actual, retireCharacterId: vi.fn(actual.retireCharacterId) };
@@ -429,8 +447,15 @@ describe('#4031 main job: run start and cache classification', () => {
       );
     });
     let preplanTakes = 0;
-    setPhase1Hook(() => {
+    /* Chapter 3's take is held until the re-mint is on disk (bounded), so at least
+       one roll is made after it, carrying the earlier chapters' pre-plan takes. */
+    const reminted = (): boolean =>
+      readCache(b.manuscriptId)?.matchPlan?.decisions[FRESH_ID]?.kind === 'new' &&
+      (readCache(b.manuscriptId)?.matchPlan?.decisions[FRESH_ID] as { id?: string }).id === `${FRESH_ID}-n1`;
+    setPhase1Hook(async (chapterId) => {
       release();
+      if (chapterId !== 3) return;
+      for (let i = 0; i < 100 && !reminted(); i++) await new Promise((r) => setTimeout(r, 20));
     });
     /* The analyzer answers in whatever id space the roster it was given uses: the
        raw id before the plan, the re-minted one after. */
@@ -439,8 +464,32 @@ describe('#4031 main job: run start and cache classification', () => {
       preplanTakes += 1;
       return FRESH_ID;
     };
-    await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: speaker });
+    /* Every per-chapter roll made once the plan exists: what manuscript-edits.json
+       says at that moment (a stopped run leaves exactly that on disk). */
+    const postPlanRolls: Array<Record<string, number>> = [];
+    const countLines = (): Record<string, number> =>
+      (readEdits(b.bookDir) as Array<{ characterId: string }>).reduce<Record<string, number>>(
+        (acc, s) => ({ ...acc, [s.characterId]: (acc[s.characterId] ?? 0) + 1 }),
+        {},
+      );
+    rollSpy.isPlanned = () => readCache(b.manuscriptId)?.matchPlan !== undefined;
+    rollSpy.after = (planned) => {
+      if (planned) postPlanRolls.push(countLines());
+    };
+    try {
+      await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: speaker });
+    } finally {
+      rollSpy.isPlanned = undefined;
+      rollSpy.after = undefined;
+    }
     expect(preplanTakes).toBeGreaterThan(0); // the scenario fired: a take predates the plan
+    /* The rolls follow the re-mint too: the pre-plan takes they carry never land on
+       the raw id, which is now the user's row. */
+    expect(postPlanRolls.length).toBeGreaterThan(0);
+    for (const rolled of postPlanRolls) {
+      expect(rolled[FRESH_ID]).toBeUndefined();
+      expect(rolled[`${FRESH_ID}-n1`]).toBeGreaterThan(0);
+    }
     const lines = (readEdits(b.bookDir) as Array<{ characterId: string }>).reduce<Record<string, number>>(
       (acc, s) => ({ ...acc, [s.characterId]: (acc[s.characterId] ?? 0) + 1 }),
       {},
