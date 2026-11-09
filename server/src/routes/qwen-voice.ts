@@ -288,10 +288,14 @@ export async function persistEmotionVariant(
    series or book-scoped mint re-keyed the row to `qwen-<uuid>` before the slot was
    recorded. The take follows the mint: its family is copied to `<new key>__<emotion>`
    (a copy of the base is already there, so the json's `baseRev` still matches it) and
-   the new name is returned; null when this row is not a mint's to follow. A mint is told
-   from a separation by the uuid's provenance: "Don't reuse" records every uuid it
-   mints or keeps (separated-voices.ts), a mint never does, so a separated row gets
-   neither the slot nor the file. A library slot's variants hang off the library key. */
+   the new name is returned; null when this row is not a mint's to follow.
+   A row is the mint's only while its new key still holds the base the take was made
+   on: `qwen-<uuid>.pt` byte-equal to `<landedBase>.pt`. A uuid alone proves nothing,
+   since a row also takes one by its own design (kept through a link-prior), a
+   redesign of the shared key replaces the base, and "Don't reuse" mints one: the
+   copy would overwrite a design the mint never wrote, so those rows keep what they
+   have. A library slot's variants hang off the library key. A new-key take that is
+   current against its base is never replaced by one that is not. */
 function variantOnMintedKey(
   c: CastCharacter,
   landedBase: string,
@@ -300,12 +304,29 @@ function variantOnMintedKey(
 ): string | null {
   if (landedBase !== `qwen-${c.voiceId ?? c.id}` || !c.voiceUuid || c.overrideTtsVoices?.qwen?.libraryUuid) return null;
   if (isSeparatedVoiceSync(c.voiceUuid)) return null;
-  const dest = `qwen-${c.voiceUuid}__${emotion}`;
+  const newKey = `qwen-${c.voiceUuid}`;
+  const landedPt = fileHash(memberPath(landedBase, '.pt'));
+  if (landedPt === null || landedPt !== fileHash(memberPath(newKey, '.pt'))) return null;
+  const dest = `${newKey}__${emotion}`;
+  const newRev = jsonField(newKey, 'rev');
+  const destCurrent = existsSync(memberPath(dest, '.pt')) && jsonField(dest, 'baseRev') === newRev;
+  if (destCurrent && jsonField(variantVoiceId, 'baseRev') !== newRev) return dest;
   const src = familyPrint(variantVoiceId);
   if (!familyPrint(dest).every((h, i) => h === src[i])) {
     refreshMintCopy(variantVoiceId, dest, { files: [], prints: new Map() });
   }
   return existsSync(memberPath(dest, '.pt')) ? dest : null;
+}
+
+/* A sidecar json's `rev` / `baseRev` (variant-base-rev.ts), read synchronously for a
+   decision inside a cast lock's sync transform; undefined when absent or unreadable. */
+function jsonField(key: string, field: 'rev' | 'baseRev'): string | undefined {
+  try {
+    const v = (JSON.parse(readFileSync(memberPath(key, '.json'), 'utf8')) as Record<string, unknown>)[field];
+    return typeof v === 'string' && v ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /* #3992 — the character vanished (deleted, merged away) between an early read and
