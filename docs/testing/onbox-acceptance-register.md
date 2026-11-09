@@ -6447,7 +6447,7 @@ The automated tests prove the decline-time separation against fixture workspaces
 >   - **19's first clause.** Don't reuse right after a design gave Book 2 its own uuid and `.pt`.
 >   - **19's hand-placed staging files.** A `qwen-staging-<21-character id>` family two hours old was removed at restart, and a fresh one was kept.
 > - **Failed, a known bug:**
->   - **14's render clause.** After Book 1's own redesign, the series mint gave Book 1 a new `voiceUuid`. Its variants still name the legacy `qwen-bliss__*` files, so its emotion lines resolve to a `qwen-<new>__<emotion>` file that does not exist. This is #4037, fixed by PR #4052.
+>   - **14's render clause.** After Book 1's own redesign, the series mint gave Book 1 a new `voiceUuid`. Its variants still name the legacy `qwen-bliss__*` files, so its emotion lines resolve to a `qwen-<new>__<emotion>` file that does not exist. This is #4037, fixed on `main` by PR #4061 after this run; the render clause is owed again on a build that has it.
 > - **Wording, owed to the owner:** step 11's "Book 1 still has no `voiceUuid` … also after Book 1 is redesigned" does not hold as written. Book 1's own redesign mints a uuid by design (`ensureCharacterVoiceUuid`), while Book 2 is unaffected. The clause probably means Book 2's redesign.
 > - **Not run:**
 >   - **6, 13 and 17:** each needs a real re-analysis. [Step 13 was amended by PR #4061 after this run, and steps 20 and 21 are new; the amended 13 and 20-21 are still owed.]
