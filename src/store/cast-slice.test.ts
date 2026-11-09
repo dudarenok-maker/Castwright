@@ -1970,3 +1970,39 @@ describe('selectCastTierByCharacterId (#1308)', () => {
     expect(selectCastTierByCharacterId(s)).toBe(selectCastTierByCharacterId(s));
   });
 });
+
+describe('castSlice — the per-book analysis era (plan 291, #4031)', () => {
+  it('latchAnalysisEra is per book and moves the epoch; clearAnalysisEra is a no-op once the epoch moved', () => {
+    let s = castSlice.reducer(baseState([]), castActions.latchAnalysisEra({ bookId: 'A' }));
+    s = castSlice.reducer(s, castActions.latchAnalysisEra({ bookId: 'A' }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+    expect(s.analysisEra?.B).toBeUndefined();
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 1 }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 2 }));
+    expect(s.analysisEra).toEqual({});
+  });
+
+  it('hydrateCharacters and the book-switch resets never clear or move an era', async () => {
+    const { configureStore } = await import('@reduxjs/toolkit');
+    const { manuscriptSlice } = await import('./manuscript-slice');
+    const { chaptersSlice } = await import('./chapters-slice');
+    const { changeLogSlice } = await import('./change-log-slice');
+    const { resetBookSlices } = await import('./reset-book-slices');
+    const store = configureStore({
+      reducer: {
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    store.dispatch(castActions.hydrateCharacters([makeChar('wren')]));
+    store.dispatch(castActions.hydrateCharacters([]));
+    /* The book switch (routes/index.tsx's resets call the same action). */
+    resetBookSlices(store.dispatch, 'B');
+    expect(store.getState().cast.analysisEra).toEqual({ A: { epoch: 2 } });
+  });
+});

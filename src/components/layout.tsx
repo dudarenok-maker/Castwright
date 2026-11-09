@@ -42,6 +42,7 @@ import {
   castWrittenSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { rehydrateCastAfterAnalysis } from '../store/cast-gate';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
@@ -2776,7 +2777,15 @@ export function Layout() {
               onMerge={
                 bookId
                   ? async (sourceId, targetId) => {
-                      const res = await api.mergeCharacters({ bookId, sourceId, targetId });
+                      let res;
+                      try {
+                        res = await api.mergeCharacters({ bookId, sourceId, targetId });
+                      } catch (err) {
+                        /* Plan 291 (C3) — a failed merge may have finished its
+                           other writes: re-read the cast. */
+                        void dispatch(rehydrateCastAfterAnalysis(bookId));
+                        throw err;
+                      }
                       dispatch(castActions.applyMerge({ characters: res.characters }));
                       /* Source character has just disappeared from the cast — drop the
                drawer so React doesn't try to render a profile for a missing

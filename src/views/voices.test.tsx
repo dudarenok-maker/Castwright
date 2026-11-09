@@ -131,6 +131,8 @@ vi.mock('../lib/api', () => ({
     promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
       promoteToLibraryMock(args),
     listVoiceLibrary: () => Promise.resolve({ voices: [] }),
+    /* Plan 291 — a failed merge re-reads the cast once busy is clear. */
+    getBookBusy: () => Promise.resolve([]),
   },
 }));
 
@@ -1203,6 +1205,31 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     });
     /* Pill collapses on success — Selected label is gone. */
     expect(screen.queryByText(/^Selected$/)).toBeNull();
+  });
+
+  it('a rejected merge or accept re-hydrates the cast', async () => {
+    /* Plan 291 (C3) — a merge whose history write failed has finished its
+       other writes, then failed the request: the cast is re-read from disk. */
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mergeCharactersMock.mockRejectedValue(new Error('retirement failed'));
+    const onDisk: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'Lead', color: 'peach', aliases: ['Wren'] },
+    ];
+    getBookState.mockResolvedValue({ state: {}, cast: { characters: onDisk } } as unknown as BookStateResponse);
+    const store = makeMergeStore();
+    store.dispatch(manuscriptSlice.actions.resetForBook('b1'));
+    render(
+      <Provider store={store}>
+        <LibraryView library={libraryB1} />
+      </Provider>,
+    );
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    fireEvent.click(screen.getByRole('button', { name: 'Merge into Wren Sparrow' }));
+    await waitFor(() => expect(store.getState().cast.characters).toEqual(onDisk));
+    expect(getBookState).toHaveBeenCalledWith('b1');
+    err.mockRestore();
   });
 });
 

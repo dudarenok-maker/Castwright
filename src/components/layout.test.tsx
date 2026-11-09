@@ -59,6 +59,7 @@ const getChapterAudioPreviousMock = vi.fn();
 const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
 const getAnalysisStateMock = vi.fn();
+const mergeCharactersMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -183,6 +184,10 @@ vi.mock('../lib/api', async (importOriginal) => {
       setCastTier: vi.fn(async () => ({ updated: 0 })),
       /* #3570 — Layout loads the analyzer catalog at boot so endpoint labels resolve. */
       getAnalyzerModels: (...args: unknown[]) => getAnalyzerModelsMock(...args),
+      /* Plan 291 — the profile drawer's merge, and the busy check a failed
+         merge's re-read waits on. */
+      mergeCharacters: (...args: unknown[]) => mergeCharactersMock(...args),
+      getBookBusy: vi.fn(async () => []),
     },
     AnalysisError: class extends Error {},
     ExportIncompleteError: class extends Error {
@@ -253,10 +258,16 @@ vi.mock('../modals/profile-drawer', async () => {
     ...actual,
     ProfileDrawer: (p: Parameters<typeof actual.ProfileDrawer>[0]) =>
       profileDrawerStub.on ? (
-        <button
-          data-testid="mock-profile-save"
-          onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
-        />
+        <>
+          <button
+            data-testid="mock-profile-save"
+            onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
+          />
+          <button
+            data-testid="mock-profile-merge"
+            onClick={() => void p.onMerge?.(p.character.id, 'other').catch(() => {})}
+          />
+        </>
       ) : (
         <actual.ProfileDrawer {...p} />
       ),
@@ -5944,5 +5955,37 @@ describe('Layout — the stale-audio banner and the regenerate modal agree on ex
     const store = await saveVoiceChange([eliza(1, true)]);
     expect(store.getState().ui.staleAudio).toBeNull();
     expect(screen.queryByTestId('stale-audio-banner')).toBeNull();
+  });
+});
+
+describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291, #4031)', () => {
+  beforeEach(() => {
+    profileDrawerStub.on = true;
+  });
+  afterEach(() => {
+    profileDrawerStub.on = false;
+  });
+
+  it('a rejected merge or accept re-hydrates the cast', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    const reads = getBookStateMock.mock.calls.length;
+    /* The merge finished its writes and then failed the request (C3). */
+    const onDisk = [
+      { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' },
+      { id: 'kestrel', name: 'Kestrel', role: '', color: 'peach' },
+    ];
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null, { cast: { characters: onDisk } }));
+    mergeCharactersMock.mockRejectedValueOnce(new Error('retirement failed'));
+    act(() => {
+      store.dispatch(uiActions.setOpenProfileId('eliza'));
+    });
+    fireEvent.click(await screen.findByTestId('mock-profile-merge'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']));
+    expect(mergeCharactersMock).toHaveBeenCalledWith({ bookId: 'A', sourceId: 'eliza', targetId: 'other' });
+    expect(getBookStateMock.mock.calls.length).toBeGreaterThan(reads);
   });
 });

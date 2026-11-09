@@ -15,7 +15,7 @@
    the round-trip works for design fixtures and jsdom tests. */
 
 import type { Middleware } from '@reduxjs/toolkit';
-import type { CastState } from './cast-slice';
+import { castActions, type CastState } from './cast-slice';
 import type { ManuscriptState } from './manuscript-slice';
 import type { UiState } from './ui-slice';
 import type { ChangeLogState } from './change-log-slice';
@@ -24,6 +24,14 @@ import type { PutStateResponse, SliceRevision, StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 import { notificationsActions } from './notifications-slice';
 import { bookMetaActions, type EditableBookMeta, type EditableBookMetaField } from './book-meta-slice';
+import type { AnalysisStreamSnapshot } from './analysis-slice';
+import {
+  CAST_READ_ONLY_DEDUPE_KEY,
+  CAST_READ_ONLY_MESSAGE,
+  requestCastRehydrate,
+  selectCastReadOnly,
+  type BookBusyState,
+} from './book-busy-slice';
 
 /* Locally-typed shape of the store the middleware reads, declared without
    importing RootState to avoid a circular type reference back through the
@@ -40,6 +48,10 @@ interface PersistableRootState {
      decoupled from the settings slice's full shape (and tests that build a
      partial root state don't have to supply it). */
   settings?: { autosaveDebounceMs?: number };
+  /* Plan 291 — the cast gate's other two legs. Optional: a hand-built store
+     without them is never read-only. */
+  bookBusy?: BookBusyState;
+  analysis?: { activeStream: AnalysisStreamSnapshot | null };
 }
 
 const DEFAULT_DEBOUNCE_MS = 500;
@@ -314,6 +326,11 @@ function savedTitleOf(s: PersistableRootState, bookId: string): string | undefin
    it would drop a correct edit and leave the optimistic `saved[A]` /
    `lastCommitted` snapshot (#2230) claiming a save that never happened. */
 const BOOK_KEYED_RULES = new Set(['bookMeta/commitDraft']);
+
+/* Plan 291 (#4031, R3) — cast rules that mirror a write a server route has
+   already made (the alias routes write cast.json themselves). While the cast
+   is read-only they build nothing and raise no toast: the change WAS saved. */
+const ROUTE_BACKED_CAST_RULES = new Set(['cast/applyAddAlias', 'cast/applyRepointAlias']);
 
 /* Persisted action types, exported for tests only so a regression suite can
    loop over every rule (including ones added later). */
@@ -616,6 +633,26 @@ export const persistenceMiddleware: Middleware = (store) => {
             store.dispatch(bookMetaActions.markNeedsFullRead({ bookId, refused }));
             ok = false;
           }
+        } else if (slice === 'cast' && (err as { code?: unknown } | null)?.code === 'book_busy') {
+          /* Plan 291 (#4031, item 6) — an analysis job holds the book: the
+             server wrote nothing and will refuse every cast save until it
+             ends. Drop what is queued (the cast is read-only now), toast,
+             latch the era and ask the gate to re-read once the run is over.
+             The analysis copy when the busy cache lists it, else the
+             server's own sentence. Read before the latch, which drops the
+             book's busy entry. */
+          failures = 0;
+          for (const u of Array.from(box.keys())) box.delete(u);
+          const listed =
+            (store.getState() as PersistableRootState).bookBusy?.busyByBook?.[bookId]?.includes('analysis') ?? false;
+          const raw = err instanceof Error ? err.message : String(err);
+          toast(
+            listed ? CAST_READ_ONLY_MESSAGE : raw.replace(/^Book state PUT failed \(\d+\): /, ''),
+            listed ? CAST_READ_ONLY_DEDUPE_KEY : `cast-persist-busy:${bookId}`,
+          );
+          store.dispatch(castActions.latchAnalysisEra({ bookId }));
+          store.dispatch(requestCastRehydrate(bookId));
+          ok = false;
         } else if (PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err))) {
           /* A deliberate refusal (analysis running, path collision, consent): it
              will not change on a re-send. A book-meta commit whose entries all
@@ -818,6 +855,17 @@ export const persistenceMiddleware: Middleware = (store) => {
       console.warn(
         `[persist] dropped ${type}: slices hold book ${held}, stage is ${bookId} (#3624)`,
       );
+      return result;
+    }
+
+    /* Plan 291 (#4031), invariant 7 — while the book's cast is read-only (its
+       analysis runs, or its era is latched until a re-read), no cast rule
+       builds or queues anything. A whole-slice save would overwrite the run's
+       rows. One deduped toast says so; a mirror of a route's own write says
+       nothing (R3). The disabled controls are UX only: this is what makes it
+       correct. */
+    if (rule.slice === 'cast' && selectCastReadOnly(after, bookId)) {
+      if (!ROUTE_BACKED_CAST_RULES.has(type)) toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
       return result;
     }
 

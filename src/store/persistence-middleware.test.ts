@@ -16,6 +16,7 @@ import {
   learnSliceRevisions,
   landedFieldsSince,
   castWrittenSince,
+  PERSISTED_ACTION_TYPES,
   type BookFlushOutcome,
 } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
@@ -2781,6 +2782,90 @@ describe('castWrittenSince (#3916)', () => {
     expect(written(store, 'b1', seq)).toBe(true);
     store.dispatch(dropRetainedSaves('b1', true) as never);
     expect(written(store, 'b1', seq)).toBe(false);
+    err.mockRestore();
+  });
+});
+
+describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
+  const ROUTE_BACKED = ['cast/applyAddAlias', 'cast/applyRepointAlias'];
+  const readOnly = (overrides: Record<string, unknown> = {}) =>
+    baseState({ cast: { characters: [{ id: 'halloran' }], analysisEra: { 'book-1': { epoch: 1 } } }, ...overrides });
+  const dispatched = (store: ReturnType<typeof makeStore>) =>
+    (store.dispatch as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+  const toastsOf = (store: ReturnType<typeof makeStore>) =>
+    dispatched(store)
+      .filter((a) => a?.type === notificationsSlice.actions.pushToast.type)
+      .reduce(notificationsSlice.reducer, notificationsSlice.getInitialState()).toasts;
+
+  it('while read-only every non-route-backed cast rule builds nothing and raises one deduped toast', async () => {
+    const store = makeStore(readOnly());
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const rules = PERSISTED_ACTION_TYPES.filter((t) => t.startsWith('cast/') && !ROUTE_BACKED.includes(t));
+    expect(rules.length).toBeGreaterThan(5);
+    for (const type of rules) mw({ type });
+    await advance(5000);
+    expect(putBookState).not.toHaveBeenCalled();
+    expect(mw(castWrittenSince('book-1', 0))).toBe(false);
+    const pushes = dispatched(store).filter((a) => a?.type === notificationsSlice.actions.pushToast.type);
+    expect(pushes).toHaveLength(rules.length);
+    const toasts = toastsOf(store);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ message: "Re-analysis running — that change wasn't saved", dedupeKey: 'cast-read-only' });
+  });
+
+  it('mirror rules of route-backed writes raise no toast while read-only', async () => {
+    const store = makeStore(readOnly());
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    for (const type of ROUTE_BACKED) mw({ type });
+    await advance(5000);
+    expect(putBookState).not.toHaveBeenCalled();
+    expect(toastsOf(store)).toHaveLength(0);
+  });
+
+  it('a manuscript rule still saves while the cast is read-only', async () => {
+    const store = makeStore(readOnly());
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(600);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState.mock.calls[0][1].slice).toBe('manuscript');
+  });
+
+  it('a 409 book_busy cast PUT toasts, latches the era and starts one re-hydrate', async () => {
+    const busyErr = () =>
+      Object.assign(new Error('Book state PUT failed (409): This book is being analysed. Wait for it to finish.'), {
+        code: 'book_busy',
+      });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const listed of [true, false]) {
+      putBookState.mockReset();
+      rejectCapped(busyErr());
+      const state: Record<string, unknown> = baseState();
+      const store = makeStore(state);
+      const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+      mw({ type: 'cast/setCharacters' });
+      /* The unit was queued before this tab saw the analysis; a busy reply
+         listing it may land while the PUT is out. */
+      if (listed) state.bookBusy = { busyByBook: { 'book-1': ['analysis'] } };
+      const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<BookFlushOutcome>;
+      await advance(20000);
+      await expect(waited).resolves.toEqual({ failedSlices: ['cast'] });
+      /* Dropped, never re-sent. */
+      expect(putBookState).toHaveBeenCalledTimes(1);
+      expect(mw(castWrittenSince('book-1', Number.MAX_SAFE_INTEGER))).toBe(false);
+      const toasts = toastsOf(store);
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toBe(
+        listed ? "Re-analysis running — that change wasn't saved" : 'This book is being analysed. Wait for it to finish.',
+      );
+      const acts = dispatched(store);
+      expect(acts.filter((a) => a?.type === castActions.latchAnalysisEra.type)).toEqual([
+        castActions.latchAnalysisEra({ bookId: 'book-1' }),
+      ]);
+      expect(acts.filter((a) => a?.type === 'bookBusy/requestCastRehydrate')).toEqual([
+        { type: 'bookBusy/requestCastRehydrate', payload: 'book-1' },
+      ]);
+    }
     err.mockRestore();
   });
 });

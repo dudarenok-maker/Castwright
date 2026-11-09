@@ -60,6 +60,12 @@ vi.mock('../lib/api', () => ({
       resolution: 'history',
       resolvedCharacterId: 'marrow',
     }),
+    /* Plan 291 — the merge-suggestion accept, and the re-read a failed one
+       runs once busy is clear. */
+    listMergeSuggestions: vi.fn().mockResolvedValue([]),
+    acceptMergeSuggestion: vi.fn().mockResolvedValue(undefined),
+    getBookBusy: vi.fn().mockResolvedValue([]),
+    getBookState: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -4080,5 +4086,48 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
     );
     /* badge gone after reset */
     expect(screen.queryByTestId('tier-badge-qwenA')).toBeNull();
+  });
+});
+
+describe('CastView — a rejected merge-suggestion accept re-reads the cast (plan 291, #4031)', () => {
+  it('a rejected merge or accept re-hydrates the cast', async () => {
+    const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    vi.mocked(api.acceptMergeSuggestion).mockRejectedValueOnce(new Error('retirement failed'));
+    const onDisk: Character[] = [narrator];
+    vi.mocked(api.getBookState).mockResolvedValueOnce({ state: {}, cast: { characters: onDisk } } as never);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b_current', status: 'voices_pending' }));
+    store.dispatch(manuscriptSlice.actions.resetForBook('b_current'));
+    store.dispatch(castSlice.actions.hydrateCharacters([narrator, marrow]));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
+    await waitFor(() => expect(store.getState().cast.characters).toEqual(onDisk));
+    expect(api.getBookState).toHaveBeenCalledWith('b_current');
+    err.mockRestore();
   });
 });

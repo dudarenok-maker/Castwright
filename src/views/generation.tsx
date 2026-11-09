@@ -829,7 +829,7 @@ export function GenerationView({
           );
         },
         onCastUpdate: ({ characters }) => {
-          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters));
+          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters, { fromAnalysis: true, bookId }));
         },
         onThrottle: ({ model: throttleModel, waitMs, reason }) => {
           patchSubset(chapterId, {
@@ -850,7 +850,7 @@ export function GenerationView({
          chapter's sentences never reached manuscript.sentences and
          audio generation had nothing to synthesise. */
       if (isOpenBook()) {
-        dispatch(castActions.mergeCharacters(res.characters ?? []));
+        dispatch(castActions.mergeCharacters(res.characters ?? [], { fromAnalysis: true, bookId }));
         dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
         dispatch(manuscriptActions.hydrateFromAnalysis(res));
         /* #3435 — the chapter's analysis finished, unless the run flagged it. */
@@ -1171,7 +1171,7 @@ export function GenerationView({
           );
         },
         onCastUpdate: ({ characters }) => {
-          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters));
+          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters, { fromAnalysis: true, bookId }));
         },
         onThrottle: ({ model: throttleModel, waitMs, reason }) => {
           patchSubset(chapterId, {
@@ -1187,7 +1187,7 @@ export function GenerationView({
         },
       });
       if (isOpenBook()) {
-        dispatch(castActions.mergeCharacters(res.characters ?? []));
+        dispatch(castActions.mergeCharacters(res.characters ?? [], { fromAnalysis: true, bookId }));
         dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
         dispatch(manuscriptActions.hydrateFromAnalysis(res));
         /* #3435 — the chapter's analysis finished, unless the run flagged it. */

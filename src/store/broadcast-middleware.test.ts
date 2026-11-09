@@ -751,3 +751,64 @@ describe('broadcast-middleware sync:substage', () => {
     expect(store.getState().prosody.activeStreams.b2).toEqual({ progress: 2, label: 'y' });
   });
 });
+
+describe('broadcastMiddleware — another tab\'s analysis reaches the cast gate (plan 291, #4031)', () => {
+  it("another tab's applyExternalAnalysisSnapshot latches the open book's era", async () => {
+    vi.useFakeTimers();
+    const { api } = await import('../lib/api');
+    const busy = vi.spyOn(api, 'getBookBusy').mockResolvedValue(['analysis']);
+    const { castSlice } = await import('./cast-slice');
+    const { bookBusySlice } = await import('./book-busy-slice');
+    const { uiSlice, uiActions } = await import('./ui-slice');
+    const { manuscriptSlice } = await import('./manuscript-slice');
+    const { castGateMiddleware, selectCastReadOnly } = await import('./cast-gate');
+    const mock = makeMockChannel();
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        analysis: analysisSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+      middleware: (gd) =>
+        gd({ serializableCheck: false }).concat(
+          createBroadcastMiddleware({ channel: mock.channel, instanceId: 'self-tab-id' }),
+          castGateMiddleware,
+        ),
+    });
+    store.dispatch(uiActions.openBook({ id: 'book-X', status: 'voices_pending' }));
+    try {
+      /* Another book's snapshot latches nothing here. */
+      mock.channel.simulateInbound({
+        kind: 'sync:analysis',
+        instanceId: 'other-tab',
+        bookId: 'book-Y',
+        mode: 'full',
+        snapshot: { ...analysisSnap, bookId: 'book-Y', manuscriptId: 'm-Y' },
+      });
+      expect(store.getState().cast.analysisEra).toEqual({});
+      /* The open book's — even one already paused — latches its era. */
+      mock.channel.simulateInbound({
+        kind: 'sync:analysis',
+        instanceId: 'other-tab',
+        bookId: 'book-X',
+        mode: 'full',
+        snapshot: { ...analysisSnap, state: 'paused' },
+      });
+      expect(store.getState().cast.analysisEra?.['book-X']).toBeDefined();
+      expect(selectCastReadOnly(store.getState(), 'book-X')).toBe(true);
+      /* The other tab's clear does not release it: only a busy-gated re-read does. */
+      mock.channel.simulateInbound({ kind: 'sync:analysis', instanceId: 'other-tab', bookId: null, mode: 'clear', snapshot: null });
+      expect(selectCastReadOnly(store.getState(), 'book-X')).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(busy).toHaveBeenCalledWith('book-X');
+    } finally {
+      /* The gate's poll keeps backing off while the book stays gated. */
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      busy.mockRestore();
+    }
+  });
+});

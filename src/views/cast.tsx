@@ -47,6 +47,7 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { distinctDriftChapterCount } from '../store/revisions-slice';
+import { rehydrateCastAfterAnalysis } from '../store/cast-gate';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -1245,7 +1246,15 @@ export function CastView({
      local roster. Dismiss drops the card without merging. */
   async function handleMergeSuggestion(sourceId: string, targetId: string) {
     if (!bookId) return;
-    await api.acceptMergeSuggestion(bookId, sourceId, targetId);
+    try {
+      await api.acceptMergeSuggestion(bookId, sourceId, targetId);
+    } catch (err) {
+      /* Plan 291 (C3) — a failed accept may have finished its other writes:
+         re-read the cast, and keep the card. */
+      console.error('[cast] merge-suggestion accept failed', err);
+      void dispatch(rehydrateCastAfterAnalysis(bookId));
+      return;
+    }
     setMergeSuggestions((prev) =>
       prev.filter((s) => !(s.sourceId === sourceId && s.targetId === targetId)),
     );

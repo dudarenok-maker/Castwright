@@ -117,6 +117,21 @@ export interface CastState {
       the same reason as its sibling — selectors read it through a `?? {}`
       guard. */
   orphanedCharacterFallbacks?: Record<string, OrphanedCharacterFallback>;
+  /** Plan 291 (#4031) — bookId → the analysis era latched for that book. A
+      book with an era is read-only (store/cast-gate.ts) until a disk re-read
+      issued after its analysis ended clears it. Per book, so a book switch
+      never moves one book's era onto another, and `hydrateCharacters` never
+      touches it. `epoch` moves on every latch, so a re-read issued before the
+      latest analysis apply does not clear it. Optional like its siblings. */
+  analysisEra?: Record<string, { epoch: number }>;
+}
+
+/** Plan 291 (#4031, R5) — `mergeCharacters`' meta: `fromAnalysis` marks an
+    analysis snapshot apply, which latches the era of `bookId` (else of the
+    book the active analysis stream names, else of the open book). */
+export interface CastApplyMeta {
+  fromAnalysis?: boolean;
+  bookId?: string | null;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -129,6 +144,7 @@ const initialState: CastState = {
   characters: [],
   renderedFallbackByCharacter: {},
   orphanedCharacterFallbacks: {},
+  analysisEra: {},
 };
 
 export const castSlice = createSlice({
@@ -144,6 +160,20 @@ export const castSlice = createSlice({
        back to the server (#3395 pass 4). */
     hydrateCharacters: (s, a: PayloadAction<Character[]>) => {
       s.characters = a.payload;
+    },
+    /* Plan 291 (#4031) — latch `bookId`'s analysis era, or move its epoch.
+       Dispatched by the cast gate on an analysis apply, a running snapshot,
+       another tab's snapshot or a busy reply listing `analysis`, and by the
+       persistence middleware on a cast PUT answered 409 `book_busy`. */
+    latchAnalysisEra: (s, a: PayloadAction<{ bookId: string }>) => {
+      const eras = (s.analysisEra ??= {});
+      eras[a.payload.bookId] = { epoch: (eras[a.payload.bookId]?.epoch ?? 0) + 1 };
+    },
+    /* Clear `bookId`'s era, unless its epoch moved since the re-read that
+       clears it was issued. */
+    clearAnalysisEra: (s, a: PayloadAction<{ bookId: string; epoch: number }>) => {
+      const era = s.analysisEra?.[a.payload.bookId];
+      if (era && era.epoch === a.payload.epoch) delete s.analysisEra![a.payload.bookId];
     },
     /* fe-16 — overwrite the per-character render fallback map from the
        book-state GET. Hydrated alongside setCharacters on book open; the empty
@@ -378,25 +408,30 @@ export const castSlice = createSlice({
        user-locked voiceId / matchedFrom on existing entries survive a
        mid-analysis snapshot replacing them. New characters land at the
        end of the array in roster discovery order. */
-    mergeCharacters: (s, a: PayloadAction<Character[]>) => {
-      const incoming = a.payload;
-      if (!incoming?.length) return;
-      const byId = new Map(s.characters.map((c) => [c.id, c]));
-      const next: Character[] = [];
-      const seen = new Set<string>();
-      for (const inc of incoming) {
-        next.push(overlaySnapshotEntry(byId.get(inc.id), inc));
-        seen.add(inc.id);
-      }
-      /* Carry forward any locally-known characters the snapshot omitted.
-         REQUIRED for the generation-time SUBSET path (generation.tsx feeds
-         a single re-analysed chapter's characters here), which is a genuine
-         delta — dropping the untouched rows would wipe the rest of the cast.
-         The full-roster analysis live view uses `replaceLiveRoster` instead. */
-      for (const c of s.characters) {
-        if (!seen.has(c.id)) next.push(c);
-      }
-      s.characters = next;
+    /* Plan 291 — the meta's `fromAnalysis` marks it as an analysis apply
+       (all four generation.tsx sites). */
+    mergeCharacters: {
+      reducer: (s, a: PayloadAction<Character[], string, CastApplyMeta | undefined>) => {
+        const incoming = a.payload;
+        if (!incoming?.length) return;
+        const byId = new Map(s.characters.map((c) => [c.id, c]));
+        const next: Character[] = [];
+        const seen = new Set<string>();
+        for (const inc of incoming) {
+          next.push(overlaySnapshotEntry(byId.get(inc.id), inc));
+          seen.add(inc.id);
+        }
+        /* Carry forward any locally-known characters the snapshot omitted.
+           REQUIRED for the generation-time SUBSET path (generation.tsx feeds
+           a single re-analysed chapter's characters here), which is a genuine
+           delta — dropping the untouched rows would wipe the rest of the cast.
+           The full-roster analysis live view uses `replaceLiveRoster` instead. */
+        for (const c of s.characters) {
+          if (!seen.has(c.id)) next.push(c);
+        }
+        s.characters = next;
+      },
+      prepare: (characters: Character[], meta?: CastApplyMeta) => ({ payload: characters, meta }),
     },
     /* Full-roster snapshot from Phase-0a live cast detection (analysis view).
        Unlike `mergeCharacters`, this REPLACES the roster with the snapshot —

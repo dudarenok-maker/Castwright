@@ -46,6 +46,7 @@ import {
 import { promoteCharacterVoice } from '../store/voice-library-slice';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
+import { rehydrateCastAfterAnalysis } from '../store/cast-gate';
 import {
   DuplicateReviewModal,
   type DuplicateReviewPair,
@@ -1014,6 +1015,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       );
     } catch (err) {
       console.error('[voices] merge failed', err);
+      /* Plan 291 (C3) — a failed merge may have finished its other writes:
+         re-read the cast. */
+      void dispatch(rehydrateCastAfterAnalysis(bookId));
       dispatch(
         notificationsActions.pushToast({
           kind: 'error',
