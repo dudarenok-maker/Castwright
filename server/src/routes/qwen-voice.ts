@@ -45,7 +45,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { jitteredDelayMs, renameWithRetry } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
-import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
+import { forgetSeparatedVoice, isSeparatedVoice, isSeparatedVoiceSync, recordSeparatedVoice } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -188,13 +188,13 @@ export async function persistEmotionVariant(
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
-  const addVariant = (c: CastCharacter, baseVoiceId: string): CastCharacter => {
+  const addVariant = (c: CastCharacter, baseVoiceId: string, slotName = variantVoiceId): CastCharacter => {
     const map = { ...(c.overrideTtsVoices ?? {}) };
     const qwen = map.qwen ?? { name: baseVoiceId };
     map.qwen = {
       ...qwen,
       name: qwen.name ?? baseVoiceId,
-      variants: { ...(qwen.variants ?? {}), [emotion]: { name: variantVoiceId } },
+      variants: { ...(qwen.variants ?? {}), [emotion]: { name: slotName } },
     };
     return { ...c, overrideTtsVoices: map };
   };
@@ -239,8 +239,10 @@ export async function persistEmotionVariant(
          different base (a declined, forked row still shares the voiceId). Compared
          by storage key, so a legacy row (no uuid) and a separated one never trade
          slots either (P10-2): render re-derives `<row's key>__<emotion>`. */
-      if (qwenStorageKey(c, c.id) !== baseVoiceId) return c;
-      return addVariant(c, baseVoiceId);
+      if (qwenStorageKey(c, c.id) === baseVoiceId) return addVariant(c, baseVoiceId);
+      /* #4037 — a mint re-keyed this row after the variant landed on the legacy key. */
+      const followed = variantOnMintedKey(c, baseVoiceId, emotion, variantVoiceId);
+      return followed ? addVariant(c, qwenStorageKey(c, c.id), followed) : c;
     });
     if (residualSkip) {
       console.warn(
@@ -272,11 +274,38 @@ export async function persistEmotionVariant(
     const freshCharacter = fresh.characters[idx];
     if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
-    if (baseVoiceId !== landedBase) return 'notFound'; // moved since the variant landed
-    fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
+    /* #4037 — moved since the variant landed: by a mint (the take follows it) or by
+       anything else (not this row's). */
+    const followed = baseVoiceId === landedBase ? variantVoiceId : variantOnMintedKey(freshCharacter, landedBase, emotion, variantVoiceId);
+    if (!followed) return 'notFound';
+    fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId, followed);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
     return 'applied';
   });
+}
+
+/* #4037 — a variant landed on the legacy key `landedBase` (`qwen-<voiceId>`), and a
+   series or book-scoped mint re-keyed the row to `qwen-<uuid>` before the slot was
+   recorded. The take follows the mint: its family is copied to `<new key>__<emotion>`
+   (a copy of the base is already there, so the json's `baseRev` still matches it) and
+   the new name is returned; null when this row is not a mint's to follow. A mint is told
+   from a separation by the uuid's provenance: "Don't reuse" records every uuid it
+   mints or keeps (separated-voices.ts), a mint never does, so a separated row gets
+   neither the slot nor the file. A library slot's variants hang off the library key. */
+function variantOnMintedKey(
+  c: CastCharacter,
+  landedBase: string,
+  emotion: string,
+  variantVoiceId: string,
+): string | null {
+  if (landedBase !== `qwen-${c.voiceId ?? c.id}` || !c.voiceUuid || c.overrideTtsVoices?.qwen?.libraryUuid) return null;
+  if (isSeparatedVoiceSync(c.voiceUuid)) return null;
+  const dest = `qwen-${c.voiceUuid}__${emotion}`;
+  const src = familyPrint(variantVoiceId);
+  if (!familyPrint(dest).every((h, i) => h === src[i])) {
+    refreshMintCopy(variantVoiceId, dest, { files: [], prints: new Map() });
+  }
+  return existsSync(memberPath(dest, '.pt')) ? dest : null;
 }
 
 /* #3992 — the character vanished (deleted, merged away) between an early read and
@@ -2015,7 +2044,11 @@ qwenVoiceRouter.post(
            pre-existing disposition explicit rather than changing it. Only
            'skippedClone' is new, deliberate refusal-reporting behaviour;
            'notFound' intentionally keeps today's behaviour, named rather
-           than left as a silent fallthrough. */
+           than left as a silent fallthrough. #4037: the answer stays 200, but a
+           take no row recorded is logged, not silent. */
+        if (outcome === 'notFound') {
+          console.warn(`[qwen-voice] ${voiceId} was designed for ${characterId} but no row in scope recorded it.`);
+        }
       }
       /* srv-43 — return voiceUuid so the drawer can stamp it locally without
          a refetch; the /sample player needs it to hit the uuid-keyed cache. */

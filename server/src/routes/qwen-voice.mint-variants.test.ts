@@ -573,3 +573,86 @@ describe('a refresh of the mint copy replaces the family whole, or not at all (#
     expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp') || f.includes('.bak'))).toEqual([]);
   });
 });
+
+/* A variant that LANDED on the legacy key while a mint walked (its family planted after the
+   copy loops, persist not yet called) and is recorded only after the walk re-keyed
+   the rows: the real route order, persist trailing the walk. */
+describe('a variant recorded after the mint re-keyed the rows follows the mint (#4037)', () => {
+  const plantLanding = (emotion: string) => {
+    plant(`qwen-v_wren__${emotion}.pt`, `${emotion.toUpperCase()}-PT`);
+    plantJson(`qwen-v_wren__${emotion}.json`, { baseRev: 'R1' });
+  };
+  const mintWithLanding = async (emotions: string[]) => {
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    let fired = false;
+    /* after the copy loops, as the walk's first stamp is about to land */
+    castWritten.fn = () => {
+      if (fired) return;
+      fired = true;
+      emotions.forEach(plantLanding);
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    return uuid;
+  };
+  const series = { author: AUTHOR, series: SERIES };
+
+  it('T20: the take lands on every linked book at the new key, whole and current', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    expect(existsSync(file(`qwen-${uuid}__sad.pt`))).toBe(false); // nothing copied it: persist has not run
+    expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    for (const t of ['Book One', 'Book Two']) {
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+      expect(await keptSlot(t, 'sad')).toBe(true);
+    }
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-PT');
+    expect(JSON.parse(readFileSync(file(`qwen-${uuid}__sad.json`), 'utf8')).baseRev).toBe('R1');
+    expect(existsSync(file('qwen-v_wren__sad.pt'))).toBe(true);
+  });
+
+  it('T21: a book that "Don\'t reuse" separated gets no take and no file', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
+    await recordSeparatedVoice('u_sep');
+    const cast = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+    cast.characters[0] = { ...cast.characters[0], voiceUuid: 'u_sep', declinedVoiceFrom: ['b_Book Two'] };
+    writeFileSync(castPath('Book One'), JSON.stringify(cast));
+    expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(rowOf('Book One').overrideTtsVoices?.qwen?.variants?.sad).toBeUndefined();
+    expect(existsSync(file('qwen-u_sep__sad.pt'))).toBe(false);
+  });
+
+  it('T22: interleaved persists give every linked book every take', async () => {
+    seed(withVariants({}));
+    writeBook('Book Three', [{ ...legacy }]);
+    const uuid = await mintWithLanding(['sad', 'excited']);
+    const outs = await Promise.all([
+      persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-v_wren__sad', series),
+      persistVariant(bookDir('Book Three'), 'wren', 'excited', 'qwen-v_wren__excited', series),
+    ]);
+    expect(outs).toEqual(['applied', 'applied']);
+    for (const t of ['Book One', 'Book Two', 'Book Three']) {
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.excited.name).toBe(`qwen-${uuid}__excited`);
+    }
+    expect(readFileSync(file(`qwen-${uuid}__excited.pt`), 'utf8')).toBe('EXCITED-PT');
+  });
+
+  it('T23: a standalone book follows its own mint too', async () => {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    mkdirSync(qwenDir(), { recursive: true });
+    writeBook('Solo', [withVariants({})], { standalone: true });
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    const uuid = (await ensure(bookDir('Solo', SOLO_SERIES), 'wren'))!;
+    plantLanding('sad');
+    expect(await persistVariant(bookDir('Solo', SOLO_SERIES), 'wren', 'sad', 'qwen-v_wren__sad')).toBe('applied');
+    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-PT');
+  });
+});
