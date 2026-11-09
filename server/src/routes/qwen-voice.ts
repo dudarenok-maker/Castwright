@@ -28,8 +28,8 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { constants as fsConstants } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { constants as fsConstants, copyFileSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
@@ -370,6 +370,34 @@ const removeFiles = async (files: string[]): Promise<void> => {
   await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
 };
 
+/* #4037 — the members of one emotion variant family (`<key>__<emotion><member>`),
+   and a print of what they hold: each member's sha256, null when absent. A content
+   hash, not size+mtime (a redesign can rewrite a member with same-size bytes inside
+   one mtime tick) and not savingKeys' `begun` (only a write made through whileSaving
+   in this process bumps it). */
+const VARIANT_MEMBERS = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
+type FamilyPrint = Array<string | null>;
+const NO_FILES: FamilyPrint = VARIANT_MEMBERS.map(() => null);
+const memberPath = (key: string, member: string): string => join(qwenVoicesDir(), `${key}${member}`);
+function fileHash(path: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
+}
+const familyPrint = (key: string): FamilyPrint => VARIANT_MEMBERS.map((m) => fileHash(memberPath(key, m)));
+
+/* #4037 — the mint's copies: every file it wrote (the caller's rollback list), and
+   per new-key variant family the print of what the mint wrote there, so a step under
+   a book's cast lock can tell its own copy (to refresh) from a design something else
+   wrote on the new key (which stands). */
+interface MintCopies {
+  files: string[];
+  prints: Map<string, FamilyPrint>;
+}
+
 /* #4037 — copy every emotion variant family of the legacy key `oldKey`
    (`<oldKey>__<emotion>.pt|.json|__1.7b.pt|__master.wav`) to `<newKey>__<emotion>.*`,
    for the series mint only (a separation drops its variants on purpose). The
@@ -377,16 +405,14 @@ const removeFiles = async (files: string[]): Promise<void> => {
    `__1.7b` / `__master` suffixes are never taken for one. Same contract as
    copyBaseFamily: returns the files written; any failure removes what this call
    copied and rethrows, so the caller never stamps a row whose variants are
-   half-copied. */
-async function copyVariantFamilies(oldKey: string, newKey: string): Promise<string[]> {
-  const dir = dirname(qwenVoicePtPath(oldKey));
-  const suffixes = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
-  const names = new Set<string>();
+   half-copied. Each member's hash is recorded in `prints` right after its copy. */
+async function copyVariantFamilies(oldKey: string, newKey: string, prints: MintCopies['prints']): Promise<string[]> {
+  const listed: Array<[string, string]> = [];
   try {
-    const present = new Set(await readdir(dir));
+    const present = new Set(await readdir(qwenVoicesDir()));
     for (const e of VARIANT_EMOTIONS) {
-      for (const s of suffixes) {
-        if (present.has(`${oldKey}__${e}${s}`)) names.add(`${oldKey}__${e}${s}`);
+      for (const m of VARIANT_MEMBERS) {
+        if (present.has(`${oldKey}__${e}${m}`)) listed.push([e, m]);
       }
     }
   } catch (e) {
@@ -394,29 +420,77 @@ async function copyVariantFamilies(oldKey: string, newKey: string): Promise<stri
     throw e;
   }
   const copied: string[] = [];
-  for (const name of names) {
-    const dest = join(dir, `${newKey}${name.slice(oldKey.length)}`);
+  for (const [e, m] of listed) {
+    const dest = memberPath(`${newKey}__${e}`, m);
     try {
-      await copyFile(join(dir, name), dest, fsConstants.COPYFILE_EXCL);
+      await copyFile(memberPath(`${oldKey}__${e}`, m), dest, fsConstants.COPYFILE_EXCL);
       copied.push(dest);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
       await removeFiles(copied);
-      throw e;
+      throw err;
     }
+    const print = prints.get(`${newKey}__${e}`) ?? [...NO_FILES];
+    print[VARIANT_MEMBERS.indexOf(m)] = fileHash(dest);
+    prints.set(`${newKey}__${e}`, print);
   }
   return copied;
 }
 
-/* #4037 — point a stamped row's stored variant names at the new key. */
-function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCharacter {
+/* #4037 — replace the mint's own copy at `destKey` with what `srcKey` holds now,
+   synchronously (the caller is inside a cast lock's sync transform). Each member the
+   source has is copied to a temp name first, so a failure leaves the earlier copy
+   whole (another stamped book may already point at it); then the temps replace it.
+   A member the source lacks is kept, never removed: a landing renames `.pt`/`.json`/
+   `__master.wav` over the old file (#4040) and drops only the `__1.7b` prompt, which
+   no variant render reads (pickEmotionVariantVoice answers the base on 1.7B), so an
+   absence says nothing about the variant. Every file written is recorded in `copies`
+   for the caller's rollback. */
+function refreshMintCopy(srcKey: string, destKey: string, copies: MintCopies): void {
+  const staged: Array<{ to: string; tmp: string }> = [];
+  try {
+    for (const m of VARIANT_MEMBERS) {
+      const to = memberPath(destKey, m);
+      const tmp = `${to}.mint-${nanoid(6)}.tmp`;
+      try {
+        copyFileSync(memberPath(srcKey, m), tmp, fsConstants.COPYFILE_EXCL);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // source absent
+        throw err;
+      }
+      staged.push({ to, tmp });
+    }
+    for (const { to, tmp } of staged) {
+      renameSync(tmp, to);
+      if (!copies.files.includes(to)) copies.files.push(to);
+    }
+  } finally {
+    for (const { tmp } of staged) rmSync(tmp, { force: true });
+  }
+  copies.prints.set(destKey, familyPrint(destKey));
+}
+
+/* #4037 — point a stamped row's stored variant names at the new key, decided from
+   the row as read under its book's cast lock (cast-lock rule 2). A slot named
+   `<from>__<emotion>` holds, at this step, a copy of what that legacy name holds now:
+   a variant landed or redesigned on another book of the series after the mint's copy
+   loop is copied over the mint's own copy here (refreshMintCopy). A new-key family the
+   mint did not write is another design, which stands. Such a slot is renamed only once
+   `<to>__<emotion>.pt` exists; with no file under either key it keeps its name. */
+function withRekeyedVariants(c: CastCharacter, from: string, to: string, copies: MintCopies): CastCharacter {
   const qwen = c.overrideTtsVoices?.qwen;
   if (!qwen?.variants) return c;
   const variants = Object.fromEntries(
-    Object.entries(qwen.variants).map(([e, v]) => [
-      e,
-      v && v.name.startsWith(`${from}__`) ? { ...v, name: `${to}${v.name.slice(from.length)}` } : v,
-    ]),
+    Object.entries(qwen.variants).map(([e, v]) => {
+      if (!v || !v.name.startsWith(`${from}__`)) return [e, v];
+      const dest = `${to}${v.name.slice(from.length)}`;
+      if (v.name !== `${from}__${e}` || !(VARIANT_EMOTIONS as string[]).includes(e)) return [e, { ...v, name: dest }];
+      const recorded = copies.prints.get(dest) ?? NO_FILES;
+      const ownCopy = familyPrint(dest).every((h, i) => h === recorded[i]);
+      const changed = familyPrint(v.name).some((h, i) => h !== null && h !== recorded[i]);
+      if (ownCopy && changed) refreshMintCopy(v.name, dest, copies);
+      return [e, existsSync(memberPath(dest, '.pt')) ? { ...v, name: dest } : v];
+    }),
   );
   return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants } } };
 }
@@ -741,7 +815,7 @@ async function stampOwnRow(
   characterId: string,
   uuid: string,
   sameBookLinkId?: string,
-  rekey?: { from: string; to: string },
+  rekey?: { from: string; to: string; copies: MintCopies },
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -754,7 +828,7 @@ async function stampOwnRow(
       if (c.voiceUuid) continue;
       if (i === idx || (sameBookLinkId !== undefined && (c.voiceId ?? c.id) === sameBookLinkId)) {
         const stamped = { ...c, voiceUuid: uuid };
-        fresh.characters[i] = rekey ? withRekeyedVariants(stamped, rekey.from, rekey.to) : stamped;
+        fresh.characters[i] = rekey ? withRekeyedVariants(stamped, rekey.from, rekey.to, rekey.copies) : stamped;
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -816,9 +890,12 @@ export async function ensureCharacterVoiceUuid(
         return stampOwnRow(bookDir, characterId, uuid);
       }
       /* #4037 — the emotion variants travel with the base, before any row is stamped
-         (a failed copy removes its own files; the base copy goes too). */
+         (a failed copy removes its own files; the base copy goes too). `copies.files`
+         is `copied` itself, so a copy made later under a book's cast lock is rolled
+         back with the rest. */
+      const copies: MintCopies = { files: copied, prints: new Map() };
       try {
-        copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
+        copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`, copies.prints)));
       } catch (e) {
         await removeFiles(copied);
         throw e;
@@ -830,7 +907,7 @@ export async function ensureCharacterVoiceUuid(
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
         stampedAny = true;
-        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
+        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`, copies);
       };
       try {
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
@@ -848,7 +925,7 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId, { from: legacyKey, to: `qwen-${uuid}` });
+        return await stampOwnRow(bookDir, characterId, uuid, linkId, { from: legacyKey, to: `qwen-${uuid}`, copies });
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;
@@ -880,9 +957,10 @@ export async function ensureCharacterVoiceUuid(
     return whileSaving(`qwen-${uuid}`, async () => {
       const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
       const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
+      const copies: MintCopies = { files: copied, prints: new Map() };
       if (hasBase) {
         try {
-          copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
+          copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`, copies.prints)));
         } catch (e) {
           await removeFiles(copied);
           throw e;
@@ -894,7 +972,9 @@ export async function ensureCharacterVoiceUuid(
       for (let i = 0; i < freshCast.characters.length; i++) {
         if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
           const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
-          freshCast.characters[i] = hasBase ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`) : stamped;
+          freshCast.characters[i] = hasBase
+            ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`, copies)
+            : stamped;
           dirty = true;
         }
       }
