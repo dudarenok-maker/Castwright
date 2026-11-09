@@ -119,6 +119,17 @@ export interface CastState {
   orphanedCharacterFallbacks?: Record<string, OrphanedCharacterFallback>;
 }
 
+/* #4067 — the client half of the server's `withForkedUuid` (qwen-voice.ts): the
+   row takes the new uuid, loses its qwen `variants`, and its qwen slot name
+   follows to `qwen-<uuid>` unless a `libraryUuid` keys it. Runs on an Immer draft. */
+function forkRow(c: Character, voiceUuid: string): void {
+  c.voiceUuid = voiceUuid;
+  const qwen = c.overrideTtsVoices?.qwen;
+  if (!qwen) return;
+  delete qwen.variants;
+  if (qwen.name && !qwen.libraryUuid) qwen.name = `qwen-${voiceUuid}`;
+}
+
 /* Empty initial state — the fixture seed (`initialCharacters` from
    ../data/characters) used to live here so the demo had something to show,
    but that meant a real book's Cast view briefly displayed fixture
@@ -300,11 +311,14 @@ export const castSlice = createSlice({
       const { characterId, voiceUuid } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
-      /* #3992 — a CHANGED uuid is a fork: the server dropped the row's qwen
-         `variants` with it (their `<uuid>__<emotion>` files belong to the old
-         uuid), so the autosave spreads must not write the stale slots back. */
-      if (c.voiceUuid && c.voiceUuid !== voiceUuid && c.overrideTtsVoices?.qwen?.variants) {
-        delete c.overrideTtsVoices.qwen.variants;
+      /* #3992 — a CHANGED uuid is a fork (the design-time separation of a
+         declined row): the server dropped the row's qwen `variants` with it
+         (their `<uuid>__<emotion>` files belong to the old uuid) and renamed its
+         slot, so the autosave spreads must not write either back (#4067). A first
+         mint (no uuid before) is not a fork: the server keeps the legacy name. */
+      if (c.voiceUuid && c.voiceUuid !== voiceUuid) {
+        forkRow(c, voiceUuid);
+        return;
       }
       c.voiceUuid = voiceUuid;
     },
@@ -315,8 +329,10 @@ export const castSlice = createSlice({
        changed-uuid test misses it), and its qwen slot name follows to
        `qwen-<uuid>`, the key the base family was copied to. A slot with a
        `libraryUuid` is keyed by that, so its name stays. Local-only, no persist
-       rule, like setCharacterVoiceUuid; separate from it because that reducer
-       also mirrors a first mint, where the server keeps the legacy name. */
+       rule, like setCharacterVoiceUuid, which does the same for a changed uuid
+       (the design-time separation); this one is for a row that may have had no
+       uuid before, which setCharacterVoiceUuid treats as a first mint and keeps
+       the legacy name. */
     forkCharacterVoiceUuid: (
       s,
       a: PayloadAction<{ characterId: string; voiceUuid: string }>,
@@ -324,11 +340,7 @@ export const castSlice = createSlice({
       const { characterId, voiceUuid } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
-      c.voiceUuid = voiceUuid;
-      const qwen = c.overrideTtsVoices?.qwen;
-      if (!qwen) return;
-      delete qwen.variants;
-      if (qwen.name && !qwen.libraryUuid) qwen.name = `qwen-${voiceUuid}`;
+      forkRow(c, voiceUuid);
     },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
        badge + count update live (the DELETE route already removed it from

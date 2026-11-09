@@ -1917,14 +1917,27 @@ describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => 
       } as never),
     ]);
 
-  it('a CHANGED uuid drops the qwen variants the server dropped with the fork', () => {
+  it('a CHANGED uuid drops the qwen variants and renames the slot, as the server fork did (#4067)', () => {
     const next = castSlice.reducer(
       forkedRow(),
       castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_forked' }),
     );
     expect(next.characters[0].voiceUuid).toBe('u_forked');
     expect(next.characters[0].overrideTtsVoices!.qwen!.variants).toBeUndefined();
-    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u_shared');
+    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u_forked');
+  });
+
+  it('a CHANGED uuid leaves a libraryUuid slot’s name alone (#4067)', () => {
+    const next = castSlice.reducer(
+      baseState([
+        makeChar('wren', {
+          voiceUuid: 'u_shared',
+          overrideTtsVoices: { qwen: { name: 'qwen-lib_1', libraryUuid: 'lib_1' } },
+        } as never),
+      ]),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_forked' }),
+    );
+    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-lib_1');
   });
 
   it('the same uuid, a first mint, or an unknown character leaves the variants alone', () => {
@@ -1943,6 +1956,7 @@ describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => 
       castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_new' }),
     );
     expect(Object.keys(minted.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
+    expect(minted.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-v'); // a first mint keeps the legacy name
 
     const ghost = castSlice.reducer(
       forkedRow(),

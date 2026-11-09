@@ -44,8 +44,11 @@ const startCalls: StartCall[] = [];
 const subscribeCalls: SubscribeCall[] = [];
 const singleStartCalls: SingleStartCall[] = [];
 
+const { putBookState } = vi.hoisted(() => ({ putBookState: vi.fn(async () => {}) }));
+
 vi.mock('../lib/api', () => ({
   api: {
+    putBookState,
     startCastDesign: (
       bookId: string,
       {
@@ -908,5 +911,91 @@ describe('castDesignMiddleware', () => {
     expect(toastActions).toHaveLength(1);
     expect(toastActions[0].payload.kind).toBe('error');
     expect(toastActions[0].payload.message).toMatch(/already running/);
+  });
+});
+
+/* #4067 — the design-time separation of a declined row renames its qwen slot on
+   disk; through the REAL persistence middleware, the next whole-roster cast PUT
+   must carry the new name, not `qwen-<old>` (the server's preserve guard lets an
+   incoming slot win when the uuid matches). */
+describe('a design that separates a declined row, then a later cast save (#4067)', () => {
+  const declined = () =>
+    ({
+      id: 'c1',
+      name: 'Aria',
+      voiceUuid: 'u_shared',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+      },
+    }) as never;
+
+  async function designThenSave(cancel: boolean) {
+    const { persistenceMiddleware, flushBookPersistence } = await import('./persistence-middleware');
+    const { uiSlice } = await import('./ui-slice');
+    const initialUi = uiSlice.getInitialState();
+    const store = configureStore({
+      reducer: {
+        castDesign: castDesignSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        ui: { ...initialUi, stage: { kind: 'ready', bookId: 'b1', view: 'cast' } } as ReturnType<
+          typeof uiSlice.getInitialState
+        >,
+      },
+      middleware: (g) =>
+        g({ serializableCheck: false }).concat(persistenceMiddleware, createCastDesignMiddleware()),
+    });
+    openBook(store as never, 'b1');
+    store.dispatch(castSlice.actions.setCharacters([declined()]));
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    const { cb } = singleStartCalls[0];
+    cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'qwen-u_forked-preview',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+      voiceUuid: 'u_forked',
+    });
+    if (!cancel) cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u_forked', voiceUuid: 'u_forked' });
+    putBookState.mockClear();
+    store.dispatch(castSlice.actions.lockVoice('c1'));
+    await store.dispatch(flushBookPersistence('b1') as never);
+    const puts = (putBookState.mock.calls as unknown as [string, { slice: string; patch: unknown }][]).filter(
+      (c) => c[1].slice === 'cast',
+    );
+    expect(puts.length).toBeGreaterThan(0);
+    const patch = puts[puts.length - 1][1].patch as {
+      characters: { id: string; voiceUuid?: string; overrideTtsVoices?: { qwen?: { name: string; variants?: unknown } } }[];
+    };
+    return patch.characters.find((c) => c.id === 'c1')!;
+  }
+
+  it('preview cancelled: the next PUT carries qwen-<new> and no stale variants', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(true);
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('design approved: the next PUT carries the server-reported voice id', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(false);
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
   });
 });
