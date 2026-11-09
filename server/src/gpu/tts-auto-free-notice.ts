@@ -14,8 +14,12 @@
 export type TtsAutoFreePurpose = 'voice design' | 'Quality render';
 
 export interface TtsAutoFreeNotice {
-  /** Monotonic per-event counter, so the frontend shows each event once even
-      when two events free the same models. */
+  /** Identifies this server process. `seq` restarts at 1 after a Node restart,
+      so the frontend compares `bootId` + `seq`, never `seq` alone — otherwise
+      the first event after a restart can look like the one already shown. */
+  bootId: string;
+  /** Monotonic per-event counter (within one `bootId`), so the frontend shows
+      each event once even when two events free the same models. */
   seq: number;
   /** Display names of what was unloaded, e.g. ['Qwen 0.6B', 'Kokoro']. */
   models: string[];
@@ -24,13 +28,15 @@ export interface TtsAutoFreeNotice {
   at: string;
 }
 
+/* Process-start timestamp: unique per Node process without an import. */
+const bootId = new Date().toISOString();
 let seq = 0;
 let last: TtsAutoFreeNotice | null = null;
 
 export function recordTtsAutoFree(models: string[], purpose: TtsAutoFreePurpose): void {
   if (models.length === 0) return;
   seq += 1;
-  last = { seq, models: [...models], purpose, at: new Date().toISOString() };
+  last = { bootId, seq, models: [...models], purpose, at: new Date().toISOString() };
 }
 
 export function getLastTtsAutoFree(): TtsAutoFreeNotice | null {

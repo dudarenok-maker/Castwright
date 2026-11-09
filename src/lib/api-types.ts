@@ -6856,7 +6856,9 @@ export interface components {
             lastTtsAutoFree?: components["schemas"]["TtsAutoFreeNotice"] | null;
         };
         TtsAutoFreeNotice: {
-            /** @description Monotonic per-event counter. */
+            /** @description Identifies the server process; `seq` restarts at 1 after a restart, so the frontend compares bootId + seq. */
+            bootId: string;
+            /** @description Monotonic per-event counter within one bootId. */
             seq: number;
             /** @description Display names of what was unloaded, e.g. ['Qwen 0.6B', 'Kokoro']. */
             models: string[];

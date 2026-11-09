@@ -580,7 +580,7 @@ describe('useTtsLifecycle', () => {
       mocks.getGpuQueueState.mockResolvedValueOnce({
         queueDepth: 0,
         devices: [],
-        lastTtsAutoFree: { seq: 1, models: ['Qwen 0.6B', 'Kokoro'], purpose: 'voice design', at: '2026-11-09T10:00:00Z' },
+        lastTtsAutoFree: { bootId: 'boot-a', seq: 1, models: ['Qwen 0.6B', 'Kokoro'], purpose: 'voice design', at: '2026-11-09T10:00:00Z' },
       });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_000);
@@ -591,11 +591,77 @@ describe('useTtsLifecycle', () => {
     }
   });
 
+  it('#4066: a dismissed auto-free notice does not reappear on the next poll of the same event', async () => {
+    vi.useFakeTimers();
+    try {
+      const event = {
+        bootId: 'boot-a',
+        seq: 1,
+        models: ['Qwen 0.6B'],
+        purpose: 'voice design' as const,
+        at: '2026-11-09T10:00:00Z',
+      };
+      mocks.getGpuQueueState.mockResolvedValueOnce({ queueDepth: 0, devices: [], lastTtsAutoFree: null });
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      /* Every later poll keeps answering the SAME last event, as the server does. */
+      mocks.getGpuQueueState.mockResolvedValue({ queueDepth: 0, devices: [], lastTtsAutoFree: event });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.evictionNotice).not.toBeNull();
+
+      act(() => result.current.dismissNotices());
+      expect(result.current.evictionNotice).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.evictionNotice).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#4066: the first event after a server restart shows even though its seq repeats (bootId differs)', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = {
+        bootId: 'boot-a',
+        seq: 1,
+        models: ['Qwen 0.6B'],
+        purpose: 'voice design' as const,
+        at: '2026-11-09T10:00:00Z',
+      };
+      mocks.getGpuQueueState.mockResolvedValueOnce({ queueDepth: 0, devices: [], lastTtsAutoFree: first });
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.evictionNotice).toBeNull(); // seeded, not shown
+
+      /* The server restarted: seq is 1 again, but it is a new event. */
+      mocks.getGpuQueueState.mockResolvedValue({
+        queueDepth: 0,
+        devices: [],
+        lastTtsAutoFree: { ...first, bootId: 'boot-b', models: ['Kokoro'] },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.evictionNotice).toBe('Kokoro unloaded to free VRAM for the voice design.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('#4066: an auto-free that happened before this page loaded is not re-shown', async () => {
     mocks.getGpuQueueState.mockResolvedValue({
       queueDepth: 0,
       devices: [],
-      lastTtsAutoFree: { seq: 4, models: ['Qwen 0.6B'], purpose: 'Quality render', at: '2026-11-09T10:00:00Z' },
+      lastTtsAutoFree: { bootId: 'boot-a', seq: 4, models: ['Qwen 0.6B'], purpose: 'Quality render', at: '2026-11-09T10:00:00Z' },
     });
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(mocks.getGpuQueueState).toHaveBeenCalled());

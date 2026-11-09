@@ -8760,12 +8760,7 @@ export interface GpuQueueState {
   lastTtsAutoFree?: TtsAutoFreeNotice | null;
 }
 
-export interface TtsAutoFreeNotice {
-  seq: number;
-  models: string[];
-  purpose: 'voice design' | 'Quality render';
-  at: string;
-}
+export type TtsAutoFreeNotice = ApiComponents['schemas']['TtsAutoFreeNotice'];
 
 async function realGetGpuQueueState(): Promise<GpuQueueState> {
   /* Permissive: a 404 / 5xx (older server, partial deploy, hot-reload

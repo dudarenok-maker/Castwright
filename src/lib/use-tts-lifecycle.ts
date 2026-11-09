@@ -187,10 +187,11 @@ export function useTtsLifecycle(): TtsLifecycle {
      seq was never written to storage, so it still differs from whatever
      (possibly older) seq IS persisted there. */
   const lastTripSeq = useRef<number | null>(readDismissedTripSeq());
-  /* #4066 — last-seen /api/gpu/queue `lastTtsAutoFree.seq`, seeded by the
+  /* #4066 — last-seen /api/gpu/queue `lastTtsAutoFree` identity
+     (`bootId:seq`; seq alone restarts at 1 with the server), seeded by the
      first poll (see the queue probe below). */
   const autoFreeSeeded = useRef(false);
-  const lastAutoFreeSeq = useRef<number | null>(null);
+  const lastAutoFreeKey = useRef<string | null>(null);
   /* In-flight op counter — guards the /health poll's unconditional pending-
      clear below against a Load/Stop that is still awaiting its response.
      Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
@@ -252,12 +253,12 @@ export function useTtsLifecycle(): TtsLifecycle {
              the last-seen seq (a reload must not re-show an old event); every
              later new seq shows the shared eviction notice. */
           const autoFree = q?.lastTtsAutoFree ?? null;
-          const autoFreeSeq = autoFree?.seq ?? null;
+          const autoFreeKey = autoFree ? `${autoFree.bootId}:${autoFree.seq}` : null;
           if (!autoFreeSeeded.current) {
             autoFreeSeeded.current = true;
-            lastAutoFreeSeq.current = autoFreeSeq;
-          } else if (autoFree && autoFreeSeq !== lastAutoFreeSeq.current) {
-            lastAutoFreeSeq.current = autoFreeSeq;
+            lastAutoFreeKey.current = autoFreeKey;
+          } else if (autoFree && autoFreeKey !== lastAutoFreeKey.current) {
+            lastAutoFreeKey.current = autoFreeKey;
             setEvictionNotice(autoFreeNoticeText(autoFree));
           }
         })

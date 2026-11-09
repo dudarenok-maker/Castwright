@@ -9591,9 +9591,10 @@ components:
 
     TtsAutoFreeNotice:
       type: object
-      required: [seq, models, purpose, at]
+      required: [bootId, seq, models, purpose, at]
       properties:
-        seq: { type: integer, minimum: 1, description: "Monotonic per-event counter." }
+        bootId: { type: string, description: "Identifies the server process; `seq` restarts at 1 after a restart, so the frontend compares bootId + seq." }
+        seq: { type: integer, minimum: 1, description: "Monotonic per-event counter within one bootId." }
         models:
           type: array
           items: { type: string }
