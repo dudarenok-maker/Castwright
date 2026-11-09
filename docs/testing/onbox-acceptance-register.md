@@ -736,7 +736,9 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-09 (#4037, #4040), owed count unchanged.** Row **A120** steps 13, 20 and 21 run on the box and recorded in a new flag; step 13's link cycle was made by hand, and step 13's text is amended (the row must not be locked or tuned, and a hand link through `POST /cast/link-prior` is stated as the alternative setup). The row stays owed. No row added or removed; `next-id` unchanged.
+> **Last change: 2026-11-10 (#4037, #4062, PR #4052), owed count unchanged.** ID **A121** retired unused: PR #4052 allocated it for the mint copying a legacy voice's emotion variants, but PR #4061 shipped that copy first and A120 step 20 already owes its on-box check, so the row was dropped before it reached `main` or the live view. `next-id` bumped A121 → A122 so the ID is never re-minted. No row added or removed.
+>
+> **Previous change: 2026-11-09 (#4037, #4040), owed count unchanged.** Row **A120** steps 13, 20 and 21 run on the box and recorded in a new flag; step 13's link cycle was made by hand, and step 13's text is amended (the row must not be locked or tuned, and a hand link through `POST /cast/link-prior` is stated as the alternative setup). The row stays owed. No row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-08 (#4037, #4040, PR #4061), owed count unchanged.** Row **A120** amended:
 > step 13 now observes an emotion variant going stale when its voice's base is redesigned
@@ -1893,7 +1895,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A121 -->
+<!-- next-id: A122 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
