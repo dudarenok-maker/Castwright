@@ -56,7 +56,8 @@ import {
 } from './__test-helpers__/analysis-job-harness.js';
 import * as historyStore from '../store/cast-id-history.js';
 import * as stateIo from '../workspace/state-io.js';
-import { mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import request from 'supertest';
+import { ANALYSIS_CACHE_VERSION, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { castMergeSuggestionsJsonPath } from '../workspace/paths.js';
 import { linkSeriesReuseOnNewRows, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
@@ -1267,5 +1268,125 @@ describe('#4031 main job: resume', () => {
     expect(errCode(events)).toBe('attribution_drift');
     expect(readSuggestions(b.bookDir).filter((s) => s.origin === 'plan')).toEqual([]);
     expect(readSuggestions(b.bookDir).some((s) => s.a === 'narrator' && s.b === FRESH_ID)).toBe(false);
+  });
+});
+
+describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
+  const orig = process.env.STAGE2_COVERAGE_RETRIES;
+  const books: HarnessBook[] = [];
+  const seed = (...a: Parameters<typeof mkBook>): HarnessBook => {
+    const b = mkBook(...a);
+    books.push(b);
+    return b;
+  };
+  const OLGA: Row = { id: 'olga', name: 'Olga', role: 'minor', color: '#444444', voiceState: 'generated' };
+  const LEAD_WREN: Row = { ...PRIOR_WREN, role: 'lead', color: '#111111' };
+  const FRESH = { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID };
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const seedWren = (): HarnessBook => seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }]);
+  /* Chapter 1 is done once its take is cached and its roll has landed. */
+  const chapterOneRolled = (b: HarnessBook): boolean =>
+    readCache(b.manuscriptId)?.chapters?.[1] !== undefined &&
+    existsSync(join(b.bookDir, '.audiobook', 'manuscript-edits.json')) &&
+    readEdits(b.bookDir).some((s) => s.chapterId === 1);
+  /* The user merges the prior Wren (the row the run joined) into olga (the route: cast.json, history, edits and cache) once, after chapter 1. */
+  const mergeAfterChapterOne = (b: HarnessBook, onMerged?: () => void) => {
+    const app = mkApp();
+    let merged: Promise<{ status: number }> | undefined;
+    return {
+      hook: async (chapterId: number): Promise<void> => {
+        if (chapterId === 1) return;
+        for (let i = 0; i < 300 && !chapterOneRolled(b); i++) await sleep(20);
+        merged ??= request(app)
+          .post(`/api/books/${b.bookId}/cast/merge`)
+          .set('Content-Type', 'application/json')
+          .send({ sourceId: PRIOR_ID, targetId: 'olga' })
+          .then((r) => {
+            onMerged?.();
+            return r;
+          });
+        await merged;
+      },
+      status: async (): Promise<number | undefined> => (await merged)?.status,
+    };
+  };
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    rollSpy.isPlanned = undefined;
+    rollSpy.after = undefined;
+    if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = orig;
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+
+  it('F5: a Phase-1 chapter failure after a mid-run merge keeps the merge, plan and failure record', async () => {
+    const b = seedWren();
+    const m = mergeAfterChapterOne(b);
+    setPhase1Hook(async (chapterId) => {
+      await m.hook(chapterId);
+      if (chapterId !== 3) return;
+      /* Chapter 2 finishes after the merge; chapter 3 then fails. */
+      for (let i = 0; i < 300 && readCache(b.manuscriptId)?.chapters?.[2] === undefined; i++) await sleep(20);
+      throw new Error('boom: the model gave up on this chapter');
+    });
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect(await m.status()).toBe(200);
+    const cache = readCache(b.manuscriptId)!;
+    /* The merge: the re-target of the plan and the remap of the take chapter 1 made before it. */
+    expect(cache.matchPlan?.decisions[FRESH_ID]).toMatchObject({ kind: 'join', priorId: 'olga' });
+    expect(new Set(cache.chapters[1].map((s) => s.characterId))).toEqual(new Set(['olga']));
+    /* The failure record the failing chapter's own save made. */
+    expect(cache.failedChapterIds).toEqual(expect.arrayContaining([3]));
+    expect(cache.failedChapterErrors?.['3']).toMatchObject({ phase: 'attribution' });
+  });
+
+  it('A23: after a mid-run merge the rolled manuscript-edits.json and the cache carry the survivor id', async () => {
+    const b = seedWren();
+    let merged = false;
+    const m = mergeAfterChapterOne(b, () => {
+      merged = true;
+    });
+    setPhase1Hook(m.hook);
+    /* Every roll made once the merge is answered: what the file and the cache say at that moment. */
+    const after: Array<{ edits: string[]; takes: string[] }> = [];
+    rollSpy.isPlanned = () => merged;
+    rollSpy.after = (mergedAtCall) => {
+      if (!mergedAtCall) return;
+      after.push({
+        edits: (readEdits(b.bookDir) as Array<{ characterId: string }>).map((s) => s.characterId),
+        takes: Object.values(readCache(b.manuscriptId)!.chapters).flatMap((ss) => ss.map((s) => s.characterId)),
+      });
+    };
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect(await m.status()).toBe(200);
+    expect(after.length).toBeGreaterThan(0);
+    for (const seen of after) {
+      expect(seen.edits).not.toContain(PRIOR_ID);
+      expect(seen.edits).toContain('olga');
+      expect(seen.takes).not.toContain(PRIOR_ID);
+    }
+  });
+
+  it('item 8: a Phase-1 save after a failure keeps pendingAttributionChapterIds and takesPersisted', async () => {
+    const b = seedWren();
+    /* An earlier stopped run left chapter 3's take pending and unpersisted. */
+    await saveAnalysisCache(b.manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION,
+      chapters: { 3: [{ id: 301, chapterId: 3, characterId: 'narrator', confidence: 0.9, text: 'Old take.' }] },
+      pendingAttributionChapterIds: [3],
+      takesPersisted: false,
+    } as never);
+    setPhase1Hook(async () => {
+      throw new Error('boom: the model gave up on this chapter');
+    });
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    const cache = readCache(b.manuscriptId)!;
+    expect(cache.failedChapterIds?.length).toBeGreaterThan(0); // a failure save ran
+    expect(cache.pendingAttributionChapterIds).toEqual([3]);
+    expect(cache.takesPersisted).toBe(false);
+    expect(cache.chapters[3]).toHaveLength(1); // the pending take is kept, never deleted
   });
 });

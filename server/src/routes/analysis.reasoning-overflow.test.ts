@@ -67,6 +67,20 @@ vi.mock('../store/analysis-cache.js', async () => {
       if (args[1].stage1) (globalThis as Record<string, unknown> & { __overflow_spend_test_stage1_saved?: () => void }).__overflow_spend_test_stage1_saved?.();
       return actual.saveAnalysisCache(...args);
     },
+    /* #4031 Task 19 - the main job saves through field-scoped patches; the same hooks see the
+       cache a patch wrote (after the write: the patch is applied inside the cache op). */
+    mutateAnalysisCache: async (...args: Parameters<typeof actual.mutateAnalysisCache>) => {
+      const written = await actual.mutateAnalysisCache(...args);
+      if (written) {
+        const g = globalThis as Record<string, unknown> & {
+          __overflow_spend_test_save_hook?: (c: typeof written) => void | Promise<void>;
+          __overflow_spend_test_stage1_saved?: () => void;
+        };
+        await g.__overflow_spend_test_save_hook?.(structuredClone(written));
+        if (written.stage1) g.__overflow_spend_test_stage1_saved?.();
+      }
+      return written;
+    },
   };
 });
 

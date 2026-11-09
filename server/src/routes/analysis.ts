@@ -96,6 +96,7 @@ import {
   reachedConfirm,
   saveAnalysisCache,
   type AnalysisCache,
+  type CachePatch,
   type ChapterErrorRecord,
 } from '../store/analysis-cache.js';
 import {
@@ -1780,6 +1781,69 @@ async function saveCacheInFailureCatch(
       saveErr,
     );
   }
+}
+
+/* #4031 Task 19 — the main job's cache saves are field-scoped patches
+   (`mutateAnalysisCache`), so a merge or decision the user makes mid-run, which
+   re-targets the cached plan and takes through the cache op, is never reverted by
+   a stale whole-cache save. A patch carries only what the save owns; an unset
+   field is left as the file has it. Copies, because the op runs after later
+   in-memory edits to the same objects. */
+function cacheFields(
+  cache: AnalysisCache,
+  keys: ReadonlyArray<keyof NonNullable<CachePatch['fields']>>,
+): NonNullable<CachePatch['fields']> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) if (cache[k] !== undefined) out[k] = structuredClone(cache[k]);
+  return out as NonNullable<CachePatch['fields']>;
+}
+
+/** The per-chapter failure record and the pending set a Phase-1 save carries (item 8). */
+const PHASE1_RECORD_FIELDS = [
+  'failedChapterIds',
+  'failedChapterErrors',
+  'pendingAttributionChapterIds',
+  'takesPersisted',
+] as const;
+
+/** Same as `saveCacheInFailureCatch`, for a field-scoped patch. */
+async function patchCacheInFailureCatch(
+  manuscriptId: string,
+  patch: CachePatch,
+  chapterId: number,
+): Promise<void> {
+  try {
+    await mutateAnalysisCache(manuscriptId, patch);
+  } catch (saveErr) {
+    console.warn(
+      `[analysis] could not persist chapter ${chapterId}'s failure record (reporting the original failure)`,
+      saveErr,
+    );
+  }
+}
+
+/* A sentence's id as it is now: the run's Phase-0b re-mints first, then the book's
+   merge history followed to its end (a mid-run merge). Reads the history lock-free,
+   so it is safe under the `book` lock. */
+async function resolveCurrentIds<S extends { characterId: string }>(
+  bookDir: string | undefined,
+  remint: Readonly<Record<string, string>>,
+  sentences: S[],
+): Promise<S[]> {
+  const reminted = remapSentenceIds(sentences, remint);
+  if (!bookDir) return reminted;
+  const read = await loadCastIdHistoryWithStatus(bookDir);
+  /* An unreadable history is "could not be determined", never "nothing merged": fail
+     rather than write ids a merge has retired. */
+  if (read.status === 'degraded') throw new Error('cast-id-history.json could not be read');
+  const { supersededBy } = read.history;
+  const idMap: Record<string, string> = {};
+  for (const { characterId } of reminted) {
+    let id = characterId;
+    for (let hops = 0; hops < 32 && Object.hasOwn(supersededBy, id); hops++) id = supersededBy[id];
+    if (id !== characterId) idMap[characterId] = id;
+  }
+  return remapSentenceIds(reminted, idMap);
 }
 
 /* Phase 0a coverage check — every non-excluded chapter must have a
@@ -5016,7 +5080,9 @@ export async function runMainAnalyzerJob(
     await mutateAnalysisCache(manuscriptId, { createIfAbsent: true, version: ANALYSIS_CACHE_VERSION });
     /* #3435 M0/M1 — heal word-free records; while stage1 is absent, a failed
        chapter's take is pending. */
-    if (applyAnalysisLoadRules(cache, recordRef.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
+    if (applyAnalysisLoadRules(cache, recordRef.chapterHints)) {
+      await mutateAnalysisCache(manuscriptId, { fields: cacheFields(cache, PHASE1_RECORD_FIELDS) });
+    }
 
     /* ── Run start (plan 291, #4031). Under the cast lock, materialise the prior:
        prune the stale reuse links, heal identical names, and write a Re-parse
@@ -5966,7 +6032,11 @@ export async function runMainAnalyzerJob(
           cache.chapterCast = chapterCast;
           const classified = classifyAnalysisFailure(chErr, analyzerLabel);
           const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
-          await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
+          await patchCacheInFailureCatch(
+            manuscriptId,
+            { fields: cacheFields(cache, ['chapterCast', 'failedChapterIds', 'failedChapterErrors']) },
+            ch.id,
+          );
           send({
             kind: 'chapter-failed',
             chapterId: ch.id,
@@ -6014,7 +6084,18 @@ export async function runMainAnalyzerJob(
            first new chapter to complete. */
         castDurations[ch.id] = chDuration;
         cache.castDurations = castDurations;
-        await saveAnalysisCache(manuscriptId, cache);
+        /* Durations are this run's own map (`durationsForEngine` already dropped a
+           prior engine's), so they replace the file's rather than merge into a stale
+           engine's. */
+        await mutateAnalysisCache(manuscriptId, {
+          fields: cacheFields(cache, [
+            'chapterCast',
+            'failedChapterIds',
+            'failedChapterErrors',
+            'castDurationsEngine',
+          ]),
+          transform: (c) => ({ ...c, castDurations: { ...castDurations } }),
+        });
         /* Plan 291 (#4031): Phase 0a writes no cast.json. The per-chapter roster is
            still raw analyzer ids, so a row written now would put an id on disk that
            the plan has not settled; the live view (`emitCastUpdate`, below) is the
@@ -6981,11 +7062,26 @@ export async function runMainAnalyzerJob(
       stage2Durations[ch.id] = chDurationForCache;
       cache.stage2Durations = stage2Durations;
       /* Atomic-rename alone does NOT order overlapping writes to one path, and
-         the pool runs chapters concurrently. `saveAnalysisCache` and the
+         the pool runs chapters concurrently. The cache patch and the
          manuscript-edits roll below both go through the per-path op chain
          (#3427), so each file's writes land in call order and the last call
-         wins. */
-      await saveAnalysisCache(manuscriptId, cache);
+         wins. #4031 — the patch carries only what this chapter owns (its take,
+         its duration, the failure record and pending set), so it never writes
+         back the plan or another chapter's take a merge has re-targeted since
+         this job last wrote them. The take speaks the ids that are current now. */
+      await mutateAnalysisCache(manuscriptId, {
+        chapters: {
+          [ch.id]: await resolveCurrentIds(liveBookDir(job) ?? undefined, remintIdMap, stage2Sentences).catch(
+            (e) => {
+              /* The persist resolves every id again; the take keeps the run's own ids until then. */
+              console.warn('[analysis] could not resolve ids against the merge history for the cache take', e);
+              return stage2Sentences;
+            },
+          ),
+        },
+        fields: cacheFields(cache, [...PHASE1_RECORD_FIELDS, 'stage2DurationsEngine']),
+        transform: (c) => ({ ...c, stage2Durations: { ...stage2Durations } }),
+      });
       if (recordRef.bookDir) {
         try {
           /* #2196 — rolling manuscript-edits is guarded in mode:'drop': a
@@ -6997,22 +7093,34 @@ export async function runMainAnalyzerJob(
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
-              /* Rebuild the running narrative from the chapter map so order is
-                 always correct regardless of which chapter completes first.
-                 #3435 — a chapter not attributed this run falls back to its
-                 cached take, so a pending take stays in the edits (and so
-                 survives the edits rebuild) until it is replaced. */
+              /* #4031 — only the chapters this run attributed, in book order. The
+                 roll re-reads the file under the `book` lock and replaces just these,
+                 so a chapter it did not produce (a cached take, a merge's remap of
+                 one) stays as the file has it. */
               const running: SentenceOutput[] = [];
               for (const order of recordRef.chapterHints) {
                 if (order.excluded) continue;
-                const arr = sentencesByChapter.get(order.id) ?? cachedChapters[order.id];
-                /* R8: a take captured before a Phase-0b re-mint still carries the old
-                   id, which may now be a user's row. */
-                if (arr) running.push(...remapSentenceIds(arr, remintIdMap));
+                const arr = sentencesByChapter.get(order.id);
+                if (arr) running.push(...arr);
               }
               return running;
             },
             recordRef.bookId ?? undefined,
+            /* R8: a take captured before a Phase-0b re-mint still carries the old id,
+               which may now be a user's row; a mid-run merge's survivor replaces the
+               id it merged away. */
+            (sentences) => resolveCurrentIds(liveBookDir(job) ?? undefined, remintIdMap, sentences),
+            /* #3435 — a chapter not attributed this run falls back to its cached take where
+               the file has none, so a pending take stays in the edits until it is replaced. */
+            () => {
+              const cached: SentenceOutput[] = [];
+              for (const order of recordRef.chapterHints) {
+                if (order.excluded || sentencesByChapter.has(order.id)) continue;
+                const arr = cachedChapters[order.id];
+                if (arr) cached.push(...arr);
+              }
+              return cached;
+            },
           );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll manuscript-edits.json', persistErr);
@@ -7095,7 +7203,11 @@ export async function runMainAnalyzerJob(
           chapter: { id: failedId, title: recordRef.chapterHints[i].title },
         });
         const attributionRecord = recordFailedChapter(cache, failedId, classified, 'attribution');
-        await saveCacheInFailureCatch(manuscriptId, cache, failedId);
+        await patchCacheInFailureCatch(
+          manuscriptId,
+          { fields: cacheFields(cache, PHASE1_RECORD_FIELDS) },
+          failedId,
+        );
         send({
           kind: 'chapter-failed',
           chapterId: failedId,
@@ -7998,7 +8110,7 @@ export async function runMainAnalyzerJob(
       if (wroteStateJson) {
         cache.takesPersisted = true;
         cache.confirmReached = true;
-        await saveAnalysisCache(manuscriptId, cache);
+        await mutateAnalysisCache(manuscriptId, { fields: { takesPersisted: true, confirmReached: true } });
       }
     }
 

@@ -378,18 +378,30 @@ vi.mock('../store/analysis-cache.js', async () => {
     classifyAnalysisCache: actual.classifyAnalysisCache,
     mutateAnalysisCache: async (
       id: string,
-      patch: { createIfAbsent?: true; version?: number; stage1?: unknown },
+      patch: {
+        createIfAbsent?: true;
+        version?: number;
+        stage1?: unknown;
+        chapters?: Record<number, unknown>;
+        fields?: Record<string, unknown>;
+        transform?: (c: Record<string, unknown>) => Record<string, unknown>;
+      },
     ) => {
       const existing = mem.get(id) as Record<string, unknown> | undefined;
       if (!existing && !patch.createIfAbsent) return null;
+      /* Task 19: the main job's per-chapter saves are patches too - a take, the
+         failure/pending fields, and a transform. */
       const next = {
         chapters: {},
         ...existing,
         ...(patch.version !== undefined ? { version: patch.version } : {}),
         ...(patch.stage1 ? { stage1: patch.stage1 } : {}),
+        ...(patch.chapters ? { chapters: { ...(existing?.chapters as object), ...patch.chapters } } : {}),
+        ...patch.fields,
       };
-      mem.set(id, next);
-      return next;
+      const out = patch.transform ? patch.transform(next) : next;
+      mem.set(id, out);
+      return out;
     },
     loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
     saveAnalysisCache: async (id: string, cache: unknown) => { mem.set(id, cache); },

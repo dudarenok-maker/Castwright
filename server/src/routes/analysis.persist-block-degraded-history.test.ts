@@ -634,7 +634,11 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (path === historyPath) {
           historyReadCount += 1;
-          if (stage2Calls >= chapterHints.length && !blipped) {
+          /* Task 19: a chapter's cache save and roll read the history to resolve ids
+             (`resolveCurrentIds`); the last chapter's read follows its Phase-1 call, so it
+             is not the persist's capture. */
+          const fromChapterSave = (new Error().stack ?? '').includes('resolveCurrentIds');
+          if (stage2Calls >= chapterHints.length && !blipped && !fromChapterSave) {
             blipped = true;
             // The one-shot blip — a transient EBUSY/EPERM, not a damaged
             // file. loadCastIdHistoryWithStatus's own try/catch turns this

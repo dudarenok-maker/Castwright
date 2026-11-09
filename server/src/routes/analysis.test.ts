@@ -245,6 +245,17 @@ vi.mock('../store/analysis-cache.js', async () => {
       hook?.(structuredClone(args[1]));
       return actual.saveAnalysisCache(...args);
     },
+    /* #4031 Task 19 - the main job saves through field-scoped patches; the hook sees
+       the cache a patch wrote (after the write, since the patch is applied inside the
+       cache op), exactly as it saw a whole save's cache before. */
+    mutateAnalysisCache: async (...args: Parameters<typeof actual.mutateAnalysisCache>) => {
+      const written = await actual.mutateAnalysisCache(...args);
+      const hook = (globalThis as Record<string, unknown>).__p286_save_hook as
+        | ((c: NonNullable<typeof written>) => void)
+        | undefined;
+      if (written) hook?.(structuredClone(written));
+      return written;
+    },
   };
 });
 
