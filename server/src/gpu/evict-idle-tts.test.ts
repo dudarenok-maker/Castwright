@@ -387,7 +387,7 @@ describe('keepForRunStart (#4066 — a Quality chapter render unloads an on-GPU 
   const keep = { keep06: false, keep17: true };
 
   it('adds keepKokoro:false for a Quality (1.7B) run with Kokoro on the GPU', async () => {
-    const out = await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => ({
+    const out = await keepForRunStart(keep, async () => ({
       kokoroLoaded: true,
       devices: { kokoro: 'cuda' },
     }));
@@ -395,15 +395,34 @@ describe('keepForRunStart (#4066 — a Quality chapter render unloads an on-GPU 
   });
 
   it('leaves a Standard (0.6B) run alone', async () => {
-    const out = await keepForRunStart({ keep06: true, keep17: false }, 'qwen3-tts-0.6b', async () => ({
+    const out = await keepForRunStart({ keep06: true, keep17: false }, async () => ({
       kokoroLoaded: true,
       devices: { kokoro: 'cuda' },
     }));
     expect(out).toEqual({ keep06: true, keep17: false });
   });
 
+  it('keys on the tier the run will LOAD: a Standard-default book with every character toggled to Quality drops Kokoro', async () => {
+    /* computeUsedQwenTiers resolves per-character tiers (fs-56) against the run
+       default, so an all-elevated cast yields keep17-only whatever the book's
+       own model key says. */
+    const out = await keepForRunStart({ keep06: false, keep17: true }, async () => ({
+      kokoroLoaded: true,
+      devices: { kokoro: 'cuda' },
+    }));
+    expect(out).toEqual({ keep06: false, keep17: true, keepKokoro: false });
+  });
+
+  it('a mixed-tier run (any 1.7B in it) drops Kokoro too', async () => {
+    const out = await keepForRunStart({ keep06: true, keep17: true }, async () => ({
+      kokoroLoaded: true,
+      devices: { kokoro: 'cuda' },
+    }));
+    expect(out).toEqual({ keep06: true, keep17: true, keepKokoro: false });
+  });
+
   it('leaves a CPU Kokoro alone', async () => {
-    const out = await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => ({
+    const out = await keepForRunStart(keep, async () => ({
       kokoroLoaded: true,
       devices: { kokoro: 'cpu' },
     }));
@@ -411,12 +430,12 @@ describe('keepForRunStart (#4066 — a Quality chapter render unloads an on-GPU 
   });
 
   it('leaves everything alone when Kokoro is not resident or the probe fails', async () => {
-    expect(await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => ({ kokoroLoaded: false }))).toEqual(keep);
+    expect(await keepForRunStart(keep, async () => ({ kokoroLoaded: false }))).toEqual(keep);
     expect(
-      await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => {
+      await keepForRunStart(keep, async () => {
         throw new Error('health down');
       }),
     ).toEqual(keep);
-    expect(await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => null)).toEqual(keep);
+    expect(await keepForRunStart(keep, async () => null)).toEqual(keep);
   });
 });

@@ -1175,11 +1175,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      defeating the whole point of this precompute). A genuinely mixed-tier book
      still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0) {
-    /* #4066 — a Quality (1.7B) run also drops an on-GPU Kokoro here (owner
-       decision); a Standard run is unchanged. Run-start only: the post-score
-       re-assert in triggerScoring runs mid-render and must not unload a
-       Kokoro a sibling chapter's fallback line may be using. */
-    await keepForRunStart(usedQwenTiers, resolveForEngine('qwen').modelKey)
+    /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
+       Kokoro here (owner decision); a run with no 1.7B is unchanged. The
+       post-score re-assert in triggerScoring runs mid-render and must not
+       unload a Kokoro a sibling chapter's fallback line may be using. */
+    await keepForRunStart(usedQwenTiers)
       .then((target) => reconcileResidentQwenTiers(target))
       .catch((e) =>
       console.warn('[generation] tier reconcile skipped:', (e as Error).message),

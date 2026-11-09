@@ -100,19 +100,21 @@ function isGpuFamily(device: string | null | undefined): boolean {
 }
 
 /** #4066 (owner decision) — the run-start reconcile target for a chapter
-    render. A Quality (1.7B) run needs ~6 GB, which cannot sit next to an
-    on-GPU Kokoro on an 8 GB card, so Kokoro is dropped at run start; a
-    Standard run keeps today's behaviour (Kokoro untouched). Kokoro fallback
-    lines inside the run may load it again — accepted. Best-effort: an
-    unreadable probe leaves `keep` as it was. Run-start only — the post-score
-    re-assert runs while chapters are in flight and must never unload a model
-    a sibling chapter's fallback line may be using. */
+    render. A run that loads the Quality (1.7B) base needs ~6 GB, which cannot
+    sit next to an on-GPU Kokoro on an 8 GB card, so Kokoro is dropped at run
+    start; a run with no 1.7B in it keeps today's behaviour (Kokoro untouched).
+    Keyed on `keep.keep17` — the computed per-character target, so a Standard
+    book with characters toggled to Quality (and a mixed-tier run) counts —
+    not on the run's default model key. Kokoro fallback lines inside the run
+    may load it again — accepted. Best-effort: an unreadable probe leaves
+    `keep` as it was. The post-score re-assert runs while chapters are in
+    flight and must never unload a model a sibling chapter's fallback line may
+    be using. */
 export async function keepForRunStart(
   keep: ResidentTtsKeep,
-  runModelKey: TtsModelKey,
   probeHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
 ): Promise<ResidentTtsKeep> {
-  if (runModelKey !== 'qwen3-tts-1.7b') return keep;
+  if (!keep.keep17) return keep;
   const health = await probeHealth().catch(() => null);
   if (health?.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) return { ...keep, keepKokoro: false };
   return keep;
