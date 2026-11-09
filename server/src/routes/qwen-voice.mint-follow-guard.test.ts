@@ -6,7 +6,7 @@
    POST /cast/link-prior route, Repro B through the real mint. */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -169,5 +169,38 @@ describe('the take follows only a row the mint re-keyed (#4037)', () => {
     expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
     expect(read('qwen-u_one__sad.pt')).toBe('CURRENT-SAD');
     expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe('qwen-u_one__sad');
+  });
+
+  it('C: a library slot row on the link id gets no slot named for its uuid', async () => {
+    reset();
+    writeBook('Book One', [legacy]);
+    writeBook('Book Two', [
+      {
+        ...legacy,
+        voiceUuid: 'u_lib_row',
+        overrideTtsVoices: { qwen: { name: 'qwen-lib1', libraryUuid: 'lib1' } },
+      },
+    ]);
+    plant('qwen-v_wren.pt', 'SAME-BASE');
+    plant('qwen-u_lib_row.pt', 'SAME-BASE'); // would pass the base check: only the library guard stops it
+    plant('qwen-v_wren__sad.pt', 'SAD');
+    await persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-v_wren__sad', series);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants?.sad).toBeUndefined();
+    expect(existsSync(file('qwen-u_lib_row__sad.pt'))).toBe(false);
+  });
+
+  it('D: a take anchored on another uuid does not follow onto a row of the link id', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_one' }]);
+    writeBook('Book Two', [{ ...legacy, voiceUuid: 'u_two' }]);
+    plant('qwen-v_wren.pt', 'SAME-BASE');
+    plant('qwen-u_one.pt', 'SAME-BASE');
+    plant('qwen-u_two.pt', 'SAME-BASE');
+    plant('qwen-u_one__sad.pt', 'SAD');
+    const out = await persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-u_one__sad', series);
+    expect(out).toBe('applied');
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe('qwen-u_one__sad');
+    expect(rowOf('Book Two').overrideTtsVoices?.qwen?.variants?.sad).toBeUndefined();
+    expect(existsSync(file('qwen-u_two__sad.pt'))).toBe(false);
   });
 });
