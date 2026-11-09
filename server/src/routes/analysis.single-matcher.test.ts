@@ -663,10 +663,23 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
     const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
     const app = mkApp();
     let voice: { status: number } | undefined;
-    const abort = abortAtFirstPhase1();
-    setPhase1Hook(async (chapterId) => {
-      voice = await routeVoice(app, b.bookId, 'the-jogger');
-      await abort(chapterId);
+    /* One-shot: several chapters reach this hook, and a later call resuming after
+       `run` returned must never touch `getLastJob()` - by then it is the NEXT test's
+       job. The first call captures this job before its await, sends the route write
+       and stops the run; every call waits for that one stop, then only throws. */
+    let stopped: Promise<void> | undefined;
+    setPhase1Hook(async () => {
+      if (!stopped) {
+        const job = getLastJob();
+        stopped = (async () => {
+          voice = await routeVoice(app, b.bookId, 'the-jogger');
+          job?.controller.abort();
+        })();
+      }
+      await stopped;
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      throw e;
     });
     await run(b.manuscriptId, b.bookDir, 'main', FRESH);
     setPhase1Hook(undefined);
@@ -801,6 +814,8 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
       expect(p).toContain(`"id": "${PRIOR_ID}"`);
       expect(p).toContain('"name": "Wren"');
       expect(p).not.toContain(FRESH_ID);
+      /* ...with the analyzer's own name listed as an alias of that row. */
+      expect(p).toContain('Wren Ashby');
     }
     /* The analyzer's own name is kept as an alias of the joined row. */
     expect(readCast(b.bookDir).find((c) => c.id === PRIOR_ID)!.aliases).toContain('Wren Ashby');
@@ -821,6 +836,8 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
     for (const s of seen) expect(s).toBe(before);
   });
 
+  /** A committed text fixture, with CRLF line endings normalised to LF. */
+  const readFixtureText = (path: string): string => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
   const FRAMES_PATH = join(
     dirname(fileURLToPath(import.meta.url)),
     '..',
@@ -844,9 +861,17 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
       mkdirSync(dirname(FRAMES_PATH), { recursive: true });
       writeFileSync(FRAMES_PATH, fresh);
     }
-    /* Staleness: the committed file must equal a fresh capture (re-record with RECORD_FIXTURES=1). */
+    /* Staleness: the committed file must equal a fresh capture (re-record with RECORD_FIXTURES=1).
+       Read line-ending-normalised: a Windows checkout under core.autocrlf=true can
+       materialise the fixture as CRLF (.gitattributes pins it to LF too). */
     expect(existsSync(FRAMES_PATH)).toBe(true);
-    expect(readFileSync(FRAMES_PATH, 'utf8')).toBe(fresh);
+    expect(readFixtureText(FRAMES_PATH)).toBe(fresh);
+    /* ...and that comparison holds for a CRLF checkout of the same content, which a
+       raw byte comparison would fail. */
+    const crlfCopy = join(dirname(b.bookDir), 'analysis-cast-update-frames.crlf.json');
+    writeFileSync(crlfCopy, fresh.replace(/\n/g, '\r\n'));
+    expect(readFileSync(crlfCopy, 'utf8')).not.toBe(fresh);
+    expect(readFixtureText(crlfCopy)).toBe(fresh);
     /* The last frame is the Phase-0b one: the plan-applied roster, prior ids. */
     const last = rec.frames[rec.frames.length - 1];
     expect(ids(last)).toContain(PRIOR_ID);
