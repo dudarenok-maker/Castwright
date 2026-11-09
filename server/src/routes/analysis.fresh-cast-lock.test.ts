@@ -49,7 +49,14 @@ import { runMainAnalyzerJob } from './analysis.js';
 import { castAliasesRouter } from './cast-aliases.js';
 import { getManuscript } from '../store/manuscripts.js';
 import * as stateIo from '../workspace/state-io.js';
-import { castJsonPath } from '../workspace/paths.js';
+import { castJsonPath, castMergesJsonPath } from '../workspace/paths.js';
+import { withCastLock } from '../workspace/cast-lock.js';
+import {
+  appendManualEntry,
+  loadCastMerges,
+  saveCastMerges,
+  type CastMergeEntry,
+} from '../store/cast-merges.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
 vi.mock('../workspace/state-io.js', async (importOriginal) => {
@@ -237,5 +244,69 @@ describe('#4031 rule 8 - a cast writer racing Start fresh', () => {
 
     run.release();
     await within(run.done, 'the run never finished');
+  });
+
+  /* The journal ref clear is its own read-modify-write inside Start fresh, and the
+     tests above never reach it (the job's locked prior read blocks first). Hold its
+     journal read open, land a manual-merge append under the cast lock meanwhile, and
+     release: with the clear cast-locked the append queues behind it and survives;
+     unlocked, the clear writes back its stale read and the append is lost. */
+  it('rule 8: a journal append racing the ref clear is kept', async () => {
+    const b = mkBook([{ ...NARR }, { ...PRIOR_NOVA }], undefined, BODY);
+    books.push(b);
+    const mergesPath = castMergesJsonPath(b.bookDir);
+    const seed: CastMergeEntry = {
+      ts: '2026-01-01T00:00:00.000Z',
+      kind: 'manual',
+      sourceId: 'zed',
+      sourceName: 'Zed',
+      targetId: 'nova',
+      affected: [{ chapterId: 1, sentenceId: 1 }],
+    };
+    await saveCastMerges(b.bookDir, { entries: [seed] });
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>('../workspace/state-io.js');
+
+    let gateOpen!: () => void;
+    const gate = new Promise<void>((r) => {
+      gateOpen = r;
+    });
+    let signalHeld!: () => void;
+    const held = new Promise<void>((r) => {
+      signalHeld = r;
+    });
+    let intercepted = false;
+    vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!intercepted && path === mergesPath) {
+        intercepted = true;
+        const value = await actual.readJson(path);
+        signalHeld();
+        await gate;
+        return value;
+      }
+      return actual.readJson(path);
+    });
+
+    const run = startFresh(b);
+    await within(held, 'the ref clear never read the journal');
+
+    const appended = withCastLock(b.bookDir, async () => {
+      const journal = await loadCastMerges(b.bookDir);
+      await saveCastMerges(
+        b.bookDir,
+        appendManualEntry(journal, { ...seed, sourceId: 'racer', sourceName: 'Racer', affected: [] }),
+      );
+    });
+    appended.catch(() => {});
+    /* No positive signal exists for "the append is queued" (locked, it cannot start),
+       so give it a few macrotasks to land if nothing is stopping it. */
+    await new Promise((r) => setTimeout(r, 100));
+    gateOpen();
+    await within(appended, 'the racing append never finished');
+    await within(run.reached, 'the run never reached Phase 0');
+    run.release();
+    await within(run.done, 'the run never finished');
+
+    const ids = (await loadCastMerges(b.bookDir)).entries.map((e) => e.sourceId);
+    expect(ids).toEqual(expect.arrayContaining(['zed', 'racer']));
   });
 });
