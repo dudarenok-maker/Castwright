@@ -166,6 +166,7 @@ import type {
 } from '../store/reanalysis-types.js';
 import { buildReservedIds, extendPlan, matchFreshToPrior } from '../store/match-fresh-to-prior.js';
 import { applyMatchPlan, planConstraintsFor, remapSentenceIds } from '../store/plan-overlay.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadStoredSuggestions, pairKey } from '../store/cast-merge-suggestions.js';
 import { unionNotLinkedTo } from '../store/cast-name-match.js';
 import {
@@ -1823,9 +1824,10 @@ async function patchCacheInFailureCatch(
 }
 
 /* A sentence's id as it is now: the run's Phase-0b re-mints first, then the book's
-   merge history followed to its end (a mid-run merge). Reads the history lock-free,
-   so it is safe under the `book` lock. */
-async function resolveCurrentIds<S extends { characterId: string }>(
+   resolver of record (`buildCastResolver`: a live id wins, history is followed only to
+   a live target) over a lock-free read of cast.json and the merge history (a mid-run
+   merge). Read-only, so it is safe under the `book` lock and inside the cache op. */
+export async function resolveCurrentIds<S extends { characterId: string }>(
   bookDir: string | undefined,
   remint: Readonly<Record<string, string>>,
   sentences: S[],
@@ -1836,12 +1838,12 @@ async function resolveCurrentIds<S extends { characterId: string }>(
   /* An unreadable history is "could not be determined", never "nothing merged": fail
      rather than write ids a merge has retired. */
   if (read.status === 'degraded') throw new Error('cast-id-history.json could not be read');
-  const { supersededBy } = read.history;
+  const cast = (await readJson<{ characters?: Array<{ id: string }> }>(castJsonPath(bookDir)))?.characters ?? [];
+  const resolver = buildCastResolver(cast, read.history);
   const idMap: Record<string, string> = {};
   for (const { characterId } of reminted) {
-    let id = characterId;
-    for (let hops = 0; hops < 32 && Object.hasOwn(supersededBy, id); hops++) id = supersededBy[id];
-    if (id !== characterId) idMap[characterId] = id;
+    const live = resolver.resolve(characterId)?.character.id;
+    if (live !== undefined && live !== characterId) idMap[characterId] = live;
   }
   return remapSentenceIds(reminted, idMap);
 }
@@ -5121,8 +5123,8 @@ export async function runMainAnalyzerJob(
         const m = out.m;
         priorCastForMerge = m.prior as Array<{ id: string } & Record<string, unknown>>;
         if (m.written) castBase?.noteExternalWrite(m.written);
-        /* R1 - the refreshed rule-11 ledger: in memory (the next whole-cache save
-           must not undo it) and in the cache file. */
+        /* R1 - the refreshed rule-11 ledger: in memory (so the job's copy matches the
+           file) and in the cache file. */
         const ledgerPatch: Record<string, LedgerEntry> = {};
         for (const [id, entry] of Object.entries(m.ledger)) {
           if (JSON.stringify(ledgerIn[id]) !== JSON.stringify(entry)) ledgerPatch[id] = entry;
@@ -5464,10 +5466,9 @@ export async function runMainAnalyzerJob(
             runAddedPairs: s.addedPairs,
             ...(remint ? { decisions: reminted, remapCharacterIds: s.idMap } : {}),
           });
-          /* ...and the job's cached copy takes the plan as written, so a later
-             whole-cache save does not revert that re-target either (a copy: the
-             returned payload is the live one). The constraints below keep the
-             plan this roster was built from. */
+          /* ...and the job's cached copy takes the plan as written, so it matches the
+             file, re-target included (a copy: the returned payload is the live one).
+             The constraints below keep the plan this roster was built from. */
           if (written?.matchPlan) cache.matchPlan = structuredClone(written.matchPlan);
         }
       }
@@ -7069,18 +7070,27 @@ export async function runMainAnalyzerJob(
          its duration, the failure record and pending set), so it never writes
          back the plan or another chapter's take a merge has re-targeted since
          this job last wrote them. The take speaks the ids that are current now. */
+      const takeBookDir = liveBookDir(job) ?? undefined;
       await mutateAnalysisCache(manuscriptId, {
-        chapters: {
-          [ch.id]: await resolveCurrentIds(liveBookDir(job) ?? undefined, remintIdMap, stage2Sentences).catch(
-            (e) => {
-              /* The persist resolves every id again; the take keeps the run's own ids until then. */
-              console.warn('[analysis] could not resolve ids against the merge history for the cache take', e);
-              return stage2Sentences;
-            },
-          ),
-        },
+        chapters: { [ch.id]: remapSentenceIds(stage2Sentences, remintIdMap) },
         fields: cacheFields(cache, [...PHASE1_RECORD_FIELDS, 'stage2DurationsEngine']),
-        transform: (c) => ({ ...c, stage2Durations: { ...stage2Durations } }),
+        /* The take speaks the ids that are current when the op RUNS: resolved here, inside the
+           op, so a merge whose history write and cache op landed before it is already seen
+           (resolved outside, a read taken before that merge would write the retired id back,
+           and each chapter is written once). */
+        transform: async (c) => {
+          const out = { ...c, stage2Durations: { ...stage2Durations } };
+          try {
+            out.chapters = {
+              ...c.chapters,
+              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id]),
+            };
+          } catch (e) {
+            /* The persist resolves every id again; the take keeps the run's own ids until then. */
+            console.warn('[analysis] could not resolve ids against the merge history for the cache take', e);
+          }
+          return out;
+        },
       });
       if (recordRef.bookDir) {
         try {
@@ -7093,17 +7103,25 @@ export async function runMainAnalyzerJob(
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
-              /* #4031 — only the chapters this run attributed, in book order. The
-                 roll re-reads the file under the `book` lock and replaces just these,
-                 so a chapter it did not produce (a cached take, a merge's remap of
-                 one) stays as the file has it. */
+              /* #4031 — only the chapters this run produced or replayed, in book order. The
+                 roll re-reads the file under the `book` lock and replaces just these (an
+                 empty take clears its chapter), so a chapter it did not produce (a cached
+                 take, a merge's remap of one) stays as the file has it. Excluded chapters
+                 leave the file, as the wholesale roll left them out. */
               const running: SentenceOutput[] = [];
+              const chapterIds: number[] = [];
+              const dropChapterIds: number[] = [];
               for (const order of recordRef.chapterHints) {
-                if (order.excluded) continue;
+                if (order.excluded) {
+                  dropChapterIds.push(order.id);
+                  continue;
+                }
                 const arr = sentencesByChapter.get(order.id);
-                if (arr) running.push(...arr);
+                if (!arr) continue;
+                chapterIds.push(order.id);
+                running.push(...arr);
               }
-              return running;
+              return { sentences: running, chapterIds, dropChapterIds };
             },
             recordRef.bookId ?? undefined,
             /* R8: a take captured before a Phase-0b re-mint still carries the old id,

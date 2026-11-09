@@ -327,8 +327,8 @@ export interface CachePatch {
   /** Rewrites `characterId` in the cached sentence takes (`chapters`) ONLY. `chapterCast` is the
       raw per-chapter output and is deliberately left untouched (see cast-merge.ts). */
   remapCharacterIds?: Record<string, string>;
-  /** Runs last, on the patched cache, inside the same op. */
-  transform?: (cache: AnalysisCache) => AnalysisCache;
+  /** Runs last, on the patched cache, inside the same op (it may await a read, never another cache op). */
+  transform?: (cache: AnalysisCache) => AnalysisCache | Promise<AnalysisCache>;
 }
 
 /* Read-modify-write as ONE `enqueuePathOp` op. The queue is not re-entrant, so
@@ -407,7 +407,7 @@ export async function mutateAnalysisCache(
         ]),
       );
     }
-    if (patch.transform) cache = patch.transform(cache);
+    if (patch.transform) cache = await patch.transform(cache);
     const payload = buildCachePayload(cache);
     await writeJsonAtomic(path, payload);
     result = payload;
