@@ -1097,11 +1097,11 @@ recite:
     On Windows a copy keeps the source's last-write time (measured: a copy of
     a 3-day-old file reads 4320 minutes old by `mtimeMs` and 0.0 by
     `birthtimeMs`), so a file made a moment ago read old and the guard that was
-    meant to spare a second server mid-mint deleted it. The test planted its
+    meant to spare a second server mid-mint would delete it. The test planted its
     "fresh" file with the current mtime, so it could not see this. Checkable:
     for every age guard, find how the file it reads was created; if by a copy,
     ask whether the creator stamps the time itself (`utimes`), and require a
-    test whose source file is old.  Fix at the creator, so every reader of the
+    test whose source file is old. Fix at the creator, so every reader of the
     mtime benefits, not in the one reader.
 
 ### Keeping the catalogue current
