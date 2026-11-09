@@ -137,7 +137,7 @@ async function runSingleDesign(
     registerProgressToken(progressToken, job);
     const progressUrl = `${serverLoopbackBaseUrl()}/api/internal/design-progress`;
 
-    const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+    const { voiceId, url, voiceUuid, separated } = await designQwenVoiceForCharacter({
       bookId: job.bookId,
       bookDir: job.bookDir,
       seriesFilter,
@@ -166,6 +166,7 @@ async function runSingleDesign(
         previewUrl: url,
         persona,
         voiceUuid,
+        separated,
       });
       return;
     }
@@ -196,6 +197,7 @@ async function runSingleDesign(
       voiceId,
       url,
       voiceUuid,
+      separated,
     });
   } catch (e) {
     /* #3992 — the character vanished between the read above and the fork/mint. */

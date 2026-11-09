@@ -44,8 +44,11 @@ const startCalls: StartCall[] = [];
 const subscribeCalls: SubscribeCall[] = [];
 const singleStartCalls: SingleStartCall[] = [];
 
+const { putBookState } = vi.hoisted(() => ({ putBookState: vi.fn(async () => {}) }));
+
 vi.mock('../lib/api', () => ({
   api: {
+    putBookState,
     startCastDesign: (
       bookId: string,
       {
@@ -908,5 +911,143 @@ describe('castDesignMiddleware', () => {
     expect(toastActions).toHaveLength(1);
     expect(toastActions[0].payload.kind).toBe('error');
     expect(toastActions[0].payload.message).toMatch(/already running/);
+  });
+});
+
+/* #4067 — the design-time separation of a declined row renames its qwen slot on
+   disk; through the REAL persistence middleware, the next whole-roster cast PUT
+   must carry the new name, not `qwen-<old>` (the server's preserve guard lets an
+   incoming slot win when the uuid matches). */
+describe('a design that separates a declined row, then a later cast save (#4067)', () => {
+  const declined = () =>
+    ({
+      id: 'c1',
+      name: 'Aria',
+      voiceUuid: 'u_shared',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+      },
+    }) as never;
+
+  type PreviewEvent = Parameters<NonNullable<CastDesignCallbacks['onPreviewReady']>>[0];
+  async function designThenSave(
+    row: unknown = declined(),
+    event: Partial<PreviewEvent> = {},
+    via: 'preview' | 'designed' = 'preview',
+  ) {
+    const { persistenceMiddleware, flushBookPersistence } = await import('./persistence-middleware');
+    const { uiSlice } = await import('./ui-slice');
+    const initialUi = uiSlice.getInitialState();
+    const store = configureStore({
+      reducer: {
+        castDesign: castDesignSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        ui: { ...initialUi, stage: { kind: 'ready', bookId: 'b1', view: 'cast' } } as ReturnType<
+          typeof uiSlice.getInitialState
+        >,
+      },
+      middleware: (g) =>
+        g({ serializableCheck: false }).concat(persistenceMiddleware, createCastDesignMiddleware()),
+    });
+    openBook(store as never, 'b1');
+    store.dispatch(castSlice.actions.setCharacters([row as never]));
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+    const { cb } = singleStartCalls[0];
+    /* A re-design job ends in `preview_ready` alone (single-design.ts); the
+       server never sends `designed` for it. */
+    if (via === 'designed') {
+      /* A first design persists on the server and ends in `designed`, carrying the
+         post-separation `voiceId`. */
+      cb.onCharacterDesigned?.({
+        characterId: 'c1',
+        voiceId: 'qwen-u_forked',
+        voiceUuid: 'u_forked',
+        separated: event.separated,
+      });
+    } else {
+      cb.onPreviewReady?.({
+        characterId: 'c1',
+        name: 'Aria',
+        previewVoiceId: 'qwen-u_forked-preview',
+        previewUrl: '/x.mp3',
+        persona: 'warm',
+        voiceUuid: 'u_forked',
+        ...event,
+      });
+    }
+    putBookState.mockClear();
+    store.dispatch(castSlice.actions.lockVoice('c1'));
+    await store.dispatch(flushBookPersistence('b1') as never);
+    const puts = (putBookState.mock.calls as unknown as [string, { slice: string; patch: unknown }][]).filter(
+      (c) => c[1].slice === 'cast',
+    );
+    expect(puts.length).toBeGreaterThan(0);
+    const patch = puts[puts.length - 1][1].patch as {
+      characters: { id: string; voiceUuid?: string; overrideTtsVoices?: { qwen?: { name: string; variants?: unknown } } }[];
+    };
+    return patch.characters.find((c) => c.id === 'c1')!;
+  }
+
+  it('preview cancelled: the next PUT carries qwen-<new> and no stale variants', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave();
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  /* A declined row the merge left with NO voiceUuid (#4067): its first design is a
+     separation on the server (rename + variants dropped), but `undefined -> uuid`
+     reads as a first mint on the client, which keeps the legacy name. Only the
+     server's `separated` tells the two apart. */
+  const legacy = () =>
+    ({
+      id: 'c1',
+      name: 'Aria',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-v_aria', variants: { angry: { name: 'qwen-v_aria__angry' } } },
+      },
+    }) as never;
+
+  it('a row with no uuid the server separated: the next PUT carries qwen-<new> and no variants', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(legacy(), { separated: true });
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('a row with no uuid that was only minted one (separated false): the legacy name stays', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(legacy(), { separated: false });
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+  });
+
+  /* The `designed` path: its `voiceId` (`qwen-<new>`) already sets the name, but a row
+     with NO uuid keeps its variants under a first mint, so the flag still decides
+     whether they are dropped. (A row that had a uuid drops them on any changed
+     uuid, so only the no-uuid row can tell the flag from its absence.) */
+  it('designed, a row with no uuid the server separated: the next PUT carries no variants', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(legacy(), { separated: true }, 'designed');
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 });

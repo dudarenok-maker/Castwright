@@ -3855,6 +3855,15 @@ export interface components {
             persona?: string;
             /** @description preview_ready / designed only. */
             voiceUuid?: string;
+            /**
+             * @description preview_ready / designed only. True when this design first separated a
+             *     declined ("Don't reuse") row onto a voice of its own, which minted the
+             *     `voiceUuid`, renamed the row's qwen slot to `qwen-<voiceUuid>` and dropped
+             *     its emotion variants. The client mirrors exactly that when true; absent or
+             *     false, a `voiceUuid` the row had none of before is a plain first mint and
+             *     the slot keeps its name (#4067).
+             */
+            separated?: boolean;
             /** @description designed only. */
             voiceId?: string;
             /** @description designed only. */
@@ -13275,6 +13284,8 @@ export interface operations {
                         declinedVoiceUuids: string[];
                         /** @description The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own). */
                         voiceUuid: string | null;
+                        /** @description True when the row was moved onto a voice of its own (the server renamed its qwen slot and dropped its variants); false when it already owned its voice and nothing moved. The client mirrors the fork only when true. */
+                        separated: boolean;
                         /** @description Other characters in the same book that moved onto the new voiceUuid with it (they shared its voice key). Empty when nothing moved. The client mirrors their new voiceUuid. */
                         movedCharacterIds: string[];
                     };

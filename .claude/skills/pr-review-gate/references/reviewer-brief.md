@@ -1104,6 +1104,20 @@ recite:
     test whose source file is old. Fix at the creator, so every reader of the
     mtime benefits, not in the one reader.
 
+87. **A client mirror of a conditional server step, inferred from a field that
+    carries the after-step value in both outcomes** — PR #4069 (#4067): the
+    decline route separates a row only when it shares its voice, but replies
+    with `voiceUuid` either way, and the client forked its local copy (rename,
+    variant drop) whenever the reply named a uuid, so a decline that moved
+    nothing dropped the row's emotion variants. The design stream repeated the
+    shape: it reads `undefined -> uuid` as a first mint, yet the server's
+    `mustSeparateOnDesign` also separates a no-uuid row carrying a decline
+    marker. Checkable: for every client mirror of a server step that runs only
+    under a condition, find the server's own outcome flag (`separated`) and
+    confirm the mirror keys on it; where the only signal is a value present in
+    both outcomes, list the server's separating conditions and test each one's
+    starting state against the mirror's inference.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
