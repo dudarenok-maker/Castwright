@@ -631,6 +631,7 @@ describe('a variant recorded after the mint re-keyed the rows follows the mint (
     const uuid = await mintWithLanding(['sad']);
     const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
     await recordSeparatedVoice('u_sep');
+    plant('qwen-u_sep.pt', 'BASE-PT'); // a real separation's copyBaseFamily leaves the byte-equal base, so only the separated check can refuse
     const cast = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
     cast.characters[0] = { ...cast.characters[0], voiceUuid: 'u_sep', declinedVoiceFrom: ['b_Book Two'] };
     writeFileSync(castPath('Book One'), JSON.stringify(cast));
@@ -638,6 +639,24 @@ describe('a variant recorded after the mint re-keyed the rows follows the mint (
     expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
     expect(rowOf('Book One').overrideTtsVoices?.qwen?.variants?.sad).toBeUndefined();
     expect(existsSync(file('qwen-u_sep__sad.pt'))).toBe(false);
+  });
+
+  it('T24: a current redesign replaces a current take the mint already copied to the new key', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Three', [{ ...legacy }]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'OLD-SAD-PT');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    const uuid = await mint(); // Design & compare: nothing lands, the mint copies the old sad
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('OLD-SAD-PT');
+    plant('qwen-v_wren__sad.pt', 'NEW-SAD-PT'); // Book Three, confirmed later, redesigns sad on the legacy key
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    expect(await persistVariant(bookDir('Book Three'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    for (const t of ['Book One', 'Book Two', 'Book Three']) {
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    }
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('NEW-SAD-PT');
   });
 
   it('T22: interleaved persists give every linked book every take', async () => {
