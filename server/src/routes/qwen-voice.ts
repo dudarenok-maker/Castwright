@@ -825,15 +825,21 @@ export async function ensureCharacterVoiceUuid(
       }
       /* A row that already has its own uuid keeps it: a separated row still shares
          `voiceId` with the earlier book, and restamping it would orphan its own
-         designed voice. */
+         designed voice. #4062 — `stampedAny` counts a book only once its cast.json
+         write has landed (`onWritten`): a write that fails, or a later row of the
+         same book that throws, leaves the copies with no book naming them. */
       let stampedAny = false;
+      let stampedInBook = false;
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
-        stampedAny = true;
+        stampedInBook = true;
         return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
       };
       try {
-        await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
+        await forEachMatchingCastCharacter(linkId, seriesFilter, stamp, undefined, () => {
+          if (stampedInBook) stampedAny = true;
+          stampedInBook = false;
+        });
       } catch (e) {
         /* A book stamped before the failure points at the copy, which is its own
            voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
