@@ -275,7 +275,7 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(freed.sort()).toEqual(['Qwen 0.6B', 'Qwen 1.7B']);
   });
 
-  it('#4066 — an absent keepKokoro never touches Kokoro (the run-start callers)', async () => {
+  it('#4066 — an absent keepKokoro never touches Kokoro (the post-score re-assert and a run with no 1.7B)', async () => {
     const m = mockSidecar({ qwen_loaded: false, kokoro_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
     await expect(reconcileResidentQwenTiers({ keep06: false, keep17: false })).resolves.toBe(false);

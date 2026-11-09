@@ -280,7 +280,8 @@ export async function reconcileResidentQwenTiers(
   if (h.qwen_loaded === true && !keep.keep06) evictions.push(unload()); // drop the 0.6B base
   if (h.qwen_base17_loaded === true && !keep.keep17) evictions.push(unload('1.7b')); // drop the 1.7B base
   /* #4066 — only an explicit `keepKokoro: false` (the admission lever for a
-     voice design or a Quality op) drops Kokoro; absent means keep. */
+     voice design or a Quality op, and `keepForRunStart`'s first-chapter target
+     for a run that loads the 1.7B base) drops Kokoro; absent means keep. */
   const dropKokoro = keep.keepKokoro === false && h.kokoro_loaded === true;
   if (dropKokoro) evictions.push(unload('kokoro'));
   if (evictions.length === 0) return false;
