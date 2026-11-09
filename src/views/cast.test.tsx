@@ -13,6 +13,7 @@ import { Provider } from 'react-redux';
 import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import type { OrphanedCharacterFallback } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { voicesSlice } from '../store/voices-slice';
@@ -4157,10 +4158,19 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
 
   function renderPaused(readOnly: boolean, setCharacters = vi.fn()) {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
     });
     store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'complete' }));
-    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    if (readOnly) {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+      /* a run is live: the banner shows */
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    }
     render(
       <Provider store={store}>
         <CastView
@@ -4182,7 +4192,7 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
   it('Cast: the banner is a status region while read-only and absent otherwise', () => {
     renderPaused(true);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner.closest('[role="status"]')).not.toBeNull();
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 
@@ -4225,6 +4235,42 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
       expect(screen.getByTestId(id)).not.toHaveAttribute('aria-disabled');
       expect(screen.getByTestId(id)).not.toBeDisabled();
     }
+  });
+
+  const dragCard = () =>
+    screen
+      .getAllByText('Narrator')
+      .map((el) => el.closest('div[draggable]'))
+      .find((n): n is HTMLElement => !!n)!;
+  const drag = { dataTransfer: { effectAllowed: 'copy', setData: () => {} } };
+
+  it('M4 control: a drop on an editable cast reaches handleDrop and writes', () => {
+    const { setCharacters } = renderPaused(false);
+    act(() => {
+      fireEvent.dragStart(dragCard(), drag);
+    });
+    const row = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragOver(row);
+      fireEvent.drop(row);
+    });
+    expect(setCharacters).toHaveBeenCalledTimes(1);
+  });
+
+  it("M4: a drag started while editable and dropped after the gate rose writes nothing (handleDrop's own guard)", () => {
+    const { setCharacters, store } = renderPaused(false);
+    act(() => {
+      fireEvent.dragStart(dragCard(), drag);
+    });
+    act(() => {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    });
+    const row = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragOver(row);
+      fireEvent.drop(row);
+    });
+    expect(setCharacters).not.toHaveBeenCalled();
   });
 
   it('the same controls are live when the cast is editable', () => {

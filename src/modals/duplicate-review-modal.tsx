@@ -117,7 +117,7 @@ export function DuplicateReviewModal({
   /* Plan 291 (#4031) — link-prior writes only the source book's cast; the open
      book's matchedFrom arrives through the cast slice's PUT, so the link waits
      for a re-analysis. "Different on purpose" saves through its own route. */
-  const linkDisabled = !canLink || loading || busy !== null || readOnly;
+  const linkDisabled = !canLink || loading || busy !== null;
   const variantDisabled = !canLink || loading || busy !== null;
 
   async function handleLink() {
@@ -287,17 +287,22 @@ export function DuplicateReviewModal({
             >
               {busy === 'variant' ? 'Saving…' : 'Different on purpose'}
             </button>
-            {/* A natively disabled button takes no pointer events, so the paused
-                tooltip sits on the wrapper. */}
-            <span className="inline-flex" title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}>
-              <PrimaryButton variant="dark" onClick={handleLink} disabled={linkDisabled}>
-                {busy === 'link'
-                  ? 'Linking…'
-                  : loading
-                    ? 'Loading casts…'
-                    : 'Same character — link them'}
-              </PrimaryButton>
-            </span>
+            <PrimaryButton
+              variant="dark"
+              onClick={() => {
+                if (readOnly) return;
+                void handleLink();
+              }}
+              disabled={linkDisabled}
+              softDisabled={readOnly}
+              title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}
+            >
+              {busy === 'link'
+                ? 'Linking…'
+                : loading
+                  ? 'Loading casts…'
+                  : 'Same character — link them'}
+            </PrimaryButton>
           </div>
         </div>
       </div>

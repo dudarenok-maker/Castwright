@@ -13,6 +13,10 @@ interface PrimaryButtonProps {
   icon?: boolean;
   size?: ButtonSize;
   disabled?: boolean;
+  /** Looks and announces as disabled (aria-disabled) but stays focusable and
+      hoverable so `title` can explain why; the call site ignores the click. */
+  softDisabled?: boolean;
+  title?: string;
   /** Extra classes for a call site that needs more than the default box
       (e.g. a 44px touch floor). Omitted, the button is unchanged. */
   className?: string;
@@ -24,6 +28,8 @@ export function PrimaryButton({
   icon = true,
   size = 'md',
   disabled = false,
+  softDisabled = false,
+  title,
   className = '',
 }: PrimaryButtonProps) {
   const styles: Record<ButtonVariant, string> = {
@@ -34,12 +40,17 @@ export function PrimaryButton({
   };
   const sizing = size === 'sm' ? 'pl-3.5 pr-1 py-1 text-xs' : 'pl-5 pr-1.5 py-1.5 text-sm';
   const dot = size === 'sm' ? 'w-5 h-5' : 'w-7 h-7';
-  const disabledCls = disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : '';
+  const disabledCls = disabled
+    ? 'opacity-50 cursor-not-allowed pointer-events-none'
+    : softDisabled
+      ? 'opacity-50 cursor-not-allowed'
+      : '';
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      aria-disabled={disabled}
+      aria-disabled={disabled || softDisabled}
+      title={title}
       className={`inline-flex items-center gap-2 rounded-full font-medium transition-colors ${sizing} ${styles[variant]} ${disabledCls}${className ? ` ${className}` : ''}`}
     >
       <span>{children}</span>
@@ -261,7 +272,7 @@ export function VoiceSwatch({
     ? loading
       ? `Generating sample for ${voice?.character ?? 'voice'}`
       : `Play sample for ${voice?.character ?? 'voice'}`
-    : undefined;
+    : `${voice?.character ?? 'Voice'} voice`;
   return (
     <div className="inline-flex flex-col items-start">
       <button

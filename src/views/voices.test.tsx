@@ -5,6 +5,7 @@ import { act, render, screen, fireEvent, within, waitFor } from '@testing-librar
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { persistenceMiddleware } from '../store/persistence-middleware';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
@@ -197,6 +198,7 @@ function makeStore() {
       manuscript: manuscriptSlice.reducer,
       voices: voicesSlice.reducer,
       notifications: notificationsSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
   });
   store.dispatch(castSlice.actions.setCharacters(characters));
@@ -2725,7 +2727,10 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     const store = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
     store.dispatch(uiSlice.actions.confirmCast());
-    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    if (readOnly) {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'b1', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    }
     render(
       <Provider store={store}>
         <LibraryView library={library} />
@@ -2741,7 +2746,7 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
   it('Voices: the banner is a status region while read-only and absent otherwise', () => {
     renderPaused(true);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner.closest('[role="status"]')).not.toBeNull();
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 
@@ -2758,6 +2763,7 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     const compare = screen.getByRole('button', { name: 'Compare' });
     expect(compare).not.toHaveAttribute('aria-disabled');
     expect(compare).toBeEnabled();
+    expect(compare.className).toContain('min-h-[44px]');
     fireEvent.click(compare);
     expect(screen.getByText('Compare cast members')).toBeInTheDocument();
     /* route-backed: rebaseline saves through its own route */

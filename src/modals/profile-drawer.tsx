@@ -1209,7 +1209,7 @@ export function ProfileDrawer({
                     aria-label="Rename character"
                     onClick={beginRename}
                     {...pausedControlProps(readOnly)}
-                    className={`shrink-0 text-[11px] font-medium text-ink/45 hover:text-magenta underline-offset-2 hover:underline ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    className={`shrink-0 text-[11px] font-medium text-ink/45 hover:text-magenta underline-offset-2 hover:underline min-h-[44px] fine-pointer:min-h-0 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                   >
                     Rename
                   </button>
@@ -1221,7 +1221,11 @@ export function ProfileDrawer({
             )}
             <p className="text-xs text-ink/60 truncate">{character.role}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-2 rounded-full hover:bg-ink/5 text-ink/60"
+          >
             <IconClose className="w-4 h-4" />
           </button>
         </div>
@@ -1817,7 +1821,7 @@ export function ProfileDrawer({
                             onRename(character.id, a);
                           }}
                           {...pausedControlProps(readOnly)}
-                          className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-magenta/15 hover:text-magenta coarse-pointer:opacity-100 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          className={`inline-flex items-center justify-center w-5 h-5 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full text-ink/55 hover:bg-magenta/15 hover:text-magenta coarse-pointer:opacity-100 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           <IconStar className="w-3 h-3" />
                         </button>
@@ -2171,16 +2175,14 @@ export function ProfileDrawer({
           >
             Discard
           </button>
-          {/* Plan 291 — read-only cast: Save is natively disabled (and so takes no
-              pointer events), so the tooltip sits on its wrapper. */}
-          <span
-            className="inline-flex"
-            title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}
-          >
+          {/* Plan 291 — read-only cast: Save stays focusable and aria-disabled so its
+              tooltip is reachable by keyboard and touch; the click is ignored. */}
           <PrimaryButton
             variant="dark"
-            disabled={readOnly}
+            softDisabled={readOnly}
+            title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}
             onClick={() => {
+              if (readOnly) return;
               /* Per-character engine (plan 108): 'default' clears the
                  field (use the project default); a real engine pins it. */
               const nextEngine = engineChoice === 'default' ? undefined : engineChoice;
@@ -2266,7 +2268,6 @@ export function ProfileDrawer({
           >
             Save changes
           </PrimaryButton>
-          </span>
         </div>
       </aside>
       {personaGuardModal}
@@ -2694,9 +2695,12 @@ export function ToneSlider({
           max={100}
           value={value}
           aria-label={label}
-          disabled={disabled}
+          aria-describedby={disabled ? `tone-paused-${label}` : undefined}
           {...pausedControlProps(disabled)}
-          onChange={(e) => onChange(Number(e.target.value))}
+          onChange={(e) => {
+            if (disabled) return;
+            onChange(Number(e.target.value));
+          }}
           className={`absolute inset-0 w-full opacity-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
         />
         <span
@@ -2704,6 +2708,11 @@ export function ToneSlider({
           style={{ left: `${value}%` }}
         />
       </div>
+      {disabled && (
+        <span id={`tone-paused-${label}`} className="sr-only">
+          {CAST_EDITS_PAUSED_TOOLTIP}
+        </span>
+      )}
       <div className="flex items-center justify-between mt-1.5 text-[11px] text-ink/40">
         <span>{leftLabel}</span>
         <span>{rightLabel}</span>

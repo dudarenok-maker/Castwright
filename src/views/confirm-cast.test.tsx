@@ -6,9 +6,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
+import { bookBusySlice, bookBusyActions } from '../store/book-busy-slice';
 import { ConfirmCastView } from './confirm-cast';
 import type { Character, Voice } from '../lib/types';
 
@@ -721,11 +723,23 @@ describe('ConfirmCastView — virtualisation threshold (plan 93)', () => {
    banner. Its decision tiles are local view state and its Confirm button saves
    nothing to the cast, so none is disabled here. */
 describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  const run = { bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never;
   function renderPaused(readOnly: boolean) {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+    });
     store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
-    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
-    render(
+    if (readOnly) {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+      /* a run is live: the banner shows */
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(run));
+    }
+    const view = render(
       <Provider store={store}>
         <ConfirmCastView
           characters={[marlow, wren]}
@@ -737,17 +751,33 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
         />
       </Provider>,
     );
+    return { store, view };
   }
 
   it('Confirm: the banner is a status region while read-only and absent otherwise', () => {
     renderPaused(true);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner.closest('[role="status"]')).not.toBeNull();
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 
   it('Confirm: no banner when the cast is editable', () => {
     renderPaused(false);
     expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('M1/M2: analysing -> Confirm with busy [] shows no banner, and the status region persists across the toggle', () => {
+    const { store } = renderPaused(true);
+    const region = screen.getByRole('status');
+    expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
+    /* The run ends: the snapshot clears and busy answers []. The era stays
+       latched until the gate re-hydrates, but no run is live. */
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+      store.dispatch(bookBusyActions.setBusy({ bookId: 'bPaused', kinds: [] }));
+    });
+    expect(store.getState().cast.analysisEra?.bPaused).toBeDefined();
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+    expect(screen.getByRole('status')).toBe(region);
   });
 });

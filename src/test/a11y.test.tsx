@@ -34,7 +34,7 @@ import { VoiceLibraryPanel } from '../components/voice-library-panel';
 import { ProfileDrawer } from '../modals/profile-drawer';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { exportsSlice } from '../store/exports-slice';
-import { analysisSlice } from '../store/analysis-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { configSlice } from '../store/config-slice';
 
@@ -434,9 +434,12 @@ describe('a11y — advanced configuration view', () => {
    disables (aria-disabled + tooltip) pass axe. */
 describe('a11y: the banner and disabled controls pass axe', () => {
   function pausedStore() {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, analysis: analysisSlice.reducer },
+    });
     store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
     store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
     return store;
   }
 
@@ -457,8 +460,8 @@ describe('a11y: the banner and disabled controls pass axe', () => {
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 
-  it('the voice library panel with its Assign pills disabled has no axe violations in those pills', async () => {
-    render(
+  it('the voice library panel with its Assign pills disabled has no axe violations', async () => {
+    const { container } = render(
       <Provider store={pausedStore()}>
         <VoiceLibraryPanel
           library={[{ ...library[0], source: 'current' }]}
@@ -473,13 +476,11 @@ describe('a11y: the banner and disabled controls pass axe', () => {
     );
     const pill = screen.getByRole('button', { name: /^Assign Marlow to a character$/ });
     expect(pill).toHaveAttribute('aria-disabled', 'true');
-    /* Scoped to the pill: the voice swatch beside it is an unnamed button
-       (pre-existing, not under test here). */
-    expect(await axe(pill, AXE_OPTS)).toHaveNoViolations();
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
     expect(pill.closest('[draggable]')).toHaveAttribute('draggable', 'false');
   });
 
-  it('the profile drawer with Save, rename, tone and lock disabled has no axe violations in those controls', async () => {
+  it('the profile drawer with Save, rename, tone and lock disabled has no axe violations', async () => {
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -488,10 +489,12 @@ describe('a11y: the banner and disabled controls pass axe', () => {
         castDesign: castDesignSlice.reducer,
         library: librarySlice.reducer,
         voiceLibrary: voiceLibrarySlice.reducer,
+        analysis: analysisSlice.reducer,
       },
     });
     store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
     store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
     const { container } = render(
       <Provider store={store}>
         <ProfileDrawer
@@ -505,17 +508,6 @@ describe('a11y: the banner and disabled controls pass axe', () => {
       </Provider>,
     );
     expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
-    /* Scoped to the banner and the controls this task disables: the drawer
-       carries wider, pre-existing markup that is not under test here. */
-    const scoped = [
-      container.ownerDocument.querySelector('[data-testid="cast-edits-paused-banner"]'),
-      screen.getByRole('button', { name: 'Save changes' }),
-      screen.getByRole('button', { name: 'Rename character' }),
-      screen.getByRole('button', { name: /^Lock$/ }),
-      ...Array.from(container.ownerDocument.querySelectorAll('input[type="range"]')),
-    ] as HTMLElement[];
-    for (const el of scoped) {
-      expect(await axe(el, AXE_OPTS)).toHaveNoViolations();
-    }
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });

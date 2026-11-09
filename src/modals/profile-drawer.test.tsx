@@ -7,6 +7,7 @@ import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { castSlice, castActions } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { librarySlice } from '../store/library-slice';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
@@ -133,6 +134,7 @@ function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {
       castDesign: castDesignSlice.reducer,
       library: librarySlice.reducer,
       voiceLibrary: voiceLibrarySlice.reducer,
+      analysis: analysisSlice.reducer,
     },
     preloadedState: myVoices
       ? { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } }
@@ -3057,6 +3059,8 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     act(() => {
       store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
       store.dispatch(castActions.latchAnalysisEra({ bookId: 'bPaused' }));
+      /* a run is live: the banner shows */
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
     });
   }
 
@@ -3065,7 +3069,7 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
     pause(store);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner.closest('[role="status"]')).not.toBeNull();
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 
@@ -3114,15 +3118,23 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(screen.queryByRole('textbox', { name: 'Character name' })).toBeNull();
     const makePrimary = screen.getByRole('button', { name: 'Make Hart the primary name' });
     disabled(makePrimary);
+    /* M6: touch targets on the gated controls */
+    for (const el of [rename, makePrimary]) expect(el.className).toContain('min-h-[44px]');
     fireEvent.click(makePrimary);
     expect(onRename).not.toHaveBeenCalled();
     /* tone */
     const sliders = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'));
     expect(sliders).toHaveLength(4);
     for (const s of sliders) {
-      expect(s).toBeDisabled();
+      /* focusable, so the tooltip is reachable; the explanation is also described */
+      expect(s).not.toBeDisabled();
       disabled(s);
+      expect(s).toHaveAttribute('aria-describedby');
+      expect(document.getElementById(s.getAttribute('aria-describedby')!)).toHaveTextContent(/paused/i);
     }
+    /* Save is focusable too (aria-disabled, tooltip on the button itself) */
+    expect(save).not.toBeDisabled();
+    expect(save).toHaveAttribute('title', expect.stringMatching(/paused/i));
     /* lock voice */
     const lock = screen.getByRole('button', { name: /^Lock$/ });
     disabled(lock);

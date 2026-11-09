@@ -11,7 +11,7 @@
    voice design, the tier pin, ...) stay live. */
 
 import { useAppSelector } from '../store';
-import { selectCastReadOnly, stageBookId } from '../store/book-busy-slice';
+import { selectCastReadOnly, snapshotRunning, stageBookId } from '../store/book-busy-slice';
 
 export const CAST_EDITS_PAUSED_TEXT = 'Re-analysis running — cast edits are paused';
 export const CAST_EDITS_PAUSED_TOOLTIP = 'Paused while the re-analysis runs — available again when it finishes';
@@ -32,17 +32,33 @@ export function pausedControlProps(readOnly: boolean): { 'aria-disabled'?: true;
   return readOnly ? { 'aria-disabled': true, title: CAST_EDITS_PAUSED_TOOLTIP } : {};
 }
 
+/** Is a re-analysis of the stage's book LIVE: the cast is read-only AND its
+    snapshot is running or the busy cache lists `analysis`. The post-run window
+    (era latched, nothing running) keeps the controls disabled for a round trip
+    but is not announced: the copy would be wrong, e.g. on a first upload. */
+export function useCastRunLive(): boolean {
+  return useAppSelector((s) => {
+    const bookId = stageBookId(s);
+    if (!bookId || !selectCastReadOnly(s, bookId)) return false;
+    return snapshotRunning(s, bookId) || (s.bookBusy?.busyByBook?.[bookId]?.includes('analysis') ?? false);
+  });
+}
+
+/** The status region is mounted whenever this renders and only its content
+    toggles, so a screen reader announces the banner when it appears. */
 export function CastEditsPausedBanner({ className = '' }: { className?: string }) {
-  const readOnly = useCastReadOnly();
-  if (!readOnly) return null;
+  const live = useCastRunLive();
   return (
-    <div
-      role="status"
-      data-testid="cast-edits-paused-banner"
-      className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-center gap-3 coarse-pointer:min-h-[44px] ${className}`}
-    >
-      <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" aria-hidden="true" />
-      <p className="text-sm text-amber-900 flex-1">{CAST_EDITS_PAUSED_TEXT}</p>
+    <div role="status">
+      {live && (
+        <div
+          data-testid="cast-edits-paused-banner"
+          className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-center gap-3 coarse-pointer:min-h-[44px] ${className}`}
+        >
+          <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" aria-hidden="true" />
+          <p className="text-sm text-amber-900 flex-1">{CAST_EDITS_PAUSED_TEXT}</p>
+        </div>
+      )}
     </div>
   );
 }
