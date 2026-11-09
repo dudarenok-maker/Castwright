@@ -3046,7 +3046,7 @@ describe('book-state router — PUT /state cast is read-only while an analysis r
     };
   }
 
-  it("PUT /state cast answers 409 book_busy with kinds ['analysis'] while an analysis job is registered, writing nothing", async () => {
+  it('PUT /state cast answers 409 book_busy while an analysis job is registered, writing nothing', async () => {
     const { bookJobKinds } = await import('../workspace/book-op-lock.js');
     const castBefore = readFileSync(castPath(), 'utf8');
     const stateBefore = readFileSync(statePath(), 'utf8');
