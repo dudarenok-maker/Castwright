@@ -10105,10 +10105,26 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
         { ts: 't', kind: 'manual', sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [{ chapterId: 1, sentenceId: 1 }] },
       ],
     });
-    for (const p of owned) writeFileSync(p, p === castMergesJsonPath(book.bookDir) ? journal : '{}');
-    await run(book, { fresh: true });
+    /* cast.json must parse: an unparseable one ends the run in `cast-unreadable`
+       before the Start fresh block, which would make this test vacuous. */
+    const cast = JSON.stringify({
+      characters: [{ id: 'nova', name: 'Nova', role: 'character', color: '#abc', aliases: [] }],
+    });
+    const bytes = new Map<string, string>();
+    for (const p of owned) {
+      const content =
+        p === castMergesJsonPath(book.bookDir) ? journal : p === castJsonPath(book.bookDir) ? cast : '{}';
+      writeFileSync(p, content);
+      bytes.set(p, content);
+    }
+    const stateBefore = readFileSync(statePath, 'utf8');
+    const r = await run(book, { fresh: true });
+    /* The run must have reached the Start fresh block (it ends on the stale
+       state.json at its first verified write, not on an earlier error). */
+    expect(r.events.some((e) => e.kind === 'error' && e.code === 'cast-unreadable')).toBe(false);
     for (const p of owned) expect(existsSync(p), p).toBe(true);
-    expect(readFileSync(castMergesJsonPath(book.bookDir), 'utf8')).toBe(journal);
+    for (const [p, content] of bytes) expect(readFileSync(p, 'utf8'), p).toBe(content);
+    expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
   }, 60_000);
 
   describe('subset route (S9/S10, word-free)', () => {
