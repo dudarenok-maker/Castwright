@@ -912,14 +912,15 @@ export async function ensureCharacterVoiceUuid(
          `voiceId` with the earlier book, and restamping it would orphan its own
          designed voice. */
       let stampedAny = false;
-      const stamp = (c: CastCharacter): CastCharacter => {
-        if (c.voiceUuid) return c;
-        const stamped = withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`, copies);
-        stampedAny = true; // only once the transform succeeded: a throw in it stamps nothing
-        return stamped;
-      };
+      const stamp = (c: CastCharacter): CastCharacter =>
+        c.voiceUuid ? c : withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`, copies);
       try {
-        await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
+        /* #4062 — "stamped" is a book's cast.json write having LANDED (the callback), not a
+           row's transform having returned: a failed write, or a later row of the same book
+           throwing, leaves no row naming the copy. */
+        await forEachMatchingCastCharacter(linkId, seriesFilter, stamp, undefined, () => {
+          stampedAny = true;
+        });
       } catch (e) {
         /* A book stamped before the failure points at the copy, which is its own
            voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
@@ -934,7 +935,15 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId, { from: legacyKey, to: `qwen-${uuid}`, copies });
+        const stamped = await stampOwnRow(bookDir, characterId, uuid, linkId, {
+          from: legacyKey,
+          to: `qwen-${uuid}`,
+          copies,
+        });
+        /* #4062 — undefined (the row is gone) or another uuid (a decline stamped it first)
+           means this call stamped nothing: with no walked book holding the copy it is a stray. */
+        if (stamped !== uuid && !stampedFirst) await removeFiles(copied);
+        return stamped;
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;

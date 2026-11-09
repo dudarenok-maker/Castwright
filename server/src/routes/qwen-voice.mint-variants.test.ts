@@ -496,3 +496,83 @@ describe('book-scoped mint copies the legacy family too (#4037)', () => {
     expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
   });
 });
+
+describe('a series mint whose stamp never lands leaves no copy behind (#4062)', () => {
+  const onlyLegacy = () => expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
+
+  it('S1: a failing cast write on the walk removes every copy, the base family too', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    castWriteFails.on = true;
+    await expect(mint()).rejects.toThrow(/ENOSPC/);
+    onlyLegacy();
+    expect(rowOf('Book One').voiceUuid).toBeUndefined();
+    expect(rowOf('Book Two').voiceUuid).toBeUndefined();
+  });
+
+  it('S2: a later row of the same book whose transform throws removes every copy', async () => {
+    /* row A stamps cleanly; row B (same link id, same book) meets an excited variant that
+       landed after the copy loop, whose in-lock copy fails: the book's write never happens */
+    const rowA = withVariants({ angry: { name: 'qwen-v_wren__angry' } });
+    const rowB = { ...withVariants({ excited: { name: 'qwen-v_wren__excited' } }), id: 'wren2' };
+    seed(rowA);
+    writeBook('Book One', [rowA, rowB]);
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest, phase) => {
+      if (!fired && phase === 'after' && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__excited.pt', 'excited-PT');
+        plant('qwen-v_wren__excited.json', 'excited-JSON');
+      }
+    };
+    syncCopyFails.on = true;
+    await expect(mint()).rejects.toThrow(/EBUSY/);
+    expect(fired).toBe(true);
+    expect(readdirSync(qwenDir()).sort()).toEqual(
+      [...legacyFiles, 'qwen-v_wren__excited.pt', 'qwen-v_wren__excited.json'].sort(),
+    );
+    expect(rowOf('Book One').voiceUuid).toBeUndefined();
+  });
+
+  it('S3: the designing row gone when stampOwnRow runs, with no book stamped, removes every copy', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book One', [{ ...legacy }], { confirmed: false });
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest, phase) => {
+      if (!fired && phase === 'after' && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [] }));
+      }
+    };
+    expect(await mint()).toBeUndefined();
+    expect(fired).toBe(true);
+    onlyLegacy();
+  });
+
+  it('S4: the designing row already stamped by a decline, with no book stamped, removes every copy', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book One', [{ ...legacy }], { confirmed: false });
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest, phase) => {
+      if (!fired && phase === 'after' && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [{ ...legacy, voiceUuid: 'u_decl' }] }));
+      }
+    };
+    expect(await mint()).toBe('u_decl');
+    expect(fired).toBe(true);
+    onlyLegacy();
+    expect(rowOf('Book Two').voiceUuid).toBe('u_decl');
+  });
+});
