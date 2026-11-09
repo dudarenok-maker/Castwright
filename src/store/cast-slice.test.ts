@@ -1952,6 +1952,36 @@ describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => 
   });
 });
 
+describe('castSlice — forkCharacterVoiceUuid mirrors withForkedUuid (#4067)', () => {
+  const qwenRow = (qwen: Record<string, unknown>, voiceUuid?: string) =>
+    baseState([makeChar('wren', { voiceUuid, overrideTtsVoices: { qwen } } as never)]);
+
+  it('renames the slot, drops variants and takes the uuid', () => {
+    const next = castSlice.reducer(
+      qwenRow({ name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } }, 'u_shared'),
+      castActions.forkCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_fresh' }),
+    );
+    const c = next.characters[0];
+    expect(c.voiceUuid).toBe('u_fresh');
+    expect(c.overrideTtsVoices!.qwen!.name).toBe('qwen-u_fresh');
+    expect(c.overrideTtsVoices!.qwen!.variants).toBeUndefined();
+  });
+
+  it('a libraryUuid slot keeps its name; a row with no qwen slot just takes the uuid', () => {
+    const lib = castSlice.reducer(
+      qwenRow({ name: 'qwen-lib_1', libraryUuid: 'lib_1' }, 'u_shared'),
+      castActions.forkCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_fresh' }),
+    );
+    expect(lib.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-lib_1');
+    const bare = castSlice.reducer(
+      baseState([makeChar('wren', {} as never)]),
+      castActions.forkCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_fresh' }),
+    );
+    expect(bare.characters[0].voiceUuid).toBe('u_fresh');
+    expect(bare.characters[0].overrideTtsVoices).toBeUndefined();
+  });
+});
+
 describe('selectCastTierByCharacterId (#1308)', () => {
   it('maps characterId to its pinned ttsModelKey', () => {
     const s = {

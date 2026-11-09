@@ -308,6 +308,28 @@ export const castSlice = createSlice({
       }
       c.voiceUuid = voiceUuid;
     },
+    /* #4067 — mirror of the decline route's `withForkedUuid`
+       (server/src/routes/qwen-voice.ts): a row moved onto a voice of its own
+       takes the new uuid, loses its qwen `variants` whether or not it had a
+       uuid before (a legacy row has none, so setCharacterVoiceUuid's
+       changed-uuid test misses it), and its qwen slot name follows to
+       `qwen-<uuid>`, the key the base family was copied to. A slot with a
+       `libraryUuid` is keyed by that, so its name stays. Local-only, no persist
+       rule, like setCharacterVoiceUuid; separate from it because that reducer
+       also mirrors a first mint, where the server keeps the legacy name. */
+    forkCharacterVoiceUuid: (
+      s,
+      a: PayloadAction<{ characterId: string; voiceUuid: string }>,
+    ) => {
+      const { characterId, voiceUuid } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      c.voiceUuid = voiceUuid;
+      const qwen = c.overrideTtsVoices?.qwen;
+      if (!qwen) return;
+      delete qwen.variants;
+      if (qwen.name && !qwen.libraryUuid) qwen.name = `qwen-${voiceUuid}`;
+    },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
        badge + count update live (the DELETE route already removed it from
        cast.json + disk — this is local-only, no persist rule, mirroring

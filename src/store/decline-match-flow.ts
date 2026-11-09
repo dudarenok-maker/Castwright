@@ -60,11 +60,12 @@ export function declineMatchFlow(characterId: string) {
       const { voiceUuid, movedCharacterIds, declinedVoiceFrom, declinedVoiceUuids } = marker;
       dispatch(castActions.setDeclinedVoice({ characterId, declinedVoiceFrom, declinedVoiceUuids }));
       /* The route may have moved the row onto a voice of its own, with the other
-         rows of this book on the same key (pass 10); the reducer drops the stale
-         variant slots when the uuid changes. */
+         rows of this book on the same key (pass 10); the fork reducer mirrors
+         the server's rename of the qwen slot and drops its variant slots (#4067),
+         or the next whole-roster save writes the old ones back. */
       if (voiceUuid) {
         for (const id of [characterId, ...(movedCharacterIds ?? [])]) {
-          dispatch(castActions.setCharacterVoiceUuid({ characterId: id, voiceUuid }));
+          dispatch(castActions.forkCharacterVoiceUuid({ characterId: id, voiceUuid }));
         }
       }
     }
