@@ -149,4 +149,37 @@ describe("bulk design of a decliner's row leaves the declined book alone (#4067,
     expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${u}`);
     expect(readRow('Book One')).toEqual(before);
   });
+
+  it('Book One keeps a library-assigned qwen slot (libraryUuid and provenance) intact', async () => {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook(
+      'Book One',
+      1,
+      bookOneId,
+      wren({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-L1', libraryUuid: 'L1', provenance: 'designed' } } }),
+    );
+    writeBook(
+      'Book Two',
+      2,
+      bookTwoId,
+      wren({ matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } }),
+    );
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    const u = declined.body.voiceUuid as string;
+    const before = readRow('Book One');
+
+    const res = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/design`)
+      .send({ characterIds: ['wren'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('character_designed');
+
+    expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${u}`);
+    expect(readRow('Book One')).toEqual(before);
+    expect(readRow('Book One').overrideTtsVoices.qwen.libraryUuid).toBe('L1');
+  });
 });

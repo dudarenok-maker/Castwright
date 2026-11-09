@@ -385,4 +385,15 @@ describe("the decliner's first design leaves the declined book's legacy row alon
     expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${u}`);
     expect(readRow('Book One')).toEqual(before);
   });
+
+  it('single design: Book One keeps a library-assigned qwen slot (libraryUuid and provenance) intact', async () => {
+    const u = await seedDeclined();
+    writeBook('Book One', 1, bookOneId, plain({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-L1', libraryUuid: 'L1', provenance: 'designed' } } }));
+    const before = readRow('Book One');
+    const res = await stream(false);
+    expect(collectSse(res).find((e) => e.type === 'designed')).toMatchObject({ voiceUuid: u });
+    expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${u}`);
+    expect(readRow('Book One')).toEqual(before);
+    expect(readRow('Book One').overrideTtsVoices.qwen.libraryUuid).toBe('L1');
+  });
 });

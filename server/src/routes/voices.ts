@@ -628,11 +628,17 @@ export async function hasClonedSlotAmongMatches(
   seriesFilter?: { author: string; series: string },
   otherThanEngine?: TtsEngine,
   onlyBookDir?: string,
+  /* #4067 -- when set, only rows that carry this voiceUuid count: a SET of a
+     "Don't reuse"-separated designed voice writes only those rows, so a clone on a row
+     that stayed on the earlier voice is not one the write could retarget. */
+  onlyOnVoiceUuid?: string,
 ): Promise<boolean> {
   const cloned = (c: CastCharacter): boolean =>
-    otherThanEngine
-      ? CLONE_ENGINE_LIST.some((e) => e !== otherThanEngine && hasClonedProvenance(c, e))
-      : characterHasClonedSlot(c);
+    onlyOnVoiceUuid && c.voiceUuid !== onlyOnVoiceUuid
+      ? false
+      : otherThanEngine
+        ? CLONE_ENGINE_LIST.some((e) => e !== otherThanEngine && hasClonedProvenance(c, e))
+        : characterHasClonedSlot(c);
 
   /* Mirrors forEachMatchingCastCharacter's own onlyBookDir special case
      (voices.ts:809) exactly: a caller with no series context must not fall
@@ -669,6 +675,16 @@ export async function hasClonedSlotAmongMatches(
     }
   }
   return false;
+}
+
+/* #4067 -- the uuid of a designed-voice override (`qwen-<uuid>`) when that voice is one
+   "Don't reuse" separated (separated-voices.ts), else undefined. Only rows holding that
+   uuid belong to such a voice; every other row matched by `voiceId` is on another one. */
+async function separatedDesignedUuid(
+  override: { engine: TtsEngine; name: string } | null,
+): Promise<string | undefined> {
+  const uuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+  return uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
 }
 
 /* Batched sibling of hasClonedSlotAmongMatches: ONE walk of the matched
@@ -789,7 +805,10 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
        `ttsEngine` to the incoming engine on every matching character, so a
        character cloned on a DIFFERENT clone-capable engine would keep its
        marker and stop rendering it. Fail loud instead. */
-    if (parsed !== null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine))) {
+    if (
+      parsed !== null &&
+      (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine, undefined, await separatedDesignedUuid(parsed)))
+    ) {
       return res.status(409).json({
         error:
           `Voice "${voiceId}" has a consented cloned voice on a linked character, on a different ` +
@@ -1057,7 +1076,14 @@ export async function applyOverrideToCastFiles(
      finalizes". This IS a genuinely series-wide (or workspace-wide)
      verdict, not a per-book one — labelled accordingly rather than with
      the residual backstop's "(unknown)" sentinel below. */
-  if (await hasClonedSlotAmongMatches(voiceId, seriesFilter, otherThanEngine, onlyBookDir)) {
+  /* #4067 -- a designed-voice name that is a voice "Don't reuse" separated (separated-
+     voices.ts) belongs to the rows that moved onto that uuid and to no other: a row that
+     does not hold it (a declined book's row, with or without a uuid, and a library-assigned
+     slot included) is on another voice, however it matches by `voiceId`. Read here, once,
+     because the walk's callback is synchronous. */
+  const separatedUuid = await separatedDesignedUuid(override);
+  const designedUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+  if (await hasClonedSlotAmongMatches(voiceId, seriesFilter, otherThanEngine, onlyBookDir, separatedUuid)) {
     return {
       updated: 0,
       skipped: [{
@@ -1068,13 +1094,6 @@ export async function applyOverrideToCastFiles(
     };
   }
   const skipped: Array<{ bookDir: string; characterId: string; reason: string }> = [];
-  /* #4067 — a designed-voice name that is a voice "Don't reuse" separated (separated-
-     voices.ts) belongs to the rows that moved onto that uuid and to no other: a row
-     that does not hold it (a declined book's legacy row with no uuid included) is on
-     another voice, however it matches by `voiceId`. Read here, once, because the
-     walk's callback is synchronous. */
-  const designedNameUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
-  const designedIsSeparated = designedNameUuid ? await isSeparatedVoice(designedNameUuid) : false;
   const updated = await forEachMatchingCastCharacter(
     voiceId,
     seriesFilter,
@@ -1097,14 +1116,14 @@ export async function applyOverrideToCastFiles(
          the match (same reference, not counted) instead of rewriting the earlier
          book's slot and engine. Linked rows share the uuid and still take the
          write; a library-assigned slot is unchanged from before, and so is a row
-         with no uuid unless the designed uuid is a separated voice (#4067,
-         above), which only the rows that moved onto it hold. */
-      const designedUuid = designedNameUuid;
+         with no uuid, unless the designed uuid is a separated voice (#4067, above):
+         then only the rows that moved onto it take the write, and every other row
+         (library slot and no-uuid row included) is declined. */
       if (
         designedUuid &&
         original.voiceUuid !== designedUuid &&
-        (original.voiceUuid || designedIsSeparated) &&
-        !original.overrideTtsVoices?.qwen?.libraryUuid
+        (separatedUuid ||
+          (original.voiceUuid && !original.overrideTtsVoices?.qwen?.libraryUuid))
       ) {
         return original;
       }
