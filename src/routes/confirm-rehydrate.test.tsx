@@ -30,7 +30,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
 import { notificationsSlice } from '../store/notifications-slice';
-import { analysisSlice } from '../store/analysis-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { bookBusySlice } from '../store/book-busy-slice';
 import { castGateMiddleware } from '../store/cast-gate';
 import type { Character } from '../lib/types';
@@ -644,4 +644,120 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
     expect(ids(store)).toEqual(['coalfall']);
     expect(store.getState().cast.characters[0].name).toBe('Coalfall Fresh');
   });
+});
+
+/* Plan 291 (#4031), Task 12 fix round 1, I3 - the entry read is owed once for a
+   visit, and runs when the gate drops, however long a run (or a live stream)
+   keeps it up. The entry read is the one handed an AbortSignal; the gate's
+   re-hydrate reads without one. */
+describe('ConfirmRoute — the owed entry read runs once when the gate drops (plan 291, I3)', () => {
+  const entryReads = () =>
+    getBookStateMock.mock.calls.filter(([, signal]) => signal instanceof AbortSignal).length;
+  const reply = (c: Character) => ({
+    state: { bookId: BOOK_ID, chapters: [{ id: 1 }] },
+    cast: { characters: [c] },
+    analysis: {},
+  });
+
+  function makeStoreWith(withGate: boolean) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        revisions: revisionsSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        voices: voicesSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        queue: queueSlice.reducer,
+        settings: settingsSlice.reducer,
+        analysis: analysisSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      middleware: (gDM) =>
+        withGate ? gDM().concat(persistenceMiddleware, castGateMiddleware) : gDM().concat(persistenceMiddleware),
+      preloadedState: { cast: { characters: [VOICELESS_COALFALL], renderedFallbackByCharacter: {} } as never },
+    });
+    store.dispatch(uiActions.openBook({ id: BOOK_ID, status: 'cast_pending' }));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: BOOK_ID, manuscriptId: 'm1', title: 'Coalfall' } as never,
+        sentences: null,
+      }),
+    );
+    store.dispatch(castActions.latchAnalysisEra({ bookId: BOOK_ID }));
+    return store;
+  }
+  function renderRoute(store: ReturnType<typeof makeStoreWith>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${BOOK_ID}/confirm`]}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+  beforeEach(() => {
+    getBookBusyMock.mockReset();
+    getBookBusyMock.mockResolvedValue([]);
+  });
+
+  it('a gated entry sets the analysis gaps once, after the gate it dispatched has released', async () => {
+    /* No gate middleware: only ConfirmRoute's own dispatch can release the era. */
+    getBookBusyMock.mockResolvedValueOnce(['analysis']);
+    getBookStateMock.mockResolvedValue(reply(VOICED_COALFALL));
+    const store = makeStoreWith(false);
+    const gapsBefore = store.getState().chapters.analysisGapById;
+    renderRoute(store);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(entryReads()).toBe(0);
+    expect(store.getState().chapters.analysisGapById).toBe(gapsBefore);
+
+    await waitFor(() => expect(entryReads()).toBe(1), { timeout: 10_000 });
+    expect(store.getState().cast.analysisEra?.[BOOK_ID]).toBeUndefined();
+    expect(store.getState().chapters.analysisGapById).not.toBe(gapsBefore);
+
+    /* The gate rising and dropping again reads nothing more. */
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: BOOK_ID }));
+      store.dispatch(castActions.clearAnalysisEra({ bookId: BOOK_ID, epoch: store.getState().cast.analysisEra![BOOK_ID].epoch }));
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(entryReads()).toBe(1);
+  }, 20_000);
+
+  it('a live run at entry: the owed read runs once, when the run ends and the gate releases', async () => {
+    getBookStateMock.mockResolvedValue(reply(VOICED_COALFALL));
+    const store = makeStoreWith(true);
+    const running = {
+      bookId: BOOK_ID,
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0,
+      remainingMs: null,
+      lastTickAt: 0,
+      state: 'running' as const,
+    };
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(running as never));
+    });
+    renderRoute(store);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(entryReads()).toBe(0);
+
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ ...running, state: 'paused' } as never));
+    });
+    await waitFor(() => expect(store.getState().cast.analysisEra?.[BOOK_ID]).toBeUndefined(), { timeout: 10_000 });
+    await waitFor(() => expect(entryReads()).toBe(1), { timeout: 10_000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(entryReads()).toBe(1);
+  }, 25_000);
 });

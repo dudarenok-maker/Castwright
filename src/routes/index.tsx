@@ -3,7 +3,7 @@
    something different from the current redux state. The Layout component
    owns the reverse direction (Redux→URL sync). */
 
-import { useEffect, useMemo, useState, lazy, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, type ReactNode } from 'react';
 import {
   createHashRouter,
   Navigate,
@@ -722,10 +722,13 @@ export function ConfirmRoute() {
   useHydrateStage({ kind: 'confirm', bookId, openProfileId }, [bookId, openProfileId]);
 
   const dispatch = useAppDispatch();
-  const reduxStore = useStore<RootState>();
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
+  /* Plan 291 (#4031), item 12 — the book's cast gate, and the book whose entry
+     read has run (so a gate that rises and drops again reads nothing twice). */
+  const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
+  const entryReadDone = useRef<string | null>(null);
   /* Re-analyse fires a fresh local-analyzer pass; guard it the same way
      book imports do so it can't evict TTS mid-chapter. Gemini/Gemma
      engines pass through unguarded. */
@@ -758,13 +761,21 @@ export function ConfirmRoute() {
      open reads.
      Plan 291 (#4031), item 12 — Confirm shares the cast gate. While the book's
      cast is read-only (an analysis era is latched, which every analysis apply
-     does) this read is the busy-gated re-hydrate instead: it waits for the run
-     to end, re-reads the cast and releases it, and only then does the read
-     below run for the rest (analysis gaps, designed voices). A read the gate's
-     clear has overtaken (castEraClearedSince) hydrates nothing: like one a cast
-     save overtook, it reads again. */
+     does) this effect issues the busy-gated re-hydrate instead of reading. The
+     read below is owed for the visit (analysis gaps, designed voices) and runs
+     exactly once, whenever the gate drops while the route is mounted: at once
+     if it was never up, otherwise after the gate's own re-hydrate released it
+     (which may be long after: a live stream, or busy still listing the run,
+     keeps the gate up). A read cut short by the gate rising again is owed
+     again. A read the gate's clear has overtaken (castEraClearedSince)
+     hydrates nothing: like one a cast save overtook, it reads again. */
   useEffect(() => {
     if (!bookId) return;
+    if (entryReadDone.current === bookId) return;
+    if (castReadOnly) {
+      void dispatch(rehydrateCastAfterAnalysis(bookId));
+      return;
+    }
     let cancelled = false;
     const life = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -780,6 +791,9 @@ export function ConfirmRoute() {
           const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
           return readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers).then((res) => {
             if (cancelled) return;
+            const done = () => {
+              entryReadDone.current = bookId;
+            };
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
                result can still carry a flagged chapter, decision B). */
@@ -794,34 +808,27 @@ export function ConfirmRoute() {
                 (dispatch(castEraClearedSince(bookId, readSeq) as never) as unknown) === true
               ) {
                 if (n < 2) attempt(n + 1);
+                else done();
                 return;
               }
               /* hydrate, not an edit: setCharacters is persisted and would echo
                  this disk snapshot straight back as a cast.json PUT (#3376). */
               dispatch(castActions.hydrateCharacters(res.cast.characters));
             }
+            done();
           });
         })
         .catch(() => {
           /* non-fatal — fall back to whatever the slice already holds */
         });
     };
-    if (selectCastReadOnly(reduxStore.getState(), bookId)) {
-      void dispatch(rehydrateCastAfterAnalysis(bookId)).then(() => {
-        /* Released: read for the rest. Still gated (a live stream owns the run's
-           end, or the slices don't hold the book yet): the gate re-issues its
-           re-hydrate itself. */
-        if (!cancelled && !selectCastReadOnly(reduxStore.getState(), bookId)) attempt(0);
-      });
-    } else {
-      attempt(0);
-    }
+    attempt(0);
     return () => {
       cancelled = true;
       life.abort();
       timers.forEach(clearTimeout);
     };
-  }, [bookId, dispatch, reduxStore]);
+  }, [bookId, dispatch, castReadOnly]);
 
   return (
     <>
