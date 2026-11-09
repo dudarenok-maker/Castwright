@@ -164,6 +164,10 @@ export interface CapacityRetryOpts {
       default `describeBlockers`; defaults to the leaf gate's
       `isGenerationKnownActive`. */
   isGenerationKnownActive?: () => boolean;
+  /** #4066 — true when the blocked op is a chapter render's own synth call
+      (`SidecarTtsProvider`). The render is then the one asking for capacity,
+      so the give-up message never names it as what holds the model. */
+  isRenderSynth?: boolean;
   /** Injected "is a VoiceDesign currently resident/in-flight on the SAME
       device this admission was denied on" check — defaults to
       `defaultIsDesignResident`, which reads
@@ -306,7 +310,9 @@ export async function withCapacityRetry(
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
   const messageCtx: BlockerMessageContext = {
     isKokoroPreloadOn: opts.isKokoroPreloadOn ?? defaultIsKokoroPreloadOn,
-    isGenerationKnownActive: opts.isGenerationKnownActive ?? isGenerationKnownActive,
+    isGenerationKnownActive: opts.isRenderSynth
+      ? () => false
+      : (opts.isGenerationKnownActive ?? isGenerationKnownActive),
   };
   const describeBlockers =
     opts.describeBlockers ?? ((deviceKey: string) => defaultDescribeBlockers(deviceKey, undefined, messageCtx));

@@ -1051,6 +1051,24 @@ describe('withCapacityRetry — #4066 give-up message and the auto-free lever', 
     expect(msg).toMatch(/The standard Qwen voice model is loaded — It is in use by the chapter render in progress/);
   });
 
+  it('does not blame the render for holding the model when the blocked op IS the render synth', async () => {
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, kokoroLoaded: false }));
+    const err = await withCapacityRetry(async () => noCapacityResponse(6_144, 'cuda:0'), {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      endpointUnloadNotes: () => [],
+      evictIdleTts: async () => false,
+      isGenerationKnownActive: () => true,
+      isRenderSynth: true,
+      pollMs: 0,
+      maxAttempts: 2,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect((err as Error).message).not.toMatch(/in use by the chapter render/);
+  });
+
   it('a request that fits never pulls the auto-free lever', async () => {
     const evictIdleTts = vi.fn(async () => true);
     const res = await withCapacityRetry(async () => okResponse(), {
