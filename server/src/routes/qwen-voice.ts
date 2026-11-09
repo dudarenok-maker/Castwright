@@ -427,14 +427,23 @@ function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCh
    base family only, so a surviving slot would ask for a `.pt` that does not exist
    (`voice_not_designed` at synth). Same reason and shape as voice-library.ts's
    assign route. The earlier book's variant files and its own slots are
-   untouched. */
+   untouched. #4067 — the slot's stored `name` follows the uuid to `qwen-<uuid>`
+   (the key the base family was copied to), so a reader of the name, not the uuid,
+   never gets the earlier book's voice. A library-assigned slot's key is its
+   `libraryUuid`, not this row's uuid, so its name is left alone. */
 function withForkedUuid(c: CastCharacter, newUuid: string): CastCharacter {
   const qwen = c.overrideTtsVoices?.qwen;
+  const renamed = qwen?.name && !qwen.libraryUuid;
   return {
     ...c,
     voiceUuid: newUuid,
-    ...(qwen?.variants
-      ? { overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants: undefined } } }
+    ...(qwen && (qwen.variants || renamed)
+      ? {
+          overrideTtsVoices: {
+            ...c.overrideTtsVoices,
+            qwen: { ...qwen, ...(renamed ? { name: `qwen-${newUuid}` } : {}), variants: undefined },
+          },
+        }
       : {}),
   };
 }

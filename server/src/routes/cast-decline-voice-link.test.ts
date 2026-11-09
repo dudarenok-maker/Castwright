@@ -302,6 +302,31 @@ describe('the separation: after a decline the row is on a voice no other book ho
     familyIntact();
   });
 
+  it('#4067: every moved row\'s stored qwen name follows its uuid to the new key; Book One and a stranger keep theirs', async () => {
+    seedShared();
+    book('Book Three', [
+      wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared') }),
+      wren({ id: 'stranger', voiceId: 'v_other', voiceUuid: 'u_shared', ...slot('u_shared') }), // another voice: stays
+    ]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three'), ...slot('u_shared') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const fresh = readRows('Book Two')[0].voiceUuid as string;
+    expect(readRows('Book Two')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book Three')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book Four')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book Three')[1].overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+    expect(readRows('Book One')[0].overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+  });
+
+  it('#4067: a legacy row (no uuid, name qwen-<voiceId>) is renamed to its new uuid key too', async () => {
+    book('Book One', [wren({ overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } })]);
+    book('Book Two', [wren({ ...linkTo('Book One'), overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const fresh = readRows('Book Two')[0].voiceUuid as string;
+    expect(readRows('Book Two')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book One')[0].overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
+  });
+
   it('a branch: two rows linking to Two both move, and what links to either', async () => {
     seedShared();
     book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
