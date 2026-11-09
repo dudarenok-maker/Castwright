@@ -54,7 +54,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 /* Makes a synchronous copy (the walk's in-lock refresh) whose destination matches fail with EBUSY. */
 const syncCopyFails = vi.hoisted(() => ({ on: null as null | RegExp }));
 /* Makes the refresh's synchronous rename into a matching destination fail `times` times with `code`. */
-const syncRenameFails = vi.hoisted(() => ({ on: null as null | RegExp, times: 0, code: 'EPERM', calls: 0 }));
+const syncRenameFails = vi.hoisted(() => ({ on: null as null | RegExp, times: 0, code: 'EPERM', calls: 0, skip: 0 }));
+/* Makes a synchronous stat of a path matching `on` fail with `code` (the separated-voice record read). */
+const syncStatFails = vi.hoisted(() => ({ on: null as null | RegExp, code: 'EACCES' }));
 /* Sees every synchronous rename's source before it runs. */
 const renameSeen = vi.hoisted(() => ({ fn: null as null | ((from: string) => void) }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -69,7 +71,9 @@ vi.mock('node:fs', async (importOriginal) => {
     renameSeen.fn?.(String(src));
     if (syncRenameFails.on && syncRenameFails.on.test(String(dest))) {
       syncRenameFails.calls++;
-      if (syncRenameFails.times > 0) {
+      if (syncRenameFails.skip > 0) {
+        syncRenameFails.skip--; // the first `skip` matching renames succeed
+      } else if (syncRenameFails.times > 0) {
         syncRenameFails.times--;
         throw Object.assign(new Error(`${syncRenameFails.code}: operation not permitted`), {
           code: syncRenameFails.code,
@@ -78,7 +82,19 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return actual.renameSync(src, dest);
   }) as typeof actual.renameSync;
-  return { ...actual, default: { ...actual, copyFileSync, renameSync }, copyFileSync, renameSync };
+  const statSync = ((path: unknown, ...rest: unknown[]) => {
+    if (syncStatFails.on && syncStatFails.on.test(String(path))) {
+      throw Object.assign(new Error(`${syncStatFails.code}: injected stat failure`), { code: syncStatFails.code });
+    }
+    return (actual.statSync as (...a: unknown[]) => unknown)(path, ...rest);
+  }) as typeof actual.statSync;
+  return {
+    ...actual,
+    default: { ...actual, copyFileSync, renameSync, statSync },
+    copyFileSync,
+    renameSync,
+    statSync,
+  };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -198,6 +214,8 @@ beforeEach(() => {
   syncRenameFails.times = 0;
   syncRenameFails.code = 'EPERM';
   syncRenameFails.calls = 0;
+  syncRenameFails.skip = 0;
+  syncStatFails.on = null;
   renameSeen.fn = null;
 });
 afterAll(() => {
@@ -695,6 +713,78 @@ describe('a variant recorded after the mint re-keyed the rows follows the mint (
       expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
     }
     expect(read(`qwen-${uuid}__sad.pt`)).toBe('NEW-SAD-PT');
+  });
+
+  it('fails closed: a separated-voice record that cannot be read delivers no take', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    plant('qwen-u_unread.pt', 'BASE-PT'); // byte-equal base: only the separated check can refuse
+    const cast = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+    cast.characters[0] = { ...cast.characters[0], voiceUuid: 'u_unread' };
+    writeFileSync(castPath('Book One'), JSON.stringify(cast));
+    syncStatFails.on = /separated[\\/]u_unread$/; // no record exists, but the read is not ENOENT
+    expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(rowOf('Book One').overrideTtsVoices?.qwen?.variants?.sad).toBeUndefined();
+    expect(existsSync(file('qwen-u_unread__sad.pt'))).toBe(false);
+  });
+
+  it('a follow whose .json rename fails leaves no .pt behind without its .json', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    syncRenameFails.on = /qwen-[^\\/]+__sad\.json$/;
+    syncRenameFails.times = 1;
+    syncRenameFails.code = 'EINVAL';
+    await expect(persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).rejects.toThrow(
+      /EINVAL/,
+    );
+    expect(existsSync(file(`qwen-${uuid}__sad.pt`))).toBe(false);
+    expect(existsSync(file(`qwen-${uuid}__sad.json`))).toBe(false);
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
+  });
+
+  it('a backup whose restore failed is kept: it is the only copy of the old member', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Three', [{ ...legacy }]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'OLD-SAD-PT');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    const uuid = await mint();
+    plant('qwen-v_wren__sad.pt', 'NEW-SAD-PT');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    /* the .pt rename lands, the .json one fails, and putting the .pt back fails too */
+    syncRenameFails.on = /qwen-[^\\/]+__sad\.(pt|json)$/;
+    syncRenameFails.skip = 1;
+    syncRenameFails.times = 2;
+    syncRenameFails.code = 'EINVAL';
+    await expect(persistVariant(bookDir('Book Three'), 'wren', 'sad', 'qwen-v_wren__sad', series)).rejects.toThrow(
+      /EINVAL/,
+    );
+    const baks = readdirSync(qwenDir()).filter((f) => f.startsWith(`qwen-${uuid}__sad.pt.mint-`) && f.endsWith('.tmp'));
+    expect(baks).toHaveLength(1);
+    expect(read(baks[0])).toBe('OLD-SAD-PT');
+  });
+
+  it('two redesigns of the legacy variant during one walk: the second refresh still lands', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    writeBook('Book Three', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    /* a redesign lands after each of the first two stamps (a refresh in between) */
+    let writes = 0;
+    castWrite.onCastWrite = () => {
+      writes++;
+      if (writes > 2) return;
+      plant('qwen-v_wren__sad.pt', `SAD-NEW-${writes}`);
+      plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    };
+    const uuid = await mint();
+    expect(writes).toBeGreaterThanOrEqual(3);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-NEW-2');
   });
 
   it('interleaved persists give every linked book every take', async () => {
