@@ -1476,14 +1476,16 @@ async function landStagedDesign(
        move, like `sharing`); a first design, a preview and a variant are not. */
     const redesign = !p.emotion && !p.preview && (await exists(qwenVoicePtPath(base)));
     await whileSaving(voiceId, async () => {
-      await moveStaged(staging, voiceId); // P11-2
-      if (redesign) await markBaseRedesigned(voiceId);
-      /* A variant (or its preview) records the base it was rendered against. */
+      /* A variant (or its preview) records the base it was rendered against in its
+         STAGED json, so the json is complete the moment the move lands it: a copy
+         of the key at any point after (the #4037 mint's refresh) carries it. */
       if (p.emotion) {
-        await stampVariantBaseRev(voiceId, variantBaseRev).catch((e) =>
+        await stampVariantBaseRev(staging, variantBaseRev).catch((e) =>
           console.error('[qwen-voice] could not record the base an emotion variant was designed against', e),
         );
       }
+      await moveStaged(staging, voiceId); // P11-2
+      if (redesign) await markBaseRedesigned(voiceId);
     });
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
