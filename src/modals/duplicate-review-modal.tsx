@@ -27,6 +27,7 @@ import { PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
 import { useAppDispatch } from '../store';
 import { castActions } from '../store/cast-slice';
+import { CAST_EDITS_PAUSED_TOOLTIP, useCastReadOnly } from '../components/cast-edits-paused-banner';
 import { notificationsActions } from '../store/notifications-slice';
 import { pickMergeSurvivor } from '../lib/voice-character-link';
 import type { Character, Voice } from '../lib/types';
@@ -82,6 +83,7 @@ export function DuplicateReviewModal({
   hydrationError = null,
 }: DuplicateReviewModalProps) {
   const dispatch = useAppDispatch();
+  const readOnly = useCastReadOnly();
   const [busy, setBusy] = useState<'link' | 'variant' | null>(null);
   const [error, setError] = useState<string | null>(null);
   /* Which side survives a "link" action. Default = the side
@@ -112,7 +114,10 @@ export function DuplicateReviewModal({
   const winner = survivor === 'a' ? sideA : sideB;
   const loser = survivor === 'a' ? sideB : sideA;
   const canLink = !!sideA.character && !!sideB.character;
-  const linkDisabled = !canLink || loading || busy !== null;
+  /* Plan 291 (#4031) — link-prior writes only the source book's cast; the open
+     book's matchedFrom arrives through the cast slice's PUT, so the link waits
+     for a re-analysis. "Different on purpose" saves through its own route. */
+  const linkDisabled = !canLink || loading || busy !== null || readOnly;
   const variantDisabled = !canLink || loading || busy !== null;
 
   async function handleLink() {
@@ -282,13 +287,17 @@ export function DuplicateReviewModal({
             >
               {busy === 'variant' ? 'Saving…' : 'Different on purpose'}
             </button>
-            <PrimaryButton variant="dark" onClick={handleLink} disabled={linkDisabled}>
-              {busy === 'link'
-                ? 'Linking…'
-                : loading
-                  ? 'Loading casts…'
-                  : 'Same character — link them'}
-            </PrimaryButton>
+            {/* A natively disabled button takes no pointer events, so the paused
+                tooltip sits on the wrapper. */}
+            <span className="inline-flex" title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}>
+              <PrimaryButton variant="dark" onClick={handleLink} disabled={linkDisabled}>
+                {busy === 'link'
+                  ? 'Linking…'
+                  : loading
+                    ? 'Loading casts…'
+                    : 'Same character — link them'}
+              </PrimaryButton>
+            </span>
           </div>
         </div>
       </div>

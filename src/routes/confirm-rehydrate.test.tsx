@@ -29,17 +29,22 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
+import { analysisSlice } from '../store/analysis-slice';
+import { bookBusySlice } from '../store/book-busy-slice';
+import { castGateMiddleware } from '../store/cast-gate';
 import type { Character } from '../lib/types';
 
 const BOOK_ID = 'castwright__standalones__the-coalfall-commission';
 
-const { getBookStateMock, putBookStateMock } = vi.hoisted(() => ({
+const { getBookStateMock, putBookStateMock, getBookBusyMock } = vi.hoisted(() => ({
   getBookStateMock: vi.fn(),
   putBookStateMock: vi.fn().mockResolvedValue(undefined),
+  getBookBusyMock: vi.fn(),
 }));
 
 vi.mock('../lib/api', () => ({
   api: {
+    getBookBusy: (...args: unknown[]) => getBookBusyMock(...args),
     getBookState: (bookId: string, signal?: AbortSignal) => getBookStateMock(bookId, signal),
     putBookState: (bookId: string, req: unknown) => putBookStateMock(bookId, req),
     matchVoices: () => new Promise(() => {}), // layout-style match probe; never resolves
@@ -506,5 +511,109 @@ describe('ConfirmRoute — the entry re-read is bounded and aborted (#3967)', ()
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/* Plan 291 (#4031), Task 12, item 12 — Confirm's entry read is the busy-gated
+   re-hydrate while the cast is read-only, and it never hydrates a read that the
+   gate's clear has overtaken. */
+describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 12)', () => {
+  const GATED_BOOK = BOOK_ID;
+  const reply = (c: Character) => ({ state: { bookId: GATED_BOOK, chapters: [] }, cast: { characters: [c] } });
+
+  function makeGatedStore(preload: Character[]) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        revisions: revisionsSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        voices: voicesSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        queue: queueSlice.reducer,
+        settings: settingsSlice.reducer,
+        analysis: analysisSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+      middleware: (gDM) => gDM().concat(persistenceMiddleware, castGateMiddleware),
+      preloadedState: { cast: { characters: preload, renderedFallbackByCharacter: {} } as never },
+    });
+    store.dispatch(uiActions.openBook({ id: GATED_BOOK, status: 'cast_pending' }));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: GATED_BOOK, manuscriptId: 'm1', title: 'Coalfall' } as never,
+        sentences: null,
+      }),
+    );
+    return store;
+  }
+  function renderRoute(store: ReturnType<typeof makeGatedStore>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${GATED_BOOK}/confirm`]}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+  const ids = (store: ReturnType<typeof makeGatedStore>) => store.getState().cast.characters.map((c) => c.id);
+
+  beforeEach(() => {
+    getBookBusyMock.mockReset();
+    getBookBusyMock.mockResolvedValue([]);
+  });
+
+  it('item 12: ConfirmRoute re-hydrates through the busy gate when read-only', async () => {
+    getBookBusyMock.mockResolvedValue(['analysis']);
+    getBookStateMock.mockResolvedValue(reply(VOICED_COALFALL));
+    const store = makeGatedStore([VOICELESS_COALFALL]);
+    store.dispatch(castActions.latchAnalysisEra({ bookId: GATED_BOOK }));
+    renderRoute(store);
+
+    /* The run is on: Confirm reads nothing and hydrates nothing. */
+    await new Promise((r) => setTimeout(r, 300));
+    expect(getBookStateMock).not.toHaveBeenCalled();
+    expect(store.getState().cast.characters[0].overrideTtsVoices).toBeUndefined();
+
+    /* The run ends: the gate reads, hydrates and releases the cast. */
+    getBookBusyMock.mockResolvedValue([]);
+    await waitFor(() => expect(store.getState().cast.analysisEra?.[GATED_BOOK]).toBeUndefined(), { timeout: 10_000 });
+    expect(store.getState().cast.characters[0].overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
+    expect(getBookStateMock).toHaveBeenCalled();
+  }, 20_000);
+
+  it('a read the gate has overtaken is not hydrated: Confirm reads again', async () => {
+    const FRESH = { ...VOICED_COALFALL, name: 'Coalfall Fresh' } as Character;
+    const resolvers: Array<(v: unknown) => void> = [];
+    getBookStateMock.mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    const store = makeGatedStore([VOICELESS_COALFALL]);
+    const seen: string[] = [];
+    store.subscribe(() => seen.push(store.getState().cast.characters[0]?.name ?? ''));
+    renderRoute(store);
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledTimes(1));
+
+    /* While the read is out an analysis lands and the gate's own re-read
+       hydrates the fresh roster and clears the era. */
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: GATED_BOOK }));
+      store.dispatch(castActions.hydrateCharacters([FRESH]));
+      store.dispatch(castActions.clearAnalysisEra({ bookId: GATED_BOOK, epoch: store.getState().cast.analysisEra![GATED_BOOK].epoch }));
+    });
+    expect(store.getState().cast.analysisEra?.[GATED_BOOK]).toBeUndefined();
+    seen.length = 0;
+
+    /* The overtaken read answers with the pre-run cast: it must not land. */
+    await act(async () => resolvers[0](reply(VOICELESS_COALFALL)));
+    expect(seen).not.toContain('Coalfall');
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledTimes(2));
+    await act(async () => resolvers[1](reply(FRESH)));
+    expect(ids(store)).toEqual(['coalfall']);
+    expect(store.getState().cast.characters[0].name).toBe('Coalfall Fresh');
   });
 });

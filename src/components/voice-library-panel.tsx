@@ -7,6 +7,7 @@ import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { assignVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { castActions } from '../store/cast-slice';
+import { pausedControlProps } from './cast-edits-paused-banner';
 
 type Tab = 'all' | 'current' | 'library';
 
@@ -42,6 +43,10 @@ interface VoiceLibraryPanelProps {
      to apply). Drag-and-drop on desktop stays intact regardless. */
   onTapAssign?: (voice: Voice) => void;
   assigningVoiceId?: string | null;
+  /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: a
+     voice card can't be dragged and its Assign pill is aria-disabled. The
+     "My voices" group saves through its own route and stays live. */
+  assignDisabled?: boolean;
   /* fs-41/fs-50 seam 4a — BCP-47 language of the current book. When set
      to a non-English code, voices whose `languageCode` doesn't match are
      hidden behind a "N hidden · can't read <Language> · show all" toggle
@@ -76,6 +81,7 @@ export function VoiceLibraryPanel({
   displayMode = 'aside',
   onTapAssign,
   assigningVoiceId,
+  assignDisabled = false,
   bookLanguage,
   bookId,
   ttsModelKey,
@@ -362,6 +368,7 @@ export function VoiceLibraryPanel({
               onPlaySample={onPlaySample}
               onTapAssign={onTapAssign}
               isAssigningTarget={assigningVoiceId === (v.familyKey ?? v.id)}
+              assignDisabled={assignDisabled}
             />
           ))
         )}
@@ -409,6 +416,8 @@ interface VoiceCardProps {
      reuse voices. isAssigningTarget surfaces the active state. */
   onTapAssign?: (voice: Voice) => void;
   isAssigningTarget?: boolean;
+  /* Plan 291 (#4031) — read-only cast: not draggable, Assign pill aria-disabled. */
+  assignDisabled?: boolean;
   /* Optional status pill rendered beside the character name (plan 117).
      The Qwen "Designed voices" section passes a Designed / Generated badge
      here; preset cards leave it unset. */
@@ -436,6 +445,7 @@ export function VoiceCard({
   onToggleSelect,
   onTapAssign,
   isAssigningTarget = false,
+  assignDisabled = false,
   badge,
   footer,
 }: VoiceCardProps) {
@@ -451,8 +461,9 @@ export function VoiceCard({
       : undefined;
   return (
     <div
-      draggable
+      draggable={!assignDisabled}
       onDragStart={(e) => {
+        if (assignDisabled) return;
         setDraggingVoiceId(voice.familyKey ?? voice.id);
         e.dataTransfer.effectAllowed = 'copy';
       }}
@@ -555,11 +566,13 @@ export function VoiceCard({
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
+            if (assignDisabled) return;
             onTapAssign(voice);
           }}
           aria-label={isAssigningTarget ? `Cancel assigning ${voice.character}` : `Assign ${voice.character} to a character`}
           aria-pressed={isAssigningTarget}
-          className={`shrink-0 min-h-[44px] min-w-[44px] px-3 inline-flex items-center justify-center rounded-full text-xs font-semibold transition-colors ${isAssigningTarget ? 'bg-magenta text-white hover:bg-magenta/90' : 'bg-ink/6 text-ink/70 hover:bg-ink/10 hover:text-ink'}`}
+          {...pausedControlProps(assignDisabled)}
+          className={`shrink-0 min-h-[44px] min-w-[44px] px-3 inline-flex items-center justify-center rounded-full text-xs font-semibold transition-colors ${isAssigningTarget ? 'bg-magenta text-white hover:bg-magenta/90' : 'bg-ink/6 text-ink/70 hover:bg-ink/10 hover:text-ink'} ${assignDisabled ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           {isAssigningTarget ? 'Cancel' : 'Assign'}
         </button>

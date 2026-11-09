@@ -64,6 +64,11 @@ import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
+import {
+  CastEditsPausedBanner,
+  pausedControlProps,
+  useCastReadOnly,
+} from '../components/cast-edits-paused-banner';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
 import { DesignScopePicker } from '../components/design-scope-picker';
 import { MergeSuggestionCard } from '../components/merge-suggestion-card';
@@ -546,6 +551,10 @@ export function CastView({
      source of truth for ttsModelKey after a bulk pin or reset. */
   const storedTiers = useAppSelector(selectCastTierByCharacterId);
   const dispatch = useAppDispatch();
+  /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: what
+     writes the cast slice (voice assign, compare) is disabled; the route-backed
+     controls stay live. */
+  const readOnly = useCastReadOnly();
   /* #2040 Task 17 — "not the same character" for either banner section.
      targetCharacterId is the resolvedCharacterId for an auto-reconciled row,
      or the user-picked live candidate for a needs-decision row. Writes the
@@ -1286,6 +1295,11 @@ export function CastView({
 
   function handleDrop(charId: string) {
     if (!draggingVoiceId) return;
+    if (readOnly) {
+      setDraggingVoiceId(null);
+      setDropTargetCharId(null);
+      return;
+    }
     const voice = findVoice(draggingVoiceId);
     if (!voice) return;
     applyVoiceToCharacter(charId, voice);
@@ -1298,6 +1312,10 @@ export function CastView({
      as handleDrop, then clears assignment mode. */
   function handleTapAssignTarget(charId: string) {
     if (!assigningVoice) return;
+    if (readOnly) {
+      setAssigningVoice(null);
+      return;
+    }
     applyVoiceToCharacter(charId, assigningVoice);
     setAssigningVoice(null);
   }
@@ -1306,6 +1324,7 @@ export function CastView({
      pill on the active voice cancels (sets back to null); tapping it on
      a different voice swaps to that voice. */
   function handleTapAssignToggle(voice: Voice) {
+    if (readOnly) return;
     setAssigningVoice((prev) =>
       (prev?.familyKey ?? prev?.id) === (voice.familyKey ?? voice.id) ? null : voice,
     );
@@ -1324,6 +1343,7 @@ export function CastView({
     >
       <div className="lg:col-span-full -mb-2 space-y-2">
         <QwenStatusNotice />
+        <CastEditsPausedBanner />
         <StaleAudioBanner />
       </div>
       {/* Plan 81 wave 4 — sticky assignment-mode banner. Visible whenever
@@ -2272,6 +2292,7 @@ export function CastView({
               <span className="w-px h-5 bg-canvas/20 hidden sm:inline-block" />
               <button
                 onClick={() => {
+                  if (readOnly) return;
                   if (selectedCharIds.length === 2)
                     setCompareIds([selectedCharIds[0], selectedCharIds[1]]);
                 }}
@@ -2281,7 +2302,8 @@ export function CastView({
                     ? 'Compare these two cast members'
                     : 'Select exactly 2 to compare'
                 }
-                className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                {...pausedControlProps(readOnly)}
+                className={`min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 Compare
               </button>
@@ -2337,6 +2359,7 @@ export function CastView({
             }}
             onTapAssign={handleTapAssignToggle}
             assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
+            assignDisabled={readOnly}
             bookLanguage={bookLanguage}
             bookId={bookId ?? undefined}
             ttsModelKey={ttsModelKey}
@@ -2410,6 +2433,7 @@ export function CastView({
                   }
                 }}
                 assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
+                assignDisabled={readOnly}
                 bookLanguage={bookLanguage}
                 bookId={bookId ?? undefined}
                 ttsModelKey={ttsModelKey}

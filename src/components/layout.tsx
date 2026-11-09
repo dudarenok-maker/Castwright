@@ -43,7 +43,7 @@ import {
   castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
-import { rehydrateCastAfterAnalysis } from '../store/cast-gate';
+import { rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
@@ -1373,6 +1373,10 @@ export function Layout() {
      at the same count re-runs it too (a bare length misses that), while an
      identity-only change does not. */
   const rosterKey = useMemo(() => characters.map((c) => c.id).sort().join('\n'), [characters]);
+  /* Plan 291 (#4031), item 13 — the match's result is a persisted cast save, so
+     it waits until the book's cast is editable. Skipped before the once-guard
+     arms, it runs once after the gate's re-hydrate releases the cast. */
+  const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
   useEffect(() => {
     if (stageKind !== 'confirm') {
       /* Clear the once-guard when leaving the confirm stage so a
@@ -1386,6 +1390,7 @@ export function Layout() {
     if (!bookId) return;
     if (characters.length === 0) return;
     if (manuscript.bookId !== bookId) return;
+    if (castReadOnly) return;
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
@@ -1408,7 +1413,7 @@ export function Layout() {
       if (!settled && voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, rosterKey, manuscript.bookId]);
+  }, [stageKind, bookId, rosterKey, manuscript.bookId, castReadOnly]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past

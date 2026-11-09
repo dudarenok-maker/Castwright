@@ -26,6 +26,12 @@ import { accountSlice, fetchAccountSettings } from '../store/account-slice';
 import { librarySlice } from '../store/library-slice';
 import { tourSlice } from '../store/tour-slice';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
+import { castDesignSlice } from '../store/cast-design-slice';
+import { voicesSlice } from '../store/voices-slice';
+import { voiceLibrarySlice } from '../store/voice-library-slice';
+import { VoiceLibraryPanel } from '../components/voice-library-panel';
+import { ProfileDrawer } from '../modals/profile-drawer';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { exportsSlice } from '../store/exports-slice';
 import { analysisSlice } from '../store/analysis-slice';
@@ -421,5 +427,95 @@ describe('a11y — advanced configuration view', () => {
     // — this confirms the mock override worked and the warning block renders.
     await screen.findByText(/Model split across GPUs/);
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — the paused-edits banner and the controls it
+   disables (aria-disabled + tooltip) pass axe. */
+describe('a11y: the banner and disabled controls pass axe', () => {
+  function pausedStore() {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    return store;
+  }
+
+  it('the Confirm view with the banner has no axe violations', async () => {
+    const { container } = render(
+      <Provider store={pausedStore()}>
+        <ConfirmCastView
+          characters={characters}
+          library={library}
+          title="the Coalfall Commission"
+          onOpenProfile={vi.fn()}
+          onConfirm={vi.fn()}
+          onReanalyse={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Re-analysis running — cast edits are paused');
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+  });
+
+  it('the voice library panel with its Assign pills disabled has no axe violations in those pills', async () => {
+    render(
+      <Provider store={pausedStore()}>
+        <VoiceLibraryPanel
+          library={[{ ...library[0], source: 'current' }]}
+          draggingVoiceId={null}
+          setDraggingVoiceId={vi.fn()}
+          characters={characters}
+          onTapAssign={vi.fn()}
+          assigningVoiceId={null}
+          assignDisabled
+        />
+      </Provider>,
+    );
+    const pill = screen.getByRole('button', { name: /^Assign Marlow to a character$/ });
+    expect(pill).toHaveAttribute('aria-disabled', 'true');
+    /* Scoped to the pill: the voice swatch beside it is an unnamed button
+       (pre-existing, not under test here). */
+    expect(await axe(pill, AXE_OPTS)).toHaveNoViolations();
+    expect(pill.closest('[draggable]')).toHaveAttribute('draggable', 'false');
+  });
+
+  it('the profile drawer with Save, rename, tone and lock disabled has no axe violations in those controls', async () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        voices: voicesSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        library: librarySlice.reducer,
+        voiceLibrary: voiceLibrarySlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    const { container } = render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={characters[1]}
+          voice={library[0]}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          onLock={vi.fn()}
+          onRename={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
+    /* Scoped to the banner and the controls this task disables: the drawer
+       carries wider, pre-existing markup that is not under test here. */
+    const scoped = [
+      container.ownerDocument.querySelector('[data-testid="cast-edits-paused-banner"]'),
+      screen.getByRole('button', { name: 'Save changes' }),
+      screen.getByRole('button', { name: 'Rename character' }),
+      screen.getByRole('button', { name: /^Lock$/ }),
+      ...Array.from(container.ownerDocument.querySelectorAll('input[type="range"]')),
+    ] as HTMLElement[];
+    for (const el of scoped) {
+      expect(await axe(el, AXE_OPTS)).toHaveNoViolations();
+    }
   });
 });

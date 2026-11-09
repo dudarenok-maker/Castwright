@@ -173,6 +173,7 @@ function renderDrawer(
     onReassignLines?: (characterId: string) => void;
     myVoices?: VoiceLibraryEntry[];
     onSave?: (next: Character, meta: { hadConflict: boolean }) => void;
+    onLock?: (character: Character) => void;
   } = {},
 ) {
   const store = makeStore({
@@ -191,7 +192,7 @@ function renderDrawer(
           voice={extra.voice}
           onClose={() => {}}
           onSave={extra.onSave ?? (() => {})}
-          onLock={() => {}}
+          onLock={extra.onLock ?? (() => {})}
           mergeCandidates={extra.mergeCandidates}
           mergeCandidatesPrior={extra.mergeCandidatesPrior}
           onMerge={extra.onMerge}
@@ -3026,5 +3027,142 @@ describe('ProfileDrawer design guard (#3084 W4)', () => {
       expect(generateVoiceStyle).not.toHaveBeenCalled();
       expect(haltActiveGeneration).not.toHaveBeenCalled();
     });
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — read-only cast: the drawer shows the paused-edits
+   banner and disables what writes the cast slice (Save, rename, tone, lock,
+   link-prior); merge, aliases and the library assign save through their own
+   routes and stay live. UX only: the persistence middleware's catch-all is
+   the guard. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  const hart: Character = {
+    id: 'hart',
+    name: 'Hartwell Vale',
+    role: 'character',
+    color: 'eliza',
+    lines: 271,
+    scenes: 9,
+    aliases: ['Hart'],
+  };
+  const sibling: Character = { ...baseChar, id: 'wren-sparrow', name: 'Wren Sparrow' };
+  const prior: PriorMergeCandidate = {
+    id: 'marlow',
+    name: 'Marlow',
+    bookId: 'the Hollow Tide_1',
+    bookTitle: 'The Hollow Tide',
+  };
+
+  function pause(store: ReturnType<typeof makeStore>) {
+    act(() => {
+      store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'bPaused' }));
+    });
+  }
+
+  it('Drawer: the banner is a status region while read-only and absent otherwise', () => {
+    const { store } = renderDrawer(hart);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+    pause(store);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('every listed client-slice control is disabled; every listed route control stays enabled', async () => {
+    const onSave = vi.fn();
+    const onRename = vi.fn();
+    const onLock = vi.fn();
+    const onLinkPrior = vi.fn();
+    const onMerge = vi.fn().mockResolvedValue(undefined);
+    const onAddAlias = vi.fn().mockResolvedValue(undefined);
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    const onReassignLines = vi.fn();
+    const { store } = renderDrawer(hart, {
+      onSave,
+      onRename,
+      onLock,
+      onLinkPrior,
+      onMerge,
+      onAddAlias,
+      onUnlinkAlias,
+      onReassignLines,
+      mergeCandidates: [sibling],
+      mergeCandidatesPrior: [prior],
+    });
+    pause(store);
+    /* aria-disabled on the control; the tooltip on it, or on the wrapper of a
+       natively disabled one (a disabled button takes no pointer events). */
+    const disabled = (el: HTMLElement) => {
+      expect(el).toHaveAttribute('aria-disabled', 'true');
+      expect(el.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    };
+    const live = (el: HTMLElement) => {
+      expect(el).not.toHaveAttribute('aria-disabled', 'true');
+      expect(el).not.toBeDisabled();
+    };
+
+    /* Save */
+    const save = screen.getByRole('button', { name: /^Save changes$/ });
+    disabled(save);
+    fireEvent.click(save);
+    expect(onSave).not.toHaveBeenCalled();
+    /* rename (header) and the alias "make primary" star */
+    const rename = screen.getByRole('button', { name: 'Rename character' });
+    disabled(rename);
+    fireEvent.click(rename);
+    expect(screen.queryByRole('textbox', { name: 'Character name' })).toBeNull();
+    const makePrimary = screen.getByRole('button', { name: 'Make Hart the primary name' });
+    disabled(makePrimary);
+    fireEvent.click(makePrimary);
+    expect(onRename).not.toHaveBeenCalled();
+    /* tone */
+    const sliders = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'));
+    expect(sliders).toHaveLength(4);
+    for (const s of sliders) {
+      expect(s).toBeDisabled();
+      disabled(s);
+    }
+    /* lock voice */
+    const lock = screen.getByRole('button', { name: /^Lock$/ });
+    disabled(lock);
+    fireEvent.click(lock);
+    expect(onLock).not.toHaveBeenCalled();
+
+    /* link-prior: the merge picker's "Link" is disabled, an in-book "Merge" stays live */
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Marlow.*The Hollow Tide/i }));
+    const link = screen.getByRole('button', { name: /^Link$/ });
+    disabled(link);
+    fireEvent.click(link);
+    expect(onLinkPrior).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
+    const merge = screen.getByRole('button', { name: /^Merge$/ });
+    live(merge);
+    fireEvent.click(merge);
+    await waitFor(() => expect(onMerge).toHaveBeenCalledWith('hart', 'wren-sparrow'));
+
+    /* route-backed: aliases, downgrade, reassign lines */
+    live(screen.getByRole('button', { name: 'Add alias' }));
+    live(screen.getByRole('button', { name: 'Unlink Hart' }));
+    live(screen.getByRole('button', { name: 'Downgrade to Unknown male' }));
+    live(screen.getByRole('button', { name: /Reassign lines/ }));
+  });
+
+  it('the same drawer controls are live when the cast is editable', () => {
+    const onSave = vi.fn();
+    const onLock = vi.fn();
+    renderDrawer(hart, { onSave, onLock, onRename: vi.fn() });
+    const save = screen.getByRole('button', { name: /^Save changes$/ });
+    expect(save).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /^Lock$/ }));
+    expect(onLock).toHaveBeenCalledTimes(1);
+    for (const s of Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))) {
+      expect(s).not.toBeDisabled();
+    }
   });
 });

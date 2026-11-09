@@ -1,0 +1,48 @@
+/* Plan 291 (#4031), Task 12 — the UX half of invariant 7 ("lock until
+   reloaded"): while a book's analysis runs (or its era is latched) its cast
+   is read-only, and this banner says so on every surface that edits it
+   (Cast, the profile drawer, Voices, Confirm).
+
+   UX only. Correctness rests on the persistence middleware's catch-all
+   (persistence-middleware.ts), which builds no cast save for a read-only
+   book whatever a control does; the controls disabled through
+   `pausedControlProps` just stop offering a change that would be refused.
+   Controls that save through their own routes (merge, orphan links, aliases,
+   voice design, the tier pin, ...) stay live. */
+
+import { useAppSelector } from '../store';
+import { selectCastReadOnly, stageBookId } from '../store/book-busy-slice';
+
+export const CAST_EDITS_PAUSED_TEXT = 'Re-analysis running — cast edits are paused';
+export const CAST_EDITS_PAUSED_TOOLTIP = 'Paused while the re-analysis runs — available again when it finishes';
+
+/** Is the cast of the book the stage names read-only? Structural, so a
+    hand-built test store without the gate's slices reads as editable. */
+export function useCastReadOnly(): boolean {
+  return useAppSelector((s) => {
+    const bookId = stageBookId(s);
+    return bookId ? selectCastReadOnly(s, bookId) : false;
+  });
+}
+
+/** The attributes of a control that is disabled while the cast is read-only:
+    `aria-disabled` and a tooltip, with the control left focusable so the
+    tooltip stays reachable. The handler must still ignore the click. */
+export function pausedControlProps(readOnly: boolean): { 'aria-disabled'?: true; title?: string } {
+  return readOnly ? { 'aria-disabled': true, title: CAST_EDITS_PAUSED_TOOLTIP } : {};
+}
+
+export function CastEditsPausedBanner({ className = '' }: { className?: string }) {
+  const readOnly = useCastReadOnly();
+  if (!readOnly) return null;
+  return (
+    <div
+      role="status"
+      data-testid="cast-edits-paused-banner"
+      className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-center gap-3 coarse-pointer:min-h-[44px] ${className}`}
+    >
+      <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" aria-hidden="true" />
+      <p className="text-sm text-amber-900 flex-1">{CAST_EDITS_PAUSED_TEXT}</p>
+    </div>
+  );
+}

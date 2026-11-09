@@ -6154,3 +6154,79 @@ describe('Layout — a full read issued before the gate cleared never lands stal
     for (const ids of castPuts(putsBefore, 'X')) expect(ids).not.toContain('yuri');
   }, 20_000);
 });
+
+describe("Layout — Confirm's voice-match waits for an editable cast (plan 291, #4031 Task 12, item 13)", () => {
+  /* The match's result is a persisted action (applyVoiceMatches). While the
+     cast is read-only the match is skipped and its once-guard stays unspent, so
+     it runs once after the gate's re-hydrate. */
+  const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' };
+  let busyKinds: string[];
+  beforeEach(() => {
+    busyKinds = ['analysis'];
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    getBookBusyMock.mockImplementation(async () => busyKinds);
+    putBookStateMock.mockReset();
+    putBookStateMock.mockResolvedValue(undefined);
+  });
+  afterEach(async () => {
+    getBookBusyMock.mockImplementation(async () => []);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+  const matchFor = (voiceId: string) => ({
+    matches: [
+      {
+        characterId: 'eliza',
+        candidates: [{ voiceId, fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }],
+      },
+    ],
+  });
+
+  it('item 13: the Confirm voice-match skips while read-only, does not arm its once-guard, and runs once after the re-hydrate', async () => {
+    matchVoicesMock.mockReset();
+    matchVoicesMock.mockResolvedValue(matchFor('v-after'));
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'A');
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    });
+    renderLayoutAt(store, 'A');
+    /* The slices hold A's cast, yet the run is on: no match. */
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(matchVoicesMock).not.toHaveBeenCalled();
+
+    /* The run ends: the gate re-reads the cast and releases it. */
+    busyKinds = [];
+    await waitFor(() => expect(store.getState().cast.analysisEra?.A).toBeUndefined(), { timeout: 10_000 });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+    expect(matchVoicesMock).toHaveBeenCalledWith({
+      bookId: 'A',
+      characters: [expect.objectContaining({ id: eliza.id })],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+  }, 20_000);
+
+  it('item 13 (Task-11 state): a voice-match while read-only produces no PUT and one toast', async () => {
+    /* A match that was already answering when the gate came up. */
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'A');
+    act(() => {
+      store.dispatch(
+        manuscriptSlice.actions.hydrateFromBookState({
+          state: { bookId: 'A', manuscriptId: 'mA', title: 'Book A' } as never,
+          sentences: null,
+        }),
+      );
+      store.dispatch(castActions.hydrateCharacters([eliza as never]));
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    });
+    act(() => {
+      store.dispatch(castActions.applyVoiceMatches(matchFor('v-late') as never));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(putBookStateMock.mock.calls.filter(([, req]) => (req as { slice: string }).slice === 'cast')).toEqual([]);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+    expect(store.getState().notifications.toasts[0].message).toMatch(/Re-analysis running/);
+  });
+});

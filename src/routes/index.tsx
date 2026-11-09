@@ -27,7 +27,14 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
-import { beginFullRead, castWrittenSince, dropRetainedSaves, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  beginFullRead,
+  castEraClearedSince,
+  castWrittenSince,
+  dropRetainedSaves,
+  flushBookPersistence,
+} from '../store/persistence-middleware';
+import { rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -715,6 +722,7 @@ export function ConfirmRoute() {
   useHydrateStage({ kind: 'confirm', bookId, openProfileId }, [bookId, openProfileId]);
 
   const dispatch = useAppDispatch();
+  const reduxStore = useStore<RootState>();
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
@@ -747,7 +755,14 @@ export function ConfirmRoute() {
      #3967 — each attempt is bounded (15 s, growing on later attempts), an
      expired read is retried on the hydrate's schedule until it lands, and it
      is aborted when the route is left, so re-entering Confirm never piles up
-     open reads. */
+     open reads.
+     Plan 291 (#4031), item 12 — Confirm shares the cast gate. While the book's
+     cast is read-only (an analysis era is latched, which every analysis apply
+     does) this read is the busy-gated re-hydrate instead: it waits for the run
+     to end, re-reads the cast and releases it, and only then does the read
+     below run for the rest (analysis gaps, designed voices). A read the gate's
+     clear has overtaken (castEraClearedSince) hydrates nothing: like one a cast
+     save overtook, it reads again. */
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
@@ -774,7 +789,10 @@ export function ConfirmRoute() {
               );
             }
             if (res?.cast?.characters && res.cast.characters.length > 0) {
-              if ((dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true) {
+              if (
+                (dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true ||
+                (dispatch(castEraClearedSince(bookId, readSeq) as never) as unknown) === true
+              ) {
                 if (n < 2) attempt(n + 1);
                 return;
               }
@@ -788,13 +806,22 @@ export function ConfirmRoute() {
           /* non-fatal — fall back to whatever the slice already holds */
         });
     };
-    attempt(0);
+    if (selectCastReadOnly(reduxStore.getState(), bookId)) {
+      void dispatch(rehydrateCastAfterAnalysis(bookId)).then(() => {
+        /* Released: read for the rest. Still gated (a live stream owns the run's
+           end, or the slices don't hold the book yet): the gate re-issues its
+           re-hydrate itself. */
+        if (!cancelled && !selectCastReadOnly(reduxStore.getState(), bookId)) attempt(0);
+      });
+    } else {
+      attempt(0);
+    }
     return () => {
       cancelled = true;
       life.abort();
       timers.forEach(clearTimeout);
     };
-  }, [bookId, dispatch]);
+  }, [bookId, dispatch, reduxStore]);
 
   return (
     <>

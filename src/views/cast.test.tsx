@@ -4136,3 +4136,102 @@ describe('CastView — a rejected merge-suggestion accept re-reads the cast (pla
     err.mockRestore();
   });
 });
+
+/* Plan 291 (#4031), Task 12 — while the book's cast is read-only (an analysis
+   era is latched) Cast shows the paused-edits banner and disables the controls
+   that write the cast slice; the controls that save through their own routes
+   stay live. UX only: the persistence middleware's catch-all is the guard. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  const qwenWren: Character = {
+    id: 'wren',
+    name: 'Wren',
+    role: 'Scout',
+    color: 'rival',
+    lines: 4,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    voiceId: 'vid-wren',
+  };
+
+  function renderPaused(readOnly: boolean, setCharacters = vi.fn()) {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'complete' }));
+    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, marrow, qwenWren]}
+          setCharacters={setCharacters}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    return { store, setCharacters };
+  }
+
+  it('Cast: the banner is a status region while read-only and absent otherwise', () => {
+    renderPaused(true);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('Cast: no banner when the cast is editable', () => {
+    renderPaused(false);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('every listed client-slice control is disabled; every listed route control stays enabled', () => {
+    const { setCharacters } = renderPaused(true);
+    /* voice assign: the Assign pill is aria-disabled with a tooltip and starts no assignment */
+    const pill = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ })[0];
+    expect(pill).toHaveAttribute('aria-disabled', 'true');
+    expect(pill).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(pill);
+    expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
+    /* drag-assign: the card is not draggable and a drop writes nothing */
+    const libraryCard = screen
+      .getAllByText('Narrator')
+      .map((el) => el.closest('div[draggable]'))
+      .find((n): n is HTMLElement => !!n)!;
+    expect(libraryCard).toHaveAttribute('draggable', 'false');
+    const marrowRow = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragStart(libraryCard, { dataTransfer: { effectAllowed: 'copy', setData: () => {} } });
+      fireEvent.dragOver(marrowRow);
+      fireEvent.drop(marrowRow);
+    });
+    expect(setCharacters).not.toHaveBeenCalled();
+    /* the compare modal: Compare is aria-disabled with a tooltip and opens nothing */
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    fireEvent.click(checkboxIn(rowFor('Mr. Marrow')));
+    const compare = screen.getByRole('button', { name: /^Compare$/ });
+    expect(compare).toHaveAttribute('aria-disabled', 'true');
+    expect(compare).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(compare);
+    expect(screen.queryByText('Compare cast members')).toBeNull();
+    /* route-backed: the tier pin saves through setCastTier and stays live */
+    for (const id of ['pin-higher-quality', 'reset-tier']) {
+      expect(screen.getByTestId(id)).not.toHaveAttribute('aria-disabled');
+      expect(screen.getByTestId(id)).not.toBeDisabled();
+    }
+  });
+
+  it('the same controls are live when the cast is editable', () => {
+    renderPaused(false);
+    const pill = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ })[0];
+    expect(pill).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(pill);
+    expect(screen.getByTestId('tap-assign-banner')).toBeInTheDocument();
+  });
+});

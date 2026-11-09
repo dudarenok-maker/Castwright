@@ -2675,3 +2675,63 @@ describe('#1866 — the rollup empty state vs. the facet rows', () => {
     expect(screen.getByText('Preset')).toBeInTheDocument();
   });
 });
+
+/* Plan 291 (#4031), Task 12 — read-only cast: Voices shows the paused-edits
+   banner and disables Compare (its modal writes the open book's cast slice);
+   rebaseline and the other route-backed controls stay live. UX only: the
+   persistence middleware's catch-all is the guard. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  function renderPaused(readOnly: boolean) {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    render(
+      <Provider store={store}>
+        <LibraryView library={library} />
+      </Provider>,
+    );
+    return store;
+  }
+  const pickCard = (name: string) =>
+    fireEvent.click(
+      screen.getByText(name).closest('div.group')!.querySelector('[aria-label="Select voice for compare"]')!,
+    );
+
+  it('Voices: the banner is a status region while read-only and absent otherwise', () => {
+    renderPaused(true);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    expect(banner).toHaveAttribute('role', 'status');
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('Voices: no banner when the cast is editable', () => {
+    renderPaused(false);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('every listed client-slice control is disabled; every listed route control stays enabled', () => {
+    renderPaused(true);
+    pickCard('Narrator');
+    pickCard('Oduvan');
+    const compare = screen.getByRole('button', { name: 'Compare' });
+    expect(compare).toHaveAttribute('aria-disabled', 'true');
+    expect(compare).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(compare);
+    expect(screen.queryByText('Compare cast members')).toBeNull();
+    /* route-backed: rebaseline saves through its own route */
+    const rebaseline = screen.getByTestId('open-rebaseline');
+    expect(rebaseline).not.toHaveAttribute('aria-disabled');
+    expect(rebaseline).not.toBeDisabled();
+  });
+
+  it('Voices: Compare opens its modal when the cast is editable', () => {
+    renderPaused(false);
+    pickCard('Narrator');
+    pickCard('Oduvan');
+    const compare = screen.getByRole('button', { name: 'Compare' });
+    expect(compare).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(compare);
+    expect(screen.getByText('Compare cast members')).toBeInTheDocument();
+  });
+});
