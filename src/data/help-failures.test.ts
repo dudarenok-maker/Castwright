@@ -10,7 +10,7 @@ describe('help content (fe-29)', () => {
       expect(e.userMessage.length).toBeGreaterThan(0);
       expect(e.remediation.length).toBeGreaterThan(0);
     }
-    expect(HELP_FAILURE_ENTRIES.length).toBe(28);
+    expect(HELP_FAILURE_ENTRIES.length).toBe(29);
   });
   it('the endpoint-missing entry is titled "cannot be used" and no longer says "yet" now that endpoints are selectable (#3084 PR 3b review pass 2, #3710 F2)', () => {
     const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'analyzer-endpoint-missing')!;

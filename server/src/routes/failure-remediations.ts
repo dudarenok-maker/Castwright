@@ -268,6 +268,17 @@ export const FAILURE_REMEDIATIONS = {
       'never overwrite each other. A second change waits its turn and gives up after ten seconds ' +
       'rather than waiting forever. It is almost always over by the time you retry.',
   },
+  'cast-unreadable': {
+    /* #4031 - a re-analysis refused to start because the book's existing cast.json
+       could not be used as the prior cast. Nothing was written. The live message
+       and remediation are chosen by reason (transient vs damaged) in
+       `classifyAnalysisFailure`; this is the offline Help prose covering both. */
+    userMessage:
+      "The book's cast file could not be read, so the re-analysis was stopped before it changed anything.",
+    remediation:
+      'If something else briefly had the file open, wait a few seconds and run the analysis again. If ' +
+      'the file is damaged, re-parse the book or restore its cast from a backup first.',
+  },
   'language-unset': {
     /* #2515 — a chapter was rendered without a book language, so the voice
        engine had no language mapping for the cast. The chapter is skipped

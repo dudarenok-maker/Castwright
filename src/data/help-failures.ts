@@ -54,6 +54,7 @@ const CATEGORIES = {
      file-level classes rather than with `analysis`, even though the analysis
      run is where it currently surfaces. */
   'lock-contention': 'files',
+  'cast-unreadable': 'files',
   'language-unset': 'voices',
   auth: 'analysis',
   unknown: 'other',
@@ -85,6 +86,7 @@ const TITLES = {
   'voice-not-designed': 'Non-English chapter missing a designed voice',
   'cloned-voice-broken': "Cloned voice can't render as itself",
   'lock-contention': 'Something else had the book open',
+  'cast-unreadable': "The book's cast file couldn't be used",
   'language-unset': "Book's language not set",
   auth: 'API key or access problem',
   unknown: 'Unrecognised error',

@@ -9133,6 +9133,7 @@ components:
         - voice-not-designed
         - cloned-voice-broken
         - lock-contention
+        - cast-unreadable
         - language-unset
         - analyzer-request-rejected
         - analyzer-invalid-output

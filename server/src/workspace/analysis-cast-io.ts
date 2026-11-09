@@ -31,7 +31,8 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { withCastLock } from './cast-lock.js';
 import { withBookLock } from './book-lock.js';
-import { ABSENT, readJsonWithFingerprint } from './cast-fingerprint.js';
+import { ABSENT, UNREADABLE, readJsonWithFingerprint } from './cast-fingerprint.js';
+import { PriorCastUnreadableError } from './prior-cast-error.js';
 import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link.js';
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
 import {
@@ -77,29 +78,21 @@ export interface PriorCastSnapshot {
   source: CastSource;
 }
 
-/** cast.json exists but could not be read (EBUSY/EPERM) or parsed. The run stops
-    before writing anything: falling back to the stale carryover would replace
-    every edit since the Re-parse. The message is fixed and path-free - it can
-    reach a client. */
-export class PriorCastUnreadableError extends Error {
-  constructor() {
-    super('The cast could not be read right now, so the re-analysis was stopped before changing anything. Try again.');
-    this.name = 'PriorCastUnreadableError';
-  }
-}
+export { PriorCastUnreadableError };
 
 /** The prior cast: cast.json, otherwise the reuse-carryover a Re-parse left - but
-    the carryover is used ONLY when cast.json is absent or parses with no
-    characters; an unreadable or unparseable cast.json throws
-    `PriorCastUnreadableError`.
+    the carryover is used ONLY when cast.json is absent or has `characters: []`;
+    an unreadable, unparseable or wrong-shape cast.json throws
+    `PriorCastUnreadableError` (reason `unreadable` | `corrupt`).
     CALLER HOLDS THE CAST LOCK - this is the lock-free inner read (it moved here
     from `readPriorCastForMerge`, which wraps it in the lock). */
 export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastSnapshot> {
   const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
+  if (cast.fingerprint === UNREADABLE) throw new PriorCastUnreadableError('unreadable');
   if (cast.fingerprint !== ABSENT) {
-    const chars = cast.value?.characters;
-    if (cast.value === null || typeof cast.value !== 'object' || (chars !== undefined && !Array.isArray(chars))) {
-      throw new PriorCastUnreadableError();
+    // Read, but not a cast: truncated, not JSON, or no `characters` array.
+    if (cast.value === null || typeof cast.value !== 'object' || !Array.isArray(cast.value.characters)) {
+      throw new PriorCastUnreadableError('corrupt');
     }
   }
   const fromCast = cast.value?.characters;

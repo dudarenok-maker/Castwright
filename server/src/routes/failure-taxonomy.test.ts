@@ -435,6 +435,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'attribution-incomplete',
         'attribution-collapse',
         'auth',
+        'cast-unreadable',
         'cloned-voice-broken',
         'cuda-poisoned',
         'disk-full',
@@ -1479,5 +1480,28 @@ describe('classifyFailure — state-lock timeout from finalize (#3625)', () => {
     const out = describeSynthesisError(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
     expect(out.errorReason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
     expect(out.errorReason).not.toContain('/abs/secret/path');
+  });
+});
+
+describe('classifyAnalysisFailure - an unusable prior cast (#4031)', () => {
+  it('splits transient from corrupt: own code, own copy, no detail, no path, no false retry promise', async () => {
+    const { PriorCastUnreadableError, PRIOR_CAST_UNREADABLE_MESSAGE, PRIOR_CAST_CORRUPT_MESSAGE } = await import(
+      '../workspace/prior-cast-error.js'
+    );
+    const transient = classifyAnalysisFailure(new PriorCastUnreadableError('unreadable'), 'gemini');
+    const corrupt = classifyAnalysisFailure(new PriorCastUnreadableError('corrupt'), 'gemini');
+    expect(transient.code).toBe('cast-unreadable');
+    expect(corrupt.code).toBe('cast-unreadable');
+    expect(transient.userMessage).toBe(PRIOR_CAST_UNREADABLE_MESSAGE);
+    expect(corrupt.userMessage).toBe(PRIOR_CAST_CORRUPT_MESSAGE);
+    expect(transient.userMessage).toMatch(/try again/i);
+    expect(corrupt.userMessage).not.toMatch(/try again/i);
+    expect(corrupt.remediation).toMatch(/re-parse/i);
+    expect(corrupt.remediation).not.toBe(transient.remediation);
+    for (const r of [transient, corrupt]) {
+      expect(r.detail).toBeUndefined();
+      expect(`${r.userMessage} ${r.remediation}`).not.toMatch(/\\|\/|cast\.json|\.audiobook/);
+      expect(r.remediation).not.toMatch(/retry on this chapter/i);
+    }
   });
 });

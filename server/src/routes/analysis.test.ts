@@ -2612,6 +2612,31 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
     }
   });
 
+  it('#4031: an unparseable cast.json rejects instead of falling back to a stale carryover', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castPath(dir), '{"characters": [');
+      writeFileSync(carryPath(dir), JSON.stringify({ characters: [{ id: 'stale' }] }));
+      await expect(readPriorCastForMerge(dir)).rejects.toMatchObject({
+        name: 'PriorCastUnreadableError',
+        reason: 'corrupt',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('#4031: a cast.json that parses but has no characters array is corrupt too', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castPath(dir), '{"other":1}');
+      writeFileSync(carryPath(dir), JSON.stringify({ characters: [{ id: 'stale' }] }));
+      await expect(readPriorCastForMerge(dir)).rejects.toMatchObject({ reason: 'corrupt' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('an EMPTY characters[] in cast.json still falls through to the carryover', async () => {
     const dir = makeBookDir();
     try {
@@ -9681,6 +9706,23 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     events
       .filter((e) => e.kind === 'result' || e.kind === 'error')
       .map((e) => (e.kind === 'error' ? `error:${String(e.code)}` : 'result'));
+
+  it('#4031: a main run on an unparseable cast.json ends in the error terminal with the corrupt copy and writes nothing', async () => {
+    const { PRIOR_CAST_CORRUPT_MESSAGE } = await import('../workspace/prior-cast-error.js');
+    const book = makeBook('corrupt-cast', [{ id: 1, body: WORDED[1] }]);
+    const castPath = join(book.bookDir, '.audiobook', 'cast.json');
+    const carryPath = join(book.bookDir, '.audiobook', 'cast-reuse-carryover.json');
+    writeFileSync(castPath, '{"characters": [');
+    writeFileSync(carryPath, JSON.stringify({ characters: [{ id: 'stale', name: 'Stale' }] }));
+    const r = await run(book);
+    expect(endings(r.events)).toEqual(['error:cast-unreadable']);
+    const err = r.events.find((e) => e.kind === 'error') as { message?: string; detail?: unknown };
+    expect(err.message).toBe(PRIOR_CAST_CORRUPT_MESSAGE);
+    expect(err.detail).toBeUndefined();
+    expect(JSON.stringify(err)).not.toMatch(/[A-Za-z]:\\|[A-Za-z]:\/|\.audiobook/);
+    expect(readFileSync(castPath, 'utf8')).toBe('{"characters": [');
+    expect(r.castCalls).toEqual([]);
+  });
 
   it('M1: with no stage1, every failed chapter with a key — including [] — enters P at load', async () => {
     const chapters: BookChapter[] = [

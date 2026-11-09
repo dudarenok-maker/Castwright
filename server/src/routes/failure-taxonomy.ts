@@ -61,6 +61,11 @@ import {
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import {
+  PriorCastUnreadableError,
+  PRIOR_CAST_CORRUPT_REMEDIATION,
+  PRIOR_CAST_UNREADABLE_REMEDIATION,
+} from '../workspace/prior-cast-error.js';
 
 export type FailureCode =
   | 'vram-spill'
@@ -88,6 +93,7 @@ export type FailureCode =
   | 'voice-not-designed'
   | 'cloned-voice-broken'
   | 'lock-contention'
+  | 'cast-unreadable'
   | 'language-unset'
   | 'auth'
   | 'unknown';
@@ -1068,6 +1074,18 @@ export function classifyAnalysisFailure(
      above the signature scan, #3625.) */
   if (isLockAcquisitionTimeout(err)) {
     return withCopy('lock-contention', LOCK_CONTENTION_REQUEST_ERROR);
+  }
+  /* #4031 - run start refused because the existing cast.json is unreadable (transient)
+     or corrupt (a retry can never fix it). The error's message is a fixed, path-free
+     sentence, so it is safe as `userMessage`; NO `detail` (the raw cause stays in the
+     server log). Remediation is run-level, picked by reason. */
+  if (err instanceof PriorCastUnreadableError) {
+    return withCopy(
+      'cast-unreadable',
+      err.message,
+      undefined,
+      err.reason === 'corrupt' ? PRIOR_CAST_CORRUPT_REMEDIATION : PRIOR_CAST_UNREADABLE_REMEDIATION,
+    );
   }
   if (err instanceof AnalyzerTruncatedError) {
     return withCopy(

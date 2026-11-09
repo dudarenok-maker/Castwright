@@ -740,6 +740,7 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
       const before = readFileSync(castJsonPath(bookDir), 'utf8');
       await expect(materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base })).rejects.toMatchObject({
         name: 'PriorCastUnreadableError',
+        reason: 'corrupt',
         message: expect.not.stringContaining(workspaceRoot),
       });
       expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
@@ -752,9 +753,23 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
       hooks.fingerprintFault = true;
       await expect(materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base })).rejects.toMatchObject({
         name: 'PriorCastUnreadableError',
+        reason: 'unreadable',
       });
       expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
     });
+
+    it.each(['{}', '{"other":1}', '{"characters":{}}', 'null', '[]'])(
+      'a cast.json that parses but is not a cast (%s) is corrupt, not an empty cast',
+      async (body) => {
+        writeFileSync(castJsonPath(bookDir), body);
+        stale();
+        await expect(materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base })).rejects.toMatchObject({
+          name: 'PriorCastUnreadableError',
+          reason: 'corrupt',
+        });
+        expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(body);
+      },
+    );
 
     it('a cast.json that parses with no characters still takes the carryover', async () => {
       writeCast([]);
