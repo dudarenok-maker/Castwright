@@ -6440,20 +6440,24 @@ The automated tests prove the decline-time separation against fixture workspaces
 >   - **4.** Book 2's chapter 42 rendered with QA `ok`. All 10 Bliss segments used Book 2's key, with no `voice_not_designed`.
 >   - **5.** The linked `narrator`, redesigned from Book 2, changed the shared `qwen-<uuid>.pt` for all three books. `melissa-edgley`, which shares a uuid with no link, was designed once from each book and stayed on one uuid.
 >   - **8.** A repeat press returned the same uuid, kept the variants and wrote no new file. This also held with an unrelated book's `cast.json` truncated.
->   - **10.** With Book 1's `cast.json` unreadable, Don't reuse on Book 2's `beryl-edgley` answered `200` and gave it its own uuid with byte copies of the three `qwen-beryl-edgley` files. Book 1's files were unchanged and its `cast.json` was restored byte-identical.
+>   - **10.** With Book 1's `cast.json` unreadable, Don't reuse on Book 2's `beryl-edgley` answered `200` and gave it its own uuid with byte copies of the three `qwen-beryl-edgley` files. Book 1's files were unchanged and its `cast.json` was restored byte-identical. Seen in the legacy shape only (`declinedVoiceUuids: []`, `a120.log:182`): a uuid'd decline with Book 1 unreadable is a different path, because Book 1's uuid cannot then be read from its own `cast.json`.
 >   - **11, except its "also after Book 1 is redesigned" clause.** Book 2 got its own uuid with byte copies of the files, and Book 1 was unchanged. Book 2 was unchanged after Book 1's own redesign, but Book 1 got a `voiceUuid` in that redesign (`rjwz7…`), so the clause does not hold as written (see Wording below).
 >   - **12.** The promote answered `400`, Book 1's `.pt` hashes were unchanged, the preview's files were gone at the decline, and Cancel answered OK.
 >   - **14, except its render clause.** An emotion designed on Book 1 added no slot to Book 2, and the reverse held too. Removing Book 2's `angry` kept Book 1's `qwen-bliss__angry.pt`.
 >   - **15, the case where Book 2's own design is in flight.** The press answered in 0.3 s mid-render. The design landed on Book 2's new uuid, Book 1 was unchanged, and no staging file was left.
 >   - **19's first clause.** Don't reuse right after a design gave Book 2 its own uuid and `.pt`.
 >   - **19's hand-placed staging files.** A `qwen-staging-<21-character id>` family two hours old was removed at restart, and a fresh one was kept.
+> - **Observed in uuid'd declines, not in the full setup:**
+>   - **1 and 2, S12 `tanith-low`** (`a120.log:316-362`). The preview's series mint put both books on `LeXUG1…`. The decline gave Book 2 `bXeC1…` with `declinedVoiceUuids: ["LeXUG1…"]` (in the response and in `cast.json`), byte copies of the `.json`, `.pt` and `__1.7b.pt`, and its variants map dropped. Book 1 kept its uuid, its variants map and its files.
+>   - **1 and 2, S19a `crystal-edgley`** (`a120.log:407-434`). The same outcome, with `__master.wav` copied as well, and `declinedVoiceUuids: ["lkXqR…"]` (Book 1's uuid).
+>   - **The S11 `bliss` decline** (legacy key, no uuid before) answered `declinedVoiceUuids: []` in the HTTP response (`a120.log:15`); the snapshot after it shows `declinedUuids=null` (`:18`).
 > - **Failed, a known bug:**
 >   - **14's render clause.** After Book 1's own redesign, the series mint gave Book 1 a new `voiceUuid`. Its variants still name the legacy `qwen-bliss__*` files, so its emotion lines resolve to a `qwen-<new>__<emotion>` file that does not exist. This is #4037, fixed on `main` by PR #4061 after this run; the render clause is owed again on a build that has it.
 > - **Wording, owed to the owner:** step 11's "Book 1 still has no `voiceUuid` … also after Book 1 is redesigned" does not hold as written. Book 1's own redesign mints a uuid by design (`ensureCharacterVoiceUuid`), while Book 2 is unaffected. The clause probably means Book 2's redesign.
 > - **Not run:**
 >   - **6, 13 and 17:** each needs a real re-analysis. [Step 13 was amended by PR #4061 after this run, and steps 20 and 21 are new; the amended 13 and 20-21 are still owed.]
 >   - **7, step 9's truncated-chain cases, 11's "a Book 3 linked straight to it", and 15's Book 3 case:** this series has no Book 3 linked to Book 2.
->   - **1 and 2 in the uuid'd setup the row names.** The S11 snapshot shows their cast and file clauses only in the legacy shape (`declinedVoiceUuids: []`, not `[<Book 1's uuid>]`).
+>   - **1 and 2 with a Book 1 designed under its own uuid** (with `qwen-<uuid>__<emotion>` variants). Both declines in the Observed list below were mint-stamped rows on legacy slot names, not that setup.
 >   - **15's queued case** (a second Book 2 character's design running first) **and its no-reload badge clause.**
 >   - **9's server-stopped toast.**
 >   - **16.**
