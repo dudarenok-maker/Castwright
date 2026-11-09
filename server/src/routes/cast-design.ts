@@ -40,6 +40,7 @@ import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { dropStaleVariants } from '../workspace/variant-base-rev.js';
 import {
   isLockAcquisitionTimeout,
   itemFailureReason,
@@ -508,9 +509,10 @@ async function runDesignJob(
       }
 
       /* Variant — skip when the base is missing (can't make a variant without
-         a base) or the variant is already designed (idempotent). */
+         a base) or the variant is already designed (idempotent). #4040 — a
+         variant whose base was redesigned since is not designed: it is re-minted. */
       const baseName = character.overrideTtsVoices?.qwen?.name;
-      const already = character.overrideTtsVoices?.qwen?.variants?.[emotion];
+      const already = (await dropStaleVariants([character]))[0].overrideTtsVoices?.qwen?.variants?.[emotion];
       if (!baseName || already) {
         job.skipped += 1;
         broadcast(job, { type: 'character_skipped', characterId });

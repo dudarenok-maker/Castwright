@@ -504,6 +504,21 @@ def _voices_dir_with_17b_pt() -> Path | None:
     return None
 
 
+def _private_voices_dir(tmp_path: Path) -> Path:
+    """Copy <_TEST_VOICE>'s family into a dir this test owns (#4040): since the
+    1.7B prompt records the base it was derived from, a pre-#4040 `__1.7b.pt`
+    is re-derived and REWRITTEN on load, which must never land in the main
+    project's voices dir."""
+    import shutil
+
+    src = _voices_dir_with_17b_pt()
+    assert src is not None
+    for name in (f"{_TEST_VOICE}.pt", f"{_TEST_VOICE}.json", f"{_TEST_VOICE}__1.7b.pt"):
+        if (src / name).is_file():
+            shutil.copyfile(src / name, tmp_path / name)
+    return tmp_path
+
+
 requires_17b_pt = pytest.mark.skipif(
     _voices_dir_with_17b_pt() is None,
     reason=f"No {_TEST_VOICE}__1.7b.pt found in expected voices dirs",
@@ -512,7 +527,7 @@ requires_17b_pt = pytest.mark.skipif(
 
 @requires_qwen_gpu
 @requires_17b_pt
-def test_real_empty_instruct_produces_valid_pcm() -> None:
+def test_real_empty_instruct_produces_valid_pcm(tmp_path: Path) -> None:
     """C2 gate (real model): _icl_instruct_synth with instruct="" returns
     valid, non-empty PCM from the 1.7B-Base.
 
@@ -520,7 +535,7 @@ def test_real_empty_instruct_produces_valid_pcm() -> None:
     keep the test fast (~5-15s on GPU); the assertion is purely structural
     (non-empty float32 array, plausible sample rate, minimum 0.1s audio).
     """
-    voices_dir = _voices_dir_with_17b_pt()
+    voices_dir = _private_voices_dir(tmp_path)
     engine = main.ENGINES["qwen"]
     assert isinstance(engine, main.QwenEngine)
 
@@ -560,12 +575,12 @@ def test_real_empty_instruct_produces_valid_pcm() -> None:
 
 @requires_qwen_gpu
 @requires_17b_pt
-def test_real_neutral_placeholder_produces_valid_pcm() -> None:
+def test_real_neutral_placeholder_produces_valid_pcm(tmp_path: Path) -> None:
     """C2 gate (real model): _icl_instruct_synth with the neutral placeholder
     also returns valid PCM.  Used to confirm the placeholder form is a safe
     fallback even though the empty-string form is the pinned NEUTRAL_INSTRUCT.
     """
-    voices_dir = _voices_dir_with_17b_pt()
+    voices_dir = _private_voices_dir(tmp_path)
     engine = main.ENGINES["qwen"]
     assert isinstance(engine, main.QwenEngine)
 
@@ -604,7 +619,7 @@ def test_real_neutral_placeholder_produces_valid_pcm() -> None:
 
 @requires_qwen_gpu
 @requires_17b_pt
-def test_real_batch_live_instruct_heterogeneous_no_cross_bleed() -> None:
+def test_real_batch_live_instruct_heterogeneous_no_cross_bleed(tmp_path: Path) -> None:
     """fs-57 Task 6 (real model): synthesize_batch(model='1.7b',
     live_instruct=True) runs N items with DIFFERENT per-item instructs (one
     neutral, no `instruct`) through ONE batched forward and returns N distinct,
@@ -616,7 +631,7 @@ def test_real_batch_live_instruct_heterogeneous_no_cross_bleed() -> None:
     without the wrapper. Cross-bleed evidence is structural here (each item gets
     its own non-empty buffer of independent length); audio-quality / emotion
     intensity is a human-listening check outside this gate."""
-    voices_dir = _voices_dir_with_17b_pt()
+    voices_dir = _private_voices_dir(tmp_path)
     engine = main.ENGINES["qwen"]
     assert isinstance(engine, main.QwenEngine)
 
