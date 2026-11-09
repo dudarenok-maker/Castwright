@@ -43,7 +43,7 @@ import {
   qwenVoicesDir,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { jitteredDelayMs, renameWithRetry } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
@@ -439,15 +439,20 @@ async function copyVariantFamilies(oldKey: string, newKey: string, prints: MintC
 
 /* #4037 — replace the mint's own copy at `destKey` with what `srcKey` holds now,
    synchronously (the caller is inside a cast lock's sync transform). Each member the
-   source has is copied to a temp name first, so a failure leaves the earlier copy
-   whole (another stamped book may already point at it); then the temps replace it.
+   source has is copied to a temp name first, and each member it will replace is
+   backed up; then the temps replace it, each rename retried on the transient
+   EPERM/EBUSY a scanner causes (renameWithRetry's set, here synchronously). If a
+   rename still fails, the members already replaced are put back from their backups
+   and the error rethrown: another stamped book may already point at the copy, and it
+   must never see a mix of old and new members.
    A member the source lacks is kept, never removed: a landing renames `.pt`/`.json`/
    `__master.wav` over the old file (#4040) and drops only the `__1.7b` prompt, which
    no variant render reads (pickEmotionVariantVoice answers the base on 1.7B), so an
    absence says nothing about the variant. Every file written is recorded in `copies`
    for the caller's rollback. */
 function refreshMintCopy(srcKey: string, destKey: string, copies: MintCopies): void {
-  const staged: Array<{ to: string; tmp: string }> = [];
+  const staged: Array<{ to: string; tmp: string; bak: string | null }> = [];
+  const keepBak = new Set<string>(); // a backup whose restore failed is the only copy left
   try {
     for (const m of VARIANT_MEMBERS) {
       const to = memberPath(destKey, m);
@@ -458,16 +463,52 @@ function refreshMintCopy(srcKey: string, destKey: string, copies: MintCopies): v
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // source absent
         throw err;
       }
-      staged.push({ to, tmp });
+      const bak = existsSync(to) ? `${to}.mint-${nanoid(6)}.tmp` : null;
+      staged.push({ to, tmp, bak });
+      if (bak) copyFileSync(to, bak, fsConstants.COPYFILE_EXCL);
     }
-    for (const { to, tmp } of staged) {
-      renameSync(tmp, to);
-      if (!copies.files.includes(to)) copies.files.push(to);
+    const replaced: typeof staged = [];
+    try {
+      for (const s of staged) {
+        renameSyncWithRetry(s.tmp, s.to);
+        replaced.push(s);
+        if (!copies.files.includes(s.to)) copies.files.push(s.to);
+      }
+    } catch (err) {
+      for (const { to, bak } of replaced.reverse()) {
+        try {
+          if (bak) renameSyncWithRetry(bak, to);
+          else rmSync(to, { force: true });
+        } catch {
+          if (bak) keepBak.add(bak);
+        }
+      }
+      throw err;
     }
   } finally {
-    for (const { tmp } of staged) rmSync(tmp, { force: true });
+    for (const { tmp, bak } of staged) {
+      rmSync(tmp, { force: true });
+      if (bak && !keepBak.has(bak)) rmSync(bak, { force: true });
+    }
   }
   copies.prints.set(destKey, familyPrint(destKey));
+}
+
+/* The synchronous twin of renameWithRetry (same retryable codes and jittered
+   backoff, a shorter schedule), for a rename inside a cast lock's sync transform. */
+const SYNC_RENAME_RETRYABLE = new Set(['EPERM', 'EBUSY', 'ENOENT', 'EACCES', 'EIO']);
+const SYNC_RENAME_DELAYS_MS = [25, 75, 200];
+function renameSyncWithRetry(src: string, dest: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(src, dest);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (!code || !SYNC_RENAME_RETRYABLE.has(code) || attempt === SYNC_RENAME_DELAYS_MS.length) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, jitteredDelayMs(SYNC_RENAME_DELAYS_MS[attempt]));
+    }
+  }
 }
 
 /* #4037 — point a stamped row's stored variant names at the new key, decided from

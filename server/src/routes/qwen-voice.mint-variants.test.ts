@@ -16,6 +16,8 @@ const failing = vi.hoisted(() => ({ on: false }));
 const hook = vi.hoisted(() => ({ fn: null as null | ((dest: string, phase: 'before' | 'after') => Promise<void>) }));
 /* T14 — makes the cast.json write (its tmp file) fail with ENOSPC. */
 const castWriteFails = vi.hoisted(() => ({ on: false }));
+/* #4037 — runs after a cast.json tmp file is written (a book's stamp is about to land). */
+const castWritten = vi.hoisted(() => ({ fn: null as null | ((path: string) => void) }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
@@ -32,12 +34,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (castWriteFails.on && /cast\.json\.tmp-/.test(String(path))) {
         return Promise.reject(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }));
       }
-      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
+      await (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
+      if (castWritten.fn && /cast\.json\.tmp-/.test(String(path))) castWritten.fn(String(path));
     }) as typeof actual.writeFile,
   };
 });
 /* T13 — makes a synchronous copy of an `__excited.json` member fail with EBUSY. */
 const syncCopyFails = vi.hoisted(() => ({ on: false }));
+const renameFails = vi.hoisted(() => ({ hard: false, transient: 0 }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const copyFileSync = ((src: string, dest: string, mode?: number) => {
@@ -46,7 +50,19 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return actual.copyFileSync(src, dest, mode);
   }) as typeof actual.copyFileSync;
-  return { ...actual, default: { ...actual, copyFileSync }, copyFileSync };
+  /* #4037 — `hard` makes a rename onto `qwen-<anything>__sad.json` fail for good (EINVAL);
+     `transient` makes the next rename onto a `__sad.pt` fail that many times with EBUSY. */
+  const renameSync = ((from: string, to: string) => {
+    if (renameFails.hard && /qwen-[^\\/]+__sad\.json$/.test(String(to))) {
+      throw Object.assign(new Error('EINVAL: invalid argument, rename'), { code: 'EINVAL' });
+    }
+    if (renameFails.transient > 0 && /qwen-[^\\/]+__sad\.pt$/.test(String(to))) {
+      renameFails.transient -= 1;
+      throw Object.assign(new Error('EBUSY: resource busy or locked, rename'), { code: 'EBUSY' });
+    }
+    return actual.renameSync(from, to);
+  }) as typeof actual.renameSync;
+  return { ...actual, default: { ...actual, copyFileSync, renameSync }, copyFileSync, renameSync };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -158,6 +174,9 @@ beforeEach(() => {
   failing.on = false;
   castWriteFails.on = false;
   syncCopyFails.on = false;
+  renameFails.hard = false;
+  renameFails.transient = 0;
+  castWritten.fn = null;
   hook.fn = null;
 });
 afterAll(() => {
@@ -574,5 +593,54 @@ describe('a series mint whose stamp never lands leaves no copy behind (#4062)', 
     expect(fired).toBe(true);
     onlyLegacy();
     expect(rowOf('Book Two').voiceUuid).toBe('u_decl');
+  });
+});
+
+describe('a refresh of the mint copy replaces the family whole, or not at all (#4037)', () => {
+  const sadSeed = () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R0' });
+  };
+  /* a redesign of sad lands on the legacy key right after Book One (walked first) is stamped */
+  const redesignAfterBookOne = () => {
+    let fired = false;
+    castWritten.fn = (path) => {
+      if (!fired && path.includes('Book One')) {
+        fired = true;
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+        plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+      }
+    };
+    return () => fired;
+  };
+
+  it('R1: a failing .json rename after the .pt one leaves the stamped book a whole, old family', async () => {
+    sadSeed();
+    const fired = redesignAfterBookOne();
+    renameFails.hard = true;
+    await expect(mint()).rejects.toThrow(/EINVAL/);
+    expect(fired()).toBe(true);
+    const uuid = rowOf('Book One').voiceUuid;
+    expect(uuid).toBeTruthy();
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-OLD');
+    expect(JSON.parse(readFileSync(file(`qwen-${uuid}__sad.json`), 'utf8')).baseRev).toBe('R0');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp') || f.includes('.bak'))).toEqual([]);
+  });
+
+  it('R2: a transient EBUSY on the .pt rename is retried and the family is refreshed', async () => {
+    sadSeed();
+    const fired = redesignAfterBookOne();
+    renameFails.transient = 2;
+    const uuid = await mint();
+    expect(fired()).toBe(true);
+    expect(renameFails.transient).toBe(0);
+    expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-NEW');
+    expect(JSON.parse(readFileSync(file(`qwen-${uuid}__sad.json`), 'utf8')).baseRev).toBe('R1');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp') || f.includes('.bak'))).toEqual([]);
   });
 });
