@@ -103,6 +103,7 @@ import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspac
 import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
+import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
 import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';
 
@@ -1174,7 +1175,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      defeating the whole point of this precompute). A genuinely mixed-tier book
      still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0) {
-    await reconcileResidentQwenTiers(usedQwenTiers).catch((e) =>
+    /* #4066 — a Quality (1.7B) run also drops an on-GPU Kokoro here (owner
+       decision); a Standard run is unchanged. Run-start only: the post-score
+       re-assert in triggerScoring runs mid-render and must not unload a
+       Kokoro a sibling chapter's fallback line may be using. */
+    await keepForRunStart(usedQwenTiers, resolveForEngine('qwen').modelKey)
+      .then((target) => reconcileResidentQwenTiers(target))
+      .catch((e) =>
       console.warn('[generation] tier reconcile skipped:', (e as Error).message),
     );
   }

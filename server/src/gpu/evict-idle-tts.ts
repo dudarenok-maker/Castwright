@@ -99,6 +99,25 @@ function isGpuFamily(device: string | null | undefined): boolean {
   return device === 'cuda' || device === 'rocm' || device === 'directml';
 }
 
+/** #4066 (owner decision) — the run-start reconcile target for a chapter
+    render. A Quality (1.7B) run needs ~6 GB, which cannot sit next to an
+    on-GPU Kokoro on an 8 GB card, so Kokoro is dropped at run start; a
+    Standard run keeps today's behaviour (Kokoro untouched). Kokoro fallback
+    lines inside the run may load it again — accepted. Best-effort: an
+    unreadable probe leaves `keep` as it was. Run-start only — the post-score
+    re-assert runs while chapters are in flight and must never unload a model
+    a sibling chapter's fallback line may be using. */
+export async function keepForRunStart(
+  keep: ResidentTtsKeep,
+  runModelKey: TtsModelKey,
+  probeHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
+): Promise<ResidentTtsKeep> {
+  if (runModelKey !== 'qwen3-tts-1.7b') return keep;
+  const health = await probeHealth().catch(() => null);
+  if (health?.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) return { ...keep, keepKokoro: false };
+  return keep;
+}
+
 export interface EvictIdleQwenBaseOpts {
   /** The model key the blocked op is asking for. When it's a Qwen key, its
       own tier is the one KEPT (the elevate-only rule: an op only reclaims

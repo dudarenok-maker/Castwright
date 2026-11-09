@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { evictIdleQwenBase } from './evict-idle-tts.js';
+import { evictIdleQwenBase, keepForRunStart } from './evict-idle-tts.js';
 import { getLastTtsAutoFree, resetTtsAutoFreeForTests } from './tts-auto-free-notice.js';
 
 /* Second eviction lever for capacity admission (#1839). Frees a resident Qwen
@@ -360,5 +360,43 @@ describe('evictIdleQwenBase', () => {
     });
 
     expect(freed).toBe(false);
+  });
+});
+
+describe('keepForRunStart (#4066 — a Quality chapter render unloads an on-GPU Kokoro at run start)', () => {
+  const keep = { keep06: false, keep17: true };
+
+  it('adds keepKokoro:false for a Quality (1.7B) run with Kokoro on the GPU', async () => {
+    const out = await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => ({
+      kokoroLoaded: true,
+      devices: { kokoro: 'cuda' },
+    }));
+    expect(out).toEqual({ keep06: false, keep17: true, keepKokoro: false });
+  });
+
+  it('leaves a Standard (0.6B) run alone', async () => {
+    const out = await keepForRunStart({ keep06: true, keep17: false }, 'qwen3-tts-0.6b', async () => ({
+      kokoroLoaded: true,
+      devices: { kokoro: 'cuda' },
+    }));
+    expect(out).toEqual({ keep06: true, keep17: false });
+  });
+
+  it('leaves a CPU Kokoro alone', async () => {
+    const out = await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => ({
+      kokoroLoaded: true,
+      devices: { kokoro: 'cpu' },
+    }));
+    expect(out).toEqual(keep);
+  });
+
+  it('leaves everything alone when Kokoro is not resident or the probe fails', async () => {
+    expect(await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => ({ kokoroLoaded: false }))).toEqual(keep);
+    expect(
+      await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => {
+        throw new Error('health down');
+      }),
+    ).toEqual(keep);
+    expect(await keepForRunStart(keep, 'qwen3-tts-1.7b', async () => null)).toEqual(keep);
   });
 });

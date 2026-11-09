@@ -29,6 +29,8 @@ let lastSynthArgs: {
   bookLanguage?: string;
 } | null = null;
 let synthesiseImpl: (args: unknown) => Promise<unknown>;
+/* Every call the mocked run-start `reconcileResidentQwenTiers` received (#4066). */
+const reconcileCalls: unknown[][] = [];
 vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
   return {
@@ -48,7 +50,10 @@ vi.mock('../tts/index.js', async (importOriginal) => {
    doesn't try to reach :9000 for the Kokoro fallback warm. */
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
-  reconcileResidentQwenTiers: async () => undefined,
+  reconcileResidentQwenTiers: async (...args: unknown[]) => {
+    reconcileCalls.push(args);
+    return undefined;
+  },
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
      consumer) is a no-op here. */
   SIDECAR_ENGINES: new Set(),
@@ -260,6 +265,30 @@ describe('per-chapter loud Qwen→Kokoro fallback gate', () => {
     }
     expect(text).not.toContain('chapter_awaiting_fallback_confirm');
     expect(synthCalled).toBe(true);
+  }, 10_000);
+});
+
+describe('#4066 run-start reconcile on a Quality chapter render', () => {
+  beforeEach(async () => {
+    reconcileCalls.length = 0;
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(async () => ({ kokoroLoaded: true, devices: { kokoro: 'cuda' } }));
+  });
+  afterEach(async () => {
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(null);
+  });
+
+  it('a Quality (1.7B) run unloads an on-GPU Kokoro at start', async () => {
+    await runStream({ modelKey: 'qwen3-tts-1.7b' });
+    expect(reconcileCalls.length).toBeGreaterThan(0);
+    expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true, keepKokoro: false });
+  }, 10_000);
+
+  it('a Standard (0.6B) run never touches Kokoro', async () => {
+    await runStream({ modelKey: 'qwen3-tts-0.6b' });
+    expect(reconcileCalls.length).toBeGreaterThan(0);
+    expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
   }, 10_000);
 });
 
