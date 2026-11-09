@@ -59,7 +59,7 @@ import * as stateIo from '../workspace/state-io.js';
 import { mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { castMergeSuggestionsJsonPath } from '../workspace/paths.js';
-import { linkSeriesReuseOnNewRows, runMainAnalyzerJob } from './analysis.js';
+import { linkSeriesReuseOnNewRows, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -993,5 +993,239 @@ describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
     expect((declined[0] as { matchedFrom?: unknown }).matchedFrom).toBeUndefined();
     /* The decline is a guard for the link pass, not data: it is not written onto the row. */
     expect((declined[0] as { notLinkedTo?: unknown }).notLinkedTo).toBeUndefined();
+  });
+});
+
+/* ---- Plan 291 Task 18 - the main job's resume ------------------------------- */
+
+describe('#4031 main job: resume', () => {
+  const orig = process.env.STAGE2_COVERAGE_RETRIES;
+  const books: HarnessBook[] = [];
+  const seed = (...a: Parameters<typeof mkBook>): HarnessBook => {
+    const b = mkBook(...a);
+    books.push(b);
+    return b;
+  };
+  const JOGGER = {
+    id: 'the-jogger',
+    name: 'The Jogger',
+    role: 'minor',
+    color: '#222222',
+    gender: 'male',
+    evidence: [{ quote: 'The Jogger waved' }],
+  } as unknown as CharacterOutput;
+  const BODY18 = `${BODY}\n\nThe Jogger waved.`;
+  const OLGA: Row = { id: 'olga', name: 'Olga', role: 'minor', color: '#444444', voiceState: 'generated' };
+  const LEAD_WREN: Row = { ...PRIOR_WREN, role: 'lead', color: '#111111' };
+  const FRESH = { roster: [NARR, WREN_FRESH, JOGGER], speakerId: FRESH_ID };
+  const PRIORS = (): Row[] => [{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }];
+  const ids = (rows: Row[]): string[] => rows.map((r) => String(r.id));
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = orig;
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+
+  /* What a run leaves, for "the resumed result equals an uninterrupted one". */
+  const shape = (b: HarnessBook): unknown[] =>
+    readCast(b.bookDir).map((c) => [c.id, c.name, c.lines ?? null, c.voiceState ?? null]);
+  const decisionsOf = (b: HarnessBook): unknown => {
+    const d = readCache(b.manuscriptId)?.matchPlan?.decisions ?? {};
+    return Object.fromEntries(Object.entries(d).map(([k, v]) => [k, { ...v }]));
+  };
+  /* Stop the job the way a user Stop does, in the first Phase-0 call (one-shot, like F14's hook). */
+  const abortPhase0 = (job: AnalysisJob): void => {
+    let stopped = false;
+    setPhase0Hook(async () => {
+      if (!stopped) {
+        stopped = true;
+        job.controller.abort();
+      }
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      throw e;
+    });
+  };
+  const stop1 = async (b: HarnessBook, fresh: Parameters<typeof run>[3] = FRESH): Promise<void> => {
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'main', fresh);
+    setPhase1Hook(undefined);
+  };
+  const straightRun = async (): Promise<HarnessBook> => {
+    const b = seed(PRIORS(), undefined, BODY18);
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    return b;
+  };
+  const errCode = (events: Array<{ kind: string; code?: unknown }>): unknown =>
+    events.find((e) => e.kind === 'error')?.code;
+
+  it('F1: cast_incomplete -> subset Retry -> resume_required -> main resume plans and completes', async () => {
+    const straight = await straightRun();
+    const b = seed(PRIORS(), undefined, BODY18);
+    setPhase0Hook((id) => {
+      if (id === 3) throw new Error('phase 0 boom');
+    });
+    const first = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    setPhase0Hook(undefined);
+    expect(errCode(first)).toBe('cast_incomplete');
+    const castPath = join(b.bookDir, '.audiobook', 'cast.json');
+    const castBeforeRetry = readFileSync(castPath, 'utf8');
+    const retry = await runSubsetRetry(b, FRESH);
+    expect(errCode(retry)).toBe('resume_required');
+    /* TODO(Task 24): flow (b) still writes the raw roster into cast.json, which the resume then
+       reads as prior rows. Until it plans instead, put cast.json back so this test isolates the
+       resume; delete this line with that change. */
+    writeFileSync(castPath, castBeforeRetry);
+    /* The Retry left the normal "current-unplanned" cache: a roster, no plan. */
+    expect(readCache(b.manuscriptId)?.stage1).toBeDefined();
+    expect(readCache(b.manuscriptId)?.matchPlan).toBeUndefined();
+    const resumed = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect(resumed.some((e) => e.kind === 'result')).toBe(true);
+    expect(readCache(b.manuscriptId)?.matchPlan).toBeDefined();
+    expect(shape(b)).toEqual(shape(straight));
+    expect(decisionsOf(b)).toEqual(decisionsOf(straight));
+  });
+
+  it('F1: stopped in Phase 0a and resumed, the result equals an uninterrupted run', async () => {
+    const straight = await straightRun();
+    const b = seed(PRIORS(), undefined, BODY18);
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH, { onJob: abortPhase0 });
+    setPhase0Hook(undefined);
+    expect(readCache(b.manuscriptId)?.stage1).toBeUndefined();
+    const resumed = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect(resumed.some((e) => e.kind === 'result')).toBe(true);
+    expect(shape(b)).toEqual(shape(straight));
+    expect(decisionsOf(b)).toEqual(decisionsOf(straight));
+  });
+
+  it('A14b: stopped after the snapshot and resumed, the result equals an uninterrupted run (a fold-dropped run-added row is gone)', async () => {
+    const straight = await straightRun();
+    /* The row this run added (a descriptor-named speaker nobody attributes to) is folded away
+       by the persist, as in the straight run. */
+    expect(ids(readCast(straight.bookDir))).not.toContain('the-jogger');
+    const b = seed(PRIORS(), undefined, BODY18);
+    await stop1(b);
+    expect(ids(readCast(b.bookDir))).toContain('the-jogger'); /* the stop left the snapshot's row */
+    expect(Object.keys(readCache(b.manuscriptId)?.addedRows ?? {})).toEqual(['the-jogger']);
+    const resumed = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect(resumed.some((e) => e.kind === 'result')).toBe(true);
+    /* The resumed snapshot knew the row was the run's own: no re-mint, no duplicate. */
+    expect(Object.keys(readCache(b.manuscriptId)?.addedRows ?? {})).toEqual(['the-jogger']);
+    expect(JSON.stringify(readCast(b.bookDir))).not.toContain('the-jogger-n');
+    expect(shape(b)).toEqual(shape(straight));
+    expect(ids(readCast(b.bookDir))).not.toContain('the-jogger');
+    expect(decisionsOf(b)).toEqual(decisionsOf(straight));
+  });
+
+  it('Q2: a resumed run saves the decisions it adds to a cached plan, and keeps the ones it reuses', async () => {
+    const b = seed(PRIORS(), undefined, BODY18);
+    await stop1(b);
+    const before = readCache(b.manuscriptId)!;
+    const kept = JSON.parse(JSON.stringify(before.matchPlan!)) as MatchPlan;
+    /* A roster row the plan does not cover (what a Retry's stage 1 can hold). */
+    const boris = {
+      id: 'boris',
+      name: 'Boris Vane',
+      role: 'minor',
+      color: '#555555',
+      gender: 'male',
+      evidence: [{ quote: 'Olga nodded' }],
+    } as unknown as CharacterOutput;
+    await saveAnalysisCache(b.manuscriptId, {
+      ...before,
+      stage1: { ...before.stage1!, characters: [...before.stage1!.characters, boris] },
+    } as never);
+    await stop1(b, { roster: [NARR, WREN_FRESH, JOGGER, boris], speakerId: FRESH_ID });
+    const after = readCache(b.manuscriptId)!.matchPlan!;
+    expect(after.runToken).toBe(kept.runToken);
+    for (const [k, d] of Object.entries(kept.decisions)) expect(after.decisions[k]).toEqual(d);
+    expect(after.decisions.boris).toMatchObject({ kind: 'new', id: 'boris' });
+    expect(ids(readCast(b.bookDir))).toContain('boris');
+  });
+
+  it('Q2: a resumed run over an unplanned cache plans and saves before it stops again', async () => {
+    const b = seed(PRIORS(), undefined, BODY18);
+    await stop1(b);
+    const before = readCache(b.manuscriptId)!;
+    const { matchPlan: _plan, ...unplanned } = before;
+    await saveAnalysisCache(b.manuscriptId, unplanned as never);
+    expect(readCache(b.manuscriptId)?.matchPlan).toBeUndefined();
+    await stop1(b);
+    const plan = readCache(b.manuscriptId)?.matchPlan;
+    expect(plan).toBeDefined();
+    expect(plan!.decisions[FRESH_ID]).toMatchObject({ kind: 'join', priorId: PRIOR_ID });
+    /* The first run's snapshot row is on disk, so the new plan meets it as a prior row of the
+       same id: a join onto itself, never a second copy under a minted id. */
+    expect(plan!.decisions['the-jogger']).toMatchObject({ kind: 'join', priorId: 'the-jogger' });
+    expect(JSON.stringify(readCast(b.bookDir))).not.toContain('the-jogger-n');
+  });
+
+  /* A completed run keeps its cache (stage 1, the plan, its ledger), so a second, non-fresh
+     analysis resumes from it. */
+  it('R4: a completed book re-analysed without Start fresh gets no -n1 duplicate of a row the first run added', async () => {
+    const boris = {
+      id: 'boris',
+      name: 'Boris Vane',
+      role: 'minor',
+      color: '#555555',
+      gender: 'male',
+      evidence: [{ quote: 'Wren asked' }],
+    } as unknown as CharacterOutput;
+    const fresh = { roster: [NARR, WREN_FRESH, boris], speakerId: ['boris', FRESH_ID] };
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    await run(b.manuscriptId, b.bookDir, 'main', fresh);
+    expect(ids(readCast(b.bookDir))).toContain('boris');
+    expect(readCache(b.manuscriptId)?.addedRows?.boris).toBeDefined();
+    await run(b.manuscriptId, b.bookDir, 'main', fresh);
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+    expect(readCache(b.manuscriptId)?.matchPlan?.decisions.boris).toMatchObject({ kind: 'new', id: 'boris', minted: false });
+  });
+
+  it('item 20: a resumed drift-refused run removes the pairs its pre-stop snapshot added', async () => {
+    /* Two prior candidates for one fresh row: the snapshot's plan suggestions. */
+    const b = seed([
+      { ...NARR },
+      { ...LEAD_WREN },
+      { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' },
+    ]);
+    writeFileSync(
+      join(b.bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        notSamePerson: [{ a: PRIOR_ID, b: 'w2b', at: '2026-11-01T00:00:00.000Z' }],
+      }),
+    );
+    const two = { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID };
+    await stop1(b, two);
+    expect(readSuggestions(b.bookDir).filter((s) => s.origin === 'plan')).toHaveLength(2);
+    expect(readCache(b.manuscriptId)?.runAddedPairs).toHaveLength(2);
+    /* Resume with a Phase 1 whose speaker is unknown for every sentence: attribution drift. */
+    const rec = getManuscript(b.manuscriptId)!;
+    const ghost: Analyzer = {
+      ...phase1(FRESH_ID),
+      runStage2Chapter: (async (_m: string, chapterId: number) => ({
+        sentences: Array.from({ length: 120 }, (_, k) => ({
+          id: chapterId * 1000 + k + 1,
+          chapterId,
+          characterId: 'ghost',
+          confidence: 0.9,
+          text: `Are you sure this will work (${k})`,
+        })),
+      })) as unknown as Analyzer['runStage2Chapter'],
+    };
+    (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(ghost, 'phase1-model');
+    const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'main');
+    await runMainAnalyzerJob(job, rec as never, sel(phase0(two.roster), 'phase0-model'), {
+      requestedFresh: false,
+      allowStage1Shrink: true,
+      requestedModel: undefined,
+    } as never);
+    expect(errCode(events)).toBe('attribution_drift');
+    expect(readSuggestions(b.bookDir).filter((s) => s.origin === 'plan')).toEqual([]);
   });
 });

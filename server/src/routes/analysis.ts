@@ -171,6 +171,7 @@ import {
   materialisePriorAtRunStart,
   readHealOpts,
   readPriorCastLockFree,
+  removeRunAddedSuggestionPairs,
   sameBookDeclinePredicate,
   writePlanSnapshot,
   type PriorCastSnapshot,
@@ -7619,6 +7620,14 @@ export async function runMainAnalyzerJob(
             1,
             `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
+          /* Plan 291 (#4031, item 20): the refused run keeps none of its suggestions - the
+             pairs the Phase-0b snapshot added, including a stopped run's (the cache holds
+             them across a resume). Advisory: cast.json is untouched either way. */
+          try {
+            await removeRunAddedSuggestionPairs(writeDir, cache.runAddedPairs ?? []);
+          } catch (pairsErr) {
+            console.warn('[analysis] failed to remove the refused run\'s suggestions', pairsErr);
+          }
         } else {
           /* Remap the prior cast's ids through the cumulative dedup→fold rewrite
              so designed voices ride onto the surviving canonical ids instead of
