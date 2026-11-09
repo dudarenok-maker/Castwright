@@ -1046,20 +1046,24 @@ export function buildInterimCast(
    (manual entries are preserved). Co-locate the CALL with the edits write so the
    journal is persisted iff the sentences it describes are. Non-fatal at the call
    site. */
-async function writeFoldJournal(
+export async function writeFoldJournal(
   bookDir: string,
   rewrites: Record<string, string>,
   preFoldSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
   characters: ReadonlyArray<{ id: string; name: string }>,
 ): Promise<void> {
-  const journal = await loadCastMerges(bookDir);
-  await saveCastMerges(
-    bookDir,
-    replaceFoldEntries(
-      journal,
-      buildFoldJournalEntries(rewrites, preFoldSentences, characters, new Date().toISOString()),
-    ),
-  );
+  /* Cast-locked: a manual merge appends to this journal under that lock, and the
+     read -> replace -> write must not straddle it (#4031). */
+  await withCastLock(bookDir, async () => {
+    const journal = await loadCastMerges(bookDir);
+    await saveCastMerges(
+      bookDir,
+      replaceFoldEntries(
+        journal,
+        buildFoldJournalEntries(rewrites, preFoldSentences, characters, new Date().toISOString()),
+      ),
+    );
+  });
 }
 
 /* srv-1 — sibling of writeFoldJournal for the dedup pass. Replace-all keeps
@@ -1067,20 +1071,23 @@ async function writeFoldJournal(
    manual entries. Same non-fatal-at-call-site contract. The pre-dedup roster +
    sentences are captured by dedupAndPrepare before the rewrite, so sourceName +
    affected sentences reflect the state the dedup collapsed. */
-async function writeDedupJournal(
+export async function writeDedupJournal(
   bookDir: string,
   rewrites: Record<string, string>,
   preDedupSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
   preDedupRoster: ReadonlyArray<{ id: string; name: string }>,
 ): Promise<void> {
-  const journal = await loadCastMerges(bookDir);
-  await saveCastMerges(
-    bookDir,
-    replaceDedupEntries(
-      journal,
-      buildDedupJournalEntries(rewrites, preDedupSentences, preDedupRoster, new Date().toISOString()),
-    ),
-  );
+  /* Cast-locked, as writeFoldJournal (#4031). */
+  await withCastLock(bookDir, async () => {
+    const journal = await loadCastMerges(bookDir);
+    await saveCastMerges(
+      bookDir,
+      replaceDedupEntries(
+        journal,
+        buildDedupJournalEntries(rewrites, preDedupSentences, preDedupRoster, new Date().toISOString()),
+      ),
+    );
+  });
 }
 
 /* Run the dedup pass + apply its rewrites to the sentence stream, capturing the

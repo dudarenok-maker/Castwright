@@ -289,6 +289,9 @@ describe('#4031 rule 8 - Start fresh keeps the user decisions', () => {
     const records = readAb(b, 'cast-id-history.json').notSamePerson as Array<{ a: string; b: string }>;
     expect(records).toHaveLength(1);
     expect([records[0].a, records[0].b]).toContain('olga');
+    /* ...and the surviving row carries the reverse edge. */
+    const wren = readCast(b.bookDir).find((c) => c.id === 'wren-ashby');
+    expect(wren?.notLinkedTo).toContain('olga');
   });
 
   it("Start fresh clears every journal entry's affected refs; unlink falls back to alias match", async () => {
