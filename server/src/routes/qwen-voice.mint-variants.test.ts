@@ -381,6 +381,37 @@ describe('series mint copies emotion variants (#4037)', () => {
     expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
   });
 
+  it('T17: every stamped row names the new key once its base was copied there', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book Two', [withVariants({})]);
+    plantBase();
+    plantAngry();
+    const uuid = await mint();
+    expect(rowOf('Book One').overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
+    expect(existsSync(file(`qwen-${uuid}.pt`))).toBe(true);
+  });
+
+  it('T18: with no base copied, the stamped designing row keeps its legacy name', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book Two', [withVariants({})], { confirmed: false });
+    plant('qwen-v_wren__angry.pt', 'ANGRY-PT');
+    const uuid = await mint();
+    expect(rowOf('Book Two').voiceUuid).toBe(uuid);
+    expect(existsSync(file(`qwen-${uuid}.pt`))).toBe(false);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
+  });
+
+  it('T19: a library slot keeps its name, and a designing row stamped by stampOwnRow is renamed', async () => {
+    seed({ ...legacy, overrideTtsVoices: { qwen: { name: 'qwen-v_wren', libraryUuid: 'lib_1' } } });
+    writeBook('Book Two', [withVariants({})], { confirmed: false });
+    plantBase();
+    const uuid = await mint();
+    expect(rowOf('Book One').voiceUuid).toBe(uuid);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
+  });
+
   it('T7b: a slot whose legacy file is gone keeps its legacy name', async () => {
     seed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, sad: { name: 'qwen-v_wren__sad' } }));
     plantBase();
@@ -409,6 +440,7 @@ describe('book-scoped mint copies the legacy family too (#4037)', () => {
     expect(readFileSync(file(`qwen-${uuid}.pt`), 'utf8')).toBe('BASE-PT');
     expect(readFileSync(file(`qwen-${uuid}__angry.pt`), 'utf8')).toBe('ANGRY-PT');
     expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
+    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
     for (const f of legacyFiles) expect(existsSync(file(f))).toBe(true);
   });
 
@@ -419,6 +451,7 @@ describe('book-scoped mint copies the legacy family too (#4037)', () => {
     expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBe(uuid);
     expect(readdirSync(qwenDir())).toEqual(['qwen-v_wren__angry.pt']);
     expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
+    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
   });
 
   it('T10: a failing variant copy removes the earlier copies and stamps nothing', async () => {

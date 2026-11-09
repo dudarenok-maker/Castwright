@@ -476,10 +476,18 @@ function refreshMintCopy(srcKey: string, destKey: string, copies: MintCopies): v
    a variant landed or redesigned on another book of the series after the mint's copy
    loop is copied over the mint's own copy here (refreshMintCopy). A new-key family the
    mint did not write is another design, which stands. Such a slot is renamed only once
-   `<to>__<emotion>.pt` exists; with no file under either key it keeps its name. */
+   `<to>__<emotion>.pt` exists; with no file under either key it keeps its name.
+   The slot's own name follows the same rule (#4067's rule for a separation): a name
+   on the legacy key becomes `<to>` once `<to>.pt` exists, and a library slot's name
+   is kept. */
 function withRekeyedVariants(c: CastCharacter, from: string, to: string, copies: MintCopies): CastCharacter {
-  const qwen = c.overrideTtsVoices?.qwen;
-  if (!qwen?.variants) return c;
+  const slot = c.overrideTtsVoices?.qwen;
+  if (!slot) return c;
+  const qwen =
+    slot.name === from && !slot.libraryUuid && existsSync(memberPath(to, '.pt')) ? { ...slot, name: to } : slot;
+  if (!qwen.variants) {
+    return qwen === slot ? c : { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen } };
+  }
   const variants = Object.fromEntries(
     Object.entries(qwen.variants).map(([e, v]) => {
       if (!v || !v.name.startsWith(`${from}__`)) return [e, v];
