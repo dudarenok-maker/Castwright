@@ -68,9 +68,10 @@ const rehydrateFlights = new WeakMap<object, Map<string, Promise<void>>>();
     sends and waits for the book's queued saves (`castWrittenSince`); reads
     the book and hydrates the cast only when the slices hold it; then clears
     the era for that epoch. An analysis apply that moved the epoch meanwhile
-    runs it again. For a book the slices do not hold it only clears the era
+    runs it again. For a book the stage does not name it only clears the era
     and reads nothing: the layout's next full read of it is the reload (R26).
-    Never rejects. */
+    For a book the stage names whose slices are not loaded yet it does
+    nothing, and runs again once they are. Never rejects. */
 export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<void>> {
   return (dispatch, getState) => {
     let flights = rehydrateFlights.get(getState);
@@ -97,6 +98,10 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
           if (eraEpochOf(getState(), bookId) !== epoch) continue;
         }
         if (!holdsBook(getState(), bookId)) {
+          /* The stage names it but its own full read is still out: that read
+             may predate the run's persist, so the era must outlive it. The
+             gate re-issues this re-read once the slices hold the book. */
+          if (stageBookId(getState()) === bookId) return;
           if (epoch !== undefined) dispatch(castActions.clearAnalysisEra({ bookId, epoch }));
           return;
         }

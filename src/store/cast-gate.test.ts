@@ -284,6 +284,30 @@ describe('the release is state-driven (B2)', () => {
   });
 });
 
+describe('the era waits for the open book read (round 1, Important 1)', () => {
+  it('while the stage names the book but its full read is still out, the era is not cleared; then exactly one gate read', async () => {
+    disk.seed('X', { state: {}, cast: { characters: [char('wren'), char('kestrel')] } });
+    const store = makeStore();
+    open(store, 'W', [char('owl')]);
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'X' }));
+    /* openBook(X): the stage names X; Layout's read of X is still out, so
+       the slices hold W. The busy reply is [] meanwhile. */
+    store.dispatch(uiActions.openBook({ id: 'X', status: 'voices_pending' }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.getBookBusy).toHaveBeenCalledWith('X');
+    expect(era(store, 'X')).toBeDefined();
+    expect(api.getBookState).not.toHaveBeenCalled();
+    expect(selectCastReadOnly(store.getState(), 'X')).toBe(true);
+    /* Layout's read lands, carrying a cast from before the job's persist. */
+    resetBookSlices(store.dispatch, 'X');
+    store.dispatch(castActions.hydrateCharacters([char('wren')]));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(api.getBookState).toHaveBeenCalledTimes(1);
+    expect(era(store, 'X')).toBeUndefined();
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['wren', 'kestrel']);
+  });
+});
+
 describe('gate-up flushes, never withholds (B3)', () => {
   it('B3 lands: a unit queued just before the gate flushes and lands before the job registers', async () => {
     disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });

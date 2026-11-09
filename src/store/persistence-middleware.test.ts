@@ -2831,6 +2831,41 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     expect(putBookState.mock.calls[0][1].slice).toBe('manuscript');
   });
 
+  it.each([
+    ['kept before the gate rose', false],
+    ['given up while the gate was up', true],
+  ])('a kept cast save never lands after the run — %s', async (_name, gateDuringRetries) => {
+    /* Round 1 Minor 1 (ruling) — the run's rows win: a kept cast unit is
+       dropped with the read-only toast, never re-sent by a later flush. */
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const gate = (on: boolean) => {
+      state.cast = { characters: [{ id: 'halloran' }], analysisEra: on ? { 'book-1': { epoch: 1 } } : {} };
+    };
+    mw({ type: 'cast/setCharacters' });
+    await advance(600);
+    if (gateDuringRetries) gate(true);
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    /* The gate-up flush, then the job ends and the re-hydrate flushes. */
+    gate(true);
+    mw(flushBookPersistence('book-1'));
+    await advance(1000);
+    gate(false);
+    mw(flushBookPersistence('book-1'));
+    mw({ type: 'ui/somethingElse' });
+    await advance(20000);
+    expect(putBookState).not.toHaveBeenCalled();
+    expect(mw(castWrittenSince('book-1', Number.MAX_SAFE_INTEGER))).toBe(false);
+    expect(toastsOf(store).map((t) => t.dedupeKey)).toContain('cast-read-only');
+    err.mockRestore();
+  });
+
   it('a 409 book_busy cast PUT toasts, latches the era and starts one re-hydrate', async () => {
     const busyErr = () =>
       Object.assign(new Error('Book state PUT failed (409): This book is being analysed. Wait for it to finish.'), {

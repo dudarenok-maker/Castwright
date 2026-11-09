@@ -517,11 +517,24 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (flights.has(key) || !outbox.get(key)?.size) return;
     flights.set(key, run(bookId, slice));
   };
+  /* Plan 291 (#4031, round 1) — a cast save kept after transport failures
+     never lands once the book's cast is read-only: the run's rows win, and
+     the re-read after the run replaces the screen. It is dropped with the
+     read-only toast. */
+  const dropKeptCast = (bookId: string): boolean => {
+    const key = flushKey(bookId, 'cast');
+    if (!selectCastReadOnly(store.getState() as PersistableRootState, bookId)) return false;
+    outbox.delete(key);
+    toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
+    return true;
+  };
   /* C7 — send the book's kept saves (idle keys), in slice order. */
   const pumpKept = (bookId: string) => {
     for (const slice of LEARNED_SLICES) {
       const key = flushKey(bookId, slice);
-      if (outbox.get(key)?.size && !timers.has(key) && !flights.has(key)) pump(bookId, slice);
+      if (!outbox.get(key)?.size || timers.has(key) || flights.has(key)) continue;
+      if (slice === 'cast' && dropKeptCast(bookId)) continue;
+      pump(bookId, slice);
     }
   };
   /* Send every queued write for `bookId` now instead of at the end of its
@@ -695,6 +708,14 @@ export const persistenceMiddleware: Middleware = (store) => {
           if (++failures <= FLUSH_RETRY_DELAYS_MS.length) {
             await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[failures - 1]));
             continue;
+          }
+          /* Plan 291 — given up while the cast is read-only: dropped, never
+             kept (see dropKeptCast). */
+          if (slice === 'cast' && selectCastReadOnly(store.getState() as PersistableRootState, bookId)) {
+            box.clear();
+            toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
+            ok = false;
+            break;
           }
           /* Given up on (#3421): the units stay, kept for the book's next
              flush. The rollback restores a shared, book-agnostic draft, and the
