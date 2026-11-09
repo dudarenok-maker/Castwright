@@ -59,6 +59,11 @@ export interface SidecarHealthSnapshot {
       `defaultIsDesignResident`. */
   qwenDeviceKey?: string | null;
   vramReservedMb?: number | null;
+  /** #4066 — the side-14 per-engine device family map ('cuda' | 'cpu' | …),
+      read for Kokoro only: a CPU-resident Kokoro holds no VRAM, so the
+      admission lever never unloads it and the give-up message never names it.
+      `SidecarHealthResult.devices` (a `SidecarDeviceMap`) is assignable. */
+  devices?: { kokoro?: string | null } | null;
 }
 
 let provider: (() => Promise<SidecarHealthSnapshot>) | null = null;

@@ -25,8 +25,25 @@
    warm independently. Plan 30 explicitly preserves that path. */
 
 import { useEffect, useRef, useState } from 'react';
-import { api, type SidecarHealth, type GpuQueueState, type GpuTripStatus } from './api';
+import {
+  api,
+  type SidecarHealth,
+  type GpuQueueState,
+  type GpuTripStatus,
+  type TtsAutoFreeNotice,
+} from './api';
 import type { ModelControlState } from '../components/ModelControlPill';
+
+/* #4066 — "Qwen 0.6B and Kokoro unloaded to free VRAM for the voice design."
+   Same shape as the analyzer line the Coqui Load writes into the shared
+   eviction notice. Exported for its unit test. */
+export function autoFreeNoticeText(n: TtsAutoFreeNotice): string {
+  const names =
+    n.models.length <= 1
+      ? n.models.join('')
+      : `${n.models.slice(0, -1).join(', ')} and ${n.models[n.models.length - 1]}`;
+  return `${names || 'Voice models'} unloaded to free VRAM for the ${n.purpose}.`;
+}
 
 /* Task 16/16.5 — persists which trip `seq` the operator has already
    dismissed, the same equality-based pattern update-notice.ts uses for the
@@ -170,6 +187,10 @@ export function useTtsLifecycle(): TtsLifecycle {
      seq was never written to storage, so it still differs from whatever
      (possibly older) seq IS persisted there. */
   const lastTripSeq = useRef<number | null>(readDismissedTripSeq());
+  /* #4066 — last-seen /api/gpu/queue `lastTtsAutoFree.seq`, seeded by the
+     first poll (see the queue probe below). */
+  const autoFreeSeeded = useRef(false);
+  const lastAutoFreeSeq = useRef<number | null>(null);
   /* In-flight op counter — guards the /health poll's unconditional pending-
      clear below against a Load/Stop that is still awaiting its response.
      Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
@@ -225,6 +246,20 @@ export function useTtsLifecycle(): TtsLifecycle {
         .then((q) => {
           if (cancelled) return;
           setGpuQueue(q);
+          /* #4066 — a voice design or a Quality render the server admitted by
+             unloading resident TTS models. The browser didn't ask for that
+             unload, so the server reports it here. The first poll only seeds
+             the last-seen seq (a reload must not re-show an old event); every
+             later new seq shows the shared eviction notice. */
+          const autoFree = q?.lastTtsAutoFree ?? null;
+          const autoFreeSeq = autoFree?.seq ?? null;
+          if (!autoFreeSeeded.current) {
+            autoFreeSeeded.current = true;
+            lastAutoFreeSeq.current = autoFreeSeq;
+          } else if (autoFree && autoFreeSeq !== lastAutoFreeSeq.current) {
+            lastAutoFreeSeq.current = autoFreeSeq;
+            setEvictionNotice(autoFreeNoticeText(autoFree));
+          }
         })
         .catch(() => {
           if (cancelled) return;

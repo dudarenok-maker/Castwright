@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { evictIdleQwenBase } from './evict-idle-tts.js';
+import { getLastTtsAutoFree, resetTtsAutoFreeForTests } from './tts-auto-free-notice.js';
 
 /* Second eviction lever for capacity admission (#1839). Frees a resident Qwen
    BASE TIER the current op does not need — Qwen only, and only when no render
@@ -102,26 +103,141 @@ describe('evictIdleQwenBase', () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it('#1839 finding 5: the lever never reaches beyond Qwen — its ONLY vocabulary is keep06/keep17, for either op shape', async () => {
-    /* Documents the blast-radius guarantee: widening WHICH Qwen tiers a
-       non-Qwen op may reclaim never grows into touching Coqui/Kokoro
-       residency itself — the reconcile call's keep-map has no other keys to
-       express that, for a Qwen op OR a non-Qwen one. */
+  it('#1839 finding 5: a light op never reaches beyond Qwen — its ONLY vocabulary is keep06/keep17', async () => {
+    /* Documents the blast-radius guarantee for every op that is NOT a voice
+       design or a Quality (1.7B) op: widening WHICH Qwen tiers a non-Qwen op
+       may reclaim never grows into touching Coqui/Kokoro residency itself.
+       #4066 deliberately widened this for the two heavy op shapes only (see
+       the #4066 block below) — Kokoro on the GPU is reclaimable there. */
+    resetTtsAutoFreeForTests();
     const reconcile = vi.fn().mockResolvedValue(true);
+    const probeHealth = vi.fn(async () => ({ kokoroLoaded: true, devices: { kokoro: 'cuda' } }));
     await evictIdleQwenBase({
       modelKey: 'kokoro-v1',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => false,
+      _probeHealth: probeHealth,
     });
     expect(Object.keys(reconcile.mock.calls[0][0]).sort()).toEqual(['keep06', 'keep17']);
 
     reconcile.mockClear();
     await evictIdleQwenBase({
-      modelKey: 'qwen3-tts-1.7b',
+      modelKey: 'qwen3-tts-0.6b',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => false,
+      _probeHealth: probeHealth,
     });
     expect(Object.keys(reconcile.mock.calls[0][0]).sort()).toEqual(['keep06', 'keep17']);
+    expect(getLastTtsAutoFree()).toBeNull();
+  });
+
+  describe('#4066 — a voice design or a Quality (1.7B) op frees the standard Qwen and Kokoro first', () => {
+    beforeEach(() => resetTtsAutoFreeForTests());
+
+    it('a design frees the resident standard Qwen 0.6B, even though the book itself is on 0.6B, and records the notice', async () => {
+      /* The design route passes the BOOK's model key (0.6B here). Before
+         #4066 that kept the 0.6B base resident (the elevate-only rule), so on
+         an 8 GB card the design's 6144 MB admission could never fit. */
+      const reconcile = vi.fn().mockResolvedValue(true);
+      const freed = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: false }),
+      });
+
+      expect(freed).toBe(true);
+      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined);
+      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'], purpose: 'voice design' });
+    });
+
+    it('a design also frees an on-demand Kokoro that sits on the GPU', async () => {
+      const reconcile = vi.fn().mockResolvedValue(true);
+      const freed = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: false, kokoroLoaded: true, devices: { kokoro: 'cuda' } }),
+      });
+
+      expect(freed).toBe(true);
+      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false, keepKokoro: false }, undefined);
+      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Kokoro'], purpose: 'voice design' });
+    });
+
+    it('a Quality (1.7B) op frees the 0.6B base and a GPU Kokoro together', async () => {
+      const reconcile = vi.fn().mockResolvedValue(true);
+      await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-1.7b',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cuda' } }),
+      });
+
+      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true, keepKokoro: false }, undefined);
+      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B', 'Kokoro'], purpose: 'Quality render' });
+    });
+
+    it('leaves a CPU-resident Kokoro alone — it holds no VRAM to free', async () => {
+      const reconcile = vi.fn().mockResolvedValue(true);
+      await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cpu' } }),
+      });
+
+      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined);
+      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'] });
+    });
+
+    it('frees nothing and records no notice while a render is in flight', async () => {
+      const reconcile = vi.fn().mockResolvedValue(true);
+      const probeHealth = vi.fn(async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cuda' } }));
+      const freed = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => true,
+        _probeHealth: probeHealth,
+      });
+
+      expect(freed).toBe(false);
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(getLastTtsAutoFree()).toBeNull();
+    });
+
+    it('records no notice when the unload did not actually free anything', async () => {
+      const reconcile = vi.fn().mockResolvedValue(false);
+      await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true }),
+      });
+
+      expect(getLastTtsAutoFree()).toBeNull();
+    });
+
+    it('each recorded notice gets a new sequence number', async () => {
+      const reconcile = vi.fn().mockResolvedValue(true);
+      const run = () =>
+        evictIdleQwenBase({
+          modelKey: 'qwen3-tts-0.6b',
+          purpose: 'design',
+          _reconcile: reconcile,
+          _isAnyGenerationActive: () => false,
+          _probeHealth: async () => ({ qwenLoaded: true }),
+        });
+      await run();
+      const first = getLastTtsAutoFree()!.seq;
+      await run();
+      expect(getLastTtsAutoFree()!.seq).toBeGreaterThan(first);
+    });
   });
 
   it('fails closed when the active-generation gate is unregistered (default)', async () => {

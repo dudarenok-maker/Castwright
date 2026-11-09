@@ -996,6 +996,72 @@ describe('withCapacityRetry — analyzer endpoint eviction (#3084)', () => {
   });
 });
 
+describe('withCapacityRetry — #4066 give-up message and the auto-free lever', () => {
+  afterEach(() => {
+    setProbeSidecarHealthProvider(null);
+  });
+
+  async function giveUpMessage(opts: {
+    health: Record<string, unknown>;
+    kokoroPreload: boolean;
+    generationActive: boolean;
+  }): Promise<string> {
+    setProbeSidecarHealthProvider(async () => opts.health);
+    const err = await withCapacityRetry(async () => noCapacityResponse(6_144, 'cuda:0'), {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      endpointUnloadNotes: () => [],
+      evictIdleTts: async () => false,
+      isKokoroPreloadOn: () => opts.kokoroPreload,
+      isGenerationKnownActive: () => opts.generationActive,
+      pollMs: 0,
+      maxAttempts: 2,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoCapacityError);
+    return (err as Error).message;
+  }
+
+  it('never says "Turn off Preload Kokoro" when Preload Kokoro is off — names the Stop control', async () => {
+    const msg = await giveUpMessage({
+      health: { kokoroLoaded: true, devices: { kokoro: 'cuda' } },
+      kokoroPreload: false,
+      generationActive: false,
+    });
+    expect(msg).not.toMatch(/Preload Kokoro/);
+    expect(msg).toMatch(/Kokoro is loaded — Press "Stop Kokoro"/);
+  });
+
+  it('keeps the Preload Kokoro remedy when the setting really is on', async () => {
+    const msg = await giveUpMessage({
+      health: { kokoroLoaded: true, devices: { kokoro: 'cuda' } },
+      kokoroPreload: true,
+      generationActive: false,
+    });
+    expect(msg).toMatch(/Turn off "Preload Kokoro at startup"/);
+  });
+
+  it('a render in flight is named as what holds the standard Qwen model', async () => {
+    const msg = await giveUpMessage({
+      health: { qwenLoaded: true, kokoroLoaded: false },
+      kokoroPreload: false,
+      generationActive: true,
+    });
+    expect(msg).toMatch(/The standard Qwen voice model is loaded — It is in use by the chapter render in progress/);
+  });
+
+  it('a request that fits never pulls the auto-free lever', async () => {
+    const evictIdleTts = vi.fn(async () => true);
+    const res = await withCapacityRetry(async () => okResponse(), {
+      engine: 'qwen',
+      evictIdleTts,
+    });
+    expect(res.ok).toBe(true);
+    expect(evictIdleTts).not.toHaveBeenCalled();
+  });
+});
+
 describe('parseNoCapacity', () => {
   it('returns the parsed shape for a 503 noCapacity body', async () => {
     const parsed = await parseNoCapacity(noCapacityResponse(1_234, 'cuda:1'));

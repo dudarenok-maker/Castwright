@@ -54,3 +54,13 @@ export function isAnyGenerationActive(): boolean {
   if (!provider) return true;
   return provider().length > 0;
 }
+
+/** True only when a render is KNOWN to be in flight. Unregistered resolves to
+    `false`. For wording a message only (#4066, `describeVramBlockers`): there
+    the worst case of a wrong `false` is a less specific error, while a wrong
+    `true` would tell the user a render is running when none is. Never use it
+    to decide whether an eviction is safe — that is `isAnyGenerationActive`. */
+export function isGenerationKnownActive(): boolean {
+  if (!provider) return false;
+  return provider().length > 0;
+}

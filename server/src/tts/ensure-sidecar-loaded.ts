@@ -39,7 +39,7 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { forceSidecarRecycle } from './sidecar-supervisor.js';
 import type { TtsEngine } from './index.js';
 import { fetch as undiciFetch, Agent } from 'undici';
-import { setReconcileResidentQwenTiersProvider } from '../gpu/qwen-tier-reconcile-gate.js';
+import { setReconcileResidentQwenTiersProvider, type ResidentTtsKeep } from '../gpu/qwen-tier-reconcile-gate.js';
 
 /* Engines whose model lives in the local sidecar and must be loaded before
    synth. Gemini is a cloud API (nothing to preload); unknown engines are left
@@ -230,7 +230,7 @@ export const UNLOAD_DISPATCHER = new Agent({
 const UNLOAD_ABSOLUTE_MAX_MS = 600_000;
 
 export async function reconcileResidentQwenTiers(
-  keep: { keep06: boolean; keep17: boolean },
+  keep: ResidentTtsKeep,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const base = getResolvedSidecarUrl();
@@ -246,12 +246,14 @@ export async function reconcileResidentQwenTiers(
   const budget = AbortSignal.timeout(UNLOAD_ABSOLUTE_MAX_MS);
   const bounded = signal ? AbortSignal.any([budget, signal]) : budget;
   let allEvicted = true; // track whether all evictions succeeded
-  const unload = async (model?: '1.7b'): Promise<void> => {
+  const unload = async (model?: '1.7b' | 'kokoro'): Promise<void> => {
     try {
       const res = await undiciFetch(`${base}/unload`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(model ? { engine: 'qwen', model } : { engine: 'qwen' }),
+        body: JSON.stringify(
+          model === 'kokoro' ? { engine: 'kokoro' } : model ? { engine: 'qwen', model } : { engine: 'qwen' },
+        ),
         signal: bounded,
         dispatcher: UNLOAD_DISPATCHER,
       });
@@ -262,7 +264,7 @@ export async function reconcileResidentQwenTiers(
            "the tier has been freed", so return false if any eviction failed. */
         allEvicted = false;
         console.warn(
-          `[generation] failed to unload Qwen ${model || '0.6B'}: sidecar returned ${res.status}`,
+          `[generation] failed to unload ${model === 'kokoro' ? 'Kokoro' : `Qwen ${model || '0.6B'}`}: sidecar returned ${res.status}`,
         );
       }
     } catch {
@@ -274,10 +276,14 @@ export async function reconcileResidentQwenTiers(
   const evictions: Promise<void>[] = [];
   if (h.qwen_loaded === true && !keep.keep06) evictions.push(unload()); // drop the 0.6B base
   if (h.qwen_base17_loaded === true && !keep.keep17) evictions.push(unload('1.7b')); // drop the 1.7B base
+  /* #4066 — only an explicit `keepKokoro: false` (the admission lever for a
+     voice design or a Quality op) drops Kokoro; absent means keep. */
+  const dropKokoro = keep.keepKokoro === false && h.kokoro_loaded === true;
+  if (dropKokoro) evictions.push(unload('kokoro'));
   if (evictions.length === 0) return false;
   console.info(
     `[generation] VRAM reconcile: evicting unused Qwen tier(s) ` +
-      `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B' : ''}]`.trim(),
+      `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B ' : ''}${dropKokoro ? 'Kokoro' : ''}]`.trim(),
   );
   await Promise.allSettled(evictions);
   return allEvicted;

@@ -565,6 +565,46 @@ describe('useTtsLifecycle', () => {
     expect(result.current.gpuQueueDepth).toBeUndefined();
   });
 
+  it('#4066: shows the "unloaded to free VRAM" notice when the server auto-freed models for a voice design', async () => {
+    vi.useFakeTimers();
+    try {
+      /* First poll seeds the last-seen seq (nothing yet), so a reload never
+         re-shows an old event. */
+      mocks.getGpuQueueState.mockResolvedValueOnce({ queueDepth: 0, devices: [], lastTtsAutoFree: null });
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.evictionNotice).toBeNull();
+
+      mocks.getGpuQueueState.mockResolvedValueOnce({
+        queueDepth: 0,
+        devices: [],
+        lastTtsAutoFree: { seq: 1, models: ['Qwen 0.6B', 'Kokoro'], purpose: 'voice design', at: '2026-11-09T10:00:00Z' },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.evictionNotice).toBe('Qwen 0.6B and Kokoro unloaded to free VRAM for the voice design.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('#4066: an auto-free that happened before this page loaded is not re-shown', async () => {
+    mocks.getGpuQueueState.mockResolvedValue({
+      queueDepth: 0,
+      devices: [],
+      lastTtsAutoFree: { seq: 4, models: ['Qwen 0.6B'], purpose: 'Quality render', at: '2026-11-09T10:00:00Z' },
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(mocks.getGpuQueueState).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.evictionNotice).toBeNull();
+  });
+
   it('Task 16/16.5: surfaces the reverted trip toast from /api/gpu/trip-status on the same tick', async () => {
     mocks.getGpuTripStatus.mockResolvedValueOnce({
       status: 'reverted',

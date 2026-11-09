@@ -722,7 +722,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 42 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 43 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 9 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -732,11 +732,16 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**76 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**77 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-09 (#4037, #4040), owed count unchanged.** Row **A120** steps 13, 20 and 21 run on the box and recorded in a new flag; step 13's link cycle was made by hand, and step 13's text is amended (the row must not be locked or tuned, and a hand link through `POST /cast/link-prior` is stated as the alternative setup). The row stays owed. No row added or removed; `next-id` unchanged.
+> **Last change: 2026-11-09 (#4066), 76 → 77.** Row **A121** (a voice design or a Quality render on
+> an 8 GB card frees the resident standard Qwen and Kokoro first; the capacity error no longer says
+> "Turn off Preload Kokoro" with preload off) added. Group A 42 → 43. `next-id` bumped A121 → A122 in
+> the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-09 (#4037, #4040), owed count unchanged.** Row **A120** steps 13, 20 and 21 run on the box and recorded in a new flag; step 13's link cycle was made by hand, and step 13's text is amended (the row must not be locked or tuned, and a hand link through `POST /cast/link-prior` is stated as the alternative setup). The row stays owed. No row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-08 (#4037, #4040, PR #4061), owed count unchanged.** Row **A120** amended:
 > step 13 now observes an emotion variant going stale when its voice's base is redesigned
@@ -1893,7 +1898,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A121 -->
+<!-- next-id: A122 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6500,6 +6505,18 @@ The automated tests prove the decline-time separation against fixture workspaces
 >   - **Voice design is refused on an 8 GB card while the sidecar's own models are resident, and nothing frees them.** After any render, the standard Qwen model (about 1.9 GB) or an on-demand Kokoro stays loaded, and a design answers `503 "Not enough GPU memory for qwen (6144MB) — free VRAM or attach a second GPU."` after about 60 s. With Kokoro loaded the message says `Turn off "Preload Kokoro at startup"` even when preload is off (Kokoro had been loaded lazily by fallback renders). The run unloaded qwen and kokoro through `POST /api/sidecar/unload` before every design. Tracked in [#4066](https://github.com/dudarenok-maker/Castwright/issues/4066); the owner decided 2026-11-09 that a design or Quality render auto-frees the resident standard Qwen/Kokoro first.
 >   - **After Don't reuse, the declined row's stored qwen voice name still points at the old key.** Book 2's `overrideTtsVoices.qwen.name` stayed `qwen-<Book 1's uuid>` while `voiceUuid` is the new one. The render uses `voiceUuid` (`qwenStorageKey`) and plays the right file, so only the stored name is stale, until the next design rewrites it. Tracked in [#4067](https://github.com/dudarenok-maker/Castwright/issues/4067).
 
+### A121 · A voice design or a Quality render on an 8 GB card frees the resident standard Qwen and Kokoro first ([#4066](https://github.com/dudarenok-maker/Castwright/issues/4066)) · **one GPU box: a single 8 GB card, real Qwen sidecar, Kokoro installed, Preload Kokoro off**
+
+The automated tests prove the lever's decisions against a mocked sidecar: what it unloads for a design or a Quality op, that it does nothing during a render, and the wording of the capacity error. Only a real 8 GB card shows that freeing the standard Qwen base and Kokoro is enough for the 6144 MB admission to fit, and that the design or Quality render then completes.
+
+- **Design after a render.** Render a chapter at the standard tier (and let a line fall back to Kokoro, or press Load on Kokoro). With GET /api/sidecar/health showing qwenLoaded: true and kokoroLoaded: true, press Design on a character. The design completes with no 
+oCapacity and no manual POST /api/sidecar/unload. logs/server.log shows VRAM reconcile: evicting unused Qwen tier(s) [0.6B Kokoro], and within 30 s the notice under the top bar reads "Qwen 0.6B and Kokoro unloaded to free VRAM for the voice design."
+- **Quality preview after a render.** With the 0.6B base resident again, play a character's sample at the Quality tier (1.7B). It plays; the notice ends "… for the Quality render."
+- **During a render, nothing is unloaded.** Start a chapter render and press Design while it runs. No VRAM reconcile line appears for the design, and if it is refused the message names the standard Qwen model as in use by the render, not Preload Kokoro.
+- **The message with Preload Kokoro off.** In any refusal seen above, the text never says "Turn off Preload Kokoro"; with Kokoro resident it says to press "Stop Kokoro" in the "Voice engines loaded" row.
+- **A card that fits is untouched.** On the 2-card boot or a 16 GB card, a design with the 0.6B base resident leaves qwenLoaded: true and shows no notice.
+
+*Needs:* the GPU box on its single 8 GB card (the last bullet needs the 2-card boot or a larger card). *Criteria:* this row. Clears when each bullet is recorded with the log line or health reading that shows it.
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B109 -->

@@ -8,8 +8,19 @@
    (#1839 finding 5).
 
    Deliberately narrow:
-   - Qwen bases only. Coqui and Kokoro are button-driven — the user loaded them
-     on purpose and silently unloading them would be surprising.
+   - Qwen bases only, for every op EXCEPT the two heavy ones below. Coqui and
+     Kokoro are button-driven — the user loaded them on purpose and silently
+     unloading them would be surprising.
+   - #4066 (owner decision, "auto-free, then design"): a voice design
+     (`purpose: 'design'`) or a Quality op (`qwen3-tts-1.7b`) needs ~6 GB, so
+     on an 8 GB card it can never fit next to a resident standard Qwen base or
+     an on-GPU Kokoro. For those two op shapes the lever frees BOTH Qwen base
+     tiers it doesn't need (a design needs neither — the sidecar reloads the
+     0.6B audition base inside its own admitted budget) and a Kokoro that sits
+     on the GPU (a CPU Kokoro holds no VRAM, so it is left alone). What it
+     freed is recorded in ./tts-auto-free-notice.ts so the browser can show
+     the "unloaded to free VRAM" notice. The no-render-in-flight gate below
+     applies unchanged.
    - Only when NO render is in flight anywhere. A resident base during a render
      may be in active use, and a mixed-tier book can have both tiers live at
      once (a character pinned above its book's tier). This also makes the lever
@@ -63,7 +74,12 @@
    an edge for cycle detection (see qwen-tier-reconcile-gate.ts), so the
    injection type below is spelled out locally instead. */
 import { isAnyGenerationActive } from './active-generation-gate.js';
-import { reconcileResidentQwenTiersIfRegistered } from './qwen-tier-reconcile-gate.js';
+import {
+  reconcileResidentQwenTiersIfRegistered,
+  type ResidentTtsKeep,
+} from './qwen-tier-reconcile-gate.js';
+import { probeSidecarHealthIfRegistered, type SidecarHealthSnapshot } from './sidecar-health-gate.js';
+import { recordTtsAutoFree } from './tts-auto-free-notice.js';
 import { engineForModelKey, type TtsModelKey } from '../tts/model-keys.js';
 
 /** Same shape as tts/ensure-sidecar-loaded.ts's `reconcileResidentQwenTiers` —
@@ -71,10 +87,13 @@ import { engineForModelKey, type TtsModelKey } from '../tts/model-keys.js';
     file header). Returns whether it actually issued an `/unload` (see that
     function's doc comment) — threaded straight through by `evictIdleQwenBase`
     below so this lever's own return value stays truthful (#1839 finding 1). */
-type ReconcileResidentQwenTiersFn = (
-  keep: { keep06: boolean; keep17: boolean },
-  signal?: AbortSignal,
-) => Promise<boolean>;
+type ReconcileResidentQwenTiersFn = (keep: ResidentTtsKeep, signal?: AbortSignal) => Promise<boolean>;
+
+/** A device family that holds VRAM. 'cpu' and an unknown/absent reading do
+    not, so a Kokoro reported there is never unloaded by this lever. */
+function isGpuFamily(device: string | null | undefined): boolean {
+  return device === 'cuda' || device === 'rocm' || device === 'directml';
+}
 
 export interface EvictIdleQwenBaseOpts {
   /** The model key the blocked op is asking for. When it's a Qwen key, its
@@ -85,6 +104,11 @@ export interface EvictIdleQwenBaseOpts {
       longer goes politely unmet just because the blocker is Qwen and not
       itself. */
   modelKey?: TtsModelKey;
+  /** #4066 — 'design' when the blocked op is a voice design. The design route
+      passes the BOOK's model key, which says nothing about what the design
+      itself loads (the 1.7B VoiceDesign model), so this is what tells the
+      lever a design needs neither Qwen base tier resident. */
+  purpose?: 'design';
   signal?: AbortSignal;
   /** Injected for tests. Defaults to the registered-accessor leaf gate
       (./qwen-tier-reconcile-gate.ts), which fails closed to "did not evict"
@@ -93,6 +117,10 @@ export interface EvictIdleQwenBaseOpts {
   /** Injected for tests. Returns true when a render may be in flight
       anywhere — defaults to the leaf gate's `isAnyGenerationActive`. */
   _isAnyGenerationActive?: typeof isAnyGenerationActive;
+  /** Injected for tests. Reads what the sidecar has resident — defaults to
+      the leaf gate's `probeSidecarHealthIfRegistered`. Only consulted for a
+      design or Quality op (#4066). */
+  _probeHealth?: () => Promise<SidecarHealthSnapshot | null>;
 }
 
 /** Returns true when the underlying `reconcileResidentQwenTiers` actually
@@ -117,11 +145,27 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
      op keeps the same elevate-only behaviour as before: it only reclaims
      the ONE tier it doesn't itself want. */
   const isQwenOp = engineForModelKey(modelKey) === 'qwen';
-  const wants17 = modelKey === 'qwen3-tts-1.7b';
-  const keep = isQwenOp ? { keep06: !wants17, keep17: wants17 } : { keep06: false, keep17: false };
+  const isDesign = opts.purpose === 'design';
+  const wants17 = !isDesign && modelKey === 'qwen3-tts-1.7b';
+  const keep: ResidentTtsKeep =
+    isQwenOp && !isDesign ? { keep06: !wants17, keep17: wants17 } : { keep06: false, keep17: false };
 
-  if (opts._reconcile) {
-    return opts._reconcile(keep, opts.signal);
+  /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro, and
+     report what they freed. Residency is read up front so the notice can
+     name only what was really resident. */
+  const heavy = isDesign || wants17;
+  const freedNames: string[] = [];
+  if (heavy) {
+    const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
+    if (health?.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
+    if (health?.qwenLoaded === true && !keep.keep06) freedNames.push('Qwen 0.6B');
+    if (health?.qwenBase17Loaded === true && !keep.keep17) freedNames.push('Qwen 1.7B');
+    if (keep.keepKokoro === false) freedNames.push('Kokoro');
   }
-  return reconcileResidentQwenTiersIfRegistered(keep, opts.signal);
+
+  const freed = opts._reconcile
+    ? await opts._reconcile(keep, opts.signal)
+    : await reconcileResidentQwenTiersIfRegistered(keep, opts.signal);
+  if (freed && heavy) recordTtsAutoFree(freedNames, isDesign ? 'voice design' : 'Quality render');
+  return freed;
 }

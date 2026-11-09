@@ -189,15 +189,18 @@ export async function postDesignAndCacheAudition(
           signal: controller.signal,
           /* Same eviction lever the /synthesize path gets (tts/sidecar.ts) —
              free an idle Qwen base this design doesn't need instead of polling
-             for ~60s and failing while it holds the VRAM (#1839 finding 4). */
-          evictIdleTts: () => evictIdleQwenBase({ modelKey, signal: controller.signal }),
+             for ~60s and failing while it holds the VRAM (#1839 finding 4).
+             `purpose: 'design'` (#4066): `modelKey` is the book's tier, not
+             the design's, so without it a 0.6B book kept its 0.6B base
+             resident and the design could never fit on an 8 GB card. */
+          evictIdleTts: () => evictIdleQwenBase({ modelKey, purpose: 'design', signal: controller.signal }),
         },
       );
     } catch (e) {
       if (e instanceof NoCapacityError) {
         /* Carry the error's own message through — it names the blocking
-           model + remedy (e.g. "Kokoro is loaded — Turn off \"Preload Kokoro
-           at startup\" in settings.") when describeVramBlockers can
+           model + remedy (e.g. "Kokoro is loaded — Press \"Stop Kokoro\" …")
+           when describeVramBlockers can
            identify one, rather than the
            generic fallback that used to replace it unconditionally
            (#1839 finding 4). Still surfaced as a SidecarDesignError, the

@@ -192,6 +192,27 @@ describe('runVoiceDesign', () => {
     );
   });
 
+  it('#4066 — tells the lever this is a voice DESIGN, so it frees the standard Qwen base even on a 0.6B book', async () => {
+    let capturedOpts: { evictIdleTts?: () => Promise<boolean> } | undefined;
+    mockWithCapacityRetry.mockImplementation((doPost, opts) => {
+      capturedOpts = opts;
+      return doPost(opts.signal);
+    });
+
+    await runVoiceDesign({
+      storageKey: 'qwen-lever-06',
+      displayName: 'Nova',
+      persona: 'a calm voice',
+      modelKey: 'qwen3-tts-0.6b',
+    });
+
+    mockEvictIdleQwenBase.mockClear();
+    await capturedOpts!.evictIdleTts!();
+    expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
+      expect.objectContaining({ modelKey: 'qwen3-tts-0.6b', purpose: 'design' }),
+    );
+  });
+
   it("#1839 finding 4 — a capacity failure's own message (naming the blocking model) reaches the caller, not a generic fallback", async () => {
     const blockers = [{ model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' }];
     mockWithCapacityRetry.mockRejectedValue(

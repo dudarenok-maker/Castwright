@@ -252,6 +252,22 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(m.unloads()).toEqual([{ engine: 'qwen', model: '1.7b' }]); // 1.7B only
   });
 
+  it('#4066 — keepKokoro:false also unloads a resident Kokoro, reports true', async () => {
+    const m = mockSidecar({ qwen_loaded: true, kokoro_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await expect(
+      reconcileResidentQwenTiers({ keep06: false, keep17: false, keepKokoro: false }),
+    ).resolves.toBe(true);
+    expect(m.unloads()).toEqual([{ engine: 'qwen' }, { engine: 'kokoro' }]);
+  });
+
+  it('#4066 — an absent keepKokoro never touches Kokoro (the run-start callers)', async () => {
+    const m = mockSidecar({ qwen_loaded: false, kokoro_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: false })).resolves.toBe(false);
+    expect(m.unloads()).toEqual([]);
+  });
+
   it('evicts nothing for a mixed-tier run (both in use), reports false', async () => {
     const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
