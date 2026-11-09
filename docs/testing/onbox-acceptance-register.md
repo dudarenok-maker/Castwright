@@ -6517,6 +6517,7 @@ The automated tests prove the lever's decisions against a mocked sidecar: what i
 - **A card that fits is untouched.** On the 2-card boot or a 16 GB card with room for the 6144 MB design next to the 0.6B base, press Design with the base resident. Afterwards `qwenLoaded` is still `true`, `logs/server.log` has no `VRAM reconcile` line for that design, and no notice appears. If the base was unloaded, this bullet fails.
 
 *Needs:* the GPU box on its single 8 GB card (the last bullet needs the 2-card boot or a larger card). *Criteria:* this row. Clears when each bullet is recorded with the log line or health reading that shows it.
+
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B109 -->
