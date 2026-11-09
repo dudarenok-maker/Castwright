@@ -1317,10 +1317,12 @@ export async function sweepStaleDesignStaging(
    round (logged once). A name a row uses as its base is kept, a staging or
    preview file never matches, and an entry younger than an hour is kept (a second
    server on the same workspace may be mid-design, as sweepStaleDesignStaging).
-   Returns how many files it removed; never throws. */
+   Returns how many files it removed; never throws. #4037: also removes the stale
+   `<member>.mint-<nanoid6>.tmp` files a killed refreshMintCopy left behind. */
 const VARIANT_FILE = new RegExp(
   `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:\\.pt|\\.json|__master\\.wav|__1\\.7b\\.pt)$`,
 );
+const MINT_TMP_FILE = /^qwen-.+(?:\.pt|\.json|__master\.wav)\.mint-[A-Za-z0-9_-]{6}\.tmp$/;
 export async function sweepOrphanVariantFiles(
   maxAgeMs: number = STAGING_MAX_AGE_MS,
   now: number = Date.now(),
@@ -1331,17 +1333,22 @@ export async function sweepOrphanVariantFiles(
   } catch {
     return 0;
   }
-  const candidates = names.filter((n) => VARIANT_FILE.test(n) && !STAGED_FILE.test(n));
-  if (candidates.length === 0) return 0;
-  const named = await namedQwenVoices().catch(() => null);
-  if (!named) {
-    console.warn('[variant-sweep] a book could not be read; keeping every variant file this round.');
-    return 0;
-  }
+  /* #4037 — refreshMintCopy's temp copies and backups, left by a process that died
+     before its cleanup. Nothing names them, so no cast read is needed; the same
+     hour guard covers a second server mid-mint. */
   const stale: string[] = [];
-  for (const n of candidates) {
+  for (const n of names.filter((name) => MINT_TMP_FILE.test(name))) {
+    const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
+    if (s && now - s.mtimeMs > maxAgeMs) stale.push(n);
+  }
+  const candidates = names.filter((n) => VARIANT_FILE.test(n) && !STAGED_FILE.test(n));
+  const named = candidates.length === 0 ? null : await namedQwenVoices().catch(() => null);
+  if (candidates.length > 0 && !named) {
+    console.warn('[variant-sweep] a book could not be read; keeping every variant file this round.');
+  }
+  for (const n of named ? candidates : []) {
     const stem = VARIANT_FILE.exec(n)?.[1];
-    if (!stem || named.has(stem)) continue;
+    if (!stem || !named || named.has(stem)) continue;
     const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
     if (s && now - s.mtimeMs > maxAgeMs) stale.push(n);
   }
