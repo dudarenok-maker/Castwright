@@ -122,6 +122,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
+import { dropStaleVariants } from '../workspace/variant-base-rev.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restructure-gate.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
@@ -261,7 +262,9 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
     );
     const fromCarryover = carry.value?.characters;
     if (fromCarryover) {
-      return { rows: fromCarryover, fingerprint: null, source: 'carryover' as const };
+      /* #4040 — a reparse carries no emotion variant whose base was redesigned
+         since: the merge would write it back into the fresh cast.json. */
+      return { rows: await dropStaleVariants(fromCarryover), fingerprint: null, source: 'carryover' as const };
     }
     return { rows: [], fingerprint: null, source: 'none' as const };
   });

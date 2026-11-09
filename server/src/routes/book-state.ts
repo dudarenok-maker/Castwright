@@ -154,6 +154,7 @@ import {
   preserveNotLinkedToOnCastWrite,
   rejectForeignCloneKeys,
 } from '../workspace/preserve-cast-voices.js';
+import { dropStaleVariants } from '../workspace/variant-base-rev.js';
 import {
   collectOrphanedCharacterFallbacks,
   collectRenderedFallbackEngines,
@@ -260,6 +261,18 @@ function stripDerivedCharacterFields(patch: unknown): unknown {
     return rest;
   });
   return { ...cast, characters };
+}
+
+/* #4040 — drop every emotion variant whose base was redesigned since it was
+   designed (variant-base-rev.ts), last, after the guards above have filled gaps
+   from disk: a client tab that still holds a stale variant cannot write it back.
+   Tolerates a non-cast-shaped patch, like its siblings. */
+async function dropStaleCastVariants(patch: unknown): Promise<unknown> {
+  if (!patch || typeof patch !== 'object' || !Array.isArray((patch as { characters?: unknown }).characters)) {
+    return patch;
+  }
+  const cast = patch as { characters: unknown[] };
+  return { ...cast, characters: await dropStaleVariants(cast.characters) };
 }
 
 /* Non-destructive title-only refresh. Invoked transparently from the
@@ -510,6 +523,11 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       manuscript: sliceRevision('manuscript', edits, revisionSalt),
       changeLog: sliceRevision('changeLog', changeLog, revisionSalt),
     };
+    /* #4040 — serve no emotion variant whose base was redesigned since (after the
+       tokens above, which describe the bytes on disk). */
+    if (cast?.characters && Array.isArray(cast.characters)) {
+      cast.characters = await dropStaleVariants(cast.characters);
+    }
 
     /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
        with its own `.catch`, not inline in an argument list.
@@ -1241,7 +1259,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           try {
             const guarded = await preserveDesignedVoices(bookDir, body.patch);
             const denormalised = await denormaliseCastReusedVoices(guarded);
-            toWrite = stripDerivedCharacterFields(denormalised);
+            toWrite = await dropStaleCastVariants(stripDerivedCharacterFields(denormalised));
           } catch (err) {
             if (err instanceof CastVoiceConsentError) {
               assertRevisionFresh('cast', baseRevision, CAST_REVISION_FIELDS, existing, body.patch, salt);
@@ -1708,9 +1726,15 @@ async function applyReparse(
        to complete while this arm never deletes cast.json — a worse partial
        state than either succeeding or failing cleanly. The .catch below is
        narrowed to that one case: a JSON parse failure degrades to the same
-       path as a missing cast.json (empty reuseRows, carryover removed,
-       cast.json deleted, reparse succeeds) — a corrupt cast has nothing
-       worth carrying over and reparse exists to discard the cast anyway.
+       path as a missing cast.json (existingCast === null: the carryover is
+       left exactly as it is, cast.json is deleted, reparse succeeds).
+       #4039 — the carryover must survive a second reparse or a
+       replace-manuscript before re-analysis. For an ABSENT cast.json it is
+       the newest record of the cast. For an UNPARSEABLE one it is older than
+       the cast it stands in for, but readPriorCastForMerge (analysis.ts)
+       already falls back to the carryover when cast.json does not parse, so
+       keeping it matches what the next analysis would use anyway, and
+       deleting it would lose the designed voices.
        Any OTHER read failure (EBUSY/EPERM/EACCES/EMFILE, etc. on an
        otherwise-intact cast.json) is logged and re-thrown instead of being
        silently treated as "no cast": the sibling arms have already started
@@ -1732,7 +1756,12 @@ async function applyReparse(
         console.error('[book-state] reparse: cast.json unreadable, refusing to discard it', err);
         throw err;
       });
-      const reuseRows = (existingCast?.characters ?? [])
+      if (existingCast === null) {
+        // Absent or unparseable cast.json: keep the carryover untouched (#4039).
+        await rm(castJsonPath(bookDir), { force: true });
+        return;
+      }
+      const reuseRows = (existingCast.characters ?? [])
         .filter((c) => typeof c.id === 'string')
         .map((c) => {
           const row: Record<string, unknown> = { id: c.id, name: c.name };

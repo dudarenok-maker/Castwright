@@ -999,6 +999,67 @@ describe('scope + variantTasks (fs-25)', () => {
     }
   });
 
+  /* #4040 — a variant designed against an earlier base (its `baseRev` ≠ the base's
+     current `rev`) is stale, i.e. not designed: the full-cast sweep re-mints it.
+     A current one is skipped. Drives the "already designed" check in the variants
+     branch; the stale-marking itself lives in workspace/variant-base-rev.ts. */
+  describe('#4040: stale variants in the full-cast sweep', () => {
+    const seedVariant = (uuid: string, baseRev: string, variantBaseRev: string) => {
+      const dir = join(workspaceRoot, 'voices', 'qwen');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `qwen-${uuid}.json`), JSON.stringify({ rev: baseRev }));
+      writeFileSync(join(dir, `qwen-${uuid}__angry.json`), JSON.stringify({ baseRev: variantBaseRev }));
+      writeBookOnDisk([
+        ...characters,
+        {
+          ...charWithBase,
+          voiceUuid: uuid,
+          overrideTtsVoices: {
+            qwen: { name: `qwen-${uuid}`, variants: { angry: { name: `qwen-${uuid}__angry` } } },
+          },
+        },
+      ]);
+    };
+    const runVariants = () =>
+      request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({
+          modelKey: QWEN_KEY,
+          scope: 'variants',
+          characterIds: [],
+          variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }],
+        });
+
+    it('re-designs a variant whose baseRev no longer matches the base rev', async () => {
+      seedVariant('u_stale4040', 'rev-new', 'rev-old');
+      const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+        voiceId: 'qwen-u_stale4040__angry',
+        url: '/voice-samples/qwen-u_stale4040__angry.mp3',
+      });
+
+      const res = await runVariants();
+
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0].characterId).toBe('marlow');
+      expect(parseSse(res.text).some((e) => e.type === 'variant_designed' && e.characterId === 'marlow')).toBe(true);
+    });
+
+    it('control: skips a variant whose baseRev matches the base rev', async () => {
+      seedVariant('u_current4040', 'rev-same', 'rev-same');
+      const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+        voiceId: 'qwen-u_current4040__angry',
+        url: '/voice-samples/qwen-u_current4040__angry.mp3',
+      });
+
+      const res = await runVariants();
+
+      expect(res.status).toBe(200);
+      expect(spy).not.toHaveBeenCalled();
+      expect(parseSse(res.text).some((e) => e.type === 'character_skipped' && e.characterId === 'marlow')).toBe(true);
+    });
+  });
+
   it('scope:variants skips a variant whose base voice is missing', async () => {
     const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
       voiceId: 'qwen-v_maerin__angry',
