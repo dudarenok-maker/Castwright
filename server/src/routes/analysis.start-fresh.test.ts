@@ -10,8 +10,8 @@
    that block left. The completed-run case covers the other half, the prior the
    merge sees. The mock blocks are the ones the harness header requires. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
 
@@ -48,6 +48,7 @@ import { getManuscript } from '../store/manuscripts.js';
 import { saveAnalysisCache } from '../store/analysis-cache.js';
 import {
   castMergeSuggestionsJsonPath,
+  makeBookId,
   manuscriptEditsJsonPath,
 } from '../workspace/paths.js';
 import type { CastMergeEntry } from '../store/cast-merges.js';
@@ -102,7 +103,7 @@ const OLGA: Row = {
   color: '#222222',
   voiceId: 'v-olga',
   voiceState: 'locked',
-  matchedFrom: { bookId: 'sibling-book', characterId: 'olga-1' },
+  matchedFrom: { bookId: 'sibling-book', characterId: 'olga-1' }, // retargeted at the real sibling by seedDecisions
   notLinkedTo: ['w2'],
 };
 const WREN: Row = {
@@ -121,6 +122,9 @@ const SALTGRAVE: Row = {
   aliases: ['Garrow'],
 };
 const PRIOR: Row[] = [{ ...NARR }, OLGA, WREN, SALTGRAVE];
+/** PRIOR with Olga's series link pointing at the sibling book seedDecisions wrote. */
+let seededPrior: Row[] = PRIOR;
+const siblingDirs: string[] = [];
 const HISTORY = {
   schema: 1,
   supersededBy: { garrow: 'saltgrave' },
@@ -164,6 +168,29 @@ const readAb = (b: HarnessBook, file: string): any => JSON.parse(readFileSync(ab
 /** Seed a book that has everything a Start fresh used to wipe or strip. */
 function seedDecisions(): HarnessBook {
   const b = mkBook(PRIOR);
+  /* Plan 291: the run start now WRITES the stale-link prune to cast.json, so a link
+     must be a valid reuse source (same author and series, an earlier position, same
+     language) for "Start fresh keeps series links" to mean anything. */
+  const author = 'Author';
+  const seriesDir = dirname(b.bookDir);
+  const series = basename(seriesDir);
+  const siblingDir = join(seriesDir, 'Book One');
+  mkdirSync(join(siblingDir, '.audiobook'), { recursive: true });
+  siblingDirs.push(siblingDir);
+  const siblingId = makeBookId(author, series, 'Book One');
+  writeFileSync(
+    join(siblingDir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      ...readJson(b.bookDir, 'state.json'),
+      bookId: siblingId,
+      manuscriptId: 'sibling-' + b.manuscriptId,
+      title: 'Book One',
+      seriesPosition: 1,
+    }),
+  );
+  writeFileSync(join(siblingDir, 'manuscript.md'), 'x');
+  seededPrior = PRIOR.map((r) => (r.id === 'olga' ? { ...r, matchedFrom: { bookId: siblingId, characterId: 'olga-1' } } : r));
+  writeAb(b, 'cast.json', { characters: seededPrior });
   writeAb(b, 'cast-id-history.json', HISTORY);
   writeAb(b, 'cast-merges.json', JOURNAL);
   writeAb(b, 'cast-merge-suggestions.json', { suggestions: [SUGGESTION] });
@@ -215,6 +242,7 @@ describe('#4031 rule 8 - Start fresh keeps the user decisions', () => {
     if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
     else process.env.STAGE2_COVERAGE_RETRIES = orig;
     for (const b of books.splice(0)) await cleanupBook(b);
+    for (const d of siblingDirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
 
   it('rule 8: Start fresh keeps merges, declines, dismissals and series links', async () => {
@@ -231,7 +259,7 @@ describe('#4031 rule 8 - Start fresh keeps the user decisions', () => {
     expect(events.some((e) => e.kind === 'result')).toBe(false);
     /* cast.json untouched: every row, with its series link, voice and decline edges. */
     expect(existsSync(ab(b, 'cast.json'))).toBe(true);
-    expect(readCast(b.bookDir)).toEqual(PRIOR);
+    expect(readCast(b.bookDir)).toEqual(seededPrior);
     /* The merge history and the dismissal record. */
     expect(readAb(b, 'cast-id-history.json')).toEqual(HISTORY);
     /* The merge journal keeps every entry (the merges); only the sentence refs go. */

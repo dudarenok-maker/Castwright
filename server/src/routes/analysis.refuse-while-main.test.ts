@@ -329,7 +329,7 @@ async function runMain(label: string, seedCache: Record<string, unknown>, opts: 
   const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
   const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
   const { runMainAnalyzerJob, __testRegisterJobForTest } = await import('./analysis.js');
-  await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+  await saveAnalysisCache(seed.manuscriptId, { version: 2, ...seedCache } as never);
   const stateBefore = readFileSync(join(seed.bookDir, '.audiobook', 'state.json'), 'utf8');
   const castCalls: number[] = [];
   const stage2Calls: number[] = [];

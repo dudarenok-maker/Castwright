@@ -87,9 +87,12 @@ import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import { readUserSettings, getCachedUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight, type PreflightTarget } from '../analyzer/preflight.js';
 import {
+  ANALYSIS_CACHE_VERSION,
+  classifyAnalysisCache,
   clearAnalysisCache,
   hasCurrentTake,
   loadAnalysisCache,
+  mutateAnalysisCache,
   reachedConfirm,
   saveAnalysisCache,
   type AnalysisCache,
@@ -148,11 +151,13 @@ import {
   dropSupersededTargetsNoLongerLive,
   refuseRetirementsOfLiveIds,
   loadCastIdHistoryWithStatus,
+  toMatchHistory,
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
-import type { DedupConstraints, StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
+import type { DedupConstraints, LedgerEntry, StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
 import {
+  materialisePriorAtRunStart,
   readHealOpts,
   readPriorCastLockFree,
   sameBookDeclinePredicate,
@@ -174,7 +179,7 @@ import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
-import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks } from '../workspace/series-reuse-link.js';
+import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks, staleReuseLinkKeys } from '../workspace/series-reuse-link.js';
 import {
   normaliseForMatch as normaliseForMatchShared,
   matchQuoteInSource,
@@ -336,12 +341,28 @@ export function logIfDegradedCastIdHistory(
   }
 }
 
+/* Plan 291 rule 10 (#4031): does the book have a prior cast or any merge history
+   to match against? Then Phase 1 is held for the plan. A degraded history counts:
+   it cannot be read, so it cannot be ruled out. */
+async function bookHasPriorOrHistory(bookDir: string | undefined, priorRows: number): Promise<boolean> {
+  if (!bookDir) return false;
+  if (priorRows > 0) return true;
+  const h = toMatchHistory(await loadCastIdHistoryWithStatus(bookDir));
+  return (
+    h.status === 'degraded' ||
+    Object.keys(h.supersededBy).length > 0 ||
+    Object.keys(h.displaced).length > 0 ||
+    h.notSamePerson.length > 0
+  );
+}
+
 /* #4031 A11 — the run-start heal's refusals (open suggestions, dismissals, an
    unreadable suggestions file switching the heal off), read by the shared
    `readHealOpts` in workspace/analysis-cast-io.ts. This wrapper is the read for
-   the call sites that still run OUTSIDE the cast lock; `materialisePriorAtRunStart`
-   makes the same read inside it, and Task 15 moves these call sites over.
-   `skipIds` is empty until the run ledger lands (Task 15). Exported only so
+   the subset job's run start, which still runs OUTSIDE the cast lock until Task 24;
+   `materialisePriorAtRunStart` makes the same read inside it, and the main job
+   moved over in Task 15.
+   `skipIds` is empty here (the main job passes its run-owned ids through materialise). Exported only so
    analysis-heal-opts.test.ts can drive it. */
 export async function loadHealOpts(
   bookDir: string | undefined,
@@ -637,8 +658,12 @@ export function engineLabel(engine: AnalysisEngine, modelId: string): string {
    knobs are active. Otherwise the sequential stub (Phase 1 waits for
    `markPhase0AllDone()` exactly like today's hard phase gate). Exported
    for unit testing. */
-export function createWatermarkForJob(): PhaseWatermark {
-  if (!isPerPhaseModelSelectionActive()) {
+/* Plan 291 rule 10 (#4031): `holdForPlan` is true for a book with a prior cast or
+   any merge history. Phase 1 then waits for Phase 0b, which applies the match
+   plan, so no take is ever attributed in raw id space - the sequential stub is
+   exactly that wall. A first analysis keeps today's pipelining. */
+export function createWatermarkForJob(opts: { holdForPlan?: boolean } = {}): PhaseWatermark {
+  if (opts.holdForPlan || !isPerPhaseModelSelectionActive()) {
     return createSequentialWatermark();
   }
   return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters() });
@@ -4724,9 +4749,8 @@ export async function runMainAnalyzerJob(
           `lag=${resolvePhase1MinLagChapters()}`,
       );
     }
-    const watermark: PhaseWatermark = createWatermarkForJob();
-    /* #3435 — endJob releases every Phase-1 worker parked on it. */
-    job.watermark = watermark;
+    /* The watermark is built after the prior cast is read (below): whether Phase 1
+       is held for the match plan depends on it (plan 291 rule 10). */
 
     /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
        Only meaningful for local Ollama; cloud engines pass 'unknown' → the
@@ -4820,94 +4844,9 @@ export async function runMainAnalyzerJob(
         )
       : null;
 
-    /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
-       feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
-       freshly-detected roster (further down) drops such a link, but
-       mergeAnalysisResultWithExistingCast re-overlays `matchedFrom` straight
-       from this prior — so without cleaning the prior the stale link
-       resurrects on every re-analysis (a standalone's character holding a
-       different series' designed voice). No-op for a clean / empty prior. */
-    if (recordRef.bookId && priorCastForMerge.length) {
-      await pruneStaleReuseLinks(
-        recordRef.bookId,
-        priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
-      );
-    }
-
-    /* Fix 2 — collapse same-name duplicate rows in the prior cast so the
-       carryover merge cannot re-add a voiced duplicate. Applied here, at the
-       single load point, so all cast.json write sites AND
-       seedReuseGuardsFromPriorCast below see one prior row per name. */
-    if (priorCastForMerge.length > 1) {
-      const reconciled = dedupePriorCastByName(
-        priorCastForMerge,
-        recordRef.bookId ?? undefined,
-        await loadHealOpts(recordRef.bookDir),
-      );
-      priorCastForMerge = reconciled.cast;
-      if (reconciled.dropped.length) {
-        log(
-          1,
-          `Collapsed ${reconciled.dropped.length} duplicate prior-cast row(s) by name (${reconciled.dropped
-            .map((d) => d.name ?? d.id)
-            .join(', ')}).`,
-        );
-      }
-      /* §4.4 / Task 8 fix round 1 (item 1) — a throwing history write
-         (EPERM/ENOSPC on cast-id-history.json) must never fail the analysis
-         persist. Mirrors writeFoldJournal/writeDedupJournal below. */
-      /* `liveIds: null` — this runs at the single prior-cast LOAD point,
-         before the analyzer has produced anything, so no roster is final and
-         there is none to force (Wave 2 final-review finding 1(b) explicitly
-         calls this site out). It needs none: every `from` here is a prior row
-         `dedupePriorCastByName` just removed from `priorCastForMerge`, which
-         is the only roster in hand, and the one case where a `from` could
-         come back live — this run's fresh roster re-minting it — is handled
-         at the end of the run by `dropSupersededIdsReclaimedByLiveCast`
-         against the roster that actually got persisted. */
-      try {
-        await withVerifiedBookDir(
-          { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-          async (bookDir) => {
-            /* #2196 — interim (pre-persist) retirement recording: guarded in
-               mode:'drop' so a stale dir is not mkdir'd back by
-               retireCharacterId. On an unresolvable path the retirement is
-               skipped; the run proceeds to the terminal persist block, which
-               is the single halt gate (C3). */
-            await recordRetirements(
-              bookDir,
-              bookIdForRetirementCleanup(recordRef),
-              reconciled.retirements,
-              null,
-              log,
-              castBase,
-              'heal',
-            );
-          },
-        );
-      } catch (historyErr) {
-        /* #2260 — THE CANONICAL "why" for the four rethrow sites in this file;
-           the other three point here. A withKeyLock ACQUISITION timeout is not
-           the disk fault this handler is scoped for. It is the shape a
-           cast-lock rule-1/rule-4 violation OR ordinary contention produces,
-           and swallowing it reports a clean run with the identity record never
-           updated — the divergence #2040 exists to prevent, silently, and
-           strictly worse than the hang the timeout replaced. Let exactly that
-           one class through; everything else (EPERM/ENOSPC/AV-lock,
-           CastIdHistoryUnreadableError) is swallowed exactly as before. See
-           `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
-
-           Round 4 — `reconcileRejectEdgesOnDisk`'s own handler is the ONE
-           deliberate exception and swallows it; see that handler for why it is
-           not in this class. Nothing else in this file is exempt.
-
-           Nothing follows this call in the surrounding block, so this site
-           throws where it catches. The two PERSIST sites cannot — see their
-           own comments for the deferred rethrow. */
-        if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
-        console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
-      }
-    }
+    /* The stale-link prune and the identical-name heal of the prior cast run at the
+       start of the run proper (below, after the cache is classified): they are written
+       to cast.json under the cast lock by materialisePriorAtRunStart. */
 
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
@@ -4973,10 +4912,115 @@ export async function runMainAnalyzerJob(
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
-    const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
+    const loadedCache = await loadAnalysisCache(manuscriptId);
+    /* Plan 291 cache lifecycle (#4031, A22): a non-empty cache without the current
+       version holds seeded rows and unplanned takes - nothing in it is reused. It
+       is classified BEFORE the load-rules save and the run start below. */
+    const legacyCache = classifyAnalysisCache(loadedCache) === 'legacy';
+    if (legacyCache) {
+      await clearAnalysisCache(manuscriptId);
+      log(0, 'Discarded a cached analysis from an older version — starting from scratch.');
+    }
+    const cache: AnalysisCache = legacyCache ? { chapters: {} } : loadedCache;
+    /* Every non-legacy cache this job holds is version 2 (a save writes the
+       version it is given, so the in-memory copy must carry it). The first write
+       creates the file when this is a new book's first run. */
+    cache.version = ANALYSIS_CACHE_VERSION;
+    await mutateAnalysisCache(manuscriptId, { createIfAbsent: true, version: ANALYSIS_CACHE_VERSION });
     /* #3435 M0/M1 — heal word-free records; while stage1 is absent, a failed
        chapter's take is pending. */
     if (applyAnalysisLoadRules(cache, recordRef.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
+
+    /* ── Run start (plan 291, #4031). Under the cast lock, materialise the prior:
+       prune the stale reuse links, heal identical names, and write a Re-parse
+       carryover into cast.json - so every later re-read has a file and no
+       snapshot can undo the heal. The slow half of the prune (which links are
+       stale) runs before the lock. */
+    if (recordRef.bookDir) {
+      const ledgerIn = cache.addedRows ?? {};
+      const runOwnedIds = new Set(
+        Object.entries(ledgerIn)
+          .filter(([, e]) => e.state === 'run-owned')
+          .map(([id]) => id),
+      );
+      const staleLinkKeys = recordRef.bookId
+        ? await staleReuseLinkKeys(recordRef.bookId, priorCastForMerge as unknown as Parameters<typeof staleReuseLinkKeys>[1])
+        : new Set<string>();
+      const out: { m?: Awaited<ReturnType<typeof materialisePriorAtRunStart>> } = {};
+      /* #2196 - through the identity-verified LIVE book dir in mode:'drop': a stale
+         path (moved book, or one now holding another book) is never written. */
+      await withVerifiedBookDir(
+        { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+        async (bookDir) => {
+          out.m = await materialisePriorAtRunStart({
+            bookDir,
+            bookId: recordRef.bookId ?? undefined,
+            staleLinkKeys,
+            runOwnedIds,
+            ledger: ledgerIn,
+          });
+        },
+      );
+      if (out.m) {
+        const m = out.m;
+        priorCastForMerge = m.prior as Array<{ id: string } & Record<string, unknown>>;
+        if (m.written) castBase?.noteExternalWrite(m.written);
+        /* R1 - the refreshed rule-11 ledger: in memory (the next whole-cache save
+           must not undo it) and in the cache file. */
+        const ledgerPatch: Record<string, LedgerEntry> = {};
+        for (const [id, entry] of Object.entries(m.ledger)) {
+          if (JSON.stringify(ledgerIn[id]) !== JSON.stringify(entry)) ledgerPatch[id] = entry;
+        }
+        if (Object.keys(ledgerPatch).length > 0) {
+          cache.addedRows = m.ledger;
+          await mutateAnalysisCache(manuscriptId, { ledger: ledgerPatch });
+        }
+        if (m.healDropped.length) {
+          log(
+            1,
+            `Collapsed ${m.healDropped.length} duplicate prior-cast row(s) by name (${m.healDropped
+              .map((d) => d.name ?? d.id)
+              .join(', ')}).`,
+          );
+        }
+        /* R26 - recorded after the cast lock is released. §4.4 / Task 8 fix round 1
+           (item 1) - a throwing history write (EPERM/ENOSPC on cast-id-history.json)
+           must never fail the analysis persist. `liveIds: null` - no roster is final
+           yet, and every `from` is a prior row the heal just removed (the one case
+           where a `from` could come back live, this run's fresh roster re-minting
+           it, is handled at the end of the run by
+           `dropSupersededIdsReclaimedByLiveCast`). */
+        try {
+          await withVerifiedBookDir(
+            { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+            async (bookDir) => {
+              await recordRetirements(
+                bookDir,
+                bookIdForRetirementCleanup(recordRef),
+                m.healRetirements,
+                null,
+                log,
+                castBase,
+                'heal',
+              );
+            },
+          );
+        } catch (historyErr) {
+          /* #2260 - the canonical "why" for the rethrow sites in this file: a lock
+             ACQUISITION timeout is not the disk fault this handler is scoped for.
+             Let exactly that class through; swallow EPERM/ENOSPC/AV-lock and
+             CastIdHistoryUnreadableError as before. */
+          if (isLockAcquisitionTimeout(historyErr)) throw historyErr;
+          console.warn('[analysis] failed to record character-id retirement(s) (dedup)', historyErr);
+        }
+      }
+    }
+    /* Plan 291 rule 10: a book with a prior cast or any merge history holds Phase 1
+       until Phase 0b has applied the plan. */
+    const holdForPlan = await bookHasPriorOrHistory(recordRef.bookDir, priorCastForMerge.length);
+    const watermark: PhaseWatermark = createWatermarkForJob({ holdForPlan });
+    /* #3435 — endJob releases every Phase-1 worker parked on it. */
+    job.watermark = watermark;
     const cachedChapters = cache.chapters ?? {};
     /* #3435 — chapters the replay will skip: a current take, not excluded. */
     const cachedChapterCount = recordRef.chapterHints.filter(
@@ -5227,7 +5271,7 @@ export async function runMainAnalyzerJob(
           return;
         }
         cache.stage1 = stage1;
-        await saveAnalysisCache(manuscriptId, cache);
+        await mutateAnalysisCache(manuscriptId, { stage1 });
       }
       // #2196 — dropped-quotes persistence is guarded in mode:'drop' so a
         // stale (moved/gone) dir is not recreated here; the terminal persist

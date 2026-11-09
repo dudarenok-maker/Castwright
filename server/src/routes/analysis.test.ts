@@ -4099,7 +4099,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
       // cached-chapter replay loop (analysis.ts, "Replay cached chapters
       // synchronously up front") picks them up and skips
       // attributeChapterStage2WithEval entirely for this run.
-      await saveAnalysisCache(manuscriptId, {
+      await saveAnalysisCache(manuscriptId, { version: 2,
         chapters: {
           1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 1, text: 'Он кивнул.' }],
           2: [{ id: 201, chapterId: 2, characterId: 'narrator', confidence: 1, text: 'Тихо было.' }],
@@ -9736,7 +9736,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     writeFileSync(carryPath, carry);
     /* Start fresh used to rm cast.json and the carryover after its prior read, so a
        corrupt cast was recoverable by it. The read now refuses first. */
-    await saveAnalysisCache(book.manuscriptId, { chapters: { 1: takeOf(1, WORDED[1]) } });
+    await saveAnalysisCache(book.manuscriptId, { version: 2, chapters: { 1: takeOf(1, WORDED[1]) } });
     const r = await run(book, { fresh: true });
     expect(endings(r.events)).toEqual(['error:cast-unreadable']);
     expect(readFileSync(castPath, 'utf8')).toBe('{"characters": [');
@@ -9756,7 +9756,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     ];
     const book = makeBook('m1', chapters);
     const attribution = { code: 'attribution-collapse', message: 'm', remediation: 'r', phase: 'attribution' as const };
-    await saveAnalysisCache(book.manuscriptId, {
+    await saveAnalysisCache(book.manuscriptId, { version: 2,
       chapterCast: { 1: roster(), 2: roster(), 4: roster(), 5: roster() },
       chapters: { 1: takeOf(1, WORDED[1]), 2: [], 4: takeOf(4, WORDED[4]), 5: takeOf(5, WORDED[5]) },
       failedChapterIds: [1, 2, 4],
@@ -9786,7 +9786,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       { id: 2, body: WORDED[2] },
     ];
     const book = makeBook('decision-h', chapters);
-    await saveAnalysisCache(book.manuscriptId, {
+    await saveAnalysisCache(book.manuscriptId, { version: 2,
       stage1: stage1For(chapters),
       chapterCast: { 1: roster(), 2: [] },
       chapters: { 1: takeOf(1, WORDED[1]) },
@@ -9814,7 +9814,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       { id: 2, body: WORDED[2] },
     ];
     const book = makeBook('decision-b', chapters);
-    await saveAnalysisCache(book.manuscriptId, {
+    await saveAnalysisCache(book.manuscriptId, { version: 2,
       stage1: stage1For(chapters),
       chapterCast: { 1: roster(), 2: roster() },
       chapters: { 1: takeOf(1, WORDED[1]) },
@@ -9836,7 +9836,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       { id: 2, body: WORDED[2] },
     ];
     const book = makeBook('pending-roll', chapters);
-    await saveAnalysisCache(book.manuscriptId, {
+    await saveAnalysisCache(book.manuscriptId, { version: 2,
       chapterCast: { 1: roster(), 2: roster() },
       chapters: { 2: takeOf(2, WORDED[2]) },
       failedChapterIds: [2],
@@ -9889,7 +9889,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       { id: 2, body: WORD_FREE },
     ];
     const book = makeBook('m0-heal', chapters);
-    await saveAnalysisCache(book.manuscriptId, {
+    await saveAnalysisCache(book.manuscriptId, { version: 2,
       stage1: stage1For(chapters),
       chapterCast: { 1: roster(), 2: roster() },
       chapters: { 1: takeOf(1, WORDED[1]), 2: [] },
@@ -9958,7 +9958,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
 
     it('still false after a persist block that swallowed the state.json error', async () => {
       const book = makeBook('flags-swallowed', one);
-      await saveAnalysisCache(book.manuscriptId, { stage1: stage1For(one), chapterCast: { 1: roster() }, chapters: {} });
+      await saveAnalysisCache(book.manuscriptId, { version: 2, stage1: stage1For(one), chapterCast: { 1: roster() }, chapters: {} });
       (globalThis as Record<string, unknown>).__analysis_test_state_write_throws = true;
       const r = await run(book);
       expect(endings(r.events)).toEqual(['result']);
@@ -10034,6 +10034,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     ];
     const book = makeBook('resuming-count', chapters);
     await saveAnalysisCache(book.manuscriptId, {
+      version: 2,
       stage1: stage1For(chapters),
       chapterCast: { 1: roster(), 2: roster(), 3: roster() },
       /* 1 is current; 2 is pending; 3 is excluded. */
@@ -10059,6 +10060,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     ];
     const book = makeBook('resuming-cast-count', chapters);
     await saveAnalysisCache(book.manuscriptId, {
+      version: 2,
       /* 1 has its cast; 2's cast failed (the [] marker + a cast record); 3 is excluded. */
       chapterCast: { 1: roster(), 2: [], 3: roster() },
       chapters: {},

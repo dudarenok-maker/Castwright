@@ -4,6 +4,8 @@
    (Tasks 15-27) are added on top of `__test-helpers__/analysis-job-harness.ts`.
    The mock blocks below are the ones the harness header requires. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /* Before any import binds BOOKS_ROOT: the harness books live in this workspace. */
 vi.hoisted(() => {
@@ -18,6 +20,7 @@ import {
   NARR,
   PRIOR_ID,
   PRIOR_WREN,
+  WREN_FRESH,
   abortAtFirstPhase1,
   blipRemapRead,
   cleanupBook,
@@ -29,6 +32,7 @@ import {
   mkBook,
   putCast,
   readCache,
+  readJson,
   readCast,
   readEdits,
   readSuggestions,
@@ -284,5 +288,182 @@ describe('#4031 analysis-job harness', () => {
     for (const c of sentFrame.characters) c.name = 'MUTATED AFTER SEND';
     expect(JSON.stringify(rec.frames[0])).toBe(before);
     expect(before).not.toContain('MUTATED AFTER SEND');
+  });
+});
+
+/* ---- Plan 291 Task 15 - the main job's run start ---------------------------- */
+
+describe('#4031 main job: run start and cache classification', () => {
+  const orig = {
+    retries: process.env.STAGE2_COVERAGE_RETRIES,
+    lag: process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS,
+  };
+  const books: HarnessBook[] = [];
+  const seed = (...a: Parameters<typeof mkBook>): HarnessBook => {
+    const b = mkBook(...a);
+    books.push(b);
+    return b;
+  };
+  const audiobook = (b: HarnessBook, file: string): string => join(b.bookDir, '.audiobook', file);
+  const WREN_DUP: Row = { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' };
+  const wrenRows = (rows: Row[]): Row[] => rows.filter((r) => r.name === 'Wren');
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    for (const [k, v] of [
+      ['STAGE2_COVERAGE_RETRIES', orig.retries],
+      ['ANALYZER_PHASE1_MIN_LAG_CHAPTERS', orig.lag],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+
+  /* The first Phase-1 call of a pipelined run: was Phase 0b's roster already cached? */
+  async function stage1AtFirstPhase1(b: HarnessBook): Promise<boolean | undefined> {
+    process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+    setPipelined(true);
+    let seen: boolean | undefined;
+    let release!: () => void;
+    const firstPhase1 = new Promise<void>((r) => {
+      release = r;
+    });
+    /* The last Phase-0 chapter waits for the first Phase-1 call (or 300ms), so a
+       Phase 1 that is NOT held gets in before Phase 0b. */
+    setPhase0Hook(async (id) => {
+      if (id === 3) await Promise.race([firstPhase1, new Promise((r) => setTimeout(r, 300))]);
+    });
+    setPhase1Hook(() => {
+      seen ??= readCache(b.manuscriptId)?.stage1 !== undefined;
+      release();
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    return seen;
+  }
+
+  it('A17a: with per-phase models on a cast book, no Phase-1 take exists before Phase 0b', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+    expect(await stage1AtFirstPhase1(b)).toBe(true);
+  });
+
+  it('A17a: a first analysis of a new book (no prior, no history) keeps its pipelining', async () => {
+    const b = seed([]);
+    expect(await stage1AtFirstPhase1(b)).toBe(false);
+  });
+
+  it('A17a: a book with only a merge history is held too', async () => {
+    const b = seed([], { w9: PRIOR_ID });
+    expect(await stage1AtFirstPhase1(b)).toBe(true);
+  });
+
+  it('A16 (route): Re-parse, then re-analyse - the carryover is in cast.json at run start with its dismissal records', async () => {
+    const b = seed([]);
+    const olga = {
+      id: 'olga',
+      name: 'Olga',
+      aliases: ['Olya'],
+      role: 'minor',
+      color: '#444444',
+      voiceId: 'v_olga',
+      voiceState: 'locked',
+    };
+    writeFileSync(audiobook(b, 'cast-reuse-carryover.json'), JSON.stringify({ characters: [olga] }));
+    const record = { a: 'olga', b: 'olya', at: '2026-11-01T00:00:00.000Z' };
+    writeFileSync(
+      audiobook(b, 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {}, notSamePerson: [record] }),
+    );
+    let atStart: Row[] | undefined;
+    setPhase0Hook(() => {
+      atStart ??= readCast(b.bookDir);
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    expect(atStart?.find((c) => c.id === 'olga')).toMatchObject(olga);
+    expect(readJson(b.bookDir, 'cast-id-history.json').notSamePerson).toEqual([record]);
+  });
+
+  it('A11 (route): identical names heal at run start, in cast.json and in the history as a heal', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP }]);
+    let atStart: { cast: Row[]; history: Record<string, unknown> } | undefined;
+    setPhase0Hook(() => {
+      atStart ??= { cast: readCast(b.bookDir), history: readJson(b.bookDir, 'cast-id-history.json') };
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    expect(wrenRows(atStart!.cast).map((r) => r.id)).toEqual([PRIOR_ID]);
+    expect(atStart!.history.supersededBy).toEqual({ w2b: PRIOR_ID });
+    expect(atStart!.history.supersededByKind).toEqual({ w2b: 'heal' });
+  });
+
+  it('A11 (route): no heal across a dismissal record', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN }, { ...WREN_DUP }]);
+    writeFileSync(
+      audiobook(b, 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        notSamePerson: [{ a: PRIOR_ID, b: 'w2b', at: '2026-11-01T00:00:00.000Z' }],
+      }),
+    );
+    let atStart: Row[] | undefined;
+    setPhase0Hook(() => {
+      atStart ??= readCast(b.bookDir);
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    expect(wrenRows(atStart!).map((r) => r.id)).toEqual([PRIOR_ID, 'w2b']);
+  });
+
+  it('A11 (route): a degraded history still heals, and records no retirement', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP }]);
+    writeFileSync(audiobook(b, 'cast-id-history.json'), '{ not json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let atStart: Row[] | undefined;
+      setPhase0Hook(() => {
+        atStart ??= readCast(b.bookDir);
+      });
+      await run(b.manuscriptId, b.bookDir, 'main');
+      expect(wrenRows(atStart!).map((r) => r.id)).toEqual([PRIOR_ID]);
+      expect(readFileSync(audiobook(b, 'cast-id-history.json'), 'utf8')).toBe('{ not json');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('A22 (route): a legacy cache is a miss', async () => {
+    const b = seed([]);
+    await saveAnalysisCache(b.manuscriptId, {
+      chapters: { 1: [{ id: 101, chapterId: 1, characterId: FRESH_ID, confidence: 0.9, text: 'LEGACY-SENTINEL' }] },
+      stage1: { characters: [NARR, WREN_FRESH], chapters: [{ id: 1, title: 'Chapter One' }] },
+    } as never);
+    let phase0Calls = 0;
+    setPhase0Hook(() => {
+      phase0Calls += 1;
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    expect(phase0Calls).toBeGreaterThan(0);
+    const cache = readCache(b.manuscriptId)!;
+    expect(cache.version).toBe(2);
+    expect(JSON.stringify(cache.chapters)).not.toContain('LEGACY-SENTINEL');
+  });
+
+  it('item 9: a first analysis of a new book creates a version-2 cache', async () => {
+    const b = seed([]);
+    let atStart: { version?: number } | null | undefined;
+    setPhase0Hook(() => {
+      atStart ??= readCache(b.manuscriptId) ?? null;
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    expect(atStart?.version).toBe(2);
+    expect(readCache(b.manuscriptId)!.version).toBe(2);
+  });
+
+  it('no cast_merge_base_stale warning on a run whose start wrote cast.json', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP }]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main');
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    expect(events.filter((e) => e.kind === 'warning' && e.code === 'cast_merge_base_stale')).toEqual([]);
   });
 });
