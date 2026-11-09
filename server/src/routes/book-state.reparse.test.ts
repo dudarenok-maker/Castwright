@@ -427,6 +427,23 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     expect(existsSync(carryoverPath())).toBe(false);
   });
 
+  it.each(['{"characters":{}}', '{"characters":"x"}', '{"other":1}'])(
+    'a cast.json whose characters is not an array (%s) re-parses like the no-cast case (#4031)',
+    async (body) => {
+      writeFileSync(
+        carryoverPath(),
+        JSON.stringify({ characters: [{ id: 'old', voiceState: 'reused' }] }),
+      );
+      writeFileSync(castPath(), body);
+
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
+      expect(res.status).toBe(200);
+
+      expect(existsSync(carryoverPath())).toBe(false);
+      expect(existsSync(castPath())).toBe(false);
+    },
+  );
+
   it('persists titleSynthesized on the made-up leading chapter only (#3628)', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),

@@ -771,7 +771,7 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
       },
     );
 
-    it('a cast.json that parses with no characters still takes the carryover', async () => {
+    it('a cast.json that parses with an empty characters array still takes the carryover', async () => {
       writeCast([]);
       stale();
       const out = await materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base });
