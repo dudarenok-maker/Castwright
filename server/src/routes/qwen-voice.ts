@@ -27,9 +27,17 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
+import { rename, rm, copyFile, stat, readdir, utimes } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { constants as fsConstants, copyFileSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
@@ -45,7 +53,12 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry, RENAME_RETRY_DELAYS_MS, RETRYABLE_CODES } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
-import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
+import {
+  forgetSeparatedVoice,
+  isSeparatedVoice,
+  isSeparatedVoiceSync,
+  recordSeparatedVoice,
+} from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -188,13 +201,13 @@ export async function persistEmotionVariant(
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
-  const addVariant = (c: CastCharacter, baseVoiceId: string): CastCharacter => {
+  const addVariant = (c: CastCharacter, baseVoiceId: string, slotName = variantVoiceId): CastCharacter => {
     const map = { ...(c.overrideTtsVoices ?? {}) };
     const qwen = map.qwen ?? { name: baseVoiceId };
     map.qwen = {
       ...qwen,
       name: qwen.name ?? baseVoiceId,
-      variants: { ...(qwen.variants ?? {}), [emotion]: { name: variantVoiceId } },
+      variants: { ...(qwen.variants ?? {}), [emotion]: { name: slotName } },
     };
     return { ...c, overrideTtsVoices: map };
   };
@@ -239,8 +252,10 @@ export async function persistEmotionVariant(
          different base (a declined, forked row still shares the voiceId). Compared
          by storage key, so a legacy row (no uuid) and a separated one never trade
          slots either (P10-2): render re-derives `<row's key>__<emotion>`. */
-      if (qwenStorageKey(c, c.id) !== baseVoiceId) return c;
-      return addVariant(c, baseVoiceId);
+      if (qwenStorageKey(c, c.id) === baseVoiceId) return addVariant(c, baseVoiceId);
+      /* #4037 — a mint re-keyed this row after the variant landed on the legacy key. */
+      const followed = variantOnMintedKey(c, baseVoiceId, emotion, variantVoiceId);
+      return followed ? addVariant(c, qwenStorageKey(c, c.id), followed) : c;
     });
     if (residualSkip) {
       console.warn(
@@ -272,11 +287,65 @@ export async function persistEmotionVariant(
     const freshCharacter = fresh.characters[idx];
     if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
-    if (baseVoiceId !== landedBase) return 'notFound'; // moved since the variant landed
-    fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
+    /* #4037 — moved since the variant landed: by a mint (the take follows it) or by
+       anything else (not this row's). */
+    const followed =
+      baseVoiceId === landedBase
+        ? variantVoiceId
+        : variantOnMintedKey(freshCharacter, landedBase, emotion, variantVoiceId);
+    if (!followed) return 'notFound';
+    fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId, followed);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
     return 'applied';
   });
+}
+
+/* #4037 — a variant landed on the legacy key `landedBase` (`qwen-<voiceId>`), and a
+   series or book-scoped mint re-keyed the row to `qwen-<uuid>` before the slot was
+   recorded. The take follows the mint: its family is copied to `<new key>__<emotion>`
+   (a copy of the base is already there, so the json's `baseRev` still matches it) and
+   the new name is returned; null when this row is not a mint's to follow.
+   A row is the mint's only while its new key still holds the base the take was made
+   on: `qwen-<uuid>.pt` byte-equal to `<landedBase>.pt`. A uuid alone proves nothing,
+   since a row also takes one by its own design (kept through a link-prior), a
+   redesign of the shared key replaces the base, and "Don't reuse" mints one: the
+   copy would overwrite a design the mint never wrote, so those rows keep what they
+   have. A library slot's variants hang off the library key. A new-key take that is
+   current against its base is never replaced by one that is not. */
+function variantOnMintedKey(
+  c: CastCharacter,
+  landedBase: string,
+  emotion: string,
+  variantVoiceId: string,
+): string | null {
+  if (landedBase !== `qwen-${c.voiceId ?? c.id}` || !c.voiceUuid || c.overrideTtsVoices?.qwen?.libraryUuid) return null;
+  if (isSeparatedVoiceSync(c.voiceUuid)) return null;
+  const newKey = `qwen-${c.voiceUuid}`;
+  const dir = dirname(qwenVoicePtPath(landedBase));
+  const landedPt = fileSha(join(dir, `${landedBase}.pt`));
+  if (landedPt === null || landedPt !== fileSha(join(dir, `${newKey}.pt`))) return null;
+  const dest = `${newKey}__${emotion}`;
+  const newRev = jsonField(dir, newKey, 'rev');
+  const destCurrent = existsSync(join(dir, `${dest}.pt`)) && jsonField(dir, dest, 'baseRev') === newRev;
+  if (destCurrent && jsonField(dir, variantVoiceId, 'baseRev') !== newRev) return dest;
+  const same = VARIANT_MEMBERS.every((s) => fileSha(join(dir, `${variantVoiceId}${s}`)) === fileSha(join(dir, `${dest}${s}`)));
+  if (!same) {
+    replaceFamilyMembers(
+      VARIANT_MEMBERS.map((s) => ({ src: join(dir, `${variantVoiceId}${s}`), dest: join(dir, `${dest}${s}`) })),
+    );
+  }
+  return existsSync(join(dir, `${dest}.pt`)) ? dest : null;
+}
+
+/* A sidecar json's `rev` / `baseRev` (variant-base-rev.ts), read synchronously for a
+   decision inside a cast lock's sync transform; undefined when absent or unreadable. */
+function jsonField(dir: string, key: string, field: 'rev' | 'baseRev'): string | undefined {
+  try {
+    const v = (JSON.parse(readFileSync(join(dir, `${key}.json`), 'utf8')) as Record<string, unknown>)[field];
+    return typeof v === 'string' && v ? v : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /* #3992 — the character vanished (deleted, merged away) between an early read and
@@ -398,6 +467,10 @@ async function copyVariantFamilies(oldKey: string, newKey: string): Promise<stri
     try {
       await copyFile(join(dir, name), dest, fsConstants.COPYFILE_EXCL);
       copied.push(dest);
+      /* a copy keeps its source's mtime on Windows: stamp it now so the startup
+         sweep's age guard reads it as the fresh file it is */
+      const now = new Date();
+      await utimes(dest, now, now);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
       await removeFiles(copied);
@@ -407,10 +480,17 @@ async function copyVariantFamilies(oldKey: string, newKey: string): Promise<stri
   return copied;
 }
 
-/* #4037 — point a stamped row's stored variant names at the new key. */
+/* #4037 — point a stamped row's stored variant names at the new key. The slot's own
+   name follows the same rule (#4067's rule for a separation): a name on the legacy
+   key becomes `<to>`, and a library slot's name is kept. Every caller re-keys only
+   after the base was copied to `<to>`. */
 function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCharacter {
-  const qwen = c.overrideTtsVoices?.qwen;
-  if (!qwen?.variants) return c;
+  const slot = c.overrideTtsVoices?.qwen;
+  if (!slot) return c;
+  const qwen = slot.name === from && !slot.libraryUuid ? { ...slot, name: to } : slot;
+  if (!qwen.variants) {
+    return qwen === slot ? c : { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen } };
+  }
   const variants = Object.fromEntries(
     Object.entries(qwen.variants).map(([e, v]) => [
       e,
@@ -487,22 +567,61 @@ function refreshVariantCopies(
       return src !== null && src !== (prints.get(m.dest) ?? null);
     });
     if (!changed) continue;
-    const staged: Array<{ tmp: string; dest: string }> = [];
+    for (const r of replaceFamilyMembers(members)) {
+      if (!prints.has(r.dest) || prints.get(r.dest) === null) copied.push(r.dest);
+      prints.set(r.dest, r.sha);
+    }
+  }
+}
+/* Replace each `dest` with its `src`, a member whose src is absent skipped. Each is
+   staged (copy, stamped fresh) next to its destination, and each destination it
+   replaces is backed up, before any rename; if a rename still fails after its
+   retries, the members already replaced are put back from their backups (or removed,
+   when there was none) and the error rethrown, so a failed refresh never leaves a mix
+   of old and new members for a book that already names the copy. A backup whose
+   restore failed is kept: it is then the only copy of the old member. Returns what
+   was written, with each file's sha256. */
+function replaceFamilyMembers(
+  members: Array<{ src: string; dest: string }>,
+): Array<{ dest: string; sha: string | null }> {
+  const staged: Array<{ tmp: string; dest: string; bak: string | null; sha: string | null }> = [];
+  const keepBak = new Set<string>();
+  try {
+    for (const m of members) {
+      if (!existsSync(m.src)) continue;
+      const tmp = `${m.dest}.mint-${nanoid(8)}.tmp`;
+      const bak = existsSync(m.dest) ? `${m.dest}.mint-${nanoid(8)}.tmp` : null;
+      staged.push({ tmp, dest: m.dest, bak, sha: null });
+      copyFileSync(m.src, tmp, fsConstants.COPYFILE_EXCL);
+      utimesSync(tmp, new Date(), new Date()); // a copy keeps its source's mtime on Windows
+      staged[staged.length - 1].sha = fileSha(tmp);
+      if (bak) {
+        copyFileSync(m.dest, bak, fsConstants.COPYFILE_EXCL);
+        utimesSync(bak, new Date(), new Date());
+      }
+    }
+    const replaced: typeof staged = [];
     try {
-      for (const m of members) {
-        if (!existsSync(m.src)) continue;
-        const tmp = `${m.dest}.mint-${nanoid(8)}.tmp`;
-        staged.push({ tmp, dest: m.dest });
-        copyFileSync(m.src, tmp);
-      }
       for (const s of staged) {
-        const sha = fileSha(s.tmp);
         renameSyncWithRetry(s.tmp, s.dest);
-        if (!prints.has(s.dest) || prints.get(s.dest) === null) copied.push(s.dest);
-        prints.set(s.dest, sha);
+        replaced.push(s);
       }
-    } finally {
-      for (const s of staged) rmSync(s.tmp, { force: true });
+    } catch (err) {
+      for (const { dest, bak } of replaced.reverse()) {
+        try {
+          if (bak) renameSyncWithRetry(bak, dest);
+          else rmSync(dest, { force: true });
+        } catch {
+          if (bak) keepBak.add(bak);
+        }
+      }
+      throw err;
+    }
+    return staged.map((s) => ({ dest: s.dest, sha: s.sha }));
+  } finally {
+    for (const { tmp, bak } of staged) {
+      rmSync(tmp, { force: true });
+      if (bak && !keepBak.has(bak)) rmSync(bak, { force: true });
     }
   }
 }
@@ -1259,10 +1378,12 @@ export async function sweepStaleDesignStaging(
    round (logged once). A name a row uses as its base is kept, a staging or
    preview file never matches, and an entry younger than an hour is kept (a second
    server on the same workspace may be mid-design, as sweepStaleDesignStaging).
-   Returns how many files it removed; never throws. */
+   Returns how many files it removed; never throws. #4037: also removes the stale
+   `<member>.mint-<nanoid8>.tmp` files a killed refresh left behind. */
 const VARIANT_FILE = new RegExp(
   `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:${VARIANT_MEMBERS.map((s) => s.replace(/\./g, '\\.')).join('|')})$`,
 );
+const MINT_TMP_FILE = /^qwen-.+(?:\.pt|\.json|__master\.wav)\.mint-[A-Za-z0-9_-]{8}\.tmp$/;
 export async function sweepOrphanVariantFiles(
   maxAgeMs: number = STAGING_MAX_AGE_MS,
   now: number = Date.now(),
@@ -1273,17 +1394,26 @@ export async function sweepOrphanVariantFiles(
   } catch {
     return 0;
   }
-  const candidates = names.filter((n) => VARIANT_FILE.test(n) && !STAGED_FILE.test(n));
-  if (candidates.length === 0) return 0;
-  const named = await namedQwenVoices().catch(() => null);
-  if (!named) {
-    console.warn('[variant-sweep] a book could not be read; keeping every variant file this round.');
-    return 0;
-  }
+  /* #4037 — the temp copies and backups replaceFamilyMembers stages, left by a process
+     that died before its cleanup. Nothing names them, so no cast read is needed; the
+     same hour guard covers a second server mid-mint. */
   const stale: string[] = [];
-  for (const n of candidates) {
+  for (const n of names.filter((name) => MINT_TMP_FILE.test(name))) {
+    const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
+    if (s && now - s.mtimeMs > maxAgeMs) {
+      stale.push(n);
+      /* a backup kept after a failed restore is the only copy of the old member */
+      console.warn(`[variant-sweep] removing stale mint temp/backup ${n}.`);
+    }
+  }
+  const candidates = names.filter((n) => VARIANT_FILE.test(n) && !STAGED_FILE.test(n));
+  const named = candidates.length === 0 ? null : await namedQwenVoices().catch(() => null);
+  if (candidates.length > 0 && !named) {
+    console.warn('[variant-sweep] a book could not be read; keeping every variant file this round.');
+  }
+  for (const n of named ? candidates : []) {
     const stem = VARIANT_FILE.exec(n)?.[1];
-    if (!stem || named.has(stem)) continue;
+    if (!stem || !named || named.has(stem)) continue;
     const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
     if (s && now - s.mtimeMs > maxAgeMs) stale.push(n);
   }
@@ -1505,14 +1635,16 @@ async function landStagedDesign(
        move, like `sharing`); a first design, a preview and a variant are not. */
     const redesign = !p.emotion && !p.preview && (await exists(qwenVoicePtPath(base)));
     await whileSaving(voiceId, async () => {
-      await moveStaged(staging, voiceId); // P11-2
-      if (redesign) await markBaseRedesigned(voiceId);
-      /* A variant (or its preview) records the base it was rendered against. */
+      /* A variant (or its preview) records the base it was rendered against in its
+         STAGED json, so the json is complete the moment the move lands it: a copy
+         of the key at any point after (the #4037 mint's refresh) carries it. */
       if (p.emotion) {
-        await stampVariantBaseRev(voiceId, variantBaseRev).catch((e) =>
+        await stampVariantBaseRev(staging, variantBaseRev).catch((e) =>
           console.error('[qwen-voice] could not record the base an emotion variant was designed against', e),
         );
       }
+      await moveStaged(staging, voiceId); // P11-2
+      if (redesign) await markBaseRedesigned(voiceId);
     });
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;

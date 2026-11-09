@@ -6,7 +6,17 @@
    alone. On real cast.json files; the mint is called directly. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  statSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,7 +54,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 /* Makes a synchronous copy (the walk's in-lock refresh) whose destination matches fail with EBUSY. */
 const syncCopyFails = vi.hoisted(() => ({ on: null as null | RegExp }));
 /* Makes the refresh's synchronous rename into a matching destination fail `times` times with `code`. */
-const syncRenameFails = vi.hoisted(() => ({ on: null as null | RegExp, times: 0, code: 'EPERM', calls: 0 }));
+const syncRenameFails = vi.hoisted(() => ({ on: null as null | RegExp, times: 0, code: 'EPERM', calls: 0, skip: 0 }));
+/* Makes a synchronous stat of a path matching `on` fail with `code` (the separated-voice record read). */
+const syncStatFails = vi.hoisted(() => ({ on: null as null | RegExp, code: 'EACCES' }));
+/* Sees every synchronous rename's source before it runs. */
+const renameSeen = vi.hoisted(() => ({ fn: null as null | ((from: string) => void) }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const copyFileSync = ((src: string, dest: string, mode?: number) => {
@@ -54,9 +68,12 @@ vi.mock('node:fs', async (importOriginal) => {
     return actual.copyFileSync(src, dest, mode);
   }) as typeof actual.copyFileSync;
   const renameSync = ((src: string, dest: string) => {
+    renameSeen.fn?.(String(src));
     if (syncRenameFails.on && syncRenameFails.on.test(String(dest))) {
       syncRenameFails.calls++;
-      if (syncRenameFails.times > 0) {
+      if (syncRenameFails.skip > 0) {
+        syncRenameFails.skip--; // the first `skip` matching renames succeed
+      } else if (syncRenameFails.times > 0) {
         syncRenameFails.times--;
         throw Object.assign(new Error(`${syncRenameFails.code}: operation not permitted`), {
           code: syncRenameFails.code,
@@ -65,7 +82,19 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return actual.renameSync(src, dest);
   }) as typeof actual.renameSync;
-  return { ...actual, default: { ...actual, copyFileSync, renameSync }, copyFileSync, renameSync };
+  const statSync = ((path: unknown, ...rest: unknown[]) => {
+    if (syncStatFails.on && syncStatFails.on.test(String(path))) {
+      throw Object.assign(new Error(`${syncStatFails.code}: injected stat failure`), { code: syncStatFails.code });
+    }
+    return (actual.statSync as (...a: unknown[]) => unknown)(path, ...rest);
+  }) as typeof actual.statSync;
+  return {
+    ...actual,
+    default: { ...actual, copyFileSync, renameSync, statSync },
+    copyFileSync,
+    renameSync,
+    statSync,
+  };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -85,6 +114,13 @@ const rowOf = (t: string, series = SERIES): Record<string, any> =>
 const file = (name: string) => join(qwenDir(), name);
 const plant = (name: string, body: string) => writeFileSync(file(name), Buffer.from(body));
 const read = (name: string) => readFileSync(file(name), 'utf8');
+/* #4040 — a sidecar json: a base carries `rev`, a variant the `baseRev` it was made from. */
+const plantJson = (name: string, json: Record<string, unknown>) => plant(name, JSON.stringify(json));
+/* #4040 — is the row's `emotion` slot still in use (not dropped as stale)? */
+const keptSlot = async (t: string, emotion: string): Promise<boolean> => {
+  const [row] = await dropStale([rowOf(t)]);
+  return !!(row as Record<string, any>).overrideTtsVoices?.qwen?.variants?.[emotion];
+};
 
 function writeBook(
   t: string,
@@ -178,6 +214,9 @@ beforeEach(() => {
   syncRenameFails.times = 0;
   syncRenameFails.code = 'EPERM';
   syncRenameFails.calls = 0;
+  syncRenameFails.skip = 0;
+  syncStatFails.on = null;
+  renameSeen.fn = null;
 });
 afterAll(() => {
   rmSync(workspaceRoot, { recursive: true, force: true });
@@ -213,6 +252,38 @@ describe('series mint: the re-key leaves foreign and already-keyed slots alone (
     expect(rowOf('Book One').voiceUuid).toBe('u_own');
     expect(rowOf('Book One').overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
   });
+
+  it('every stamped row names the new key once its base was copied there', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book Two', [withVariants({})]);
+    plantBase();
+    plantAngry();
+    const uuid = await mint();
+    expect(rowOf('Book One').overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
+    expect(existsSync(file(`qwen-${uuid}.pt`))).toBe(true);
+  });
+
+  it('with no base copied, the stamped designing row keeps its legacy name', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book Two', [withVariants({})], { confirmed: false });
+    plant('qwen-v_wren__angry.pt', 'ANGRY-PT');
+    const uuid = await mint();
+    expect(rowOf('Book Two').voiceUuid).toBe(uuid);
+    expect(existsSync(file(`qwen-${uuid}.pt`))).toBe(false);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
+  });
+
+  it('a library slot keeps its name, and a designing row stamped by stampOwnRow is renamed', async () => {
+    seed({ ...legacy, overrideTtsVoices: { qwen: { name: 'qwen-v_wren', libraryUuid: 'lib_1' } } });
+    writeBook('Book Two', [withVariants({})], { confirmed: false });
+    plantBase();
+    const uuid = await mint();
+    expect(rowOf('Book One').voiceUuid).toBe(uuid);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
+  });
+
 });
 
 describe('series mint: a variant landing between the up-front copy and the walk (#4037)', () => {
@@ -536,5 +607,283 @@ describe('book-scoped mint: a failed cast write (#4037)', () => {
     await expect(ensure(bookDir('Solo', SOLO_SERIES), 'wren')).rejects.toThrow(/ENOSPC/);
     expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
     expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
+  });
+});
+
+describe('a refresh of the mint copy replaces the family whole, or not at all (#4037)', () => {
+  const sadSeed = () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R0' });
+  };
+
+  it('a failing .json rename after the .pt one leaves the stamped book a whole, old family', async () => {
+    sadSeed();
+    /* a redesign of sad lands on the legacy key right after Book One (walked first) is stamped */
+    let fired = false;
+    castWrite.onCastWrite = (path) => {
+      if (fired || !path.includes('Book One')) return;
+      fired = true;
+      plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    };
+    syncRenameFails.on = /qwen-[^\\/]+__sad\.json$/;
+    syncRenameFails.times = 1;
+    syncRenameFails.code = 'EINVAL';
+    await expect(mint()).rejects.toThrow(/EINVAL/);
+    expect(fired).toBe(true);
+    const uuid = rowOf('Book One').voiceUuid;
+    expect(uuid).toBeTruthy();
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-OLD');
+    expect(JSON.parse(read(`qwen-${uuid}__sad.json`)).baseRev).toBe('R0');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp') || f.includes('.bak'))).toEqual([]);
+  });
+});
+
+/* A variant that LANDED on the legacy key while a mint walked (its family planted after the
+   copy loops, persist not yet called) and is recorded only after the walk re-keyed
+   the rows: the real route order, persist trailing the walk. */
+describe('a variant recorded after the mint re-keyed the rows follows the mint (#4037)', () => {
+  const plantLanding = (emotion: string) => {
+    plant(`qwen-v_wren__${emotion}.pt`, `${emotion.toUpperCase()}-PT`);
+    plantJson(`qwen-v_wren__${emotion}.json`, { baseRev: 'R1' });
+  };
+  const mintWithLanding = async (emotions: string[]) => {
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    let fired = false;
+    /* after the copy loops, as the walk's first stamp is about to land */
+    castWrite.onCastWrite = () => {
+      if (fired) return;
+      fired = true;
+      emotions.forEach(plantLanding);
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    return uuid;
+  };
+  const series = { author: AUTHOR, series: SERIES };
+
+  it('the take lands on every linked book at the new key, whole and current', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    expect(existsSync(file(`qwen-${uuid}__sad.pt`))).toBe(false); // nothing copied it: persist has not run
+    expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    for (const t of ['Book One', 'Book Two']) {
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+      expect(await keptSlot(t, 'sad')).toBe(true);
+    }
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-PT');
+    expect(JSON.parse(read(`qwen-${uuid}__sad.json`)).baseRev).toBe('R1');
+    expect(existsSync(file('qwen-v_wren__sad.pt'))).toBe(true);
+  });
+
+  it('a book that "Don\'t reuse" separated gets no take and no file', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
+    await recordSeparatedVoice('u_sep');
+    plant('qwen-u_sep.pt', 'BASE-PT'); // a real separation's copyBaseFamily leaves the byte-equal base, so only the separated check can refuse
+    const cast = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+    cast.characters[0] = { ...cast.characters[0], voiceUuid: 'u_sep', declinedVoiceFrom: ['b_Book Two'] };
+    writeFileSync(castPath('Book One'), JSON.stringify(cast));
+    expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(rowOf('Book One').overrideTtsVoices?.qwen?.variants?.sad).toBeUndefined();
+    expect(existsSync(file('qwen-u_sep__sad.pt'))).toBe(false);
+  });
+
+  it('a current redesign replaces a current take the mint already copied to the new key', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Three', [{ ...legacy }]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'OLD-SAD-PT');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    const uuid = await mint(); // Design & compare: nothing lands, the mint copies the old sad
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('OLD-SAD-PT');
+    plant('qwen-v_wren__sad.pt', 'NEW-SAD-PT'); // Book Three, confirmed later, redesigns sad on the legacy key
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    expect(await persistVariant(bookDir('Book Three'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    for (const t of ['Book One', 'Book Two', 'Book Three']) {
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    }
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('NEW-SAD-PT');
+  });
+
+  it('fails closed: a separated-voice record that cannot be read delivers no take', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    plant('qwen-u_unread.pt', 'BASE-PT'); // byte-equal base: only the separated check can refuse
+    const cast = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+    cast.characters[0] = { ...cast.characters[0], voiceUuid: 'u_unread' };
+    writeFileSync(castPath('Book One'), JSON.stringify(cast));
+    syncStatFails.on = /separated[\\/]u_unread$/; // no record exists, but the read is not ENOENT
+    expect(await persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).toBe('applied');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(rowOf('Book One').overrideTtsVoices?.qwen?.variants?.sad).toBeUndefined();
+    expect(existsSync(file('qwen-u_unread__sad.pt'))).toBe(false);
+  });
+
+  it('a follow whose .json rename fails leaves no .pt behind without its .json', async () => {
+    seed(withVariants({}));
+    const uuid = await mintWithLanding(['sad']);
+    syncRenameFails.on = /qwen-[^\\/]+__sad\.json$/;
+    syncRenameFails.times = 1;
+    syncRenameFails.code = 'EINVAL';
+    await expect(persistVariant(bookDir('Book Two'), 'wren', 'sad', 'qwen-v_wren__sad', series)).rejects.toThrow(
+      /EINVAL/,
+    );
+    expect(existsSync(file(`qwen-${uuid}__sad.pt`))).toBe(false);
+    expect(existsSync(file(`qwen-${uuid}__sad.json`))).toBe(false);
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
+  });
+
+  it('a backup whose restore failed is kept: it is the only copy of the old member', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Three', [{ ...legacy }]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'OLD-SAD-PT');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    const uuid = await mint();
+    plant('qwen-v_wren__sad.pt', 'NEW-SAD-PT');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    /* the .pt rename lands, the .json one fails, and putting the .pt back fails too */
+    syncRenameFails.on = /qwen-[^\\/]+__sad\.(pt|json)$/;
+    syncRenameFails.skip = 1;
+    syncRenameFails.times = 2;
+    syncRenameFails.code = 'EINVAL';
+    await expect(persistVariant(bookDir('Book Three'), 'wren', 'sad', 'qwen-v_wren__sad', series)).rejects.toThrow(
+      /EINVAL/,
+    );
+    const baks = readdirSync(qwenDir()).filter((f) => f.startsWith(`qwen-${uuid}__sad.pt.mint-`) && f.endsWith('.tmp'));
+    expect(baks).toHaveLength(1);
+    expect(read(baks[0])).toBe('OLD-SAD-PT');
+  });
+
+  it('two redesigns of the legacy variant during one walk: the second refresh still lands', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    writeBook('Book Three', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    /* a redesign lands after each of the first two stamps (a refresh in between) */
+    let writes = 0;
+    castWrite.onCastWrite = () => {
+      writes++;
+      if (writes > 2) return;
+      plant('qwen-v_wren__sad.pt', `SAD-NEW-${writes}`);
+      plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+    };
+    const uuid = await mint();
+    expect(writes).toBeGreaterThanOrEqual(3);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-NEW-2');
+  });
+
+  it('interleaved persists give every linked book every take', async () => {
+    seed(withVariants({}));
+    writeBook('Book Three', [{ ...legacy }]);
+    const uuid = await mintWithLanding(['sad', 'excited']);
+    const outs = await Promise.all([
+      persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-v_wren__sad', series),
+      persistVariant(bookDir('Book Three'), 'wren', 'excited', 'qwen-v_wren__excited', series),
+    ]);
+    expect(outs).toEqual(['applied', 'applied']);
+    for (const t of ['Book One', 'Book Two', 'Book Three']) {
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+      expect(rowOf(t).overrideTtsVoices.qwen.variants.excited.name).toBe(`qwen-${uuid}__excited`);
+    }
+    expect(read(`qwen-${uuid}__excited.pt`)).toBe('EXCITED-PT');
+  });
+
+  it('a standalone book follows its own mint too', async () => {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    mkdirSync(qwenDir(), { recursive: true });
+    writeBook('Solo', [withVariants({})], { standalone: true });
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    const uuid = (await ensure(bookDir('Solo', SOLO_SERIES), 'wren'))!;
+    plantLanding('sad');
+    expect(await persistVariant(bookDir('Solo', SOLO_SERIES), 'wren', 'sad', 'qwen-v_wren__sad')).toBe('applied');
+    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-PT');
+  });
+});
+
+/* A copy keeps its source's mtime on Windows, so a copy of an old file reads old to the
+   startup sweep's one-hour guard. The mint stamps every copy it makes with the time it
+   made it. */
+describe('the mint stamps its copies fresh, so the startup sweep leaves them alone (#4037)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const age = (path: string): number => Date.now() - statSync(path).mtimeMs;
+  const makeOld = (path: string) => {
+    const t = new Date(Date.now() - 3 * DAY_MS);
+    utimesSync(path, t, t);
+  };
+
+  it('a variant family copied from an old source reads fresh to the startup sweep', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    plantBase();
+    plantAngry();
+    for (const f of legacyFiles) makeOld(file(f));
+    const { sweepOrphanVariantFiles } = await import('./qwen-voice.js');
+    const uuid = await mint();
+    const copies = ['pt', 'json'].map((x) => file(`qwen-${uuid}__angry.${x}`));
+    for (const c of copies) expect(age(c), c).toBeLessThan(60_000);
+    /* in the window before a row names the copies, nothing does */
+    for (const t of ['Book One', 'Book Two']) writeBook(t, [{ ...legacy }]);
+    /* only the old, unnamed legacy angry files go (.pt, .json), never the fresh copies */
+    expect(await sweepOrphanVariantFiles()).toBe(2);
+    for (const c of copies) expect(existsSync(c)).toBe(true);
+  });
+
+  /* a redesign of sad lands on the legacy key after Book One is stamped; the mint copy
+     of the old sad is aged so a refresh has to back it up and replace it */
+  const refreshFromOldSources = () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R0' });
+    let fired = false;
+    castWrite.onCastWrite = (path) => {
+      if (fired || !path.includes('Book One')) return;
+      fired = true;
+      plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+      for (const f of readdirSync(qwenDir()).filter((n) => /__sad\.(pt|json)$/.test(n))) makeOld(file(f));
+    };
+    const seen: Array<{ from: string; ageMs: number }> = [];
+    renameSeen.fn = (from) => {
+      if (/\.mint-[A-Za-z0-9_-]{8}\.tmp$/.test(from)) seen.push({ from, ageMs: age(from) });
+    };
+    return seen;
+  };
+
+  it('a refresh stamps its temp copies fresh, whatever the age of the source', async () => {
+    const seen = refreshFromOldSources();
+    await mint();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) expect(s.ageMs, s.from).toBeLessThan(60_000);
+  });
+
+  it('a refresh stamps its backups fresh, whatever the age of the file it replaces', async () => {
+    const seen = refreshFromOldSources();
+    syncRenameFails.on = /qwen-[^\\/]+__sad\.json$/; // the .json rename fails: the .pt is put back from its backup
+    syncRenameFails.times = 1;
+    syncRenameFails.code = 'EINVAL';
+    await expect(mint()).rejects.toThrow(/EINVAL/);
+    /* the .pt temp renamed over the copy, then its backup renamed back over it */
+    expect(seen.filter((x) => x.from.includes('__sad.pt.mint-')).length).toBe(2);
+    for (const s of seen) expect(s.ageMs, s.from).toBeLessThan(60_000);
   });
 });
