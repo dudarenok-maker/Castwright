@@ -309,7 +309,12 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
         const castAfter = JSON.parse(
           readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
         ) as { characters: Array<{ id: string }> };
-        expect(castAfter.characters.map((c) => c.id)).toContain('nova');
+        /* Plan 291 (#4031): a degraded history cannot rule out a merged-away id, so
+           the plan mints every `new` row a run-unique id (`<raw>-r<runToken>`),
+           never the raw `nova`. It used to persist as `nova`. */
+        const nonNarrator = castAfter.characters.map((c) => c.id).filter((id) => id !== 'narrator');
+        expect(nonNarrator).toHaveLength(1);
+        expect(nonNarrator[0]).toMatch(/^nova-r[0-9a-f]+$/);
 
         // The damaged file was never laundered — byte-identical to what was
         // seeded. Before #2214 an always-writing step in this same block
@@ -582,8 +587,22 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
         bookId: BLIP_BOOK_ID,
       });
 
+      /* Plan 291 (#4031): the run now reads the history long before the persist
+         (run start and the Phase-0b plan), so "the first read" is no longer the
+         persist's capture. The blip is armed once every chapter's Phase-1 call has
+         returned, so it lands on the first history read after Phase 1 - the
+         persist's own pre-persist capture. */
+      let stage2Calls = 0;
+      const phase1 = buildPhase1Analyzer();
       (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = buildSelection(
-        buildPhase1Analyzer(),
+        {
+          ...phase1,
+          runStage2Chapter: async (...args: Parameters<Analyzer['runStage2Chapter']>) => {
+            const out = await phase1.runStage2Chapter(...args);
+            stage2Calls += 1;
+            return out;
+          },
+        },
         'phase1-model',
       );
 
@@ -611,10 +630,12 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
         '../workspace/state-io.js',
       );
       let historyReadCount = 0;
+      let blipped = false;
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (path === historyPath) {
           historyReadCount += 1;
-          if (historyReadCount === 1) {
+          if (stage2Calls >= chapterHints.length && !blipped) {
+            blipped = true;
             // The one-shot blip — a transient EBUSY/EPERM, not a damaged
             // file. loadCastIdHistoryWithStatus's own try/catch turns this
             // into a 'degraded' verdict exactly as it would a real one.
@@ -636,6 +657,7 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
           { requestedFresh: false, allowStage1Shrink: true, requestedModel: undefined },
         );
 
+        expect(blipped).toBe(true); // sanity: the blip fired, after Phase 1
         expect(historyReadCount).toBeGreaterThan(1); // sanity: later reads did happen and succeeded
 
         const castAfter = JSON.parse(

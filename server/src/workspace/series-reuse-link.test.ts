@@ -729,7 +729,12 @@ describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
 
 /* #3920 child 3 — compose the analysis route's re-analysis steps end to end,
    seed → prune → link → (dedup) → remap → merge. Steps run, by symbol, in the
-   route's main-job order:
+   main job's order BEFORE plan 291 (#4031). Since plan 291 Task 16 the main job
+   no longer seeds: it plans identity once at Phase 0b, applies the plan and links
+   `new` rows only (`linkSeriesReuseOnNewRows`, pinned through the real job in
+   analysis.single-matcher.test.ts), and the prune runs at run start. The subset
+   job still seeds (after its dedup) until plan 291 Task 24, and Task 28 deletes
+   the seed and these compositions with it. The pre-plan order:
 
      seedReuseGuardsFromPriorCast(priorCastForMerge, characters)
      pruneStaleReuseLinks(bookId, characters)

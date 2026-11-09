@@ -312,14 +312,19 @@ describe('#4031 rule 8 - Start fresh keeps the user decisions', () => {
     expect(olga).toBeDefined();
     expect(olga?.voiceId).toBe('v-olga');
     expect(olga?.notLinkedTo).toContain('w2');
-    /* The dismissal record is still there; the run joined Wren (w2) into wren-ashby
-       and the retirement repointed the record's w2 side. */
-    const records = readAb(b, 'cast-id-history.json').notSamePerson as Array<{ a: string; b: string }>;
-    expect(records).toHaveLength(1);
-    expect([records[0].a, records[0].b]).toContain('olga');
-    /* ...and the surviving row carries the reverse edge. */
-    const wren = readCast(b.bookDir).find((c) => c.id === 'wren-ashby');
+    /* Plan 291 (#4031, acceptance 1): the fresh "Wren Ashby" joins Wren on her
+       PRIOR id - she is no longer retired into `wren-ashby` (which repointed the
+       record's w2 side) - so the dismissal record is untouched... */
+    expect(readAb(b, 'cast-id-history.json').notSamePerson).toEqual(HISTORY.notSamePerson);
+    /* ...and the surviving row, still `w2` with her voice state, carries the
+       reverse edge and the analyzer's name as an alias. */
+    const cast = readCast(b.bookDir);
+    expect(cast.map((c) => c.id)).not.toContain('wren-ashby');
+    const wren = cast.find((c) => c.id === 'w2');
+    expect(wren?.voiceState).toBe('locked');
     expect(wren?.notLinkedTo).toContain('olga');
+    expect(wren?.lines).toBe(3);
+    expect(wren?.aliases).toContain('Wren Ashby');
   });
 
   it("Start fresh clears every journal entry's affected refs; unlink falls back to alias match", async () => {

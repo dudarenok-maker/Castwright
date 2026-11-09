@@ -180,15 +180,28 @@ vi.mock('../workspace/cast-merge-base.js', async (importOriginal) => {
    than `writeFoldJournal`/`writeDedupJournal`, which live in analysis.ts
    itself and so cannot be mocked) — it sits under the same
    `catch (dedupErr)`. */
-const suggestionsWrite = vi.hoisted(() => ({ toThrow: null as unknown, calls: 0 }));
+const suggestionsWrite = vi.hoisted(() => ({
+  toThrow: null as unknown,
+  /* Plan 291: the Phase-0b snapshot reconciles the plan's suggestions through this
+     same seam before the persist does, so a fixture aims its throw at one call by
+     ordinal (`null` = every call) and asserts the total count, as `castWrite`'s
+     `selects` does. */
+  throwAt: null as number | null,
+  calls: 0,
+  thrown: 0,
+}));
 
 vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-merge-suggestions.js')>();
   return {
     ...actual,
     reconcileSuggestionsLocked: async (...args: Parameters<typeof actual.reconcileSuggestionsLocked>) => {
+      const index = suggestionsWrite.calls;
       suggestionsWrite.calls += 1;
-      if (suggestionsWrite.toThrow) throw suggestionsWrite.toThrow;
+      if (suggestionsWrite.toThrow && (suggestionsWrite.throwAt === null || suggestionsWrite.throwAt === index)) {
+        suggestionsWrite.thrown += 1;
+        throw suggestionsWrite.toThrow;
+      }
       return actual.reconcileSuggestionsLocked(...args);
     },
   };
@@ -556,6 +569,7 @@ async function runJob(
   planSnapshot.thrown = 0;
   castWrite.thrown = 0;
   suggestionsWrite.calls = 0;
+  suggestionsWrite.thrown = 0;
 
   /* Neither job EVER rejects — each owns its own top-level catch, which is the
      whole point: the terminal event, not a thrown error, is what the user
@@ -855,6 +869,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     castWrite.toThrow = null;
     castWrite.selects = null;
     suggestionsWrite.toThrow = null;
+    suggestionsWrite.throwAt = null;
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
   });
 
@@ -937,10 +952,12 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
          timeout": `reconcileSuggestionsLocked` reports into the same
          `catch (persistErr)` chain, and it is lineage, not identity. */
       suggestionsWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/journal', 10_000);
+      suggestionsWrite.throwAt = 1; // the persist's call; 0 is the Phase-0b snapshot's
 
       const run = await runJob('journal-timeout');
       try {
-        expect(suggestionsWrite.calls).toBe(1); // it really ran
+        expect(suggestionsWrite.calls).toBe(2); // the snapshot's and the persist's
+        expect(suggestionsWrite.thrown).toBe(1); // it really ran, and threw
 
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('result');

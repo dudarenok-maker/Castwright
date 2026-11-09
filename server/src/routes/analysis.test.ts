@@ -5145,7 +5145,11 @@ describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 287 T1)
 });
 
 describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)', () => {
-  /* This is the test that would have caught all three rounds of "green but
+  /* Plan 291 (#4031): Site 1 below no longer exists - the plan joins fresh rows
+     onto prior ids at Phase 0b, so no fresh-side dedup ever rewrites a prior id.
+     The tests now pin the plan's join retirement in its place (see each test).
+
+     This is the test that would have caught all three rounds of "green but
      inert": a unit test on a pure function proves it RETURNS a retirement
      list; it proves nothing about whether that list ever reaches
      cast-id-history.json in production. Here we drive the REAL route
@@ -5318,7 +5322,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   }
 
   it(
-    'a full analysis over a book whose history already has an entry: that entry survives AND site-1 + site-2 each record a new one',
+    'a full analysis over a book whose history already has an entry: that entry survives AND the heal and the join each record a new one',
     async () => {
       const manuscriptId = `test-cast-id-history-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -5331,7 +5335,18 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
          anything this run touches. Must still be there after the run. */
       await retireCharacterId(bookDir, 'old-eliza', 'eliza');
 
-      /* Prior cast.json seeds BOTH §4.4 sites this test pins:
+      /* Plan 291 (#4031) re-derivation. Site 1 (`applyRewriteToPriorCast`
+         retiring a PRIOR id because the fresh-side dedup collapsed it) is gone by
+         construction: the plan joins both fresh rows (`anton-x` by id, `anton-a`
+         by name, rule 6) onto the prior row, which keeps its id. What this pins
+         now: the pre-existing entry survives, site 2 (the run-start heal) records
+         its own entry, and the join records `anton-a -> anton-x` (tagged
+         `analyzer`) while the prior id is never retired. The prior row is named
+         "Anton Prime" so `anton-a` joins by name (it was "Anton Legacy Voice",
+         to keep the old name fallback away from site 1; under the plan that name
+         left `anton-a` a separate `new` row whose "Anton asked" lines escalate).
+
+         The original notes, kept for the heal half:
          - 'anton-x': voiced, id matches a key THIS run's own fresh-roster
            dedup (dedupeRosterByName Tier-1) will rewrite — site 1
            (applyRewriteToPriorCast). Its NAME ("Anton Legacy Voice")
@@ -5357,7 +5372,7 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           characters: [
             {
               id: 'anton-x',
-              name: 'Anton Legacy Voice',
+              name: 'Anton Prime',
               voiceUuid: 'U-anton',
               ttsEngine: 'qwen',
               overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
@@ -5416,39 +5431,30 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           requestedModel: undefined,
         });
 
-        // The fresh roster's Tier-1 name-dedup actually collapsed anton-x/
-        // anton-a onto the lowest member id, anton-a (#4031: it was a third,
-        // safeId(name) id before) — sanity check: if this fails the fixture
-        // itself is wrong, not the history wiring. The prior anton-x row is the
-        // LOSER, so it is still a dedup rewrite key.
+        // Both fresh rows joined the prior row, which keeps its id, its voice and
+        // every line (#4031; the dedup used to collapse them onto `anton-a` and
+        // retire the prior `anton-x`).
         const castAfter = JSON.parse(
           readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
-        ) as { characters: Array<{ id: string; name: string }> };
-        const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
-        expect(antonPrime).toBeDefined();
-        const antonPrimeId = antonPrime!.id;
-        expect(antonPrimeId).toBe('anton-a');
-        expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-x');
+        ) as { characters: Array<{ id: string; name: string; voiceUuid?: string; lines?: number }> };
+        const antonRows = castAfter.characters.filter((c) => c.name === 'Anton Prime');
+        expect(antonRows.map((c) => c.id)).toEqual(['anton-x']);
+        expect(antonRows[0].voiceUuid).toBe('U-anton');
+        expect(antonRows[0].lines).toBe(3);
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-a');
 
         const history = await loadCastIdHistory(bookDir);
         // The pre-existing entry from before this run survived the run.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
-        // Site 1 (applyRewriteToPriorCast): the prior 'anton-x' row's id is a
-        // same-run dedup rewrite key, so the prior cast is remapped onto the
-        // fresh survivor.
-        expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
+        // The join's retirement: the raw id the analyzer used for chapters 2-3
+        // resolves to the prior row, tagged `analyzer` (not a T1 identity rule).
+        expect(history.supersededBy).toHaveProperty('anton-a', 'anton-x');
+        expect(history.supersededByKind).toHaveProperty('anton-a', 'analyzer');
+        // ...and the prior id itself was never retired.
+        expect(history.supersededBy).not.toHaveProperty('anton-x');
         // Site 2 (dedupePriorCastByName): the two "Legacy Duplicate" prior
         // rows collapse, keeping the stronger voiceState's own id.
         expect(history.supersededBy).toHaveProperty('dup-b', 'dup-a');
-        // NOTE: this fixture's prior 'anton-x' row is deliberately named
-        // "Anton Legacy Voice", NOT "Anton Prime" (see the comment above the
-        // cast.json seed) — so remapFreshToPriorIds's own name-match never
-        // even attempts this pair here, and asserting "Task 10 recorded
-        // nothing" against this fixture would be vacuous (confirmed: it
-        // still passes with priorIdAfter reverted to the raw pre-composition
-        // id — the earlier round-2 bug). The real convergence-skip
-        // "recorded nothing" pin lives in the dedicated test below, whose
-        // fixture's prior name DOES match the fresh roster's.
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -5549,10 +5555,14 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
           readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
         ) as { characters: Array<{ id: string; name: string; lines?: number }> };
         const idsAfter = castAfter.characters.map((c) => c.id);
-        expect(idsAfter).not.toContain('anton-x');
+        // Plan 291 (#4031): both fresh rows join the prior `anton-x`, which keeps
+        // its id (the dedup used to retire it onto `anton-a`); the heal still
+        // collapses `dup-b`.
+        expect(idsAfter).toContain('anton-x');
+        expect(idsAfter).not.toContain('anton-a');
         expect(idsAfter).not.toContain('dup-b');
         const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
-        expect(antonPrime).toBeDefined();
+        expect(antonPrime?.id).toBe('anton-x');
         // 1 attributed line per chapter x 3 chapters — real Phase-1 output,
         // not the interim write's `lines: 0` placeholder.
         expect(antonPrime!.lines).toBe(3);
@@ -5650,13 +5660,18 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
         expect(antonPrime).toBeDefined();
         const antonPrimeId = antonPrime!.id;
-        // Confirms the remap correctly skipped (converged) rather than
-        // reversing the roster back onto the stale prior id.
-        expect(antonPrimeId).not.toBe('anton-x');
+        // Plan 291 (#4031, rule 6): both fresh rows join the prior row by id and
+        // by name, so the prior id is kept (the dedup survivor used to replace
+        // it, and this asserted the remap skipped rather than reversing that).
+        expect(antonPrimeId).toBe('anton-x');
+        expect(castAfter.characters.filter((c) => c.name === 'Anton Prime')).toHaveLength(1);
 
         const history = await loadCastIdHistory(bookDir);
-        // Site 1 still records its own entry for this exact pair.
-        expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
+        // The join's retirement - the fresh `anton-a` resolves to the prior row,
+        // tagged `analyzer` - is the only entry for this pair (Site 1 recorded
+        // `anton-x -> <fresh survivor>` before).
+        expect(history.supersededBy).toEqual({ 'anton-a': 'anton-x' });
+        expect(history.supersededByKind).toEqual({ 'anton-a': 'analyzer' });
         // #2040 Task 14 review item 4: this assertion no longer isolates the
         // "Task 10's remap recorded nothing" claim it was written for —
         // dropSupersededIdsReclaimedByLiveCast (Task 14) now guarantees a
@@ -5936,8 +5951,14 @@ describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wirin
         // established id (Task 10 early remap, site 4) — but 'oduvan' itself
         // was never retired (Site 1 must not fire on it, since the strip
         // removed it from the composed rewrite table it consumes).
+        // Plan 291 (#4031): the plan joins all three fresh rows onto the
+        // established `oduvan` at Phase 0b (T1 by id, T2 by name), so no fresh
+        // dedup survivor ever competes with it; each drifted raw id is retired
+        // onto it as the join's own `analyzer` entry (it was the Task 10 remap's).
         const history = await loadCastIdHistory(bookDir);
         expect(history.supersededBy).toHaveProperty('a_oduvan', 'oduvan');
+        expect(history.supersededBy).toHaveProperty('owdovan', 'oduvan');
+        expect(history.supersededByKind).toMatchObject({ a_oduvan: 'analyzer', owdovan: 'analyzer' });
         expect(history.supersededBy).not.toHaveProperty('oduvan');
       } finally {
         removeManuscript(manuscriptId);
@@ -6114,21 +6135,19 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
       // Prior cast.json: 'anton-x' is voiced ('tuned', with a voiceUuid) —
       // the row an unfixed interim write would durably swap out for the
       // freshly-detected 'anton-y'.
-      writeFileSync(
-        join(bookDir, '.audiobook', 'cast.json'),
-        JSON.stringify({
-          characters: [
-            {
-              id: 'anton-x',
-              name: 'Anton Prime',
-              voiceUuid: 'U-anton',
-              voiceState: 'tuned',
-              ttsEngine: 'qwen',
-              overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
-            },
-          ],
-        }),
-      );
+      const seededCastRaw = JSON.stringify({
+        characters: [
+          {
+            id: 'anton-x',
+            name: 'Anton Prime',
+            voiceUuid: 'U-anton',
+            voiceState: 'tuned',
+            ttsEngine: 'qwen',
+            overrideTtsVoices: { qwen: { name: 'qwen-U-anton' } },
+          },
+        ],
+      });
+      writeFileSync(join(bookDir, '.audiobook', 'cast.json'), seededCastRaw);
 
       const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model');
       const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model');
@@ -6173,16 +6192,17 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
         ) as { characters: Array<{ id: string; name: string; voiceUuid?: string }> };
         const idsAfter = castAfter.characters.map((c) => c.id);
 
-        // Assertion 1 (RED today — only 'anton-y' is present): the prior
-        // voiced row survives the interim write, voice intact.
+        // Assertion 1: the prior voiced row survives, voice intact.
         const antonX = castAfter.characters.find((c) => c.id === 'anton-x');
         expect(antonX).toBeDefined();
         expect(antonX!.voiceUuid).toBe('U-anton');
 
-        // Assertion 2: the interim write still does its job — the
-        // freshly-detected row is there too (mid-run duplicate, by design;
-        // see the interim-write comment in analysis.ts).
-        expect(idsAfter).toContain('anton-y');
+        // Assertion 2 (plan 291, #4031): Phase 0a writes no cast.json, so a run
+        // that dies before Phase 0b leaves cast.json BYTE-IDENTICAL - no raw
+        // `anton-y` row ever reaches disk. (The per-chapter interim write used
+        // to add it as a mid-run duplicate, by design.)
+        expect(idsAfter).not.toContain('anton-y');
+        expect(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8')).toBe(seededCastRaw);
 
         // Assertion 3: cast-id-history.json is BYTE-IDENTICAL to the seed —
         // no provisional retirement was recorded, and the pre-existing
@@ -6436,8 +6456,11 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         // an EXACT id match and never reaches its name-fallback branch — the
         // only place it records anything. This entry can only have come from
         // Task 10's own recording.
+        // Plan 291 (#4031): the plan's T2 join (made at Phase 0b, so the remap
+        // never sees `mayrin`) is what records this now, tagged `analyzer`.
         const history = await loadCastIdHistory(bookDir);
         expect(history.supersededBy).toHaveProperty('mayrin', 'mairin');
+        expect(history.supersededByKind).toHaveProperty('mayrin', 'analyzer');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -6624,15 +6647,15 @@ describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', (
         expect(idsAfter).not.toContain('olga');
         expect(idsAfter).toContain('olga-legacy');
 
+        // Plan 291 (#4031): the plan joins `olga` to `olga-legacy` at Phase 0b,
+        // so the post-stage-2 dedup already speaks prior ids and its diminutive
+        // suggestion targets the live `olga-legacy` (it used to name the
+        // pre-remap `olga` and survive only because the prune checked
+        // characters0). Exactly that suggestion, nothing else.
         const suggestionsFile = await loadSuggestions(bookDir);
-        expect(suggestionsFile.suggestions.length).toBeGreaterThan(0);
-        // The diminutive suggestion references the PRE-remap 'olga' id
-        // (dd.suggestions is built before the remap runs) — confirms this
-        // survived because pruneSuggestionsToRoster was checked against
-        // characters0, not because some unrelated suggestion snuck through.
-        expect(
-          suggestionsFile.suggestions.some((s) => s.sourceId === 'olga' || s.targetId === 'olga'),
-        ).toBe(true);
+        expect(suggestionsFile.suggestions).toEqual([
+          expect.objectContaining({ sourceId: 'olya', targetId: 'olga-legacy' }),
+        ]);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

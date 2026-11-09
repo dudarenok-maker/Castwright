@@ -338,11 +338,13 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         speaker: 'old-tom-2',
         onCall: abortAtFirstPhase1(),
       }).catch(() => {});
-      expect(
-        named(bookDir, 'Old Tom')
-          .map((r) => r.id)
-          .sort(),
-      ).toEqual(['old-tom', 'old-tom-2']);
+      /* Plan 291 (#4031): Phase 0b joins the drifted `old-tom-2` onto `old-tom`
+         before its snapshot, so the stopped run has only extended the cast - no
+         raw-id twin on disk (it used to hold the interim write's `old-tom-2`). */
+      const stopped = named(bookDir, 'Old Tom');
+      expect(stopped.map((r) => r.id)).toEqual(['old-tom']);
+      expect(stopped[0].voiceId).toBe('v_tom');
+      expect(stopped[0].voiceState).toBe('locked');
 
       await run(manuscriptId, bookDir, tomRoster, { speaker: 'old-tom-2' });
       const rows = named(bookDir, 'Old Tom');

@@ -78,9 +78,12 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
 
 /* THE injection. Stands in for a regression that reopens finding 1(a): emit
    `brann -> brann-weir` even though a different, live prior row still holds
-   'brann'. Only fires for this file's fixture (a fresh row with id 'brann');
+   'brann'. Only fires for this file's fixture (the fresh "Brann Weir" row);
    anything else delegates to the real implementation, so the mock can't
-   accidentally become the thing under test. */
+   accidentally become the thing under test. Plan 291 (#4031): the fresh row no
+   longer reaches the remap under its raw id 'brann' - Phase 0b's plan finds the
+   by-id/by-name conflict ('brann' is live, "Brann Weir" names another row) and
+   mints it a new id - so the mock keys on the row's name, not its id. */
 vi.mock('../store/remap-fresh-to-prior.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/remap-fresh-to-prior.js')>();
   return {
@@ -92,13 +95,14 @@ vi.mock('../store/remap-fresh-to-prior.js', async (importOriginal) => {
       priorRewrites?: Readonly<Record<string, string>>,
       currentBookId?: string,
     ) => {
-      if (!fresh.some((f) => f.id === 'brann')) {
+      const row = fresh.find((f) => (f as { name?: unknown }).name === 'Brann Weir');
+      if (!row) {
         return actual.remapFreshToPriorIds(fresh, sentences, priorCast, priorRewrites, currentBookId);
       }
       return {
-        characters: fresh.map((c) => (c.id === 'brann' ? { ...c, id: 'brann-weir' } : c)),
+        characters: fresh.map((c) => (c.id === row.id ? { ...c, id: 'brann-weir' } : c)),
         sentences: sentences.map((s) =>
-          s.characterId === 'brann' ? { ...s, characterId: 'brann-weir' } : s,
+          s.characterId === row.id ? { ...s, characterId: 'brann-weir' } : s,
         ),
         rewrites: { brann: 'brann-weir' },
       };

@@ -376,7 +376,7 @@ describe('reconcileRejectEdgesOnDisk', () => {
       expect(blockStart, `${bookIdBinding} block not found`).toBeGreaterThan(-1);
 
       const captureIdx = src.indexOf(
-        'const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(',
+        'const { status: historyStatusBeforePersist',
         blockStart,
       );
       const firstRewriteIdx = src.indexOf(
