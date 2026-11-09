@@ -1,13 +1,16 @@
-/* #4067 — a row with NO voiceUuid that carries a decline marker is reachable from
-   merged code, and its first design separates it (mustSeparateOnDesign: a marker and
-   no uuid always separates). The server renames its qwen slot to `qwen-<new>` and
-   drops its variants, but a client that only sees `undefined -> uuid` cannot tell
-   that from a plain first mint (which keeps the legacy name), so the single-design
-   events say so: `separated: true`.
+/* #4067 — a row with NO voiceUuid that carries a decline marker has its first design
+   separate it (mustSeparateOnDesign: a marker and no uuid always separates). The
+   server renames its qwen slot to `qwen-<new>` and drops its variants, but a client
+   that only sees `undefined -> uuid` cannot tell that from a plain first mint (which
+   keeps the legacy name), so the single-design events say so: `separated: true`.
 
-   Reachability is proved, not assumed: the row is BUILT by the real
-   seedReuseGuardsFromPriorCast (the #3965 union for an id-drifted speaker whose name
-   two prior rows share), not written by hand. */
+   Reachability, stated narrowly: the real seedReuseGuardsFromPriorCast (the #3965
+   union for an id-drifted speaker whose name two prior rows share) does leave
+   markers on a row with no uuid (the first case below). It builds ONLY the markers:
+   the qwen slot, its `angry` variant and `voiceId` are written onto the fixture row
+   by hand, and no merged code path is shown to produce that slot beside the markers
+   (the series linker, series-reuse-link.ts, is the plausible one, unverified). The
+   slot is what makes `separated` change the client's result. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';

@@ -1676,7 +1676,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
         const start = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
         if (!start) throw new CharacterGoneError();
         baseVoiceId = qwenStorageKey(start, p.characterId);
-        const w = { key: baseVoiceId, linkId: start.voiceId ?? start.id };
+        const w: DesignWatcher = { key: baseVoiceId, linkId: start.voiceId ?? start.id };
         designWatchers.set(tag, w);
         return w;
       });

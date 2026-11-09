@@ -933,6 +933,7 @@ describe('a design that separates a declined row, then a later cast save (#4067)
   async function designThenSave(
     row: unknown = declined(),
     event: Partial<PreviewEvent> = {},
+    via: 'preview' | 'designed' = 'preview',
   ) {
     const { persistenceMiddleware, flushBookPersistence } = await import('./persistence-middleware');
     const { uiSlice } = await import('./ui-slice');
@@ -969,15 +970,26 @@ describe('a design that separates a declined row, then a later cast save (#4067)
     const { cb } = singleStartCalls[0];
     /* A re-design job ends in `preview_ready` alone (single-design.ts); the
        server never sends `designed` for it. */
-    cb.onPreviewReady?.({
-      characterId: 'c1',
-      name: 'Aria',
-      previewVoiceId: 'qwen-u_forked-preview',
-      previewUrl: '/x.mp3',
-      persona: 'warm',
-      voiceUuid: 'u_forked',
-      ...event,
-    });
+    if (via === 'designed') {
+      /* A first design persists on the server and ends in `designed`, carrying the
+         post-separation `voiceId`. */
+      cb.onCharacterDesigned?.({
+        characterId: 'c1',
+        voiceId: 'qwen-u_forked',
+        voiceUuid: 'u_forked',
+        separated: event.separated,
+      });
+    } else {
+      cb.onPreviewReady?.({
+        characterId: 'c1',
+        name: 'Aria',
+        previewVoiceId: 'qwen-u_forked-preview',
+        previewUrl: '/x.mp3',
+        persona: 'warm',
+        voiceUuid: 'u_forked',
+        ...event,
+      });
+    }
     putBookState.mockClear();
     store.dispatch(castSlice.actions.lockVoice('c1'));
     await store.dispatch(flushBookPersistence('b1') as never);
@@ -1027,9 +1039,15 @@ describe('a design that separates a declined row, then a later cast save (#4067)
     expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
   });
 
-  /* No "design approved" case: a first design's `designed` event carries the
-     post-fork `voiceId` (`qwen-<new>`), which setQwenOverrideName writes over the
-     name, and the pre-#4067 reducer already dropped the variants on a changed
-     uuid, so that path passes with setCharacterVoiceUuid's rename reverted. Only
-     the preview path (no `designed` event until promote) needs the rename. */
+  /* The `designed` path: its `voiceId` (`qwen-<new>`) already sets the name, but a row
+     with NO uuid keeps its variants under a first mint, so the flag still decides
+     whether they are dropped. (A row that had a uuid drops them on any changed
+     uuid, so only the no-uuid row can tell the flag from its absence.) */
+  it('designed, a row with no uuid the server separated: the next PUT carries no variants', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(legacy(), { separated: true }, 'designed');
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
 });
