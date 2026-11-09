@@ -385,3 +385,11 @@ export function isStaleIncludeSnapshot(
     now - held.lastTickAt > (held.serverConfirmed === true ? STALL_THRESHOLD_MS : UNCONFIRMED_INCLUDE_MAX_MS)
   );
 }
+
+/** Plan 291 (#4031, R30) — "is an analysis stream feeding `bookId`'s
+    snapshot right now?" Not a reducer action: the analysis-stream middleware
+    answers it (dispatch returns `true` while its handle is open for the
+    manuscript the snapshot names for that book). A store without that
+    middleware answers with the action object, which reads as "no". */
+export const ANALYSIS_STREAM_LIVE_QUERY = 'analysisStream/isLive';
+export const isAnalysisStreamLive = (bookId: string) => ({ type: ANALYSIS_STREAM_LIVE_QUERY, payload: bookId });

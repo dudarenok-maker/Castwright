@@ -1601,3 +1601,20 @@ describe('analysisStreamMiddleware - #3967 the refusal re-read failing keeps a l
     }
   });
 });
+
+describe('analysisStreamMiddleware — liveness query (plan 291, R30)', () => {
+  it('answers true only while its handle is open for the manuscript the book snapshot names', async () => {
+    const { isAnalysisStreamLive } = await import('./analysis-slice');
+    const store = buildStore();
+    const live = (bookId: string) => store.dispatch(isAnalysisStreamLive(bookId)) as unknown;
+    expect(live('b1')).toBe(false);
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    /* No handle before the first tick. */
+    expect(live('b1')).toBe(false);
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    expect(live('b1')).toBe(true);
+    expect(live('b2')).toBe(false);
+    store.dispatch(analysisActions.setHalted({ manuscriptId: 'm1', code: 'aborted', message: 'x' }));
+    expect(live('b1')).toBe(false);
+  });
+});

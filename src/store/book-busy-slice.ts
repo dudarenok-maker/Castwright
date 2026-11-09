@@ -17,7 +17,8 @@
 import { createSlice, type PayloadAction, type ThunkAction, type UnknownAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { castActions, type CastState } from './cast-slice';
-import type { AnalysisStreamSnapshot } from './analysis-slice';
+import { analysisActions, isAnalysisStreamLive, type AnalysisStreamSnapshot } from './analysis-slice';
+import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 
 export type BookBusyKinds = Awaited<ReturnType<typeof api.getBookBusy>>;
 
@@ -91,6 +92,34 @@ export const stageBookId = (state: BusyPollState): string | null =>
 
 const eraEpochOf = (state: CastGateState, bookId: string) => state.cast?.analysisEra?.[bookId]?.epoch;
 
+/** R30 — is an analysis stream in this tab feeding `bookId`'s snapshot? Asks
+    the analysis-stream middleware (a dispatch that returns its answer). */
+export const streamLive = (dispatch: (a: UnknownAction) => unknown, bookId: string): boolean =>
+  dispatch(isAnalysisStreamLive(bookId)) === true;
+
+/* R30 — busy lists no `analysis`, and no stream here feeds the book's
+   `running` snapshot: the run ended without this tab seeing its last frame
+   (a `stream_no_result` close, a reload's snapshot that never ticked, a
+   mirrored run). Halt the snapshot here only: `applyExternalAnalysisSnapshot`
+   is never broadcast, where `setHalted` would reach the owning tab and close
+   its live handle. The stream-failed code lets a live stream's next tick lift
+   it again. An unconfirmed snapshot is the click-to-registration window, in
+   which busy truthfully lists nothing, so it is left alone. */
+const STALE_RUN_REASON = 'Lost touch with this analysis.';
+function haltStaleSnapshot(dispatch: (a: UnknownAction) => unknown, state: CastGateState, bookId: string) {
+  const snap = state.analysis?.activeStream;
+  if (!snap || snap.bookId !== bookId || snap.state !== 'running' || snap.serverConfirmed !== true) return;
+  if (streamLive(dispatch, bookId)) return;
+  dispatch(
+    analysisActions.applyExternalAnalysisSnapshot({
+      ...snap,
+      state: 'halted',
+      haltCode: ANALYSIS_STREAM_FAILED,
+      haltReason: STALE_RUN_REASON,
+    }),
+  );
+}
+
 /* B2 — the gaps before each re-ask while a book stays gated: 1 s, 3 s, 9 s,
    27 s, then every 30 s while it is open. */
 export const BUSY_POLL_DELAYS_MS = [1000, 3000, 9000, 27000] as const;
@@ -103,11 +132,12 @@ const pollFlights = new WeakMap<object, Map<string, Promise<BookBusyKinds>>>();
 
 /** Ask the server which jobs hold `bookId` and cache the answer, then keep
     asking (`busyPollDelay`) while the book is open, gated and not running a
-    snapshot of its own, until a reply lists no `analysis`. Single-flight per
-    book: a call while one runs returns that one. A reply listing `analysis`
-    latches the book's era; a reply issued before the era last moved is
-    dropped and asked again at once. Resolves with the last reply; rejects
-    only when no request answered. */
+    live stream of its own, until a reply lists no `analysis`. Single-flight
+    per book: a call while one runs returns that one. A reply listing
+    `analysis` latches the book's era; a reply issued before the era last
+    moved is dropped and asked again after the next backoff gap. A reply
+    listing no `analysis` halts a stale running snapshot locally (R30).
+    Resolves with the last reply; rejects only when no request answered. */
 export function pollBookBusy(
   bookId: string,
 ): ThunkAction<Promise<BookBusyKinds>, BusyPollState, unknown, UnknownAction> {
@@ -118,7 +148,7 @@ export function pollBookBusy(
     if (running) return running;
     const keepAsking = () => {
       const s = getState();
-      return stageBookId(s) === bookId && selectCastReadOnly(s, bookId) && !snapshotRunning(s, bookId);
+      return stageBookId(s) === bookId && selectCastReadOnly(s, bookId) && !streamLive(dispatch, bookId);
     };
     const loop = async (): Promise<BookBusyKinds> => {
       /* Registered before anything runs, so a re-entrant call finds it. */
@@ -134,9 +164,9 @@ export function pollBookBusy(
           lastErr = err;
           console.warn('[book-busy] busy check failed:', (err as Error)?.message);
         }
-        if (kinds && eraEpochOf(getState(), bookId) !== issuedAt) continue;
-        if (kinds) {
+        if (kinds && eraEpochOf(getState(), bookId) === issuedAt) {
           if (kinds.includes('analysis')) dispatch(castActions.latchAnalysisEra({ bookId }));
+          else haltStaleSnapshot(dispatch, getState(), bookId);
           dispatch(bookBusyActions.setBusy({ bookId, kinds }));
           last = kinds;
           if (!kinds.includes('analysis')) return kinds;

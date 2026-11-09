@@ -2862,7 +2862,7 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     await advance(20000);
     expect(putBookState).not.toHaveBeenCalled();
     expect(mw(castWrittenSince('book-1', Number.MAX_SAFE_INTEGER))).toBe(false);
-    expect(toastsOf(store).map((t) => t.dedupeKey)).toContain('cast-read-only');
+    expect(toastsOf(store).map((t: { dedupeKey?: string }) => t.dedupeKey)).toContain('cast-read-only');
     err.mockRestore();
   });
 

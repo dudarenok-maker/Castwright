@@ -26,7 +26,7 @@ import { bookMetaSlice } from './book-meta-slice';
 import { chaptersSlice } from './chapters-slice';
 import { resetBookSlices } from './reset-book-slices';
 import { createBookStateDisk, type BookStateDisk } from '../test/book-state-disk';
-import { ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import type { Character, PutStateRequest } from '../lib/types';
 
 const char = (id: string): Character => ({ id, name: id, role: 'role', color: id, voiceState: 'generated' });
@@ -241,6 +241,38 @@ describe('the release is state-driven (B2)', () => {
       expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['wren', 'kestrel']);
     },
   );
+
+  it('stream_no_result plus busy [] — the stale running snapshot is halted locally, the gate releases, exactly one read (R30)', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren'), char('kestrel')] } });
+    busy = { A: ['analysis'] };
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    /* A confirmed run whose stream closed on stream_no_result: the snapshot
+       stays `running`, and no live connection feeds it. */
+    store.dispatch(analysisActions.setActiveStream(snap('A', { serverConfirmed: true })));
+    store.dispatch(castActions.replaceLiveRoster([char('wren'), char('kestrel')]));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(selectCastReadOnly(store.getState(), 'A')).toBe(true);
+    expect(store.getState().analysis.activeStream?.state).toBe('running');
+    busy = {};
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: ANALYSIS_STREAM_FAILED });
+    expect(api.getBookState).toHaveBeenCalledTimes(1);
+    expect(era(store, 'A')).toBeUndefined();
+    expect(selectCastReadOnly(store.getState(), 'A')).toBe(false);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['wren', 'kestrel']);
+  });
+
+  it('an unconfirmed running snapshot (the click-to-registration window) is never halted by busy []', async () => {
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    store.dispatch(analysisActions.setActiveStream(snap('A')));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.getBookBusy).toHaveBeenCalled();
+    expect(store.getState().analysis.activeStream?.state).toBe('running');
+    expect(selectCastReadOnly(store.getState(), 'A')).toBe(true);
+    expect(api.getBookState).not.toHaveBeenCalled();
+  });
 
   it('an analysis apply after the re-hydrate was issued moves the epoch; the re-hydrate re-runs', async () => {
     disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });

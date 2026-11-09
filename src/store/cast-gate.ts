@@ -18,11 +18,13 @@
    - Gate-up flushes (B3). When the open book's gate goes up its queued cast
      save is sent at once, never withheld: it lands before the job registers
      or gets the 409, and the re-read below waits for that flight.
-   - Release (B2). While the open book is gated and its snapshot is not
-     running (no live stream feeds it), `pollBookBusy` asks the server. Once
-     busy lists no `analysis` and the snapshot is not running,
-     `rehydrateCastAfterAnalysis` re-reads the cast from disk and clears the
-     era. No terminal frame and no action releases it on its own.
+   - Release (B2, R30). While the open book is gated and no analysis stream
+     in this tab feeds it (the analysis-stream middleware's liveness query),
+     `pollBookBusy` asks the server. A reply listing no `analysis` halts a
+     stale running snapshot here only. Once busy lists no `analysis` and the
+     snapshot is not running, `rehydrateCastAfterAnalysis` re-reads the cast
+     from disk and clears the era. No terminal frame and no action releases
+     it on its own.
 
    "Open" has two senses here, as in open-book.ts: the gate is evaluated for
    the book the stage names (where the persistence middleware sends saves);
@@ -31,7 +33,7 @@
 import type { Middleware, ThunkAction, UnknownAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { castActions, type CastApplyMeta } from './cast-slice';
-import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { analysisActions, ANALYSIS_STREAM_LIVE_QUERY, type AnalysisStreamSnapshot } from './analysis-slice';
 import { beginFullRead, castWrittenSince, flushBookPersistence } from './persistence-middleware';
 import {
   REQUEST_CAST_REHYDRATE,
@@ -40,6 +42,7 @@ import {
   selectCastReadOnly,
   snapshotRunning,
   stageBookId,
+  streamLive,
   type BusyPollState,
 } from './book-busy-slice';
 
@@ -84,7 +87,8 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
       let failures = 0;
       for (;;) {
         const s = getState();
-        if (snapshotRunning(s, bookId)) return;
+        /* A live stream owns the run's end; the gate re-issues this after it. */
+        if (streamLive(dispatch, bookId)) return;
         const epoch = eraEpochOf(s, bookId);
         const cached = s.bookBusy?.busyByBook?.[bookId];
         if (!cached || cached.includes('analysis')) {
@@ -94,9 +98,13 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
           } catch {
             return;
           }
-          if (kinds.includes('analysis') || snapshotRunning(getState(), bookId)) return;
+          if (kinds.includes('analysis') || streamLive(dispatch, bookId)) return;
           if (eraEpochOf(getState(), bookId) !== epoch) continue;
         }
+        /* Invariant 7 — never released while the snapshot runs. A stale one
+           was halted by the poll (R30); an unconfirmed one is a run that has
+           not registered yet. */
+        if (snapshotRunning(getState(), bookId)) return;
         if (!holdsBook(getState(), bookId)) {
           /* The stage names it but its own full read is still out: that read
              may predate the run's persist, so the era must outlive it. The
@@ -137,6 +145,13 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
   };
 }
 
+/* A different run than the one held: another book, manuscript or kind. */
+const isNewRun = (prev: AnalysisStreamSnapshot | null, next: AnalysisStreamSnapshot) =>
+  !prev ||
+  prev.bookId !== next.bookId ||
+  prev.manuscriptId !== next.manuscriptId ||
+  (prev.kind ?? 'main') !== (next.kind ?? 'main');
+
 const APPLY_TYPES = new Set<string>([
   castActions.replaceLiveRoster.type,
   castActions.hydrateFromAnalysis.type,
@@ -151,6 +166,9 @@ export const castGateMiddleware: Middleware = (store) => {
 
   return (next) => (action) => {
     const a = action as { type?: string; payload?: unknown; meta?: CastApplyMeta };
+    /* The liveness query the gate itself dispatches below. */
+    if (a.type === ANALYSIS_STREAM_LIVE_QUERY) return next(action);
+    const before = getState().analysis?.activeStream ?? null;
     if (
       a.type &&
       APPLY_TYPES.has(a.type) &&
@@ -179,15 +197,17 @@ export const castGateMiddleware: Middleware = (store) => {
       return result;
     }
     /* Item 8 — an analysis seen by any route latches the open book's era:
-       another tab's snapshot (even a paused one), or a running snapshot. */
+       another tab's snapshot (even a paused one), or a running snapshot.
+       R30 — another tab's snapshot latches only on a transition (a new run,
+       or a run that starts running), never on each mirrored tick. */
+    let latch = false;
     if (a.type === analysisActions.applyExternalAnalysisSnapshot.type) {
       const snap = a.payload as AnalysisStreamSnapshot | null;
-      if (snap?.bookId === open) store.dispatch(castActions.latchAnalysisEra({ bookId: open }));
+      latch = snap?.bookId === open && (isNewRun(before, snap) || (snap.state === 'running' && before?.state !== 'running'));
     }
     const running = snapshotRunning(getState(), open);
-    if (running && eraEpochOf(getState(), open) === undefined) {
-      store.dispatch(castActions.latchAnalysisEra({ bookId: open }));
-    }
+    if (running && eraEpochOf(getState(), open) === undefined) latch = true;
+    if (latch) store.dispatch(castActions.latchAnalysisEra({ bookId: open }));
 
     const s = getState();
     const gated = selectCastReadOnly(s, open);
@@ -195,7 +215,8 @@ export const castGateMiddleware: Middleware = (store) => {
     last = { bookId: open, gated };
     /* B3 — flush, never withhold. */
     if (rose) store.dispatch(flushBookPersistence(open));
-    if (gated && !running) {
+    /* R30 — release work runs whenever no live stream feeds the book. */
+    if (gated && !streamLive(store.dispatch, open)) {
       const kinds = s.bookBusy?.busyByBook?.[open];
       if (kinds && !kinds.includes('analysis')) void run(rehydrateCastAfterAnalysis(open));
       else void run(pollBookBusy(open)).catch(() => {});

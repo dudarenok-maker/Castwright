@@ -83,6 +83,12 @@ describe('pollBookBusy', () => {
     store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
     answer([]);
     await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().bookBusy.busyByBook.A).toBeUndefined();
+    /* R30 — the re-ask keeps the backoff, so a moving epoch never storms. */
+    expect(api.getBookBusy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(api.getBookBusy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(p).resolves.toEqual([]);
     expect(api.getBookBusy).toHaveBeenCalledTimes(2);
     expect(store.getState().bookBusy.busyByBook.A).toEqual([]);
