@@ -56,7 +56,9 @@ import {
 } from './__test-helpers__/analysis-job-harness.js';
 import * as historyStore from '../store/cast-id-history.js';
 import * as stateIo from '../workspace/state-io.js';
-import { saveAnalysisCache } from '../store/analysis-cache.js';
+import { mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { retargetPlanForMerge } from '../store/plan-overlay.js';
+import { castMergeSuggestionsJsonPath } from '../workspace/paths.js';
 import { linkSeriesReuseOnNewRows, runMainAnalyzerJob } from './analysis.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
@@ -406,6 +408,47 @@ describe('#4031 main job: run start and cache classification', () => {
     }
   });
 
+  it('R8: a snapshot re-mint reaches the takes a pipelined run made before Phase 0b', async () => {
+    /* A first analysis keeps its pipelining, so Phase 1 attributes chapters in the
+       analyzer's id space before the plan exists. A row created on disk under that
+       same id while the run is in Phase 0 makes the Phase-0b snapshot re-mint the
+       run's row, and every take - the ones already made included - must follow. */
+    const b = seed([]);
+    process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+    setPipelined(true);
+    let release!: () => void;
+    const firstPhase1 = new Promise<void>((r) => {
+      release = r;
+    });
+    setPhase0Hook(async (id) => {
+      if (id !== 3) return;
+      await Promise.race([firstPhase1, new Promise((r) => setTimeout(r, 300))]);
+      writeFileSync(
+        join(b.bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({ characters: [{ id: FRESH_ID, name: 'Someone Else', role: 'character' }] }),
+      );
+    });
+    let preplanTakes = 0;
+    setPhase1Hook(() => {
+      release();
+    });
+    /* The analyzer answers in whatever id space the roster it was given uses: the
+       raw id before the plan, the re-minted one after. */
+    const speaker = (): string => {
+      if (readCache(b.manuscriptId)?.matchPlan) return `${FRESH_ID}-n1`;
+      preplanTakes += 1;
+      return FRESH_ID;
+    };
+    await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: speaker });
+    expect(preplanTakes).toBeGreaterThan(0); // the scenario fired: a take predates the plan
+    const lines = (readEdits(b.bookDir) as Array<{ characterId: string }>).reduce<Record<string, number>>(
+      (acc, s) => ({ ...acc, [s.characterId]: (acc[s.characterId] ?? 0) + 1 }),
+      {},
+    );
+    expect(lines[`${FRESH_ID}-n1`]).toBe(9); // three lines in each of three chapters
+    expect(lines[FRESH_ID]).toBeUndefined();
+  });
+
   it('A17a: a book with only a merge history is held too', async () => {
     const b = seed([], { w9: PRIOR_ID });
     expect(await stage1AtFirstPhase1(b)).toBe(true);
@@ -630,6 +673,39 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
     expect(voice?.status).toBe(200);
     const row = readCast(b.bookDir).find((c) => c.id === 'the-jogger')!;
     expect((row.overrideTtsVoices as { qwen?: { name: string } }).qwen?.name).toBe('route-voice-the-jogger');
+  });
+
+  it("R8/carry 4: a merge's cache re-target landing between Phase 0b's two cache patches survives", async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
+    /* The window: the snapshot runs after the first patch (the plan is on disk) and
+       before the second. Its suggestions read is where the cache half of a
+       `performCastMerge` (the-jogger -> olga, cast-merge.ts) is landed - the same
+       patch the route sends. */
+    const suggestionsPath = castMergeSuggestionsJsonPath(b.bookDir);
+    let merged = false;
+    const actual = vi.mocked(stateIo.readJson).getMockImplementation()!;
+    vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (!merged && path === suggestionsPath && readCache(b.manuscriptId)?.matchPlan) {
+        merged = true;
+        await mutateAnalysisCache(b.manuscriptId, {
+          remapCharacterIds: { 'the-jogger': 'olga' },
+          ledger: { 'the-jogger': null },
+          transform: (c) =>
+            c.matchPlan ? { ...c, matchPlan: retargetPlanForMerge(c.matchPlan, 'the-jogger', 'olga') } : c,
+        });
+      }
+      return actual(path);
+    });
+    try {
+      await stopAtPhase1(b);
+    } finally {
+      vi.mocked(stateIo.readJson).mockImplementation(actual);
+    }
+    expect(merged).toBe(true);
+    expect(readCache(b.manuscriptId)?.matchPlan?.decisions['the-jogger']).toMatchObject({
+      kind: 'join',
+      priorId: 'olga',
+    });
   });
 
   it('A7c (#4023 S1): a locked prior row joined by a surname keeps its id, its lock and its lines', async () => {

@@ -325,7 +325,10 @@ export async function run(
   manuscriptId: string,
   bookDir: string,
   kind: 'main' | 'subset',
-  fresh: { roster: CharacterOutput[]; speakerId: string | string[] } = { roster, speakerId: FRESH_ID },
+  fresh: { roster: CharacterOutput[]; speakerId: string | string[] | ((chapterId: number) => string) } = {
+    roster,
+    speakerId: FRESH_ID,
+  },
   opts: RunOpts = {},
 ): Promise<Sent[]> {
   const { job, events } = mkJob(manuscriptId, bookDir, kind);

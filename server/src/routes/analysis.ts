@@ -2362,6 +2362,18 @@ language:
    Anton.") marks who is addressed, not who speaks — never attribute the line to
    the person being addressed.`;
 
+/* One stage-2 roster entry. Plan 291 (#4031): a joined row carries the prior id and
+   display name, so the analyzer's own name for it survives only as an alias - list
+   the aliases, or the model sees a name it never used for that speaker. */
+function stage2RosterEntry(c: Stage1Output['characters'][number]): {
+  id: string;
+  name: string;
+  role: string;
+  aliases?: string[];
+} {
+  return { id: c.id, name: c.name, role: c.role, ...(c.aliases?.length ? { aliases: c.aliases } : {}) };
+}
+
 export function buildStage2ChapterInbox(
   manuscriptId: string,
   title: string,
@@ -2399,14 +2411,14 @@ JSON object matching the schema. No prose, no code fences.
 ## Characters (from stage 1)
 
 Only the \`id\` is load-bearing for stage 2 (you assign sentences by character
-id). Name and role are included for disambiguation when the manuscript
+id). Name, aliases and role are included for disambiguation when the manuscript
 refers to the same person by multiple forms. The richer tone / evidence /
 description fields from stage 1 are intentionally elided to keep the call
 fast — refer back to them only if you genuinely can't disambiguate.
 
 \`\`\`json
 ${JSON.stringify(
-  stage1.characters.map((c) => ({ id: c.id, name: c.name, role: c.role })),
+  stage1.characters.map(stage2RosterEntry),
   null,
   2,
 )}
@@ -2489,11 +2501,11 @@ JSON object matching the schema. No prose, no code fences.
 ## Characters (from stage 1)
 
 Only the \`id\` is load-bearing for stage 2 (you assign sentences by character
-id). Name and role are included for disambiguation.
+id). Name, aliases and role are included for disambiguation.
 
 \`\`\`json
 ${JSON.stringify(
-  stage1.characters.map((c) => ({ id: c.id, name: c.name, role: c.role })),
+  stage1.characters.map(stage2RosterEntry),
   null,
   2,
 )}
@@ -5262,6 +5274,11 @@ export async function runMainAnalyzerJob(
        for the dedup and the live-view fold that follow. */
     let planConstraints: DedupConstraints = EMPTY_DEDUP_CONSTRAINTS;
     let planProtectIds: ReadonlySet<string> | undefined;
+    /* R8: every id a Phase-0b snapshot re-minted. A pipelined first analysis makes
+       Phase-1 takes before the plan exists; those already handed to the Phase-1 pool
+       (`sentencesByChapter`, an in-flight take) are remapped through this when they
+       are recorded and when the run stitches them. */
+    let remintIdMap: Record<string, string> = {};
     const planCastIdentity = async (raw: CharacterOutput[]): Promise<CharacterOutput[]> => {
       const bookDir = recordRef.bookDir;
       const currentBookId = recordRef.bookId ?? undefined;
@@ -5355,6 +5372,7 @@ export async function runMainAnalyzerJob(
           plan = s.plan;
           const remint = Object.keys(s.idMap).length > 0;
           if (remint) {
+            remintIdMap = { ...remintIdMap, ...s.idMap };
             characters = characters.map((c) => (Object.hasOwn(s.idMap, c.id) ? { ...c, id: s.idMap[c.id] } : c));
             for (const [k, takes] of Object.entries(cache.chapters)) {
               cache.chapters[Number(k)] = remapSentenceIds(takes, s.idMap);
@@ -5367,12 +5385,23 @@ export async function runMainAnalyzerJob(
             ...(cache.runAddedPairs ?? []),
             ...s.addedPairs.filter(([a, b]) => !seen.has(`${a}\u0000${b}`)),
           ];
-          await mutateAnalysisCache(manuscriptId, {
+          /* Only the decisions the snapshot re-minted: the rest are already on disk
+             from the first patch, and re-sending them would revert a merge's
+             re-target (cast-merge.ts) that landed in between. */
+          const remintedIds = new Set(Object.values(s.idMap));
+          const reminted = Object.fromEntries(
+            Object.entries(plan.decisions).filter(([, d]) => d.kind === 'new' && remintedIds.has(d.id)),
+          );
+          const written = await mutateAnalysisCache(manuscriptId, {
             ledger: s.ledger,
             runAddedPairs: s.addedPairs,
-            decisions: plan.decisions,
-            ...(remint ? { remapCharacterIds: s.idMap } : {}),
+            ...(remint ? { decisions: reminted, remapCharacterIds: s.idMap } : {}),
           });
+          /* ...and the job's cached copy takes the plan as written, so a later
+             whole-cache save does not revert that re-target either (a copy: the
+             returned payload is the live one). The constraints below keep the
+             plan this roster was built from. */
+          if (written?.matchPlan) cache.matchPlan = structuredClone(written.matchPlan);
         }
       }
 
@@ -5582,9 +5611,10 @@ export async function runMainAnalyzerJob(
         const roster = rebuildRoster();
         /* Name-only fold so descriptor speakers ("The Jogger", "Drooly
            Boy", "Unknown Intruder") collapse into the Unknown male /
-           Unknown female buckets in the live view — same contract the
-           on-disk interim cast.json uses, kept in lockstep so the user
-           sees one consistent roster across SSE + .audiobook/. */
+           Unknown female buckets in the live view. Plan 291 (#4031): this
+           SSE frame is the only Phase-0a progress surface - the main job
+           writes no cast.json until the Phase-0b snapshot, which writes the
+           unfolded plan-applied roster. */
         const folded = previewFoldForLiveView(Array.from(roster.values()), bookLanguage, EMPTY_DEDUP_CONSTRAINTS);
         send({ kind: 'cast-update', characters: folded });
       };
@@ -6937,6 +6967,8 @@ export async function runMainAnalyzerJob(
       );
       cache.takesPersisted = false;
       for (const s of stage2Sentences) s.chapterId = ch.id;
+      /* R8: a take dispatched before a Phase-0b re-mint still speaks the old id. */
+      for (const s of stage2Sentences) if (Object.hasOwn(remintIdMap, s.characterId)) s.characterId = remintIdMap[s.characterId];
       sentencesByChapter.set(ch.id, stage2Sentences);
       if (stage2StructureReport) structureReports.push(stage2StructureReport);
       cachedChapters[ch.id] = stage2Sentences;
@@ -7197,7 +7229,8 @@ export async function runMainAnalyzerJob(
     /* Stitch the per-chapter results into narrative order. */
     for (const ch of record.chapterHints) {
       const arr = sentencesByChapter.get(ch.id);
-      if (arr) allSentences.push(...arr);
+      /* R8: a take recorded (or replayed from the cache) before a Phase-0b re-mint. */
+      if (arr) allSentences.push(...remapSentenceIds(arr, remintIdMap));
     }
 
     /* Final manuscript-edits.json write is deferred until after the fold
@@ -8969,8 +9002,12 @@ export async function runSubsetAnalyzerJob(
               // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
               // provisional roster, no sentence counts yet; the authoritative
               // write below clobbers it. `overlayInterimCastForLiveView` has
-              // no name-fallback and produces no retirements — see the main
-              // route's interim-write comment for the full rationale.
+              // no name-fallback and produces no retirements: a partial roster
+              // cannot tell a character not reached yet from one the analyzer
+              // dropped, and at an interim write a name-fallback has turned
+              // that ambiguity into a durably swapped id with no history
+              // record (srv-87, #2086). (The main job no longer writes an
+              // interim cast.json in Phase 0a - plan 291, #4031.)
               const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
               await castBase!.writeChecked(
                 { characters: mergedInterim },
@@ -8978,9 +9015,11 @@ export async function runSubsetAnalyzerJob(
               );
             } catch (persistErr) {
               /* #2292 (owner decision) — deliberate swallow, including a lock
-                 timeout; mirrors the main route's interim handler. Progress
-                 snapshot, clobbered by the authoritative write below, which is
-                 where a timeout DOES fail the run (#2295). */
+                 timeout: this is a progress snapshot, clobbered by the
+                 authoritative write below, so a timeout here diverges nothing
+                 and failing a long analysis over it would be disproportionate.
+                 The authoritative write is where a timeout DOES fail the run
+                 (#2295). */
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
           }
