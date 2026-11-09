@@ -6295,3 +6295,44 @@ describe("Layout — Confirm's voice-match waits for an editable cast (plan 291,
     expect(store.getState().notifications.toasts[0].message).toMatch(/Re-analysis running/);
   });
 });
+
+describe('Layout — one app-level status region for the paused-edits banner (plan 291, #4031)', () => {
+  const MESSAGE = 'Re-analysis running — cast edits are paused';
+  const running = {
+    bookId: 'A',
+    manuscriptId: 'mns_A',
+    phaseId: 0,
+    phaseLabel: 'x',
+    phaseProgress: 0,
+    remainingMs: null,
+    lastTickAt: 0,
+    state: 'running' as const,
+  };
+  const regions = () => screen.getAllByRole('status').filter((el) => el.className.includes('sr-only'));
+  const announcing = () => regions().filter((el) => el.textContent === MESSAGE);
+
+  it('exactly one status region announces the message, with the drawer open over Cast, and it survives the toggle', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(running as never));
+      store.dispatch(uiActions.setOpenProfileId('eliza'));
+    });
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+    /* the drawer is open over the view, and holds no region of its own */
+    await waitFor(() => expect(document.querySelector('[data-tour-id="profile-drawer"]')).not.toBeNull());
+    expect(document.querySelector('[data-tour-id="profile-drawer"] [role="status"]')).toBeNull();
+    expect(announcing()).toHaveLength(1);
+    const region = announcing()[0];
+
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+    });
+    expect(announcing()).toHaveLength(0);
+    expect(regions().filter((el) => el === region)).toHaveLength(1);
+    expect(region).toBeEmptyDOMElement();
+  });
+});

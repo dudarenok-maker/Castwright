@@ -456,7 +456,7 @@ describe('a11y: the banner and disabled controls pass axe', () => {
         />
       </Provider>,
     );
-    expect(screen.getByRole('status')).toHaveTextContent('Re-analysis running — cast edits are paused');
+    expect(screen.getByTestId('cast-edits-paused-banner')).toHaveTextContent('Re-analysis running — cast edits are paused');
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 

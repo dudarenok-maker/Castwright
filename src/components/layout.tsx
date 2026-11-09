@@ -44,6 +44,7 @@ import {
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
+import { CastEditsPausedStatus } from './cast-edits-paused-banner';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
@@ -2401,6 +2402,8 @@ export function Layout() {
       <BuildStamp />
 
       <ToastStack />
+      {/* Plan 291 (#4031) — the one status region for the paused-edits banner. */}
+      <CastEditsPausedStatus />
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer

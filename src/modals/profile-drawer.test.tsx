@@ -3069,7 +3069,8 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
     pause(store);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(screen.getByRole('status')).toHaveTextContent('Re-analysis running — cast edits are paused');
+    /* announced by the one app-level region in Layout, not by a surface */
+    expect(screen.queryByRole('status')).toBeNull();
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 

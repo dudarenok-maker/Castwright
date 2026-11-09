@@ -47,27 +47,32 @@ export function useCastRunLive(): boolean {
   });
 }
 
-/** The announced text lives in a persistent, zero-size sr-only status region
-    (so a screen reader announces it when it appears, and the region adds no
-    layout to a `space-y` stack); the visible banner is mounted only while
-    live, aria-hidden so it is not read twice. */
-export function CastEditsPausedBanner({ className = '' }: { className?: string }) {
+/** The ONE app-level status region (mounted in Layout, outside every
+    `space-y` stack): persistent and zero-size sr-only, so a screen reader
+    announces the text when a run goes live, once, whatever surfaces are open. */
+export function CastEditsPausedStatus() {
   const live = useCastRunLive();
   return (
-    <>
-      <div role="status" className="sr-only">
-        {live ? CAST_EDITS_PAUSED_TEXT : null}
-      </div>
-      {live && (
-        <div
-          data-testid="cast-edits-paused-banner"
-          aria-hidden="true"
-          className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-center gap-3 coarse-pointer:min-h-[44px] ${className}`}
-        >
-          <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-          <p className="text-sm text-amber-900 flex-1">{CAST_EDITS_PAUSED_TEXT}</p>
-        </div>
-      )}
-    </>
+    <div role="status" className="sr-only">
+      {live ? CAST_EDITS_PAUSED_TEXT : null}
+    </div>
+  );
+}
+
+/** The visible banner of one surface: mounted only while a run is live,
+    aria-hidden (the app-level status region announces it), and nothing at all
+    otherwise, so it is never an empty child of its stack. */
+export function CastEditsPausedBanner({ className = '' }: { className?: string }) {
+  const live = useCastRunLive();
+  if (!live) return null;
+  return (
+    <div
+      data-testid="cast-edits-paused-banner"
+      aria-hidden="true"
+      className={`rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-center gap-3 coarse-pointer:min-h-[44px] ${className}`}
+    >
+      <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+      <p className="text-sm text-amber-900 flex-1">{CAST_EDITS_PAUSED_TEXT}</p>
+    </div>
   );
 }

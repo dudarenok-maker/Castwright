@@ -757,7 +757,8 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
   it('Confirm: the banner is a status region while read-only and absent otherwise', () => {
     renderPaused(true);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(screen.getByRole('status')).toHaveTextContent('Re-analysis running — cast edits are paused');
+    /* announced by the one app-level region in Layout, not by a surface */
+    expect(screen.queryByRole('status')).toBeNull();
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 
@@ -766,9 +767,8 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
   });
 
-  it('M1/M2: analysing -> Confirm with busy [] shows no banner, and the status region persists across the toggle', () => {
+  it('M1: analysing -> Confirm with busy [] shows no banner', () => {
     const { store } = renderPaused(true);
-    const region = screen.getByRole('status');
     expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
     /* The run ends: the snapshot clears and busy answers []. The era stays
        latched until the gate re-hydrates, but no run is live. */
@@ -778,23 +778,17 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     });
     expect(store.getState().cast.analysisEra?.bPaused).toBeDefined();
     expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
-    expect(screen.getByRole('status')).toBe(region);
   });
 
-  it('a hidden banner takes no layout: the status region is a zero-size sr-only box with no text', () => {
+  it('a hidden banner contributes no child to its stack', () => {
     const { store } = renderPaused(true);
     act(() => {
       store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
       store.dispatch(bookBusyActions.setBusy({ bookId: 'bPaused', kinds: [] }));
     });
-    const region = screen.getByRole('status');
-    expect(region).toBeEmptyDOMElement();
-    expect(region.className).toContain('sr-only');
-    /* no visible empty box in the space-y stack that holds it */
-    const stack = region.parentElement!;
-    for (const child of Array.from(stack.children)) {
-      if (child !== region) expect(child).not.toBeEmptyDOMElement();
-    }
+    expect(screen.queryByRole('status')).toBeNull();
+    /* the space-y stack that held the banner is left with no children at all */
+    expect(document.querySelector('.mb-4.space-y-2')).toBeEmptyDOMElement();
   });
 
   it('a paused run still counts as live: the banner shows', () => {
