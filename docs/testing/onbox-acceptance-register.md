@@ -738,8 +738,9 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 > **Last change: 2026-11-08 (#4037, #4040, PR #4061), owed count unchanged.** Row **A120** amended:
 > step 13 now observes an emotion variant going stale when its voice's base is redesigned
-> (`rev`/`baseRev`), and new step 20 covers the legacy variant copy at the series mint plus the
-> same staleness across books. No row added or removed; `next-id` unchanged.
+> (`rev`/`baseRev`), new step 20 covers the legacy variant copy at the series mint plus the
+> same staleness across books, and new step 21 covers the sidecar rendering from a base replaced
+> on disk behind its back. No row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-05 (#3992, PR #4007), 75 → 76.** Row **A120** ("Don't reuse" moves a
 > declined series character onto a voice of its own at once, with every later book whose link
@@ -6430,16 +6431,16 @@ The automated tests prove the decline-time separation against fixture workspaces
 20. **A legacy voice's emotion variants survive the series mint, and a base redesign makes them stale (#4037, #4040).** Book 1's character is on a legacy `qwen-v_*` key (no `voiceUuid`) with one emotion variant (`qwen-v_*__<emotion>.pt`), and an emotion-tagged line in Book 1 renders with that emotion. Link Book 2's character to it and run Design and compare on Book 2 (preview only, no Keep yet). Book 1's emotion-tagged line still renders with that emotion (no `voice_not_designed` in the sidecar or server log), the new `voiceUuid` row set carries `qwen-<uuid>__<emotion>.pt` and `.json` as byte copies of the legacy variant's, Book 1's row variants map points at them, and the legacy `qwen-v_*__<emotion>.pt` is still on disk. Then Keep a full base design on Book 2: both books' emotion-tagged lines now render with the new base voice (the variant is stale, as in step 13), the drawer lists no variant for either row, and the variant files are gone after a server restart once the variant file is over an hour old (the startup sweep skips younger files). Control: a declined (own-`voiceUuid`) book in the same series keeps its variant through the same base design.
 21. **The sidecar renders from the base on disk after it is replaced behind its back, with no restart and no evict (#4040).** With the sidecar running, pick a designed voice and render one line at the standard tier and one at Quality (1.7B), so the voice is warm in both. Then replace its base by hand, without going through the app (no Keep, no redesign): in `voices/qwen/`, back up `qwen-<key>.pt`, then copy another designed voice's `qwen-<other>.pt` over it. Render the same two lines again without restarting the sidecar: both tiers now sound like the OTHER voice (on a build without this fix they keep the old cached voice). Now exercise the on-disk `__1.7b.pt` check: stop the sidecar, and while it is stopped copy the backup back over `qwen-<key>.pt` (the base is the original voice again, while the old `qwen-<key>__1.7b.pt` derived from the OTHER voice stays in place). Start the sidecar and render at Quality: the original voice returns, because the stale `__1.7b.pt` records the hash of a different base and is re-derived (a build without this check reuses the stale file and still sounds like the OTHER voice). Render at the standard tier too: the original voice. Separately, the first Quality render of each existing voice after upgrading re-derives its `__1.7b.pt` once (a one-off GPU step, then cached).
 
-*Needs:* the GPU box with the Qwen sidecar and a series of two books (four for step 7) with a linked character. *Criteria:* this row; issues #3992, #4028, #4037 and #4040 (PR #4061 amended steps 13 and 20) (the separation is `separateVoiceLocked` in `server/src/routes/qwen-voice.ts`, its rule `mustSeparateOnDecline` in `server/src/workspace/voice-uuid-fork.ts`; a design lands in `landStagedDesign`, the series mint is `ensureCharacterVoiceUuid`, the separated-voice record is `server/src/workspace/separated-voices.ts`). Clears when each step is recorded with the cast.json uuids and the file listing that show it.
+*Needs:* the GPU box with the Qwen sidecar and a series of two books (four for step 7) with a linked character. *Criteria:* this row; issues #3992, #4028, #4037 and #4040 (PR #4061 amended step 13 and added steps 20 and 21) (the separation is `separateVoiceLocked` in `server/src/routes/qwen-voice.ts`, its rule `mustSeparateOnDecline` in `server/src/workspace/voice-uuid-fork.ts`; a design lands in `landStagedDesign`, the series mint is `ensureCharacterVoiceUuid`, the separated-voice record is `server/src/workspace/separated-voices.ts`). Clears when each step is recorded with the cast.json uuids and the file listing that show it.
 
 > **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch copy of a real series (*Skulduggery Pleasant*: *Scepter of the Ancients* as Book 1, *Playing with Fire* as Book 2, legacy keys with no `voiceUuid` on the characters used), with the real Qwen sidecar, on `main` at 8fb8c684. Every step was snapshotted: each `cast.json` row, plus the size, mtime and sha1 of every `voices/qwen/` file on the character's keys. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-evidence\wt-onbox115-a120.log`.
 >
 > - **Passed:**
->   - **3.** Design; Design and compare then promote; Design and compare then Cancel; and an `angry` variant. Only Book 2's `qwen-<new>` files changed, Book 1's `qwen-bliss*` stayed byte-identical throughout, and no staging file was left.
+>   - **3.** Design; Design and compare then promote; Design and compare then Cancel; and an `angry` variant. Only Book 2's `qwen-<new>` files changed, Book 1's `qwen-bliss*` stayed byte-identical throughout. Two first attempts (the promote and the Cancel) answered HTTP 000 because the scratch server was down and were re-run. Three staging files were still listed after the promote, the Cancel and the emotion design: the family left when the server died at 09:30:32 (#4054), removed by the startup sweep at the 12:13:31 restart (`removed 3 stale voice-design staging file(s)`), which is also real-crash evidence for step 19's hour-old sweep.
 >   - **4.** Book 2's chapter 42 rendered with QA `ok`. All 10 Bliss segments used Book 2's key, with no `voice_not_designed`.
 >   - **5.** The linked `narrator`, redesigned from Book 2, changed the shared `qwen-<uuid>.pt` for all three books. `melissa-edgley`, which shares a uuid with no link, was designed once from each book and stayed on one uuid.
 >   - **8.** A repeat press returned the same uuid, kept the variants and wrote no new file. This also held with an unrelated book's `cast.json` truncated.
->   - **10.**
+>   - **10.** With Book 1's `cast.json` unreadable, Don't reuse on Book 2's `beryl-edgley` answered `200` and gave it its own uuid with byte copies of the three `qwen-beryl-edgley` files. Book 1's files were unchanged and its `cast.json` was restored byte-identical.
 >   - **11, except its "also after Book 1 is redesigned" clause.** Book 2 got its own uuid with byte copies of the files, and Book 1 was unchanged. Book 2 was unchanged after Book 1's own redesign, but Book 1 got a `voiceUuid` in that redesign (`rjwz7…`), so the clause does not hold as written (see Wording below).
 >   - **12.** The promote answered `400`, Book 1's `.pt` hashes were unchanged, the preview's files were gone at the decline, and Cancel answered OK.
 >   - **14, except its render clause.** An emotion designed on Book 1 added no slot to Book 2, and the reverse held too. Removing Book 2's `angry` kept Book 1's `qwen-bliss__angry.pt`.
@@ -6451,7 +6452,9 @@ The automated tests prove the decline-time separation against fixture workspaces
 > - **Wording, owed to the owner:** step 11's "Book 1 still has no `voiceUuid` … also after Book 1 is redesigned" does not hold as written. Book 1's own redesign mints a uuid by design (`ensureCharacterVoiceUuid`), while Book 2 is unaffected. The clause probably means Book 2's redesign.
 > - **Not run:**
 >   - **6, 13 and 17:** each needs a real re-analysis. [Step 13 was amended by PR #4061 after this run, and steps 20 and 21 are new; the amended 13 and 20-21 are still owed.]
->   - **7, step 9's truncated-chain cases, and 15's Book 3 case:** this series has no Book 3 linked to Book 2.
+>   - **7, step 9's truncated-chain cases, 11's "a Book 3 linked straight to it", and 15's Book 3 case:** this series has no Book 3 linked to Book 2.
+>   - **1 and 2 in the uuid'd setup the row names.** The S11 snapshot shows their cast and file clauses only in the legacy shape (`declinedVoiceUuids: []`, not `[<Book 1's uuid>]`).
+>   - **15's queued case** (a second Book 2 character's design running first) **and its no-reload badge clause.**
 >   - **9's server-stopped toast.**
 >   - **16.**
 >   - **18:** no Book 2 row is on its own legacy voice.
@@ -7730,7 +7733,7 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 
 *Needs:* no GPU; a real workspace (a copied book folder is enough) and a running server. *Cost:* ~10 minutes. *Criteria:* the bullets above; plan [`288-book-op-lock.md`](../features/288-book-op-lock.md), "Repair of existing duplicate bookIds (#3713)". Clears when each bullet is recorded.
 
-> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch workspace. The twin `A Lost Art twin` is a copy of a real rendered book, *The Lost Art of World Domination*, without its audio, and it sorts first. The server was `main` at 8fb8c684. The log is kept on the box at `C:\Claude\Projects\wt-onbox115-evidence\wt-onbox115-e116.log`.
+> **Partially run 2026-11-08 (Claude Code, the v1.15.0 pre-cut pass). The row stays owed.** Run on a scratch workspace. The twin `A Lost Art twin` is a copy of a real rendered book, *The Lost Art of World Domination*, without its audio, and it sorts first. The server was `main` at 8fb8c684. The log of the HTTP gate checks is kept on the box at `C:\Claude\Projects\wt-onbox115-evidence\wt-onbox115-e116.log`; the ranking, the sweep, the idempotence, the five restarts and the truncated gate file are in the server logs beside it, `wt-onbox115-server2…7.{out,err}.log`.
 >
 > - **Passed:**
 >   - **Which twin keeps the id.** The original, which has the work, kept the id although its folder sorts later.
@@ -7751,6 +7754,8 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 >   - **The unreadable gate file.**
 >   - **Deleting a gated book.**
 >   - **The loser's queue, backups and exports.**
+>   - **The unlistable directory** (the sweep logging `a directory is unlistable` and changing nothing).
+>   - **The pre-upgrade tab (a browser item) and "nothing a client does ends the gate early"** (see the gate-never-expires bullet above).
 
 ## Group G — GitHub Actions itself
 
