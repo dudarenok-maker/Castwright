@@ -456,10 +456,11 @@ export const castWrittenSince = (bookId: string, readSeq: number) => ({
 });
 /* Plan 291 (#4031, round 2) — has the cast gate cleared the book's analysis
    era since a read stamped at `readSeq` was issued? Then the gate's own read
-   (issued once the run had ended) is newer than that read, and the read's
-   cast must not be hydrated: it may predate the run's persist, and the cast
-   is no longer read-only to protect it. A latch alone does not count: the
-   era still stands, and the gate re-reads after it. Not a reducer action. */
+   (issued once the run had ended) is newer than that read, which must not
+   be hydrated at all — Layout reads again instead: it may predate the run's
+   persist, and the cast is no longer read-only to protect it. A latch alone
+   does not count: the era still stands, and the gate re-reads after it. Not
+   a reducer action. */
 const CAST_ERA_CLEARED_SINCE = 'persistence/castEraClearedSince';
 export const castEraClearedSince = (bookId: string, readSeq: number) => ({
   type: CAST_ERA_CLEARED_SINCE,

@@ -5995,73 +5995,162 @@ describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291
   });
 });
 
-describe('Layout — a full read issued before the gate cleared never lands stale (plan 291, #4031 round 2)', () => {
-  it('the stale full read keeps the gate\'s roster in the slice, and no PUT carries the stale roster', async () => {
-    const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' };
-    const kestrel = { id: 'kestrel', name: 'Kestrel', role: '', color: 'peach' };
-    let diskCast: unknown[] = [eliza];
-    let busyKinds: string[] = [];
-    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null, { cast: { characters: diskCast } }));
+describe('Layout — a full read issued before the gate cleared never lands stale (plan 291, #4031 rounds 2-3)', () => {
+  const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' };
+  const kestrel = { id: 'kestrel', name: 'Kestrel', role: '', color: 'peach' };
+  const yuri = { id: 'yuri', name: 'Yuri', role: '', color: 'peach' };
+  const line = (text: string, characterId: string) => ({ id: 1, chapterId: 1, characterId, text });
+  type Disk = Record<string, { cast: unknown[]; sentences: unknown[] }>;
+  let disk: Disk;
+  let busyKinds: string[];
+  /* A held read answers with what `answer` gives when it is issued. */
+  let holds: Array<{ id: string; answer?: (id: string) => unknown }>;
+  const held: Array<{ id: string; release: () => void }> = [];
+  const read = (id: string) =>
+    bookStateFor(id, null, {
+      cast: { characters: disk[id].cast },
+      manuscriptEdits: { sentences: disk[id].sentences },
+    });
+  beforeEach(() => {
+    held.length = 0;
+    holds = [];
+    busyKinds = [];
+    getBookStateMock.mockImplementation(async (id: string) => {
+      const h = holds.findIndex((x) => x.id === id);
+      if (h < 0) return read(id);
+      const [{ answer }] = holds.splice(h, 1);
+      const pre = answer ? answer(id) : read(id);
+      await new Promise<void>((release) => held.push({ id, release }));
+      return pre;
+    });
     getBookBusyMock.mockImplementation(async () => busyKinds);
     putBookStateMock.mockReset();
     putBookStateMock.mockResolvedValue(undefined);
-    try {
-      const store = makeStore([persistenceMiddleware, castGateMiddleware]);
-      openAt(store, 'A');
-      renderLayoutAt(store, 'A');
-      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
-      await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+  });
+  afterEach(() => {
+    getBookBusyMock.mockImplementation(async () => []);
+  });
+  const castPuts = (from: number, bookId: string) =>
+    putBookStateMock.mock.calls
+      .slice(from)
+      .filter(([id, req]) => id === bookId && (req as { slice: string }).slice === 'cast')
+      .map(([, req]) => ((req as { patch: { characters: Array<{ id: string }> } }).patch.characters ?? []).map((c) => c.id));
+  const texts = (store: ReturnType<typeof makeStore>) => store.getState().manuscript.sentences.map((x) => x.text);
 
-      /* A re-analysis of A is under way. */
-      busyKinds = ['analysis'];
-      act(() => {
-        store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
-      });
-      /* Layout re-reads A (a stale refusal, say) while the run still holds
-         it: the read answers with the pre-persist cast, and is held. */
-      let release!: () => void;
-      const held = new Promise<void>((r) => (release = r));
-      const before = getBookStateMock.mock.calls.length;
-      getBookStateMock.mockImplementationOnce(async (id: string) => {
-        const pre = bookStateFor(id, null, { cast: { characters: [eliza] } });
-        await held;
-        return pre;
-      });
-      act(() => {
-        store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' }));
-      });
-      await waitFor(() => expect(getBookStateMock.mock.calls.length).toBe(before + 1));
+  it("the stale full read keeps the gate's roster in the slice, and no PUT carries the stale roster", async () => {
+    disk = { A: { cast: [eliza], sentences: [line('v0', 'eliza')] } };
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'A');
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    await waitFor(() => expect(texts(store)).toEqual(['v0']));
+    const seenTexts: string[][] = [];
+    store.subscribe(() => seenTexts.push(texts(store)));
 
-      /* The run persists its rows and ends; the gate reads and clears. */
-      diskCast = [eliza, kestrel];
-      busyKinds = [];
-      await waitFor(() => expect(store.getState().cast.analysisEra?.A).toBeUndefined(), { timeout: 10_000 });
-      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+    /* A re-analysis of A is under way. */
+    busyKinds = ['analysis'];
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    });
+    /* Layout re-reads A (a stale refusal, say) while the run still holds it:
+       the read answers with the pre-persist cast and attributions, and is
+       held. */
+    const before = getBookStateMock.mock.calls.length;
+    holds.push({
+      id: 'A',
+      answer: (id) =>
+        bookStateFor(id, null, { cast: { characters: [eliza] }, manuscriptEdits: { sentences: [line('v-stale', 'eliza')] } }),
+    });
+    act(() => {
+      store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' }));
+    });
+    await waitFor(() => expect(held).toHaveLength(1));
 
-      /* The held, stale full read lands now. */
-      await act(async () => {
-        release();
-        await held;
-      });
-      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
-      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
-      /* Saves from here on are the ones a stale slice would poison (the
-         gate-up flush of a save queued before the run is B3's, not this). */
-      const putsBefore = putBookStateMock.mock.calls.length;
+    /* The run persists its rows and its attributions, then ends; the gate
+       reads and clears. */
+    disk.A = { cast: [eliza, kestrel], sentences: [line('v1', 'kestrel')] };
+    busyKinds = [];
+    await waitFor(() => expect(store.getState().cast.analysisEra?.A).toBeUndefined(), { timeout: 10_000 });
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+    expect(getBookStateMock.mock.calls.length).toBe(before + 2);
 
-      /* The next whole-slice save carries the run's rows. */
-      act(() => {
-        store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' }));
-      });
-      const puts = () => putBookStateMock.mock.calls.slice(putsBefore);
-      await waitFor(() => expect(puts().some(([, req]) => (req as { slice: string }).slice === 'cast')).toBe(true));
-      for (const [, req] of puts()) {
-        const r = req as { slice: string; patch: { characters?: Array<{ id: string }> } };
-        if (r.slice !== 'cast') continue;
-        expect(r.patch.characters?.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
-      }
-    } finally {
-      getBookBusyMock.mockImplementation(async () => []);
+    /* The held, stale full read lands now: it is overtaken, so Layout reads
+       again — once — instead of hydrating any of it. */
+    const putsBefore = putBookStateMock.mock.calls.length;
+    await act(async () => {
+      held[0].release();
+    });
+    await waitFor(() => expect(texts(store)).toEqual(['v1']));
+    await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+    expect(getBookStateMock.mock.calls.length).toBe(before + 3);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+    for (const t of seenTexts) expect(t).not.toContain('v-stale');
+
+    /* The next whole-slice saves carry the run's rows and attributions. */
+    act(() => {
+      store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' }));
+      store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'eliza' }));
+    });
+    const puts = () => putBookStateMock.mock.calls.slice(putsBefore);
+    await waitFor(() => expect(puts().map(([, req]) => (req as { slice: string }).slice)).toEqual(expect.arrayContaining(['cast', 'manuscript'])));
+    for (const ids of castPuts(putsBefore, 'A')) expect(ids).toEqual(['eliza', 'kestrel']);
+    for (const [, req] of puts()) {
+      const r = req as { slice: string; patch: { sentences?: Array<{ text: string }> } };
+      if (r.slice === 'manuscript') expect(r.patch.sentences?.map((x) => x.text)).toEqual(['v1']);
     }
+  }, 20_000);
+
+  it("X -> Y -> X inside the gate's read: no cast PUT for X carries Y's roster", async () => {
+    disk = {
+      X: { cast: [eliza], sentences: [line('x0', 'eliza')] },
+      Y: { cast: [yuri], sentences: [line('y0', 'yuri')] },
+    };
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'X');
+    renderLayoutAt(store, 'X');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('X'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+
+    /* X's run ends; the gate's own read of X is held. */
+    busyKinds = ['analysis'];
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'X' }));
+    });
+    disk.X = { cast: [eliza, kestrel], sentences: [line('x1', 'kestrel')] };
+    holds.push({ id: 'X' });
+    busyKinds = [];
+    await waitFor(() => expect(held.map((h) => h.id)).toEqual(['X']), { timeout: 10_000 });
+
+    /* Y, then back to X: Layout's read of X goes out before the gate's
+       read lands and clears, and answers the pre-persist book. */
+    openAt(store, 'Y');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('Y'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['yuri']));
+    holds.push({
+      id: 'X',
+      answer: (id) =>
+        bookStateFor(id, null, { cast: { characters: [eliza] }, manuscriptEdits: { sentences: [line('x0', 'eliza')] } }),
+    });
+    openAt(store, 'X');
+    await waitFor(() => expect(held.map((h) => h.id)).toEqual(['X', 'X']));
+
+    /* The gate's read lands with the slices holding Y: it hydrates nothing
+       and clears X's era. Then Layout's overtaken read of X lands. */
+    const putsBefore = putBookStateMock.mock.calls.length;
+    await act(async () => {
+      held[0].release();
+    });
+    await waitFor(() => expect(store.getState().cast.analysisEra?.X).toBeUndefined());
+    await act(async () => {
+      held[1].release();
+    });
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('X'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']));
+
+    act(() => {
+      store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' }));
+    });
+    await waitFor(() => expect(castPuts(putsBefore, 'X').length).toBeGreaterThan(0));
+    for (const ids of castPuts(putsBefore, 'X')) expect(ids).not.toContain('yuri');
   }, 20_000);
 });
