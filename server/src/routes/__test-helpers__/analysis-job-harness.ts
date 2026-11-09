@@ -450,9 +450,9 @@ export const routeVoice = (app: Express, bookId: string, id: string, name = `rou
     reaches `phase`, so await it only after `run` returned having reached it.
     Shares the hook slot of `setPhase0Hook` / `setPhase1Hook` (phase0 or phase1
     respectively, also used by `abortAtFirstPhase1`): the later call overwrites
-    the earlier one. The default `'phase1'` runs after the first snapshot has
-    dropped prior-only rows from cast.json, so a source that exists only in the
-    prior cast answers 404 there; use `'phase0'` for those. */
+    the earlier one. The default `'phase1'` runs after the Phase-0b snapshot,
+    which carries every prior row forward, so a prior-only source is still in
+    cast.json there; an id that was never in the cast answers 404. */
 export function mergeMidRun(
   app: Express,
   bookId: string,

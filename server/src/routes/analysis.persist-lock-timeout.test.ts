@@ -113,6 +113,23 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
    `value`/`enabled` are re-exposed as getters on purpose: they are getters on
    the real object (mutable run state, see cast-merge-base.ts's header), and a
    spread would freeze them at their first read. */
+/* Plan 291: the Phase-0b snapshot is `writePlanSnapshot` (the main job's Phase 0a writes
+   nothing), so the swallow tests aim a throw at it instead of at a `writeChecked` ordinal. */
+const planSnapshot = vi.hoisted(() => ({ toThrow: null as unknown, thrown: 0 }));
+vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
+  return {
+    ...actual,
+    writePlanSnapshot: (...a: Parameters<typeof actual.writePlanSnapshot>) => {
+      if (planSnapshot.toThrow) {
+        planSnapshot.thrown += 1;
+        return Promise.reject(planSnapshot.toThrow);
+      }
+      return actual.writePlanSnapshot(...a);
+    },
+  };
+});
+
 interface CastWritePayload {
   characters: Array<{ id: string; lines?: number }>;
 }
@@ -536,6 +553,7 @@ async function runJob(
      job and not everything the file has run so far. Those counts are what stop
      a mis-aimed `selects` from passing vacuously. */
   castWrite.calls.length = 0;
+  planSnapshot.thrown = 0;
   castWrite.thrown = 0;
   suggestionsWrite.calls = 0;
 
@@ -820,9 +838,10 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
  * and must keep being swallowed.
  *
  * WRITE ORDER, verified by instrumenting this seam against a real run rather
- * than read off the source: the main job performs FIVE `writeChecked` calls —
- * three per-chapter interim, one stage-1, then the authoritative final — and
- * the subset job performs FOUR (three interim, then final). Only the final
+ * than read off the source: the main job performs ONE `writeChecked` call —
+ * the authoritative final (plan 291: its Phase 0a / 0b snapshots go through
+ * `writePlanSnapshot`, not this seam) — and the subset job performs FOUR
+ * (three interim, then final). Only the final
  * write carries real sentence counts, so `lines > 0` selects it in both jobs;
  * every fixture also asserts the total call count, so a future change to that
  * sequence reddens here instead of silently re-aiming a `selects`.
@@ -850,7 +869,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
         /* The seam actually fired, once, at the write the fixture aimed at —
            without this the whole test could pass on a `selects` that never
            matched anything. */
-        expect(castWrite.calls).toHaveLength(5);
+        expect(castWrite.calls).toHaveLength(1);
         expect(castWrite.thrown).toBe(1);
 
         /* THE HARM IS REAL, and asserted rather than assumed: the
@@ -889,7 +908,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
 
       const run = await runJob('final-eperm');
       try {
-        expect(castWrite.calls).toHaveLength(5);
+        expect(castWrite.calls).toHaveLength(1);
         expect(castWrite.thrown).toBe(1);
 
         /* Identical disk outcome to the timeout case — the discrimination is
@@ -1009,6 +1028,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
  */
 describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)', () => {
   afterEach(() => {
+    planSnapshot.toThrow = null;
     castWrite.toThrow = null;
     castWrite.selects = null;
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
@@ -1030,18 +1050,18 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
   }
 
   it(
-    'a lock timeout on the per-chapter interim write is swallowed and the run completes',
+    'a lock timeout on the Phase-0b snapshot is swallowed and the run completes',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/interim', 10_000);
-      castWrite.selects = (_p, index) => index === 0; // the first per-chapter snapshot
+      /* Replaces the main job's per-chapter interim and stage-1 timeout tests: plan 291
+         removed those writes (Phase 0a writes no cast.json) and made the Phase-0b
+         snapshot, `writePlanSnapshot`, the one pre-final write. */
+      planSnapshot.toThrow = new LockAcquisitionTimeoutError('cast:/w/phase0b', 10_000);
 
-      const run = await runJob('interim-timeout');
+      const run = await runJob('phase0b-timeout');
       try {
-        expect(castWrite.calls).toHaveLength(5);
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        // Swallowed is not unnoticed.
-        expect(run.warnings.some((w) => w.includes('interim cast.json write failed'))).toBe(true);
+        expect(run.warnings.some((w) => w.includes('Phase-0b cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }
@@ -1050,62 +1070,18 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
   );
 
   it(
-    'an EPERM-shaped disk fault on the same interim write behaves identically',
+    'an EPERM-shaped disk fault on the Phase-0b snapshot behaves identically',
     async () => {
-      castWrite.toThrow = Object.assign(
+      planSnapshot.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = (_p, index) => index === 0;
 
-      const run = await runJob('interim-eperm');
+      const run = await runJob('phase0b-eperm');
       try {
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        expect(run.warnings.some((w) => w.includes('interim cast.json write failed'))).toBe(true);
-      } finally {
-        await run.cleanup();
-      }
-    },
-    60_000,
-  );
-
-  it(
-    'a lock timeout on the stage-1 snapshot write is swallowed and the run completes',
-    async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/stage1', 10_000);
-      /* Index 3 in the main job: after the three per-chapter snapshots, before
-         the final write — see this file's write-order note. The call-count
-         assertion below is what stops this ordinal drifting silently. */
-      castWrite.selects = (_p, index) => index === 3;
-
-      const run = await runJob('stage1-timeout');
-      try {
-        expect(castWrite.calls).toHaveLength(5);
-        expect(castWrite.thrown).toBe(1);
-        expectRunCompletedWhole(run);
-        expect(run.warnings.some((w) => w.includes('stage1 cast.json write failed'))).toBe(true);
-      } finally {
-        await run.cleanup();
-      }
-    },
-    60_000,
-  );
-
-  it(
-    'an EPERM-shaped disk fault on the stage-1 write behaves identically',
-    async () => {
-      castWrite.toThrow = Object.assign(
-        new Error("EPERM: operation not permitted, rename 'cast.json'"),
-        { code: 'EPERM' },
-      );
-      castWrite.selects = (_p, index) => index === 3;
-
-      const run = await runJob('stage1-eperm');
-      try {
-        expect(castWrite.thrown).toBe(1);
-        expectRunCompletedWhole(run);
-        expect(run.warnings.some((w) => w.includes('stage1 cast.json write failed'))).toBe(true);
+        expect(run.warnings.some((w) => w.includes('Phase-0b cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }

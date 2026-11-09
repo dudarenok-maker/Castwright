@@ -155,12 +155,24 @@ import {
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
-import type { DedupConstraints, LedgerEntry, StoredSuggestion, SupersededKind } from '../store/reanalysis-types.js';
+import type {
+  DedupConstraints,
+  LedgerEntry,
+  MatchPlan,
+  PriorRow,
+  StoredSuggestion,
+  SupersededKind,
+} from '../store/reanalysis-types.js';
+import { buildReservedIds, extendPlan, matchFreshToPrior } from '../store/match-fresh-to-prior.js';
+import { applyMatchPlan, planConstraintsFor, remapSentenceIds } from '../store/plan-overlay.js';
+import { loadStoredSuggestions, pairKey } from '../store/cast-merge-suggestions.js';
+import { unionNotLinkedTo } from '../store/cast-name-match.js';
 import {
   materialisePriorAtRunStart,
   readHealOpts,
   readPriorCastLockFree,
   sameBookDeclinePredicate,
+  writePlanSnapshot,
   type PriorCastSnapshot,
 } from '../workspace/analysis-cast-io.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
@@ -179,7 +191,12 @@ import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
-import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks, staleReuseLinkKeys } from '../workspace/series-reuse-link.js';
+import {
+  linkSeriesReuseAtAnalysis,
+  pruneStaleReuseLinks,
+  staleReuseLinkKeys,
+  type LinkSeriesReuseOptions,
+} from '../workspace/series-reuse-link.js';
 import {
   normaliseForMatch as normaliseForMatchShared,
   matchQuoteInSource,
@@ -220,6 +237,7 @@ import type { DecisionBucket, EngineReport, LanguageConventions } from '../analy
 import { measureChapterLegibility } from '../analyzer/dialogue-structure/legibility.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { GeminiAnalyzer } from '../analyzer/gemini.js';
+import { randomBytes } from 'node:crypto';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -1177,6 +1195,64 @@ function previewFoldForLiveView(
   // never depends on line counts, so this agrees with the post-stage-2 call.
   const deduped = dedupeRosterByName(characters, [], { language, constraints }).characters;
   return foldMinorCast(deduped, [], { nameOnly: true, language, protectIds }).characters;
+}
+
+/* Plan 291 (#4031) - the Phase-0b series linker. It stamps only the `new` rows of
+   the plan-applied roster: a joined row keeps the prior row's own link and is never
+   re-linked. */
+export async function linkSeriesReuseOnNewRows(
+  bookId: string,
+  characters: CharacterOutput[],
+  plan: MatchPlan,
+  options?: LinkSeriesReuseOptions,
+): Promise<number> {
+  /* A `new` row may be one of several candidates: it must not take a link any of them
+     declined. The decline reaches the linker on a throwaway view of the row (its
+     `notLinkedTo` guard), and only what the linker stamped is copied back, so the
+     decline is never written onto the row itself. */
+  const declines = new Map<string, unknown[]>();
+  for (const d of Object.values(plan.decisions)) {
+    if (d.kind === 'new') declines.set(d.id, unionNotLinkedTo(declines.get(d.id), d.inheritedDeclines));
+  }
+  const targets = characters.filter((c) => declines.has(c.id));
+  const views = targets.map((c) => ({
+    ...c,
+    notLinkedTo: unionNotLinkedTo((c as { notLinkedTo?: unknown[] }).notLinkedTo, declines.get(c.id) ?? []),
+  }));
+  const linked = await linkSeriesReuseAtAnalysis(bookId, views as never, options);
+  targets.forEach((c, i) => {
+    const row = c as unknown as Record<string, unknown>;
+    for (const [k, v] of Object.entries(views[i])) if (k !== 'notLinkedTo' && row[k] !== v) row[k] = v;
+  });
+  return linked;
+}
+
+/* The questions the plan asks the user: one suggestion from each `new` row to each
+   prior candidate it could be. The new row is the source, so accepting never folds an
+   established character into a fresh one. */
+function planSuggestionsFor(
+  plan: MatchPlan,
+  roster: ReadonlyArray<{ id: string; name?: string }>,
+  prior: ReadonlyArray<PriorRow>,
+): StoredSuggestion[] {
+  const names = new Map<string, string>();
+  for (const r of [...prior, ...roster]) names.set(r.id, typeof r.name === 'string' ? r.name : r.id);
+  const out: StoredSuggestion[] = [];
+  for (const d of Object.values(plan.decisions)) {
+    if (d.kind !== 'new') continue;
+    for (const candidate of d.suggest) {
+      out.push({
+        sourceId: d.id,
+        targetId: candidate,
+        ...pairKey(d.id, candidate),
+        reason: `"${names.get(d.id) ?? d.id}" may be the same character as "${names.get(candidate) ?? candidate}"`,
+        origin: 'plan',
+        newRow: d.id,
+        candidate,
+      });
+    }
+  }
+  return out;
 }
 
 /* Stage 1 doesn't know per-sentence counts. Compute lines (sentences spoken)
@@ -2488,6 +2564,10 @@ export async function attributeChapterStage2(opts: {
   stage1: Stage1Output;
   chapter: { id: number; title: string; body: string };
   stageCall: StageCall;
+  /* Plan 291 (#4031): what the plan says about each roster row. The main job passes
+     it so this prompt dedup and the post-stage-2 `dedupAndPrepare` agree; omitted
+     (the subset job, until it plans), every row is an unplanned new row. */
+  dedupConstraints?: DedupConstraints;
   /* Phase-1 analyzer capacity (#3084 wave 2) — sizes the chunk budget: a
      context-family capacity (local Ollama) derives it from num_ctx so a fat
      input chunk doesn't starve the output window (#528 follow-up; 2026-06-14
@@ -2544,8 +2624,10 @@ export async function attributeChapterStage2(opts: {
      row carries «я» as an alias. */
   const stage1: Stage1Output = {
     ...opts.stage1,
-    characters: dedupeRosterByName(opts.stage1.characters, [], { language: opts.stageCall.language, constraints: EMPTY_DEDUP_CONSTRAINTS })
-      .characters,
+    characters: dedupeRosterByName(opts.stage1.characters, [], {
+      language: opts.stageCall.language,
+      constraints: opts.dedupConstraints ?? EMPTY_DEDUP_CONSTRAINTS,
+    }).characters,
   };
   /* RC3 — thread the known first-person narrator id into the stage-2 prompt
      itself (not just the deterministic structure engine below) so the model
@@ -5142,6 +5224,12 @@ export async function runMainAnalyzerJob(
          snapshot is structured-cloned so a later Phase 0 merge can't
          retroactively mutate a Phase 1 worker's view. */
       if (rosterSnapshotFn) {
+        /* Plan 291 rule 10: a book held for the plan never attributes against the
+           raw rolling roster - the watermark keeps Phase 1 parked until Phase 0b
+           has applied the plan, so reaching this is a bug, not a state. */
+        if (holdForPlan) {
+          throw new Error('Phase 1 asked for the rolling roster of a book held for the cast plan.');
+        }
         return {
           characters: structuredClone(rosterSnapshotFn()),
           chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
@@ -5156,6 +5244,143 @@ export async function runMainAnalyzerJob(
         chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
       };
     };
+    /* ── Plan 291 (#4031): the run's one cast-identity decision. Called with the raw
+       stage-1 roster (Phase 0b, or a cache-hit resume) BEFORE `phase1Stage1Ready`
+       flips and `markPhase0AllDone()` releases Phase 1, so no take is ever made in
+       raw id space. In order:
+         1. plan (`matchFreshToPrior`; a resume reuses the cached plan and
+            `extendPlan`s the rows it does not cover);
+         2. apply it (R29: everything after speaks plan-applied ids);
+         3. link new rows only;
+         4. patch the cache - the RAW roster stays in `stage1`, the plan and its
+            decisions are stored beside it;
+         5. snapshot the unfolded plan-applied roster with the plan's suggestions;
+         6. patch the cache again - the ledger, the run's suggestion pairs and the
+            decisions (a snapshot re-mint's id map is applied to the roster and to
+            the cached takes).
+       Returns the plan-applied roster; `planConstraints` / `planProtectIds` are set
+       for the dedup and the live-view fold that follow. */
+    let planConstraints: DedupConstraints = EMPTY_DEDUP_CONSTRAINTS;
+    let planProtectIds: ReadonlySet<string> | undefined;
+    const planCastIdentity = async (raw: CharacterOutput[]): Promise<CharacterOutput[]> => {
+      const bookDir = recordRef.bookDir;
+      const currentBookId = recordRef.bookId ?? undefined;
+      const prior = priorCastForMerge as PriorRow[];
+      const history = toMatchHistory(
+        bookDir
+          ? await loadCastIdHistoryWithStatus(bookDir)
+          : { status: 'absent', history: { schema: 1, supersededBy: {} } },
+      );
+      let openSuggestions: StoredSuggestion[] = [];
+      if (bookDir) {
+        try {
+          openSuggestions = await loadStoredSuggestions(bookDir);
+        } catch (err) {
+          // Unreadable: no open questions to land on (a row is then only a new one). Server-side only.
+          console.warn(`[analysis] planned without the open suggestions - they could not be read: ${(err as Error)?.message ?? err}`);
+        }
+      }
+      const input = {
+        fresh: raw.map((c) => ({ id: c.id, name: c.name, aliases: c.aliases })),
+        prior,
+        history,
+        openSuggestions,
+        reservedIds: buildReservedIds({ prior, history, plan: cache.matchPlan }),
+        runToken: randomBytes(4).toString('hex'),
+        currentBookId,
+      };
+      let plan: MatchPlan;
+      if (cache.matchPlan) {
+        const uncovered = input.fresh.filter((r) => !Object.hasOwn(cache.matchPlan!.decisions, r.id));
+        plan = uncovered.length > 0 ? extendPlan(cache.matchPlan, { ...input, fresh: uncovered }) : cache.matchPlan;
+      } else {
+        plan = matchFreshToPrior(input);
+      }
+      let characters = applyMatchPlan(raw, plan, prior).characters;
+
+      if (recordRef.bookId) {
+        try {
+          const linked = await linkSeriesReuseOnNewRows(recordRef.bookId, characters, plan);
+          if (linked > 0) {
+            log(
+              0,
+              `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`,
+            );
+          }
+        } catch (linkErr) {
+          console.warn('[analysis] series reuse-link pass failed', linkErr);
+        }
+      }
+
+      /* R20: the header and the decisions are separate patch fields. */
+      cache.matchPlan = plan;
+      await mutateAnalysisCache(manuscriptId, {
+        stage1: cache.stage1,
+        matchPlan: { version: plan.version, runToken: plan.runToken },
+        decisions: plan.decisions,
+      });
+
+      if (bookDir) {
+        const newIds = new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'new' ? [d.id] : [])));
+        /* Unfolded, with palette colours; a new row gets the lines/scenes placeholders
+           (a joined row keeps the prior counts - lines/scenes are analysis-owned, so an
+           explicit 0 here would zero them). */
+        const snapshot = assignPaletteColors(characters).map((c) =>
+          newIds.has(c.id) ? { ...c, lines: c.lines ?? 0, scenes: c.scenes ?? 0 } : c,
+        );
+        const out: { s?: Awaited<ReturnType<typeof writePlanSnapshot>> } = {};
+        try {
+          await withVerifiedBookDir(
+            { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+            async (dir) => {
+              out.s = await writePlanSnapshot({
+                bookDir: dir,
+                bookId: currentBookId,
+                roster: snapshot,
+                plan,
+                ledger: cache.addedRows ?? {},
+                runSuggestions: planSuggestionsFor(plan, snapshot, prior),
+              });
+            },
+          );
+        } catch (persistErr) {
+          /* #2292 (owner decision) - deliberate swallow, including a
+             `LockAcquisitionTimeoutError`: the ids are already in the cache, and the
+             persist re-plans whatever this snapshot did not land. */
+          console.warn('[analysis] Phase-0b cast.json snapshot failed', persistErr);
+        }
+        if (out.s) {
+          const s = out.s;
+          if (s.written) castBase?.noteExternalWrite(s.written);
+          plan = s.plan;
+          const remint = Object.keys(s.idMap).length > 0;
+          if (remint) {
+            characters = characters.map((c) => (Object.hasOwn(s.idMap, c.id) ? { ...c, id: s.idMap[c.id] } : c));
+            for (const [k, takes] of Object.entries(cache.chapters)) {
+              cache.chapters[Number(k)] = remapSentenceIds(takes, s.idMap);
+            }
+          }
+          cache.matchPlan = plan;
+          cache.addedRows = s.ledger;
+          const seen = new Set((cache.runAddedPairs ?? []).map(([a, b]) => `${a}\u0000${b}`));
+          cache.runAddedPairs = [
+            ...(cache.runAddedPairs ?? []),
+            ...s.addedPairs.filter(([a, b]) => !seen.has(`${a}\u0000${b}`)),
+          ];
+          await mutateAnalysisCache(manuscriptId, {
+            ledger: s.ledger,
+            runAddedPairs: s.addedPairs,
+            decisions: plan.decisions,
+            ...(remint ? { remapCharacterIds: s.idMap } : {}),
+          });
+        }
+      }
+
+      planConstraints = planConstraintsFor({ roster: characters, plan, prior, history, currentBookId });
+      planProtectIds = new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'join' ? [d.priorId] : [])));
+      return characters;
+    };
+
     /* Failure signalling from Phase 0 to Phase 1 and to the post-Promise.all
        handler. When Phase 0 finishes with any chapters still in the failed
        set, we set this so Phase 1 workers can bail without dispatching and
@@ -5286,9 +5511,13 @@ export async function runMainAnalyzerJob(
             await persistDroppedQuotesBatch(bookDir, manuscriptId, 'analysis-stream', verified);
           },
         );
-      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS) });
+      /* Plan 291 (#4031): the cached stage 1 is the RAW roster. Settle its identity
+         (reusing a cached plan, or planning now) BEFORE Phase 1 is released, so no
+         take is made in raw id space. The cached `stage1` stays raw. */
+      stage1 = { ...cache.stage1, characters: await planCastIdentity(cache.stage1.characters) };
+      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, planConstraints, planProtectIds) });
       /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
-         the finalised stage1 is the canonical roster for any Phase 1
+         the plan-applied stage1 is the canonical roster for any Phase 1
          worker that asks for a snapshot. Flip the flag so
          `getPhase1Stage1Snapshot` returns `stage1` directly without
          consulting the (empty) rolling-roster fallback. Release any
@@ -5755,55 +5984,10 @@ export async function runMainAnalyzerJob(
         castDurations[ch.id] = chDuration;
         cache.castDurations = castDurations;
         await saveAnalysisCache(manuscriptId, cache);
-        /* Mirror the cache write into cast.json so the book folder reflects
-           progress mid-run — without this, a user inspecting `.audiobook/`
-           or re-opening the book mid-run sees an empty folder even when
-           30+ chapters of cast are already detected. Carries the same
-           shape as the post-Phase-1 end-of-run write (palette colours +
-           lines:0/scenes:0 placeholders); the final fold-and-attribute
-           pass overwrites with the authoritative version. With sticky
-           analysis the run survives navigation, so this no longer needs
-           a clientGone gate — the cache + cast.json writes are the
-           authoritative side effects of progress regardless of
-           subscriber count. */
-        if (recordRef.bookDir) {
-          const interim = buildInterimCast(
-            chapterCast,
-            recordRef.chapterHints.map((h) => h.id),
-            bookLanguage,
-            bookAuthor,
-          );
-          if (interim.length > 0) {
-            try {
-              /* §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) — this
-                 write persists a PROVISIONAL roster (no sentence counts yet;
-                 the authoritative end-of-run write below clobbers it).
-                 `overlayInterimCastForLiveView` has no id-drift name-fallback
-                 and produces no retirements — a prior id that looks dropped
-                 here may simply not have been reached yet, so it must not be
-                 able to swap a persisted id. Only §4.4's five listed sites
-                 record retirements, and none of them is this one. */
-              const mergedInterim = overlayInterimCastForLiveView(priorCastForMerge, interim);
-              await castBase!.writeChecked(
-                { characters: mergedInterim },
-                reportCastConflict('interim'),
-              );
-            } catch (persistErr) {
-              /* #2292 (owner decision) — a `LockAcquisitionTimeoutError` is
-                 SWALLOWED here deliberately, NOT parked like the authoritative
-                 final write in the persist block below (#2295, `writeChecked`
-                 wrapped at `reportCastConflict('final')`). Tell the two apart
-                 by what follows the write, not by the handler's wording: this
-                 is a PROGRESS SNAPSHOT, and the authoritative write later in
-                 the same run clobbers whatever it managed to put on disk, so a
-                 timeout here leaves nothing diverged. Failing a multi-minute
-                 analysis because one mid-run checkpoint could not take the
-                 lock is disproportionate — the same reasoning that makes
-                 `reconcileRejectEdgesOnDisk` the other deliberate swallow. */
-              console.warn('[analysis] interim cast.json write failed', persistErr);
-            }
-          }
-        }
+        /* Plan 291 (#4031): Phase 0a writes no cast.json. The per-chapter roster is
+           still raw analyzer ids, so a row written now would put an id on disk that
+           the plan has not settled; the live view (`emitCastUpdate`, below) is the
+           only progress surface until Phase 0b has planned the roster. */
         castInFlight.delete(i);
         log(
           0,
@@ -5955,55 +6139,23 @@ export async function runMainAnalyzerJob(
           (msg) => log(0, msg),
           record.sourceText,
         );
-        /* Plan 126 Facet A — establish cross-book reuse links server-side.
-           Match each new character against prior same-series confirmed cast
-           and stamp `matchedFrom` + a unified `voiceId` + `voiceState:'reused'`
-           (+ aliases + denormalised bespoke voice) so continuity is
-           authoritative at analysis time, not dependent on the client reaching
-           a confirm page. No-op for standalone / earliest-in-series books.
-           Mutates `characters` in place so both stage1 and the on-disk cast
-           below carry the links. Failure is non-fatal — a reuse-link error
-           must never abort an otherwise-good analysis. */
-        if (recordRef.bookId) {
-          try {
-            /* Seed the guard fields (notLinkedTo, matchedFrom) from the prior
-               cast BEFORE the link pass — it scores against `characters`, so
-               without this it would re-link a pair the user separated and
-               re-stamp links already established (srv-13). */
-            seedReuseGuardsFromPriorCast(priorCastForMerge, characters);
-            const staleDropped = await pruneStaleReuseLinks(recordRef.bookId, characters);
-            if (staleDropped > 0) {
-              log(
-                0,
-                `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`,
-              );
-            }
-            const linked = await linkSeriesReuseAtAnalysis(recordRef.bookId, characters);
-            if (linked > 0) {
-              log(
-                0,
-                `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`,
-              );
-            }
-          } catch (linkErr) {
-            console.warn('[analysis] series reuse-link pass failed', linkErr);
-          }
-        }
-        stage1 = {
+        /* Plan 291 (#4031) — the RAW roster is what the cache keeps; the plan
+           (`planCastIdentity`) settles every row's identity, applies it, links the
+           new rows to prior series books (plan 126 Facet A: `matchedFrom` + a unified
+           `voiceId` + `voiceState:'reused'`, non-fatal) and snapshots the plan-applied
+           roster. Only then does Phase 1 see a roster: `phase1Stage1Ready` flips
+           BEFORE `markPhase0AllDone()` so a released waiter reads the plan-applied
+           stage1 instead of the rolling snapshot. */
+        const rawStage1: Stage1Output = {
           characters,
           /* Carry the parser's chapter list verbatim — Phase 0a deliberately
              doesn't return a chapters[] field, and stage 2's prompt /
              merging downstream both work off the same list. */
           chapters: recordRef.chapterHints.map((c) => ({ id: c.id, title: c.title })),
         };
-        /* Plan 88 follow-up — Phase 0b consolidation produced the final
-           roster. Flip `phase1Stage1Ready` BEFORE `markPhase0AllDone()`
-           so any Phase 1 waiter released by the watermark sees the
-           finalised roster instead of falling back to the rolling
-           snapshot. */
+        cache.stage1 = rawStage1;
+        stage1 = { ...rawStage1, characters: await planCastIdentity(characters) };
         phase1Stage1Ready = true;
-        cache.stage1 = stage1;
-        await saveAnalysisCache(manuscriptId, cache);
         // #2196 — dropped-quotes persistence guarded in mode:'drop' (subset
         // phase-0b; stale dir not recreated; terminal persist halt-gates).
         await withVerifiedBookDir(
@@ -6018,46 +6170,11 @@ export async function runMainAnalyzerJob(
           },
         );
         stage1ActualMs = Date.now() - stage0Start;
-        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS) });
-        /* Cast.json reflects the verified Phase 0b state before Phase 1's
-           attribution pass starts (which can be the longest phase by far
-           on a long book). We apply the name-only fold here too — the
-           live SSE just emitted the same shape, and the user's mental
-           model of "this is what we detected" needs to line up between
-           the streaming view and `.audiobook/cast.json` on disk.
-           stage1.characters itself stays un-folded for stage-2 attribution
-           — the descriptor names need to survive into the stage-2 prompt
-           so the model can map dialogue to them. The post-Phase-1 fold
-           later overwrites this file with the authoritative counts.
-           No clientGone gate: with sticky analysis the run survives
-           navigation, so the on-disk state stays in lockstep with the
-           broadcast events regardless of subscriber count. */
-        if (recordRef.bookDir) {
-          try {
-            const stage1Cast = attachLinesAndScenes(
-              assignPaletteColors(previewFoldForLiveView(stage1.characters, bookLanguage, EMPTY_DEDUP_CONSTRAINTS)),
-              [],
-            );
-            // §4.4 / Task 8 fix round 1 (item 4) / srv-87 (#2086) —
-            // preview-folded roster, no sentence counts yet; the
-            // authoritative write below clobbers it.
-            // `overlayInterimCastForLiveView` has no name-fallback and
-            // produces no retirements — see the interim-write comment above
-            // for the full rationale.
-            const mergedStage1 = overlayInterimCastForLiveView(priorCastForMerge, stage1Cast);
-            await castBase!.writeChecked(
-              { characters: mergedStage1 },
-              reportCastConflict('stage1'),
-            );
-          } catch (persistErr) {
-            /* #2292 (owner decision) — deliberate swallow, including a
-               `LockAcquisitionTimeoutError`. Same reasoning as the per-chapter
-               interim write above: this is the Phase-0b snapshot, the
-               authoritative end-of-run write clobbers it, and the run's own
-               loud failure lives at that write (#2295), not here. */
-            console.warn('[analysis] stage1 cast.json write failed', persistErr);
-          }
-        }
+        send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, planConstraints, planProtectIds) });
+        /* Cast.json already reflects the plan-applied Phase 0b roster
+           (`planCastIdentity`'s snapshot, unfolded - the fold is a live-view and
+           final-pass concern, and a folded snapshot would write buckets in place of
+           real rows). */
         /* Use the observed rate to refine stage 2's estimate. Stage 2
            prompt is a similar size to stage 1 plus the small character
            roster, but its output is much larger (one JSON entry per
@@ -6677,6 +6794,9 @@ export async function runMainAnalyzerJob(
         stage1: phase1Stage1,
         chapter: ch,
         stageCall: stage2Call,
+        /* A chapter dispatched on the rolling roster (a first analysis, pipelined)
+           predates the plan; every other chapter reads the plan-applied roster. */
+        dedupConstraints: phase1Stage1 === stage1 ? planConstraints : undefined,
         // #3084 P30 — the active selection, so a chapter dispatched after a switch is sized for the target.
         capacity: resolveCapacity({ engine: phase1Engine, model: phase1ModelId }),
         structureBudget,
@@ -7154,7 +7274,7 @@ export async function runMainAnalyzerJob(
        duplicates and rewrite their sentences onto the canonical id, so the fold
        counts lines against deduped ids. Captures pre-dedup lineage for the
        journal + diminutive suggestions for the sibling file. */
-    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage, EMPTY_DEDUP_CONSTRAINTS);
+    const dd = dedupAndPrepare(stage1.characters, recovered.sentences, bookLanguage, planConstraints);
     stage1.characters = dd.characters;
     recovered.sentences = dd.sentences;
     /* #1447 — strip a real third-party person named/quoted only in a non-story

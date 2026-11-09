@@ -1,0 +1,167 @@
+{
+  "frames": [
+    {
+      "kind": "cast-update",
+      "characters": [
+        {
+          "id": "narrator",
+          "name": "Narrator",
+          "role": "narrator",
+          "color": "narrator",
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "wren-ashby",
+          "name": "Wren Ashby",
+          "role": "lead",
+          "color": "#111111",
+          "gender": "female",
+          "evidence": [
+            {
+              "quote": "Wren asked"
+            }
+          ],
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "unknown-male",
+          "name": "Unknown male",
+          "role": "background",
+          "color": "narrator",
+          "gender": "male",
+          "description": "Composite voice covering one-off male bystanders, intruders, joggers, and similar background speakers who only have a handful of lines. Folded automatically at analysis time so they share a single generic voice instead of consuming one cast slot each.",
+          "aliases": [
+            "The Jogger"
+          ],
+          "lines": 0,
+          "scenes": 0
+        }
+      ]
+    },
+    {
+      "kind": "cast-update",
+      "characters": [
+        {
+          "id": "narrator",
+          "name": "Narrator",
+          "role": "narrator",
+          "color": "narrator",
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "wren-ashby",
+          "name": "Wren Ashby",
+          "role": "lead",
+          "color": "#111111",
+          "gender": "female",
+          "evidence": [
+            {
+              "quote": "Wren asked"
+            }
+          ],
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "unknown-male",
+          "name": "Unknown male",
+          "role": "background",
+          "color": "narrator",
+          "gender": "male",
+          "description": "Composite voice covering one-off male bystanders, intruders, joggers, and similar background speakers who only have a handful of lines. Folded automatically at analysis time so they share a single generic voice instead of consuming one cast slot each.",
+          "aliases": [
+            "The Jogger"
+          ],
+          "lines": 0,
+          "scenes": 0
+        }
+      ]
+    },
+    {
+      "kind": "cast-update",
+      "characters": [
+        {
+          "id": "narrator",
+          "name": "Narrator",
+          "role": "narrator",
+          "color": "narrator",
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "wren-ashby",
+          "name": "Wren Ashby",
+          "role": "lead",
+          "color": "#111111",
+          "gender": "female",
+          "evidence": [
+            {
+              "quote": "Wren asked"
+            }
+          ],
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "unknown-male",
+          "name": "Unknown male",
+          "role": "background",
+          "color": "narrator",
+          "gender": "male",
+          "description": "Composite voice covering one-off male bystanders, intruders, joggers, and similar background speakers who only have a handful of lines. Folded automatically at analysis time so they share a single generic voice instead of consuming one cast slot each.",
+          "aliases": [
+            "The Jogger"
+          ],
+          "lines": 0,
+          "scenes": 0
+        }
+      ]
+    },
+    {
+      "kind": "cast-update",
+      "characters": [
+        {
+          "id": "narrator",
+          "name": "Narrator",
+          "role": "narrator",
+          "color": "narrator",
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "w2",
+          "name": "Wren",
+          "role": "lead",
+          "color": "#111111",
+          "gender": "female",
+          "evidence": [
+            {
+              "quote": "Wren asked"
+            }
+          ],
+          "aliases": [
+            "Wren Ashby"
+          ],
+          "lines": 0,
+          "scenes": 0
+        },
+        {
+          "id": "unknown-male",
+          "name": "Unknown male",
+          "role": "background",
+          "color": "narrator",
+          "gender": "male",
+          "description": "Composite voice covering one-off male bystanders, intruders, joggers, and similar background speakers who only have a handful of lines. Folded automatically at analysis time so they share a single generic voice instead of consuming one cast slot each.",
+          "aliases": [
+            "The Jogger"
+          ],
+          "lines": 0,
+          "scenes": 0
+        }
+      ]
+    }
+  ]
+}

@@ -4,8 +4,9 @@
    (Tasks 15-27) are added on top of `__test-helpers__/analysis-job-harness.ts`.
    The mock blocks below are the ones the harness header requires. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /* Before any import binds BOOKS_ROOT: the harness books live in this workspace. */
 vi.hoisted(() => {
@@ -16,8 +17,10 @@ vi.hoisted(() => {
 });
 
 import {
+  BODY,
   FRESH_ID,
   NARR,
+  PHASE1_GLOBAL,
   PRIOR_ID,
   PRIOR_WREN,
   WREN_FRESH,
@@ -30,6 +33,9 @@ import {
   mergeMidRun,
   mkApp,
   mkBook,
+  mkJob,
+  phase0,
+  phase1,
   putCast,
   readCache,
   readJson,
@@ -41,6 +47,7 @@ import {
   routeVoice,
   run,
   runSubsetRetry,
+  sel,
   setPhase0Hook,
   setPhase1Hook,
   setPipelined,
@@ -50,6 +57,13 @@ import {
 import * as historyStore from '../store/cast-id-history.js';
 import * as stateIo from '../workspace/state-io.js';
 import { saveAnalysisCache } from '../store/analysis-cache.js';
+import { linkSeriesReuseOnNewRows, runMainAnalyzerJob } from './analysis.js';
+import { getManuscript } from '../store/manuscripts.js';
+import type { Analyzer } from '../analyzer/index.js';
+import type { CharacterOutput } from '../handoff/schemas.js';
+import type { MatchPlan } from '../store/reanalysis-types.js';
+import type { LibraryCharacterRecord } from '../workspace/library-cast-scan.js';
+import type { LinkSeriesReuseOptions } from '../workspace/series-reuse-link.js';
 
 /* Passthrough by default; the harness installs one-shot failures on top. */
 vi.mock('../workspace/state-io.js', async (importOriginal) => {
@@ -182,22 +196,42 @@ describe('#4031 analysis-job harness', () => {
     expect(res?.body.sourceId).toBe('w3');
   });
 
-  it('mergeMidRun: the default Phase-1 branch merges a source that still exists then, and 404s a prior-only one', async () => {
+  it('mergeMidRun: the default Phase-1 branch merges a source that still exists then, a prior-only row included, and 404s one that never did', async () => {
     const b = seed([{ ...NARR }, { ...PRIOR_WREN }, { id: 'w3', name: 'Wrenna', role: 'minor', color: '#222222' }]);
     const live = mergeMidRun(mkApp(), b.bookId, PRIOR_ID, 'narrator');
     await run(b.manuscriptId, b.bookDir, 'main');
     expect((await live.done)?.status).toBe(200);
 
+    /* Plan 291 rule 1: the Phase-0b snapshot carries every prior row forward, so a
+       prior-only source (w3) is still in cast.json at the first Phase-1 call. (Before
+       Task 16 the interim snapshot dropped it and this answered 404.) */
     const c = seed([{ ...NARR }, { ...PRIOR_WREN }, { id: 'w3', name: 'Wrenna', role: 'minor', color: '#222222' }]);
-    const gone = mergeMidRun(mkApp(), c.bookId, 'w3', PRIOR_ID);
+    const carried = mergeMidRun(mkApp(), c.bookId, 'w3', PRIOR_ID);
     await run(c.manuscriptId, c.bookDir, 'main');
+    expect((await carried.done)?.status).toBe(200);
+
+    const d = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+    const gone = mergeMidRun(mkApp(), d.bookId, 'never-in-the-cast', PRIOR_ID);
+    await run(d.manuscriptId, d.bookDir, 'main');
     expect((await gone.done)?.status).toBe(404);
   });
 
   it('failNextRetirement: the next retirement write throws once', async () => {
-    const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+    /* A retirement is recorded by the run-start heal of two identically named rows. (A
+       surname join no longer retires anything during the run: the plan-applied roster
+       already speaks the prior id.) */
+    const b = seed([
+      { ...NARR },
+      { ...PRIOR_WREN, lines: 40 },
+      { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' },
+    ]);
     const fault = failNextRetirement();
-    await run(b.manuscriptId, b.bookDir, 'main');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await run(b.manuscriptId, b.bookDir, 'main');
+    } finally {
+      warn.mockRestore();
+    }
     expect(fault.calls()).toBe(1);
   });
 
@@ -520,5 +554,294 @@ describe('#4031 main job: run start and cache classification', () => {
     const events = await run(b.manuscriptId, b.bookDir, 'main');
     expect(events.some((e) => e.kind === 'result')).toBe(true);
     expect(events.filter((e) => e.kind === 'warning' && e.code === 'cast_merge_base_stale')).toEqual([]);
+  });
+});
+
+/* ---- Plan 291 Task 16 - the main job's Phase 0b plan and snapshots ----------- */
+
+describe('#4031 main job: Phase 0b plans cast identity once', () => {
+  const orig = process.env.STAGE2_COVERAGE_RETRIES;
+  const books: HarnessBook[] = [];
+  const seed = (...a: Parameters<typeof mkBook>): HarnessBook => {
+    const b = mkBook(...a);
+    books.push(b);
+    return b;
+  };
+  /* A descriptor-named row: the preview fold rolls it into the Unknown male bucket,
+     the plan-applied snapshot must keep it as its own row. */
+  const JOGGER = {
+    id: 'the-jogger',
+    name: 'The Jogger',
+    role: 'minor',
+    color: '#222222',
+    gender: 'male',
+    evidence: [{ quote: 'The Jogger waved' }],
+  } as unknown as CharacterOutput;
+  const BODY16 = `${BODY}\n\nThe Jogger waved.`;
+  const OLGA: Row = { id: 'olga', name: 'Olga', role: 'minor', color: '#444444', voiceState: 'generated' };
+  const LEAD_WREN: Row = { ...PRIOR_WREN, role: 'lead', color: '#111111' };
+  const FRESH = { roster: [NARR, WREN_FRESH, JOGGER], speakerId: FRESH_ID };
+  const stopAtPhase1 = async (
+    b: HarnessBook,
+    fresh: Parameters<typeof run>[3] = FRESH,
+    opts?: Parameters<typeof run>[4],
+  ): Promise<void> => {
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'main', fresh, opts);
+    setPhase1Hook(undefined);
+  };
+  const ids = (rows: Row[]): string[] => rows.map((r) => String(r.id));
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = orig;
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+
+  it('A14a: stopped after the Phase-0b snapshot and never resumed, the cast is only extended', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
+    await stopAtPhase1(b);
+    const cast = readCast(b.bookDir);
+    /* Every prior row is still there, the joined analyzer row is the prior row, and the
+       descriptor-named new row is its own (unfolded) row - not the Unknown male bucket. */
+    expect(ids(cast)).toEqual(expect.arrayContaining(['narrator', PRIOR_ID, 'olga', 'the-jogger']));
+    expect(ids(cast)).not.toContain(FRESH_ID);
+    expect(ids(cast)).not.toContain('unknown-male');
+    const wren = cast.find((c) => c.id === PRIOR_ID)!;
+    expect(wren).toMatchObject({ name: 'Wren', voiceState: 'locked' });
+    expect(wren.aliases).toContain('Wren Ashby');
+    expect(cast.find((c) => c.id === 'olga')).toMatchObject(OLGA);
+  });
+
+  it('F14: a route-given voice on a new row survives a stopped run', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
+    const app = mkApp();
+    let voice: { status: number } | undefined;
+    const abort = abortAtFirstPhase1();
+    setPhase1Hook(async (chapterId) => {
+      voice = await routeVoice(app, b.bookId, 'the-jogger');
+      await abort(chapterId);
+    });
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    setPhase1Hook(undefined);
+    expect(voice?.status).toBe(200);
+    const row = readCast(b.bookDir).find((c) => c.id === 'the-jogger')!;
+    expect((row.overrideTtsVoices as { qwen?: { name: string } }).qwen?.name).toBe('route-voice-the-jogger');
+  });
+
+  it('A7c (#4023 S1): a locked prior row joined by a surname keeps its id, its lock and its lines', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    const cast = readCast(b.bookDir);
+    expect(cast.filter((c) => String(c.name).startsWith('Wren')).map((c) => c.id)).toEqual([PRIOR_ID]);
+    const row = cast.find((c) => c.id === PRIOR_ID)!;
+    expect(row.voiceState).toBe('locked');
+    expect(row.voiceId).toBeUndefined();
+    const edits = readEdits(b.bookDir);
+    expect(edits.some((s) => s.characterId === PRIOR_ID)).toBe(true);
+    expect(edits.some((s) => s.characterId === FRESH_ID)).toBe(false);
+  });
+
+  /* Two prior rows both match "Wren Ashby" by surname; a dismissal keeps the run-start
+     heal from collapsing them. The owner's rule: no guess - a new row, suggestions to both. */
+  const twoWrens = (): HarnessBook => {
+    const b = seed([
+      { ...NARR },
+      { ...LEAD_WREN },
+      { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' },
+    ]);
+    writeFileSync(
+      join(b.bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        notSamePerson: [{ a: PRIOR_ID, b: 'w2b', at: '2026-11-01T00:00:00.000Z' }],
+      }),
+    );
+    return b;
+  };
+
+  it('A7c (#4023 S2, two-row variant): two surname candidates make a new row, not a guess', async () => {
+    const b = twoWrens();
+    await stopAtPhase1(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+    const cast = readCast(b.bookDir);
+    expect(ids(cast)).toEqual(expect.arrayContaining(['narrator', PRIOR_ID, 'w2b', FRESH_ID]));
+    const plan = readCache(b.manuscriptId)!.matchPlan!;
+    expect(plan.decisions[FRESH_ID]).toMatchObject({ kind: 'new', suggest: [PRIOR_ID, 'w2b'] });
+  });
+
+  it('Q3 (route): the Phase-0b snapshot writes the plan suggestions while the run is still in progress', async () => {
+    const b = twoWrens();
+    await stopAtPhase1(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+    const sug = readSuggestions(b.bookDir);
+    expect(sug.map((s) => [s.newRow, s.candidate, s.origin, s.sourceId, s.targetId]).sort()).toEqual([
+      [FRESH_ID, PRIOR_ID, 'plan', FRESH_ID, PRIOR_ID],
+      [FRESH_ID, 'w2b', 'plan', FRESH_ID, 'w2b'],
+    ]);
+  });
+
+  it('A7c (#4023 S3): a prior catch-all id is carried forward and the fresh row stays its own new row', async () => {
+    const b = seed([
+      { ...NARR },
+      { id: 'unknown-male', name: 'Timkin', role: 'minor', color: '#555555', voiceState: 'tuned' },
+    ]);
+    const timkin = {
+      id: 'timkin',
+      name: 'Timkin',
+      role: 'minor',
+      color: '#666666',
+      evidence: [{ quote: 'Olga nodded' }],
+    } as unknown as CharacterOutput;
+    await stopAtPhase1(b, { roster: [NARR, timkin], speakerId: 'timkin' });
+    const cast = readCast(b.bookDir);
+    expect(ids(cast)).toEqual(expect.arrayContaining(['narrator', 'unknown-male', 'timkin']));
+    expect(cast.find((c) => c.id === 'unknown-male')).toMatchObject({ voiceState: 'tuned' });
+  });
+
+  it('the Phase-1 prompt lists prior ids and names with analyzer names as aliases', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    const prompts: string[] = [];
+    const base = phase1(PRIOR_ID);
+    const spy: Analyzer = {
+      ...base,
+      runStage2Chapter: ((m: string, c: number, prompt: string, call: unknown) => {
+        prompts.push(prompt);
+        return (base.runStage2Chapter as (...a: unknown[]) => unknown)(m, c, prompt, call);
+      }) as never,
+    };
+    const rec = getManuscript(b.manuscriptId)!;
+    const { job } = mkJob(b.manuscriptId, b.bookDir, 'main');
+    (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(spy, 'phase1-model');
+    await runMainAnalyzerJob(job, rec as never, sel(phase0([NARR, WREN_FRESH]), 'phase0-model'), {
+      requestedFresh: false,
+      allowStage1Shrink: true,
+      requestedModel: undefined,
+    } as never);
+    expect(prompts.length).toBeGreaterThan(0);
+    for (const p of prompts) {
+      expect(p).toContain(`"id": "${PRIOR_ID}"`);
+      expect(p).toContain('"name": "Wren"');
+      expect(p).not.toContain(FRESH_ID);
+    }
+    /* The analyzer's own name is kept as an alias of the joined row. */
+    expect(readCast(b.bookDir).find((c) => c.id === PRIOR_ID)!.aliases).toContain('Wren Ashby');
+  });
+
+  it('Phase 0a writes no cast.json in the main job', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
+    const before = readFileSync(join(b.bookDir, '.audiobook', 'cast.json'), 'utf8');
+    const seen: string[] = [];
+    setPhase0Hook(async (id) => {
+      /* Let an earlier chapter finish (and snapshot, if it did) first. */
+      if (id === 3) await new Promise((r) => setTimeout(r, 250));
+      seen.push(readFileSync(join(b.bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    });
+    await stopAtPhase1(b);
+    setPhase0Hook(undefined);
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    for (const s of seen) expect(s).toBe(before);
+  });
+
+  const FRAMES_PATH = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '..',
+    'src',
+    'test-fixtures',
+    'analysis-cast-update-frames.json',
+  );
+
+  it("record: the job's cast-update frames are written to src/test-fixtures/analysis-cast-update-frames.json", async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
+    let rec!: ReturnType<typeof recordCastUpdateFrames>;
+    await stopAtPhase1(b, FRESH, {
+      onJob: (j) => {
+        rec = recordCastUpdateFrames(j);
+      },
+    });
+    const fresh = `${JSON.stringify({ frames: rec.frames.map((characters) => ({ kind: 'cast-update', characters })) }, null, 2)}\n`;
+    if (process.env.RECORD_FIXTURES === '1') {
+      mkdirSync(dirname(FRAMES_PATH), { recursive: true });
+      writeFileSync(FRAMES_PATH, fresh);
+    }
+    /* Staleness: the committed file must equal a fresh capture (re-record with RECORD_FIXTURES=1). */
+    expect(existsSync(FRAMES_PATH)).toBe(true);
+    expect(readFileSync(FRAMES_PATH, 'utf8')).toBe(fresh);
+    /* The last frame is the Phase-0b one: the plan-applied roster, prior ids. */
+    const last = rec.frames[rec.frames.length - 1];
+    expect(ids(last)).toContain(PRIOR_ID);
+    expect(ids(last)).not.toContain(FRESH_ID);
+  });
+});
+
+/* ---- Plan 291 Task 16 - the linker runs on `new` rows only ------------------- */
+
+describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
+  const BOOK1 = 'book-1';
+  const BOOK2 = 'book-2';
+  const LIBRARY: LibraryCharacterRecord[] = [
+    {
+      bookId: BOOK1,
+      bookTitle: 'Book One',
+      character: { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen', voiceId: 'wren' },
+    },
+    {
+      bookId: BOOK1,
+      bookTitle: 'Book One',
+      character: { id: 'marlow', name: 'Marlow', gender: 'male', ageRange: 'teen' },
+    },
+  ];
+  const options = (): LinkSeriesReuseOptions => ({
+    scanLibrary: async () => LIBRARY,
+    resolveAuthorSeries: async () => ({ author: 'A', series: 'S' }),
+    positions: async () =>
+      new Map<string, number | null>([
+        [BOOK1, 1],
+        [BOOK2, 2],
+      ]),
+    isStandaloneBookId: async () => false,
+    resolveBookLanguage: async () => 'en',
+    castLoader: async () => null,
+  });
+  const planOf = (decisions: MatchPlan['decisions']): MatchPlan => ({ version: 1, runToken: 'tok', decisions });
+  const newD = (id: string, inheritedDeclines: Array<{ bookId?: string; characterId: string }> = []): MatchPlan['decisions'][string] => ({
+    kind: 'new',
+    rawId: id,
+    id,
+    minted: false,
+    suggest: [],
+    inheritedDeclines,
+  });
+
+  it("A7c (#4023 S2): a joined row keeps the prior row's link and is not re-linked; a new row is linked", async () => {
+    const rows = [
+      { id: PRIOR_ID, name: 'Wren', gender: 'female', ageRange: 'teen' },
+      { id: 'marlow-x', name: 'Marlow', gender: 'male', ageRange: 'teen' },
+    ] as never[];
+    const plan = planOf({
+      [FRESH_ID]: { kind: 'join', rawId: FRESH_ID, priorId: PRIOR_ID, tier: 'surname' },
+      'marlow-x': newD('marlow-x'),
+    });
+    const linked = await linkSeriesReuseOnNewRows(BOOK2, rows, plan, options());
+    expect(linked).toBe(1);
+    expect((rows[0] as { matchedFrom?: unknown }).matchedFrom).toBeUndefined();
+    expect((rows[1] as { matchedFrom?: { bookId: string } }).matchedFrom?.bookId).toBe(BOOK1);
+  });
+
+  it('a new row never takes a series link one of its candidates declined (inheritedDeclines)', async () => {
+    const mk = (): never[] => [{ id: 'wren-x', name: 'Wren', gender: 'female', ageRange: 'teen' }] as never[];
+    const control = mk();
+    expect(await linkSeriesReuseOnNewRows(BOOK2, control, planOf({ 'wren-x': newD('wren-x') }), options())).toBe(1);
+
+    const declined = mk();
+    const plan = planOf({ 'wren-x': newD('wren-x', [{ bookId: BOOK1, characterId: 'wren' }]) });
+    expect(await linkSeriesReuseOnNewRows(BOOK2, declined, plan, options())).toBe(0);
+    expect((declined[0] as { matchedFrom?: unknown }).matchedFrom).toBeUndefined();
+    /* The decline is a guard for the link pass, not data: it is not written onto the row. */
+    expect((declined[0] as { notLinkedTo?: unknown }).notLinkedTo).toBeUndefined();
   });
 });
