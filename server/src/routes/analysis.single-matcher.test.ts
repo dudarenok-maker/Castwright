@@ -1037,10 +1037,12 @@ describe('#4031 main job: resume', () => {
     const d = readCache(b.manuscriptId)?.matchPlan?.decisions ?? {};
     return Object.fromEntries(Object.entries(d).map(([k, v]) => [k, { ...v }]));
   };
-  /* Stop the job the way a user Stop does, in the first Phase-0 call (one-shot, like F14's hook). */
+  /* Stop the job the way a user Stop does, in Phase 0a: chapter 1 completes (its cast is cached),
+     the first later chapter aborts the job, and every later call only throws. */
   const abortPhase0 = (job: AnalysisJob): void => {
     let stopped = false;
-    setPhase0Hook(async () => {
+    setPhase0Hook(async (chapterId) => {
+      if (chapterId === 1) return;
       if (!stopped) {
         stopped = true;
         job.controller.abort();
@@ -1095,8 +1097,25 @@ describe('#4031 main job: resume', () => {
     const b = seed(PRIORS(), undefined, BODY18);
     await run(b.manuscriptId, b.bookDir, 'main', FRESH, { onJob: abortPhase0 });
     setPhase0Hook(undefined);
-    expect(readCache(b.manuscriptId)?.stage1).toBeUndefined();
+    const stopped = readCache(b.manuscriptId)!;
+    expect(stopped.stage1).toBeUndefined();
+    /* The aborted chapters carry the empty failed marker, not a cast. */
+    expect(
+      Object.entries(stopped.chapterCast ?? {})
+        .filter(([, c]) => c.length > 0)
+        .map(([k]) => k),
+    ).toEqual(['1']);
+    /* Phase 0a writes no cast.json in the main job: no raw-id row on disk. */
+    expect(ids(readCast(b.bookDir))).not.toContain(FRESH_ID);
+    expect(ids(readCast(b.bookDir))).not.toContain('the-jogger');
+    const phase0Chapters: number[] = [];
+    setPhase0Hook((id) => {
+      phase0Chapters.push(id);
+    });
     const resumed = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    setPhase0Hook(undefined);
+    /* The resume replays chapter 1 from the cache and runs only the rest. */
+    expect(phase0Chapters.sort()).toEqual([2, 3]);
     expect(resumed.some((e) => e.kind === 'result')).toBe(true);
     expect(shape(b)).toEqual(shape(straight));
     expect(decisionsOf(b)).toEqual(decisionsOf(straight));
@@ -1157,10 +1176,9 @@ describe('#4031 main job: resume', () => {
     await stop1(b);
     const plan = readCache(b.manuscriptId)?.matchPlan;
     expect(plan).toBeDefined();
+    /* Unreachable in production (a dropped plan keeps its ledger nowhere); the invariant is only
+       that a plan is made and saved, and the first run's row is not copied under a minted id. */
     expect(plan!.decisions[FRESH_ID]).toMatchObject({ kind: 'join', priorId: PRIOR_ID });
-    /* The first run's snapshot row is on disk, so the new plan meets it as a prior row of the
-       same id: a join onto itself, never a second copy under a minted id. */
-    expect(plan!.decisions['the-jogger']).toMatchObject({ kind: 'join', priorId: 'the-jogger' });
     expect(JSON.stringify(readCast(b.bookDir))).not.toContain('the-jogger-n');
   });
 
@@ -1204,6 +1222,26 @@ describe('#4031 main job: resume', () => {
     await stop1(b, two);
     expect(readSuggestions(b.bookDir).filter((s) => s.origin === 'plan')).toHaveLength(2);
     expect(readCache(b.manuscriptId)?.runAddedPairs).toHaveLength(2);
+    /* A run-added pair whose ids are both in the fresh roster survives the drift path's dedup
+       prune (`reconcileDedupSuggestions` against characters0), so only the explicit removal
+       can take it out. */
+    const sugPath = castMergeSuggestionsJsonPath(b.bookDir);
+    const stored = JSON.parse(readFileSync(sugPath, 'utf8')) as { suggestions: Row[] };
+    stored.suggestions.push({
+      ...stored.suggestions[0],
+      sourceId: FRESH_ID,
+      targetId: 'narrator',
+      a: 'narrator',
+      b: FRESH_ID,
+      newRow: FRESH_ID,
+      candidate: 'narrator',
+    });
+    writeFileSync(sugPath, JSON.stringify(stored));
+    const cached = readCache(b.manuscriptId)!;
+    await saveAnalysisCache(b.manuscriptId, {
+      ...cached,
+      runAddedPairs: [...(cached.runAddedPairs ?? []), ['narrator', FRESH_ID]],
+    } as never);
     /* Resume with a Phase 1 whose speaker is unknown for every sentence: attribution drift. */
     const rec = getManuscript(b.manuscriptId)!;
     const ghost: Analyzer = {
@@ -1212,7 +1250,8 @@ describe('#4031 main job: resume', () => {
         sentences: Array.from({ length: 120 }, (_, k) => ({
           id: chapterId * 1000 + k + 1,
           chapterId,
-          characterId: 'ghost',
+          /* A few real lines keep the fresh row in the roster the drift path prunes against. */
+          characterId: k < 10 ? FRESH_ID : 'ghost',
           confidence: 0.9,
           text: `Are you sure this will work (${k})`,
         })),
@@ -1227,5 +1266,6 @@ describe('#4031 main job: resume', () => {
     } as never);
     expect(errCode(events)).toBe('attribution_drift');
     expect(readSuggestions(b.bookDir).filter((s) => s.origin === 'plan')).toEqual([]);
+    expect(readSuggestions(b.bookDir).some((s) => s.a === 'narrator' && s.b === FRESH_ID)).toBe(false);
   });
 });
