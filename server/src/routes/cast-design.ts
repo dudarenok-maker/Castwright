@@ -681,7 +681,7 @@ async function runDesignJob(
                override declined this row under the book's lock. */
             if (keptOwnSlot) {
               job.skipped += 1;
-              broadcast(job, { type: 'character_skipped', characterId, name: character.name ?? characterId });
+              broadcast(job, { type: 'character_skipped', characterId });
               break;
             }
             /* Series-wide veto, mirroring the variant branch's own clone-skip
@@ -732,7 +732,7 @@ async function runDesignJob(
              landing: the same freshness skip as above, not a failure. */
           if (e instanceof DesignSlotTakenError) {
             job.skipped += 1;
-            broadcast(job, { type: 'character_skipped', characterId, name: character.name ?? characterId });
+            broadcast(job, { type: 'character_skipped', characterId });
             break;
           }
           const message = (e as Error).message || 'Voice design failed.';

@@ -2320,7 +2320,9 @@ describe('cast-design — bulk design never overwrites a voice picked mid-synthe
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
-    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'aria')).toBe(true);
+    const skip = events.find((e) => e.type === 'character_skipped' && e.characterId === 'aria');
+    expect(skip).toBeDefined();
+    expect(skip).not.toHaveProperty('name');
     expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(false);
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
     /* The landing itself declined: the staged render was discarded, never moved onto the key. */
@@ -2340,7 +2342,9 @@ describe('cast-design — bulk design never overwrites a voice picked mid-synthe
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
-    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'aria')).toBe(true);
+    const skip = events.find((e) => e.type === 'character_skipped' && e.characterId === 'aria');
+    expect(skip).toBeDefined();
+    expect(skip).not.toHaveProperty('name');
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
   });
 });
