@@ -327,6 +327,18 @@ describe('the separation: after a decline the row is on a voice no other book ho
     expect(readRows('Book One')[0].overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
   });
 
+  it('#4067: a library-assigned slot keeps its name on the fork (its key is the libraryUuid, not the row\'s uuid)', async () => {
+    seedShared({
+      overrideTtsVoices: { qwen: { name: 'qwen-u_shared', libraryUuid: 'lib_1', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+    });
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const row = readRows('Book Two')[0];
+    expect(row.voiceUuid).not.toBe('u_shared');
+    expect(row.overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+    expect(row.overrideTtsVoices.qwen.libraryUuid).toBe('lib_1');
+    expect(row.overrideTtsVoices.qwen.variants).toBeUndefined();
+  });
+
   it('a branch: two rows linking to Two both move, and what links to either', async () => {
     seedShared();
     book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
