@@ -285,6 +285,40 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
     expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true, keepKokoro: false });
   }, 10_000);
 
+  it('keeps Kokoro when a sibling generation is already in flight (one POST per chapter — Kokoro may be mid-line)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const okResult = {
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 1,
+      segments: [{ characterId: 'wren', sentenceIds: [1] }],
+    };
+    synthesiseImpl = async () => {
+      await gate;
+      return okResult;
+    };
+    /* First chapter POST: parks inside synth, so its job stays registered. */
+    const first = runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+    try {
+      await vi.waitFor(() => expect(synthCalled).toBe(true));
+      expect(reconcileCalls[0]![0]).toMatchObject({ keepKokoro: false }); // nothing else was running
+      reconcileCalls.length = 0;
+
+      /* Sibling POST arrives mid-render. */
+      synthesiseImpl = async () => okResult;
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true });
+      expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+    } finally {
+      release();
+      await first;
+    }
+  }, 15_000);
+
   it('a Standard (0.6B) run never touches Kokoro', async () => {
     await runStream({ modelKey: 'qwen3-tts-0.6b' });
     expect(reconcileCalls.length).toBeGreaterThan(0);

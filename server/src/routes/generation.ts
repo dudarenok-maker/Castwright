@@ -1165,9 +1165,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
   /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
      use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
-     vice-versa. Fires ONCE here, before any chapter synth — never per chapter —
-     so the in-use tier stays warm across the book (load price paid on chapter 1
-     only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
+     vice-versa. Runs before this POST's chapter synth (the queue dispatcher
+     sends one POST per chapter, so it re-runs per chapter; the tier target is
+     the same each time, so the in-use tier stays warm across the book — load
+     price paid on chapter 1 only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
      against the run default with the SAME elevate-only precedence
      synthesise-chapter's routeFor uses, so a character whose stored tier is
      stale/lower than the run default can't make this precompute evict the tier
@@ -1176,10 +1177,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0) {
     /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
-       Kokoro here (owner decision); a run with no 1.7B is unchanged. The
-       post-score re-assert in triggerScoring runs mid-render and must not
-       unload a Kokoro a sibling chapter's fallback line may be using. */
-    await keepForRunStart(usedQwenTiers)
+       Kokoro here (owner decision); a run with no 1.7B is unchanged. This
+       POST has not registered its own job yet (registerJob is below), so
+       `activeGenerationBooks()` sees only OTHER jobs: the drop applies to the
+       first chapter of a run only. A later chapter's POST (one per chapter,
+       sibling chapters are live) and the post-score re-assert in
+       triggerScoring must not unload a Kokoro a sibling chapter's fallback
+       line may be using. */
+    await keepForRunStart(usedQwenTiers, activeGenerationBooks().length > 0)
       .then((target) => reconcileResidentQwenTiers(target))
       .catch((e) =>
       console.warn('[generation] tier reconcile skipped:', (e as Error).message),

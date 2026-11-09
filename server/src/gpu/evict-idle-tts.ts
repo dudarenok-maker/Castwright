@@ -107,14 +107,19 @@ function isGpuFamily(device: string | null | undefined): boolean {
     book with characters toggled to Quality (and a mixed-tier run) counts —
     not on the run's default model key. Kokoro fallback lines inside the run
     may load it again — accepted. Best-effort: an unreadable probe leaves
-    `keep` as it was. The post-score re-assert runs while chapters are in
-    flight and must never unload a model a sibling chapter's fallback line may
-    be using. */
+    `keep` as it was.
+    The queue dispatcher sends one POST per chapter, so this runs on EVERY
+    chapter's POST, and a sibling chapter's job may already be live (and its
+    Kokoro fallback line mid-synth — `KokoroEngine.unload()` takes no lock). So
+    it only applies to the first chapter of a run: with another generation in
+    flight (`anotherGenerationActive`) the drop is skipped, and the caller must
+    pass `true` whenever that is unknown (fail closed). */
 export async function keepForRunStart(
   keep: ResidentTtsKeep,
+  anotherGenerationActive: boolean,
   probeHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
 ): Promise<ResidentTtsKeep> {
-  if (!keep.keep17) return keep;
+  if (anotherGenerationActive || !keep.keep17) return keep;
   const health = await probeHealth().catch(() => null);
   if (health?.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) return { ...keep, keepKokoro: false };
   return keep;
