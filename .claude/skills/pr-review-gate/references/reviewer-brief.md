@@ -1090,6 +1090,20 @@ recite:
     (here: the in-flight design's key moves only with a separation of the row,
     and anything else discards the render).
 
+86. **An age guard on a file created by a copy, where the copy keeps its
+    source's mtime** — PR #4070 pass 2 (#4037): the startup sweep deleted
+    files older than an hour by `mtimeMs`, and the mint created its temp
+    copies, backups and copied variant families with `copyFile`/`copyFileSync`.
+    On Windows a copy keeps the source's last-write time (measured: a copy of
+    a 3-day-old file reads 4320 minutes old by `mtimeMs` and 0.0 by
+    `birthtimeMs`), so a file made a moment ago read old and the guard that was
+    meant to spare a second server mid-mint deleted it. The test planted its
+    "fresh" file with the current mtime, so it could not see this. Checkable:
+    for every age guard, find how the file it reads was created; if by a copy,
+    ask whether the creator stamps the time itself (`utimes`), and require a
+    test whose source file is old.  Fix at the creator, so every reader of the
+    mtime benefits, not in the one reader.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
