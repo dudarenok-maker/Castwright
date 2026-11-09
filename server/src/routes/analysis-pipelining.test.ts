@@ -384,7 +384,7 @@ vi.mock('../store/analysis-cache.js', async () => {
         stage1?: unknown;
         chapters?: Record<number, unknown>;
         fields?: Record<string, unknown>;
-        transform?: (c: Record<string, unknown>) => Record<string, unknown>;
+        transform?: (c: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>;
       },
     ) => {
       const existing = mem.get(id) as Record<string, unknown> | undefined;
@@ -399,7 +399,7 @@ vi.mock('../store/analysis-cache.js', async () => {
         ...(patch.chapters ? { chapters: { ...(existing?.chapters as object), ...patch.chapters } } : {}),
         ...patch.fields,
       };
-      const out = patch.transform ? patch.transform(next) : next;
+      const out = patch.transform ? await patch.transform(next) : next;
       mem.set(id, out);
       return out;
     },

@@ -13,7 +13,7 @@
    earlier call last. */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,6 +22,12 @@ let writeNo = 0;
 let verifyDelays: number[] = [];
 let verifyNo = 0;
 let verifiedDir = '/book';
+const tmpDirs: string[] = [];
+const tmpBook = (): string => {
+  const dir = mkdtempSync(join(tmpdir(), 'edits-roll-'));
+  tmpDirs.push(dir);
+  return dir;
+};
 
 vi.mock('./book-dir-guard.js', () => ({
   withVerifiedBookDir: async (
@@ -54,6 +60,7 @@ afterEach(() => {
   verifyNo = 0;
   verifyDelays = [];
   verifiedDir = '/book';
+  for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 const opts = { manuscriptId: 'm', candidateBookDir: '/book', mode: 'drop' as const };
@@ -120,7 +127,7 @@ describe('rollManuscriptEdits book lock (#3784)', () => {
 describe('rollManuscriptEdits re-reads under the book lock (#4031)', () => {
   type S = { chapterId: number; characterId: string };
   const seedEdits = (sentences: S[]): string => {
-    const dir = mkdtempSync(join(tmpdir(), 'edits-roll-'));
+    const dir = tmpBook();
     mkdirSync(join(dir, '.audiobook'), { recursive: true });
     writeFileSync(join(dir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({ sentences }));
     return dir;
@@ -142,13 +149,13 @@ describe('rollManuscriptEdits re-reads under the book lock (#4031)', () => {
   });
 
   it('with no file yet a roll writes just its own chapters', async () => {
-    verifiedDir = mkdtempSync(join(tmpdir(), 'edits-roll-'));
+    verifiedDir = tmpBook();
     await rollManuscriptEdits(opts, () => [s(1, 'the-jogger')], 'book-4031-c', toOlga);
     expect(landed).toEqual([[s(1, 'olga')]]);
   });
 
   it('an unreadable file fails the roll instead of being written over as empty', async () => {
-    verifiedDir = mkdtempSync(join(tmpdir(), 'edits-roll-'));
+    verifiedDir = tmpBook();
     mkdirSync(join(verifiedDir, '.audiobook'), { recursive: true });
     writeFileSync(join(verifiedDir, '.audiobook', 'manuscript-edits.json'), '{ not json');
     await expect(
@@ -161,6 +168,24 @@ describe('rollManuscriptEdits re-reads under the book lock (#4031)', () => {
     verifiedDir = seedEdits([s(1, 'olga')]);
     await rollManuscriptEdits(opts, () => [s(3, 'x')], 'book-4031-f', toOlga, () => [s(1, 'the-jogger'), s(2, 'the-jogger')]);
     expect(landed).toEqual([[s(1, 'olga'), s(2, 'olga'), s(3, 'x')]]);
+  });
+
+  it('an own chapter whose new take is empty clears the sentences the file has for it', async () => {
+    verifiedDir = seedEdits([s(1, 'olga'), s(2, 'olga'), s(3, 'olga')]);
+    await rollManuscriptEdits(opts, () => ({ sentences: [], chapterIds: [2] }), 'book-4031-g', toOlga);
+    expect(landed).toEqual([[s(1, 'olga'), s(3, 'olga')]]);
+  });
+
+  it('a dropped (excluded) chapter leaves the file, and is not seeded back from the fallback', async () => {
+    verifiedDir = seedEdits([s(1, 'olga'), s(2, 'olga'), s(3, 'olga')]);
+    await rollManuscriptEdits(
+      opts,
+      () => ({ sentences: [s(1, 'x')], chapterIds: [1], dropChapterIds: [3] }),
+      'book-4031-h',
+      toOlga,
+      () => [s(3, 'x'), s(4, 'x')],
+    );
+    expect(landed).toEqual([[s(1, 'x'), s(2, 'olga'), s(4, 'x')]]);
   });
 
   it('without resolveIds a roll still writes its snapshot wholesale (the subset job)', async () => {

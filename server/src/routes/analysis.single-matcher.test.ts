@@ -60,7 +60,7 @@ import request from 'supertest';
 import { ANALYSIS_CACHE_VERSION, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { castMergeSuggestionsJsonPath } from '../workspace/paths.js';
-import { linkSeriesReuseOnNewRows, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
+import { linkSeriesReuseOnNewRows, resolveCurrentIds, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -88,6 +88,21 @@ vi.mock('../workspace/edits-roll.js', async (importOriginal) => {
       const out = await actual.rollManuscriptEdits(...a);
       rollSpy.after?.(planned);
       return out;
+    },
+  };
+});
+/* Passthrough; a test may run something between the job calling a cache patch and the patch
+   joining the cache op chain (`beforePatch`). */
+const cacheSpy = vi.hoisted(() => ({
+  beforePatch: undefined as undefined | ((patch: { chapters?: Record<number, unknown> }) => Promise<void>),
+}));
+vi.mock('../store/analysis-cache.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
+  return {
+    ...actual,
+    mutateAnalysisCache: async (...a: Parameters<typeof actual.mutateAnalysisCache>) => {
+      await cacheSpy.beforePatch?.(a[1]);
+      return actual.mutateAnalysisCache(...a);
     },
   };
 });
@@ -1317,6 +1332,7 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     resetHarness();
     rollSpy.isPlanned = undefined;
     rollSpy.after = undefined;
+    cacheSpy.beforePatch = undefined;
     if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
     else process.env.STAGE2_COVERAGE_RETRIES = orig;
     for (const b of books.splice(0)) await cleanupBook(b);
@@ -1372,21 +1388,76 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
 
   it('item 8: a Phase-1 save after a failure keeps pendingAttributionChapterIds and takesPersisted', async () => {
     const b = seedWren();
-    /* An earlier stopped run left chapter 3's take pending and unpersisted. */
+    /* An earlier stopped run left chapter 3's take (the prior Wren's) pending and unpersisted. */
     await saveAnalysisCache(b.manuscriptId, {
       version: ANALYSIS_CACHE_VERSION,
-      chapters: { 3: [{ id: 301, chapterId: 3, characterId: 'narrator', confidence: 0.9, text: 'Old take.' }] },
+      chapters: { 3: [{ id: 301, chapterId: 3, characterId: PRIOR_ID, confidence: 0.9, text: 'Old take.' }] },
       pendingAttributionChapterIds: [3],
       takesPersisted: false,
     } as never);
+    /* The user merges that Wren into olga from inside the first failing chapter's call, and it
+       finishes before the chapter throws; every chapter then fails. */
+    const app = mkApp();
+    let merge: Promise<{ status: number }> | undefined;
     setPhase1Hook(async () => {
+      merge ??= request(app)
+        .post(`/api/books/${b.bookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId: PRIOR_ID, targetId: 'olga' })
+        .then((r) => r);
+      await merge;
       throw new Error('boom: the model gave up on this chapter');
     });
     await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect((await merge)?.status).toBe(200);
     const cache = readCache(b.manuscriptId)!;
     expect(cache.failedChapterIds?.length).toBeGreaterThan(0); // a failure save ran
     expect(cache.pendingAttributionChapterIds).toEqual([3]);
     expect(cache.takesPersisted).toBe(false);
-    expect(cache.chapters[3]).toHaveLength(1); // the pending take is kept, never deleted
+    /* The pending take is kept, never deleted, and the failure save did not write it back
+       over the merge's remap. */
+    expect(cache.chapters[3].map((s) => s.characterId)).toEqual(['olga']);
+  });
+
+  it('a take is resolved inside the cache op: a merge that lands before the op still wins', async () => {
+    const b = seedWren();
+    const app = mkApp();
+    let merge: Promise<{ status: number }> | undefined;
+    let chapterId: number | undefined;
+    /* The window: after the job has read the history for the take and before its patch joins the
+       cache op chain, the merge's history write and cache op both land. */
+    cacheSpy.beforePatch = async (patch) => {
+      if (merge || !patch.chapters) return;
+      chapterId = Number(Object.keys(patch.chapters)[0]);
+      merge = request(app)
+        .post(`/api/books/${b.bookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId: PRIOR_ID, targetId: 'olga' })
+        .then((r) => r);
+      await merge;
+    };
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    expect((await merge)?.status).toBe(200);
+    expect(chapterId).toBeDefined();
+    expect(readCache(b.manuscriptId)!.chapters[chapterId!].map((s) => s.characterId)).toEqual(['olga']);
+  });
+
+  describe('resolveCurrentIds', () => {
+    const mkDir = (cast: Row[], supersededBy: Record<string, string>): string => {
+      const dir = seed([]).bookDir;
+      writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: cast }));
+      writeFileSync(join(dir, '.audiobook', 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy }));
+      return dir;
+    };
+    const take = (characterId: string) => [{ id: 1, chapterId: 1, characterId, confidence: 0.9, text: 't' }];
+    it('a live id that is also a stale history key stays itself; a retired id follows to its live survivor', async () => {
+      const dir = mkDir([{ id: 'a' }, { id: 'b' }], { a: 'b', x: 'b' });
+      expect((await resolveCurrentIds(dir, {}, take('a')))[0].characterId).toBe('a');
+      expect((await resolveCurrentIds(dir, {}, take('x')))[0].characterId).toBe('b');
+    });
+    it('a history target that is no longer live resolves nothing', async () => {
+      const dir = mkDir([{ id: 'b' }], { x: 'gone' });
+      expect((await resolveCurrentIds(dir, {}, take('x')))[0].characterId).toBe('x');
+    });
   });
 });
