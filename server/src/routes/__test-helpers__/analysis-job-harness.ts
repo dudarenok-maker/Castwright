@@ -18,6 +18,12 @@
         selection stored on `globalThis[PHASE1_GLOBAL]` for `phase: 'phase1'`
         and answers `isPerPhaseModelSelectionActive` from `globalThis[PIPELINED_GLOBAL]`.
         These are the same test-only globals #4023 used; analysis.ts needs no seam.
+        The mock's key strings ('__single_matcher_phase1', '__single_matcher_pipelined')
+        must match PHASE1_GLOBAL / PIPELINED_GLOBAL below exactly: a typo falls
+        through silently to the real analyzer. (`vi.mock` factories are hoisted
+        above imports, so they cannot reference the constants.)
+        The `vi.hoisted` block cannot use `import`s (they are not initialised yet),
+        so it fetches fs/os/path with `process.getBuiltinModule`.
 
    Also mock `./ollama-health.js` and `../gpu/analyzer-device-state.js` as the
    sibling route tests do, and run with OLLAMA_URL=http://127.0.0.1:1. See
@@ -152,7 +158,8 @@ export const sel = (analyzer: Analyzer, model: string): AnalyzerSelection => ({
 
 /** A Phase-1 hook that aborts the job on its first call (the way a user Stop
     does) and throws the AbortError the pipeline expects. The job comes from
-    `getLastJob()`. */
+    `getLastJob()`. Install it with `setPhase1Hook`: it shares that one slot with
+    `mergeMidRun(..., 'phase1')`, and the later call overwrites the earlier one. */
 export const abortAtFirstPhase1 = (): ((chapterId: number) => Promise<void>) => {
   const onCall = async (): Promise<void> => {
     getLastJob()?.controller.abort();
@@ -170,6 +177,11 @@ export const setPipelined = (on: boolean): void => {
 
 /** Reset every module-level knob and global; call from `afterEach`. */
 export function resetHarness(): void {
+  /* clearMocks is false in server/vitest.config.ts, so an armed-but-unfired
+     `failNextRetirement` / `blipRemapRead` would leak into the next test.
+     `mockReset` returns each `vi.fn(actual)` to its original implementation. */
+  if (vi.isMockFunction(historyStore.retireCharacterId)) vi.mocked(historyStore.retireCharacterId).mockReset();
+  if (vi.isMockFunction(stateIo.readJson)) vi.mocked(stateIo.readJson).mockReset();
   const g = globalThis as Record<string, unknown>;
   delete g[PHASE1_GLOBAL];
   delete g[PIPELINED_GLOBAL];
@@ -434,7 +446,13 @@ export const routeVoice = (app: Express, bookId: string, id: string, name = `rou
 
 /** Install a one-shot hook that merges `sourceId` into `targetId` through the
     merge route the first time the run reaches `phase`. `done` resolves with the
-    route's response once it has been answered (null if the phase never ran). */
+    route's response once it has been answered; it never resolves if the run never
+    reaches `phase`, so await it only after `run` returned having reached it.
+    Shares the hook slot of `setPhase0Hook` / `setPhase1Hook` (phase0 or phase1
+    respectively, also used by `abortAtFirstPhase1`): the later call overwrites
+    the earlier one. The default `'phase1'` runs after the first snapshot has
+    dropped prior-only rows from cast.json, so a source that exists only in the
+    prior cast answers 404 there; use `'phase0'` for those. */
 export function mergeMidRun(
   app: Express,
   bookId: string,
@@ -484,7 +502,10 @@ export function failNextRetirement(): { calls: () => number } {
     after `readerFn` must be `runMainAnalyzerJob` / `runSubsetAnalyzerJob`, so the
     stores' and routes' own reads are untouched. #4023 named its reader
     `loadIdHistoryForRemap`; that function does not exist on this branch, so the
-    default is the store reader the jobs call today. */
+    default is the store reader the jobs call today. The rule: the stack frame
+    right after `readerFn` must be a job function; a read reached through an
+    intermediate helper never matches. When no frame matches, NOTHING is blipped
+    and nothing fails, so callers MUST assert `count()` afterwards. */
 export const blipRemapRead = async (
   readerFn = 'loadCastIdHistoryWithStatus',
 ): Promise<{ count: () => number; restore: () => void }> => {

@@ -22,6 +22,7 @@ import {
   blipRemapRead,
   cleanupBook,
   failNextRetirement,
+  getLastJob,
   linesById,
   mergeMidRun,
   mkApp,
@@ -40,7 +41,11 @@ import {
   setPhase1Hook,
   setPipelined,
   type HarnessBook,
+  type Row,
 } from './__test-helpers__/analysis-job-harness.js';
+import * as historyStore from '../store/cast-id-history.js';
+import * as stateIo from '../workspace/state-io.js';
+import { saveAnalysisCache } from '../store/analysis-cache.js';
 
 /* Passthrough by default; the harness installs one-shot failures on top. */
 vi.mock('../workspace/state-io.js', async (importOriginal) => {
@@ -118,15 +123,35 @@ describe('#4031 analysis-job harness', () => {
     expect(readCache(b.manuscriptId)).not.toBeNull();
   });
 
-  it('setPipelined and setPhase0Hook: the hook runs in Phase 0 and the flag is read by the mock', async () => {
+  it('setPhase0Hook: the hook runs in Phase 0', async () => {
     const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
     const seen: number[] = [];
     setPhase0Hook((id) => {
       seen.push(id);
     });
-    setPipelined(false);
     await run(b.manuscriptId, b.bookDir, 'main');
     expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('setPipelined: true takes the pipelined path (analysis.ts pipelinedPerPhase), false does not', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const pipelinedLog = (l: typeof log): boolean =>
+      l.mock.calls.some((c: unknown[]) => String(c[0]).includes('pipelined phase0='));
+    try {
+      const off = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+      setPipelined(false);
+      await run(off.manuscriptId, off.bookDir, 'main');
+      expect(pipelinedLog(log)).toBe(false);
+
+      log.mockClear();
+      const on = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+      setPipelined(true);
+      const events = await run(on.manuscriptId, on.bookDir, 'main');
+      expect(pipelinedLog(log)).toBe(true);
+      expect(events.some((e) => e.kind === 'result')).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('putCast: a whole-slice cast PUT lands on disk', async () => {
@@ -144,13 +169,25 @@ describe('#4031 analysis-job harness', () => {
     expect((row?.overrideTtsVoices as { qwen?: { name: string } }).qwen?.name).toBe(`route-voice-${PRIOR_ID}`);
   });
 
-  it('mergeMidRun: a merge fired from the Phase-1 hook is answered while the run is in flight', async () => {
+  it('mergeMidRun: a merge fired from the Phase-0 hook is answered while the run is in flight', async () => {
     const b = seed([{ ...NARR }, { ...PRIOR_WREN }, { id: 'w3', name: 'Wrenna', role: 'minor', color: '#222222' }]);
     const m = mergeMidRun(mkApp(), b.bookId, 'w3', PRIOR_ID, 'phase0');
     await run(b.manuscriptId, b.bookDir, 'main');
     const res = await m.done;
     expect(res?.status).toBe(200);
     expect(res?.body.sourceId).toBe('w3');
+  });
+
+  it('mergeMidRun: the default Phase-1 branch merges a source that still exists then, and 404s a prior-only one', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN }, { id: 'w3', name: 'Wrenna', role: 'minor', color: '#222222' }]);
+    const live = mergeMidRun(mkApp(), b.bookId, PRIOR_ID, 'narrator');
+    await run(b.manuscriptId, b.bookDir, 'main');
+    expect((await live.done)?.status).toBe(200);
+
+    const c = seed([{ ...NARR }, { ...PRIOR_WREN }, { id: 'w3', name: 'Wrenna', role: 'minor', color: '#222222' }]);
+    const gone = mergeMidRun(mkApp(), c.bookId, 'w3', PRIOR_ID);
+    await run(c.manuscriptId, c.bookDir, 'main');
+    expect((await gone.done)?.status).toBe(404);
   });
 
   it('failNextRetirement: the next retirement write throws once', async () => {
@@ -173,16 +210,51 @@ describe('#4031 analysis-job harness', () => {
     }
   });
 
-  it('abortAtFirstPhase1 + runSubsetRetry: a stopped run leaves a cache the retry resumes', async () => {
+  it('resetHarness: an armed, unfired failNextRetirement does not leak into the next test', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+    const fault = failNextRetirement();
+    resetHarness();
+    const err = await historyStore.retireCharacterId(b.bookDir, 'nope-a', 'nope-b', 'user').catch((e: Error) => e);
+    expect(String((err as Error)?.message ?? '')).not.toContain('simulated');
+    expect(fault.calls()).toBe(0);
+  });
+
+  it('resetHarness: an armed blipRemapRead no longer replaces readJson afterwards', async () => {
+    const blip = await blipRemapRead();
+    const armed = vi.mocked(stateIo.readJson).getMockImplementation();
+    resetHarness();
+    expect(vi.mocked(stateIo.readJson).getMockImplementation()).not.toBe(armed);
+    expect(blip.count()).toBe(0);
+  });
+
+  it('abortAtFirstPhase1 stops the run; runSubsetRetry resumes the cache it left, without re-seeding', async () => {
     const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
     setPhase1Hook(abortAtFirstPhase1());
-    await run(b.manuscriptId, b.bookDir, 'main');
+    const stopped = await run(b.manuscriptId, b.bookDir, 'main');
     setPhase1Hook(undefined);
-    const afterStop = readCache(b.manuscriptId);
-    expect(afterStop?.stage1).toBeDefined();
-    const events = await runSubsetRetry(b);
-    expect(events.length).toBeGreaterThan(0);
-    expect(readCache(b.manuscriptId)?.stage1).toBeDefined();
+    expect(getLastJob()!.controller.signal.aborted).toBe(true);
+    expect(stopped.some((e) => e.kind === 'result')).toBe(false);
+
+    const cache = readCache(b.manuscriptId)!;
+    expect(cache.stage1).toBeDefined();
+    /* A cached take for a chapter the retry does not run: a re-seed
+       (cache := { chapters: {}, stage1 }) would erase it. */
+    await saveAnalysisCache(b.manuscriptId, {
+      ...cache,
+      chapters: {
+        ...cache.chapters,
+        99: [{ id: 9901, chapterId: 99, characterId: FRESH_ID, confidence: 0.9, text: 'CACHED-SENTINEL' }],
+      },
+    } as never);
+
+    const phase1Chapters: number[] = [];
+    setPhase1Hook((id) => {
+      phase1Chapters.push(id);
+    });
+    const retry = await runSubsetRetry(b);
+    expect(phase1Chapters.length).toBeGreaterThan(0); /* the retry did run */
+    expect(retry.length).toBeGreaterThan(0);
+    expect(JSON.stringify(readCache(b.manuscriptId)!.chapters[99])).toContain('CACHED-SENTINEL');
   });
 
   it('recordCastUpdateFrames: every cast-update frame is captured as a snapshot', async () => {
@@ -197,5 +269,20 @@ describe('#4031 analysis-job harness', () => {
     expect(sent.length).toBeGreaterThan(0);
     expect(rec.frames).toHaveLength(sent.length);
     expect(rec.frames[0].length).toBeGreaterThan(0);
+  });
+
+  it('recordCastUpdateFrames: a captured frame is a deep copy taken at send time', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+    let rec!: ReturnType<typeof recordCastUpdateFrames>;
+    const events = await run(b.manuscriptId, b.bookDir, 'main', undefined, {
+      onJob: (j) => {
+        rec = recordCastUpdateFrames(j);
+      },
+    });
+    const sentFrame = events.find((e) => e.kind === 'cast-update') as unknown as { characters: Row[] };
+    const before = JSON.stringify(rec.frames[0]);
+    for (const c of sentFrame.characters) c.name = 'MUTATED AFTER SEND';
+    expect(JSON.stringify(rec.frames[0])).toBe(before);
+    expect(before).not.toContain('MUTATED AFTER SEND');
   });
 });
