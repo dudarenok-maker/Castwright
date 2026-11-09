@@ -59,6 +59,8 @@ const SERIES = 'The Hollow Tide';
 
 let workspaceRoot: string;
 let ensure: typeof import('./qwen-voice.js').ensureCharacterVoiceUuid;
+let persistVariant: typeof import('./qwen-voice.js').persistEmotionVariant;
+let dropStale: typeof import('../workspace/variant-base-rev.js').dropStaleVariants;
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 const SOLO_SERIES = 'Standalones';
@@ -136,6 +138,7 @@ const plantAngry = () => {
   plant('qwen-v_wren__angry.json', 'ANGRY-JSON');
 };
 const mint = () => ensure(bookDir('Book Two'), 'wren', { author: AUTHOR, series: SERIES });
+const persistSad = () => persistVariant(bookDir('Book One'), 'wren', 'sad', 'qwen-v_wren__sad', { author: AUTHOR, series: SERIES });
 const legacyFiles = [
   'qwen-v_wren.pt',
   'qwen-v_wren.json',
@@ -148,7 +151,8 @@ const legacyFiles = [
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'castwright-mint-variants-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  ({ ensureCharacterVoiceUuid: ensure } = await import('./qwen-voice.js'));
+  ({ ensureCharacterVoiceUuid: ensure, persistEmotionVariant: persistVariant } = await import('./qwen-voice.js'));
+  ({ dropStaleVariants: dropStale } = await import('../workspace/variant-base-rev.js'));
 });
 beforeEach(() => {
   hook.pre = null;
@@ -190,6 +194,198 @@ describe('series mint: the re-key leaves foreign and already-keyed slots alone (
     expect(uuid).toBeTruthy();
     expect(rowOf('Book One').voiceUuid).toBe('u_own');
     expect(rowOf('Book One').overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
+  });
+});
+
+describe('series mint: a variant landing between the up-front copy and the walk (#4037)', () => {
+  it('a variant first designed in the window gets its file at the new key (P1-2)', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.post = async (dest) => {
+      /* the up-front copy's last member: sad was not there when it listed the key */
+      if (!fired && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__sad.pt', 'SAD-PT');
+        plant('qwen-v_wren__sad.json', 'SAD-JSON');
+        expect(await persistSad()).toBe('applied');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book One').voiceUuid).toBe(uuid);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-PT');
+    expect(read(`qwen-${uuid}__sad.json`)).toBe('SAD-JSON');
+    expect(read('qwen-v_wren__sad.pt')).toBe('SAD-PT');
+  });
+
+  it('a variant REdesigned in the window reaches the renamed slot, and stays current (P2-1, #4040)', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, sad: { name: 'qwen-v_wren__sad' } }));
+    plantBase();
+    plant('qwen-v_wren.json', JSON.stringify({ rev: 'r1' }));
+    plantAngry();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plant('qwen-v_wren__sad.json', JSON.stringify({ baseRev: 'r1', take: 'old' }));
+    let fired = false;
+    hook.post = async (dest) => {
+      /* the old sad family is copied: the user's sad redesign on Book One lands, then persists */
+      if (!fired && /qwen-[^\\/]+__sad\.json$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+        plant('qwen-v_wren__sad.json', JSON.stringify({ baseRev: 'r1', take: 'new' }));
+        expect(await persistSad()).toBe('applied');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-NEW');
+    expect(JSON.parse(read(`qwen-${uuid}__sad.json`)).take).toBe('new');
+    /* the refreshed json still records the base the copied base carries: current */
+    const [kept] = await dropStale([rowOf('Book One')]);
+    expect(kept.overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+  });
+
+  it('the designing row stamped outside the walk (stampOwnRow) gets the redesigned variant too', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book One', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })], { confirmed: false });
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })], { confirmed: false });
+    plantBase();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__sad\.pt$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-NEW');
+  });
+
+  it('a landing that completes after its .pt was copied leaves no half family and no EEXIST (Q1)', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    plantBase();
+    plantAngry();
+    plant('qwen-v_wren__sad.pt', 'SAD-PT'); // the landing has moved its .pt, not yet its .json
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__sad\.pt$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__sad.json', 'SAD-JSON');
+        expect(await persistSad()).toBe('applied');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book One').voiceUuid).toBe(uuid);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-PT');
+    expect(read(`qwen-${uuid}__sad.json`)).toBe('SAD-JSON');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
+  });
+
+  it('a legacy variant absent for one step never removes the copy a stamped book names (P3-1)', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    writeBook('Book Three', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })], { confirmed: false });
+    plantBase();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plant('qwen-v_wren__sad.json', 'SAD-OLD-J');
+    let phase = 0;
+    castWrite.onCastWrite = (p) => {
+      if (phase === 0 && p.includes('Book One')) {
+        phase = 1;
+        rmSync(file('qwen-v_wren__sad.pt')); // a writer that replaces the file by rm, then rename
+      } else if (phase === 1 && p.includes('Book Two')) {
+        phase = 2;
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      }
+    };
+    const uuid = await mint();
+    expect(phase).toBe(2);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-OLD');
+  });
+
+  it('a new-key variant file the mint did not write is never overwritten', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    let fired = false;
+    castWrite.onCastWrite = (p) => {
+      if (!fired && p.includes('Book One')) {
+        fired = true;
+        /* Book One, now on the new key, designs its own sad there; and another book
+           still on the legacy key redesigns the legacy sad */
+        const uuid = /qwen-([^\\/"]+)__sad/.exec(readFileSync(p, 'utf8'))![1];
+        plant(`qwen-${uuid}__sad.pt`, 'SAD-OWN');
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-OWN');
+    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+  });
+
+  it('a failed refresh leaves the earlier copy whole, never a mixed family', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plant('qwen-v_wren__sad.json', 'SAD-OLD-J');
+    castWrite.onCastWrite = (p) => {
+      if (p.includes('Book One') && !syncCopyFails.on) {
+        /* Book One is stamped; the legacy sad is redesigned before Book Two's step */
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+        plant('qwen-v_wren__sad.json', 'SAD-NEW-J');
+        syncCopyFails.on = /__sad\.json/;
+      }
+    };
+    await expect(mint()).rejects.toThrow(/EBUSY/);
+    const uuid = rowOf('Book One').voiceUuid;
+    expect(uuid).toBeTruthy();
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-OLD');
+    expect(read(`qwen-${uuid}__sad.json`)).toBe('SAD-OLD-J');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
+  });
+
+  it('a failing in-lock copy with nothing stamped removes every copy, the in-lock ones too', async () => {
+    /* sad and excited land after the up-front copy; in Book One's step, sad's copy
+       succeeds and excited's fails, before any row is stamped. */
+    seed(
+      withVariants({
+        angry: { name: 'qwen-v_wren__angry' },
+        sad: { name: 'qwen-v_wren__sad' },
+        excited: { name: 'qwen-v_wren__excited' },
+      }),
+    );
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        for (const e of ['sad', 'excited']) {
+          plant(`qwen-v_wren__${e}.pt`, `${e}-PT`);
+          plant(`qwen-v_wren__${e}.json`, `${e}-JSON`);
+        }
+      }
+    };
+    syncCopyFails.on = /__excited\.json/;
+    await expect(mint()).rejects.toThrow(/EBUSY/);
+    expect(fired).toBe(true);
+    const extra = ['sad', 'excited'].flatMap((e) => [`qwen-v_wren__${e}.pt`, `qwen-v_wren__${e}.json`]);
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles, ...extra].sort());
+    expect(rowOf('Book One').voiceUuid).toBeUndefined();
+    expect(rowOf('Book Two').voiceUuid).toBeUndefined();
   });
 });
 
