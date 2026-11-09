@@ -275,15 +275,17 @@ describe('the release is state-driven (B2)', () => {
   });
 
   it('an analysis apply after the re-hydrate was issued moves the epoch; the re-hydrate re-runs', async () => {
+    /* Round 1 Minor 4 — the held read answers with the disk as it was when
+       it was issued, and that stale roster must never reach the slice. */
     disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
     const store = makeStore();
-    open(store, 'A', [char('wren')]);
+    open(store, 'A', []);
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
-    const first = api.getBookState.getMockImplementation()!;
-    api.getBookState.mockImplementationOnce(async (id: string) => {
-      await held;
-      return first(id);
+    const read = api.getBookState.getMockImplementation()!;
+    api.getBookState.mockImplementationOnce((id: string) => {
+      const pre = read(id);
+      return held.then(() => pre);
     });
     store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
     await settle();
@@ -291,13 +293,34 @@ describe('the release is state-driven (B2)', () => {
 
     /* A late apply lands while the read is out, and disk moves on. */
     store.dispatch(castActions.replaceLiveRoster([char('wren'), char('kestrel')]));
+    const rosters: string[][] = [];
+    store.subscribe(() => rosters.push(store.getState().cast.characters.map((c) => c.id)));
     disk.write('A', 'cast', { characters: [char('wren'), char('kestrel'), char('owl')] });
     release();
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(api.getBookState).toHaveBeenCalledTimes(2);
+    for (const ids of rosters) expect(ids).not.toEqual(['wren']);
     expect(era(store, 'A')).toBeUndefined();
     expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['wren', 'kestrel', 'owl']);
+  });
+
+  it('an apply during the busy check moves the epoch; the re-hydrate checks again before it reads (one read)', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren'), char('kestrel')] } });
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    let answer!: (k: string[]) => void;
+    api.getBookBusy.mockImplementationOnce(() => new Promise((r) => (answer = r)));
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    /* An explicit re-read (a failed merge, a 409) joins the held busy check. */
+    const done = store.dispatch(rehydrateCastAfterAnalysis('A'));
+    await settle();
+    store.dispatch(castActions.replaceLiveRoster([char('wren'), char('kestrel')]));
+    answer([]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await done;
+    expect(api.getBookState).toHaveBeenCalledTimes(1);
+    expect(era(store, 'A')).toBeUndefined();
   });
 
   it('the re-hydrate is single-flight per book, and for a book that is not open only clears its era (R26)', async () => {
@@ -337,6 +360,54 @@ describe('the era waits for the open book read (round 1, Important 1)', () => {
     expect(api.getBookState).toHaveBeenCalledTimes(1);
     expect(era(store, 'X')).toBeUndefined();
     expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['wren', 'kestrel']);
+  });
+});
+
+describe('one flight, and nothing left running (round 1, Minor 5)', () => {
+  it('a 409 and the gate listener land on one re-hydrate flight: exactly one read', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
+    busy = { A: ['analysis'] };
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    store.dispatch(castActions.setCharacters([char('wren'), char('lark')]));
+    disk.refuseNext('book_busy', (_id, req) => req.slice === 'cast');
+    /* The gate rises on an era alone (another route saw the run). */
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(disk.log.filter((p) => p.slice === 'cast').map((p) => p.outcome)).toEqual(['refused']);
+    busy = {};
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.getBookState).toHaveBeenCalledTimes(1);
+    expect(era(store, 'A')).toBeUndefined();
+  });
+
+  it('no timers survive a book switch, and the switched-away book is not asked again', async () => {
+    busy = { A: ['analysis'] };
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    const asked = api.getBookBusy.mock.calls.filter(([id]) => id === 'A').length;
+    expect(asked).toBeGreaterThan(1);
+    open(store, 'B');
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(api.getBookBusy.mock.calls.filter(([id]) => id === 'A').length).toBe(asked);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('R5 — an apply names its own book (round 1, Minor 2)', () => {
+  it("another tab's run of A never retargets this tab's own roster for B", () => {
+    const store = makeStore();
+    open(store, 'B', [char('bee')]);
+    /* Tab 2 runs A: its snapshot is mirrored here. */
+    store.dispatch(analysisActions.applyExternalAnalysisSnapshot(snap('A')));
+    /* Tab 1's own run of B streams its roster. */
+    store.dispatch(castActions.replaceLiveRoster([char('bee'), char('wasp')], { bookId: 'B' }));
+    store.dispatch(castActions.hydrateFromAnalysis({ characters: [char('bee'), char('wasp')] } as never, { bookId: 'B' }));
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['bee', 'wasp']);
+    expect(era(store, 'B')).toEqual({ epoch: 2 });
+    expect(era(store, 'A')).toBeUndefined();
   });
 });
 

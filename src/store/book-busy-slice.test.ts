@@ -94,3 +94,22 @@ describe('pollBookBusy', () => {
     expect(store.getState().bookBusy.busyByBook.A).toEqual([]);
   });
 });
+
+describe('pollBookBusy — the gate dropping ends the poll (round 1, Minor 5)', () => {
+  it('stops asking once the book is no longer gated, while it stays open', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    api.getBookBusy.mockRejectedValue(new Error('offline'));
+    const store = makeStore('A');
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    const p = store.dispatch(pollBookBusy('A'));
+    const caught = p.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.getBookBusy).toHaveBeenCalledTimes(2);
+    store.dispatch(castActions.clearAnalysisEra({ bookId: 'A', epoch: store.getState().cast.analysisEra!.A.epoch }));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(api.getBookBusy).toHaveBeenCalledTimes(2);
+    expect(await caught).toBeInstanceOf(Error);
+    expect(vi.getTimerCount()).toBe(0);
+    warn.mockRestore();
+  });
+});

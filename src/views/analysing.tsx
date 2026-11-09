@@ -733,7 +733,7 @@ export function AnalysingView({
                — snapshots upsert by id, preserving locked voices on survivors.
                Only while the cast slice still holds this book (open-book.ts). */
             if (selectIsOpenBook(store.getState(), { manuscriptId })) {
-              dispatch(castActions.replaceLiveRoster(characters));
+              dispatch(castActions.replaceLiveRoster(characters, { bookId: bookId ?? null }));
             }
           },
           onChapterFailed: ({ chapterId, message, code, remediation, phase }) => {
@@ -1163,7 +1163,7 @@ export function AnalysingView({
           markEvent();
           /* Full roster snapshot — replace, don't accumulate (see the other
              onCastUpdate handler above and replaceLiveRoster's rationale). */
-          if (isOpenBook()) dispatch(castActions.replaceLiveRoster(characters));
+          if (isOpenBook()) dispatch(castActions.replaceLiveRoster(characters, { bookId: bookId ?? null }));
         },
         onChapterFailed: ({ chapterId: failedId, message, code, remediation, phase }) => {
           markEvent();

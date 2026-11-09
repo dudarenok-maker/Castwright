@@ -1252,6 +1252,13 @@ export function CastView({
       /* Plan 291 (C3) — a failed accept may have finished its other writes:
          re-read the cast, and keep the card. */
       console.error('[cast] merge-suggestion accept failed', err);
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: 'Couldn’t merge those characters. Try again.',
+          dedupeKey: `merge-suggestion-error:${bookId}:${sourceId}:${targetId}`,
+        }),
+      );
       void dispatch(rehydrateCastAfterAnalysis(bookId));
       return;
     }

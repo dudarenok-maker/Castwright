@@ -886,7 +886,9 @@ export const persistenceMiddleware: Middleware = (store) => {
        nothing (R3). The disabled controls are UX only: this is what makes it
        correct. */
     if (rule.slice === 'cast' && selectCastReadOnly(after, bookId)) {
-      if (!ROUTE_BACKED_CAST_RULES.has(type)) toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
+      const routeBacked =
+        ROUTE_BACKED_CAST_RULES.has(type) || (a as { meta?: { routeBacked?: boolean } }).meta?.routeBacked === true;
+      if (!routeBacked) toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
       return result;
     }
 

@@ -4105,6 +4105,7 @@ describe('CastView — a rejected merge-suggestion accept re-reads the cast (pla
         cast: castSlice.reducer,
         castDesign: castDesignSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
       },
     });
     store.dispatch(uiSlice.actions.openBook({ id: 'b_current', status: 'voices_pending' }));
@@ -4128,6 +4129,10 @@ describe('CastView — a rejected merge-suggestion accept re-reads the cast (pla
     fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
     await waitFor(() => expect(store.getState().cast.characters).toEqual(onDisk));
     expect(api.getBookState).toHaveBeenCalledWith('b_current');
+    /* Round 1 Minor 6 — the failure is not silent. */
+    expect(store.getState().notifications.toasts).toEqual([
+      expect.objectContaining({ kind: 'error', message: expect.stringMatching(/couldn.t merge/i) }),
+    ]);
     err.mockRestore();
   });
 });

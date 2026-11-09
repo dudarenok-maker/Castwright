@@ -219,7 +219,7 @@ export const castGateMiddleware: Middleware = (store) => {
     if (gated && !streamLive(store.dispatch, open)) {
       const kinds = s.bookBusy?.busyByBook?.[open];
       if (kinds && !kinds.includes('analysis')) void run(rehydrateCastAfterAnalysis(open));
-      else void run(pollBookBusy(open)).catch(() => {});
+      else void run(pollBookBusy(open));
     }
     return result;
   };

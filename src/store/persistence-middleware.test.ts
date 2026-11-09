@@ -2813,6 +2813,17 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     expect(toasts[0]).toMatchObject({ message: "Re-analysis running — that change wasn't saved", dedupeKey: 'cast-read-only' });
   });
 
+  it('a decline a route already saved (meta.routeBacked) is silent while read-only; a local one toasts (R31)', async () => {
+    for (const routeBacked of [true, false]) {
+      const store = makeStore(readOnly());
+      const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+      mw({ type: 'cast/declineMatch', payload: 'halloran', meta: routeBacked ? { routeBacked: true } : undefined });
+      await advance(5000);
+      expect(putBookState).not.toHaveBeenCalled();
+      expect(toastsOf(store)).toHaveLength(routeBacked ? 0 : 1);
+    }
+  });
+
   it('mirror rules of route-backed writes raise no toast while read-only', async () => {
     const store = makeStore(readOnly());
     const mw = persistenceMiddleware(store)(vi.fn((x) => x));
@@ -2863,6 +2874,27 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     expect(putBookState).not.toHaveBeenCalled();
     expect(mw(castWrittenSince('book-1', Number.MAX_SAFE_INTEGER))).toBe(false);
     expect(toastsOf(store).map((t: { dedupeKey?: string }) => t.dedupeKey)).toContain('cast-read-only');
+    err.mockRestore();
+  });
+
+  it('the 409 branch keys on the code, never the sentence', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cases = [
+      { code: 'book_busy', sentence: 'Something else is holding it.', busy: true },
+      { code: 'book_path_taken', sentence: 'This book is busy being analysed.', busy: false },
+    ];
+    for (const c of cases) {
+      putBookState.mockReset();
+      rejectCapped(Object.assign(new Error(`Book state PUT failed (409): ${c.sentence}`), { code: c.code }));
+      const store = makeStore(baseState());
+      const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+      mw({ type: 'cast/setCharacters' });
+      mw(flushBookPersistence('book-1'));
+      await advance(20000);
+      const acts = dispatched(store);
+      expect(acts.filter((a) => a?.type === castActions.latchAnalysisEra.type)).toHaveLength(c.busy ? 1 : 0);
+      expect(acts.filter((a) => a?.type === 'bookBusy/requestCastRehydrate')).toHaveLength(c.busy ? 1 : 0);
+    }
     err.mockRestore();
   });
 

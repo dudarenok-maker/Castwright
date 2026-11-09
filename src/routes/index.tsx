@@ -690,7 +690,7 @@ export function AnalysingRoute() {
            never read this one. Skipped, the slices keep the other book's id
            and the layout reads this one from disk on the way to Confirm. */
         if (selectIsOpenBook(reduxStore.getState(), payload)) {
-          dispatch(castActions.hydrateFromAnalysis(payload));
+          dispatch(castActions.hydrateFromAnalysis(payload, { bookId: payload.bookId }));
           /* hydrateFromAnalysis atomically pins the chapters slice to
              payload.bookId via its currentBookId reducer field, so the
              cross-book tick guard in applyGenerationTick has a truthful

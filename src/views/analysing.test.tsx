@@ -12,6 +12,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { AnalysingView } from './analysing';
+import { castGateMiddleware } from '../store/cast-gate';
 import { WIKI_BASE } from '../lib/wiki-links';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
@@ -62,6 +63,8 @@ vi.mock('../lib/api', async () => {
       },
       /* Subset retry — captures the chapter ids + opts and exposes a
          manual resolver so tests can simulate a successful retry. */
+      /* Plan 291 — the cast gate's busy check, when a test wires the gate. */
+      getBookBusy: () => new Promise(() => {}),
       runAnalysisForChapters: (_id: string, chapterIds: number[], opts?: AnalyseOpts) => {
         capturedSubsetCall = { chapterIds, opts };
         return new Promise<AnalyseResponse>((resolve, reject) => {
@@ -2701,7 +2704,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       uploadedAt: new Date(0).toISOString(),
       sourceText: '',
     });
-    async function mountAfterMainFailure(castConfirmed: boolean, { withManuscript = false } = {}) {
+    async function mountAfterMainFailure(castConfirmed: boolean, { withManuscript = false, withGate = false } = {}) {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const base = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
       bookState = { ...base, state: { ...base.state, castConfirmed } };
@@ -2722,6 +2725,7 @@ describe('AnalysingView — failed-chapter retry', () => {
           notifications: notificationsSlice.reducer,
           ...(withManuscript ? { manuscript: manuscriptSlice.reducer } : {}),
         },
+        middleware: (gd) => gd().concat(...(withGate ? [castGateMiddleware] : [])),
       });
       /* The view only renders on its book's analysing stage. */
       store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
@@ -2862,6 +2866,32 @@ describe('AnalysingView — failed-chapter retry', () => {
        cast-update), and the cast slice holds whichever book is open. */
     const villain = { id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' as const };
     const hero = { id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'magenta' as const };
+    it.each([
+      ['main run', () => capturedOpts!.onCastUpdate!],
+      ['Retry', () => capturedSubsetCall!.opts!.onCastUpdate!],
+    ])("another tab's run never retargets this tab's own %s roster (R5)", async (_name, handler) => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true, withGate: true });
+      /* Tab 2's run of another book is mirrored into this tab's snapshot. */
+      store.dispatch(
+        analysisActions.applyExternalAnalysisSnapshot({
+          bookId: 'b9',
+          manuscriptId: 'm9',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: 1,
+          state: 'running',
+        }),
+      );
+      act(() => {
+        handler()({ characters: [villain] as Character[] });
+      });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['a-villain']);
+      expect(store.getState().cast.analysisEra?.b1).toBeDefined();
+      expect(store.getState().cast.analysisEra?.b9).toBeUndefined();
+    });
+
     it('a Retry cast update after another book opened never writes into that book\'s cast', async () => {
       const { store } = await mountAfterMainFailure(false, { withManuscript: true });
       cleanup();

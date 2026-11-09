@@ -124,6 +124,9 @@ export interface CastState {
       touches it. `epoch` moves on every latch, so a re-read issued before the
       latest analysis apply does not clear it. Optional like its siblings. */
   analysisEra?: Record<string, { epoch: number }>;
+  /** The last epoch issued per book. A clear never resets it, so a new era
+      never reuses an epoch a stale re-read might still hold. */
+  analysisEraSeq?: Record<string, number>;
 }
 
 /** Plan 291 (#4031, R5) — `mergeCharacters`' meta: `fromAnalysis` marks an
@@ -132,6 +135,13 @@ export interface CastState {
 export interface CastApplyMeta {
   fromAnalysis?: boolean;
   bookId?: string | null;
+}
+
+/** Plan 291 (#4031, R31) — `declineMatch`'s meta: `routeBacked` when the
+    decline route already recorded it (decline-match-flow.ts), so a read-only
+    cast raises no "that change wasn't saved" toast for it. */
+export interface CastDeclineMeta {
+  routeBacked?: boolean;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -145,6 +155,7 @@ const initialState: CastState = {
   renderedFallbackByCharacter: {},
   orphanedCharacterFallbacks: {},
   analysisEra: {},
+  analysisEraSeq: {},
 };
 
 export const castSlice = createSlice({
@@ -166,8 +177,10 @@ export const castSlice = createSlice({
        another tab's snapshot or a busy reply listing `analysis`, and by the
        persistence middleware on a cast PUT answered 409 `book_busy`. */
     latchAnalysisEra: (s, a: PayloadAction<{ bookId: string }>) => {
-      const eras = (s.analysisEra ??= {});
-      eras[a.payload.bookId] = { epoch: (eras[a.payload.bookId]?.epoch ?? 0) + 1 };
+      const seq = (s.analysisEraSeq ??= {});
+      const epoch = Math.max(seq[a.payload.bookId] ?? 0, s.analysisEra?.[a.payload.bookId]?.epoch ?? 0) + 1;
+      seq[a.payload.bookId] = epoch;
+      (s.analysisEra ??= {})[a.payload.bookId] = { epoch };
     },
     /* Clear `bookId`'s era, unless its epoch moved since the re-read that
        clears it was issued. */
@@ -190,13 +203,16 @@ export const castSlice = createSlice({
     ) => {
       s.orphanedCharacterFallbacks = a.payload ?? {};
     },
-    declineMatch: (s, a: PayloadAction<string>) => {
-      const c = s.characters.find((x) => x.id === a.payload);
-      if (c) {
-        c.matchedFrom = undefined;
-        /* Declining a link never drops a lock/tune the user set (#3842). */
-        if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
-      }
+    declineMatch: {
+      reducer: (s, a: PayloadAction<string, string, CastDeclineMeta | undefined>) => {
+        const c = s.characters.find((x) => x.id === a.payload);
+        if (c) {
+          c.matchedFrom = undefined;
+          /* Declining a link never drops a lock/tune the user set (#3842). */
+          if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
+        }
+      },
+      prepare: (characterId: string, meta?: CastDeclineMeta) => ({ payload: characterId, meta }),
     },
     /* #3992 — mirror the "Don't reuse" marker the decline route returned, so
        applyVoiceMatches' own filter (which reads it) works in the session where
@@ -370,38 +386,41 @@ export const castSlice = createSlice({
        definition, just had a voice generated for them — default the field
        so the Cast view's Status column renders the green "Generated" pill
        instead of nothing. */
-    hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
-      const { characters } = a.payload;
-      if (!characters?.length) return;
-      /* Overlay the existing slice's voice-design fields onto the freshly-analysed
-         roster, matched by id — the SAME preservation mergeCharacters already does
-         for live Phase-0a snapshots (#518). The analysis-complete payload that lands
-         on /confirm carries voice continuity only for characters matched against
-         OTHER books in the series (the series-reuse pass); a character DESIGNED IN
-         THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
-         arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
-         "No voice designed yet" for Berrin/Sela/Quill even though cast.json on disk
-         still held the voice. Existing-wins ONLY when the existing entry has the
-         field, so a fresh reuse link stamped this run still flows through. */
-      const byId = new Map(s.characters.map((c) => [c.id, c]));
-      s.characters = characters.map((inc) => {
-        const existing = byId.get(inc.id);
-        if (!existing) return inc.voiceState ? inc : { ...inc, voiceState: 'generated' };
-        return {
-          ...inc,
-          voiceId: existing.voiceId ?? inc.voiceId,
-          matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
-          /* matchFactors is voice-match-only — the analyzer payload never carries
-             it, so there is no incoming value to fall back to; just keep ours. */
-          matchFactors: existing.matchFactors,
-          voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
-          overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
-          ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
-          voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
-          notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
-          aliases: unionAliases(existing.aliases, inc.aliases),
-        };
-      });
+    hydrateFromAnalysis: {
+      reducer: (s, a: PayloadAction<AnalyseResponse, string, CastApplyMeta | undefined>) => {
+        const { characters } = a.payload;
+        if (!characters?.length) return;
+        /* Overlay the existing slice's voice-design fields onto the freshly-analysed
+           roster, matched by id — the SAME preservation mergeCharacters already does
+           for live Phase-0a snapshots (#518). The analysis-complete payload that lands
+           on /confirm carries voice continuity only for characters matched against
+           OTHER books in the series (the series-reuse pass); a character DESIGNED IN
+           THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
+           arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
+           "No voice designed yet" for Berrin/Sela/Quill even though cast.json on disk
+           still held the voice. Existing-wins ONLY when the existing entry has the
+           field, so a fresh reuse link stamped this run still flows through. */
+        const byId = new Map(s.characters.map((c) => [c.id, c]));
+        s.characters = characters.map((inc) => {
+          const existing = byId.get(inc.id);
+          if (!existing) return inc.voiceState ? inc : { ...inc, voiceState: 'generated' };
+          return {
+            ...inc,
+            voiceId: existing.voiceId ?? inc.voiceId,
+            matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
+            /* matchFactors is voice-match-only — the analyzer payload never carries
+               it, so there is no incoming value to fall back to; just keep ours. */
+            matchFactors: existing.matchFactors,
+            voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
+            overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
+            ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
+            voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
+            notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+            aliases: unionAliases(existing.aliases, inc.aliases),
+          };
+        });
+      },
+      prepare: (response: AnalyseResponse, meta?: CastApplyMeta) => ({ payload: response, meta }),
     },
     /* Live cast-update events from Phase 0a (per-chapter cast detection).
        Each event carries the running roster snapshot — upsert by id so
@@ -445,11 +464,14 @@ export const castSlice = createSlice({
        later event. Voice / design fields are still preserved by id-match for
        any surviving row (#518 / srv-13). No-op on an empty snapshot so a stray
        empty event can't wipe a populated roster. */
-    replaceLiveRoster: (s, a: PayloadAction<Character[]>) => {
-      const incoming = a.payload;
-      if (!incoming?.length) return;
-      const byId = new Map(s.characters.map((c) => [c.id, c]));
-      s.characters = incoming.map((inc) => overlaySnapshotEntry(byId.get(inc.id), inc));
+    replaceLiveRoster: {
+      reducer: (s, a: PayloadAction<Character[], string, CastApplyMeta | undefined>) => {
+        const incoming = a.payload;
+        if (!incoming?.length) return;
+        const byId = new Map(s.characters.map((c) => [c.id, c]));
+        s.characters = incoming.map((inc) => overlaySnapshotEntry(byId.get(inc.id), inc));
+      },
+      prepare: (characters: Character[], meta?: CastApplyMeta) => ({ payload: characters, meta }),
     },
     /* From POST /api/books/:bookId/cast/merge — replaces the local cast
        with the server's merged list. The server is authoritative because

@@ -1983,6 +1983,17 @@ describe('castSlice — the per-book analysis era (plan 291, #4031)', () => {
     expect(s.analysisEra).toEqual({});
   });
 
+  it('the epoch is monotonic per book: a clear never restarts it (round 1, Minor 7)', () => {
+    let s = castSlice.reducer(baseState([]), castActions.latchAnalysisEra({ bookId: 'A' }));
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 1 }));
+    expect(s.analysisEra).toEqual({});
+    s = castSlice.reducer(s, castActions.latchAnalysisEra({ bookId: 'A' }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+    /* A stale clear from the first era cannot clear the second. */
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 1 }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+  });
+
   it('hydrateCharacters and the book-switch resets never clear or move an era', async () => {
     const { configureStore } = await import('@reduxjs/toolkit');
     const { manuscriptSlice } = await import('./manuscript-slice');

@@ -55,7 +55,9 @@ export function declineMatchFlow(characterId: string) {
       }
     }
     if (!selectIsOpenBook(getState(), openBook)) return;
-    dispatch(castActions.declineMatch(characterId));
+    /* Plan 291 (R31) — the route already saved it: a read-only cast toasts
+       nothing for it. With no source book only the reducer runs, unsaved. */
+    dispatch(castActions.declineMatch(characterId, marker ? { routeBacked: true } : undefined));
     if (marker) {
       const { voiceUuid, movedCharacterIds, declinedVoiceFrom, declinedVoiceUuids } = marker;
       dispatch(castActions.setDeclinedVoice({ characterId, declinedVoiceFrom, declinedVoiceUuids }));

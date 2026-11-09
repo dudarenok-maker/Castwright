@@ -181,6 +181,9 @@ export function pollBookBusy(
     const flight = loop().finally(() => {
       if (flights!.get(bookId) === flight) flights!.delete(bookId);
     });
+    /* One handler per flight, so the gate's fire-and-forget dispatches never
+       leave an unhandled rejection (and never stack a reaction per action). */
+    flight.catch(() => {});
     flights.set(bookId, flight);
     return flight;
   };
