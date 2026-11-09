@@ -1450,14 +1450,25 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       return dir;
     };
     const take = (characterId: string) => [{ id: 1, chapterId: 1, characterId, confidence: 0.9, text: 't' }];
-    it('a live id that is also a stale history key stays itself; a retired id follows to its live survivor', async () => {
+    const ids = (...v: string[]): ReadonlySet<string> => new Set(v);
+    it('a live id that is also a stale history key stays itself; a prior id merged away follows to its live survivor', async () => {
       const dir = mkDir([{ id: 'a' }, { id: 'b' }], { a: 'b', x: 'b' });
-      expect((await resolveCurrentIds(dir, {}, take('a')))[0].characterId).toBe('a');
-      expect((await resolveCurrentIds(dir, {}, take('x')))[0].characterId).toBe('b');
+      expect((await resolveCurrentIds(dir, {}, take('a'), ids('a', 'b', 'x')))[0].characterId).toBe('a');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('a', 'b', 'x')))[0].characterId).toBe('b');
     });
     it('a history target that is no longer live resolves nothing', async () => {
       const dir = mkDir([{ id: 'b' }], { x: 'gone' });
-      expect((await resolveCurrentIds(dir, {}, take('x')))[0].characterId).toBe('x');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('b', 'x')))[0].characterId).toBe('x');
+    });
+    it('R33: a raw id that is a separator variant of a live prior row, planned new, stays itself', async () => {
+      const dir = mkDir([{ id: 'the_torment' }], {});
+      expect((await resolveCurrentIds(dir, {}, take('the-torment'), ids('the_torment')))[0].characterId).toBe(
+        'the-torment',
+      );
+    });
+    it('R33: a raw analyzer-chain key that is not a prior id stays itself', async () => {
+      const dir = mkDir([{ id: 'b' }], { raw: 'b' });
+      expect((await resolveCurrentIds(dir, {}, take('raw'), ids('b')))[0].characterId).toBe('raw');
     });
   });
 });

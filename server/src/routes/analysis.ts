@@ -1823,14 +1823,18 @@ async function patchCacheInFailureCatch(
   }
 }
 
-/* A sentence's id as it is now: the run's Phase-0b re-mints first, then the book's
-   resolver of record (`buildCastResolver`: a live id wins, history is followed only to
-   a live target) over a lock-free read of cast.json and the merge history (a mid-run
-   merge). Read-only, so it is safe under the `book` lock and inside the cache op. */
+/* A sentence's id as it is now: the run's Phase-0b re-mints first, then a prior row
+   merged away mid-run follows to its live survivor (R33). A take carries RAW analyzer
+   ids the plan has already decided, so an id is rewritten only when it is a prior-row id
+   from the run-start prior AND `buildCastResolver` resolves it through its `'history'`
+   tier to a live target; the resolver's normalised tiers and analyzer-tagged chains
+   would otherwise override the plan. Lock-free reads of cast.json and the history, so it
+   is safe under the `book` lock and inside the cache op. */
 export async function resolveCurrentIds<S extends { characterId: string }>(
   bookDir: string | undefined,
   remint: Readonly<Record<string, string>>,
   sentences: S[],
+  priorIds: ReadonlySet<string>,
 ): Promise<S[]> {
   const reminted = remapSentenceIds(sentences, remint);
   if (!bookDir) return reminted;
@@ -1842,8 +1846,9 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
   const resolver = buildCastResolver(cast, read.history);
   const idMap: Record<string, string> = {};
   for (const { characterId } of reminted) {
-    const live = resolver.resolve(characterId)?.character.id;
-    if (live !== undefined && live !== characterId) idMap[characterId] = live;
+    if (!priorIds.has(characterId)) continue;
+    const hit = resolver.resolve(characterId);
+    if (hit?.via === 'history' && hit.character.id !== characterId) idMap[characterId] = hit.character.id;
   }
   return remapSentenceIds(reminted, idMap);
 }
@@ -7071,6 +7076,7 @@ export async function runMainAnalyzerJob(
          back the plan or another chapter's take a merge has re-targeted since
          this job last wrote them. The take speaks the ids that are current now. */
       const takeBookDir = liveBookDir(job) ?? undefined;
+      const priorIds = new Set(priorCastForMerge.map((r) => r.id));
       await mutateAnalysisCache(manuscriptId, {
         chapters: { [ch.id]: remapSentenceIds(stage2Sentences, remintIdMap) },
         fields: cacheFields(cache, [...PHASE1_RECORD_FIELDS, 'stage2DurationsEngine']),
@@ -7083,7 +7089,7 @@ export async function runMainAnalyzerJob(
           try {
             out.chapters = {
               ...c.chapters,
-              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id]),
+              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id], priorIds),
             };
           } catch (e) {
             /* The persist resolves every id again; the take keeps the run's own ids until then. */
@@ -7127,7 +7133,13 @@ export async function runMainAnalyzerJob(
             /* R8: a take captured before a Phase-0b re-mint still carries the old id,
                which may now be a user's row; a mid-run merge's survivor replaces the
                id it merged away. */
-            (sentences) => resolveCurrentIds(liveBookDir(job) ?? undefined, remintIdMap, sentences),
+            (sentences) =>
+              resolveCurrentIds(
+                liveBookDir(job) ?? undefined,
+                remintIdMap,
+                sentences,
+                new Set(priorCastForMerge.map((r) => r.id)),
+              ),
             /* #3435 — a chapter not attributed this run falls back to its cached take where
                the file has none, so a pending take stays in the edits until it is replaced. */
             () => {
