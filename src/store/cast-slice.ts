@@ -315,24 +315,26 @@ export const castSlice = createSlice({
          declined row): the server dropped the row's qwen `variants` with it
          (their `<uuid>__<emotion>` files belong to the old uuid) and renamed its
          slot, so the autosave spreads must not write either back (#4067). A first
-         mint (no uuid before) is not a fork: the server keeps the legacy name. */
+         mint (no uuid before) is not a fork by this test: the server keeps the
+         legacy name. A row with no uuid that the design DID separate is not
+         visible here; the design stream says so (`separated`) and dispatches
+         forkCharacterVoiceUuid instead. */
       if (c.voiceUuid && c.voiceUuid !== voiceUuid) {
         forkRow(c, voiceUuid);
         return;
       }
       c.voiceUuid = voiceUuid;
     },
-    /* #4067 — mirror of the decline route's `withForkedUuid`
-       (server/src/routes/qwen-voice.ts): a row moved onto a voice of its own
-       takes the new uuid, loses its qwen `variants` whether or not it had a
-       uuid before (a legacy row has none, so setCharacterVoiceUuid's
-       changed-uuid test misses it), and its qwen slot name follows to
-       `qwen-<uuid>`, the key the base family was copied to. A slot with a
-       `libraryUuid` is keyed by that, so its name stays. Local-only, no persist
-       rule, like setCharacterVoiceUuid, which does the same for a changed uuid
-       (the design-time separation); this one is for a row that may have had no
-       uuid before, which setCharacterVoiceUuid treats as a first mint and keeps
-       the legacy name. */
+    /* #4067 — mirror of the server's `withForkedUuid`
+       (server/src/routes/qwen-voice.ts), which the decline route and a design's
+       separation of a declined row both apply: a row moved onto a voice of its own
+       takes the new uuid, loses its qwen `variants` whether or not it had a uuid
+       before (a legacy row has none, so setCharacterVoiceUuid's changed-uuid test
+       misses it), and its qwen slot name follows to `qwen-<uuid>`, the key the
+       base family was copied to. A slot with a `libraryUuid` is keyed by that, so
+       its name stays. Local-only, no persist rule. Dispatched by the decline flow
+       and by the design stream when the server reports `separated`; a plain first
+       mint goes through setCharacterVoiceUuid, which keeps the legacy name. */
     forkCharacterVoiceUuid: (
       s,
       a: PayloadAction<{ characterId: string; voiceUuid: string }>,

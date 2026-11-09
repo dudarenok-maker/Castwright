@@ -681,8 +681,8 @@ export async function separateVoiceLocked(
 /* #3992 — a design of a row declined before the decline route separated it (see
    mustSeparateOnDesign): run the route's separation once, under the same locks,
    then design the row's own key. Caller holds the design lock. Returns the row's
-   uuid after the step. */
-async function separateDeclinedVoiceForDesign(bookDir: string, characterId: string): Promise<string | undefined> {
+   uuid after the step, and whether the locked re-decision did separate it (#4067). */
+async function separateDeclinedVoiceForDesign(bookDir: string, characterId: string): Promise<UuidStep> {
   const plan = await separationPlan(bookDir, characterId);
   const out = await withBookOps(plan.bookIds, (books) => {
     const own = books.find((b) => b.bookId === plan.bookIds[0]);
@@ -700,7 +700,13 @@ async function separateDeclinedVoiceForDesign(bookDir: string, characterId: stri
   if (out === BOOK_GONE) {
     throw new RetryableForkError('A book in this series was removed while the voice was being separated; try again.');
   }
-  return out.voiceUuid;
+  return { uuid: out.voiceUuid, separated: out.separated };
+}
+
+/* The uuid step's answer: the row's uuid, and whether the step separated the row. */
+interface UuidStep {
+  uuid: string | undefined;
+  separated: boolean;
 }
 
 /* #3992 — is this row one a design must separate first? Only a row carrying the
@@ -716,12 +722,12 @@ async function needsDesignSeparation(bookDir: string, character: MarkedCharacter
    separated it, which is separated first exactly like a base design (its base
    family is copied, so nothing is orphaned). The caller holds the design lock
    (designQwenVoiceForCharacter). */
-async function forkDeclinedVoiceUuidIfShared(bookDir: string, characterId: string): Promise<string | undefined> {
+async function forkDeclinedVoiceUuidIfShared(bookDir: string, characterId: string): Promise<UuidStep> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
-  if (!character) return undefined;
+  if (!character) return { uuid: undefined, separated: false };
   if (await needsDesignSeparation(bookDir, character)) return separateDeclinedVoiceForDesign(bookDir, characterId);
-  return character.voiceUuid ?? undefined;
+  return { uuid: character.voiceUuid ?? undefined, separated: false };
 }
 
 /* #3992 — check the uuid a design is about to run under, for a character the
@@ -795,10 +801,31 @@ export async function ensureCharacterVoiceUuid(
   characterId: string,
   seriesFilter?: { author: string; series: string },
 ): Promise<string | undefined> {
+  return (await ensureCharacterVoiceUuidStep(bookDir, characterId, seriesFilter)).uuid;
+}
+
+/* #4067 — ensureCharacterVoiceUuid, also saying whether the step separated the row
+   (a separation renames its qwen slot and drops its variants, which the design
+   events must tell a client: a first mint on a row with no uuid looks the same by
+   the uuid alone). */
+async function ensureCharacterVoiceUuidStep(
+  bookDir: string,
+  characterId: string,
+  seriesFilter?: { author: string; series: string },
+): Promise<UuidStep> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
-  if (!cast || !character) return undefined;
+  if (!cast || !character) return { uuid: undefined, separated: false };
   if (await needsDesignSeparation(bookDir, character)) return separateDeclinedVoiceForDesign(bookDir, characterId);
+  return { uuid: await readOrMintVoiceUuid(bookDir, characterId, character, seriesFilter), separated: false };
+}
+
+async function readOrMintVoiceUuid(
+  bookDir: string,
+  characterId: string,
+  character: CastCharacter,
+  seriesFilter?: { author: string; series: string },
+): Promise<string | undefined> {
   if (character.voiceUuid) return character.voiceUuid;
 
   if (seriesFilter) {
@@ -1086,6 +1113,10 @@ export interface DesignQwenVoiceResult {
   url: string;
   /** The row's voiceUuid when the design landed. */
   voiceUuid?: string;
+  /** #4067 — this design first separated a declined row onto a voice of its own
+      (the uuid step's separation, which also renamed its qwen slot and dropped its
+      variants). A client cannot tell that from a first mint by the uuid alone. */
+  separated?: boolean;
   fellBackToDesignVoice?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
 }
@@ -1559,13 +1590,10 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       const now = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (!now) throw new CharacterGoneError();
       if (qwenStorageKey(now, p.characterId) !== watcher.key) throw new DesignVoiceChangedError();
-      const uuid = requireDesignVoiceUuid(
-        p.character,
-        !!p.emotion,
-        p.emotion
-          ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
-          : await ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter),
-      );
+      const step = p.emotion
+        ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
+        : await ensureCharacterVoiceUuidStep(p.bookDir, p.characterId, p.seriesFilter);
+      const uuid = requireDesignVoiceUuid(p.character, !!p.emotion, step.uuid);
       /* The uuid step's own move: a separation already moved the watcher, and a
          first mint gives a row that had no uuid its new key. A row that had one and
          now answers another, unannounced, was changed by some other writer; a link
@@ -1576,7 +1604,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)) };
+      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)), separated: step.separated };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);

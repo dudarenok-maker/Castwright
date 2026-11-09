@@ -6641,7 +6641,7 @@ export interface CastDesignCallbacks {
   onHeartbeat?: (e: { characterId: string }) => void;
   /** A character was designed + persisted; `voiceId` is the bespoke qwen name.
       srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
-  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string; separated?: boolean }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
@@ -6675,6 +6675,9 @@ export interface CastDesignCallbacks {
     /** srv-43: uuid of the character's bespoke voice file — lets the drawer
         resolve the uuid-keyed cache entry before the next cast refetch. */
     voiceUuid?: string;
+    /** #4067 — the design first separated a declined row onto a voice of its own
+        (new uuid, qwen slot renamed, variants dropped); see SingleDesignEvent. */
+    separated?: boolean;
   }) => void;
   /** Single-design (re)subscribe seed — replayed once on reload re-attach so the
       slice can open a single snapshot at the right character + phase. */
@@ -6707,6 +6710,7 @@ interface CastDesignStreamEvent {
   previewUrl?: string;
   persona?: string;
   voiceUuid?: string;
+  separated?: boolean;
   mode?: 'first' | 'redesign';
   url?: string;
   viaFallback?: boolean;
@@ -6787,6 +6791,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId,
             voiceId: e.voiceId,
             voiceUuid: e.voiceUuid,
+            separated: e.separated,
           });
         break;
       case 'preview_ready':
@@ -6802,6 +6807,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             previewUrl: e.previewUrl,
             persona: e.persona ?? '',
             voiceUuid: e.voiceUuid,
+            separated: e.separated,
           });
         break;
       case 'progress':

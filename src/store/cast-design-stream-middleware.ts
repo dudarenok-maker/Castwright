@@ -82,6 +82,19 @@ export function createCastDesignMiddleware(): Middleware {
     const holdsBook = (bookId: string): boolean =>
       (store.getState() as { manuscript: { bookId: string | null } }).manuscript.bookId === bookId;
 
+    /* #4067 — mirror the uuid a single design landed on. `separated` is the server
+       saying it separated a declined row first (new uuid, qwen slot renamed to
+       `qwen-<uuid>`, variants dropped): mirror exactly that, even for a row that had
+       no uuid before, which the uuid alone cannot distinguish from a first mint.
+       Otherwise a first mint keeps the legacy name. */
+    const mirrorVoiceUuid = (characterId: string, voiceUuid: string, separated?: boolean): void => {
+      dispatch(
+        separated
+          ? castActions.forkCharacterVoiceUuid({ characterId, voiceUuid })
+          : castActions.setCharacterVoiceUuid({ characterId, voiceUuid }),
+      );
+    };
+
     const buildCallbacks = (bookId: string, controller: AbortController): CastDesignCallbacks => ({
       signal: controller.signal,
       /* Cold-boot re-subscribe: seed the snapshot from the server's replay so
@@ -232,7 +245,7 @@ export function createCastDesignMiddleware(): Middleware {
         ),
       onHeartbeat: () =>
         dispatch(castDesignActions.heartbeat({ bookId, lastTickAt: Date.now() })),
-      onCharacterDesigned: ({ characterId: cid, voiceId, voiceUuid }) => {
+      onCharacterDesigned: ({ characterId: cid, voiceId, voiceUuid, separated }) => {
         /* Mirror the persisted override into the cast slice so the row flips
            "Needs voice" → "Designed" live. (The `designed` event may carry an
            extra `url` now — ignored; we don't auto-play on first design in v1.) */
@@ -240,7 +253,7 @@ export function createCastDesignMiddleware(): Middleware {
           dispatch(castActions.setQwenOverrideName({ characterId: cid, voiceId }));
           /* srv-43: mirror the voiceUuid so "Play 12s" right after a first design
              resolves the uuid-keyed cache entry without waiting for a cast refetch. */
-          if (voiceUuid) dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
+          if (voiceUuid) mirrorVoiceUuid(cid, voiceUuid, separated);
         }
         dispatch(
           notificationsActions.pushToast({
@@ -257,12 +270,10 @@ export function createCastDesignMiddleware(): Middleware {
            is satisfied by 'done', so it will dispatch clear() as before. */
         dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
       },
-      onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona, voiceUuid }) => {
+      onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona, voiceUuid, separated }) => {
         /* #3992 — the server forks a declined row's shared uuid BEFORE the preview,
            so a Cancel (which never approves) must still learn the new uuid here. */
-        if (voiceUuid && holdsBook(bookId)) {
-          dispatch(castActions.setCharacterVoiceUuid({ characterId: cid, voiceUuid }));
-        }
+        if (voiceUuid && holdsBook(bookId)) mirrorVoiceUuid(cid, voiceUuid, separated);
         dispatch(
           castDesignActions.previewReady({
             bookId,

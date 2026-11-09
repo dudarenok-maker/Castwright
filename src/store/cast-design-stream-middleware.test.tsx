@@ -929,7 +929,11 @@ describe('a design that separates a declined row, then a later cast save (#4067)
       },
     }) as never;
 
-  async function designThenSave() {
+  type PreviewEvent = Parameters<NonNullable<CastDesignCallbacks['onPreviewReady']>>[0];
+  async function designThenSave(
+    row: unknown = declined(),
+    event: Partial<PreviewEvent> = {},
+  ) {
     const { persistenceMiddleware, flushBookPersistence } = await import('./persistence-middleware');
     const { uiSlice } = await import('./ui-slice');
     const initialUi = uiSlice.getInitialState();
@@ -950,7 +954,7 @@ describe('a design that separates a declined row, then a later cast save (#4067)
         g({ serializableCheck: false }).concat(persistenceMiddleware, createCastDesignMiddleware()),
     });
     openBook(store as never, 'b1');
-    store.dispatch(castSlice.actions.setCharacters([declined()]));
+    store.dispatch(castSlice.actions.setCharacters([row as never]));
     store.dispatch(
       castDesignActions.designSingleRequested({
         bookId: 'b1',
@@ -972,6 +976,7 @@ describe('a design that separates a declined row, then a later cast save (#4067)
       previewUrl: '/x.mp3',
       persona: 'warm',
       voiceUuid: 'u_forked',
+      ...event,
     });
     putBookState.mockClear();
     store.dispatch(castSlice.actions.lockVoice('c1'));
@@ -992,6 +997,34 @@ describe('a design that separates a declined row, then a later cast save (#4067)
     expect(sent.voiceUuid).toBe('u_forked');
     expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
     expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  /* A declined row the merge left with NO voiceUuid (#4067): its first design is a
+     separation on the server (rename + variants dropped), but `undefined -> uuid`
+     reads as a first mint on the client, which keeps the legacy name. Only the
+     server's `separated` tells the two apart. */
+  const legacy = () =>
+    ({
+      id: 'c1',
+      name: 'Aria',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-v_aria', variants: { angry: { name: 'qwen-v_aria__angry' } } },
+      },
+    }) as never;
+
+  it('a row with no uuid the server separated: the next PUT carries qwen-<new> and no variants', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(legacy(), { separated: true });
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('a row with no uuid that was only minted one (separated false): the legacy name stays', async () => {
+    vi.useRealTimers();
+    const sent = await designThenSave(legacy(), { separated: false });
+    expect(sent.voiceUuid).toBe('u_forked');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
   });
 
   /* No "design approved" case: a first design's `designed` event carries the
