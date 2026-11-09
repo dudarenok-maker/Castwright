@@ -17,7 +17,7 @@ describe('evictIdleQwenBase', () => {
 
     expect(freed).toBe(true);
     /* Keep the tier this op needs, drop the other. */
-    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined);
+    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined, expect.any(Array));
   });
 
   it('keeps the 0.6B base when that is the tier being asked for', async () => {
@@ -46,7 +46,7 @@ describe('evictIdleQwenBase', () => {
     });
 
     expect(freed).toBe(false);
-    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined);
+    expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true }, undefined, expect.any(Array));
   });
 
   it('does nothing while any render is in flight', async () => {
@@ -134,11 +134,19 @@ describe('evictIdleQwenBase', () => {
   describe('#4066 — a voice design or a Quality (1.7B) op frees the standard Qwen and Kokoro first', () => {
     beforeEach(() => resetTtsAutoFreeForTests());
 
+    /* A reconcile stand-in that reports (through the out-param) what it
+       "unloaded", the way the real one does per successful /unload. */
+    const reconcileFreeing = (names: string[], result: boolean) =>
+      vi.fn(async (_keep: unknown, _signal: unknown, freedOut?: string[]) => {
+        freedOut?.push(...names);
+        return result;
+      });
+
     it('a design frees the resident standard Qwen 0.6B, even though the book itself is on 0.6B, and records the notice', async () => {
       /* The design route passes the BOOK's model key (0.6B here). Before
          #4066 that kept the 0.6B base resident (the elevate-only rule), so on
          an 8 GB card the design's 6144 MB admission could never fit. */
-      const reconcile = vi.fn().mockResolvedValue(true);
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
       const freed = await evictIdleQwenBase({
         modelKey: 'qwen3-tts-0.6b',
         purpose: 'design',
@@ -148,12 +156,12 @@ describe('evictIdleQwenBase', () => {
       });
 
       expect(freed).toBe(true);
-      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined);
+      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined, expect.any(Array));
       expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'], purpose: 'voice design' });
     });
 
     it('a design also frees an on-demand Kokoro that sits on the GPU', async () => {
-      const reconcile = vi.fn().mockResolvedValue(true);
+      const reconcile = reconcileFreeing(['Kokoro'], true);
       const freed = await evictIdleQwenBase({
         modelKey: 'qwen3-tts-0.6b',
         purpose: 'design',
@@ -163,12 +171,16 @@ describe('evictIdleQwenBase', () => {
       });
 
       expect(freed).toBe(true);
-      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false, keepKokoro: false }, undefined);
+      expect(reconcile).toHaveBeenCalledWith(
+        { keep06: false, keep17: false, keepKokoro: false },
+        undefined,
+        expect.any(Array),
+      );
       expect(getLastTtsAutoFree()).toMatchObject({ models: ['Kokoro'], purpose: 'voice design' });
     });
 
     it('a Quality (1.7B) op frees the 0.6B base and a GPU Kokoro together', async () => {
-      const reconcile = vi.fn().mockResolvedValue(true);
+      const reconcile = reconcileFreeing(['Qwen 0.6B', 'Kokoro'], true);
       await evictIdleQwenBase({
         modelKey: 'qwen3-tts-1.7b',
         _reconcile: reconcile,
@@ -176,12 +188,16 @@ describe('evictIdleQwenBase', () => {
         _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cuda' } }),
       });
 
-      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: true, keepKokoro: false }, undefined);
+      expect(reconcile).toHaveBeenCalledWith(
+        { keep06: false, keep17: true, keepKokoro: false },
+        undefined,
+        expect.any(Array),
+      );
       expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B', 'Kokoro'], purpose: 'Quality render' });
     });
 
     it('leaves a CPU-resident Kokoro alone — it holds no VRAM to free', async () => {
-      const reconcile = vi.fn().mockResolvedValue(true);
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
       await evictIdleQwenBase({
         modelKey: 'qwen3-tts-0.6b',
         purpose: 'design',
@@ -190,12 +206,12 @@ describe('evictIdleQwenBase', () => {
         _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cpu' } }),
       });
 
-      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined);
+      expect(reconcile).toHaveBeenCalledWith({ keep06: false, keep17: false }, undefined, expect.any(Array));
       expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'] });
     });
 
     it('frees nothing and records no notice while a render is in flight', async () => {
-      const reconcile = vi.fn().mockResolvedValue(true);
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
       const probeHealth = vi.fn(async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cuda' } }));
       const freed = await evictIdleQwenBase({
         modelKey: 'qwen3-tts-0.6b',
@@ -210,8 +226,8 @@ describe('evictIdleQwenBase', () => {
       expect(getLastTtsAutoFree()).toBeNull();
     });
 
-    it('records no notice when the unload did not actually free anything', async () => {
-      const reconcile = vi.fn().mockResolvedValue(false);
+    it('records no notice when nothing was actually unloaded', async () => {
+      const reconcile = reconcileFreeing([], false);
       await evictIdleQwenBase({
         modelKey: 'qwen3-tts-0.6b',
         purpose: 'design',
@@ -224,12 +240,11 @@ describe('evictIdleQwenBase', () => {
     });
 
     it('each recorded notice gets a new sequence number', async () => {
-      const reconcile = vi.fn().mockResolvedValue(true);
       const run = () =>
         evictIdleQwenBase({
           modelKey: 'qwen3-tts-0.6b',
           purpose: 'design',
-          _reconcile: reconcile,
+          _reconcile: reconcileFreeing(['Qwen 0.6B'], true),
           _isAnyGenerationActive: () => false,
           _probeHealth: async () => ({ qwenLoaded: true }),
         });
@@ -237,6 +252,83 @@ describe('evictIdleQwenBase', () => {
       const first = getLastTtsAutoFree()!.seq;
       await run();
       expect(getLastTtsAutoFree()!.seq).toBeGreaterThan(first);
+    });
+
+    it("still records the Qwen model it freed when Kokoro's unload failed (reconcile returns false)", async () => {
+      const freed = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcileFreeing(['Qwen 0.6B'], false),
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: true, devices: { kokoro: 'cuda' } }),
+      });
+
+      expect(freed).toBe(false);
+      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'] });
+    });
+
+    it('does not drop the event when the health probe fails — the notice comes from what reconcile unloaded', async () => {
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
+      const freed = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => {
+          throw new Error('health down');
+        },
+      });
+
+      expect(freed).toBe(true);
+      expect(getLastTtsAutoFree()).toMatchObject({ models: ['Qwen 0.6B'] });
+    });
+
+    it('declines when a VoiceDesign model is resident on the denied device — unloading would kill another design', async () => {
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
+      const result = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        deviceKey: 'cuda:0',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, qwenDesignResident: true, qwenDeviceKey: 'cuda:0' }),
+      });
+
+      expect(result).toBe('declined');
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(getLastTtsAutoFree()).toBeNull();
+    });
+
+    it('a VoiceDesign resident on a DIFFERENT device does not stop the free', async () => {
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
+      const result = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        deviceKey: 'cuda:1',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, qwenDesignResident: true, qwenDeviceKey: 'cuda:0' }),
+      });
+
+      expect(result).toBe(true);
+      expect(reconcile).toHaveBeenCalled();
+    });
+
+    it('re-checks the render gate after the health probe, right before unloading', async () => {
+      /* A render can start during the probe's (up to ~2 s) round trip. */
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
+      const gate = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+      const result = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: gate,
+        _probeHealth: async () => ({ qwenLoaded: true }),
+      });
+
+      expect(result).toBe(false);
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(getLastTtsAutoFree()).toBeNull();
     });
   });
 

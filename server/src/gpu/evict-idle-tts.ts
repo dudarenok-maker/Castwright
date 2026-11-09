@@ -87,7 +87,11 @@ import { engineForModelKey, type TtsModelKey } from '../tts/model-keys.js';
     file header). Returns whether it actually issued an `/unload` (see that
     function's doc comment) — threaded straight through by `evictIdleQwenBase`
     below so this lever's own return value stays truthful (#1839 finding 1). */
-type ReconcileResidentQwenTiersFn = (keep: ResidentTtsKeep, signal?: AbortSignal) => Promise<boolean>;
+type ReconcileResidentQwenTiersFn = (
+  keep: ResidentTtsKeep,
+  signal?: AbortSignal,
+  freedOut?: string[],
+) => Promise<boolean>;
 
 /** A device family that holds VRAM. 'cpu' and an unknown/absent reading do
     not, so a Kokoro reported there is never unloaded by this lever. */
@@ -109,6 +113,10 @@ export interface EvictIdleQwenBaseOpts {
       itself loads (the 1.7B VoiceDesign model), so this is what tells the
       lever a design needs neither Qwen base tier resident. */
   purpose?: 'design';
+  /** #4066 — the device the blocked admission was denied on. A VoiceDesign
+      resident on it makes a design/Quality op decline (`'declined'`). Absent
+      means unknown, which declines on any resident VoiceDesign. */
+  deviceKey?: string;
   signal?: AbortSignal;
   /** Injected for tests. Defaults to the registered-accessor leaf gate
       (./qwen-tier-reconcile-gate.ts), which fails closed to "did not evict"
@@ -132,7 +140,7 @@ export interface EvictIdleQwenBaseOpts {
     finding 1), which made `capacity-retry.ts` `continue` into an immediate,
     wasted retry attempt instead of falling through to its bounded poll; the
     same is now true of a failed eviction, not just a no-op one. */
-export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean> {
+export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean | 'declined'> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
   const { modelKey } = opts;
 
@@ -150,22 +158,32 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   const keep: ResidentTtsKeep =
     isQwenOp && !isDesign ? { keep06: !wants17, keep17: wants17 } : { keep06: false, keep17: false };
 
-  /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro, and
-     report what they freed. Residency is read up front so the notice can
-     name only what was really resident. */
+  /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro. Residency
+     is read up front only to decide that (and whether another design is
+     resident); what the notice names comes from what reconcile really
+     unloaded, so a failed probe or a failed Kokoro unload never loses or
+     misstates the event. */
   const heavy = isDesign || wants17;
-  const freedNames: string[] = [];
   if (heavy) {
     const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
+    /* Designs are not globally serialised and `QwenEngine.unload()` clears
+       the VoiceDesign model along with the base, so unloading under another
+       design resident on the denied device would kill it mid-forward. Hold
+       off; the caller keeps its latch armed and asks again on a later poll. */
+    if (health?.qwenDesignResident === true && (!opts.deviceKey || health.qwenDeviceKey === opts.deviceKey)) {
+      return 'declined';
+    }
     if (health?.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
-    if (health?.qwenLoaded === true && !keep.keep06) freedNames.push('Qwen 0.6B');
-    if (health?.qwenBase17Loaded === true && !keep.keep17) freedNames.push('Qwen 1.7B');
-    if (keep.keepKokoro === false) freedNames.push('Kokoro');
+    /* The probe above can take up to ~2 s; a render may have started in it. */
+    if (anyGenerationActive()) return false;
   }
 
+  /* Only the heavy shapes report what they freed (the light ops record no
+     notice), so only they hand reconcile an out-param. */
+  const freedNames: string[] | undefined = heavy ? [] : undefined;
   const freed = opts._reconcile
-    ? await opts._reconcile(keep, opts.signal)
-    : await reconcileResidentQwenTiersIfRegistered(keep, opts.signal);
-  if (freed && heavy) recordTtsAutoFree(freedNames, isDesign ? 'voice design' : 'Quality render');
+    ? await (freedNames ? opts._reconcile(keep, opts.signal, freedNames) : opts._reconcile(keep, opts.signal))
+    : await reconcileResidentQwenTiersIfRegistered(keep, opts.signal, freedNames);
+  if (freedNames) recordTtsAutoFree(freedNames, isDesign ? 'voice design' : 'Quality render');
   return freed;
 }

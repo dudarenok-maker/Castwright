@@ -261,6 +261,20 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(m.unloads()).toEqual([{ engine: 'qwen' }, { engine: 'kokoro' }]);
   });
 
+  it('#4066 — reports into freedOut only the models whose /unload succeeded', async () => {
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true, kokoro_loaded: true }) };
+      const body = JSON.parse((init?.body as string) ?? '{}') as { engine: string; model?: string };
+      return { ok: body.engine !== 'kokoro', json: async () => ({}), status: body.engine === 'kokoro' ? 500 : 200 };
+    });
+    global.fetch = f as unknown as typeof fetch;
+    const freed: string[] = [];
+    await expect(
+      reconcileResidentQwenTiers({ keep06: false, keep17: false, keepKokoro: false }, undefined, freed),
+    ).resolves.toBe(false); // Kokoro's unload failed
+    expect(freed.sort()).toEqual(['Qwen 0.6B', 'Qwen 1.7B']);
+  });
+
   it('#4066 — an absent keepKokoro never touches Kokoro (the run-start callers)', async () => {
     const m = mockSidecar({ qwen_loaded: false, kokoro_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;

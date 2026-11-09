@@ -46,13 +46,15 @@ export interface ResidentTtsKeep {
   keepKokoro?: boolean;
 }
 
-let provider: ((keep: ResidentTtsKeep, signal?: AbortSignal) => Promise<boolean>) | null = null;
+/* `freedOut`, when given, is pushed the display name of each model whose
+   `/unload` succeeded (#4066), so a caller can say what really went. */
+type ReconcileFn = (keep: ResidentTtsKeep, signal?: AbortSignal, freedOut?: string[]) => Promise<boolean>;
+
+let provider: ReconcileFn | null = null;
 
 /** Registered by tts/ensure-sidecar-loaded.ts at module init with its own
     `reconcileResidentQwenTiers`. */
-export function setReconcileResidentQwenTiersProvider(
-  fn: (keep: ResidentTtsKeep, signal?: AbortSignal) => Promise<boolean>,
-): void {
+export function setReconcileResidentQwenTiersProvider(fn: ReconcileFn): void {
   provider = fn;
 }
 
@@ -63,7 +65,8 @@ export function setReconcileResidentQwenTiersProvider(
 export async function reconcileResidentQwenTiersIfRegistered(
   keep: ResidentTtsKeep,
   signal?: AbortSignal,
+  freedOut?: string[],
 ): Promise<boolean> {
   if (!provider) return false;
-  return provider(keep, signal);
+  return freedOut ? provider(keep, signal, freedOut) : provider(keep, signal);
 }

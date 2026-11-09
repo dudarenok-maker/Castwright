@@ -232,6 +232,7 @@ const UNLOAD_ABSOLUTE_MAX_MS = 600_000;
 export async function reconcileResidentQwenTiers(
   keep: ResidentTtsKeep,
   signal?: AbortSignal,
+  freedOut?: string[],
 ): Promise<boolean> {
   const base = getResolvedSidecarUrl();
   let h: Record<string, unknown> | null = null;
@@ -257,7 +258,9 @@ export async function reconcileResidentQwenTiers(
         signal: bounded,
         dispatcher: UNLOAD_DISPATCHER,
       });
-      if (!res.ok) {
+      if (res.ok) {
+        freedOut?.push(model === 'kokoro' ? 'Kokoro' : model ? 'Qwen 1.7B' : 'Qwen 0.6B');
+      } else {
         /* Sidecar returned an error (e.g. 500 from base17 in-flight contention).
            Mark the eviction as failed and log it for visibility (the sidecar
            already logged the root cause). Callers interpret the return value as

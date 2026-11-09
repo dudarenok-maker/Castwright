@@ -145,9 +145,12 @@ export interface CapacityRetryOpts {
       `NoCapacityError`. */
   maxAttempts?: number;
   /** Injected "free a resident TTS model this op doesn't need" action —
-      defaults to `evictIdleQwenBase` bound to this call's model key. Returns
-      true when it actually unloaded something. */
-  evictIdleTts?: () => Promise<boolean>;
+      defaults to `evictIdleQwenBase` bound to this call's model key. Takes the
+      denied request's `deviceKey`. Returns true when it actually unloaded
+      something, and `'declined'` when it held off for a reason that can clear
+      (another design resident on the card, #4066) — which leaves the
+      one-shot latch armed so a later poll asks again. */
+  evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'>;
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
@@ -377,8 +380,11 @@ export async function withCapacityRetry(
          "no render in flight" inside evictIdleQwenBase, so it is inert during
          generation by construction. At most once per call, like the analyzer. */
       if (!evictedTts) {
-        evictedTts = true;
-        if (await evictIdleTts()) continue; // immediate retry after freeing VRAM
+        const freedTts = await evictIdleTts(noCap.deviceKey);
+        if (freedTts !== 'declined') {
+          evictedTts = true;
+          if (freedTts) continue; // immediate retry after freeing VRAM
+        }
       }
 
       if (usingDesignBudget) {

@@ -163,6 +163,31 @@ describe('withCapacityRetry', () => {
     expect(doPost).toHaveBeenCalledTimes(2); // refused, freed, retried OK
   });
 
+  it('#4066: a declined auto-free re-arms the one-shot latch, so a later poll can still free', async () => {
+    /* The lever declines while another design is resident on the card. That
+       is a "not yet", not a "no": the latch must stay armed so the next poll
+       asks again (a plain `false` keeps the one-shot behaviour above). */
+    const evictIdleTts = vi.fn().mockResolvedValueOnce('declined').mockResolvedValueOnce(true);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls < 3 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictIdleTts).toHaveBeenCalledTimes(2);
+    expect(evictIdleTts).toHaveBeenCalledWith('cuda:0');
+  });
+
   it('#1839 finding 1: evictIdleTts reporting false does not burn an immediate no-op retry — it still takes the poll wait', async () => {
     /* Before the fix, evictIdleTts (evict-idle-tts.ts's evictIdleQwenBase)
        reported `true` whenever it was CALLED, even when it froze nothing —
