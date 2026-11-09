@@ -326,6 +326,38 @@ describe('series mint copies emotion variants (#4037)', () => {
     expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
   });
 
+  it('T13: a failing in-lock copy with nothing stamped removes every copy, the in-lock ones too', async () => {
+    /* sad and excited land after the copy loop; in the walk, sad's in-lock copy
+       succeeds and excited's .json copy fails, before any row is stamped. */
+    seed(
+      withVariants({
+        angry: { name: 'qwen-v_wren__angry' },
+        sad: { name: 'qwen-v_wren__sad' },
+        excited: { name: 'qwen-v_wren__excited' },
+      }),
+    );
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest, phase) => {
+      if (!fired && phase === 'after' && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        for (const e of ['sad', 'excited']) {
+          plant(`qwen-v_wren__${e}.pt`, `${e}-PT`);
+          plant(`qwen-v_wren__${e}.json`, `${e}-JSON`);
+        }
+      }
+    };
+    syncCopyFails.on = true;
+    await expect(mint()).rejects.toThrow(/EBUSY/);
+    expect(fired).toBe(true);
+    const extra = ['sad', 'excited'].flatMap((e) => [`qwen-v_wren__${e}.pt`, `qwen-v_wren__${e}.json`]);
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles, ...extra].sort());
+    expect(rowOf('Book One').voiceUuid).toBeUndefined();
+    expect(rowOf('Book Two').voiceUuid).toBeUndefined();
+  });
+
   it('T15: a new-key variant file the mint did not write is never overwritten', async () => {
     seed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, sad: { name: 'qwen-v_wren__sad' } }));
     plantBase();
@@ -396,6 +428,28 @@ describe('book-scoped mint copies the legacy family too (#4037)', () => {
     failing.on = true;
     await expect(ensure(bookDir('Solo', SOLO_SERIES), 'wren')).rejects.toThrow(/EBUSY/);
     expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
+    expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
+  });
+
+  it('T16: a failing in-lock copy removes every copy, the in-lock ones too, and stamps nothing', async () => {
+    soloSeed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, excited: { name: 'qwen-v_wren__excited' } }));
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.fn = async (dest, phase) => {
+      /* after the copy loop's last copy, a landing on the legacy key (another book on it) */
+      if (!fired && phase === 'after' && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__angry.pt', 'ANGRY-NEW');
+        plant('qwen-v_wren__excited.pt', 'EXCITED-PT');
+        plant('qwen-v_wren__excited.json', 'EXCITED-JSON');
+      }
+    };
+    syncCopyFails.on = true;
+    await expect(ensure(bookDir('Solo', SOLO_SERIES), 'wren')).rejects.toThrow(/EBUSY/);
+    expect(fired).toBe(true);
+    const extra = ['qwen-v_wren__excited.pt', 'qwen-v_wren__excited.json'];
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles, ...extra].sort());
     expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
   });
 

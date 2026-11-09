@@ -906,8 +906,9 @@ export async function ensureCharacterVoiceUuid(
       let stampedAny = false;
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
-        stampedAny = true;
-        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`, copies);
+        const stamped = withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`, copies);
+        stampedAny = true; // only once the transform succeeded: a throw in it stamps nothing
+        return stamped;
       };
       try {
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
@@ -953,7 +954,7 @@ export async function ensureCharacterVoiceUuid(
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
        sees the copied base). A failed copy removes its own files and rethrows;
-       a failed cast write removes the copies. */
+       a failed cast write, or a failed copy made while renaming, removes the copies. */
     return whileSaving(`qwen-${uuid}`, async () => {
       const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
       const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
@@ -968,17 +969,17 @@ export async function ensureCharacterVoiceUuid(
       } else {
         await removeFiles(copied);
       }
-      let dirty = false;
-      for (let i = 0; i < freshCast.characters.length; i++) {
-        if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
-          const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
-          freshCast.characters[i] = hasBase
-            ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`, copies)
-            : stamped;
-          dirty = true;
-        }
-      }
       try {
+        let dirty = false;
+        for (let i = 0; i < freshCast.characters.length; i++) {
+          if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+            const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
+            freshCast.characters[i] = hasBase
+              ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`, copies)
+              : stamped;
+            dirty = true;
+          }
+        }
         if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
       } catch (e) {
         await removeFiles(copied);
