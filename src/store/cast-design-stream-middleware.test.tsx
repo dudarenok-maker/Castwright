@@ -929,7 +929,7 @@ describe('a design that separates a declined row, then a later cast save (#4067)
       },
     }) as never;
 
-  async function designThenSave(cancel: boolean) {
+  async function designThenSave() {
     const { persistenceMiddleware, flushBookPersistence } = await import('./persistence-middleware');
     const { uiSlice } = await import('./ui-slice');
     const initialUi = uiSlice.getInitialState();
@@ -963,6 +963,8 @@ describe('a design that separates a declined row, then a later cast save (#4067)
       }),
     );
     const { cb } = singleStartCalls[0];
+    /* A re-design job ends in `preview_ready` alone (single-design.ts); the
+       server never sends `designed` for it. */
     cb.onPreviewReady?.({
       characterId: 'c1',
       name: 'Aria',
@@ -971,7 +973,6 @@ describe('a design that separates a declined row, then a later cast save (#4067)
       persona: 'warm',
       voiceUuid: 'u_forked',
     });
-    if (!cancel) cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-u_forked', voiceUuid: 'u_forked' });
     putBookState.mockClear();
     store.dispatch(castSlice.actions.lockVoice('c1'));
     await store.dispatch(flushBookPersistence('b1') as never);
@@ -987,15 +988,15 @@ describe('a design that separates a declined row, then a later cast save (#4067)
 
   it('preview cancelled: the next PUT carries qwen-<new> and no stale variants', async () => {
     vi.useRealTimers();
-    const sent = await designThenSave(true);
+    const sent = await designThenSave();
     expect(sent.voiceUuid).toBe('u_forked');
     expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
     expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 
-  it('design approved: the next PUT carries the server-reported voice id', async () => {
-    vi.useRealTimers();
-    const sent = await designThenSave(false);
-    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_forked');
-  });
+  /* No "design approved" case: a first design's `designed` event carries the
+     post-fork `voiceId` (`qwen-<new>`), which setQwenOverrideName writes over the
+     name, and the pre-#4067 reducer already dropped the variants on a changed
+     uuid, so that path passes with setCharacterVoiceUuid's rename reverted. Only
+     the preview path (no `designed` event until promote) needs the rename. */
 });
