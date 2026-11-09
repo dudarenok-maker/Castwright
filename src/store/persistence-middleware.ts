@@ -454,6 +454,17 @@ export const castWrittenSince = (bookId: string, readSeq: number) => ({
   type: CAST_WRITTEN_SINCE,
   payload: { bookId, readSeq },
 });
+/* Plan 291 (#4031, round 2) — has the cast gate cleared the book's analysis
+   era since a read stamped at `readSeq` was issued? Then the gate's own read
+   (issued once the run had ended) is newer than that read, and the read's
+   cast must not be hydrated: it may predate the run's persist, and the cast
+   is no longer read-only to protect it. A latch alone does not count: the
+   era still stands, and the gate re-reads after it. Not a reducer action. */
+const CAST_ERA_CLEARED_SINCE = 'persistence/castEraClearedSince';
+export const castEraClearedSince = (bookId: string, readSeq: number) => ({
+  type: CAST_ERA_CLEARED_SINCE,
+  payload: { bookId, readSeq },
+});
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
 /* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
@@ -486,6 +497,8 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* Per field, the `clock` reading of the latest PUT 200 that carried it; a full
      read stamped before that teaches nothing for the field. */
   const landedAt = new Map<FlushKey, Record<string, number>>();
+  /* Plan 291 — per book, the `clock` reading at which its era was last cleared. */
+  const eraClearedAt = new Map<string, number>();
   let clock = 0;
 
   /* The token fields a unit's value carries: its own name on `state`, the
@@ -749,10 +762,17 @@ export const persistenceMiddleware: Middleware = (store) => {
   };
 
   return (next) => (action) => {
+    const clearing = (action as { type?: string }).type === castActions.clearAnalysisEra.type;
+    const clearBook = clearing ? (action as { payload: { bookId: string } }).payload.bookId : null;
+    const hadEra =
+      clearBook !== null && !!(store.getState() as PersistableRootState).cast?.analysisEra?.[clearBook];
     const result = next(action);
     const a = action as { type?: string; payload?: unknown };
     const type = a?.type;
     if (!type) return result;
+    if (hadEra && !(store.getState() as PersistableRootState).cast?.analysisEra?.[clearBook!]) {
+      eraClearedAt.set(clearBook!, ++clock);
+    }
 
     const after = store.getState() as PersistableRootState;
     const bookId = bookIdFromState(after);
@@ -777,6 +797,11 @@ export const persistenceMiddleware: Middleware = (store) => {
       const key = flushKey(readBook, 'cast');
       if ((outbox.get(key)?.size ?? 0) > 0 || timers.has(key) || flights.has(key)) return true;
       return Object.values(landedAt.get(key) ?? {}).some((tick) => tick > readSeq);
+    }
+
+    if (type === CAST_ERA_CLEARED_SINCE) {
+      const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
+      return (eraClearedAt.get(readBook) ?? 0) > readSeq;
     }
 
     if (type === LEARN_REVISIONS) {

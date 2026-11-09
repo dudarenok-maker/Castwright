@@ -38,6 +38,8 @@ import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
 import { persistenceMiddleware, flushBookPersistence, dropRetainedSaves } from '../store/persistence-middleware';
+import { bookBusySlice } from '../store/book-busy-slice';
+import { castGateMiddleware } from '../store/cast-gate';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
@@ -60,6 +62,7 @@ const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
 const getAnalysisStateMock = vi.fn();
 const mergeCharactersMock = vi.fn();
+const getBookBusyMock = vi.fn(async (..._a: unknown[]): Promise<string[]> => []);
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -187,7 +190,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       /* Plan 291 — the profile drawer's merge, and the busy check a failed
          merge's re-read waits on. */
       mergeCharacters: (...args: unknown[]) => mergeCharactersMock(...args),
-      getBookBusy: vi.fn(async () => []),
+      getBookBusy: (...args: unknown[]) => getBookBusyMock(...args),
     },
     AnalysisError: class extends Error {},
     ExportIncompleteError: class extends Error {
@@ -331,6 +334,8 @@ function makeStore(extraMiddleware: Middleware[] = []) {
       scriptReview: scriptReviewSlice.reducer,
       config: configSlice.reducer,
       splice: spliceSlice.reducer,
+      /* Plan 291 — the cast gate's busy cache. */
+      bookBusy: bookBusySlice.reducer,
     },
   });
 }
@@ -5988,4 +5993,75 @@ describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291
     expect(mergeCharactersMock).toHaveBeenCalledWith({ bookId: 'A', sourceId: 'eliza', targetId: 'other' });
     expect(getBookStateMock.mock.calls.length).toBeGreaterThan(reads);
   });
+});
+
+describe('Layout — a full read issued before the gate cleared never lands stale (plan 291, #4031 round 2)', () => {
+  it('the stale full read keeps the gate\'s roster in the slice, and no PUT carries the stale roster', async () => {
+    const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' };
+    const kestrel = { id: 'kestrel', name: 'Kestrel', role: '', color: 'peach' };
+    let diskCast: unknown[] = [eliza];
+    let busyKinds: string[] = [];
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null, { cast: { characters: diskCast } }));
+    getBookBusyMock.mockImplementation(async () => busyKinds);
+    putBookStateMock.mockReset();
+    putBookStateMock.mockResolvedValue(undefined);
+    try {
+      const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+
+      /* A re-analysis of A is under way. */
+      busyKinds = ['analysis'];
+      act(() => {
+        store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+      });
+      /* Layout re-reads A (a stale refusal, say) while the run still holds
+         it: the read answers with the pre-persist cast, and is held. */
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      const before = getBookStateMock.mock.calls.length;
+      getBookStateMock.mockImplementationOnce(async (id: string) => {
+        const pre = bookStateFor(id, null, { cast: { characters: [eliza] } });
+        await held;
+        return pre;
+      });
+      act(() => {
+        store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' }));
+      });
+      await waitFor(() => expect(getBookStateMock.mock.calls.length).toBe(before + 1));
+
+      /* The run persists its rows and ends; the gate reads and clears. */
+      diskCast = [eliza, kestrel];
+      busyKinds = [];
+      await waitFor(() => expect(store.getState().cast.analysisEra?.A).toBeUndefined(), { timeout: 10_000 });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+
+      /* The held, stale full read lands now. */
+      await act(async () => {
+        release();
+        await held;
+      });
+      await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+      /* Saves from here on are the ones a stale slice would poison (the
+         gate-up flush of a save queued before the run is B3's, not this). */
+      const putsBefore = putBookStateMock.mock.calls.length;
+
+      /* The next whole-slice save carries the run's rows. */
+      act(() => {
+        store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' }));
+      });
+      const puts = () => putBookStateMock.mock.calls.slice(putsBefore);
+      await waitFor(() => expect(puts().some(([, req]) => (req as { slice: string }).slice === 'cast')).toBe(true));
+      for (const [, req] of puts()) {
+        const r = req as { slice: string; patch: { characters?: Array<{ id: string }> } };
+        if (r.slice !== 'cast') continue;
+        expect(r.patch.characters?.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+      }
+    } finally {
+      getBookBusyMock.mockImplementation(async () => []);
+    }
+  }, 20_000);
 });

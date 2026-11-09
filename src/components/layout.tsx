@@ -40,6 +40,7 @@ import {
   learnSliceRevisions,
   landedFieldsSince,
   castWrittenSince,
+  castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { rehydrateCastAfterAnalysis } from '../store/cast-gate';
@@ -1050,8 +1051,15 @@ export function Layout() {
                Analysing view's "Cast so far" pill would start at 24 instead
                of 0 as Phase 0a streams in fresh detections. Through
              `hydrateCharacters`, which is never persisted: this is the disk
-             snapshot, not an edit (#3395 pass 4). */
-            dispatch(castActions.hydrateCharacters(res.cast?.characters ?? []));
+             snapshot, not an edit (#3395 pass 4).
+             Plan 291 (#4031) — unless the cast gate cleared the book's
+             analysis era since this read was issued: the gate's own read,
+             issued after the run ended, is newer, and this one may predate
+             the run's persist. Only the cast part is skipped. */
+            const eraClearedSince =
+              typeof readSeq === 'number' &&
+              (dispatch(castEraClearedSince(bookId, readSeq) as never) as unknown) === true;
+            if (!eraClearedSince) dispatch(castActions.hydrateCharacters(res.cast?.characters ?? []));
             /* fe-16 — per-character render fallback engine (Qwen → Kokoro). Empty
                map clears stale entries when a re-render dropped the fallback. */
             dispatch(castActions.setRenderedFallback(res.renderedFallbackByCharacter ?? {}));
