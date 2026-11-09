@@ -52,11 +52,12 @@ function makeStore(characters: Character[]) {
 }
 
 /* the declined row as the LAST whole-roster cast PUT carried it */
-async function declineThenEdit(store: ReturnType<typeof makeStore>, newUuid: string) {
+async function declineThenEdit(store: ReturnType<typeof makeStore>, newUuid: string, separated = true) {
   declineVoiceLink.mockResolvedValue({
     declinedVoiceFrom: ['book-one'],
     declinedVoiceUuids: ['u_shared'],
     voiceUuid: newUuid,
+    separated,
     movedCharacterIds: [],
   });
   await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -106,5 +107,18 @@ describe('"Don\'t reuse" then a later cast save (#4067)', () => {
     expect(sent.voiceUuid).toBe('u_fresh');
     expect(sent.overrideTtsVoices?.qwen?.variants).toBeUndefined();
     expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_fresh');
+  });
+
+  it('a decline that did NOT move the row keeps its name and its emotion variants', async () => {
+    const store = makeStore([
+      row({
+        voiceUuid: 'u_own',
+        overrideTtsVoices: { qwen: { name: 'qwen-u_own', variants: { angry: { name: 'qwen-u_own__angry' } } } },
+      }),
+    ]);
+    const sent = await declineThenEdit(store, 'u_own', false);
+    expect(sent.voiceUuid).toBe('u_own');
+    expect(sent.overrideTtsVoices?.qwen?.name).toBe('qwen-u_own');
+    expect(sent.overrideTtsVoices?.qwen?.variants?.angry?.name).toBe('qwen-u_own__angry');
   });
 });

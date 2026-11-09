@@ -180,7 +180,7 @@ describe('the marker', () => {
   it('records the declined book on the row, and only that row', async () => {
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', movedCharacterIds: [] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', separated: false, movedCharacterIds: [] });
     const rows = readRows('Book Two');
     expect(rows[0].declinedVoiceFrom).toEqual([oneId]);
     expect(rows[1].declinedVoiceFrom).toBeUndefined();
@@ -239,7 +239,7 @@ describe('the separation: after a decline the row is on a voice no other book ho
     const two = readRows('Book Two')[0];
     const fresh = two.voiceUuid as string;
     expect(fresh).not.toBe('u_shared');
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], voiceUuid: fresh, movedCharacterIds: [] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], voiceUuid: fresh, separated: true, movedCharacterIds: [] });
     expect(two.overrideTtsVoices.qwen.variants).toBeUndefined();
     for (const base of ['.pt', '.json', '__1.7b.pt', '__master.wav']) {
       expect(readFileSync(voiceFile(`qwen-${fresh}${base}`)).equals(FAMILY[`qwen-u_shared${base}`])).toBe(true);
@@ -401,7 +401,7 @@ describe('the separation: after a decline the row is on a voice no other book ho
     book('Book Two', [wren({ voiceUuid: 'u_two', ...slot('u_two', ['angry']) })]);
     book('Book Three', [wren({ voiceUuid: 'u_two', ...linkTo('Book Two') })]);
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', movedCharacterIds: [] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', separated: false, movedCharacterIds: [] });
     expect(Object.keys(readRows('Book Two')[0].overrideTtsVoices.qwen.variants)).toEqual(['angry']);
     expect(voiceFiles()).toEqual([]);
   });

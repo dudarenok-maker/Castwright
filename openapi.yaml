@@ -4781,7 +4781,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [declinedVoiceFrom, declinedVoiceUuids, voiceUuid, movedCharacterIds]
+                required: [declinedVoiceFrom, declinedVoiceUuids, voiceUuid, separated, movedCharacterIds]
                 properties:
                   declinedVoiceFrom:
                     type: array
@@ -4793,6 +4793,9 @@ paths:
                     type: string
                     nullable: true
                     description: The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own).
+                  separated:
+                    type: boolean
+                    description: True when the row was moved onto a voice of its own (the server renamed its qwen slot and dropped its variants); false when it already owned its voice and nothing moved. The client mirrors the fork only when true.
                   movedCharacterIds:
                     type: array
                     items: { type: string }

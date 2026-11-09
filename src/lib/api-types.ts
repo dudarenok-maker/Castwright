@@ -13261,6 +13261,8 @@ export interface operations {
                         declinedVoiceUuids: string[];
                         /** @description The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own). */
                         voiceUuid: string | null;
+                        /** @description True when the row was moved onto a voice of its own (the server renamed its qwen slot and dropped its variants); false when it already owned its voice and nothing moved. The client mirrors the fork only when true. */
+                        separated: boolean;
                         /** @description Other characters in the same book that moved onto the new voiceUuid with it (they shared its voice key). Empty when nothing moved. The client mirrors their new voiceUuid. */
                         movedCharacterIds: string[];
                     };
