@@ -296,8 +296,11 @@ export class CharacterGoneError extends Error {
    with a separation that moves the row (separateVoiceLocked): any other writer
    that changes the row's key (a link made mid-render, a re-analysis) leaves it
    behind, and the landing then discards the render instead of following it onto
-   another book's voice. */
-const designWatchers = new Map<string, { key: string; linkId: string }>();
+   another book's voice. `separated` (#4067) is set when a separation moved the
+   watcher, so the landing reports a separation some other writer performed
+   mid-render, not only the design's own uuid step. */
+type DesignWatcher = { key: string; linkId: string; separated?: boolean };
+const designWatchers = new Map<string, DesignWatcher>();
 const watchTag = (bookId: string, characterId: string): string => `${bookId}|${characterId}`;
 
 /* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — the voice keys
@@ -754,7 +757,10 @@ export async function separateVoiceLocked(
   /* P11-5 — a design in flight on a moved row follows it to the new voice. */
   for (const m of moved) {
     const w = designWatchers.get(watchTag(m.bookId, m.characterId));
-    if (w?.key === oldKey) w.key = `qwen-${newUuid}`;
+    if (w?.key === oldKey) {
+      w.key = `qwen-${newUuid}`;
+      w.separated = true;
+    }
   }
   await dropStagedPreviews(oldKey, moved);
   console.log(
@@ -1714,7 +1720,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)), separated: step.separated };
+      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)), separated: step.separated || !!watcher.separated };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);

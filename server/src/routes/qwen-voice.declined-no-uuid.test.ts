@@ -33,6 +33,21 @@ vi.mock('../gpu/gpu-load.js', () => ({
 }));
 vi.mock('../gpu/sidecar-vram-sample.js', () => ({ maybeSampleSidecarEngine: async () => {} }));
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
+/* Runs once, just before a separation takes its book-ops (the window between the
+   lock-free pre-check and the locked re-decision). */
+const beforeLocks = vi.hoisted(() => ({ fn: null as (() => void) | null }));
+vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
+  const withBookOps: typeof actual.withBookOps = (ids, fn, opts) => {
+    if (beforeLocks.fn) {
+      const run = beforeLocks.fn;
+      beforeLocks.fn = null;
+      run();
+    }
+    return actual.withBookOps(ids, fn, opts);
+  };
+  return { ...actual, withBookOps };
+});
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -110,15 +125,18 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', fetchMock);
 
   const { singleDesignRouter } = await import('./single-design.js');
+  const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
   app = express();
   app.use(express.json());
   app.use('/api/books', singleDesignRouter);
+  app.use('/api/books', castDeclineVoiceLinkRouter);
 });
 
 beforeEach(() => {
+  beforeLocks.fn = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -219,5 +237,105 @@ describe('a declined row with no voiceUuid (#4067)', () => {
     const ready = collectSse(res).find((e) => e.type === 'preview_ready');
     expect(ready?.voiceUuid).toEqual(expect.any(String));
     expect(ready?.separated).toBe(false);
+  });
+});
+
+/* Pass 4, S1 — a "Don't reuse" from another tab DURING the render separates the row
+   first; the landing follows it (the P11-5 watcher), and the design's own uuid step
+   then finds nothing left to separate. The event still has to say the row was
+   separated, or a stale tab's first-mint mirror keeps the old name and variants. */
+describe('a decline that lands during the render (#4067, pass 4 S1)', () => {
+  const legacyLinked = (extra: Record<string, unknown> = {}) => ({
+    id: 'wren',
+    name: 'Wren',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'v_wren',
+    voiceStyle: 'a bright voice',
+    evidence: [{ quote: '"Hello there."' }],
+    overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } },
+    ...extra,
+  });
+
+  async function declineDuringRender(preview: boolean) {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', 1, bookOneId, legacyLinked());
+    writeBook(
+      'Book Two',
+      2,
+      bookTwoId,
+      legacyLinked({ matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } }),
+    );
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), Buffer.from('ORIG'));
+    const base = fetchMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (entered = r));
+    const held = new Promise<void>((r) => (release = r));
+    let first = true;
+    fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
+      if (first && !String(url).includes('evict')) {
+        first = false;
+        entered();
+        await held;
+      }
+      return base(url, init);
+    });
+    const streaming = Promise.resolve(stream(preview));
+    await reached;
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    release();
+    return { events: collectSse(await streaming), declined: declined.body };
+  }
+
+  it('preview_ready carries separated: true', async () => {
+    const { events, declined } = await declineDuringRender(true);
+    const ready = events.find((e) => e.type === 'preview_ready');
+    expect(declined.separated).toBe(true);
+    expect(ready).toMatchObject({ voiceUuid: declined.voiceUuid, separated: true });
+  });
+
+  it('designed carries separated: true', async () => {
+    const { events, declined } = await declineDuringRender(false);
+    const designed = events.find((e) => e.type === 'designed');
+    expect(designed).toMatchObject({ voiceUuid: declined.voiceUuid, separated: true });
+  });
+});
+
+/* Pass 4, minor 2 — `separated` is the LOCKED re-decision's answer, not the lock-free
+   pre-check's. A row with a uuid and a marker, with an outside holder that leaves
+   between the two, is not separated: reporting it so would make the client fork a
+   row the server kept, and the next PUT would delete its variants on disk. */
+describe('a holder that leaves before the locks (#4067, pass 4)', () => {
+  it('reports separated: false and keeps the uuid, name and variants', async () => {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    const wren = {
+      id: 'wren',
+      name: 'Wren',
+      role: 'supporting',
+      color: 'sky',
+      voiceId: 'v_wren',
+      voiceUuid: 'u_shared',
+      voiceStyle: 'a bright voice',
+      evidence: [{ quote: '"Hello there."' }],
+    };
+    writeBook('Book One', 1, bookOneId, wren);
+    writeBook('Book Two', 2, bookTwoId, {
+      ...wren,
+      declinedVoiceFrom: [bookOneId],
+      overrideTtsVoices: { qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+    });
+    beforeLocks.fn = () => writeBook('Book One', 1, bookOneId, { ...wren, voiceId: 'v_other', voiceUuid: 'u_other' });
+    const res = await stream(true);
+    expect(beforeLocks.fn).toBeNull(); // the window was hit
+    const ready = collectSse(res).find((e) => e.type === 'preview_ready');
+    expect(ready).toMatchObject({ voiceUuid: 'u_shared', separated: false });
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 });
