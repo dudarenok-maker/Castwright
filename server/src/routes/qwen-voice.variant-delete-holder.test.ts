@@ -459,7 +459,14 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
     plant(stale);
     plant(kept);
     plant(['qwen-u_solo__sad.json.mint-Fresh1.tmp'], false); // a second server may be mid-mint
-    expect(await sweepOrphanVariantFiles()).toBe(stale.length);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await sweepOrphanVariantFiles()).toBe(stale.length);
+      /* a backup kept after a failed restore is deleted here: say so */
+      for (const n of stale) expect(warn).toHaveBeenCalledWith(expect.stringContaining(n));
+    } finally {
+      warn.mockRestore();
+    }
     expect(onDisk()).toEqual([...kept, 'qwen-u_solo__sad.json.mint-Fresh1.tmp'].sort());
   });
 

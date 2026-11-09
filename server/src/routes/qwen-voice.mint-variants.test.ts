@@ -5,7 +5,17 @@
    On real cast.json files; the mint is called directly. Ported from PR #4052. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  statSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -42,6 +52,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 /* T13 — makes a synchronous copy of an `__excited.json` member fail with EBUSY. */
 const syncCopyFails = vi.hoisted(() => ({ on: false }));
 const renameFails = vi.hoisted(() => ({ hard: false, transient: 0 }));
+/* #4037 — sees every synchronous rename's source before it runs. */
+const renameSeen = vi.hoisted(() => ({ fn: null as null | ((from: string, to: string) => void) }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const copyFileSync = ((src: string, dest: string, mode?: number) => {
@@ -53,6 +65,7 @@ vi.mock('node:fs', async (importOriginal) => {
   /* #4037 — `hard` makes a rename onto `qwen-<anything>__sad.json` fail for good (EINVAL);
      `transient` makes the next rename onto a `__sad.pt` fail that many times with EBUSY. */
   const renameSync = ((from: string, to: string) => {
+    renameSeen.fn?.(String(from), String(to));
     if (renameFails.hard && /qwen-[^\\/]+__sad\.json$/.test(String(to))) {
       throw Object.assign(new Error('EINVAL: invalid argument, rename'), { code: 'EINVAL' });
     }
@@ -177,6 +190,7 @@ beforeEach(() => {
   renameFails.hard = false;
   renameFails.transient = 0;
   castWritten.fn = null;
+  renameSeen.fn = null;
   hook.fn = null;
 });
 afterAll(() => {
@@ -654,5 +668,73 @@ describe('a variant recorded after the mint re-keyed the rows follows the mint (
     expect(await persistVariant(bookDir('Solo', SOLO_SERIES), 'wren', 'sad', 'qwen-v_wren__sad')).toBe('applied');
     expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
     expect(readFileSync(file(`qwen-${uuid}__sad.pt`), 'utf8')).toBe('SAD-PT');
+  });
+});
+
+/* A copy keeps its source's mtime on Windows, so a copy of an old file reads old to the
+   startup sweep's one-hour guard. The mint stamps every copy it makes with the time it
+   made it. */
+describe('the mint stamps its copies fresh, so the startup sweep leaves them alone (#4037)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const age = (path: string): number => Date.now() - statSync(path).mtimeMs;
+  const makeOld = (path: string) => {
+    const t = new Date(Date.now() - 3 * DAY_MS);
+    utimesSync(path, t, t);
+  };
+
+  it('F1: a variant family copied from an old source reads fresh to the startup sweep', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    plantBase();
+    plantAngry();
+    for (const f of legacyFiles) makeOld(file(f));
+    const { sweepOrphanVariantFiles } = await import('./qwen-voice.js');
+    const uuid = await mint();
+    const copies = ['pt', 'json'].map((x) => file(`qwen-${uuid}__angry.${x}`));
+    for (const c of copies) expect(age(c), c).toBeLessThan(60_000);
+    /* in the window before a row names the copies, nothing does */
+    for (const t of ['Book One', 'Book Two']) writeBook(t, [{ ...legacy }]);
+    /* only the old, unnamed legacy angry files go (.pt, .json), never the fresh copies */
+    expect(await sweepOrphanVariantFiles()).toBe(2);
+    for (const c of copies) expect(existsSync(c)).toBe(true);
+  });
+
+  /* a redesign of sad lands on the legacy key after Book One is stamped; the mint copy
+     of the old sad is aged so a refresh has to back it up and replace it */
+  const refreshFromOldSources = () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    writeBook('Book Two', [withVariants({ sad: { name: 'qwen-v_wren__sad' } })]);
+    plantBase();
+    plantJson('qwen-v_wren.json', { rev: 'R1' });
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plantJson('qwen-v_wren__sad.json', { baseRev: 'R0' });
+    let fired = false;
+    castWritten.fn = (path) => {
+      if (fired || !path.includes('Book One')) return;
+      fired = true;
+      plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+      plantJson('qwen-v_wren__sad.json', { baseRev: 'R1' });
+      for (const f of readdirSync(qwenDir()).filter((n) => /__sad\.(pt|json)$/.test(n))) makeOld(file(f));
+    };
+    const seen: Array<{ from: string; ageMs: number }> = [];
+    renameSeen.fn = (from) => {
+      if (/\.mint-[A-Za-z0-9_-]{6}\.tmp$/.test(from)) seen.push({ from, ageMs: age(from) });
+    };
+    return seen;
+  };
+
+  it('F2: a refresh stamps its temp copies fresh, whatever the age of the source', async () => {
+    const seen = refreshFromOldSources();
+    await mint();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) expect(s.ageMs, s.from).toBeLessThan(60_000);
+  });
+
+  it('F3: a refresh stamps its backups fresh, whatever the age of the file it replaces', async () => {
+    const seen = refreshFromOldSources();
+    renameFails.hard = true; // the .json rename fails: the .pt is put back from its backup
+    await expect(mint()).rejects.toThrow(/EINVAL/);
+    /* the .pt temp renamed over the copy, then its backup renamed back over it */
+    expect(seen.filter((x) => x.from.includes('__sad.pt.mint-')).length).toBe(2);
+    for (const s of seen) expect(s.ageMs, s.from).toBeLessThan(60_000);
   });
 });

@@ -27,9 +27,9 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
+import { rename, rm, copyFile, stat, readdir, utimes } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { constants as fsConstants, copyFileSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync, readFileSync, renameSync, rmSync, utimesSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
@@ -475,6 +475,10 @@ async function copyVariantFamilies(oldKey: string, newKey: string, prints: MintC
     try {
       await copyFile(memberPath(`${oldKey}__${e}`, m), dest, fsConstants.COPYFILE_EXCL);
       copied.push(dest);
+      /* a copy keeps its source's mtime on Windows: stamp it now so the startup
+         sweep's age guard reads it as the fresh file it is */
+      const now = new Date();
+      await utimes(dest, now, now);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
       await removeFiles(copied);
@@ -509,13 +513,17 @@ function refreshMintCopy(srcKey: string, destKey: string, copies: MintCopies): v
       const tmp = `${to}.mint-${nanoid(6)}.tmp`;
       try {
         copyFileSync(memberPath(srcKey, m), tmp, fsConstants.COPYFILE_EXCL);
+        utimesSync(tmp, new Date(), new Date()); // see copyVariantFamilies: a copy keeps its source's mtime
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // source absent
         throw err;
       }
       const bak = existsSync(to) ? `${to}.mint-${nanoid(6)}.tmp` : null;
       staged.push({ to, tmp, bak });
-      if (bak) copyFileSync(to, bak, fsConstants.COPYFILE_EXCL);
+      if (bak) {
+        copyFileSync(to, bak, fsConstants.COPYFILE_EXCL);
+        utimesSync(bak, new Date(), new Date());
+      }
     }
     const replaced: typeof staged = [];
     try {
@@ -1360,7 +1368,11 @@ export async function sweepOrphanVariantFiles(
   const stale: string[] = [];
   for (const n of names.filter((name) => MINT_TMP_FILE.test(name))) {
     const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
-    if (s && now - s.mtimeMs > maxAgeMs) stale.push(n);
+    if (s && now - s.mtimeMs > maxAgeMs) {
+      stale.push(n);
+      /* a backup kept after a failed restore is the only copy of the old member */
+      console.warn(`[variant-sweep] removing stale mint temp/backup ${n}.`);
+    }
   }
   const candidates = names.filter((n) => VARIANT_FILE.test(n) && !STAGED_FILE.test(n));
   const named = candidates.length === 0 ? null : await namedQwenVoices().catch(() => null);
