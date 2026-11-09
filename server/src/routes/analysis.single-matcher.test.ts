@@ -4,7 +4,7 @@
    (Tasks 15-27) are added on top of `__test-helpers__/analysis-job-harness.ts`.
    The mock blocks below are the ones the harness header requires. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /* Before any import binds BOOKS_ROOT: the harness books live in this workspace. */
@@ -354,6 +354,24 @@ describe('#4031 main job: run start and cache classification', () => {
     expect(await stage1AtFirstPhase1(b)).toBe(false);
   });
 
+  it('A17a: the pipelined operator log says held-for-plan only for a held book', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const line = (): string => log.mock.calls.map((c: unknown[]) => String(c[0])).find((l) => l.includes('pipelined phase0=')) ?? '';
+    try {
+      setPipelined(true);
+      const cast = seed([{ ...NARR }, { ...PRIOR_WREN }]);
+      await run(cast.manuscriptId, cast.bookDir, 'main');
+      expect(line()).toContain('held-for-plan');
+      log.mockClear();
+      const fresh = seed([]);
+      await run(fresh.manuscriptId, fresh.bookDir, 'main');
+      expect(line()).not.toContain('held-for-plan');
+      expect(line()).toContain('pipelined phase0=');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('A17a: a book with only a merge history is held too', async () => {
     const b = seed([], { w9: PRIOR_ID });
     expect(await stage1AtFirstPhase1(b)).toBe(true);
@@ -429,6 +447,43 @@ describe('#4031 main job: run start and cache classification', () => {
       expect(readFileSync(audiobook(b, 'cast-id-history.json'), 'utf8')).toBe('{ not json');
     } finally {
       warn.mockRestore();
+    }
+  });
+
+  it('the stale reuse-link prune is written to cast.json at run start', async () => {
+    const olga = { id: 'olga', name: 'Olga', role: 'minor', color: '#444444', matchedFrom: { bookId: 'not-in-this-series', characterId: 'olga-1' } };
+    const b = seed([{ ...NARR }, olga]);
+    let atStart: Row[] | undefined;
+    setPhase0Hook(() => {
+      atStart ??= readCast(b.bookDir);
+    });
+    await run(b.manuscriptId, b.bookDir, 'main');
+    const row = atStart!.find((c) => c.id === 'olga')!;
+    expect(row).toBeDefined();
+    expect(row.matchedFrom).toBeUndefined();
+  });
+
+  it('an unverifiable book dir at run start ends the run in the curated terminal and writes nothing', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN }, { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' }]);
+    /* The book path now holds a DIFFERENT book (as after an out-of-process move). */
+    const statePath = audiobook(b, 'state.json');
+    writeFileSync(statePath, JSON.stringify({ ...JSON.parse(readFileSync(statePath, 'utf8')), manuscriptId: 'some-other-book' }));
+    const castBefore = readFileSync(audiobook(b, 'cast.json'), 'utf8');
+    let phase0Calls = 0;
+    setPhase0Hook(() => {
+      phase0Calls += 1;
+    });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const events = await run(b.manuscriptId, b.bookDir, 'main');
+      /* It ends AT the run start, before any analyzer work - not later at the persist. */
+      expect(phase0Calls).toBe(0);
+      expect(events.some((e) => e.kind === 'result')).toBe(false);
+      expect(events.find((e) => e.kind === 'error')?.code).toBe('STALE_BOOK_DIR');
+      expect(readFileSync(audiobook(b, 'cast.json'), 'utf8')).toBe(castBefore);
+      expect(existsSync(audiobook(b, 'cast-id-history.json'))).toBe(false);
+    } finally {
+      err.mockRestore();
     }
   });
 

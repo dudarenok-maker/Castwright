@@ -4741,14 +4741,6 @@ export async function runMainAnalyzerJob(
       configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
     const hasPerRunPhasePick = Boolean(opts.requestedPhase0Model) || Boolean(opts.requestedPhase1Model);
     const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(hasPerRunPhasePick);
-    if (pipelinedPerPhase) {
-      console.log(
-        `[analysis] manuscript=${manuscriptId} pipelined ` +
-          `phase0=${selection.engine}:${selection.model} ` +
-          `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
-          `lag=${resolvePhase1MinLagChapters()}`,
-      );
-    }
     /* The watermark is built after the prior cast is read (below): whether Phase 1
        is held for the match plan depends on it (plan 291 rule 10). */
 
@@ -4947,10 +4939,13 @@ export async function runMainAnalyzerJob(
         ? await staleReuseLinkKeys(recordRef.bookId, priorCastForMerge as unknown as Parameters<typeof staleReuseLinkKeys>[1])
         : new Set<string>();
       const out: { m?: Awaited<ReturnType<typeof materialisePriorAtRunStart>> } = {};
-      /* #2196 - through the identity-verified LIVE book dir in mode:'drop': a stale
-         path (moved book, or one now holding another book) is never written. */
+      /* #2196 - through the identity-verified LIVE book dir, mode 'throw': a stale
+         path (moved book, or one now holding another book) is never written, and
+         the run ends here in the curated STALE_BOOK_DIR terminal. Skipping instead
+         would run on the unhealed first read with the carryover never in cast.json,
+         and every later cast.json-only reader would see a Re-parse's rows as deleted. */
       await withVerifiedBookDir(
-        { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+        { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job) },
         async (bookDir) => {
           out.m = await materialisePriorAtRunStart({
             bookDir,
@@ -5019,6 +5014,15 @@ export async function runMainAnalyzerJob(
        until Phase 0b has applied the plan. */
     const holdForPlan = await bookHasPriorOrHistory(recordRef.bookDir, priorCastForMerge.length);
     const watermark: PhaseWatermark = createWatermarkForJob({ holdForPlan });
+    if (pipelinedPerPhase) {
+      console.log(
+        `[analysis] manuscript=${manuscriptId} pipelined ` +
+          `phase0=${selection.engine}:${selection.model} ` +
+          `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
+          `lag=${resolvePhase1MinLagChapters()}` +
+          (holdForPlan ? ' held-for-plan' : ''),
+      );
+    }
     /* #3435 — endJob releases every Phase-1 worker parked on it. */
     job.watermark = watermark;
     const cachedChapters = cache.chapters ?? {};
