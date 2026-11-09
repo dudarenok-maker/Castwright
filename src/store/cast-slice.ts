@@ -325,15 +325,40 @@ export const castSlice = createSlice({
       if (Object.keys(variants).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
     },
     /* Redesign invalidation — clear ALL of a character's designed Qwen emotion
-       variants from redux when a redesign is approved. The promote-voice route
-       already tore them off cast.json + disk (they were minted from the base
-       embedding the redesign replaces); this mirrors that so the save-path
+       variants from redux when a redesign is approved. They were minted from the
+       base embedding the redesign replaces, so the server now treats them as
+       stale (#4040); this drops them locally at once so the save-path
        spreads don't re-persist the stale slots and the cast's "Emotion variants"
        demand re-surfaces them live. Local-only, mirroring
        removeCharacterEmotionVariant. No-op for an unknown character / no variants. */
     clearCharacterEmotionVariants: (s, a: PayloadAction<{ characterId: string }>) => {
       const c = s.characters.find((x) => x.id === a.payload.characterId);
       if (c?.overrideTtsVoices?.qwen?.variants) delete c.overrideTtsVoices.qwen.variants;
+    },
+    /* #4040 — a base redesign makes every emotion variant minted from the OLD
+       base stale on the server (dropped from the book GET, the cast PUT and
+       render) on EVERY row sharing the voice key, not just the redesigned one.
+       Reconcile the open tab with a fresh read: for each named row, of the
+       `emotions` the caller saw in the store at dispatch time, drop those the
+       payload's `variants` no longer carries. Prune-only and variants-only, so
+       unsaved edits to other cast fields survive, a row the read does not name
+       is untouched, and a variant that arrived after dispatch is never in
+       `emotions`, so it survives. Not a persisted action: the server already
+       holds this state. */
+    pruneStaleEmotionVariants: (
+      s,
+      a: PayloadAction<Array<{ id: string; emotions: string[]; variants?: Record<string, unknown> }>>,
+    ) => {
+      for (const fresh of a.payload) {
+        const c = s.characters.find((x) => x.id === fresh.id);
+        const local = c?.overrideTtsVoices?.qwen?.variants;
+        if (!local) continue;
+        const keep = fresh.variants ?? {};
+        for (const emotion of fresh.emotions) {
+          if (!(emotion in keep)) delete local[emotion as keyof typeof local];
+        }
+        if (Object.keys(local).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
+      }
     },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by

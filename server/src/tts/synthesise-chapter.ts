@@ -77,6 +77,7 @@ import {
   qwenVoiceWavPath,
   xttsVoiceLatentsPath,
 } from '../workspace/paths.js';
+import { anyQwenVariants, dropStaleVariants } from '../workspace/variant-base-rev.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -1338,7 +1339,7 @@ export async function synthesiseChapter(
 ): Promise<ChapterSynthesisResult> {
   const {
     sentences,
-    cast,
+    cast: castIn,
     castIdHistory = { supersededBy: {} },
     provider,
     modelKey,
@@ -1376,6 +1377,10 @@ export async function synthesiseChapter(
     cloneResolverDepsOverride,
     designedResolverDepsOverride,
   } = opts;
+  /* #4040 — an emotion variant whose base was redesigned since it was designed is
+     treated as not designed: its line renders in the base voice. A cast with no
+     variant at all is used as given, without yielding before the first group. */
+  const cast = anyQwenVariants(castIn) ? await dropStaleVariants(castIn) : castIn;
 
   /* fs-53: resolve the book language to a concrete BCP-47 primary subtag ONCE,
      then thread it into every audio-producing normaliseForTts call (title +

@@ -28,7 +28,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat, readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
@@ -43,6 +43,7 @@ import {
   qwenVoicesDir,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
@@ -74,6 +75,7 @@ import {
   RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
+import { readBaseRev, stampBaseRedesign, stampVariantBaseRev } from '../workspace/variant-base-rev.js';
 import { STAGING_MAX_AGE_MS } from '../workspace/portable-staging.js';
 
 /* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
@@ -368,6 +370,57 @@ const removeFiles = async (files: string[]): Promise<void> => {
   await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
 };
 
+/* #4037 — copy every emotion variant family of the legacy key `oldKey`
+   (`<oldKey>__<emotion>.pt|.json|__1.7b.pt|__master.wav`) to `<newKey>__<emotion>.*`,
+   for the series mint only (a separation drops its variants on purpose). The
+   emotions are the closed VARIANT_EMOTIONS set, so the base family's own
+   `__1.7b` / `__master` suffixes are never taken for one. Same contract as
+   copyBaseFamily: returns the files written; any failure removes what this call
+   copied and rethrows, so the caller never stamps a row whose variants are
+   half-copied. */
+async function copyVariantFamilies(oldKey: string, newKey: string): Promise<string[]> {
+  const dir = dirname(qwenVoicePtPath(oldKey));
+  const suffixes = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
+  const names = new Set<string>();
+  try {
+    const present = new Set(await readdir(dir));
+    for (const e of VARIANT_EMOTIONS) {
+      for (const s of suffixes) {
+        if (present.has(`${oldKey}__${e}${s}`)) names.add(`${oldKey}__${e}${s}`);
+      }
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  const copied: string[] = [];
+  for (const name of names) {
+    const dest = join(dir, `${newKey}${name.slice(oldKey.length)}`);
+    try {
+      await copyFile(join(dir, name), dest, fsConstants.COPYFILE_EXCL);
+      copied.push(dest);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
+      await removeFiles(copied);
+      throw e;
+    }
+  }
+  return copied;
+}
+
+/* #4037 — point a stamped row's stored variant names at the new key. */
+function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCharacter {
+  const qwen = c.overrideTtsVoices?.qwen;
+  if (!qwen?.variants) return c;
+  const variants = Object.fromEntries(
+    Object.entries(qwen.variants).map(([e, v]) => [
+      e,
+      v && v.name.startsWith(`${from}__`) ? { ...v, name: `${to}${v.name.slice(from.length)}` } : v,
+    ]),
+  );
+  return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants } } };
+}
+
 /* #3992 — stamp a new uuid onto one row and drop its qwen `variants` map in the
    same write. Render never reads a stored variant name: `pickEmotionVariantVoice`
    re-derives `qwen-<uuid>__<emotion>` from the row's uuid, and the copies are the
@@ -535,7 +588,8 @@ export async function separateVoiceLocked(
   /* PR #4007 pass 11, P11-2 (owner decision: refuse only mid-save) — a missing
      source `.pt` is a voice nobody designed (or one deleted by hand), and the row
      moves onto the empty key like any other, UNLESS a landing, promote or mint of
-     that key was saving it across the copy (between its rm and its rename): then
+     that key was saving it across the copy (a first save: absent until its
+     rename — a redesign renames over the old file, so its source is whole): then
      the step fails, retryably, before anything is written. */
   if (!copied.includes(qwenVoicePtPath(`qwen-${newUuid}`))) {
     const savesAfter = savesOf(oldKey);
@@ -687,6 +741,7 @@ async function stampOwnRow(
   characterId: string,
   uuid: string,
   sameBookLinkId?: string,
+  rekey?: { from: string; to: string },
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -698,7 +753,8 @@ async function stampOwnRow(
       const c = fresh.characters[i];
       if (c.voiceUuid) continue;
       if (i === idx || (sameBookLinkId !== undefined && (c.voiceId ?? c.id) === sameBookLinkId)) {
-        fresh.characters[i] = { ...c, voiceUuid: uuid };
+        const stamped = { ...c, voiceUuid: uuid };
+        fresh.characters[i] = rekey ? withRekeyedVariants(stamped, rekey.from, rekey.to) : stamped;
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -751,12 +807,21 @@ export async function ensureCharacterVoiceUuid(
        The caller holds the design lock. */
     /* P11-2 — the mint's key is saving until its walk ends (savingKeys). */
     return whileSaving(`qwen-${uuid}`, async () => {
-      const copied = await copyBaseFamily(`qwen-${linkId}`, `qwen-${uuid}`);
+      const legacyKey = `qwen-${linkId}`;
+      const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
       if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
         await removeFiles(copied);
         /* Owner decision (share a first design): the landing shares it when it
            writes the key's first file, under its locks (shareFirstDesign). */
         return stampOwnRow(bookDir, characterId, uuid);
+      }
+      /* #4037 — the emotion variants travel with the base, before any row is stamped
+         (a failed copy removes its own files; the base copy goes too). */
+      try {
+        copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
+      } catch (e) {
+        await removeFiles(copied);
+        throw e;
       }
       /* A row that already has its own uuid keeps it: a separated row still shares
          `voiceId` with the earlier book, and restamping it would orphan its own
@@ -765,7 +830,7 @@ export async function ensureCharacterVoiceUuid(
       const stamp = (c: CastCharacter): CastCharacter => {
         if (c.voiceUuid) return c;
         stampedAny = true;
-        return { ...c, voiceUuid: uuid };
+        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
       };
       try {
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp);
@@ -783,7 +848,7 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId);
+        return await stampOwnRow(bookDir, characterId, uuid, linkId, { from: legacyKey, to: `qwen-${uuid}` });
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;
@@ -806,15 +871,41 @@ export async function ensureCharacterVoiceUuid(
 
     const uuid = nanoid();
     const linkId = freshChar.voiceId ?? freshChar.id;
-    let dirty = false;
-    for (let i = 0; i < freshCast.characters.length; i++) {
-      if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
-        freshCast.characters[i] = { ...freshCast.characters[i], voiceUuid: uuid };
-        dirty = true;
+    const legacyKey = `qwen-${linkId}`;
+    /* #4037 — same as the series mint: the legacy key's base family and emotion
+       variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
+       always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
+       sees the copied base). A failed copy removes its own files and rethrows;
+       a failed cast write removes the copies. */
+    return whileSaving(`qwen-${uuid}`, async () => {
+      const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
+      const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
+      if (hasBase) {
+        try {
+          copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
+        } catch (e) {
+          await removeFiles(copied);
+          throw e;
+        }
+      } else {
+        await removeFiles(copied);
       }
-    }
-    if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
-    return uuid;
+      let dirty = false;
+      for (let i = 0; i < freshCast.characters.length; i++) {
+        if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+          const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
+          freshCast.characters[i] = hasBase ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`) : stamped;
+          dirty = true;
+        }
+      }
+      try {
+        if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
+      } catch (e) {
+        await removeFiles(copied);
+        throw e;
+      }
+      return uuid;
+    });
   });
 }
 
@@ -1090,8 +1181,11 @@ export async function sweepOrphanVariantFiles(
   return stale.length;
 }
 
-/* #4028 — move a staged family onto `target`, rm-then-rename like promote (a
-   Windows rename over an existing file can EPERM). Only what was staged replaces
+/* #4028 — move a staged family onto `target`, each file renamed over the old one
+   like promote (#4040: never rm-then-rename — the sidecar re-validates its cached
+   prompt against the .pt on disk, so a synth landing while the base is absent
+   would fail as undesigned; `renameWithRetry` rides out a transient Windows
+   EPERM/EBUSY on the replace). Only what was staged replaces
    anything; with a `.pt` staged, the target's derived `__1.7b` prompt (built from
    the embedding being replaced) goes too, as the sidecar's own design does.
    PR #4007 pass 12, Y2 — a missing staged `.pt` (the sidecar answered but its file
@@ -1105,9 +1199,20 @@ async function moveStaged(staging: string, target: string): Promise<void> {
   for (const [kind, suffix] of STAGED_FAMILY) {
     const from = familyPath(kind, `${staging}${suffix}`);
     if (!(await exists(from))) continue;
-    const to = familyPath(kind, `${target}${suffix}`);
-    await rm(to, { force: true });
-    await rename(from, to);
+    await renameWithRetry(from, familyPath(kind, `${target}${suffix}`));
+  }
+}
+
+/* #4040 — the base at `baseKey` was redesigned: give it a fresh `rev`, which makes
+   every emotion variant designed against the old base stale in every book on the
+   key (variant-base-rev.ts). Best-effort after the move: the redesign has landed,
+   so a failed write is logged (those variants then stay in use until the next
+   redesign) and never fails the request. */
+export async function markBaseRedesigned(baseKey: string): Promise<void> {
+  try {
+    await stampBaseRedesign(baseKey);
+  } catch (e) {
+    console.error('[qwen-voice] could not mark a redesigned base voice; its old emotion variants stay in use', e);
   }
 }
 
@@ -1261,6 +1366,8 @@ async function landStagedDesign(
   staging: string,
   calibrationText: string,
   watcher: { key: string },
+  /** #4040 — a variant design: the base `rev` read when its render began. */
+  variantBaseRev?: string,
 ): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
@@ -1284,7 +1391,19 @@ async function landStagedDesign(
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     const sharing = await firstDesignOf(row); // decided before the move creates the file
-    await whileSaving(voiceId, () => moveStaged(staging, voiceId)); // P11-2
+    /* #4040 — a base design over an existing base is a redesign (decided before the
+       move, like `sharing`); a first design, a preview and a variant are not. */
+    const redesign = !p.emotion && !p.preview && (await exists(qwenVoicePtPath(base)));
+    await whileSaving(voiceId, async () => {
+      await moveStaged(staging, voiceId); // P11-2
+      if (redesign) await markBaseRedesigned(voiceId);
+      /* A variant (or its preview) records the base it was rendered against. */
+      if (p.emotion) {
+        await stampVariantBaseRev(voiceId, variantBaseRev).catch((e) =>
+          console.error('[qwen-voice] could not record the base an emotion variant was designed against', e),
+        );
+      }
+    });
     if (p.persistSlot && !p.emotion && !p.preview && cast) {
       let slotted = false;
       const characters = cast.characters.map((c) => {
@@ -1405,6 +1524,26 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
         designWatchers.set(tag, w);
         return w;
       });
+      /* #4040 — the base `rev` this variant is recorded against, read before the
+         render: a base redesign that lands DURING the render leaves the variant
+         stale (recorded against the old rev), the safe direction. A redesign
+         stamps its new rev only after its `.pt` is in place, and the sidecar's
+         mint reads the base `.pt` on disk (its cached copy is checked against
+         the file), so a variant that records the new rev was made from the new
+         base, even before the redesign's evictSidecarVoices runs or if it fails. */
+      let variantBaseRev: string | undefined;
+      if (p.emotion) {
+        try {
+          variantBaseRev = await readBaseRev(baseVoiceId);
+        } catch (err) {
+          /* A node fs error (EBUSY) is curated by the route's own fs branch; a
+             torn / unparseable json is not one, and its V8 parse message must not
+             reach the body (nor be mapped as a sidecar failure): a fixed sentence. */
+          if (isFsError(err)) throw err;
+          console.error('[qwen-voice] base json unreadable for a variant design', err);
+          throw new RetryableForkError('The base voice could not be read right now; try again.');
+        }
+      }
       const rendered = await renderStaged();
       /* Before the uuid step: a key some other writer changed during the render
          (a link) would send the mint across the wrong link. */
@@ -1428,7 +1567,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher)) };
+      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)) };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);
@@ -1847,14 +1986,14 @@ qwenVoiceRouter.post(
 
     /* A redesign replaces the base embedding in place, so every emotion variant
        minted from the OLD embedding is now stale (each was anchored to a PT that
-       no longer exists). Invalidate them: drop the whole `variants` map from
-       cast.json. The character's tagged emotions then re-register as missing
-       demand, so the cast's "Design full cast → Emotion variants" scope re-mints
-       the ones the user still wants from the new base. #4026 — the variant FILES
-       stay: another row (a linked book, a declined one, a sibling) may still name
-       them, and no lock-free check here can see every writer adding a holder. The
+       no longer exists). #4040 — the promote gives the base a fresh `rev`
+       (variant-base-rev.ts), which makes those variants stale in every book on
+       the key at once, this row included; no cast.json is written. The
+       character's tagged emotions then re-register as missing demand, so the
+       cast's "Design full cast → Emotion variants" scope re-mints the ones the
+       user still wants from the new base. #4026 — the variant FILES stay: the
        startup sweep (sweepOrphanVariantFiles) removes the ones nothing names. */
-    /* The read, the preview-id check, the artifact moves and the variant drop all
+    /* The read, the preview-id check and the artifact moves all
        sit inside the cast lock (rule 2: every decision derived from the read goes
        inside it). The sidecar evict stays OUTSIDE: it is a best-effort network call (#2127 — bounded by EVICT_FETCH_TIMEOUT_MS,
        but still no reason to pin the lock for even that bounded worst case).
@@ -1878,8 +2017,9 @@ qwenVoiceRouter.post(
         return { status: 400, body: { error: `modelKey must be one of: ${Object.keys(TTS_MODEL_LABELS).join(', ')}` } };
       }
 
-      /* Move the staged embedding onto the stable id. rm-then-rename so a Windows
-         rename over an existing file can't EPERM. A missing preview `.pt` means
+      /* Move the staged embedding onto the stable id, renamed over the old file so
+         the real `.pt` (and `.json`) is never absent mid-swap (#4040, see
+         moveStaged). A missing preview `.pt` means
          nothing was staged (e.g. a double-promote) → 409 — checked via `stat`
          BEFORE the live `.pt` is removed (#1804), so a double-promote can't
          delete a live artifact when the replacement was never staged. */
@@ -1893,15 +2033,23 @@ qwenVoiceRouter.post(
       }
       /* Nothing at the real key yet: this promote writes its first real file. */
       const firstFile = !(await exists(qwenVoicePtPath(realVoiceId)));
-      /* P11-2 — the real key is saving between this rm and its rename. */
-      await whileSaving(realVoiceId, async () => {
-        await rm(qwenVoicePtPath(realVoiceId), { force: true });
-        await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
-      });
-      await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
-      await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
-        () => {},
+      /* P11-2 — the real key is saving during its rename. */
+      await whileSaving(realVoiceId, () =>
+        renameWithRetry(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId)),
       );
+      /* Best-effort: a preview with no `.json` drops the old one rather than
+         pairing the new embedding with the old voice's manifest. */
+      if (await exists(qwenVoiceSidecarPath(previewVoiceId))) {
+        await renameWithRetry(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
+          () => {},
+        );
+      } else {
+        await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
+      }
+      /* #4040 — a promote over an existing base is a redesign: a fresh `rev` makes
+         every variant designed against the old base stale. A first file has no
+         variants of its own to invalidate. */
+      if (!firstFile) await markBaseRedesigned(realVoiceId);
       /* Fix wave (consent-erasure gap) — carry the preview's retained reference
          clip (§2.3, written by the sidecar's design_voice) onto the real key too.
          Best-effort like the .json above (only the .pt is required): a voice
@@ -1934,15 +2082,6 @@ qwenVoiceRouter.post(
       await copyFile(previewMp3, voiceSampleFilePath(realFileName)).catch(() => {});
       await rm(previewMp3, { force: true }).catch(() => {});
 
-      const freshSlot = character.overrideTtsVoices?.qwen;
-      /* KEEP this guard — it is the current behaviour (qwen-voice.ts:788) and it
-         encloses the write. Without it every promote-voice writes cast.json even
-         when the character has no emotion variants, which is the common path.
-         Evaluated against the FRESH slot, per rule 2. */
-      if (freshSlot?.variants && Object.keys(freshSlot.variants).length > 0) {
-        delete freshSlot.variants;
-        await writeJsonAtomic(castJsonPath(located.bookDir), fresh);
-      }
       const first =
         firstFile && seriesInfo && character.voiceUuid && (await isOrdinarySeriesVoice(character))
           ? { linkId: character.voiceId ?? character.id, uuid: character.voiceUuid, voiceId: realVoiceId }

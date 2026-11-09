@@ -29,6 +29,28 @@ vi.mock('undici', async (importOriginal) => {
       (globalThis.fetch as unknown as (...a: unknown[]) => unknown)(...args),
   };
 });
+/* #4040 — every watched path found absent around an rm or rename: the points a
+   sidecar synth landing mid-swap could observe (it validates its cached prompt
+   against the .pt on disk). Passthrough unless a test sets `watch.paths`. */
+const watch = vi.hoisted(() => ({ paths: [] as string[], absent: [] as string[] }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const check = async (when: string) => {
+    for (const p of watch.paths) {
+      if (!(await actual.stat(p).then(() => true, () => false))) watch.absent.push(`${p} ${when}`);
+    }
+  };
+  const rename = async (from: unknown, to: unknown) => {
+    await check(`before rename onto ${String(to)}`);
+    await actual.rename(from as string, to as string);
+    await check(`after rename onto ${String(to)}`);
+  };
+  const rm = async (path: unknown, opts?: Parameters<typeof actual.rm>[1]) => {
+    await actual.rm(path as string, opts);
+    await check(`after rm of ${String(path)}`);
+  };
+  return { ...actual, default: { ...actual, rename, rm }, rename, rm };
+});
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 
@@ -4084,6 +4106,66 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     expect(new Date(after!.updatedAt).getTime()).toBeGreaterThan(
       new Date(before!.updatedAt).getTime(),
     );
+  });
+
+  it('redesign/promote never leaves the live .pt or .json absent mid-swap (#4040)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'promo-gap',
+        provenance: 'designed',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+    const liveP = qwenVoice.qwenVoicePtPath('qwen-promo-gap');
+    const liveJ = paths.qwenVoiceSidecarPath('qwen-promo-gap');
+    wf(liveP, 'LIVE');
+    wf(liveJ, JSON.stringify({ instruct: 'old' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-gap-preview'), 'PREVIEW');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-gap-preview'), JSON.stringify({ instruct: 'new' }));
+    watch.paths = [liveP, liveJ];
+    watch.absent = [];
+    try {
+      const res = await request(app).post('/api/voice-library/promo-gap/redesign/promote').send({});
+      expect(res.status).toBe(200);
+      expect(readFileSync(liveP, 'utf8')).toBe('PREVIEW');
+      expect(JSON.parse(readFileSync(liveJ, 'utf8')).instruct).toBe('new');
+      expect(watch.absent).toEqual([]);
+    } finally {
+      watch.paths = [];
+    }
+  });
+
+  it('redesign/promote stamps a fresh base rev, so an emotion variant designed against the old base goes stale (#4040)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'promo-rev',
+        provenance: 'designed',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+    // A legacy base (no rev) with a legacy variant (no baseRev): both undefined, so current.
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-rev'), 'LIVE');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-rev'), JSON.stringify({ instruct: 'old' }));
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-rev__angry'), JSON.stringify({ voiceId: 'qwen-promo-rev__angry' }));
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-rev-preview'), 'PREVIEW');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-rev-preview'), JSON.stringify({ instruct: 'new' }));
+    const row = { id: 'c1', overrideTtsVoices: { qwen: { libraryUuid: 'promo-rev', variants: { angry: { name: 'a' } } } } };
+    const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+    expect((await dropStaleVariants([row]))[0]).toBe(row); // current before the redesign
+
+    const res = await request(app).post('/api/voice-library/promo-rev/redesign/promote').send({});
+
+    expect(res.status).toBe(200);
+    const live = JSON.parse(readFileSync(paths.qwenVoiceSidecarPath('qwen-promo-rev'), 'utf8'));
+    expect(live.instruct).toBe('new');
+    expect(typeof live.rev).toBe('string');
+    expect((await dropStaleVariants([row]))[0].overrideTtsVoices.qwen.variants).toBeUndefined();
   });
 
   it('redesign/promote carries the preview’s retained reference clip onto the live key (fix wave, §2.3 consent gap)', async () => {

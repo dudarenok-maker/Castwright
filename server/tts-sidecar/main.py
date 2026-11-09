@@ -6252,6 +6252,38 @@ class VoiceNotDesignedError(RuntimeError):
     """Base voice has no cached .pt — design it before minting a variant."""
 
 
+def _pt_file_sig(path: str) -> "Optional[tuple[int, int, int]]":
+    """(inode/file-id, size, mtime_ns) of a voice .pt, or None if it is absent.
+    A rename over the path (the Node server's staged-design landing) changes
+    the file id; an in-place rewrite changes the mtime/size. Used to validate
+    QwenEngine's in-memory prompt cache against the file on disk (#4040)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def _file_sha256(path: str) -> Optional[str]:
+    """Hex sha256 of a file's bytes, or None if it can't be read. Identifies
+    the base .pt a 1.7B prompt was derived from by CONTENT rather than file
+    id, so a copied or renamed base (the series mint copies a whole family,
+    `__1.7b.pt` included) still matches its derived prompt (#4040). A base
+    .pt is tens of KB, so hashing it costs far less than the torch.load."""
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return None
+
+
+# #4040 — marks a `<voice>__1.7b.pt` saved as {format, base_sha256, prompt}:
+# the derived prompt plus the sha256 of the base .pt it was derived from. A
+# file without it (written before #4040) can't be proven current and is
+# re-derived once.
+_PROMPT17_FORMAT = "castwright-1.7b-prompt/v1"
+
+
 class VoiceLanguageUnsupportedError(VoiceNotDesignedError):
     """The voice EXISTS and its artifact loaded fine — the loaded model just
     doesn't list the requested language (GATE 1 MIN-4). Deliberately a
@@ -6484,6 +6516,19 @@ class QwenEngine(Engine):
         # asyncio.to_thread worker threads — a double-load on a cold-cache race
         # is harmless, but the lock is cheap and keeps hit/miss accounting honest.
         self._prompt_cache: dict[str, tuple[Any, str]] = {}
+        # #4040 — the on-disk identity (`_pt_file_sig`) of the .pt each
+        # `_load_voice_prompt` entry above was read from. A hit is served only
+        # while the file on disk still matches, so a .pt replaced behind the
+        # sidecar's back (the Node server lands a base redesign by renaming a
+        # staged .pt over it, and its evict call afterwards is best-effort) is
+        # reloaded rather than served stale. An entry with no signature here is
+        # a miss.
+        self._prompt_cache_sig: dict[str, tuple[int, int, int]] = {}
+        # #4040 — for each `<voice>__1.7b` entry above: the base .pt's
+        # (`_pt_file_sig`, sha256) it was derived from. The sig is the cheap
+        # per-call check; only when it moved is the base re-hashed, and a
+        # changed hash re-derives. An entry with no record here is a miss.
+        self._prompt17_base: dict[str, tuple[tuple[int, int, int], str]] = {}
         self._cache_lock = threading.Lock()
         # Serialises the GPU model forward. The Qwen Base model's batched
         # `generate_voice_clone` is NOT thread-safe: two overlapping forwards of
@@ -7300,6 +7345,7 @@ class QwenEngine(Engine):
         cache_key = f"{voice_id}__1.7b"
         with self._cache_lock:
             self._prompt_cache.pop(cache_key, None)
+            self._prompt17_base.pop(cache_key, None)
         pt_path, _json_path = self._voice_paths(cache_key)
         try:
             os.remove(pt_path)
@@ -7956,8 +8002,11 @@ class QwenEngine(Engine):
             )
         # Warm the in-memory cache + drop any stale 1.7B-native prompt, OUTSIDE
         # the synth lock (mirrors design_voice's post-lock cache handling).
+        sig = _pt_file_sig(self._voice_paths(voice_id)[0])
         with self._cache_lock:
             self._prompt_cache[voice_id] = (prompt, lang)
+            if sig is not None:
+                self._prompt_cache_sig[voice_id] = sig
         self._evict_17b_prompt(voice_id)
         log.info("Cloned + cached Qwen voice '%s' from caller clip.", voice_id)
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
@@ -8218,17 +8267,25 @@ class QwenEngine(Engine):
         language resolution. Fails fast (no catalog fallback) if the voice
         hasn't been designed. The cache lock is released across the
         torch.load so a slow disk read can't block other threads' lookups —
-        a concurrent double-miss just loads twice (benign, same content)."""
+        a concurrent double-miss just loads twice (benign, same content).
+
+        #4040 — a hit also requires the .pt on disk to be the file the entry
+        was read from (`_pt_file_sig`: one stat per call), so a replaced .pt is
+        reloaded and a deleted one fails as undesigned. The stat is taken
+        BEFORE the load, so a file swapped between the two is recorded against
+        the older signature and reloaded on the next call."""
         import torch  # type: ignore
 
+        pt_path, _json_path = self._voice_paths(voice)
+        sig = _pt_file_sig(pt_path)
         with self._cache_lock:
             cached = self._prompt_cache.get(voice)
-        if cached is not None:
+            fresh = sig is not None and self._prompt_cache_sig.get(voice) == sig
+        if cached is not None and fresh:
             prompt, lang = cached
             return prompt, lang, True
 
-        pt_path, _json_path = self._voice_paths(voice)
-        if not os.path.isfile(pt_path):
+        if sig is None or not os.path.isfile(pt_path):
             # Typed so the /synthesize route can map it to a clear 409 instead
             # of the opaque 500 (#1063). The absolute path is omitted from the
             # message (it may reach the client body) — the voice id is enough to
@@ -8245,6 +8302,7 @@ class QwenEngine(Engine):
         prompt = torch.load(pt_path, weights_only=False)
         with self._cache_lock:
             self._prompt_cache[voice] = (prompt, lang)
+            self._prompt_cache_sig[voice] = sig
         return prompt, lang, False
 
     def _load_voice_prompt_17b(self, voice: str) -> tuple[Any, str, bool]:
@@ -8263,15 +8321,38 @@ class QwenEngine(Engine):
         `/unload` won the gap between that ensure and this call.
 
         Language is inherited from the base voice's manifest — the same language
-        used for the 0.6B path."""
+        used for the 0.6B path.
+
+        #4040 — the derived prompt is only ever served while it was derived
+        from the CURRENT base .pt, whether or not an evict ran: the base's
+        sha256 is recorded with it (in memory, and inside the saved
+        `__1.7b.pt`), and a mismatch re-derives. In memory the base's file sig
+        is checked first (one stat), so the hash is re-read only when the base
+        file moved. Content, not file id, because the series mint copies the
+        family to a new key and a copied matching pair must stay a hit. Both
+        are taken BEFORE the derive, so a base swapped mid-derive is recorded
+        against the older content and re-derived on the next call."""
         import torch  # type: ignore
 
         cache_key = f"{voice}__1.7b"
+        base_pt, _base_json = self._voice_paths(voice)
+        base_sig = _pt_file_sig(base_pt)
         with self._cache_lock:
             cached = self._prompt_cache.get(cache_key)
-        if cached is not None:
-            prompt, lang = cached
-            return prompt, lang, True
+            record = self._prompt17_base.get(cache_key)
+        base_sha: Optional[str] = None
+        if cached is not None and record is not None and base_sig is not None:
+            if record[0] == base_sig:
+                prompt, lang = cached
+                return prompt, lang, True
+            base_sha = _file_sha256(base_pt)
+            if base_sha is not None and base_sha == record[1]:
+                with self._cache_lock:
+                    self._prompt17_base[cache_key] = (base_sig, base_sha)
+                prompt, lang = cached
+                return prompt, lang, True
+        if base_sha is None and base_sig is not None:
+            base_sha = _file_sha256(base_pt)
 
         pt_path, _json_path = self._voice_paths(cache_key)
 
@@ -8286,10 +8367,12 @@ class QwenEngine(Engine):
         # needs `lang` here — read cheaply straight from the base voice's JSON
         # manifest rather than via _load_voice_prompt, which would also
         # torch.load the full 0.6B .pt just to throw it away; that full load
-        # is only needed below, on the actual re-derivation path.
-        if os.path.isfile(pt_path):
+        # is only needed below, on the actual re-derivation path. #4040 — only
+        # a file recording the current base's sha256 is reused; a stale one
+        # (its evict failed) or a pre-#4040 one falls through to re-derive.
+        if base_sha is not None and os.path.isfile(pt_path):
             try:
-                prompt = torch.load(pt_path, weights_only=False)
+                saved = torch.load(pt_path, weights_only=False)
             except FileNotFoundError:
                 # Evicted (redesign / mint-variant / /qwen/evict-voice, all of
                 # which call _evict_17b_prompt) between the isfile check above
@@ -8297,10 +8380,21 @@ class QwenEngine(Engine):
                 # surfacing a benign race as a synth failure.
                 pass
             else:
-                lang = self._read_voice_language(voice)
-                with self._cache_lock:
-                    self._prompt_cache[cache_key] = (prompt, lang)
-                return prompt, lang, False
+                if (
+                    isinstance(saved, dict)
+                    and saved.get("format") == _PROMPT17_FORMAT
+                    and saved.get("base_sha256") == base_sha
+                ):
+                    prompt = saved["prompt"]
+                    lang = self._read_voice_language(voice)
+                    with self._cache_lock:
+                        self._prompt_cache[cache_key] = (prompt, lang)
+                        self._prompt17_base[cache_key] = (base_sig, base_sha)
+                    return prompt, lang, False
+                log.info(
+                    "1.7B prompt for voice '%s' was not derived from its current base; re-deriving.",
+                    voice,
+                )
 
         # Cache MISS (in-memory AND on-disk) — load the base (0.6B) prompt to
         # get ref_code + language for the re-derivation below.
@@ -8355,7 +8449,10 @@ class QwenEngine(Engine):
         )
         os.close(tmp_fd)  # mkstemp only needed to atomically allocate the unique name
         try:
-            torch.save(prompt, tmp_path)
+            torch.save(
+                {"format": _PROMPT17_FORMAT, "base_sha256": base_sha, "prompt": prompt},
+                tmp_path,
+            )
             os.replace(tmp_path, pt_path)
         except BaseException:
             try:
@@ -8365,6 +8462,8 @@ class QwenEngine(Engine):
             raise
         with self._cache_lock:
             self._prompt_cache[cache_key] = (prompt, lang)
+            if base_sig is not None and base_sha is not None:
+                self._prompt17_base[cache_key] = (base_sig, base_sha)
         log.info("Derived 1.7B-native prompt for voice '%s' (saved %s).", voice, pt_path)
         return prompt, lang, False
 
@@ -12251,11 +12350,12 @@ async def qwen_evict_voice(req: Request) -> Response:
     synth re-reads its embedding from disk.
 
     Used by the server's voice-design 'promote' step (plan 161), which moves a
-    previewed embedding onto a stable voiceId behind the sidecar's back. Without
-    this, a voiceId already resident in `_prompt_cache` from an earlier
-    generation would keep serving the OLD embedding (the cache has no on-disk
-    mtime check — it's only evicted on (re)design of that id or a full unload).
-    Idempotent: a miss is a no-op `evicted: false`."""
+    previewed embedding onto a stable voiceId behind the sidecar's back. Since
+    #4040 a cached prompt is already re-validated against the .pt on disk on
+    every lookup (`_pt_file_sig`), so a stale embedding is no longer served
+    without this call; it still frees the old entry eagerly and deletes the
+    derived `__1.7b.pt` (which the next 1.7B render would otherwise re-check
+    and re-derive). Idempotent: a miss is a no-op `evicted: false`."""
     try:
         body = await _read_json_body(req)
     except Exception:

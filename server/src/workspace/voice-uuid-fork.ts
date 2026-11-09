@@ -37,6 +37,7 @@ import { readStateJsonWithRecovery } from './state-migrate.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
+import { dropStaleVariants } from './variant-base-rev.js';
 
 interface CastRow {
   id: string;
@@ -383,7 +384,8 @@ async function readCastRowsForVariants(dir: string): Promise<NonNullable<Variant
    legacy key). Its base names (the slot's `name` and its storage key) are in the
    set too, so a base whose key happens to end in `__<emotion>` is never taken for
    a variant. No marker, link or uuid comparison decides it: a file a row names is
-   kept. null when a library folder cannot be listed or a cast.json cannot be read:
+   kept, unless the slot naming it is stale (#4040: its base was redesigned since,
+   variant-base-rev.ts). null when a library folder cannot be listed or a cast.json cannot be read:
    the caller then deletes nothing (an orphan at worst, never a deleted take).
    Scans every book under BOOKS_ROOT, takes no lock, writes nothing. */
 export async function namedQwenVoices(): Promise<Set<string> | null> {
@@ -399,7 +401,9 @@ export async function namedQwenVoices(): Promise<Set<string> | null> {
       for (const titleName of titles) {
         const cast = await readCastRowsForVariants(join(BOOKS_ROOT, authorName, seriesName, titleName));
         if (cast === UNREADABLE) return null;
-        for (const y of cast) {
+        /* #4040 — a stale variant slot (its base was redesigned) names nothing:
+           the render no longer uses it, so its files go too. */
+        for (const y of await dropStaleVariants(cast)) {
           const qwen = y.overrideTtsVoices?.qwen;
           /* The render path's key: a uuid row's own, or (no uuid) the legacy one. */
           const key = qwenStorageKey(y, y.id ?? '');
