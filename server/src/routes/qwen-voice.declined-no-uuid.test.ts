@@ -339,3 +339,47 @@ describe('a holder that leaves before the locks (#4067, pass 4)', () => {
     expect(readRow('Book Two').voiceUuid).toBe('u_shared');
   });
 });
+
+/* Pass 4, S2 (pre-existing, #4067's class) — the declined book is untouched by the
+   decliner's first design. "Don't reuse" separates Two onto U'; Two's first design
+   then writes its slot, and applyOverrideToCastFiles' walk used to write `qwen-U'`
+   onto Book One's legacy row too (the #3992 guard only skipped a row with a
+   DIFFERENT uuid), pinning One to a key with no file. */
+describe("the decliner's first design leaves the declined book's legacy row alone (#4067, pass 4 S2)", () => {
+  const plain = (extra: Record<string, unknown> = {}) => ({
+    id: 'wren',
+    name: 'Wren',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'v_wren',
+    voiceStyle: 'a bright voice',
+    evidence: [{ quote: '"Hello there."' }],
+    ...extra,
+  });
+
+  async function seedDeclined() {
+    rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+    rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+    writeBook('Book One', 1, bookOneId, plain());
+    writeBook(
+      'Book Two',
+      2,
+      bookTwoId,
+      plain({ matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } }),
+    );
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    return declined.body.voiceUuid as string;
+  }
+
+  it('single design: Book One keeps no slot, no engine pin, no uuid', async () => {
+    const u = await seedDeclined();
+    const before = readRow('Book One');
+    const res = await stream(false);
+    expect(collectSse(res).find((e) => e.type === 'designed')).toMatchObject({ voiceUuid: u });
+    expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(`qwen-${u}`);
+    expect(readRow('Book One')).toEqual(before);
+  });
+});

@@ -65,6 +65,7 @@ import {
 } from '../tts/base-voices.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { isSeparatedVoice } from '../workspace/separated-voices.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
@@ -1067,6 +1068,13 @@ export async function applyOverrideToCastFiles(
     };
   }
   const skipped: Array<{ bookDir: string; characterId: string; reason: string }> = [];
+  /* #4067 — a designed-voice name that is a voice "Don't reuse" separated (separated-
+     voices.ts) belongs to the rows that moved onto that uuid and to no other: a row
+     that does not hold it (a declined book's legacy row with no uuid included) is on
+     another voice, however it matches by `voiceId`. Read here, once, because the
+     walk's callback is synchronous. */
+  const designedNameUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+  const designedIsSeparated = designedNameUuid ? await isSeparatedVoice(designedNameUuid) : false;
   const updated = await forEachMatchingCastCharacter(
     voiceId,
     seriesFilter,
@@ -1088,13 +1096,14 @@ export async function applyOverrideToCastFiles(
          (`qwen-<uuid>`) that names another uuid is not meant for it: decline
          the match (same reference, not counted) instead of rewriting the earlier
          book's slot and engine. Linked rows share the uuid and still take the
-         write; a row with no uuid, or a library-assigned slot, is unchanged from
-         before. */
-      const designedUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+         write; a library-assigned slot is unchanged from before, and so is a row
+         with no uuid unless the designed uuid is a separated voice (#4067,
+         above), which only the rows that moved onto it hold. */
+      const designedUuid = designedNameUuid;
       if (
         designedUuid &&
-        original.voiceUuid &&
         original.voiceUuid !== designedUuid &&
+        (original.voiceUuid || designedIsSeparated) &&
         !original.overrideTtsVoices?.qwen?.libraryUuid
       ) {
         return original;
