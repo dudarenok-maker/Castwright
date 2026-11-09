@@ -4192,7 +4192,7 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
   it('Cast: the banner is a status region while read-only and absent otherwise', () => {
     renderPaused(true);
     const banner = screen.getByTestId('cast-edits-paused-banner');
-    expect(banner.closest('[role="status"]')).not.toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Re-analysis running — cast edits are paused');
     expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
   });
 
