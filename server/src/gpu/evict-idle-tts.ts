@@ -114,8 +114,10 @@ function isGpuFamily(device: string | null | undefined): boolean {
     it only applies while nothing else is live: with another generation, splice
     or QA repair in flight (`anotherGenerationActive`) the drop is skipped, and
     the caller must pass `true` whenever that is unknown (fail closed). Two
-    first POSTs arriving together can both see nothing and both drop — harmless,
-    reconcile re-reads `kokoro_loaded`, so the second finds nothing to unload. */
+    first POSTs arriving together can both see nothing and both drop. Bounded
+    cost, not a no-op: the second drop can unload a Kokoro the first job just
+    reloaded for a fallback line; that line then fails and goes through the
+    transient retry. */
 export async function keepForRunStart(
   keep: ResidentTtsKeep,
   anotherGenerationActive: boolean,

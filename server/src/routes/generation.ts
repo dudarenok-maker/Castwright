@@ -1187,8 +1187,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
        therefore applies to the first chapter POST of a run, and is skipped
        while anything else is live — but two first POSTs arriving together can
-       both see nothing and both drop, which is harmless: reconcile re-reads
-       `kokoro_loaded`, so the second drop finds nothing to unload. A later
+       both see nothing and both drop. Bounded cost, not a no-op: the second
+       drop can unload a Kokoro the first job just reloaded for a fallback
+       line; that line then fails and goes through the transient retry. A later
        chapter's POST (one per chapter, sibling chapters are live) and the
        post-score re-assert in triggerScoring must not unload a Kokoro a
        sibling chapter's fallback line may be using. */

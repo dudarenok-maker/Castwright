@@ -275,6 +275,19 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(freed.sort()).toEqual(['Qwen 0.6B', 'Qwen 1.7B']);
   });
 
+  it('#4066 — a Kokoro /unload that rejects (network error / timeout / abort) logs the failure and reports false', async () => {
+    const f = vi.fn(async (url: string) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => ({ kokoro_loaded: true }) };
+      throw new Error('socket hang up');
+    });
+    global.fetch = f as unknown as typeof fetch;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      reconcileResidentQwenTiers({ keep06: true, keep17: true, keepKokoro: false }),
+    ).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[generation] failed to unload Kokoro: socket hang up'));
+  });
+
   it('#4066 — an absent keepKokoro never touches Kokoro (the post-score re-assert and a run with no 1.7B)', async () => {
     const m = mockSidecar({ qwen_loaded: false, kokoro_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;

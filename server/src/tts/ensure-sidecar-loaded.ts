@@ -177,8 +177,9 @@ export async function ensureSidecarEngineReady(
     chapter POST of a run (the tier target is the same every time), so the in-use
     tier is never evicted between chapters — the load price is paid on the first
     chapter only. Two first POSTs arriving together can both see no sibling job
-    and both apply the Kokoro drop (#4066) — harmless, because reconcile
-    re-reads `kokoro_loaded` and a second drop finds nothing to unload. The
+    and both apply the Kokoro drop (#4066). Bounded cost, not a no-op: the
+    second drop can unload a Kokoro the first job just reloaded for a fallback
+    line; that line then fails and goes through the transient retry. The
     needed tiers come from the run's cast (per-character `ttsModelKey` + the run
     default), so a genuinely mixed-tier book keeps both. Best-effort: a sidecar
     that is down / mid-recycle just skips (the next run reconciles).
@@ -273,9 +274,13 @@ export async function reconcileResidentQwenTiers(
           `[generation] failed to unload ${model === 'kokoro' ? 'Kokoro' : `Qwen ${model || '0.6B'}`}: sidecar returned ${res.status}`,
         );
       }
-    } catch {
-      /* best-effort — network error, timeout, abort, etc. */
+    } catch (err) {
+      /* best-effort — network error, timeout, abort, etc. Logged like the
+         non-ok branch above, so a failed unload is never silent (#4066). */
       allEvicted = false;
+      console.warn(
+        `[generation] failed to unload ${model === 'kokoro' ? 'Kokoro' : `Qwen ${model || '0.6B'}`}: ${(err as Error)?.message ?? String(err)}`,
+      );
     }
   };
 
