@@ -10,6 +10,7 @@
    two writers never touch the same file, and nothing in a cast.json changes, so
    re-analysis and the analyzer grammar never see it. It survives a restart. */
 
+import { statSync } from 'node:fs';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { separatedVoicePath } from './paths.js';
@@ -30,6 +31,17 @@ export async function forgetSeparatedVoice(voiceUuid: string): Promise<void> {
 export async function isSeparatedVoice(voiceUuid: string): Promise<boolean> {
   try {
     await stat(separatedVoicePath(voiceUuid));
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
+/* The synchronous twin, for a step inside a cast lock's sync transform. Same
+   fail-closed answer. */
+export function isSeparatedVoiceSync(voiceUuid: string): boolean {
+  try {
+    statSync(separatedVoicePath(voiceUuid));
     return true;
   } catch (e) {
     return (e as NodeJS.ErrnoException).code !== 'ENOENT';

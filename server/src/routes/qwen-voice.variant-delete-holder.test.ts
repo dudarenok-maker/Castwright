@@ -443,6 +443,33 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
     expect(onDisk()).toEqual(['qwen-u_fresh__angry.pt']);
   });
 
+  /* #4037 — replaceFamilyMembers's temp copies and backups (`<member>.mint-<8>.tmp`) outlive
+     a process that died between the write and its cleanup; nothing else ever names them. */
+  it('removes a stale mint-copy tmp, keeps a fresh one, a real variant file and an unrelated file', async () => {
+    reset();
+    writeBook('Book One', [designedOn('u_solo')]);
+    const stale = ['qwen-u_solo__angry.pt.mint-aB3_x-Qz.tmp', 'qwen-u_solo__angry__master.wav.mint-Zz9Qq0Ab.tmp'];
+    const kept = [
+      ...family('qwen-u_solo'),
+      'qwen-u_solo__angry.pt.mint-short.tmp', // not the 8-char nanoid shape
+      'qwen-u_solo__angry.pt.mint-aB3_x-Qz.tmp.bak', // not ending .tmp
+      'other.pt.mint-aB3_x-Qz.tmp', // not a qwen- key
+      'notes.txt',
+    ];
+    plant(stale);
+    plant(kept);
+    plant(['qwen-u_solo__sad.json.mint-Fresh123.tmp'], false); // a second server may be mid-mint
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await sweepOrphanVariantFiles()).toBe(stale.length);
+      /* a backup kept after a failed restore is deleted here: say so */
+      for (const n of stale) expect(warn).toHaveBeenCalledWith(expect.stringContaining(n));
+    } finally {
+      warn.mockRestore();
+    }
+    expect(onDisk()).toEqual([...kept, 'qwen-u_solo__sad.json.mint-Fresh123.tmp'].sort());
+  });
+
   it('never touches a base voice, a preview, a staging file or a base whose key ends like a variant', async () => {
     reset();
     /* a character whose own id ends in `__angry`: its base key looks like a variant */
