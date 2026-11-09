@@ -4180,19 +4180,20 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
   );
 
   it(
-    'fresh re-analysis PRESERVES designed voices while dropping reuse continuity (voice-strip incident 2026-07-14)',
+    'fresh re-analysis PRESERVES designed voices AND reuse continuity (voice-strip incident 2026-07-14; plan 291 rule 8)',
     async () => {
       /* Regression: a `fresh: true` re-analysis used to set priorCastForMerge=[]
          and so overwrote cast.json with a voiceless roster, destroying every
          designed Qwen voice (the 2026-07-14 Coalfall incident). "Start fresh"
-         legitimately discards reuse continuity (matchedFrom / voiceId / library
-         links), but must NEVER discard the user's bespoke designed voices. */
+         must NEVER discard the user's bespoke designed voices. Plan 291 rule 8
+         (#4031): it no longer discards reuse continuity (matchedFrom / voiceId /
+         library links) either - those are the user's decisions. */
       const manuscriptId = `test-fresh-preserve-voice-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
       seedStateJson(bookDir, manuscriptId, { castConfirmed: true });
       // Pre-seed a cast.json where 'narrator' (the character with a stable id
       // across this fixture's fold) carries BOTH a designed Qwen voice (must
-      // survive) and a reuse link (must be dropped by a fresh run).
+      // survive) and a reuse link (must survive too, since plan 291 rule 8).
       writeFileSync(
         join(bookDir, '.audiobook', 'cast.json'),
         JSON.stringify({
@@ -4262,9 +4263,11 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         });
         expect(narr!.voiceUuid).toBe('U-narr');
         expect(narr!.ttsEngine).toBe('qwen');
-        // Reuse continuity is DROPPED by the fresh run.
-        expect(narr!.matchedFrom).toBeUndefined();
-        expect(narr!.voiceId).toBeUndefined();
+        // Reuse continuity SURVIVES the fresh run too (rule 8). Both were
+        // `toBeUndefined()` before.
+        expect(narr!.matchedFrom).toEqual({ bookId: 'prior', characterId: 'narrator', confidence: 0.9 });
+        expect(narr!.voiceId).toBe('some-library-voice');
+        expect(narr!.voiceState).toBe('reused');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -9724,6 +9727,25 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     expect(r.castCalls).toEqual([]);
   });
 
+  it('#4031 rule 8: Start fresh on an unparseable cast.json is refused too; it is no longer a way out of a corrupt cast', async () => {
+    const book = makeBook('corrupt-cast-fresh', [{ id: 1, body: WORDED[1] }]);
+    const castPath = join(book.bookDir, '.audiobook', 'cast.json');
+    const carryPath = join(book.bookDir, '.audiobook', 'cast-reuse-carryover.json');
+    const carry = JSON.stringify({ characters: [{ id: 'stale', name: 'Stale' }] });
+    writeFileSync(castPath, '{"characters": [');
+    writeFileSync(carryPath, carry);
+    /* Start fresh used to rm cast.json and the carryover after its prior read, so a
+       corrupt cast was recoverable by it. The read now refuses first. */
+    await saveAnalysisCache(book.manuscriptId, { chapters: { 1: takeOf(1, WORDED[1]) } });
+    const r = await run(book, { fresh: true });
+    expect(endings(r.events)).toEqual(['error:cast-unreadable']);
+    expect(readFileSync(castPath, 'utf8')).toBe('{"characters": [');
+    expect(readFileSync(carryPath, 'utf8')).toBe(carry);
+    expect(r.castCalls).toEqual([]);
+    /* The refusal precedes the cache discard: nothing was thrown away. */
+    expect(r.after.chapters[1]).toEqual(takeOf(1, WORDED[1]));
+  });
+
   it('M1: with no stage1, every failed chapter with a key — including [] — enters P at load', async () => {
     const chapters: BookChapter[] = [
       { id: 1, body: WORDED[1] },
@@ -10062,7 +10084,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     expect(JSON.parse(readFileSync(statePath, 'utf8')).castConfirmed).toBe(true);
   }, 60_000);
 
-  it("Start fresh's file deletes go through the verified book dir: a stale path now holding another book keeps its files", async () => {
+  it("Start fresh's file writes go through the verified book dir: a stale path now holding another book keeps its files", async () => {
     const chapters: BookChapter[] = [{ id: 1, body: WORDED[1] }];
     const book = makeBook('fresh-deletes-stale', chapters, { castConfirmed: true });
     const statePath = join(book.bookDir, '.audiobook', 'state.json');
@@ -10075,9 +10097,18 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       castMergesJsonPath(book.bookDir),
       castMergeSuggestionsJsonPath(book.bookDir),
     ];
-    for (const p of owned) writeFileSync(p, '{}');
+    /* Plan 291 rule 8: Start fresh now deletes only the edits file and clears the
+       journal's refs (a rewrite). Seed the journal with a real ref so a write through
+       the stale path would change its bytes; the other three are kept, never touched. */
+    const journal = JSON.stringify({
+      entries: [
+        { ts: 't', kind: 'manual', sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [{ chapterId: 1, sentenceId: 1 }] },
+      ],
+    });
+    for (const p of owned) writeFileSync(p, p === castMergesJsonPath(book.bookDir) ? journal : '{}');
     await run(book, { fresh: true });
     for (const p of owned) expect(existsSync(p), p).toBe(true);
+    expect(readFileSync(castMergesJsonPath(book.bookDir), 'utf8')).toBe(journal);
   }, 60_000);
 
   describe('subset route (S9/S10, word-free)', () => {

@@ -21,11 +21,9 @@
      - `dismissSuggestionDurably` — the dismiss route: takes the cast lock itself.
      - `loadStoredSuggestions` / `loadSuggestions` — the full stored shape, and
        the `MergeSuggestion` shape the GET route serves.
-     - `clearSuggestions` — no-op when absent.
 
    Same atomic-write + empty-on-missing contract as store/cast-merges.ts. */
 
-import { rm } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { castMergeSuggestionsJsonPath, castJsonPath } from '../workspace/paths.js';
 import { withCastLock } from '../workspace/cast-lock.js';
@@ -146,11 +144,6 @@ export async function removeSuggestionPairsLocked(
   const kept = stored.filter((s) => !drop.has(keyOf(s.a, s.b)));
   if (kept.length === stored.length) return;
   await writeStored(bookDir, kept);
-}
-
-/** Delete the suggestions file. No-op when absent. */
-export async function clearSuggestions(bookDir: string): Promise<void> {
-  await rm(castMergeSuggestionsJsonPath(bookDir), { force: true });
 }
 
 

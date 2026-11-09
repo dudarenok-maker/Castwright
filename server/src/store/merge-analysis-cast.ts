@@ -61,43 +61,6 @@ export interface Retirement {
   to: string;
 }
 
-/** Reuse-continuity fields — a voice matched/linked from ANOTHER book or the
-    library, plus the "not the same person" guard. A `fresh: true` ("Start
-    fresh") re-analysis re-derives these from scratch, except a locked or tuned
-    row's pinned `voiceId` (see `dropReuseContinuityKeepDesignedVoice`). The
-    bespoke DESIGNED-voice fields (`overrideTtsVoices` / `voiceUuid` / `ttsEngine` / `voiceStyle`) are
-    deliberately NOT here — a fresh run must never discard them (the 2026-07-14
-    Coalfall voice-strip incident: `fresh` set the merge's prior to `[]` and so
-    overwrote cast.json voiceless). */
-const REUSE_CONTINUITY_FIELDS = ['voiceId', 'matchedFrom', 'notLinkedTo'] as const;
-/* #3992: `declinedVoiceFrom` is deliberately NOT in this list. "Don't reuse" is a
-   durable record of a user decision, not a re-derivable link, so Start fresh keeps
-   it (the linker would otherwise re-link the declined book on the next run). */
-
-/** Strip reuse continuity from a prior cast while KEEPING each character's
-    bespoke designed voice — the transform applied to the prior cast before a
-    `fresh: true` re-analysis overlays it. Reuse-derived `voiceState: 'reused'` is
-    cleared too (the fresh run re-derives lifecycle state); a bespoke 'tuned' /
-    'locked' pin is kept. #3920 (owner decision 2026-10-31): a locked or tuned
-    row also keeps its `voiceId` — Start fresh clears its series link
-    (`matchedFrom` / `notLinkedTo`) but never the voice the user pinned, which
-    the pinned overlay in the merge would otherwise delete with no linker
-    re-stamp to replace it. Returns a new array; the input is not mutated. */
-export function dropReuseContinuityKeepDesignedVoice<T extends CastRecord>(
-  cast: ReadonlyArray<T>,
-): T[] {
-  return cast.map((c) => {
-    const next: CastRecord = { ...c };
-    const pinned = next.voiceState === 'locked' || next.voiceState === 'tuned';
-    for (const field of REUSE_CONTINUITY_FIELDS) {
-      if (field === 'voiceId' && pinned) continue;
-      delete next[field];
-    }
-    if (next.voiceState === 'reused') delete next.voiceState;
-    return next as T;
-  });
-}
-
 /** A character carries continuity worth rescuing when it has a non-generated
     voice state or any concrete voice/reuse field. */
 function isVoicedOrReused(c: CastRecord): boolean {

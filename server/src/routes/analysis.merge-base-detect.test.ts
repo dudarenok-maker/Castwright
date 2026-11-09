@@ -3,7 +3,8 @@
 
    cast-merge-base.test.ts (Task 2) proves the createCastMergeBase primitive
    is correct in ISOLATION. It cannot prove analysis.ts wired it: that
-   markDeleted() is really called in the Start-fresh block, that all five
+   a Start-fresh run's baseline is captured from the kept cast.json (plan 291
+   rule 8: it is no longer deleted), that all five
    cast.json write sites really go through writeChecked, or that the subset
    route got its own reporter/send binding. That wiring is exactly where a
    detector with a ~100%-false-positive rate would still hide — a false
@@ -341,12 +342,12 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
        distinguish a working detector from one that fires unconditionally.
        Fresh is mandatory too — it is the shape that killed design 3 (a
        baseline pinned at capture would be invalidated by the Start-fresh
-       delete's own markDeleted() reset if that reset were missing or wrong,
-       reporting a conflict on every single fresh run with zero concurrent
-       writers). A pre-existing cast.json is seeded so the delete + reset
-       actually has a real sha256 to transition away from — an empty book
-       captures fingerprint:null from the start (source: 'none'), which
-       would make markDeleted() a no-op and prove nothing. */
+       delete, reporting a conflict on every single fresh run with zero
+       concurrent writers). Plan 291 rule 8 (#4031): Start fresh no longer
+       deletes cast.json, so the captured baseline stays the file's own sha256
+       for the whole run. A pre-existing cast.json is still seeded so there is a
+       real sha256 to compare against — an empty book captures fingerprint:null
+       from the start (source: 'none') and proves nothing. */
     'control 1 — an uncontended multi-chapter Start-fresh run emits ZERO stale warnings (route-level, main)',
     async () => {
       const manuscriptId = `test-merge-base-fresh-${Date.now()}-${Math.random()}`;
@@ -390,8 +391,8 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
 
   it(
     /* Covers the `sha256` baseline path (control 1 covers the ABSENT path):
-       a real prior cast.json, requestedFresh:false, no Start-fresh delete —
-       the baseline never touches markDeleted() at all on this run. */
+       a real prior cast.json, requestedFresh:false. Since rule 8 control 1 walks the
+       same sha256 path with requestedFresh:true; this one is its non-fresh twin. */
     'control 2 — an uncontended multi-chapter NON-fresh run emits ZERO stale warnings (route-level, main)',
     async () => {
       const manuscriptId = `test-merge-base-nonfresh-${Date.now()}-${Math.random()}`;
@@ -561,11 +562,11 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
   );
 
   it(
-    /* srv-13 carry-forward, unchanged by this branch — the 2026-07-14
-       Coalfall voice-strip invariant. Mirrors analysis.test.ts's
-       "fresh re-analysis PRESERVES designed voices…" assertions rather than
-       inventing new ones. */
-    'control 5 — fresh re-analysis PRESERVES designed voices while dropping reuse continuity (route-level)',
+    /* srv-13 carry-forward — the 2026-07-14 Coalfall voice-strip invariant.
+       Mirrors analysis.test.ts's "fresh re-analysis PRESERVES designed voices…"
+       assertions rather than inventing new ones. Plan 291 rule 8 (#4031) turned
+       the "…while dropping reuse continuity" half around: Start fresh keeps it. */
+    'control 5 — fresh re-analysis PRESERVES designed voices AND reuse continuity (route-level)',
     async () => {
       const manuscriptId = `test-merge-base-voice-preserve-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -620,8 +621,11 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
         expect(narr!.voiceUuid).toBe('U-narr');
         expect(narr!.ttsEngine).toBe('qwen');
-        expect(narr!.matchedFrom).toBeUndefined();
-        expect(narr!.voiceId).toBeUndefined();
+        /* Plan 291 rule 8 (#4031): Start fresh no longer drops reuse continuity. These
+           two assertions were `toBeUndefined()` before. */
+        expect(narr!.matchedFrom).toEqual({ bookId: 'prior', characterId: 'narrator', confidence: 0.9 });
+        expect(narr!.voiceId).toBe('some-library-voice');
+        expect(narr!.voiceState).toBe('reused');
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }

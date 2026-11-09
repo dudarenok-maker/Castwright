@@ -48,13 +48,13 @@ import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
 import {
   loadCastMerges,
   saveCastMerges,
-  clearCastMerges,
+  clearAffectedRefs,
   replaceFoldEntries,
   buildFoldJournalEntries,
   replaceDedupEntries,
   buildDedupJournalEntries,
 } from '../store/cast-merges.js';
-import { reconcileSuggestionsLocked, clearSuggestions } from '../store/cast-merge-suggestions.js';
+import { reconcileSuggestionsLocked } from '../store/cast-merge-suggestions.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
   runStage2ChapterChunked,
@@ -112,7 +112,6 @@ import type {
 } from '../handoff/schemas.js';
 import {
   castJsonPath,
-  castReuseCarryoverJsonPath,
   changeLogJsonPath,
   manuscriptEditsJsonPath,
   slug,
@@ -140,7 +139,6 @@ import {
   seedReuseGuardsFromPriorCast,
   voicedSurvivorsDropped,
   applyRewriteToPriorCast,
-  dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
   type Retirement,
 } from '../store/merge-analysis-cast.js';
@@ -4791,21 +4789,18 @@ export async function runMainAnalyzerJob(
     /* Snapshot the existing cast's designed-voice links BEFORE any interim
        write clobbers cast.json, so the final roster preserves them across a
        re-analysis (#518 — re-attribution must not strip designed voices).
-       `fresh` (Start fresh) re-derives attribution AND reuse continuity from
-       scratch, but must NOT discard the user's bespoke designed voices (the
-       2026-07-14 Coalfall voice-strip incident: fresh used to capture nothing
-       here, so the interim/final merge overwrote cast.json voiceless). So still
-       snapshot the prior on a fresh run — with reuse continuity stripped, since
-       fresh legitimately re-derives that. Read happens before the fresh block
-       below rm's cast.json, so the value survives that deletion. */
+       Plan 291 rule 8 (#4031): Start fresh keeps the user's decisions, so a fresh
+       run reads its prior exactly like any other run — series links and declines
+       included. The 2026-07-14 Coalfall voice-strip incident (fresh captured
+       nothing here, so the interim/final merge overwrote cast.json voiceless) and
+       #3920's pinned-voice carve-out both came from fresh being a special case
+       of this read. */
     const priorSnapshot = recordRef.bookDir
       ? await readPriorCastForMerge(recordRef.bookDir)
       : { rows: [], fingerprint: null, source: 'none' as const };
-    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = requestedFresh
-      ? dropReuseContinuityKeepDesignedVoice(priorSnapshot.rows)
-      : priorSnapshot.rows;
+    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
     /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
-       every merge-base write and reset by the Start-fresh delete below. */
+       every merge-base write. */
     const castBase: CastMergeBase | null = recordRef.bookDir
       ? createCastMergeBase(
           /* #2165 + #2196 — live, not pinned, AND identity-gated. Resolution
@@ -4909,14 +4904,17 @@ export async function runMainAnalyzerJob(
 
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
-      /* Match the filesystem to the cleared cache state. Without this,
-         "Start fresh" leaves the previous run's partial cast.json and
-         manuscript-edits.json behind until the new run completes — the
-         library card hydration would then briefly show stale cast
-         entries against an empty cache. `rm({ force: true })` is a
-         no-op when the file doesn't exist (manuscripts uploaded via
-         the legacy non-workspace path have no bookDir; the guard
-         keeps it cheap). */
+      /* Match the filesystem to the cleared cache state: the per-sentence edits
+         go with the cache, or the library card would briefly show stale lines
+         against an empty cache. `rm({ force: true })` is a no-op when the file
+         doesn't exist (manuscripts uploaded via the legacy non-workspace path
+         have no bookDir; the guard keeps it cheap).
+
+         Plan 291 rule 8 (#4031) — Start fresh KEEPS cast.json, the reparse
+         carryover, the merge journal's merges, the suggestions and the history:
+         merges, declines, dismissals and series links are the user's decisions,
+         not analysis output. It used to delete all of them here (under the cast
+         lock, with a `markDeleted` reset of the merge base). */
       if (recordRef.bookDir) {
         /* #3435 — every file below is touched only through the identity-verified
            LIVE book dir (mode:'drop', #2196), never `recordRef.bookDir` directly:
@@ -4925,45 +4923,20 @@ export async function runMainAnalyzerJob(
         await withVerifiedBookDir(
           { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
           async (freshBookDir) => {
-            /* #1981 Task 11 — the delete must be serialised against the other 34
-               cast.json writers the same way they're serialised against each
-               other: a writer that acquires the lock AFTER this delete would
-               otherwise recreate cast.json from its own stale read, resurrecting
-               the roster this delete exists to remove (design §4 rule 1 — this
-               is the innermost, one-level lock around the whole read-through-
-               delete span; the delete itself has no read of its own to pull
-               inside it). #2015/#2155 update: the five merge-base writes and
-               readPriorCastForMerge are no longer out of scope here — they are
-               locked too, and the carryover's delete now rides this same hold. */
-            await withCastLock(freshBookDir, async () => {
-              await rm(castJsonPath(freshBookDir), { force: true });
-              /* Start fresh intentionally discards reuse continuity — drop the
-                 reparse carryover too so it can't resurrect links (srv-13).
-                 #2155: inside the SAME hold as cast.json's delete, so a concurrent
-                 analysis can no longer observe the intermediate state where the
-                 carryover is written but cast.json is not yet gone. */
-              await rm(castReuseCarryoverJsonPath(freshBookDir), { force: true });
-              /* #2015 §3a rule 2 — the capture above deliberately happened BEFORE
-                 this delete (so the rows survive it), which means the captured
-                 hash describes a file we are now removing. Without this reset the
-                 first write site re-reads an absent file against a live hash and
-                 reports a guaranteed false conflict on every fresh run. */
-              castBase?.markDeleted();
-            });
-            /* #3784 — `book`-locked (after the cast lock above is released), so
-               a slice PUT that passed its manuscript check cannot recreate the
-               pre-wipe file after this delete. */
+            /* #3784 — `book`-locked, so a slice PUT that passed its manuscript
+               check cannot recreate the pre-wipe file after this delete. */
             await withOptionalBookLock(recordRef.bookId, async () => {
               const editsPath = manuscriptEditsJsonPath(freshBookDir);
               await enqueuePathOp(editsPath, () => rm(editsPath, { force: true }));
             });
-            /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
-               meaningless; drop the merge journal + dedup suggestions too. */
-            await clearCastMerges(freshBookDir);
-            await clearSuggestions(freshBookDir);
+            /* The kept journal's manual entries point at sentences this run
+               regenerates, and unlink-alias intersects by them - so the merges stay
+               and their refs go; an unlink then offers lines by alias match alone.
+               Cast-locked: a manual merge appends to the journal under that lock. */
+            await withCastLock(freshBookDir, () => clearAffectedRefs(freshBookDir));
             /* #3435 O1 — Start fresh un-confirms the book, as Re-parse does
-               (`applyReparse`, book-state.ts): the cast is gone, so a book still
-               marked confirmed would read "done" with nothing behind it. It reads
+               (`applyReparse`, book-state.ts): this run re-derives the cast, so a book
+               still marked confirmed would read "done" while it is rebuilt. It reads
                "Analysing" until this run persists and the user confirms again.
                #2196 — through the identity-verified LIVE book dir in mode:'drop':
                a stale path (moved book, or one now holding another book) is

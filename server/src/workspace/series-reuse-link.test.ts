@@ -23,7 +23,6 @@ import {
   seedReuseGuardsFromPriorCast,
   mergeAnalysisResultWithExistingCast,
   applyRewriteToPriorCast,
-  dropReuseContinuityKeepDesignedVoice,
   dedupePriorCastByName,
 } from '../store/merge-analysis-cast.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
@@ -744,8 +743,9 @@ describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
    Steps the harness OMITS, so it is a composition of the pure functions and
    not the route: foldMinorCast (folded.rewrites is {} and folded.sentences
    is []), applyNarratorIdentity, the prior-side pruneStaleReuseLinks /
-   dedupePriorCastByName, and the requestedFresh strip (the Start fresh test
-   calls dropReuseContinuityKeepDesignedVoice itself). The `sentences` option
+   dedupePriorCastByName. (There is no requestedFresh strip to omit any more:
+   since plan 291 rule 8 a Start fresh reads its prior like any other run.) The
+   `sentences` option
    runs dedupeRosterByName; without it dedup is skipped and the journal is
    empty (composeRewrites({}, {}) === {}), which only a fixture that cannot
    collapse can honestly use. The route feeds the default workspace scanners;
@@ -886,7 +886,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     await surnameDrift('tuned');
   });
 
-  it('Start fresh: a locked row whose voice equals Book One keeps voiceId, loses matchedFrom (strip → seed → link → merge)', async () => {
+  it('Start fresh (rule 8, no strip): a locked row whose voice equals Book One keeps voiceId AND its series link (seed → link → merge)', async () => {
     const rawPrior: PriorRow[] = [
       {
         id: 'wren',
@@ -896,7 +896,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
         matchedFrom: { bookId: BOOK1, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 },
       },
     ];
-    const prior = dropReuseContinuityKeepDesignedVoice(rawPrior);
+    const prior = rawPrior;
     const fresh: LinkableCharacter[] = [
       { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen' },
     ];
@@ -908,11 +908,14 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
       },
     ];
     const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
-    expect(postLink[0].matchedFrom?.bookId).toBe(BOOK1); // the linker did re-stamp a link
+    expect(postLink[0].matchedFrom?.bookId).toBe(BOOK1); // the prior's link seeded the fresh row
     const wren = merged.find((c) => c.id === 'wren');
     expect(wren?.voiceId).toBe('w2');
     expect(wren?.voiceState).toBe('locked');
-    expect(wren?.matchedFrom).toBeUndefined();
+    /* Before rule 8 the strip removed the link and the merge deleted the re-stamped
+       one, so this was undefined. Now the user's series link is kept. */
+    expect(wren?.matchedFrom?.bookId).toBe(BOOK1);
+    expect(wren?.matchedFrom?.characterId).toBe('wren');
   });
 
   it('cousin name: a same-name fresh row never inherits the seeded link of the prior row it was not joined to', async () => {
@@ -984,7 +987,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
     expect(mara2?.matchedFrom?.confidence).not.toBe(seededLink.confidence);
   });
 
-  it('Start fresh: a locked voice that differs from Book One keeps its own voiceId (w_mine, not w_b1) and gets no link', async () => {
+  it('Start fresh (rule 8, no strip): a locked voice that differs from Book One keeps its own voiceId (w_mine, not w_b1) and its series link', async () => {
     const rawPrior: PriorRow[] = [
       {
         id: 'wren',
@@ -994,7 +997,7 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
         matchedFrom: { bookId: BOOK1, characterId: 'wren', bookTitle: 'Book One', confidence: 0.9 },
       },
     ];
-    const prior = dropReuseContinuityKeepDesignedVoice(rawPrior);
+    const prior = rawPrior;
     const fresh: LinkableCharacter[] = [
       { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen' },
     ];
@@ -1006,11 +1009,14 @@ describe('re-analysis keeps locked/tuned voices — seed → link → remap → 
       },
     ];
     const { merged, postLink } = await runReAnalysis(prior, fresh, routeOptions(library));
-    expect(postLink[0].voiceId).toBe('w_b1'); // the linker did try to hand over Book One's voice
+    /* The prior's link seeds the fresh row, so the linker skips it and never hands
+       Book One's voice over (before rule 8 it did, and the merge then deleted it). */
+    expect(postLink[0].matchedFrom?.bookId).toBe(BOOK1);
+    expect(postLink[0].voiceId).not.toBe('w_b1');
     const wren = merged.find((c) => c.id === 'wren');
     expect(wren?.voiceId).toBe('w_mine');
     expect(wren?.voiceState).toBe('locked');
-    expect(wren?.matchedFrom).toBeUndefined();
+    expect(wren?.matchedFrom?.bookId).toBe(BOOK1);
     expect(wren?.overrideTtsVoices).toBeUndefined();
   });
 

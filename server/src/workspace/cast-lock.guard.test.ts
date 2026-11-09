@@ -74,7 +74,8 @@
    `writeJsonAtomic` calls (four rejected designs for closing them are
    recorded in cast-lock.ts's own header) were deferred, with an entry here;
    its one `rm` (the "Start fresh" delete, Task 11) was never deferred — it
-   IS locked, and always was. #2155 Task 5 closed the deferred half: the five
+   IS locked, and always was. (That delete is gone since plan 291 rule 8,
+   #4031: Start fresh keeps cast.json.) #2155 Task 5 closed the deferred half: the five
    writes now go through `createCastMergeBase`'s `writeChecked`, which takes
    the lock itself — true, but **this guard cannot check that claim**. The
    write it actually emits (`cast-merge-base.ts`'s `const path =

@@ -4,7 +4,6 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
 import type { StoredSuggestion } from './reanalysis-types.js';
 
 /** A dedup-origin stored suggestion, pair key derived the way the store does. */
@@ -140,28 +139,5 @@ describe('cast-merge-suggestions store', () => {
 
     await removeSuggestionPairsLocked(bookDir, [['nonexistent', 'target']]);
     expect(await loadStoredSuggestions(bookDir)).toHaveLength(2);
-  });
-
-  it('clearSuggestions removes the file; subsequent load returns empty', async () => {
-    const { reconcileSuggestionsLocked, loadSuggestions, clearSuggestions } = await import(
-      './cast-merge-suggestions.js'
-    );
-    await reconcileSuggestionsLocked(bookDir, {
-      add: [stored('оля', 'ольга')],
-      liveIds: new Set(['оля', 'ольга']),
-      supersededBy: {},
-      declined: never,
-    });
-    const { castMergeSuggestionsJsonPath } = await import('../workspace/paths.js');
-    expect(existsSync(castMergeSuggestionsJsonPath(bookDir))).toBe(true);
-    await clearSuggestions(bookDir);
-    expect(existsSync(castMergeSuggestionsJsonPath(bookDir))).toBe(false);
-    const result = await loadSuggestions(bookDir);
-    expect(result).toEqual({ suggestions: [] });
-  });
-
-  it('clearSuggestions is a no-op when file is absent', async () => {
-    const { clearSuggestions } = await import('./cast-merge-suggestions.js');
-    await expect(clearSuggestions(bookDir)).resolves.toBeUndefined();
   });
 });
