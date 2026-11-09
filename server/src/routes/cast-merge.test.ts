@@ -1426,4 +1426,21 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
        skips the second clear whenever the first changed something. */
     expect(castRow(live)!.notLinkedTo ?? []).toEqual([]);
   });
+
+  it('GET merge-suggestions returns only pairs whose two ids are both live rows', async () => {
+    const u = uniq();
+    const a = `get-a-${u}`;
+    const b = `get-b-${u}`;
+    seedRows([row(a), row(b)]);
+    seedSuggestions([
+      [a, b],
+      [a, `get-deleted-${u}`],
+    ]);
+
+    const res = await request(app).get(`/api/books/${bookId}/cast/merge-suggestions`);
+    expect(res.status).toBe(200);
+    expect(res.body.suggestions.map((s: { sourceId: string; targetId: string }) => `${s.sourceId}>${s.targetId}`)).toEqual([
+      `${a}>${b}`,
+    ]);
+  });
 });

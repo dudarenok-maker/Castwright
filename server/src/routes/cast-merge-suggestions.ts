@@ -11,7 +11,8 @@
 
    bookDir resolution mirrors cast-merge.ts: `findBookByBookId`, 404 when the
    book is absent for accept/dismiss; the GET returns an empty list when the
-   book or file is absent (safe for a stale bookId the UI may hold). */
+   book or file is absent (safe for a stale bookId the UI may hold); it lists
+   only pairs whose two ids are live rows in cast.json. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -23,6 +24,8 @@ import {
   removeSuggestionPairsLocked,
 } from '../store/cast-merge-suggestions.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { castJsonPath } from '../workspace/paths.js';
+import { readJson } from '../workspace/state-io.js';
 import {
   isLockAcquisitionTimeout,
   LOCK_CONTENTION_REQUEST_ERROR,
@@ -49,8 +52,16 @@ castMergeSuggestionsRouter.get(
     const located = await findBookByBookId(bookId);
     if (!located) return res.json({ suggestions: [] });
 
+    /* Only pairs whose two ids are both live rows in the current cast: a stored
+       pair naming a deleted or merged-away row cannot be acted on (accept 404s)
+       and is pruned by the next run's reconcile, not before. A lock-free read —
+       this route writes nothing. */
     const file = await loadSuggestions(located.bookDir);
-    return res.json(file);
+    const cast = await readJson<{ characters?: Array<{ id: string }> }>(castJsonPath(located.bookDir));
+    const live = new Set((cast?.characters ?? []).map((c) => c.id));
+    return res.json({
+      suggestions: file.suggestions.filter((s) => live.has(s.sourceId) && live.has(s.targetId)),
+    });
   },
 );
 
