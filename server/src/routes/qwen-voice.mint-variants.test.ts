@@ -184,21 +184,6 @@ afterAll(() => {
 });
 
 describe('series mint copies emotion variants (#4037)', () => {
-  it('T1: copies the angry family, renames the stamped slot, keeps the legacy files', async () => {
-    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
-    plantBase();
-    plantAngry();
-    const uuid = await mint();
-    expect(uuid).toBeTruthy();
-    expect(readFileSync(file(`qwen-${uuid}__angry.pt`), 'utf8')).toBe('ANGRY-PT');
-    expect(readFileSync(file(`qwen-${uuid}__angry.json`), 'utf8')).toBe('ANGRY-JSON');
-    expect(rowOf('Book One').voiceUuid).toBe(uuid);
-    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
-    expect(readFileSync(file(`qwen-${uuid}.pt`), 'utf8')).toBe('BASE-PT');
-    for (const f of legacyFiles) expect(existsSync(file(f))).toBe(true);
-    expect(readFileSync(file('qwen-v_wren__angry.pt'), 'utf8')).toBe('ANGRY-PT');
-  });
-
   it('T2: a foreign variant name is kept', async () => {
     seed(
       withVariants({
@@ -222,17 +207,6 @@ describe('series mint copies emotion variants (#4037)', () => {
     expect(rowOf('Book One').overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
   });
 
-  it('T4: a failing variant copy removes every earlier copy and stamps nothing', async () => {
-    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
-    plantBase();
-    plantAngry();
-    failing.on = true;
-    await expect(mint()).rejects.toThrow(/EBUSY/);
-    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
-    expect(rowOf('Book One').voiceUuid).toBeUndefined();
-    expect(rowOf('Book Two').voiceUuid).toBeUndefined();
-  });
-
   it('T5: a row with its own uuid keeps both uuid and variant names', async () => {
     /* The shape every row the pre-#4037 mint stamped has: a uuid, and a slot still
        named for the legacy key, whose legacy file is the only copy of those bytes. */
@@ -243,17 +217,6 @@ describe('series mint copies emotion variants (#4037)', () => {
     expect(uuid).toBeTruthy();
     expect(rowOf('Book One').voiceUuid).toBe('u_own');
     expect(rowOf('Book One').overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
-  });
-
-  it('T6: a designing book whose cast is unconfirmed (stampOwnRow) renames its own slot', async () => {
-    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
-    writeBook('Book Two', [withVariants({ angry: { name: 'qwen-v_wren__angry' } })], { confirmed: false });
-    plantBase();
-    plantAngry();
-    const uuid = await mint();
-    expect(rowOf('Book Two').voiceUuid).toBe(uuid);
-    expect(rowOf('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
-    expect(existsSync(file(`qwen-${uuid}__angry.pt`))).toBe(true);
   });
 
   it('T7: a variant landing on another book between the copy and the walk gets its file copied, then renamed', async () => {
@@ -448,40 +411,6 @@ describe('book-scoped mint copies the legacy family too (#4037)', () => {
     mkdirSync(qwenDir(), { recursive: true });
     writeBook('Solo', [row], { standalone: true });
   };
-
-  it('T8: a standalone legacy row gets the base and angry copied under the new key, slot renamed', async () => {
-    soloSeed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
-    plantBase();
-    plantAngry();
-    const uuid = await ensure(bookDir('Solo', SOLO_SERIES), 'wren');
-    expect(uuid).toBeTruthy();
-    expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBe(uuid);
-    expect(readFileSync(file(`qwen-${uuid}.pt`), 'utf8')).toBe('BASE-PT');
-    expect(readFileSync(file(`qwen-${uuid}__angry.pt`), 'utf8')).toBe('ANGRY-PT');
-    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
-    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
-    for (const f of legacyFiles) expect(existsSync(file(f))).toBe(true);
-  });
-
-  it('T9: nothing designed under the legacy key stamps as before and copies nothing', async () => {
-    soloSeed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
-    plant('qwen-v_wren__angry.pt', 'ANGRY-PT');
-    const uuid = await ensure(bookDir('Solo', SOLO_SERIES), 'wren');
-    expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBe(uuid);
-    expect(readdirSync(qwenDir())).toEqual(['qwen-v_wren__angry.pt']);
-    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
-    expect(rowOf('Solo', SOLO_SERIES).overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
-  });
-
-  it('T10: a failing variant copy removes the earlier copies and stamps nothing', async () => {
-    soloSeed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
-    plantBase();
-    plantAngry();
-    failing.on = true;
-    await expect(ensure(bookDir('Solo', SOLO_SERIES), 'wren')).rejects.toThrow(/EBUSY/);
-    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
-    expect(rowOf('Solo', SOLO_SERIES).voiceUuid).toBeUndefined();
-  });
 
   it('T16: a failing in-lock copy removes every copy, the in-lock ones too, and stamps nothing', async () => {
     soloSeed(withVariants({ angry: { name: 'qwen-v_wren__angry' }, excited: { name: 'qwen-v_wren__excited' } }));

@@ -97,6 +97,7 @@ describe('#4037 — the book-scoped mint copies a legacy voice’s base family a
     }
     expect(existsSync(join(qwenDir(), 'qwen-v_wren.pt'))).toBe(true);
     expect(readRow().overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
+    expect(readRow().overrideTtsVoices.qwen.name).toBe(`qwen-${uuid}`);
   });
 
   it('a failed variant copy stamps nothing and leaves no copy behind', async () => {
@@ -108,10 +109,13 @@ describe('#4037 — the book-scoped mint copies a legacy voice’s base family a
   });
 
   it('with nothing designed under the legacy key, the row is stamped and nothing is copied', async () => {
-    rmSync(qwenDir(), { recursive: true, force: true });
-    mkdirSync(qwenDir(), { recursive: true });
+    /* the base was never designed; a lone variant of it is no reason to copy anything */
+    for (const f of ['.pt', '.json', '__1.7b.pt', '__master.wav']) rmSync(join(qwenDir(), `qwen-v_wren${f}`));
     const uuid = await mint();
     expect(readRow().voiceUuid).toBe(uuid);
-    expect(readdirSync(qwenDir())).toEqual([]);
+    expect(readdirSync(qwenDir()).filter((f) => !f.startsWith('qwen-v_wren__angry'))).toEqual([]);
+    expect(readdirSync(qwenDir())).toHaveLength(4);
+    expect(readRow().overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-v_wren__angry');
+    expect(readRow().overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
   });
 });
