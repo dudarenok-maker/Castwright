@@ -9,6 +9,11 @@
    `routes/generation.ts -> tts/index.ts -> tts/sidecar.ts ->
    gpu/evict-idle-tts.ts -> routes/generation.ts`.
 
+   A fs-26 splice and a QA repair are GPU work too but never enter
+   `inFlightByBook`; `routes/chapter-job-coordination.ts` registers its
+   in-flight splice count (`setInFlightSpliceCounter`, #4066) and both
+   predicates below fold it in.
+
    There is exactly one source of truth (the registered accessor) — nothing
    here copies or caches the state, so it can't drift from
    `routes/generation.ts`'s own view.
@@ -41,6 +46,7 @@
    much larger span than this fix should touch. */
 
 let provider: (() => string[]) | null = null;
+let spliceCounter: (() => number) | null = null;
 
 /** Registered by routes/generation.ts at module init with its existing
     `activeGenerationBooks` accessor. */
@@ -48,9 +54,33 @@ export function setActiveGenerationBooksProvider(fn: () => string[]): void {
   provider = fn;
 }
 
-/** True when a render may be in flight anywhere. Unregistered resolves to
-    `true` — fail closed (see file header). */
+/** #4066 — registered by routes/chapter-job-coordination.ts at module init
+    with its in-flight splice count. A fs-26 splice and a QA repair (which
+    registers through the same `registerSplice`) re-synthesise on the GPU but
+    never enter generation's `inFlightByBook`, so the accessor above cannot see
+    them. Unregistered counts as zero: the generation provider is the fail-closed
+    one, and a splice can only exist once its registry (the registrant) has loaded. */
+export function setInFlightSpliceCounter(fn: () => number): void {
+  spliceCounter = fn;
+}
+
+function spliceActive(): boolean {
+  return (spliceCounter?.() ?? 0) > 0;
+}
+
+/** True when a render, splice or QA repair may be in flight anywhere.
+    Unregistered resolves to `true` — fail closed (see file header). */
 export function isAnyGenerationActive(): boolean {
   if (!provider) return true;
-  return provider().length > 0;
+  return provider().length > 0 || spliceActive();
+}
+
+/** True only when a render is KNOWN to be in flight. Unregistered resolves to
+    `false`. For wording a message only (#4066, `describeVramBlockers`): there
+    the worst case of a wrong `false` is a less specific error, while a wrong
+    `true` would tell the user a render is running when none is. Never use it
+    to decide whether an eviction is safe — that is `isAnyGenerationActive`. */
+export function isGenerationKnownActive(): boolean {
+  if (!provider) return false;
+  return provider().length > 0 || spliceActive();
 }

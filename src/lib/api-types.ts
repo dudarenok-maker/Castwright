@@ -6852,6 +6852,20 @@ export interface components {
             queueDepth: number;
             /** @description Live per-device VRAM reading at response time. */
             devices: components["schemas"]["GpuQueueDevice"][];
+            /** @description #4066 — the last time a voice design or a Quality (1.7B) op unloaded resident TTS models (the standard Qwen base, an on-GPU Kokoro) to free VRAM, or null. Absent on older servers. The frontend shows the 'unloaded to free VRAM' notice once per new `seq`. */
+            lastTtsAutoFree?: components["schemas"]["TtsAutoFreeNotice"] | null;
+        };
+        TtsAutoFreeNotice: {
+            /** @description Identifies the server process; `seq` restarts at 1 after a restart, so the frontend compares bootId + seq. */
+            bootId: string;
+            /** @description Monotonic per-event counter within one bootId. */
+            seq: number;
+            /** @description Display names of what was unloaded, e.g. ['Qwen 0.6B', 'Kokoro']. */
+            models: string[];
+            /** @enum {string} */
+            purpose: "voice design" | "Quality render";
+            /** Format: date-time */
+            at: string;
         };
         /**
          * @description One finished chapter's own throughput, for the history ring. `rtf` is

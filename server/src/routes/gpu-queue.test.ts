@@ -19,6 +19,7 @@ vi.mock('../gpu/capacity-probe.js', () => ({
 }));
 
 import { gpuQueueRouter, readGpuQueueState } from './gpu-queue.js';
+import { recordTtsAutoFree, resetTtsAutoFreeForTests } from '../gpu/tts-auto-free-notice.js';
 
 function makeApp() {
   const app = express();
@@ -28,6 +29,7 @@ function makeApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetTtsAutoFreeForTests();
   getCapacityWaiterCount.mockReturnValue(0);
   capacityProbeRead.mockResolvedValue([]);
 });
@@ -40,12 +42,12 @@ describe('readGpuQueueState()', () => {
 
     const state = await readGpuQueueState();
 
-    expect(state).toEqual({ queueDepth: 2, devices });
+    expect(state).toEqual({ queueDepth: 2, devices, lastTtsAutoFree: null });
   });
 
   it('returns queueDepth 0 with no devices when nothing is waiting and no GPU is present', async () => {
     const state = await readGpuQueueState();
-    expect(state).toEqual({ queueDepth: 0, devices: [] });
+    expect(state).toEqual({ queueDepth: 0, devices: [], lastTtsAutoFree: null });
   });
 });
 
@@ -62,6 +64,21 @@ describe('GET /api/gpu/queue', () => {
     expect(res.body).toEqual({
       queueDepth: 1,
       devices: [{ kind: 'cuda', index: 0, label: 'cuda:0', totalMb: 8000, freeMb: 1200 }],
+      lastTtsAutoFree: null,
+    });
+  });
+});
+
+describe('#4066 — the last TTS auto-free rides the queue payload', () => {
+  it('reports what a voice design unloaded, so the browser can show the notice', async () => {
+    recordTtsAutoFree(['Qwen 0.6B', 'Kokoro'], 'voice design');
+
+    const res = await request(makeApp()).get('/api/gpu/queue');
+
+    expect(res.body.lastTtsAutoFree).toMatchObject({
+      seq: expect.any(Number),
+      models: ['Qwen 0.6B', 'Kokoro'],
+      purpose: 'voice design',
     });
   });
 });

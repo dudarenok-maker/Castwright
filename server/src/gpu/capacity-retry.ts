@@ -30,6 +30,9 @@ import {
   probeSidecarHealthIfRegistered,
   type SidecarHealthSnapshot,
 } from './sidecar-health-gate.js';
+import { isGenerationKnownActive } from './active-generation-gate.js';
+import { getKnob } from '../config/registry.js';
+import { resolveKnob } from '../config/resolver.js';
 
 /* Bounded poll for the no-capacity retry loop. GPU_CAPACITY_POLL_MS is the
    wait between admission checks; GPU_CAPACITY_MAX_ATTEMPTS bounds the total
@@ -142,9 +145,12 @@ export interface CapacityRetryOpts {
       `NoCapacityError`. */
   maxAttempts?: number;
   /** Injected "free a resident TTS model this op doesn't need" action —
-      defaults to `evictIdleQwenBase` bound to this call's model key. Returns
-      true when it actually unloaded something. */
-  evictIdleTts?: () => Promise<boolean>;
+      defaults to `evictIdleQwenBase` bound to this call's model key. Takes the
+      denied request's `deviceKey`. Returns true when it actually unloaded
+      something, and `'declined'` when it held off for a reason that can clear
+      (another design resident on the card, #4066) — which leaves the
+      one-shot latch armed so a later poll asks again. */
+  evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'>;
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
@@ -153,6 +159,18 @@ export interface CapacityRetryOpts {
       never named (#2678 review finding F1 — same qualification
       `isDesignResident` already applies). */
   describeBlockers?: (deviceKey: string) => Promise<VramBlocker[]>;
+  /** #4066 — injected "is Preload Kokoro at startup on" read for the default
+      `describeBlockers`; defaults to the `tts.preload.kokoro` registry knob.
+      Decides whether the setting is named as Kokoro's remedy. */
+  isKokoroPreloadOn?: () => boolean;
+  /** #4066 — injected "is a render known to be in flight" read for the
+      default `describeBlockers`; defaults to the leaf gate's
+      `isGenerationKnownActive`. */
+  isGenerationKnownActive?: () => boolean;
+  /** #4066 — true when the blocked op is a chapter render's own synth call
+      (`SidecarTtsProvider`). The render is then the one asking for capacity,
+      so the give-up message never names it as what holds the model. */
+  isRenderSynth?: boolean;
   /** Injected "is a VoiceDesign currently resident/in-flight on the SAME
       device this admission was denied on" check — defaults to
       `defaultIsDesignResident`, which reads
@@ -180,9 +198,32 @@ export interface CapacityRetryOpts {
    that gate's file header for the full path). Best-effort: an unregistered
    gate or a probe failure both report no blockers rather than turning a
    probe failure into a worse error than the one already being thrown. */
+interface BlockerMessageContext {
+  isKokoroPreloadOn: () => boolean;
+  isGenerationKnownActive: () => boolean;
+  isRenderSynth: boolean;
+}
+
+/* #4066 — the effective "Preload Kokoro at startup" setting, so a resident
+   Kokoro is only blamed on that setting when it is actually on. Fails to
+   `false` (name the Stop control, never the setting) if the read throws. */
+function defaultIsKokoroPreloadOn(): boolean {
+  try {
+    const knob = getKnob('tts.preload.kokoro');
+    return knob ? resolveKnob(knob).effective === true : false;
+  } catch {
+    return false;
+  }
+}
+
 async function defaultDescribeBlockers(
   deviceKey: string,
   fetchHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
+  ctx: BlockerMessageContext = {
+    isKokoroPreloadOn: defaultIsKokoroPreloadOn,
+    isGenerationKnownActive,
+    isRenderSynth: false,
+  },
 ): Promise<VramBlocker[]> {
   try {
     const health = await fetchHealth();
@@ -190,6 +231,10 @@ async function defaultDescribeBlockers(
     return describeVramBlockers({
       coquiLoaded: health.modelLoaded,
       kokoroLoaded: health.kokoroLoaded,
+      kokoroDevice: health.devices?.kokoro,
+      kokoroPreload: health.kokoroLoaded ? ctx.isKokoroPreloadOn() : false,
+      generationActive: ctx.isGenerationKnownActive(),
+      blockedOpIsRender: ctx.isRenderSynth,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
       // Qualified by deviceKey (#2678 review finding F1), same as
@@ -269,7 +314,13 @@ export async function withCapacityRetry(
   const pollMs = opts.pollMs ?? GPU_CAPACITY_POLL_MS;
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
-  const describeBlockers = opts.describeBlockers ?? defaultDescribeBlockers;
+  const messageCtx: BlockerMessageContext = {
+    isKokoroPreloadOn: opts.isKokoroPreloadOn ?? defaultIsKokoroPreloadOn,
+    isGenerationKnownActive: opts.isGenerationKnownActive ?? isGenerationKnownActive,
+    isRenderSynth: opts.isRenderSynth === true,
+  };
+  const describeBlockers =
+    opts.describeBlockers ?? ((deviceKey: string) => defaultDescribeBlockers(deviceKey, undefined, messageCtx));
   const designMaxAttempts = opts.designMaxAttempts ?? GPU_CAPACITY_DESIGN_MAX_ATTEMPTS;
 
   let evicted = false;
@@ -331,8 +382,11 @@ export async function withCapacityRetry(
          "no render in flight" inside evictIdleQwenBase, so it is inert during
          generation by construction. At most once per call, like the analyzer. */
       if (!evictedTts) {
-        evictedTts = true;
-        if (await evictIdleTts()) continue; // immediate retry after freeing VRAM
+        const freedTts = await evictIdleTts(noCap.deviceKey);
+        if (freedTts !== 'declined') {
+          evictedTts = true;
+          if (freedTts) continue; // immediate retry after freeing VRAM
+        }
       }
 
       if (usingDesignBudget) {
@@ -373,7 +427,7 @@ export async function withCapacityRetry(
             noCap.deviceKey,
             opts.describeBlockers
               ? await opts.describeBlockers(noCap.deviceKey)
-              : await defaultDescribeBlockers(noCap.deviceKey, fetchHealthOnce),
+              : await defaultDescribeBlockers(noCap.deviceKey, fetchHealthOnce, messageCtx),
             unloadNotes(noCap.deviceKey),
           );
         }

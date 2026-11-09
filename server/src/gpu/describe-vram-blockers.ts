@@ -17,12 +17,21 @@
    Stop at that moment would kill a live render — the honest remedy there is
    "wait", and an entry advising a destructive action is worse than no entry.
 
-   Kokoro stays listed. It has a Stop pill reachable wherever it's resident
+   Kokoro stays listed (but see the render-in-flight rule below). It has a Stop pill reachable wherever it's resident
    (the top bar / global TTS notice banner —
-   src/components/tts-notice-banner.tsx), but stopping it only frees the VRAM
-   until the sidecar next restarts, because it's the eagerly-resident fallback
-   gated by the "Preload Kokoro at startup" setting — so the actionable fix
-   names the setting instead. */
+   src/components/tts-notice-banner.tsx). When the "Preload Kokoro at startup"
+   setting is ON, stopping it only frees the VRAM until the sidecar next
+   restarts, so the actionable fix names the setting. When the setting is OFF
+   (the default) Kokoro was loaded on demand by a render that needed it, and
+   the setting is not the cause — the remedy names the Stop control instead
+   (#4066: the old copy said "Turn off Preload Kokoro" with preload already
+   off). A Kokoro reported on the CPU holds no VRAM and is not listed.
+
+   #4066 — a voice design or a Quality op now auto-frees the standard Qwen
+   base and an on-GPU Kokoro (./evict-idle-tts.ts), EXCEPT while a render is
+   in flight, where that model may be in use. In that one case the standard
+   Qwen model IS the blocker and the honest remedy is to wait or pause, so it
+   is named when `generationActive` is set. */
 
 export interface VramBlocker {
   /** Display name, as the user sees it in the UI. */
@@ -57,12 +66,40 @@ export interface VramBlockerHealth {
       blocker where "wait it out" is the whole remedy, not noise on top of
       an action already taken (#2678). */
   qwenDesignResident?: boolean;
+  /** #4066 — the effective "Preload Kokoro at startup" setting. Only when it
+      is on is the setting the remedy for a resident Kokoro. */
+  kokoroPreload?: boolean;
+  /** #4066 — Kokoro's device family from the sidecar's device map. 'cpu'
+      means it holds no VRAM; absent/unknown is treated as possibly-GPU. */
+  kokoroDevice?: string | null;
+  /** #4066 — a chapter render is known to be in flight, so the auto-free
+      declined and a resident standard Qwen model is in use by it. */
+  generationActive?: boolean;
+  /** #4066 — the blocked op is that render's own synth call, so the render is
+      the one asking for capacity and is never named as what holds the Qwen
+      model. Kokoro still gets the wait remedy during a render. */
+  blockedOpIsRender?: boolean;
 }
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
-  if (health.kokoroLoaded) {
-    out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' });
+  if (health.kokoroLoaded && health.kokoroDevice !== 'cpu') {
+    out.push({
+      model: 'Kokoro',
+      /* During a render, Stop would kill a Kokoro fallback line in flight —
+         the same "never advise a destructive action" rule as Coqui above. */
+      remedy: health.generationActive
+        ? 'A chapter render is in progress and may be using it — wait for the render to finish, or pause it, then try again.'
+        : health.kokoroPreload
+          ? 'Turn off "Preload Kokoro at startup" in settings.'
+          : 'Press "Stop Kokoro" in the "Voice engines loaded" row under the top bar.',
+    });
+  }
+  if (health.generationActive && !health.blockedOpIsRender && (health.qwenLoaded || health.qwenBase17Loaded)) {
+    out.push({
+      model: health.qwenLoaded ? 'The standard Qwen voice model' : 'The Quality Qwen voice model',
+      remedy: 'It is in use by the chapter render in progress — wait for the render to finish, or pause it, then try again.',
+    });
   }
   if (health.qwenDesignResident) {
     out.push({

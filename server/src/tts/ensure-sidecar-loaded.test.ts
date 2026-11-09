@@ -252,6 +252,49 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(m.unloads()).toEqual([{ engine: 'qwen', model: '1.7b' }]); // 1.7B only
   });
 
+  it('#4066 — keepKokoro:false also unloads a resident Kokoro, reports true', async () => {
+    const m = mockSidecar({ qwen_loaded: true, kokoro_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await expect(
+      reconcileResidentQwenTiers({ keep06: false, keep17: false, keepKokoro: false }),
+    ).resolves.toBe(true);
+    expect(m.unloads()).toEqual([{ engine: 'qwen' }, { engine: 'kokoro' }]);
+  });
+
+  it('#4066 — reports into freedOut only the models whose /unload succeeded', async () => {
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true, kokoro_loaded: true }) };
+      const body = JSON.parse((init?.body as string) ?? '{}') as { engine: string; model?: string };
+      return { ok: body.engine !== 'kokoro', json: async () => ({}), status: body.engine === 'kokoro' ? 500 : 200 };
+    });
+    global.fetch = f as unknown as typeof fetch;
+    const freed: string[] = [];
+    await expect(
+      reconcileResidentQwenTiers({ keep06: false, keep17: false, keepKokoro: false }, undefined, freed),
+    ).resolves.toBe(false); // Kokoro's unload failed
+    expect(freed.sort()).toEqual(['Qwen 0.6B', 'Qwen 1.7B']);
+  });
+
+  it('#4066 — a Kokoro /unload that rejects (network error / timeout / abort) logs the failure and reports false', async () => {
+    const f = vi.fn(async (url: string) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => ({ kokoro_loaded: true }) };
+      throw new Error('socket hang up');
+    });
+    global.fetch = f as unknown as typeof fetch;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      reconcileResidentQwenTiers({ keep06: true, keep17: true, keepKokoro: false }),
+    ).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[generation] failed to unload Kokoro: socket hang up'));
+  });
+
+  it('#4066 — an absent keepKokoro never touches Kokoro (the post-score re-assert and a run with no 1.7B)', async () => {
+    const m = mockSidecar({ qwen_loaded: false, kokoro_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: false })).resolves.toBe(false);
+    expect(m.unloads()).toEqual([]);
+  });
+
   it('evicts nothing for a mixed-tier run (both in use), reports false', async () => {
     const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;

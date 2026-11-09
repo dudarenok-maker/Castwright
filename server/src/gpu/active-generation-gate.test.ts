@@ -29,4 +29,21 @@ describe('active-generation-gate', () => {
     setActiveGenerationBooksProvider(() => []);
     expect(isAnyGenerationActive()).toBe(false);
   });
+
+  /* #4066 — a QA repair or a splice re-synthesises on the GPU but is not in
+     generation's `inFlightByBook`; the owning module registers a counter. */
+  it('counts a registered in-flight splice/repair as active (both predicates)', async () => {
+    const { setActiveGenerationBooksProvider, setInFlightSpliceCounter, isAnyGenerationActive, isGenerationKnownActive } =
+      await import('./active-generation-gate.js');
+
+    setActiveGenerationBooksProvider(() => []);
+    let spliceCount = 0;
+    setInFlightSpliceCounter(() => spliceCount);
+    expect(isAnyGenerationActive()).toBe(false);
+    expect(isGenerationKnownActive()).toBe(false);
+
+    spliceCount = 1;
+    expect(isAnyGenerationActive()).toBe(true);
+    expect(isGenerationKnownActive()).toBe(true);
+  });
 });

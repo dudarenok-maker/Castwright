@@ -286,6 +286,10 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     code: 'vram-spill',
     fatal: true,
     source: 'generation',
+    /* NoCapacityError (tts/tts-errors.ts) is the admission-gate refusal: typed
+       match first, because its message wording is user-facing copy that no
+       longer reliably contains the "VRAM" token (#4066). */
+    matchName: 'NoCapacityError',
     match: (raw) => /CUDA out of memory|VRAM/i.test(raw),
   },
   /* Host-process OOM kill — the OS killed the sidecar (exit 137 / SIGKILL).

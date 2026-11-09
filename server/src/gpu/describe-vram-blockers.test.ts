@@ -6,16 +6,56 @@ describe('describeVramBlockers', () => {
     expect(describeVramBlockers({ coquiLoaded: true })).toEqual([]);
   });
 
-  it('names Kokoro with the preload-setting remedy, not "stop it"', () => {
-    /* Kokoro DOES have a Stop pill (Task 10, #1839) — but it's the
+  it('names Kokoro with the preload-setting remedy when Preload Kokoro IS on', () => {
+    /* Kokoro DOES have a Stop pill (Task 10, #1839) — but when it's the
        eagerly-resident fallback gated by the "Preload Kokoro at startup"
-       setting, so stopping it only frees the VRAM until the sidecar next
+       setting, stopping it only frees the VRAM until the sidecar next
        restarts. The durable, actionable remedy is the setting, not the
        button. */
-    const out = describeVramBlockers({ kokoroLoaded: true });
+    const out = describeVramBlockers({ kokoroLoaded: true, kokoroPreload: true });
     expect(out).toEqual([
       { model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' },
     ]);
+  });
+
+  it('#4066: never tells the user to turn off Preload Kokoro when it is already off — names the Stop control instead', () => {
+    /* Kokoro loads on demand (a render that fell back to it) with preload
+       off — the default. The old copy said "Turn off Preload Kokoro" anyway. */
+    for (const kokoroPreload of [false, undefined]) {
+      const out = describeVramBlockers({ kokoroLoaded: true, kokoroPreload });
+      expect(out).toHaveLength(1);
+      expect(out[0].remedy).not.toMatch(/Preload Kokoro/);
+      expect(out[0].remedy).toBe('Press "Stop Kokoro" in the "Voice engines loaded" row under the top bar.');
+    }
+  });
+
+  it('#4066: does not name a CPU-resident Kokoro — it holds no GPU memory', () => {
+    expect(describeVramBlockers({ kokoroLoaded: true, kokoroDevice: 'cpu' })).toEqual([]);
+  });
+
+  it('#4066: names the standard Qwen model as in use by a render when a render is in flight', () => {
+    /* The auto-free declines during a render (it would unload the model the
+       render is using), so the honest remedy is to wait or pause. */
+    const out = describeVramBlockers({ qwenLoaded: true, generationActive: true });
+    expect(out).toEqual([
+      {
+        model: 'The standard Qwen voice model',
+        remedy: 'It is in use by the chapter render in progress — wait for the render to finish, or pause it, then try again.',
+      },
+    ]);
+  });
+
+  it('#4066: never advises stopping Kokoro while a render is in flight — Stop would kill a fallback line', () => {
+    for (const kokoroPreload of [false, true]) {
+      const out = describeVramBlockers({ kokoroLoaded: true, kokoroPreload, generationActive: true });
+      expect(out).toHaveLength(1);
+      expect(out[0].remedy).not.toMatch(/Stop Kokoro|Turn off/);
+      expect(out[0].remedy).toMatch(/wait for the render to finish, or pause it/);
+    }
+  });
+
+  it('#4066: does not name the render as holding the Qwen model when the blocked op is the render itself', () => {
+    expect(describeVramBlockers({ qwenLoaded: true, generationActive: true, blockedOpIsRender: true })).toEqual([]);
   });
 
   it('lists Kokoro only when both Coqui and Kokoro are resident', () => {

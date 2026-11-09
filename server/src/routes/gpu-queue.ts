@@ -12,12 +12,17 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getCapacityWaiterCount } from '../tts/sidecar.js';
 import { capacityProbe, type ComputeDevice } from '../gpu/capacity-probe.js';
+import { getLastTtsAutoFree, type TtsAutoFreeNotice } from '../gpu/tts-auto-free-notice.js';
 
 export const gpuQueueRouter = Router();
 
 export interface GpuQueueState {
   queueDepth: number;
   devices: ComputeDevice[];
+  /** #4066 — the last time a voice design or a Quality op unloaded resident
+      TTS models to free VRAM (gpu/tts-auto-free-notice.ts), or null. The
+      frontend shows the "unloaded to free VRAM" notice once per new seq. */
+  lastTtsAutoFree: TtsAutoFreeNotice | null;
 }
 
 /* Extracted so the /api/diagnostics aggregator (fs-18) can reuse it
@@ -26,6 +31,7 @@ export async function readGpuQueueState(): Promise<GpuQueueState> {
   return {
     queueDepth: getCapacityWaiterCount(),
     devices: await capacityProbe.read(),
+    lastTtsAutoFree: getLastTtsAutoFree(),
   };
 }
 

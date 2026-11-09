@@ -168,7 +168,7 @@ describe('runVoiceDesign', () => {
   });
 
   it('#1839 finding 4 — passes withCapacityRetry an evictIdleTts lever that frees an idle Qwen base for THIS design\'s own tier', async () => {
-    let capturedOpts: { evictIdleTts?: () => Promise<boolean> } | undefined;
+    let capturedOpts: { evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'> } | undefined;
     mockWithCapacityRetry.mockImplementation((doPost, opts) => {
       capturedOpts = opts;
       return doPost(opts.signal);
@@ -186,9 +186,30 @@ describe('runVoiceDesign', () => {
     // chance to free VRAM before the ~60s poll-then-fail.
     expect(capturedOpts?.evictIdleTts).toBeTypeOf('function');
     mockEvictIdleQwenBase.mockClear();
-    await capturedOpts!.evictIdleTts!();
+    await capturedOpts!.evictIdleTts!('cuda:0');
     expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
-      expect.objectContaining({ modelKey: 'qwen3-tts-1.7b' }),
+      expect.objectContaining({ modelKey: 'qwen3-tts-1.7b', deviceKey: 'cuda:0' }),
+    );
+  });
+
+  it('#4066 — tells the lever this is a voice DESIGN, so it frees the standard Qwen base even on a 0.6B book', async () => {
+    let capturedOpts: { evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'> } | undefined;
+    mockWithCapacityRetry.mockImplementation((doPost, opts) => {
+      capturedOpts = opts;
+      return doPost(opts.signal);
+    });
+
+    await runVoiceDesign({
+      storageKey: 'qwen-lever-06',
+      displayName: 'Nova',
+      persona: 'a calm voice',
+      modelKey: 'qwen3-tts-0.6b',
+    });
+
+    mockEvictIdleQwenBase.mockClear();
+    await capturedOpts!.evictIdleTts!('cuda:0');
+    expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
+      expect.objectContaining({ modelKey: 'qwen3-tts-0.6b', purpose: 'design' }),
     );
   });
 

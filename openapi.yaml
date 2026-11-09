@@ -9583,6 +9583,24 @@ components:
           type: array
           items: { $ref: '#/components/schemas/GpuQueueDevice' }
           description: "Live per-device VRAM reading at response time."
+        lastTtsAutoFree:
+          nullable: true
+          description: "#4066 — the last time a voice design or a Quality (1.7B) op unloaded resident TTS models (the standard Qwen base, an on-GPU Kokoro) to free VRAM, or null. Absent on older servers. The frontend shows the 'unloaded to free VRAM' notice once per new `seq`."
+          allOf:
+            - $ref: '#/components/schemas/TtsAutoFreeNotice'
+
+    TtsAutoFreeNotice:
+      type: object
+      required: [bootId, seq, models, purpose, at]
+      properties:
+        bootId: { type: string, description: "Identifies the server process; `seq` restarts at 1 after a restart, so the frontend compares bootId + seq." }
+        seq: { type: integer, minimum: 1, description: "Monotonic per-event counter within one bootId." }
+        models:
+          type: array
+          items: { type: string }
+          description: "Display names of what was unloaded, e.g. ['Qwen 0.6B', 'Kokoro']."
+        purpose: { type: string, enum: ['voice design', 'Quality render'] }
+        at: { type: string, format: date-time }
 
     # --- Live generation throughput (dev RTF pill) -----
     ChapterThroughputRecord:

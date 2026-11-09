@@ -39,7 +39,7 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { forceSidecarRecycle } from './sidecar-supervisor.js';
 import type { TtsEngine } from './index.js';
 import { fetch as undiciFetch, Agent } from 'undici';
-import { setReconcileResidentQwenTiersProvider } from '../gpu/qwen-tier-reconcile-gate.js';
+import { setReconcileResidentQwenTiersProvider, type ResidentTtsKeep } from '../gpu/qwen-tier-reconcile-gate.js';
 
 /* Engines whose model lives in the local sidecar and must be loaded before
    synth. Gemini is a cloud API (nothing to preload); unknown engines are left
@@ -173,9 +173,13 @@ export async function ensureSidecarEngineReady(
 
 /** Run-start VRAM hygiene (2026-06-26). Evict any resident Qwen base TIER this
     run will not use, so only the needed tier occupies the GPU — a pure-1.7B
-    render no longer co-resides the 0.6B base (and vice-versa). Fires ONCE at
-    generation start (NOT per chapter), so the in-use tier is never evicted
-    between chapters — the load price is paid on the first chapter only. The
+    render no longer co-resides the 0.6B base (and vice-versa). Runs on each
+    chapter POST of a run (the tier target is the same every time), so the in-use
+    tier is never evicted between chapters — the load price is paid on the first
+    chapter only. Two first POSTs arriving together can both see no sibling job
+    and both apply the Kokoro drop (#4066). Bounded cost, not a no-op: the
+    second drop can unload a Kokoro the first job just reloaded for a fallback
+    line; that line then fails and goes through the transient retry. The
     needed tiers come from the run's cast (per-character `ttsModelKey` + the run
     default), so a genuinely mixed-tier book keeps both. Best-effort: a sidecar
     that is down / mid-recycle just skips (the next run reconciles).
@@ -230,8 +234,9 @@ export const UNLOAD_DISPATCHER = new Agent({
 const UNLOAD_ABSOLUTE_MAX_MS = 600_000;
 
 export async function reconcileResidentQwenTiers(
-  keep: { keep06: boolean; keep17: boolean },
+  keep: ResidentTtsKeep,
   signal?: AbortSignal,
+  freedOut?: string[],
 ): Promise<boolean> {
   const base = getResolvedSidecarUrl();
   let h: Record<string, unknown> | null = null;
@@ -246,38 +251,51 @@ export async function reconcileResidentQwenTiers(
   const budget = AbortSignal.timeout(UNLOAD_ABSOLUTE_MAX_MS);
   const bounded = signal ? AbortSignal.any([budget, signal]) : budget;
   let allEvicted = true; // track whether all evictions succeeded
-  const unload = async (model?: '1.7b'): Promise<void> => {
+  const unload = async (model?: '1.7b' | 'kokoro'): Promise<void> => {
     try {
       const res = await undiciFetch(`${base}/unload`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(model ? { engine: 'qwen', model } : { engine: 'qwen' }),
+        body: JSON.stringify(
+          model === 'kokoro' ? { engine: 'kokoro' } : model ? { engine: 'qwen', model } : { engine: 'qwen' },
+        ),
         signal: bounded,
         dispatcher: UNLOAD_DISPATCHER,
       });
-      if (!res.ok) {
+      if (res.ok) {
+        freedOut?.push(model === 'kokoro' ? 'Kokoro' : model ? 'Qwen 1.7B' : 'Qwen 0.6B');
+      } else {
         /* Sidecar returned an error (e.g. 500 from base17 in-flight contention).
            Mark the eviction as failed and log it for visibility (the sidecar
            already logged the root cause). Callers interpret the return value as
            "the tier has been freed", so return false if any eviction failed. */
         allEvicted = false;
         console.warn(
-          `[generation] failed to unload Qwen ${model || '0.6B'}: sidecar returned ${res.status}`,
+          `[generation] failed to unload ${model === 'kokoro' ? 'Kokoro' : `Qwen ${model || '0.6B'}`}: sidecar returned ${res.status}`,
         );
       }
-    } catch {
-      /* best-effort — network error, timeout, abort, etc. */
+    } catch (err) {
+      /* best-effort — network error, timeout, abort, etc. Logged like the
+         non-ok branch above, so a failed unload is never silent (#4066). */
       allEvicted = false;
+      console.warn(
+        `[generation] failed to unload ${model === 'kokoro' ? 'Kokoro' : `Qwen ${model || '0.6B'}`}: ${(err as Error)?.message ?? String(err)}`,
+      );
     }
   };
 
   const evictions: Promise<void>[] = [];
   if (h.qwen_loaded === true && !keep.keep06) evictions.push(unload()); // drop the 0.6B base
   if (h.qwen_base17_loaded === true && !keep.keep17) evictions.push(unload('1.7b')); // drop the 1.7B base
+  /* #4066 — only an explicit `keepKokoro: false` (the admission lever for a
+     voice design or a Quality op, and `keepForRunStart`'s run-start target
+     for a run that loads the 1.7B base while nothing else is live) drops Kokoro; absent means keep. */
+  const dropKokoro = keep.keepKokoro === false && h.kokoro_loaded === true;
+  if (dropKokoro) evictions.push(unload('kokoro'));
   if (evictions.length === 0) return false;
   console.info(
     `[generation] VRAM reconcile: evicting unused Qwen tier(s) ` +
-      `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B' : ''}]`.trim(),
+      `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B ' : ''}${dropKokoro ? 'Kokoro' : ''}]`.trim(),
   );
   await Promise.allSettled(evictions);
   return allEvicted;

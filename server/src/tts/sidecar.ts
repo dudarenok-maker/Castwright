@@ -207,6 +207,7 @@ export class SidecarTtsProvider implements TtsProvider {
     modelKey,
     language,
     cloned,
+    renderSynth,
     signal,
   }: SynthesizeInput): Promise<SynthesizeOutput> {
     /* fs-59 W4b — XTTS's own language table uses `zh-cn` where every other
@@ -231,7 +232,7 @@ export class SidecarTtsProvider implements TtsProvider {
        analyzer out of the way or wait and retry. */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const response = await this.postWithCapacityRetry('/synthesize', body, modelKey, signal);
+      const response = await this.postWithCapacityRetry('/synthesize', body, modelKey, renderSynth, signal);
 
       const buf = Buffer.from(await response.arrayBuffer());
       if (buf.length === 0) {
@@ -329,6 +330,7 @@ export class SidecarTtsProvider implements TtsProvider {
     modelKey,
     liveInstruct,
     language,
+    renderSynth,
     signal,
   }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
     const body = JSON.stringify({
@@ -359,7 +361,7 @@ export class SidecarTtsProvider implements TtsProvider {
     /* Per-engine serialisation — outer gate, same rationale as synthesize(). */
     const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const response = await this.postWithCapacityRetry('/synthesize-batch', body, modelKey, signal);
+      const response = await this.postWithCapacityRetry('/synthesize-batch', body, modelKey, renderSynth, signal);
 
       const buf = Buffer.from(await response.arrayBuffer());
       if (buf.length === 0) {
@@ -428,6 +430,7 @@ export class SidecarTtsProvider implements TtsProvider {
     path: string,
     body: string,
     modelKey: TtsModelKey,
+    renderSynth: boolean | undefined,
     signal?: AbortSignal,
   ): Promise<Response> {
     const response = await withCapacityRetry((s) => this.post(path, body, s), {
@@ -440,7 +443,8 @@ export class SidecarTtsProvider implements TtsProvider {
       evictEndpoints: this.evictEndpoints,
       pollMs: this.capacityPollMs,
       maxAttempts: this.maxCapacityAttempts,
-      evictIdleTts: () => evictIdleQwenBase({ modelKey, signal }),
+      isRenderSynth: renderSynth === true,
+      evictIdleTts: (deviceKey) => evictIdleQwenBase({ modelKey, deviceKey, signal }),
     });
     if (!response.ok) await throwForResponse(response);
     return response;

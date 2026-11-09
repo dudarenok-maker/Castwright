@@ -8754,7 +8754,13 @@ export interface GpuQueueState {
   /** Live per-device VRAM reading, same shape the sidecar's /capacity
       reports. */
   devices: GpuQueueDevice[];
+  /** #4066 — the last time a voice design or a Quality op unloaded resident
+      TTS models to free VRAM (server/src/gpu/tts-auto-free-notice.ts), or
+      null. Absent on an older server. */
+  lastTtsAutoFree?: TtsAutoFreeNotice | null;
 }
+
+export type TtsAutoFreeNotice = ApiComponents['schemas']['TtsAutoFreeNotice'];
 
 async function realGetGpuQueueState(): Promise<GpuQueueState> {
   /* Permissive: a 404 / 5xx (older server, partial deploy, hot-reload
@@ -8775,7 +8781,7 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
      the pill's "GPU busy · N waiting ·" prefix can be exercised by
      stubbing the api surface in tests. */
   await wait(20);
-  return { queueDepth: 0, devices: [] };
+  return { queueDepth: 0, devices: [], lastTtsAutoFree: null };
 }
 
 /* Task 16/16.5 (#1230 item 2, #2974) — outcome of the most recent code-43

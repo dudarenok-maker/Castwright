@@ -163,6 +163,31 @@ describe('withCapacityRetry', () => {
     expect(doPost).toHaveBeenCalledTimes(2); // refused, freed, retried OK
   });
 
+  it('#4066: a declined auto-free re-arms the one-shot latch, so a later poll can still free', async () => {
+    /* The lever declines while another design is resident on the card. That
+       is a "not yet", not a "no": the latch must stay armed so the next poll
+       asks again (a plain `false` keeps the one-shot behaviour above). */
+    const evictIdleTts = vi.fn().mockResolvedValueOnce('declined').mockResolvedValueOnce(true);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls < 3 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictIdleTts).toHaveBeenCalledTimes(2);
+    expect(evictIdleTts).toHaveBeenCalledWith('cuda:0');
+  });
+
   it('#1839 finding 1: evictIdleTts reporting false does not burn an immediate no-op retry — it still takes the poll wait', async () => {
     /* Before the fix, evictIdleTts (evict-idle-tts.ts's evictIdleQwenBase)
        reported `true` whenever it was CALLED, even when it froze nothing —
@@ -993,6 +1018,90 @@ describe('withCapacityRetry — analyzer endpoint eviction (#3084)', () => {
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NoCapacityError);
     expect((err as Error).message).toContain('Unload URL');
+  });
+});
+
+describe('withCapacityRetry — #4066 give-up message and the auto-free lever', () => {
+  afterEach(() => {
+    setProbeSidecarHealthProvider(null);
+  });
+
+  async function giveUpMessage(opts: {
+    health: Record<string, unknown>;
+    kokoroPreload: boolean;
+    generationActive: boolean;
+  }): Promise<string> {
+    setProbeSidecarHealthProvider(async () => opts.health);
+    const err = await withCapacityRetry(async () => noCapacityResponse(6_144, 'cuda:0'), {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      endpointUnloadNotes: () => [],
+      evictIdleTts: async () => false,
+      isKokoroPreloadOn: () => opts.kokoroPreload,
+      isGenerationKnownActive: () => opts.generationActive,
+      pollMs: 0,
+      maxAttempts: 2,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoCapacityError);
+    return (err as Error).message;
+  }
+
+  it('never says "Turn off Preload Kokoro" when Preload Kokoro is off — names the Stop control', async () => {
+    const msg = await giveUpMessage({
+      health: { kokoroLoaded: true, devices: { kokoro: 'cuda' } },
+      kokoroPreload: false,
+      generationActive: false,
+    });
+    expect(msg).not.toMatch(/Preload Kokoro/);
+    expect(msg).toMatch(/Kokoro is loaded — Press "Stop Kokoro"/);
+  });
+
+  it('keeps the Preload Kokoro remedy when the setting really is on', async () => {
+    const msg = await giveUpMessage({
+      health: { kokoroLoaded: true, devices: { kokoro: 'cuda' } },
+      kokoroPreload: true,
+      generationActive: false,
+    });
+    expect(msg).toMatch(/Turn off "Preload Kokoro at startup"/);
+  });
+
+  it('a render in flight is named as what holds the standard Qwen model', async () => {
+    const msg = await giveUpMessage({
+      health: { qwenLoaded: true, kokoroLoaded: false },
+      kokoroPreload: false,
+      generationActive: true,
+    });
+    expect(msg).toMatch(/The standard Qwen voice model is loaded — It is in use by the chapter render in progress/);
+  });
+
+  it('does not blame the render for holding the model when the blocked op IS the render synth', async () => {
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, kokoroLoaded: false }));
+    const err = await withCapacityRetry(async () => noCapacityResponse(6_144, 'cuda:0'), {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      endpointUnloadNotes: () => [],
+      evictIdleTts: async () => false,
+      isGenerationKnownActive: () => true,
+      isRenderSynth: true,
+      pollMs: 0,
+      maxAttempts: 2,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect((err as Error).message).not.toMatch(/in use by the chapter render/);
+  });
+
+  it('a request that fits never pulls the auto-free lever', async () => {
+    const evictIdleTts = vi.fn(async () => true);
+    const res = await withCapacityRetry(async () => okResponse(), {
+      engine: 'qwen',
+      evictIdleTts,
+    });
+    expect(res.ok).toBe(true);
+    expect(evictIdleTts).not.toHaveBeenCalled();
   });
 });
 
