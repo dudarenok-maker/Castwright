@@ -102,7 +102,10 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
-import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
+import {
+  setActiveGenerationBooksProvider,
+  isAnyGenerationActive,
+} from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
 import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';
@@ -194,7 +197,8 @@ export async function triggerScoring(ctx: {
       mismatchCount: result.mismatchCount,
     });
     /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
-       run-start `reconcileResidentQwenTiers` fires once; the between-chapters
+       run-start `reconcileResidentQwenTiers` fires at the start of each
+       chapter's POST; the between-chapters
        Option-B audition can transiently pull a base tier the render doesn't
        use (a legacy segments file with no stamped modelKey → the 0.6B audition
        fallback), which would then linger co-resident with the 1.7B synth (the
@@ -1179,12 +1183,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
        Kokoro here (owner decision); a run with no 1.7B is unchanged. This
        POST has not registered its own job yet (registerJob is below), so
-       `activeGenerationBooks()` sees only OTHER jobs: the drop applies to the
-       first chapter of a run only. A later chapter's POST (one per chapter,
-       sibling chapters are live) and the post-score re-assert in
-       triggerScoring must not unload a Kokoro a sibling chapter's fallback
-       line may be using. */
-    await keepForRunStart(usedQwenTiers, activeGenerationBooks().length > 0)
+       the gate sees only OTHER work: generation jobs plus an in-flight splice
+       or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
+       therefore applies to the first chapter POST of a run, and is skipped
+       while anything else is live — but two first POSTs arriving together can
+       both see nothing and both drop, which is harmless: reconcile re-reads
+       `kokoro_loaded`, so the second drop finds nothing to unload. A later
+       chapter's POST (one per chapter, sibling chapters are live) and the
+       post-score re-assert in triggerScoring must not unload a Kokoro a
+       sibling chapter's fallback line may be using. */
+    await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
       .then((target) => reconcileResidentQwenTiers(target))
       .catch((e) =>
       console.warn('[generation] tier reconcile skipped:', (e as Error).message),

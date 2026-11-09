@@ -173,9 +173,12 @@ export async function ensureSidecarEngineReady(
 
 /** Run-start VRAM hygiene (2026-06-26). Evict any resident Qwen base TIER this
     run will not use, so only the needed tier occupies the GPU — a pure-1.7B
-    render no longer co-resides the 0.6B base (and vice-versa). Fires ONCE at
-    generation start (NOT per chapter), so the in-use tier is never evicted
-    between chapters — the load price is paid on the first chapter only. The
+    render no longer co-resides the 0.6B base (and vice-versa). Runs on each
+    chapter POST of a run (the tier target is the same every time), so the in-use
+    tier is never evicted between chapters — the load price is paid on the first
+    chapter only. Two first POSTs arriving together can both see no sibling job
+    and both apply the Kokoro drop (#4066) — harmless, because reconcile
+    re-reads `kokoro_loaded` and a second drop finds nothing to unload. The
     needed tiers come from the run's cast (per-character `ttsModelKey` + the run
     default), so a genuinely mixed-tier book keeps both. Best-effort: a sidecar
     that is down / mid-recycle just skips (the next run reconciles).
@@ -280,8 +283,8 @@ export async function reconcileResidentQwenTiers(
   if (h.qwen_loaded === true && !keep.keep06) evictions.push(unload()); // drop the 0.6B base
   if (h.qwen_base17_loaded === true && !keep.keep17) evictions.push(unload('1.7b')); // drop the 1.7B base
   /* #4066 — only an explicit `keepKokoro: false` (the admission lever for a
-     voice design or a Quality op, and `keepForRunStart`'s first-chapter target
-     for a run that loads the 1.7B base) drops Kokoro; absent means keep. */
+     voice design or a Quality op, and `keepForRunStart`'s run-start target
+     for a run that loads the 1.7B base while nothing else is live) drops Kokoro; absent means keep. */
   const dropKokoro = keep.keepKokoro === false && h.kokoro_loaded === true;
   if (dropKokoro) evictions.push(unload('kokoro'));
   if (evictions.length === 0) return false;

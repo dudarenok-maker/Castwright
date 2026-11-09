@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { evictIdleQwenBase, keepForRunStart } from './evict-idle-tts.js';
+import { computeUsedQwenTiers } from '../tts/per-character-engine.js';
 import { getLastTtsAutoFree, resetTtsAutoFreeForTests } from './tts-auto-free-notice.js';
 
 /* Second eviction lever for capacity admission (#1839). Frees a resident Qwen
@@ -403,10 +404,20 @@ describe('keepForRunStart (#4066 — a Quality chapter render unloads an on-GPU 
   });
 
   it('keys on the tier the run will LOAD: a Standard-default book with every character toggled to Quality drops Kokoro', async () => {
-    /* computeUsedQwenTiers resolves per-character tiers (fs-56) against the run
-       default, so an all-elevated cast yields keep17-only whatever the book's
-       own model key says. */
-    const out = await keepForRunStart({ keep06: false, keep17: true }, false, async () => ({
+    /* The target the route hands in is `computeUsedQwenTiers`, which resolves
+       per-character tiers (fs-56) against the run default: an all-elevated cast
+       yields keep17-only whatever the run default (0.6B here) says. Composed
+       for real, not hand-written, so the input is the route's own. */
+    const tiers = computeUsedQwenTiers(
+      [
+        { ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' },
+        { ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' },
+      ],
+      'qwen',
+      'qwen3-tts-0.6b',
+    );
+    expect(tiers).toEqual({ keep06: false, keep17: true });
+    const out = await keepForRunStart(tiers, false, async () => ({
       kokoroLoaded: true,
       devices: { kokoro: 'cuda' },
     }));

@@ -111,9 +111,11 @@ function isGpuFamily(device: string | null | undefined): boolean {
     The queue dispatcher sends one POST per chapter, so this runs on EVERY
     chapter's POST, and a sibling chapter's job may already be live (and its
     Kokoro fallback line mid-synth — `KokoroEngine.unload()` takes no lock). So
-    it only applies to the first chapter of a run: with another generation in
-    flight (`anotherGenerationActive`) the drop is skipped, and the caller must
-    pass `true` whenever that is unknown (fail closed). */
+    it only applies while nothing else is live: with another generation, splice
+    or QA repair in flight (`anotherGenerationActive`) the drop is skipped, and
+    the caller must pass `true` whenever that is unknown (fail closed). Two
+    first POSTs arriving together can both see nothing and both drop — harmless,
+    reconcile re-reads `kokoro_loaded`, so the second finds nothing to unload. */
 export async function keepForRunStart(
   keep: ResidentTtsKeep,
   anotherGenerationActive: boolean,

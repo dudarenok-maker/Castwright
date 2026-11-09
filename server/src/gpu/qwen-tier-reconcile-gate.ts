@@ -38,8 +38,8 @@
 
 /** What a reconcile keeps resident. `keepKokoro` is optional and an absent
     value means KEEP (#4066): only the admission lever for a voice design or a
-    Quality op, and the first-chapter run-start target of a run that loads the
-    1.7B base (`keepForRunStart`), ever pass `false`; the post-score re-assert
+    Quality op, and the run-start target of a run that loads the 1.7B base while
+    nothing else is live (`keepForRunStart`), ever pass `false`; the post-score re-assert
     in routes/generation.ts never touches Kokoro. */
 export interface ResidentTtsKeep {
   keep06: boolean;

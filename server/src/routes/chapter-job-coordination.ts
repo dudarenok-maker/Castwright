@@ -10,7 +10,15 @@
    `abortInFlightChapterJob` from generation.ts. generation.ts never imports the
    splice route. */
 
+import { setInFlightSpliceCounter } from '../gpu/active-generation-gate.js';
+
 const inFlightSplices = new Map<string, AbortController>();
+
+/* #4066 — a splice and a QA repair hold the GPU but are invisible to
+   generation's `inFlightByBook`; hand the leaf gate this registry's count so
+   `isAnyGenerationActive()` sees them (the gate imports nothing, so this edge
+   cannot close a cycle). */
+setInFlightSpliceCounter(() => inFlightSplices.size);
 
 function key(bookId: string, chapterId: number): string {
   return `${bookId}::${chapterId}`;

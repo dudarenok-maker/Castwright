@@ -192,6 +192,18 @@ beforeEach(async () => {
   });
 });
 
+/* generation.ts fires `void markQueueEntryDoneOnDisk(...)` (queue prune of a
+   rendered entry) without awaiting it, so it can still be queued behind the
+   queue mutex when the SSE stream closes. A later test's `beforeEach` rewrites
+   the queue file under the SAME entry id, and the straggler then prunes THAT
+   entry (the flake that left `readRuEntry()` undefined in the fs-60 PARKS
+   test). The straggler enqueues synchronously on the mutex, so a no-op task
+   queued behind it resolves only after it has run. */
+afterEach(async () => {
+  const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+  await serializeQueueMutation(async () => undefined);
+});
+
 /** POST a generation stream and collect the full SSE body text + resolve when
     the stream closes. */
 async function runStream(extraBody: Record<string, unknown> = {}): Promise<string> {
@@ -318,6 +330,39 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
       await first;
     }
   }, 15_000);
+
+  it('keeps Kokoro while a QA repair or splice is running (invisible to generation\'s own job map)', async () => {
+    const { registerSplice } = await import('./chapter-job-coordination.js');
+    /* A repair registers through the same `registerSplice` as a splice, on any book. */
+    const release = registerSplice('some-other-book', 7, new AbortController());
+    try {
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true });
+      expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('keys the drop on the tier the cast will LOAD, not the run default: a Standard run whose only Qwen character is set to Quality drops Kokoro', async () => {
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const { readFileSync } = await import('node:fs');
+    const original = readFileSync(castPath, 'utf8');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'wren', name: 'Wren', ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' }],
+      }),
+    );
+    try {
+      await runStream({ modelKey: 'qwen3-tts-0.6b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep06: false, keep17: true, keepKokoro: false });
+    } finally {
+      writeFileSync(castPath, original);
+    }
+  }, 10_000);
 
   it('a Standard (0.6B) run never touches Kokoro', async () => {
     await runStream({ modelKey: 'qwen3-tts-0.6b' });
