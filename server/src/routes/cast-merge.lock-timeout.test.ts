@@ -17,9 +17,9 @@
  * journal both reflect the merge (whole). Neither assertion alone would
  * distinguish the fix from the bug.
  *
- * The disk-fault direction is pinned alongside it — the two-directional shape
- * `store/not-linked-edges.lock-timeout.test.ts` established. An EPERM out of
- * the same call is still swallowed, still warns, and the merge still resolves.
+ * The disk-fault direction is pinned alongside it. #4031 C3 made it the same
+ * shape as the timeout: an EPERM out of the same call is parked too, the cache
+ * and journal are written, and the merge then rejects (it no longer resolves).
  *
  * `retireCharacterId` is mocked rather than the lock genuinely contended: the
  * real budget is 10s and vitest's testTimeout is 15s. The mock throws the REAL
@@ -39,18 +39,19 @@ const retire = vi.hoisted(() => ({ toThrow: null as unknown }));
 
 /* #2292 — a seam for a NON-lock failure that genuinely escapes
    `performCastMerge`. `retire.toThrow` cannot serve for that: an EPERM there
-   is swallowed by design. `loadAnalysisCache` runs inside the merge with no
-   handler of its own, so a throw there escapes exactly as a cast.json EACCES
-   would. */
+   is parked and rethrown after the writes (C3). `mutateAnalysisCache` runs
+   inside the merge with no handler of its own, so a throw there escapes
+   exactly as a cast.json EACCES would. (It was `loadAnalysisCache` before
+   #4031 moved the cache rewrite into one mutate op.) */
 const cacheLoad = vi.hoisted(() => ({ toThrow: null as unknown }));
 
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
     ...actual,
-    loadAnalysisCache: async (...args: Parameters<typeof actual.loadAnalysisCache>) => {
+    mutateAnalysisCache: async (...args: Parameters<typeof actual.mutateAnalysisCache>) => {
       if (cacheLoad.toThrow) throw cacheLoad.toThrow;
-      return actual.loadAnalysisCache(...args);
+      return actual.mutateAnalysisCache(...args);
     },
   };
 });
@@ -86,9 +87,14 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
   return {
     ...actual,
-    retireCharacterId: async (bookDir: string, from: string, to: string) => {
+    retireCharacterId: async (
+      bookDir: string,
+      from: string,
+      to: string,
+      kind?: Parameters<typeof actual.retireCharacterId>[3],
+    ) => {
       if (retire.toThrow) throw retire.toThrow;
-      return actual.retireCharacterId(bookDir, from, to);
+      return actual.retireCharacterId(bookDir, from, to, kind);
     },
   };
 });
@@ -209,10 +215,11 @@ function expectMergeFullyApplied(): void {
   expect(cast.characters.map((c) => c.id)).not.toContain(SOURCE_ID);
 
   /* The cache reconciliation (route lines after the retirement block): the
-     source is gone from stage1 AND its sentences are re-attributed. Skipping
-     this is what makes the merged-away character reappear on resume. */
+     source's cached takes are re-attributed. Skipping this is what makes the
+     merged-away character reappear on resume. (#4031: the raw stage1 roster is
+     no longer edited, so it still lists the source — the takes are the proof.) */
   const cache = readCache();
-  expect((cache.stage1?.characters ?? []).map((c) => c.id)).not.toContain(SOURCE_ID);
+  expect((cache.stage1?.characters ?? []).map((c) => c.id)).toContain(SOURCE_ID);
   expect((cache.chapters?.['1'] ?? []).some((s) => s.characterId === SOURCE_ID)).toBe(false);
 
   /* The journal entry — without it the merge can never be unlinked. */
@@ -289,22 +296,25 @@ describe('performCastMerge — lock timeout vs disk fault (#2260 C2)', () => {
     expectMergeFullyApplied();
   });
 
-  it('an EPERM-shaped disk fault is STILL swallowed — the merge resolves and disk is identical', async () => {
-    retire.toThrow = Object.assign(
+  it('C3: an EPERM-shaped disk fault is parked like a timeout — the merge REJECTS, marked applied, disk identical', async () => {
+    /* REPLACES "an EPERM-shaped disk fault is STILL swallowed — the merge
+       resolves and disk is identical" (#2260 C2), which pinned the swallow
+       that #4031 C3 removes: a swallowed retirement reported success on a merge
+       whose id history was lost. The disk half is unchanged and still asserted;
+       only the RETURN flips. */
+    const eperm = Object.assign(
       new Error("EPERM: operation not permitted, rename 'cast-id-history.json'"),
       { code: 'EPERM' },
     );
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    retire.toThrow = eperm;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    const result = (await runMerge()) as { sourceId: string };
-    expect(result.sourceId).toBe(SOURCE_ID);
-    expect(
-      warn.mock.calls.some((c) => String(c[0]).includes('failed to record character-id retirement')),
-    ).toBe(true);
+    const { didCastMergeApply } = await import('./cast-merge.js');
+    await expect(runMerge()).rejects.toBe(eperm);
+    expect(didCastMergeApply(eperm)).toBe(true);
 
-    /* Identical disk outcome to the timeout case above — the discrimination
-       is about the RETURN, not about what got written. */
+    /* Identical disk outcome to the timeout case above. */
     expectMergeFullyApplied();
   });
 });
@@ -385,16 +395,25 @@ describe('POST merge-suggestions/accept — a deferred timeout still dismisses (
     expect(res.status).toBe(404);
     expect(readSuggestions()).toHaveLength(1);
 
-    /* And an EPERM out of the retirement — swallowed by `performCastMerge`, so
-       this is the ordinary success path and the dismiss runs as it always
-       has. Pinned here so the new branch can't be mistaken for the only route
-       to a dismissed suggestion. */
+  });
+
+  it('C3: accept — a history write failing with EPERM finishes the merge, drops the suggestion, answers a curated 500', async () => {
+    /* REPLACES the second half of "a merge that genuinely FAILED keeps its
+       suggestion", which pinned an EPERM out of the retirement as the ordinary
+       200 success path. #4031 C3: the fault is parked, every write completes
+       (merge applied, suggestion dismissed — the deferred-rethrow contract on
+       the accept caller), then the request fails with a body naming no path. */
     retire.toThrow = Object.assign(
       new Error("EPERM: operation not permitted, rename 'cast-id-history.json'"),
-      { code: 'EPERM' },
+      { code: 'EPERM', syscall: 'rename', path: join(bookDir, '.audiobook', 'cast-id-history.json') },
     );
-    const ok = await callAccept();
-    expect(ok.status).toBe(200);
+    const res = await callAccept();
+    expect(res.status).toBe(500);
+    expect(res.type).toBe('application/json');
+    expect(res.body.error).not.toContain(bookDir);
+    expect(res.body.error).not.toContain('EPERM');
+    expect(res.body.error).not.toContain('cast-id-history');
+    expectMergeFullyApplied();
     expect(readSuggestions()).toHaveLength(0);
   });
 });
@@ -446,7 +465,7 @@ describe('merge routes — an OUTER cast-lock timeout wrote nothing (#2260 final
       readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
     ) as { characters: Array<{ id: string }> };
     expect(cast.characters.map((c) => c.id)).toContain(SOURCE_ID);
-    expect((readCache().stage1?.characters ?? []).map((c) => c.id)).toContain(SOURCE_ID);
+    expect((readCache().chapters?.['1'] ?? []).some((s) => s.characterId === SOURCE_ID)).toBe(true);
     expect(readJournal()).toBeNull();
   }
 

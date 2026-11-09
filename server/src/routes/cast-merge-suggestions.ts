@@ -119,7 +119,8 @@ castMergeSuggestionsRouter.post(
           await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
         } catch (err) {
           /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
-         `performCastMerge` is DEFERRED, not aborting: it is parked at the
+         `performCastMerge` is DEFERRED, not aborting (#4031 C3: so is ANY other
+         failure of the history write, e.g. an EPERM): it is parked at the
          retirement site and rethrown only once cast.json, manuscript-edits
          .json, the analysis cache and the `cast-merges` journal have all been
          written (see that function's own deferred-rethrow comment, which
@@ -157,7 +158,7 @@ castMergeSuggestionsRouter.post(
          Its own failure is swallowed deliberately — the timeout is the more
          informative error and must be what the user sees, and a failed
          dismiss is no worse than not attempting one. */
-          if (isLockAcquisitionTimeout(err) && didCastMergeApply(err)) {
+          if (didCastMergeApply(err)) {
             try {
               await withCastLock(bookDir, () =>
                 removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]),
@@ -187,10 +188,9 @@ castMergeSuggestionsRouter.post(
          body for everything else; the full error still goes to the log. See
          `cast-merge.ts`'s handler for the long version. */
           console.error('[cast-merge-suggestions] accept failed', err);
-          if (isLockAcquisitionTimeout(err)) {
-            return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
-          }
-          return res.status(500).json({ error: 'Internal server error.' });
+          return res
+            .status(500)
+            .json({ error: requestFailureMessageFs(err, 'Internal server error.') });
         }
 
         /* Drop the suggestion only after a successful merge. This lock can still
