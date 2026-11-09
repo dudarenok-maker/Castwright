@@ -875,9 +875,10 @@ export async function forEachMatchingCastCharacter(
      real call site. Omit only for the genuinely-global
      PUT /:voiceId/override 'workspace' scope. */
   onlyBookDir?: string,
-  /* #4062 — called once a book's cast.json write has landed, so a caller can tell
-     'mutated' from 'persisted' when a later book (or row) throws. */
-  onBookWritten?: () => void,
+  /* #4062 — called with each book's directory once that book's cast.json write
+     has landed (never for a book whose write failed), so a caller can tell the
+     books it changed on disk from the ones its `mutate` only ran on. */
+  onWritten?: (bookDir: string) => void,
 ): Promise<number> {
   /* #1981 — this function is a fan-out writer: one call can touch every book
      in a series (or the whole workspace), so it's the worst place for a lost
@@ -915,7 +916,7 @@ export async function forEachMatchingCastCharacter(
       }
       if (dirty) {
         await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
-        onBookWritten?.();
+        onWritten?.(onlyBookDir);
       }
       return updated;
     });
@@ -963,7 +964,7 @@ export async function forEachMatchingCastCharacter(
             }
             if (dirty) {
               await writeJsonAtomic(castJsonPath(dir), cast);
-              onBookWritten?.();
+              onWritten?.(dir);
             }
             return bookUpdated;
           });

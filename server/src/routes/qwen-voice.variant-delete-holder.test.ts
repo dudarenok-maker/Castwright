@@ -443,22 +443,22 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
     expect(onDisk()).toEqual(['qwen-u_fresh__angry.pt']);
   });
 
-  /* #4037 — refreshMintCopy's temp copies and backups (`<member>.mint-<6>.tmp`) outlive
+  /* #4037 — replaceFamilyMembers's temp copies and backups (`<member>.mint-<8>.tmp`) outlive
      a process that died between the write and its cleanup; nothing else ever names them. */
-  it('removes a stale refreshMintCopy tmp, keeps a fresh one, a real variant file and an unrelated file', async () => {
+  it('removes a stale mint-copy tmp, keeps a fresh one, a real variant file and an unrelated file', async () => {
     reset();
     writeBook('Book One', [designedOn('u_solo')]);
-    const stale = ['qwen-u_solo__angry.pt.mint-aB3_x-.tmp', 'qwen-u_solo__angry__master.wav.mint-Zz9Qq0.tmp'];
+    const stale = ['qwen-u_solo__angry.pt.mint-aB3_x-Qz.tmp', 'qwen-u_solo__angry__master.wav.mint-Zz9Qq0Ab.tmp'];
     const kept = [
       ...family('qwen-u_solo'),
-      'qwen-u_solo__angry.pt.mint-short.tmp', // not the 6-char nanoid shape
-      'qwen-u_solo__angry.pt.mint-aB3_x-.tmp.bak', // not ending .tmp
-      'other.pt.mint-aB3_x-.tmp', // not a qwen- key
+      'qwen-u_solo__angry.pt.mint-short.tmp', // not the 8-char nanoid shape
+      'qwen-u_solo__angry.pt.mint-aB3_x-Qz.tmp.bak', // not ending .tmp
+      'other.pt.mint-aB3_x-Qz.tmp', // not a qwen- key
       'notes.txt',
     ];
     plant(stale);
     plant(kept);
-    plant(['qwen-u_solo__sad.json.mint-Fresh1.tmp'], false); // a second server may be mid-mint
+    plant(['qwen-u_solo__sad.json.mint-Fresh123.tmp'], false); // a second server may be mid-mint
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       expect(await sweepOrphanVariantFiles()).toBe(stale.length);
@@ -467,7 +467,7 @@ describe('#4026 — the startup sweep of variant files no cast row names', () =>
     } finally {
       warn.mockRestore();
     }
-    expect(onDisk()).toEqual([...kept, 'qwen-u_solo__sad.json.mint-Fresh1.tmp'].sort());
+    expect(onDisk()).toEqual([...kept, 'qwen-u_solo__sad.json.mint-Fresh123.tmp'].sort());
   });
 
   it('never touches a base voice, a preview, a staging file or a base whose key ends like a variant', async () => {

@@ -28,8 +28,16 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { rename, rm, copyFile, stat, readdir, utimes } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { constants as fsConstants, copyFileSync, existsSync, readFileSync, renameSync, rmSync, utimesSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import {
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { findBookByBookId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook, withBookOp, withBookOps, type BookHandle } from '../workspace/book-op-lock.js';
@@ -43,9 +51,14 @@ import {
   qwenVoicesDir,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { jitteredDelayMs, renameWithRetry } from '../workspace/atomic-rename.js';
+import { renameWithRetry, RENAME_RETRY_DELAYS_MS, RETRYABLE_CODES } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
-import { forgetSeparatedVoice, isSeparatedVoice, isSeparatedVoiceSync, recordSeparatedVoice } from '../workspace/separated-voices.js';
+import {
+  forgetSeparatedVoice,
+  isSeparatedVoice,
+  isSeparatedVoiceSync,
+  recordSeparatedVoice,
+} from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -276,7 +289,10 @@ export async function persistEmotionVariant(
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
     /* #4037 — moved since the variant landed: by a mint (the take follows it) or by
        anything else (not this row's). */
-    const followed = baseVoiceId === landedBase ? variantVoiceId : variantOnMintedKey(freshCharacter, landedBase, emotion, variantVoiceId);
+    const followed =
+      baseVoiceId === landedBase
+        ? variantVoiceId
+        : variantOnMintedKey(freshCharacter, landedBase, emotion, variantVoiceId);
     if (!followed) return 'notFound';
     fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId, followed);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -305,24 +321,27 @@ function variantOnMintedKey(
   if (landedBase !== `qwen-${c.voiceId ?? c.id}` || !c.voiceUuid || c.overrideTtsVoices?.qwen?.libraryUuid) return null;
   if (isSeparatedVoiceSync(c.voiceUuid)) return null;
   const newKey = `qwen-${c.voiceUuid}`;
-  const landedPt = fileHash(memberPath(landedBase, '.pt'));
-  if (landedPt === null || landedPt !== fileHash(memberPath(newKey, '.pt'))) return null;
+  const dir = dirname(qwenVoicePtPath(landedBase));
+  const landedPt = fileSha(join(dir, `${landedBase}.pt`));
+  if (landedPt === null || landedPt !== fileSha(join(dir, `${newKey}.pt`))) return null;
   const dest = `${newKey}__${emotion}`;
-  const newRev = jsonField(newKey, 'rev');
-  const destCurrent = existsSync(memberPath(dest, '.pt')) && jsonField(dest, 'baseRev') === newRev;
-  if (destCurrent && jsonField(variantVoiceId, 'baseRev') !== newRev) return dest;
-  const src = familyPrint(variantVoiceId);
-  if (!familyPrint(dest).every((h, i) => h === src[i])) {
-    refreshMintCopy(variantVoiceId, dest, { files: [], prints: new Map() });
+  const newRev = jsonField(dir, newKey, 'rev');
+  const destCurrent = existsSync(join(dir, `${dest}.pt`)) && jsonField(dir, dest, 'baseRev') === newRev;
+  if (destCurrent && jsonField(dir, variantVoiceId, 'baseRev') !== newRev) return dest;
+  const same = VARIANT_MEMBERS.every((s) => fileSha(join(dir, `${variantVoiceId}${s}`)) === fileSha(join(dir, `${dest}${s}`)));
+  if (!same) {
+    replaceFamilyMembers(
+      VARIANT_MEMBERS.map((s) => ({ src: join(dir, `${variantVoiceId}${s}`), dest: join(dir, `${dest}${s}`) })),
+    );
   }
-  return existsSync(memberPath(dest, '.pt')) ? dest : null;
+  return existsSync(join(dir, `${dest}.pt`)) ? dest : null;
 }
 
 /* A sidecar json's `rev` / `baseRev` (variant-base-rev.ts), read synchronously for a
    decision inside a cast lock's sync transform; undefined when absent or unreadable. */
-function jsonField(key: string, field: 'rev' | 'baseRev'): string | undefined {
+function jsonField(dir: string, key: string, field: 'rev' | 'baseRev'): string | undefined {
   try {
-    const v = (JSON.parse(readFileSync(memberPath(key, '.json'), 'utf8')) as Record<string, unknown>)[field];
+    const v = (JSON.parse(readFileSync(join(dir, `${key}.json`), 'utf8')) as Record<string, unknown>)[field];
     return typeof v === 'string' && v ? v : undefined;
   } catch {
     return undefined;
@@ -420,34 +439,6 @@ const removeFiles = async (files: string[]): Promise<void> => {
   await Promise.all(files.map((f) => rm(f, { force: true }).catch(() => {})));
 };
 
-/* #4037 — the members of one emotion variant family (`<key>__<emotion><member>`),
-   and a print of what they hold: each member's sha256, null when absent. A content
-   hash, not size+mtime (a redesign can rewrite a member with same-size bytes inside
-   one mtime tick) and not savingKeys' `begun` (only a write made through whileSaving
-   in this process bumps it). */
-const VARIANT_MEMBERS = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
-type FamilyPrint = Array<string | null>;
-const NO_FILES: FamilyPrint = VARIANT_MEMBERS.map(() => null);
-const memberPath = (key: string, member: string): string => join(qwenVoicesDir(), `${key}${member}`);
-function fileHash(path: string): string | null {
-  try {
-    return createHash('sha256').update(readFileSync(path)).digest('hex');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw e;
-  }
-}
-const familyPrint = (key: string): FamilyPrint => VARIANT_MEMBERS.map((m) => fileHash(memberPath(key, m)));
-
-/* #4037 — the mint's copies: every file it wrote (the caller's rollback list), and
-   per new-key variant family the print of what the mint wrote there, so a step under
-   a book's cast lock can tell its own copy (to refresh) from a design something else
-   wrote on the new key (which stands). */
-interface MintCopies {
-  files: string[];
-  prints: Map<string, FamilyPrint>;
-}
-
 /* #4037 — copy every emotion variant family of the legacy key `oldKey`
    (`<oldKey>__<emotion>.pt|.json|__1.7b.pt|__master.wav`) to `<newKey>__<emotion>.*`,
    for the series mint only (a separation drops its variants on purpose). The
@@ -455,14 +446,15 @@ interface MintCopies {
    `__1.7b` / `__master` suffixes are never taken for one. Same contract as
    copyBaseFamily: returns the files written; any failure removes what this call
    copied and rethrows, so the caller never stamps a row whose variants are
-   half-copied. Each member's hash is recorded in `prints` right after its copy. */
-async function copyVariantFamilies(oldKey: string, newKey: string, prints: MintCopies['prints']): Promise<string[]> {
-  const listed: Array<[string, string]> = [];
+   half-copied. */
+async function copyVariantFamilies(oldKey: string, newKey: string): Promise<string[]> {
+  const dir = dirname(qwenVoicePtPath(oldKey));
+  const names = new Set<string>();
   try {
-    const present = new Set(await readdir(qwenVoicesDir()));
+    const present = new Set(await readdir(dir));
     for (const e of VARIANT_EMOTIONS) {
-      for (const m of VARIANT_MEMBERS) {
-        if (present.has(`${oldKey}__${e}${m}`)) listed.push([e, m]);
+      for (const s of VARIANT_MEMBERS) {
+        if (present.has(`${oldKey}__${e}${s}`)) names.add(`${oldKey}__${e}${s}`);
       }
     }
   } catch (e) {
@@ -470,136 +462,168 @@ async function copyVariantFamilies(oldKey: string, newKey: string, prints: MintC
     throw e;
   }
   const copied: string[] = [];
-  for (const [e, m] of listed) {
-    const dest = memberPath(`${newKey}__${e}`, m);
+  for (const name of names) {
+    const dest = join(dir, `${newKey}${name.slice(oldKey.length)}`);
     try {
-      await copyFile(memberPath(`${oldKey}__${e}`, m), dest, fsConstants.COPYFILE_EXCL);
+      await copyFile(join(dir, name), dest, fsConstants.COPYFILE_EXCL);
       copied.push(dest);
       /* a copy keeps its source's mtime on Windows: stamp it now so the startup
          sweep's age guard reads it as the fresh file it is */
       const now = new Date();
       await utimes(dest, now, now);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // removed since the listing
       await removeFiles(copied);
-      throw err;
+      throw e;
     }
-    const print = prints.get(`${newKey}__${e}`) ?? [...NO_FILES];
-    print[VARIANT_MEMBERS.indexOf(m)] = fileHash(dest);
-    prints.set(`${newKey}__${e}`, print);
   }
   return copied;
 }
 
-/* #4037 — replace the mint's own copy at `destKey` with what `srcKey` holds now,
-   synchronously (the caller is inside a cast lock's sync transform). Each member the
-   source has is copied to a temp name first, and each member it will replace is
-   backed up; then the temps replace it, each rename retried on the transient
-   EPERM/EBUSY a scanner causes (renameWithRetry's set, here synchronously). If a
-   rename still fails, the members already replaced are put back from their backups
-   and the error rethrown: another stamped book may already point at the copy, and it
-   must never see a mix of old and new members.
-   A member the source lacks is kept, never removed: a landing renames `.pt`/`.json`/
-   `__master.wav` over the old file (#4040) and drops only the `__1.7b` prompt, which
-   no variant render reads (pickEmotionVariantVoice answers the base on 1.7B), so an
-   absence says nothing about the variant. Every file written is recorded in `copies`
-   for the caller's rollback. */
-function refreshMintCopy(srcKey: string, destKey: string, copies: MintCopies): void {
-  const staged: Array<{ to: string; tmp: string; bak: string | null }> = [];
-  const keepBak = new Set<string>(); // a backup whose restore failed is the only copy left
+/* #4037 — point a stamped row's stored variant names at the new key. The slot's own
+   name follows the same rule (#4067's rule for a separation): a name on the legacy
+   key becomes `<to>`, and a library slot's name is kept. Every caller re-keys only
+   after the base was copied to `<to>`. */
+function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCharacter {
+  const slot = c.overrideTtsVoices?.qwen;
+  if (!slot) return c;
+  const qwen = slot.name === from && !slot.libraryUuid ? { ...slot, name: to } : slot;
+  if (!qwen.variants) {
+    return qwen === slot ? c : { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen } };
+  }
+  const variants = Object.fromEntries(
+    Object.entries(qwen.variants).map(([e, v]) => [
+      e,
+      v && v.name.startsWith(`${from}__`) ? { ...v, name: `${to}${v.name.slice(from.length)}` } : v,
+    ]),
+  );
+  return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants } } };
+}
+
+/* #4037 (PR #4052 review, P1-2 / P2-1 / Q1) — the series mint copies the variant
+   families once, up front, but stamps each book later, under that book's cast
+   lock; a variant landing on another book of the series (its own locks only) can
+   fall in between. So each stamp first makes `qwen-<uuid>__<emotion>` hold what the
+   legacy name holds at that moment, for every slot the fresh row names on the
+   legacy key. `prints` is what the mint itself wrote at each new-key file (sha256),
+   which is the only thing it may overwrite: a new-key family whose files differ
+   from it was designed by someone else, and stands. A source member that is absent
+   is never a delete (a slot's files outlive it, #4026), so it is skipped and a
+   copy is never removed. A landing straddling the copy (#4040's moveStaged renames
+   .pt, then .json, then .wav) can leave a mixed family (new .pt beside the old
+   .json); accepted: render reads only the .pt and the json's language, and a later
+   base redesign retires the copies. Each member is staged next to its destination and renamed into
+   place only once the whole family is staged, so a failed copy leaves the earlier
+   copy whole. Synchronous: it runs inside forEachMatchingCastCharacter's `mutate`, and
+   no other JS interleaves between the check and the copy. Every file it creates
+   joins `copied`, for the caller's rollback. The json is copied as is, so the
+   variant's `baseRev` (#4040) still names the base it was designed against. */
+const VARIANT_MEMBERS = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
+/* Bounded synchronous retry of a transient rename failure (an AV / indexer scan, or
+   the sidecar holding the destination open on Windows): the same codes and first
+   backoffs as renameWithRetry, which is async and cannot run inside the mutate. */
+function renameSyncWithRetry(src: string, dest: string): void {
+  const delays = RENAME_RETRY_DELAYS_MS.slice(0, 3);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(src, dest);
+      return;
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (!code || !RETRYABLE_CODES.has(code) || attempt === delays.length) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
+    }
+  }
+}
+const fileSha = (path: string): string | null => {
   try {
-    for (const m of VARIANT_MEMBERS) {
-      const to = memberPath(destKey, m);
-      const tmp = `${to}.mint-${nanoid(6)}.tmp`;
-      try {
-        copyFileSync(memberPath(srcKey, m), tmp, fsConstants.COPYFILE_EXCL);
-        utimesSync(tmp, new Date(), new Date()); // see copyVariantFamilies: a copy keeps its source's mtime
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // source absent
-        throw err;
-      }
-      const bak = existsSync(to) ? `${to}.mint-${nanoid(6)}.tmp` : null;
-      staged.push({ to, tmp, bak });
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
+};
+function recordMintPrints(prints: Map<string, string | null>, files: string[]): void {
+  for (const f of files) prints.set(f, fileSha(f));
+}
+function refreshVariantCopies(
+  c: CastCharacter,
+  oldKey: string,
+  newKey: string,
+  prints: Map<string, string | null>,
+  copied: string[],
+): void {
+  const dir = dirname(qwenVoicePtPath(oldKey));
+  for (const v of Object.values(c.overrideTtsVoices?.qwen?.variants ?? {})) {
+    const emotion = v?.name.startsWith(`${oldKey}__`) ? v.name.slice(oldKey.length + 2) : undefined;
+    if (!emotion || !(VARIANT_EMOTIONS as readonly string[]).includes(emotion)) continue;
+    const members = VARIANT_MEMBERS.map((s) => ({
+      src: join(dir, `${oldKey}__${emotion}${s}`),
+      dest: join(dir, `${newKey}__${emotion}${s}`),
+    }));
+    if (members.some((m) => fileSha(m.dest) !== (prints.get(m.dest) ?? null))) continue; // not the mint's
+    const changed = members.some((m) => {
+      const src = fileSha(m.src);
+      return src !== null && src !== (prints.get(m.dest) ?? null);
+    });
+    if (!changed) continue;
+    for (const r of replaceFamilyMembers(members)) {
+      if (!prints.has(r.dest) || prints.get(r.dest) === null) copied.push(r.dest);
+      prints.set(r.dest, r.sha);
+    }
+  }
+}
+/* Replace each `dest` with its `src`, a member whose src is absent skipped. Each is
+   staged (copy, stamped fresh) next to its destination, and each destination it
+   replaces is backed up, before any rename; if a rename still fails after its
+   retries, the members already replaced are put back from their backups (or removed,
+   when there was none) and the error rethrown, so a failed refresh never leaves a mix
+   of old and new members for a book that already names the copy. A backup whose
+   restore failed is kept: it is then the only copy of the old member. Returns what
+   was written, with each file's sha256. */
+function replaceFamilyMembers(
+  members: Array<{ src: string; dest: string }>,
+): Array<{ dest: string; sha: string | null }> {
+  const staged: Array<{ tmp: string; dest: string; bak: string | null; sha: string | null }> = [];
+  const keepBak = new Set<string>();
+  try {
+    for (const m of members) {
+      if (!existsSync(m.src)) continue;
+      const tmp = `${m.dest}.mint-${nanoid(8)}.tmp`;
+      const bak = existsSync(m.dest) ? `${m.dest}.mint-${nanoid(8)}.tmp` : null;
+      staged.push({ tmp, dest: m.dest, bak, sha: null });
+      copyFileSync(m.src, tmp, fsConstants.COPYFILE_EXCL);
+      utimesSync(tmp, new Date(), new Date()); // a copy keeps its source's mtime on Windows
+      staged[staged.length - 1].sha = fileSha(tmp);
       if (bak) {
-        copyFileSync(to, bak, fsConstants.COPYFILE_EXCL);
+        copyFileSync(m.dest, bak, fsConstants.COPYFILE_EXCL);
         utimesSync(bak, new Date(), new Date());
       }
     }
     const replaced: typeof staged = [];
     try {
       for (const s of staged) {
-        renameSyncWithRetry(s.tmp, s.to);
+        renameSyncWithRetry(s.tmp, s.dest);
         replaced.push(s);
-        if (!copies.files.includes(s.to)) copies.files.push(s.to);
       }
     } catch (err) {
-      for (const { to, bak } of replaced.reverse()) {
+      for (const { dest, bak } of replaced.reverse()) {
         try {
-          if (bak) renameSyncWithRetry(bak, to);
-          else rmSync(to, { force: true });
+          if (bak) renameSyncWithRetry(bak, dest);
+          else rmSync(dest, { force: true });
         } catch {
           if (bak) keepBak.add(bak);
         }
       }
       throw err;
     }
+    return staged.map((s) => ({ dest: s.dest, sha: s.sha }));
   } finally {
     for (const { tmp, bak } of staged) {
       rmSync(tmp, { force: true });
       if (bak && !keepBak.has(bak)) rmSync(bak, { force: true });
     }
   }
-  copies.prints.set(destKey, familyPrint(destKey));
-}
-
-/* The synchronous twin of renameWithRetry (same retryable codes and jittered
-   backoff, a shorter schedule), for a rename inside a cast lock's sync transform. */
-const SYNC_RENAME_RETRYABLE = new Set(['EPERM', 'EBUSY', 'ENOENT', 'EACCES', 'EIO']);
-const SYNC_RENAME_DELAYS_MS = [25, 75, 200];
-function renameSyncWithRetry(src: string, dest: string): void {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      renameSync(src, dest);
-      return;
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (!code || !SYNC_RENAME_RETRYABLE.has(code) || attempt === SYNC_RENAME_DELAYS_MS.length) throw e;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, jitteredDelayMs(SYNC_RENAME_DELAYS_MS[attempt]));
-    }
-  }
-}
-
-/* #4037 — point a stamped row's stored variant names at the new key, decided from
-   the row as read under its book's cast lock (cast-lock rule 2). A slot named
-   `<from>__<emotion>` holds, at this step, a copy of what that legacy name holds now:
-   a variant landed or redesigned on another book of the series after the mint's copy
-   loop is copied over the mint's own copy here (refreshMintCopy). A new-key family the
-   mint did not write is another design, which stands. Such a slot is renamed only once
-   `<to>__<emotion>.pt` exists; with no file under either key it keeps its name.
-   The slot's own name follows the same rule (#4067's rule for a separation): a name
-   on the legacy key becomes `<to>` once `<to>.pt` exists, and a library slot's name
-   is kept. */
-function withRekeyedVariants(c: CastCharacter, from: string, to: string, copies: MintCopies): CastCharacter {
-  const slot = c.overrideTtsVoices?.qwen;
-  if (!slot) return c;
-  const qwen =
-    slot.name === from && !slot.libraryUuid && existsSync(memberPath(to, '.pt')) ? { ...slot, name: to } : slot;
-  if (!qwen.variants) {
-    return qwen === slot ? c : { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen } };
-  }
-  const variants = Object.fromEntries(
-    Object.entries(qwen.variants).map(([e, v]) => {
-      if (!v || !v.name.startsWith(`${from}__`)) return [e, v];
-      const dest = `${to}${v.name.slice(from.length)}`;
-      if (v.name !== `${from}__${e}` || !(VARIANT_EMOTIONS as string[]).includes(e)) return [e, { ...v, name: dest }];
-      const recorded = copies.prints.get(dest) ?? NO_FILES;
-      const ownCopy = familyPrint(dest).every((h, i) => h === recorded[i]);
-      const changed = familyPrint(v.name).some((h, i) => h !== null && h !== recorded[i]);
-      if (ownCopy && changed) refreshMintCopy(v.name, dest, copies);
-      return [e, existsSync(memberPath(dest, '.pt')) ? { ...v, name: dest } : v];
-    }),
-  );
-  return { ...c, overrideTtsVoices: { ...c.overrideTtsVoices, qwen: { ...qwen, variants } } };
 }
 
 /* #3992 — stamp a new uuid onto one row and drop its qwen `variants` map in the
@@ -922,7 +946,7 @@ async function stampOwnRow(
   characterId: string,
   uuid: string,
   sameBookLinkId?: string,
-  rekey?: { from: string; to: string; copies: MintCopies },
+  rekey?: { from: string; to: string; prints: Map<string, string | null>; copied: string[] },
 ): Promise<string | undefined> {
   return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
@@ -935,7 +959,8 @@ async function stampOwnRow(
       if (c.voiceUuid) continue;
       if (i === idx || (sameBookLinkId !== undefined && (c.voiceId ?? c.id) === sameBookLinkId)) {
         const stamped = { ...c, voiceUuid: uuid };
-        fresh.characters[i] = rekey ? withRekeyedVariants(stamped, rekey.from, rekey.to, rekey.copies) : stamped;
+        if (rekey) refreshVariantCopies(c, rekey.from, rekey.to, rekey.prints, rekey.copied);
+        fresh.characters[i] = rekey ? withRekeyedVariants(stamped, rekey.from, rekey.to) : stamped;
       }
     }
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
@@ -997,28 +1022,34 @@ export async function ensureCharacterVoiceUuid(
         return stampOwnRow(bookDir, characterId, uuid);
       }
       /* #4037 — the emotion variants travel with the base, before any row is stamped
-         (a failed copy removes its own files; the base copy goes too). `copies.files`
-         is `copied` itself, so a copy made later under a book's cast lock is rolled
-         back with the rest. */
-      const copies: MintCopies = { files: copied, prints: new Map() };
+         (a failed copy removes its own files; the base copy goes too). */
+      /* What the mint wrote at each new-key variant file (refreshVariantCopies). */
+      const prints = new Map<string, string | null>();
       try {
-        copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`, copies.prints)));
+        const variants = await copyVariantFamilies(legacyKey, `qwen-${uuid}`);
+        copied.push(...variants);
+        recordMintPrints(prints, variants);
       } catch (e) {
         await removeFiles(copied);
         throw e;
       }
       /* A row that already has its own uuid keeps it: a separated row still shares
          `voiceId` with the earlier book, and restamping it would orphan its own
-         designed voice. */
+         designed voice. #4062 — `stampedAny` counts a book only once its cast.json
+         write has landed (`onWritten`): a write that fails, or a later row of the
+         same book that throws, leaves the copies with no book naming them. */
       let stampedAny = false;
-      const stamp = (c: CastCharacter): CastCharacter =>
-        c.voiceUuid ? c : withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`, copies);
+      let stampedInBook = false;
+      const stamp = (c: CastCharacter): CastCharacter => {
+        if (c.voiceUuid) return c;
+        refreshVariantCopies(c, legacyKey, `qwen-${uuid}`, prints, copied);
+        stampedInBook = true;
+        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
+      };
       try {
-        /* #4062 — "stamped" is a book's cast.json write having LANDED (the callback), not a
-           row's transform having returned: a failed write, or a later row of the same book
-           throwing, leaves no row naming the copy. */
         await forEachMatchingCastCharacter(linkId, seriesFilter, stamp, undefined, () => {
-          stampedAny = true;
+          if (stampedInBook) stampedAny = true;
+          stampedInBook = false;
         });
       } catch (e) {
         /* A book stamped before the failure points at the copy, which is its own
@@ -1037,11 +1068,12 @@ export async function ensureCharacterVoiceUuid(
         const stamped = await stampOwnRow(bookDir, characterId, uuid, linkId, {
           from: legacyKey,
           to: `qwen-${uuid}`,
-          copies,
+          prints,
+          copied,
         });
-        /* #4062 — undefined (the row is gone) or another uuid (a decline stamped it first)
-           means this call stamped nothing: with no walked book holding the copy it is a stray. */
-        if (stamped !== uuid && !stampedFirst) await removeFiles(copied);
+        /* stampOwnRow wrote nothing (the row is gone, or already holds another uuid)
+           and the walk stamped no book: no row names the copies. */
+        if (!stampedFirst && stamped !== uuid) await removeFiles(copied);
         return stamped;
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
@@ -1070,14 +1102,16 @@ export async function ensureCharacterVoiceUuid(
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
        sees the copied base). A failed copy removes its own files and rethrows;
-       a failed cast write, or a failed copy made while renaming, removes the copies. */
+       a failed cast write removes the copies. */
+    /* No refresh here (unlike the series mint): the rows are read, the copies made and
+       the cast written inside this one cast lock, so only another book sharing the
+       bare legacy key could change a variant in between. */
     return whileSaving(`qwen-${uuid}`, async () => {
       const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
       const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
-      const copies: MintCopies = { files: copied, prints: new Map() };
       if (hasBase) {
         try {
-          copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`, copies.prints)));
+          copied.push(...(await copyVariantFamilies(legacyKey, `qwen-${uuid}`)));
         } catch (e) {
           await removeFiles(copied);
           throw e;
@@ -1085,17 +1119,15 @@ export async function ensureCharacterVoiceUuid(
       } else {
         await removeFiles(copied);
       }
-      try {
-        let dirty = false;
-        for (let i = 0; i < freshCast.characters.length; i++) {
-          if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
-            const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
-            freshCast.characters[i] = hasBase
-              ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`, copies)
-              : stamped;
-            dirty = true;
-          }
+      let dirty = false;
+      for (let i = 0; i < freshCast.characters.length; i++) {
+        if ((freshCast.characters[i].voiceId ?? freshCast.characters[i].id) === linkId) {
+          const stamped = { ...freshCast.characters[i], voiceUuid: uuid };
+          freshCast.characters[i] = hasBase ? withRekeyedVariants(stamped, legacyKey, `qwen-${uuid}`) : stamped;
+          dirty = true;
         }
+      }
+      try {
         if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
       } catch (e) {
         await removeFiles(copied);
@@ -1347,11 +1379,11 @@ export async function sweepStaleDesignStaging(
    preview file never matches, and an entry younger than an hour is kept (a second
    server on the same workspace may be mid-design, as sweepStaleDesignStaging).
    Returns how many files it removed; never throws. #4037: also removes the stale
-   `<member>.mint-<nanoid6>.tmp` files a killed refreshMintCopy left behind. */
+   `<member>.mint-<nanoid8>.tmp` files a killed refresh left behind. */
 const VARIANT_FILE = new RegExp(
-  `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:\\.pt|\\.json|__master\\.wav|__1\\.7b\\.pt)$`,
+  `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:${VARIANT_MEMBERS.map((s) => s.replace(/\./g, '\\.')).join('|')})$`,
 );
-const MINT_TMP_FILE = /^qwen-.+(?:\.pt|\.json|__master\.wav)\.mint-[A-Za-z0-9_-]{6}\.tmp$/;
+const MINT_TMP_FILE = /^qwen-.+(?:\.pt|\.json|__master\.wav)\.mint-[A-Za-z0-9_-]{8}\.tmp$/;
 export async function sweepOrphanVariantFiles(
   maxAgeMs: number = STAGING_MAX_AGE_MS,
   now: number = Date.now(),
@@ -1362,9 +1394,9 @@ export async function sweepOrphanVariantFiles(
   } catch {
     return 0;
   }
-  /* #4037 — refreshMintCopy's temp copies and backups, left by a process that died
-     before its cleanup. Nothing names them, so no cast read is needed; the same
-     hour guard covers a second server mid-mint. */
+  /* #4037 — the temp copies and backups replaceFamilyMembers stages, left by a process
+     that died before its cleanup. Nothing names them, so no cast read is needed; the
+     same hour guard covers a second server mid-mint. */
   const stale: string[] = [];
   for (const n of names.filter((name) => MINT_TMP_FILE.test(name))) {
     const s = await stat(join(qwenVoicesDir(), n)).catch(() => null);
@@ -2084,11 +2116,7 @@ qwenVoiceRouter.post(
            pre-existing disposition explicit rather than changing it. Only
            'skippedClone' is new, deliberate refusal-reporting behaviour;
            'notFound' intentionally keeps today's behaviour, named rather
-           than left as a silent fallthrough. #4037: the answer stays 200, but a
-           take no row recorded is logged, not silent. */
-        if (outcome === 'notFound') {
-          console.warn(`[qwen-voice] ${voiceId} was designed for ${characterId} but no row in scope recorded it.`);
-        }
+           than left as a silent fallthrough. */
       }
       /* srv-43 — return voiceUuid so the drawer can stamp it locally without
          a refetch; the /sample player needs it to hit the uuid-keyed cache. */
