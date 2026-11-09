@@ -848,7 +848,7 @@ export function ConfirmRoute() {
             targetCharacterId,
           });
           if (res?.source) {
-            dispatch(castActions.updateCharacter(res.source));
+            dispatch(castActions.updateCharacter(res.source, { routeBacked: true }));
           }
         }}
         onConfirm={() => {

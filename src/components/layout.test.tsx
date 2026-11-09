@@ -2012,6 +2012,71 @@ describe('Layout — tier-modal 1.7B eligibility converges on the shared voice-r
       'qwen3-tts-1.7b',
     );
   });
+
+  it('plan 291 I1: a pin made while the cast is read-only mirrors the route result without a "wasn\'t saved" toast', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      qwenBase17WeightsPresent: true,
+    });
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: false,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: mixedCast },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    });
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: libraryVoices, dropped: [] } as never);
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+
+    const store = makeStore([persistenceMiddleware]);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'b1' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => {
+      expect(store.getState().cast.characters.map((c) => c.id)).toContain('undesigned');
+      expect(store.getState().voices.voices.map((v) => v.id)).toContain('vid-linh');
+    });
+    act(() => {
+      store.dispatch(uiActions.openStartGenPrompt());
+    });
+    fireEvent.click(await screen.findByTestId('start-gen-tier-qwen3-tts-1.7b'));
+    fireEvent.click(screen.getByRole('button', { name: /Start generating/i }));
+    await waitFor(() => expect(vi.mocked(api.setCastTier)).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        store.getState().cast.characters.filter((c) => c.ttsModelKey === 'qwen3-tts-1.7b').length,
+      ).toBe(2),
+    );
+    expect(
+      store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+    ).toEqual([]);
+  });
 });
 
 describe('Layout — analysis sub-stage runtime fields forward to the Status pill/popover (Task 11)', () => {

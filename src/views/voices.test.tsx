@@ -5,6 +5,7 @@ import { act, render, screen, fireEvent, within, waitFor } from '@testing-librar
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -133,6 +134,7 @@ vi.mock('../lib/api', () => ({
     listVoiceLibrary: () => Promise.resolve({ voices: [] }),
     /* Plan 291 — a failed merge re-reads the cast once busy is clear. */
     getBookBusy: () => Promise.resolve([]),
+    putBookState: () => Promise.resolve(undefined),
   },
 }));
 
@@ -930,6 +932,44 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       expect(call.bookId).toBe('b1');
       expect(call.characterId).toBe('narrator');
       expect(call.patch).toMatchObject({ gender: 'female' });
+    });
+
+    it('plan 291 I1/I2: Save while the cast is read-only still opens the modal, mirrors the route result and raises no read-only toast', async () => {
+      seriesPatchCharacter.mockResolvedValue({
+        updated: [{ bookId: 'b1', bookTitle: 'Book One', characterId: 'narrator' }],
+        failed: [],
+      });
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          voices: voicesSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (gDM) => gDM().concat(persistenceMiddleware),
+      });
+      store.dispatch(castSlice.actions.setCharacters(charactersB1));
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(uiSlice.actions.confirmCast());
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+      render(
+        <Provider store={store}>
+          <LibraryView library={libraryB1} />
+        </Provider>,
+      );
+      openModal();
+      const sideA = screen.getByLabelText(/Side A: Narrator/);
+      fireEvent.change(within(sideA).getByLabelText('Gender for Narrator'), {
+        target: { value: 'female' },
+      });
+      fireEvent.click(within(sideA).getByRole('button', { name: 'Save' }));
+      await flush();
+      expect(seriesPatchCharacter).toHaveBeenCalledTimes(1);
+      expect(store.getState().cast.characters.find((c) => c.id === 'narrator')?.gender).toBe('female');
+      expect(
+        store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+      ).toEqual([]);
     });
 
     it('pushes a "Saved to N books in this series" toast when updated covers multiple books', async () => {
@@ -2714,11 +2754,12 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     renderPaused(true);
     pickCard('Narrator');
     pickCard('Oduvan');
+    /* Compare saves through api.seriesPatchCharacter (a route), so it is live */
     const compare = screen.getByRole('button', { name: 'Compare' });
-    expect(compare).toHaveAttribute('aria-disabled', 'true');
-    expect(compare).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    expect(compare).not.toHaveAttribute('aria-disabled');
+    expect(compare).toBeEnabled();
     fireEvent.click(compare);
-    expect(screen.queryByText('Compare cast members')).toBeNull();
+    expect(screen.getByText('Compare cast members')).toBeInTheDocument();
     /* route-backed: rebaseline saves through its own route */
     const rebaseline = screen.getByTestId('open-rebaseline');
     expect(rebaseline).not.toHaveAttribute('aria-disabled');

@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 import { RebaselineModalContainer } from './rebaseline-modal';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
@@ -123,7 +124,7 @@ const voice = (id: string, characterId: string): Voice =>
 function makeStore(
   characters: Character[],
   voices: Voice[],
-  { openBookId = 'book-1' as string | null } = {},
+  { openBookId = 'book-1' as string | null, readOnly = false } = {},
 ) {
   const baseUi = { ...uiSlice.getInitialState(), rebaselineModalOpen: true };
   const ui =
@@ -139,7 +140,8 @@ function makeStore(
             openProfileId: null,
           },
         };
-  return configureStore({
+  const store = configureStore({
+    middleware: (gDM) => (readOnly ? gDM().concat(persistenceMiddleware) : gDM()),
     reducer: {
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
@@ -156,6 +158,9 @@ function makeStore(
       voices: { ...voicesSlice.getInitialState(), voices },
     },
   });
+  /* Plan 291 (#4031) - a latched analysis era makes the book's cast read-only. */
+  if (readOnly && openBookId) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: openBookId }));
+  return store;
 }
 
 /* Canonical cast: narrator dominates lines (excluded), Maerin + Marlow carry
@@ -658,6 +663,31 @@ describe('RebaselineModal — reuse already-approved voices', () => {
     expect(names).toContain('qwen-hart-approved');
     expect(names).toContain('qwen-marlow');
     expect(names).not.toContain('qwen-maerin-approved');
+  });
+});
+
+describe('RebaselineModal — approve while the cast is read-only (plan 291, I1)', () => {
+  it('mirrors the route result into the slice without a read-only toast', async () => {
+    const store = makeStore(CHARACTERS, VOICES, { readOnly: true });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledTimes(2));
+    const maerin = store.getState().cast.characters.find((c) => c.id === 'maerin')!;
+    expect(maerin.overrideTtsVoices?.qwen?.name).toBe('qwen-maerin');
+    expect(
+      store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+    ).toEqual([]);
   });
 });
 

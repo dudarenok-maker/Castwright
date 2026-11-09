@@ -139,7 +139,8 @@ export interface CastApplyMeta {
 
 /** Plan 291 (#4031, R31) — `declineMatch`'s meta: `routeBacked` when the
     decline route already recorded it (decline-match-flow.ts), so a read-only
-    cast raises no "that change wasn't saved" toast for it. */
+    cast raises no "that change wasn't saved" toast for it. The same meta rides
+    `updateCharacter` / `setCharacters` where they mirror a route's result. */
 export interface CastDeclineMeta {
   routeBacked?: boolean;
 }
@@ -162,8 +163,12 @@ export const castSlice = createSlice({
   name: 'cast',
   initialState,
   reducers: {
-    setCharacters: (s, a: PayloadAction<Character[]>) => {
-      s.characters = a.payload;
+    setCharacters: {
+      reducer: (s, a: PayloadAction<Character[], string, CastDeclineMeta | undefined>) => {
+        s.characters = a.payload;
+      },
+      /* `meta.routeBacked`: a route already saved this change (plan 291, I1). */
+      prepare: (characters: Character[], meta?: CastDeclineMeta) => ({ payload: characters, meta }),
     },
     /* Same state change as `setCharacters`, but a distinct action type the
        persistence middleware does not persist — for seeding the roster FROM
@@ -238,9 +243,13 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === a.payload);
       if (c) c.voiceState = 'locked';
     },
-    updateCharacter: (s, a: PayloadAction<Character>) => {
-      const next = a.payload;
-      s.characters = s.characters.map((c) => (c.id === next.id ? { ...c, ...next } : c));
+    updateCharacter: {
+      reducer: (s, a: PayloadAction<Character, string, CastDeclineMeta | undefined>) => {
+        const next = a.payload;
+        s.characters = s.characters.map((c) => (c.id === next.id ? { ...c, ...next } : c));
+      },
+      /* `meta.routeBacked`: a route already saved this change (plan 291, I1). */
+      prepare: (character: Character, meta?: CastDeclineMeta) => ({ payload: character, meta }),
     },
     /* Plan 108 — set a character's Gemini-generated voice-design persona
        ("voice style"). The server persists it to cast.json; this reducer

@@ -2537,7 +2537,7 @@ export function Layout() {
               }
               const targetChars = tier === 'qwen3-tts-1.7b' ? eligibleQwenMembers : qwenMembers;
               targetChars.forEach((c) =>
-                dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin })),
+                dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin }, { routeBacked: true })),
               );
               setStartGenBusy(false);
               const fallbackConfirmed = ui.startGenPrompt?.fallbackConfirmed;

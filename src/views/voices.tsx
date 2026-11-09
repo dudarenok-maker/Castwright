@@ -11,11 +11,7 @@ import {
 } from '../components/primitives';
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
-import {
-  CastEditsPausedBanner,
-  pausedControlProps,
-  useCastReadOnly,
-} from '../components/cast-edits-paused-banner';
+import { CastEditsPausedBanner } from '../components/cast-edits-paused-banner';
 import { IconPlay, IconSparkle } from '../lib/icons';
 import type {
   BaseVoice,
@@ -238,10 +234,6 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const currentBookId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
   );
-  /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: Compare
-     (its modal writes the cast slice) is disabled; the route-backed controls
-     (override, alias, merge, rebaseline) stay live. */
-  const readOnly = useCastReadOnly();
   /* The rebaseline modal's target book (open book for the book-scoped tab,
      the series' representative book for the per-series global-view buttons). */
   const rebaselineBookId = useAppSelector((s) => s.ui.rebaselineBookId);
@@ -1488,7 +1480,6 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             <span className="w-px h-5 bg-canvas/20" />
             <button
               onClick={() => {
-                if (readOnly) return;
                 if (!canCompare || selectedVoiceIds.length !== 2) return;
                 openCompareModal([selectedVoices[0], selectedVoices[1]]);
               }}
@@ -1500,8 +1491,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                     ? 'Compare these two voices'
                     : (compareDisabledReason ?? undefined)
               }
-              {...pausedControlProps(readOnly)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {globalCastFetching.size > 0 ? 'Loading…' : 'Compare'}
             </button>
@@ -1597,7 +1587,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                   });
                   for (const u of res.updated) {
                     if (u.bookId === currentBookId) {
-                      dispatch(castActions.updateCharacter(next));
+                      dispatch(castActions.updateCharacter(next, { routeBacked: true }));
                     } else {
                       setGlobalCastCache((prev) => {
                         const cached = prev.get(u.bookId);

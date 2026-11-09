@@ -1008,7 +1008,7 @@ export function CastView({
       await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, 'qwen3-tts-1.7b')));
       setPinDialogOpen(false);
       qwenMembers.forEach((c) =>
-        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' })),
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' }, { routeBacked: true })),
       );
     } catch {
       dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't pin quality tier. Please try again." }));
@@ -1022,7 +1022,7 @@ export function CastView({
       await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, null)));
       setResetDialogOpen(false);
       qwenMembers.forEach((c) =>
-        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null })),
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null }, { routeBacked: true })),
       );
     } catch {
       dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't reset quality tier. Please try again." }));
@@ -1274,7 +1274,13 @@ export function CastView({
     setMergeSuggestions((prev) =>
       prev.filter((s) => !(s.sourceId === sourceId && s.targetId === targetId)),
     );
-    setCharacters((prev) => prev.filter((c) => c.id !== sourceId));
+    /* The accept route already saved the fold: mirror it as route-backed (plan 291). */
+    dispatch(
+      castActions.setCharacters(
+        characters.filter((c) => c.id !== sourceId),
+        { routeBacked: true },
+      ),
+    );
   }
 
   async function handleDismissSuggestion(sourceId: string, targetId: string) {

@@ -449,7 +449,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
             qwen: { name: p.proposedVoiceId },
           },
         };
-        dispatch(castActions.updateCharacter(next));
+        dispatch(castActions.updateCharacter(next, { routeBacked: true }));
         dispatch(rebaselineActions.proposalApplied({ characterId: p.characterId }));
         applied += 1;
       } catch {

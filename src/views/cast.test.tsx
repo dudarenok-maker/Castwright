@@ -4235,3 +4235,114 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(screen.getByTestId('tap-assign-banner')).toBeInTheDocument();
   });
 });
+
+/* Plan 291 (#4031), Task 12 fix round 1, I1 - the controls that save through
+   their own route mirror the route's result into the cast slice. While the cast
+   is read-only that mirror must raise no "that change wasn't saved" toast (the
+   route did save), and the slice must still reflect the route's result. The
+   real persistence and gate middleware are in the store; the gate is held up by
+   a busy reply that lists the analysis. */
+describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
+  const READ_ONLY_TOAST = /Re-analysis running/;
+  const qwenWren: Character = {
+    id: 'wren',
+    name: 'Wren',
+    role: 'Scout',
+    color: 'rival',
+    lines: 4,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    voiceId: 'vid-wren',
+  };
+
+  async function readOnlyStore(chars: Character[]) {
+    const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const { bookBusySlice } = await import('../store/book-busy-slice');
+    const { analysisSlice } = await import('../store/analysis-slice');
+    const { persistenceMiddleware } = await import('../store/persistence-middleware');
+    const { castGateMiddleware } = await import('../store/cast-gate');
+    vi.mocked(api.getBookBusy).mockResolvedValue(['analysis']);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+      middleware: (gDM) => gDM().concat(persistenceMiddleware, castGateMiddleware),
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bRo', status: 'complete' }));
+    store.dispatch(manuscriptSlice.actions.resetForBook('bRo'));
+    store.dispatch(castSlice.actions.hydrateCharacters(chars));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bRo' }));
+    return store;
+  }
+  function mount(store: Awaited<ReturnType<typeof readOnlyStore>>, chars: Character[]) {
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={chars}
+          setCharacters={(next) => {
+            /* the parent's setter (routes/index.tsx), which dispatches the slice action */
+            const value = typeof next === 'function' ? next(store.getState().cast.characters) : next;
+            store.dispatch(castSlice.actions.setCharacters(value));
+          }}
+          library={[]}
+          title="Tier Test"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+  }
+  const toasts = (store: Awaited<ReturnType<typeof readOnlyStore>>) =>
+    store.getState().notifications.toasts.map((t) => t.message);
+  afterEach(() => {
+    vi.mocked(api.getBookBusy).mockResolvedValue([]);
+  });
+
+  it('the tier pin mirrors the route result without a toast', async () => {
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+    const store = await readOnlyStore([qwenWren]);
+    mount(store, [qwenWren]);
+    fireEvent.click(screen.getByTestId('pin-higher-quality'));
+    fireEvent.click(screen.getByRole('button', { name: /Pin to all cast/i }));
+    await waitFor(() =>
+      expect(store.getState().cast.characters[0].ttsModelKey).toBe('qwen3-tts-1.7b'),
+    );
+    expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+
+  it('the tier reset mirrors the route result without a toast', async () => {
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+    const pinned = { ...qwenWren, ttsModelKey: 'qwen3-tts-1.7b' as const };
+    const store = await readOnlyStore([pinned]);
+    mount(store, [pinned]);
+    fireEvent.click(screen.getByTestId('reset-tier'));
+    fireEvent.click(screen.getByRole('button', { name: /Reset to 0\.6B/i }));
+    await waitFor(() => expect(store.getState().cast.characters[0].ttsModelKey).toBeNull());
+    expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+
+  it('a merge-suggestion accept mirrors the route result without a toast', async () => {
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    vi.mocked(api.acceptMergeSuggestion).mockResolvedValueOnce(undefined);
+    const store = await readOnlyStore([narrator, marrow]);
+    mount(store, [narrator, marrow]);
+    fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
+    await waitFor(() =>
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']),
+    );
+    expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+});

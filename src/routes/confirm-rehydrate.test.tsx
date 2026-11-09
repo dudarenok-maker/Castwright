@@ -29,6 +29,7 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { analysisSlice } from '../store/analysis-slice';
 import { bookBusySlice } from '../store/book-busy-slice';
 import { castGateMiddleware } from '../store/cast-gate';
@@ -36,8 +37,10 @@ import type { Character } from '../lib/types';
 
 const BOOK_ID = 'castwright__standalones__the-coalfall-commission';
 
-const { getBookStateMock, putBookStateMock, getBookBusyMock } = vi.hoisted(() => ({
+const { getBookStateMock, putBookStateMock, getBookBusyMock, overrideLibraryCastMock, viewProps } = vi.hoisted(() => ({
   getBookStateMock: vi.fn(),
+  overrideLibraryCastMock: vi.fn(),
+  viewProps: { current: null as null | { onOverrideLibrary: (a: unknown) => Promise<void> } },
   putBookStateMock: vi.fn().mockResolvedValue(undefined),
   getBookBusyMock: vi.fn(),
 }));
@@ -45,6 +48,7 @@ const { getBookStateMock, putBookStateMock, getBookBusyMock } = vi.hoisted(() =>
 vi.mock('../lib/api', () => ({
   api: {
     getBookBusy: (...args: unknown[]) => getBookBusyMock(...args),
+    overrideLibraryCast: (...args: unknown[]) => overrideLibraryCastMock(...args),
     getBookState: (bookId: string, signal?: AbortSignal) => getBookStateMock(bookId, signal),
     putBookState: (bookId: string, req: unknown) => putBookStateMock(bookId, req),
     matchVoices: () => new Promise(() => {}), // layout-style match probe; never resolves
@@ -57,7 +61,10 @@ vi.mock('../lib/api', () => ({
 /* Stub the heavy confirm view so the route renders in isolation — the fix lives
    in ConfirmRoute's hydration effect, not the view. */
 vi.mock('../views/confirm-cast', () => ({
-  ConfirmCastView: () => null,
+  ConfirmCastView: (props: never) => {
+    viewProps.current = props;
+    return null;
+  },
 }));
 
 /* The analyzer guard hook pulls in modals/providers we don't need here. */
@@ -538,6 +545,7 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
         settings: settingsSlice.reducer,
         analysis: analysisSlice.reducer,
         bookBusy: bookBusySlice.reducer,
+        notifications: notificationsSlice.reducer,
       },
       middleware: (gDM) => gDM().concat(persistenceMiddleware, castGateMiddleware),
       preloadedState: { cast: { characters: preload, renderedFallbackByCharacter: {} } as never },
@@ -587,6 +595,26 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
     expect(store.getState().cast.characters[0].overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
     expect(getBookStateMock).toHaveBeenCalled();
   }, 20_000);
+
+  it('I1: the override-from-library mirror raises no read-only toast and the slice reflects the route result', async () => {
+    getBookBusyMock.mockResolvedValue(['analysis']);
+    getBookStateMock.mockResolvedValue(reply(VOICELESS_COALFALL));
+    overrideLibraryCastMock.mockResolvedValue({ source: { ...VOICELESS_COALFALL, name: 'Coalfall Unioned' } });
+    const store = makeGatedStore([VOICELESS_COALFALL]);
+    store.dispatch(castActions.latchAnalysisEra({ bookId: GATED_BOOK }));
+    renderRoute(store);
+    await act(async () => {
+      await viewProps.current!.onOverrideLibrary({
+        sourceCharacterId: 'coalfall',
+        targetBookId: 'b0',
+        targetCharacterId: 'x',
+      });
+    });
+    expect(store.getState().cast.characters[0].name).toBe('Coalfall Unioned');
+    expect(
+      store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+    ).toEqual([]);
+  });
 
   it('a read the gate has overtaken is not hydrated: Confirm reads again', async () => {
     const FRESH = { ...VOICED_COALFALL, name: 'Coalfall Fresh' } as Character;
