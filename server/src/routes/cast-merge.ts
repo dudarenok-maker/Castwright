@@ -30,7 +30,8 @@ import { withBookLock } from '../workspace/book-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { mutateAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
-import { retireCharacterId } from '../store/cast-id-history.js';
+import { retireCharacterId, CastIdHistoryUnreadableError } from '../store/cast-id-history.js';
+import { removeSuggestionPairsLocked } from '../store/cast-merge-suggestions.js';
 import { clearNotLinkedEdgesForDroppedRejectionsLocked } from '../store/not-linked-edges.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { unionNotLinkedTo } from '../store/cast-name-match.js';
@@ -307,8 +308,15 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        the journal below still run, so disk is whole, and then the error is
        rethrown — the request fails, the client reloads, and the half that
        could not be written is visible rather than silent. */
-    let parkedHistoryError: unknown;
-    let hasParkedHistoryError = false;
+    /* The FIRST error parked wins (the history write is the one a user can act
+       on); every later step still runs. */
+    let parkedError: unknown;
+    let hasParkedError = false;
+    const park = (err: unknown): void => {
+      if (hasParkedError) return;
+      parkedError = err;
+      hasParkedError = true;
+    };
     try {
       const historyResult = await retireCharacterId(bookDir, sourceId, targetId, 'user');
       /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
@@ -325,22 +333,42 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
 
          #4031 — the same reasoning for a dropped `notSamePerson` record (a
          dismissed pair this merge collapses): its two `notLinkedTo` edges are
-         removed together with it. */
-      const droppedPairs = historyResult.droppedSelfLoopRejections.length > 0;
-      const notLinkedChanged =
-        (droppedPairs &&
-          clearNotLinkedEdgesForDroppedRejectionsLocked(
-            nextCharacters,
-            bookId,
-            historyResult.droppedSelfLoopRejections,
-          )) ||
-        clearNotSamePersonEdgesLocked(nextCharacters, bookId, historyResult.droppedNotSamePerson);
-      if (notLinkedChanged) {
+         removed together with it. BOTH clears always run (no `||`
+         short-circuit): each owns a different set of edges. */
+      const clearedRejections =
+        historyResult.droppedSelfLoopRejections.length > 0 &&
+        clearNotLinkedEdgesForDroppedRejectionsLocked(
+          nextCharacters,
+          bookId,
+          historyResult.droppedSelfLoopRejections,
+        );
+      const clearedDismissals = clearNotSamePersonEdgesLocked(
+        nextCharacters,
+        bookId,
+        historyResult.droppedNotSamePerson,
+      );
+      if (clearedRejections || clearedDismissals) {
         await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
       }
     } catch (historyErr) {
-      parkedHistoryError = historyErr;
-      hasParkedHistoryError = true;
+      if (historyErr instanceof CastIdHistoryUnreadableError) {
+        /* A degraded / unreadable history is not a merge failure: the
+           retirement is skipped and logged server-side (spec "Retirements are
+           skipped and logged"; the dismiss route does the same) and the merge
+           answers success. Only a real write error is parked. */
+        console.warn('[cast-merge] cast-id-history is unreadable; retirement skipped', historyErr);
+      } else {
+        park(historyErr);
+      }
+    }
+
+    /* R32 — a manual merge removes ITS OWN pair's suggestion (the accept route
+       already did; the manual route left it dangling). Under the cast lock we
+       already hold; a failure is parked like every other step here. */
+    try {
+      await removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]);
+    } catch (suggestionErr) {
+      park(suggestionErr);
     }
 
     /* Analysis cache — ONE `mutateAnalysisCache` op (R7): the source's cached
@@ -354,13 +382,22 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        edit at the next persist (sticky `added-once`), which is correct.
        `chapterCast` and the raw `stage1` roster are not touched (header). A
        cache that does not exist is left absent (the op returns null). */
-    const cacheResult = await mutateAnalysisCache(state.manuscriptId, {
-      remapCharacterIds: { [sourceId]: targetId },
-      ledger: { [sourceId]: null },
-      transform: (c) =>
-        c.matchPlan ? { ...c, matchPlan: retargetPlanForMerge(c.matchPlan, sourceId, targetId) } : c,
-    });
-    const cacheTouched = cacheResult !== null;
+    let cacheTouched = false;
+    try {
+      const cacheResult = await mutateAnalysisCache(state.manuscriptId, {
+        remapCharacterIds: { [sourceId]: targetId },
+        ledger: { [sourceId]: null },
+        transform: (c) =>
+          c.matchPlan ? { ...c, matchPlan: retargetPlanForMerge(c.matchPlan, sourceId, targetId) } : c,
+      });
+      cacheTouched = cacheResult !== null;
+    } catch (cacheErr) {
+      /* Parked, not thrown: cast.json and manuscript-edits.json are already
+         written, so aborting here would skip the journal below and leave a
+         merge that can never be unlinked (and, via the accept route, a
+         suggestion that 404s on every retry). */
+      park(cacheErr);
+    }
 
     /* srv-1 — append this merge to the deterministic lineage journal so the
        unlink-alias route can later surface exactly these sentences. Non-fatal:
@@ -418,15 +455,16 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        escapes the same function with the same class and NOTHING written. Stamp
        it, so "the merge is fully applied" is a fact the caller can test rather
        than an assumption it has to make. See `CAST_MERGE_APPLIED` above. */
-    if (hasParkedHistoryError) {
+    if (hasParkedError) {
       /* #4031 C3 — the parked error is no longer only a lock timeout: any
-         failure of the history write lands here. A thrown non-object (never
+         failure of the history write, the pair removal or the cache write
+         lands here. A thrown non-object (never
          produced by node or this repo) is wrapped so the marker below has
          something to sit on. */
       const parked =
-        typeof parkedHistoryError === 'object' && parkedHistoryError !== null
-          ? parkedHistoryError
-          : new Error(String(parkedHistoryError));
+        typeof parkedError === 'object' && parkedError !== null
+          ? parkedError
+          : new Error(String(parkedError));
       try {
         Object.defineProperty(parked, CAST_MERGE_APPLIED, {
           value: true,

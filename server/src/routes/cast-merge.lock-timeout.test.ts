@@ -230,6 +230,20 @@ function expectMergeFullyApplied(): void {
   ).toBe(true);
 }
 
+/** The facts that hold even when the CACHE write failed: cast.json lost the
+ *  source and the journal entry exists (so the merge can still be unlinked). */
+function expectCastAndJournalApplied(): void {
+  const cast = JSON.parse(
+    readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
+  ) as { characters: Array<{ id: string }> };
+  expect(cast.characters.map((c) => c.id)).not.toContain(SOURCE_ID);
+  const journal = readJournal();
+  expect(journal).not.toBeNull();
+  expect(
+    (journal!.entries ?? []).some((e) => e.sourceId === SOURCE_ID && e.targetId === TARGET_ID),
+  ).toBe(true);
+}
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-merge-lock-timeout-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
@@ -675,6 +689,9 @@ describe('merge routes curate the failure body and leak nothing (#2292 round 5)'
     expect(res.body.error).toBe('Internal server error.');
     expect(res.body.error).not.toContain('EPERM');
     expect(res.body.error).not.toContain('analysis-cache.json');
+    /* A cache-write failure is parked like the history one: the journal is
+       still written (the merge stays unlinkable) before the request fails. */
+    expectCastAndJournalApplied();
   });
 
   it('POST /cast/merge — a structured {status,error} failure keeps ITS status', async () => {
@@ -724,6 +741,14 @@ describe('merge routes curate the failure body and leak nothing (#2292 round 5)'
     expectJsonError(res);
     expect(res.body.error).toBe('Internal server error.');
     expect(res.body.error).not.toContain('EPERM');
+    /* The merge landed (cast + journal) despite the cache fault, so the
+       suggestion is dropped — otherwise it 404s on every retry. */
+    expectCastAndJournalApplied();
+    expect(
+      (JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast-merge-suggestions.json'), 'utf8')) as {
+        suggestions?: unknown[];
+      }).suggestions ?? [],
+    ).toHaveLength(0);
   });
 
   it('POST merge-suggestions/accept — a structured failure keeps ITS status', async () => {
@@ -827,5 +852,6 @@ describe('the REAL app returns no lock key to a client (#2292 round 5)', () => {
     expect(res.status).toBe(500);
     expect(res.type).toBe('application/json');
     expect(res.body.error).toBe('Internal server error.');
+    expectCastAndJournalApplied();
   });
 });

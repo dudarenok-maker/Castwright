@@ -24,7 +24,11 @@ import request from 'supertest';
    test in this file sees the real implementations. */
 vi.mock('../workspace/state-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
-  return { ...actual, readJson: vi.fn(actual.readJson) };
+  return {
+    ...actual,
+    readJson: vi.fn(actual.readJson),
+    writeJsonAtomic: vi.fn(actual.writeJsonAtomic),
+  };
 });
 vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
@@ -410,10 +414,10 @@ describe('cast-merge router', () => {
        agree; only then does the request fail, loud, with a curated body that
        leaks no path.
 
-       No mocking: cast-id-history.json's PATH is occupied by a directory, so
-       writeJsonAtomic's rename onto it throws for real. Same technique as
-       analysis.test.ts's sibling "a throwing history write never blocks the
-       authoritative cast.json persist". */
+       The fault is a REAL write error (EPERM on the history file's write), via
+       the passthrough `writeJsonAtomic` mock — not an unreadable history
+       (that is the degraded case, which is skipped and answers success; see
+       the next test). */
     const { castIdHistoryPath } = await import('../store/cast-id-history.js');
     const historyPath = castIdHistoryPath(bookDir);
 
@@ -454,8 +458,21 @@ describe('cast-merge router', () => {
     ];
     writeFileSync(cachePath, JSON.stringify(cacheBefore));
 
-    rmSync(historyPath, { recursive: true, force: true });
-    mkdirSync(historyPath, { recursive: true });
+    const { writeJsonAtomic } = await import('../workspace/state-io.js');
+    const real = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    vi.mocked(writeJsonAtomic).mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith('cast-id-history.json')) {
+        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${path}'`), {
+          code: 'EPERM',
+          syscall: 'rename',
+          path,
+        });
+      }
+      return real.writeJsonAtomic(path, ...rest);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const res = await request(app)
         .post(`/api/books/${bookId}/cast/merge`)
@@ -489,8 +506,47 @@ describe('cast-merge router', () => {
       const journal = readDisk<{ entries: Array<{ sourceId: string }> }>('cast-merges.json');
       expect(journal.entries.some((e) => e.sourceId === sourceId)).toBe(true);
     } finally {
-      rmSync(historyPath, { recursive: true, force: true });
+      vi.mocked(writeJsonAtomic).mockImplementation(real.writeJsonAtomic);
+      errSpy.mockRestore();
     }
+  });
+
+  it('degraded history is not a merge failure: the retirement is skipped and the merge answers 200', async () => {
+    /* #4031 ruling: an UNREADABLE cast-id-history.json (CastIdHistoryUnreadableError)
+       is skipped and logged server-side — matching "Retirements are skipped and
+       logged" and the dismiss route — and the merge succeeds. Only a real write
+       error is parked (the C3 test above). The history path is occupied by a
+       directory, so the read fails for real. */
+    const { castIdHistoryPath, loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const historyPath = castIdHistoryPath(bookDir);
+    const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceId = `degr-src-${unique}`;
+    const targetId = `degr-tgt-${unique}`;
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(
+      { id: sourceId, name: 'Degr Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+      { id: targetId, name: 'Degr Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    rmSync(historyPath, { recursive: true, force: true });
+    mkdirSync(historyPath, { recursive: true });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId, targetId });
+      expect(res.status).toBe(200);
+      const castAfter = readDisk<{ characters: Array<{ id: string }> }>('cast.json');
+      expect(castAfter.characters.map((c) => c.id)).not.toContain(sourceId);
+      const journal = readDisk<{ entries: Array<{ sourceId: string }> }>('cast-merges.json');
+      expect(journal.entries.some((e) => e.sourceId === sourceId)).toBe(true);
+    } finally {
+      rmSync(historyPath, { recursive: true, force: true });
+      warnSpy.mockRestore();
+    }
+    /* No retirement was recorded: the history is a fresh, empty one. */
+    expect((await loadCastIdHistory(bookDir)).supersededBy ?? {}).not.toHaveProperty(sourceId);
   });
 
   it('cast-merge round trip keeps phase', async () => {
@@ -1232,7 +1288,21 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
     expect(castRow(tgt)!.notLinkedTo ?? []).toEqual([]);
   });
 
-  it('A12d: accepting a dismissed pair drops its record and edges and the suggestion', async () => {
+  function seedSuggestions(pairs: Array<[string, string]>): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-merge-suggestions.json'),
+      JSON.stringify({ suggestions: pairs.map(([a, b]) => ({ sourceId: a, targetId: b, reason: 'same?' })) }),
+    );
+  }
+
+  function storedSuggestionPairs(): string[] {
+    return readDisk<{ suggestions: Array<{ sourceId: string; targetId: string }> }>(
+      'cast-merge-suggestions.json',
+    ).suggestions.map((s) => `${s.sourceId}>${s.targetId}`);
+  }
+
+  it('A12d: both routes drop a dismissed pair\'s record, edges and suggestion', async () => {
+    /* (1) accept route. */
     const u = uniq();
     const src = `a12d-src-${u}`;
     const tgt = `a12d-tgt-${u}`;
@@ -1243,19 +1313,117 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
       .send({ sourceId: src, targetId: tgt });
     expect(await notSamePersonNaming(src, tgt)).toHaveLength(1);
     /* A later run can re-raise the pair only by writing the file directly. */
-    writeFileSync(
-      join(bookDir, '.audiobook', 'cast-merge-suggestions.json'),
-      JSON.stringify({ suggestions: [{ sourceId: src, targetId: tgt, reason: 'same?' }] }),
-    );
+    seedSuggestions([[src, tgt]]);
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
       .set('Content-Type', 'application/json')
       .send({ sourceId: src, targetId: tgt });
     expect(res.status).toBe(200);
-
     expect(await notSamePersonNaming(src, tgt)).toEqual([]);
     expect(castRow(tgt)!.notLinkedTo ?? []).toEqual([]);
-    expect(readDisk<{ suggestions: unknown[] }>('cast-merge-suggestions.json').suggestions).toEqual([]);
+    expect(storedSuggestionPairs()).toEqual([]);
+
+    /* (2) manual merge route. */
+    const src2 = `a12d-src2-${u}`;
+    const tgt2 = `a12d-tgt2-${u}`;
+    seedRows([row(src2), row(tgt2)]);
+    await request(app)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: src2, targetId: tgt2 });
+    seedSuggestions([[src2, tgt2]]);
+
+    expect((await merge(src2, tgt2)).status).toBe(200);
+    expect(await notSamePersonNaming(src2, tgt2)).toEqual([]);
+    expect(castRow(tgt2)!.notLinkedTo ?? []).toEqual([]);
+    expect(storedSuggestionPairs()).toEqual([]);
+  });
+
+  it("R32: a manual merge removes its own pair's suggestion and keeps the others", async () => {
+    const u = uniq();
+    const src = `r32-src-${u}`;
+    const tgt = `r32-tgt-${u}`;
+    const other = `r32-other-${u}`;
+    const other2 = `r32-other2-${u}`;
+    seedRows([row(src), row(tgt), row(other), row(other2)]);
+    seedSuggestions([
+      [src, tgt],
+      [other, other2],
+    ]);
+
+    expect((await merge(tgt, src)).status).toBe(200); // opposite direction: the pair is unordered
+
+    expect(storedSuggestionPairs()).toEqual([`${other}>${other2}`]);
+  });
+
+  it('R32: the pair removal survives an EPERM history write error (parked, finished, then 500)', async () => {
+    const u = uniq();
+    const src = `r32e-src-${u}`;
+    const tgt = `r32e-tgt-${u}`;
+    seedRows([row(src), row(tgt)]);
+    seedSuggestions([[src, tgt]]);
+    const { writeJsonAtomic } = await import('../workspace/state-io.js');
+    const real = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    vi.mocked(writeJsonAtomic).mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith('cast-id-history.json')) {
+        throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      }
+      return real.writeJsonAtomic(path, ...rest);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await merge(src, tgt)).status).toBe(500);
+    } finally {
+      vi.mocked(writeJsonAtomic).mockImplementation(real.writeJsonAtomic);
+      errSpy.mockRestore();
+    }
+    expect(castRow(src)).toBeUndefined();
+    expect(storedSuggestionPairs()).toEqual([]);
+  });
+
+  /* A superseded target: tgt was retired into the live row R, so retiring
+     src into tgt resolves to R and a (src, R) dismissal record collapses to
+     (R, R). R is NOT one of the two merging rows, so only the
+     dropped-record edge clear can remove R's edge naming src. */
+  async function seedSupersededTargetFixture(u: string, withRejectedPair: boolean) {
+    const src = `sup-src-${u}`;
+    const tgt = `sup-tgt-${u}`;
+    const live = `sup-live-${u}`;
+    const bystander = `sup-by-${u}`;
+    seedRows([
+      row(src),
+      row(tgt),
+      row(live, { notLinkedTo: [{ bookId, characterId: src }] }),
+      row(bystander, { notLinkedTo: [{ bookId, characterId: live }] }),
+    ]);
+    const history = await import('../store/cast-id-history.js');
+    await history.recordNotSamePerson(bookDir, src, live);
+    if (withRejectedPair) await history.rejectOrphanedPair(bookDir, live, src);
+    await history.retireCharacterId(bookDir, tgt, live);
+    return { src, tgt, live, bystander };
+  }
+
+  it('a dropped dismissal record clears the edge on the row it collapsed into (superseded target)', async () => {
+    const { src, tgt, live } = await seedSupersededTargetFixture(uniq(), false);
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    expect(await notSamePersonNaming(src, live)).toEqual([]);
+    expect(castRow(live)!.notLinkedTo ?? []).toEqual([]);
+  });
+
+  it('both dropped-edge clears run: a self-loop rejection AND a dismissal record in one merge', async () => {
+    const { src, tgt, live, bystander } = await seedSupersededTargetFixture(uniq(), true);
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    /* the rejectedPairs self-loop's edge (naming `live`) on the bystander... */
+    expect(castRow(bystander)!.notLinkedTo ?? []).toEqual([]);
+    /* ...and the dismissal record's edge on `live`. A short-circuiting `||`
+       skips the second clear whenever the first changed something. */
+    expect(castRow(live)!.notLinkedTo ?? []).toEqual([]);
   });
 });
