@@ -7750,7 +7750,7 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 >   - **A single voice design.** A design in the series answered `409 book_repaired_reload` before any job, and `cast.json` was unchanged.
 >   - **The gate never expires, except four clauses.** `repairEpoch` stayed the same across five restarts over about 2.5 hours (observed, one reading kept: `e116.log:2`). Not run or not recorded: the days-later clause; the gate file's contents (the id, the repair time and the epoch, with no path); that nothing a client does ends it early; and that a tab from before the upgrade stays refused (a browser item).
 >   - **A truncated gate file.** With the file truncated inside its `manuscripts` list, the server log says it `kept 1 id(s) and rewrote it` (`server7.err.log:1`). That the readable entry stayed gated, and that the file was rewritten whole with the same epoch and an empty `manuscripts` list, were observed, log not kept.
->   - **Both books open.** `GET /api/books/<id>/state` answered `200` for both ids.
+>   - **Both books open, except the loser's queue, backups and exports and the unlistable directory.** `GET /api/books/<id>/state` answered `200` for both ids (`e116.log:3-4`). The two excepted clauses are under Not run.
 > - **Not run:**
 >   - **Analyse on either twin.**
 >   - **Every browser item:** the stale-tab reload, Library Delete, Voices Compare, the reload-loop cap, the series change from a stale page, the banner UI and the queue.
