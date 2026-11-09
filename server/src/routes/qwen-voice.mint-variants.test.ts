@@ -43,6 +43,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 /* Makes a synchronous copy (the walk's in-lock refresh) whose destination matches fail with EBUSY. */
 const syncCopyFails = vi.hoisted(() => ({ on: null as null | RegExp }));
+/* Makes the refresh's synchronous rename into a matching destination fail `times` times with `code`. */
+const syncRenameFails = vi.hoisted(() => ({ on: null as null | RegExp, times: 0, code: 'EPERM', calls: 0 }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const copyFileSync = ((src: string, dest: string, mode?: number) => {
@@ -51,7 +53,19 @@ vi.mock('node:fs', async (importOriginal) => {
     }
     return actual.copyFileSync(src, dest, mode);
   }) as typeof actual.copyFileSync;
-  return { ...actual, default: { ...actual, copyFileSync }, copyFileSync };
+  const renameSync = ((src: string, dest: string) => {
+    if (syncRenameFails.on && syncRenameFails.on.test(String(dest))) {
+      syncRenameFails.calls++;
+      if (syncRenameFails.times > 0) {
+        syncRenameFails.times--;
+        throw Object.assign(new Error(`${syncRenameFails.code}: operation not permitted`), {
+          code: syncRenameFails.code,
+        });
+      }
+    }
+    return actual.renameSync(src, dest);
+  }) as typeof actual.renameSync;
+  return { ...actual, default: { ...actual, copyFileSync, renameSync }, copyFileSync, renameSync };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -160,6 +174,10 @@ beforeEach(() => {
   castWrite.failFor = null;
   castWrite.onCastWrite = null;
   syncCopyFails.on = null;
+  syncRenameFails.on = null;
+  syncRenameFails.times = 0;
+  syncRenameFails.code = 'EPERM';
+  syncRenameFails.calls = 0;
 });
 afterAll(() => {
   rmSync(workspaceRoot, { recursive: true, force: true });
@@ -356,6 +374,50 @@ describe('series mint: a variant landing between the up-front copy and the walk 
     expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
   });
 
+  it('a transient EPERM on the refresh’s rename is retried, and the refresh completes (PR #4052 pass 4)', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    plantBase();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plant('qwen-v_wren__sad.json', 'SADJ-OLD');
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__sad\.json$/.test(dest)) {
+        fired = true;
+        plant('qwen-v_wren__sad.pt', 'SAD-NEW');
+        plant('qwen-v_wren__sad.json', 'SADJ-NEW');
+      }
+    };
+    syncRenameFails.on = /__sad\.pt$/;
+    syncRenameFails.times = 2;
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(syncRenameFails.calls).toBe(3);
+    expect(rowOf('Book One').voiceUuid).toBe(uuid);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-NEW');
+    expect(read(`qwen-${uuid}__sad.json`)).toBe('SADJ-NEW');
+    expect(readdirSync(qwenDir()).filter((f) => f.includes('.tmp'))).toEqual([]);
+  });
+
+  it('a legacy variant family deleted in the window changes nothing and removes nothing', async () => {
+    seed(withVariants({ sad: { name: 'qwen-v_wren__sad' } }));
+    plantBase();
+    plant('qwen-v_wren__sad.pt', 'SAD-OLD');
+    plant('qwen-v_wren__sad.json', 'SADJ-OLD');
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__sad\.json$/.test(dest)) {
+        fired = true;
+        rmSync(file('qwen-v_wren__sad.pt'));
+        rmSync(file('qwen-v_wren__sad.json'));
+      }
+    };
+    const uuid = await mint();
+    expect(fired).toBe(true);
+    expect(rowOf('Book One').overrideTtsVoices.qwen.variants.sad.name).toBe(`qwen-${uuid}__sad`);
+    expect(read(`qwen-${uuid}__sad.pt`)).toBe('SAD-OLD');
+    expect(read(`qwen-${uuid}__sad.json`)).toBe('SADJ-OLD');
+  });
+
   it('a failing in-lock copy with nothing stamped removes every copy, the in-lock ones too', async () => {
     /* sad and excited land after the up-front copy; in Book One's step, sad's copy
        succeeds and excited's fails, before any row is stamped. */
@@ -410,6 +472,42 @@ describe('series mint: a failed cast write (#4062)', () => {
     castWrite.failFor = /Book Two/;
     await expect(mint()).rejects.toThrow(/ENOSPC/);
     expect(rowOf('Book Two').voiceUuid).toBeUndefined();
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
+  });
+
+  it('the designing row gone from its cast meanwhile (stampOwnRow writes nothing) removes the copies', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book One', [withVariants({ angry: { name: 'qwen-v_wren__angry' } })], { confirmed: false });
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        writeBook('Book Two', [], { confirmed: false }); // a merge or delete removes Wren
+      }
+    };
+    expect(await mint()).toBeUndefined();
+    expect(fired).toBe(true);
+    expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
+  });
+
+  it('the designing row separated onto its own uuid meanwhile removes the copies', async () => {
+    seed(withVariants({ angry: { name: 'qwen-v_wren__angry' } }));
+    writeBook('Book One', [withVariants({ angry: { name: 'qwen-v_wren__angry' } })], { confirmed: false });
+    writeBook('Book Two', [{ ...legacy }], { confirmed: false });
+    plantBase();
+    plantAngry();
+    let fired = false;
+    hook.post = async (dest) => {
+      if (!fired && /qwen-[^\\/]+__angry\.json$/.test(dest)) {
+        fired = true;
+        writeBook('Book Two', [{ ...legacy, voiceUuid: 'u_sep' }], { confirmed: false }); // "Don't reuse"
+      }
+    };
+    expect(await mint()).toBe('u_sep');
+    expect(fired).toBe(true);
     expect(readdirSync(qwenDir()).sort()).toEqual([...legacyFiles].sort());
   });
 

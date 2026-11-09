@@ -43,7 +43,7 @@ import {
   qwenVoicesDir,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { renameWithRetry, RENAME_RETRY_DELAYS_MS, RETRYABLE_CODES } from '../workspace/atomic-rename.js';
 import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import { forgetSeparatedVoice, isSeparatedVoice, recordSeparatedVoice } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
@@ -380,12 +380,11 @@ const removeFiles = async (files: string[]): Promise<void> => {
    half-copied. */
 async function copyVariantFamilies(oldKey: string, newKey: string): Promise<string[]> {
   const dir = dirname(qwenVoicePtPath(oldKey));
-  const suffixes = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
   const names = new Set<string>();
   try {
     const present = new Set(await readdir(dir));
     for (const e of VARIANT_EMOTIONS) {
-      for (const s of suffixes) {
+      for (const s of VARIANT_MEMBERS) {
         if (present.has(`${oldKey}__${e}${s}`)) names.add(`${oldKey}__${e}${s}`);
       }
     }
@@ -428,15 +427,34 @@ function withRekeyedVariants(c: CastCharacter, from: string, to: string): CastCh
    legacy name holds at that moment, for every slot the fresh row names on the
    legacy key. `prints` is what the mint itself wrote at each new-key file (sha256),
    which is the only thing it may overwrite: a new-key family whose files differ
-   from it was designed by someone else, and stands. A source with no `.pt` is a
-   landing caught mid-move, never a delete (a slot's files outlive it, #4026), so it
-   changes nothing. Each member is staged next to its destination and renamed into
+   from it was designed by someone else, and stands. A source member that is absent
+   is never a delete (a slot's files outlive it, #4026), so it is skipped and a
+   copy is never removed. A landing straddling the copy (#4040's moveStaged renames
+   .pt, then .json, then .wav) can leave a mixed family (new .pt beside the old
+   .json); accepted: render reads only the .pt and the json's language, and a later
+   base redesign retires the copies. Each member is staged next to its destination and renamed into
    place only once the whole family is staged, so a failed copy leaves the earlier
    copy whole. Synchronous: it runs inside forEachMatchingCastCharacter's `mutate`, and
    no other JS interleaves between the check and the copy. Every file it creates
    joins `copied`, for the caller's rollback. The json is copied as is, so the
    variant's `baseRev` (#4040) still names the base it was designed against. */
 const VARIANT_MEMBERS = ['.pt', '.json', '__master.wav', '__1.7b.pt'];
+/* Bounded synchronous retry of a transient rename failure (an AV / indexer scan, or
+   the sidecar holding the destination open on Windows): the same codes and first
+   backoffs as renameWithRetry, which is async and cannot run inside the mutate. */
+function renameSyncWithRetry(src: string, dest: string): void {
+  const delays = RENAME_RETRY_DELAYS_MS.slice(0, 3);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(src, dest);
+      return;
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (!code || !RETRYABLE_CODES.has(code) || attempt === delays.length) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
+    }
+  }
+}
 const fileSha = (path: string): string | null => {
   try {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -463,7 +481,6 @@ function refreshVariantCopies(
       src: join(dir, `${oldKey}__${emotion}${s}`),
       dest: join(dir, `${newKey}__${emotion}${s}`),
     }));
-    if (!existsSync(members[0].src)) continue; // mid-move, or never designed: nothing to say
     if (members.some((m) => fileSha(m.dest) !== (prints.get(m.dest) ?? null))) continue; // not the mint's
     const changed = members.some((m) => {
       const src = fileSha(m.src);
@@ -480,7 +497,7 @@ function refreshVariantCopies(
       }
       for (const s of staged) {
         const sha = fileSha(s.tmp);
-        renameSync(s.tmp, s.dest);
+        renameSyncWithRetry(s.tmp, s.dest);
         if (!prints.has(s.dest) || prints.get(s.dest) === null) copied.push(s.dest);
         prints.set(s.dest, sha);
       }
@@ -929,12 +946,16 @@ export async function ensureCharacterVoiceUuid(
          copy, so nothing is left without its file even when the row is gone. */
       const stampedFirst = stampedAny;
       try {
-        return await stampOwnRow(bookDir, characterId, uuid, linkId, {
+        const stamped = await stampOwnRow(bookDir, characterId, uuid, linkId, {
           from: legacyKey,
           to: `qwen-${uuid}`,
           prints,
           copied,
         });
+        /* stampOwnRow wrote nothing (the row is gone, or already holds another uuid)
+           and the walk stamped no book: no row names the copies. */
+        if (!stampedFirst && stamped !== uuid) await removeFiles(copied);
+        return stamped;
       } catch (e) {
         if (!stampedFirst) await removeFiles(copied);
         throw e;
@@ -963,6 +984,9 @@ export async function ensureCharacterVoiceUuid(
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
        sees the copied base). A failed copy removes its own files and rethrows;
        a failed cast write removes the copies. */
+    /* No refresh here (unlike the series mint): the rows are read, the copies made and
+       the cast written inside this one cast lock, so only another book sharing the
+       bare legacy key could change a variant in between. */
     return whileSaving(`qwen-${uuid}`, async () => {
       const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
       const hasBase = copied.includes(qwenVoicePtPath(`qwen-${uuid}`));
@@ -1237,7 +1261,7 @@ export async function sweepStaleDesignStaging(
    server on the same workspace may be mid-design, as sweepStaleDesignStaging).
    Returns how many files it removed; never throws. */
 const VARIANT_FILE = new RegExp(
-  `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:\\.pt|\\.json|__master\\.wav|__1\\.7b\\.pt)$`,
+  `^(qwen-.+__(?:${VARIANT_EMOTIONS.join('|')}))(?:${VARIANT_MEMBERS.map((s) => s.replace(/\./g, '\\.')).join('|')})$`,
 );
 export async function sweepOrphanVariantFiles(
   maxAgeMs: number = STAGING_MAX_AGE_MS,
