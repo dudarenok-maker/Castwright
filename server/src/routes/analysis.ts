@@ -19,7 +19,7 @@ import {
   endpointIdsForModelIds,
   markEndpointRunActive,
 } from '../analyzer/analyzer-concurrency.js';
-import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
+import { applyNarratorIdentity, NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { RunFallbackSwitch, type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -7611,7 +7611,19 @@ export async function runMainAnalyzerJob(
               `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
             );
           }
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, characters, record.bookId ?? undefined);
+          /* Plan 291 (#4031) — the plan's decline guard, until this merge is replaced
+             by the plan overlay (Task 20). A `new` row may be any of its candidates, so
+             it carries the declines they inherited (the plan's `inheritedDeclines`):
+             this merge's name fallback then never hands it a link one of them
+             declined, and the decline survives on the row. Phase 0b used to seed the
+             same guard from the prior cast (`seedReuseGuardsFromPriorCast`). */
+          const guarded = characters.map((c) => {
+            const p = planConstraints.planned.get(c.id);
+            return p?.kind === 'new' && p.inheritedDeclines.length > 0
+              ? { ...c, notLinkedTo: unionNotLinkedTo((c as { notLinkedTo?: unknown[] }).notLinkedTo, [...p.inheritedDeclines]) }
+              : c;
+          });
+          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, guarded, record.bookId ?? undefined);
           /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
              writes reaching `catch (persistErr)` below that take a lock at all
              (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
@@ -7681,9 +7693,8 @@ export async function runMainAnalyzerJob(
                edge — destroying the surviving half of a decision whose durable
                half is already unreadable. The verdict must be captured here,
                first, and carried down. */
-            const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(
-              writeDir,
-            );
+            const { status: historyStatusBeforePersist, history: historyBeforePersist } =
+              await loadCastIdHistoryWithStatus(writeDir);
             await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log, castBase, 'analyzer');
             await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log, castBase, 'analyzer');
             /* §4.4 call site 4 — the early remap (Task 10) also retires an
@@ -7696,6 +7707,21 @@ export async function runMainAnalyzerJob(
               ([from, to]) => ({ from, to }),
             );
             await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase, 'analyzer');
+            /* Plan 291 (#4031) — the plan's joins are retirements too: `raw -> prior`,
+               tagged `analyzer`, when the two differ and `raw` is neither live (the
+               live-id filter) nor already a `supersededBy` key (a user's merge is never
+               repointed). Phase 0b applies the plan before the remap above runs, so the
+               remap no longer sees these raw ids. The narrator's join is exempt, as the
+               remap's was. */
+            const planJoinRetirements: Retirement[] = Object.values(cache.matchPlan?.decisions ?? {}).flatMap((d) =>
+              d.kind === 'join' &&
+              d.rawId !== d.priorId &&
+              !NARRATOR_CHARACTER_IDS.includes(d.rawId) &&
+              !Object.hasOwn(historyBeforePersist.supersededBy, d.rawId)
+                ? [{ from: d.rawId, to: d.priorId }]
+                : [],
+            );
+            await recordRetirements(writeDir, retirementBookId, planJoinRetirements, liveIds, log, castBase, 'analyzer');
             /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
                exact-id-first, so a history entry keyed to an id this write
                just reintroduced as live would silently lose to it (no tie,
