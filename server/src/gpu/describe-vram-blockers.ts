@@ -17,7 +17,7 @@
    Stop at that moment would kill a live render — the honest remedy there is
    "wait", and an entry advising a destructive action is worse than no entry.
 
-   Kokoro stays listed. It has a Stop pill reachable wherever it's resident
+   Kokoro stays listed (but see the render-in-flight rule below). It has a Stop pill reachable wherever it's resident
    (the top bar / global TTS notice banner —
    src/components/tts-notice-banner.tsx). When the "Preload Kokoro at startup"
    setting is ON, stopping it only frees the VRAM until the sidecar next
@@ -75,6 +75,10 @@ export interface VramBlockerHealth {
   /** #4066 — a chapter render is known to be in flight, so the auto-free
       declined and a resident standard Qwen model is in use by it. */
   generationActive?: boolean;
+  /** #4066 — the blocked op is that render's own synth call, so the render is
+      the one asking for capacity and is never named as what holds the Qwen
+      model. Kokoro still gets the wait remedy during a render. */
+  blockedOpIsRender?: boolean;
 }
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
@@ -82,12 +86,16 @@ export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   if (health.kokoroLoaded && health.kokoroDevice !== 'cpu') {
     out.push({
       model: 'Kokoro',
-      remedy: health.kokoroPreload
-        ? 'Turn off "Preload Kokoro at startup" in settings.'
-        : 'Press "Stop Kokoro" in the "Voice engines loaded" row under the top bar.',
+      /* During a render, Stop would kill a Kokoro fallback line in flight —
+         the same "never advise a destructive action" rule as Coqui above. */
+      remedy: health.generationActive
+        ? 'A chapter render is in progress and may be using it — wait for the render to finish, or pause it, then try again.'
+        : health.kokoroPreload
+          ? 'Turn off "Preload Kokoro at startup" in settings.'
+          : 'Press "Stop Kokoro" in the "Voice engines loaded" row under the top bar.',
     });
   }
-  if (health.generationActive && (health.qwenLoaded || health.qwenBase17Loaded)) {
+  if (health.generationActive && !health.blockedOpIsRender && (health.qwenLoaded || health.qwenBase17Loaded)) {
     out.push({
       model: health.qwenLoaded ? 'The standard Qwen voice model' : 'The Quality Qwen voice model',
       remedy: 'It is in use by the chapter render in progress — wait for the render to finish, or pause it, then try again.',

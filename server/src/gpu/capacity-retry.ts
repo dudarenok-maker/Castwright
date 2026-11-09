@@ -201,6 +201,7 @@ export interface CapacityRetryOpts {
 interface BlockerMessageContext {
   isKokoroPreloadOn: () => boolean;
   isGenerationKnownActive: () => boolean;
+  isRenderSynth: boolean;
 }
 
 /* #4066 — the effective "Preload Kokoro at startup" setting, so a resident
@@ -221,6 +222,7 @@ async function defaultDescribeBlockers(
   ctx: BlockerMessageContext = {
     isKokoroPreloadOn: defaultIsKokoroPreloadOn,
     isGenerationKnownActive,
+    isRenderSynth: false,
   },
 ): Promise<VramBlocker[]> {
   try {
@@ -232,6 +234,7 @@ async function defaultDescribeBlockers(
       kokoroDevice: health.devices?.kokoro,
       kokoroPreload: health.kokoroLoaded ? ctx.isKokoroPreloadOn() : false,
       generationActive: ctx.isGenerationKnownActive(),
+      blockedOpIsRender: ctx.isRenderSynth,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
       // Qualified by deviceKey (#2678 review finding F1), same as
@@ -313,9 +316,8 @@ export async function withCapacityRetry(
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
   const messageCtx: BlockerMessageContext = {
     isKokoroPreloadOn: opts.isKokoroPreloadOn ?? defaultIsKokoroPreloadOn,
-    isGenerationKnownActive: opts.isRenderSynth
-      ? () => false
-      : (opts.isGenerationKnownActive ?? isGenerationKnownActive),
+    isGenerationKnownActive: opts.isGenerationKnownActive ?? isGenerationKnownActive,
+    isRenderSynth: opts.isRenderSynth === true,
   };
   const describeBlockers =
     opts.describeBlockers ?? ((deviceKey: string) => defaultDescribeBlockers(deviceKey, undefined, messageCtx));

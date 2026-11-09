@@ -45,6 +45,19 @@ describe('describeVramBlockers', () => {
     ]);
   });
 
+  it('#4066: never advises stopping Kokoro while a render is in flight — Stop would kill a fallback line', () => {
+    for (const kokoroPreload of [false, true]) {
+      const out = describeVramBlockers({ kokoroLoaded: true, kokoroPreload, generationActive: true });
+      expect(out).toHaveLength(1);
+      expect(out[0].remedy).not.toMatch(/Stop Kokoro|Turn off/);
+      expect(out[0].remedy).toMatch(/wait for the render to finish, or pause it/);
+    }
+  });
+
+  it('#4066: does not name the render as holding the Qwen model when the blocked op is the render itself', () => {
+    expect(describeVramBlockers({ qwenLoaded: true, generationActive: true, blockedOpIsRender: true })).toEqual([]);
+  });
+
   it('lists Kokoro only when both Coqui and Kokoro are resident', () => {
     expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(1);
   });
