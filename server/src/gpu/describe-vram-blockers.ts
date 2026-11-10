@@ -75,11 +75,17 @@ export interface VramBlockerHealth {
   /** #4066 — a chapter render is known to be in flight, so the auto-free
       declined and a resident standard Qwen model is in use by it. */
   generationActive?: boolean;
+  /** #4075 — the only thing in flight is a splice or QA repair, not a chapter
+      render. It cannot be paused, so the remedy is to wait. Only read
+      alongside `generationActive`. */
+  repairOnly?: boolean;
   /** #4066 — the blocked op is that render's own synth call, so the render is
       the one asking for capacity and is never named as what holds the Qwen
       model. Kokoro still gets the wait remedy during a render. */
   blockedOpIsRender?: boolean;
 }
+
+const REPAIR_WAIT = 'A chapter repair is in progress — wait for it to finish, then try again.';
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
@@ -89,7 +95,9 @@ export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
       /* During a render, Stop would kill a Kokoro fallback line in flight —
          the same "never advise a destructive action" rule as Coqui above. */
       remedy: health.generationActive
-        ? 'A chapter render is in progress and may be using it — wait for the render to finish, or pause it, then try again.'
+        ? health.repairOnly
+          ? REPAIR_WAIT
+          : 'A chapter render is in progress and may be using it — wait for the render to finish, or pause it, then try again.'
         : health.kokoroPreload
           ? 'Turn off "Preload Kokoro at startup" in settings.'
           : 'Press "Stop Kokoro" in the "Voice engines loaded" row under the top bar.',
@@ -98,7 +106,9 @@ export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   if (health.generationActive && !health.blockedOpIsRender && (health.qwenLoaded || health.qwenBase17Loaded)) {
     out.push({
       model: health.qwenLoaded ? 'The standard Qwen voice model' : 'The Quality Qwen voice model',
-      remedy: 'It is in use by the chapter render in progress — wait for the render to finish, or pause it, then try again.',
+      remedy: health.repairOnly
+        ? 'It is in use by the chapter repair in progress — wait for it to finish, then try again.'
+        : 'It is in use by the chapter render in progress — wait for the render to finish, or pause it, then try again.',
     });
   }
   if (health.qwenDesignResident) {

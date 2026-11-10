@@ -27,7 +27,7 @@ describe('evictIdleQwenBase with a registered splice/repair', () => {
         _reconcile: reconcile,
         _probeHealth: probe as never,
       });
-      expect(out).toBe(false);
+      expect(out).toBe('declined'); // #4075: splice-only, latch stays armed
       expect(reconcile).not.toHaveBeenCalled();
     } finally {
       release();

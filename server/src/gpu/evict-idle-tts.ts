@@ -169,13 +169,19 @@ export interface EvictIdleQwenBaseOpts {
     drop was never resident" — that used to collapse into `true` here (#1839
     finding 1), which made `capacity-retry.ts` `continue` into an immediate,
     wasted retry attempt instead of falling through to its bounded poll; the
-    same is now true of a failed eviction, not just a no-op one. */
+    same is now true of a failed eviction, not just a no-op one.
+    `'declined'` is a hold-off that can clear — a render, splice or QA repair in
+    flight (#4075, before and after the health probe), another design resident,
+    or an unreadable probe (#4066) — and leaves the caller's one-shot latch
+    armed so a later poll asks again. */
 export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean | 'declined'> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
   const { modelKey } = opts;
 
   if (!modelKey) return false;
-  if (anyGenerationActive()) return false;
+  /* #4075 — 'declined', not false: a render, splice or QA repair ends, so this is
+     a "not yet", and `false` would spend the caller's one-shot latch. */
+  if (anyGenerationActive()) return 'declined';
 
   /* #1839 finding 5 — a non-Qwen op (Coqui/Kokoro) can never need either
      Qwen base resident, so it may reclaim BOTH idle tiers rather than
@@ -211,7 +217,7 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     }
     if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
-    if (anyGenerationActive()) return false;
+    if (anyGenerationActive()) return 'declined';
   }
 
   /* Only the heavy shapes report what they freed (the light ops record no

@@ -46,4 +46,24 @@ describe('active-generation-gate', () => {
     expect(isAnyGenerationActive()).toBe(true);
     expect(isGenerationKnownActive()).toBe(true);
   });
+
+  /* #4075 - wording-only: a repair-only state must be distinguishable from a render. */
+  it('isRepairOnlyKnownActive is true only for a splice/repair with no render, and false unregistered', async () => {
+    const { setActiveGenerationBooksProvider, setInFlightSpliceCounter, isRepairOnlyKnownActive } = await import(
+      './active-generation-gate.js'
+    );
+    expect(isRepairOnlyKnownActive()).toBe(false); // unregistered
+
+    let books: string[] = [];
+    let splices = 0;
+    setActiveGenerationBooksProvider(() => books);
+    setInFlightSpliceCounter(() => splices);
+    expect(isRepairOnlyKnownActive()).toBe(false); // idle
+
+    splices = 1;
+    expect(isRepairOnlyKnownActive()).toBe(true); // repair only
+
+    books = ['book-1'];
+    expect(isRepairOnlyKnownActive()).toBe(false); // a render is also running: render wording
+  });
 });

@@ -45,6 +45,28 @@ describe('describeVramBlockers', () => {
     ]);
   });
 
+  it('#4075: a repair-only blocker says wait for the repair, never "pause"', () => {
+    const qwen = describeVramBlockers({ qwenLoaded: true, generationActive: true, repairOnly: true });
+    expect(qwen).toEqual([
+      {
+        model: 'The standard Qwen voice model',
+        remedy: 'It is in use by the chapter repair in progress — wait for it to finish, then try again.',
+      },
+    ]);
+    const kokoro = describeVramBlockers({ kokoroLoaded: true, generationActive: true, repairOnly: true });
+    expect(kokoro).toEqual([
+      { model: 'Kokoro', remedy: 'A chapter repair is in progress — wait for it to finish, then try again.' },
+    ]);
+    for (const b of [...qwen, ...kokoro]) expect(b.remedy).not.toMatch(/pause|render/i);
+  });
+
+  it('#4075: repairOnly is ignored without generationActive, and a render keeps the render wording', () => {
+    expect(describeVramBlockers({ kokoroLoaded: true, repairOnly: true })[0].remedy).toMatch(/Stop Kokoro/);
+    expect(describeVramBlockers({ qwenLoaded: true, generationActive: true, repairOnly: false })[0].remedy).toMatch(
+      /render in progress — wait for the render to finish, or pause it/,
+    );
+  });
+
   it('#4066: never advises stopping Kokoro while a render is in flight — Stop would kill a fallback line', () => {
     for (const kokoroPreload of [false, true]) {
       const out = describeVramBlockers({ kokoroLoaded: true, kokoroPreload, generationActive: true });

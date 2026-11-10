@@ -75,6 +75,15 @@ export function isAnyGenerationActive(): boolean {
   return provider().length > 0 || spliceActive();
 }
 
+/** #4075 — true only when a splice or QA repair is KNOWN to be in flight and
+    NO chapter render is. For wording a message only, like
+    `isGenerationKnownActive` (unregistered resolves to `false`): a repair is
+    not a chapter render and cannot be paused, so its remedy is "wait". */
+export function isRepairOnlyKnownActive(): boolean {
+  if (!provider) return false;
+  return provider().length === 0 && spliceActive();
+}
+
 /** True only when a render is KNOWN to be in flight. Unregistered resolves to
     `false`. For wording a message only (#4066, `describeVramBlockers`): there
     the worst case of a wrong `false` is a less specific error, while a wrong

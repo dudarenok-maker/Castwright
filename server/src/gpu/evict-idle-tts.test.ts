@@ -63,7 +63,8 @@ describe('evictIdleQwenBase', () => {
       _isAnyGenerationActive: () => true,
     });
 
-    expect(freed).toBe(false);
+    /* #4075 - 'declined', not false: the caller's latch must stay armed. */
+    expect(freed).toBe('declined');
     expect(reconcile).not.toHaveBeenCalled();
   });
 
@@ -102,7 +103,7 @@ describe('evictIdleQwenBase', () => {
       _isAnyGenerationActive: () => true,
     });
 
-    expect(freed).toBe(false);
+    expect(freed).toBe('declined');
     expect(reconcile).not.toHaveBeenCalled();
   });
 
@@ -224,7 +225,7 @@ describe('evictIdleQwenBase', () => {
         _probeHealth: probeHealth,
       });
 
-      expect(freed).toBe(false);
+      expect(freed).toBe('declined');
       expect(reconcile).not.toHaveBeenCalled();
       expect(getLastTtsAutoFree()).toBeNull();
     });
@@ -346,7 +347,7 @@ describe('evictIdleQwenBase', () => {
         _probeHealth: async () => ({ qwenLoaded: true }),
       });
 
-      expect(result).toBe(false);
+      expect(result).toBe('declined'); // #4075: the post-probe check keeps the latch armed too
       expect(reconcile).not.toHaveBeenCalled();
       expect(getLastTtsAutoFree()).toBeNull();
     });
@@ -363,7 +364,7 @@ describe('evictIdleQwenBase', () => {
       _reconcile: reconcile,
     });
 
-    expect(freed).toBe(false);
+    expect(freed).toBe('declined');
     expect(reconcile).not.toHaveBeenCalled();
   });
 
