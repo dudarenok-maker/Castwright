@@ -1169,8 +1169,10 @@ describe('#4031 main job: resume', () => {
     expect(Object.keys(readCache(b.manuscriptId)?.addedRows ?? {})).toEqual(['the-jogger']);
     const resumed = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
     expect(resumed.some((e) => e.kind === 'result')).toBe(true);
-    /* The resumed snapshot knew the row was the run's own: no re-mint, no duplicate. */
-    expect(Object.keys(readCache(b.manuscriptId)?.addedRows ?? {})).toEqual(['the-jogger']);
+    /* The resumed snapshot knew the row was the run's own: no re-mint, no duplicate. The
+       completed persist then dropped it (un-edited, fold-dropped: rule 11), so its ledger entry
+       is gone, and the one row it added and wrote (the fold's bucket) is kept as added-once (R4). */
+    expect(readCache(b.manuscriptId)?.addedRows).toEqual({ 'unknown-male': { state: 'added-once' } });
     expect(JSON.stringify(readCast(b.bookDir))).not.toContain('the-jogger-n');
     expect(shape(b)).toEqual(shape(straight));
     expect(ids(readCast(b.bookDir))).not.toContain('the-jogger');
@@ -1719,6 +1721,27 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
     expect(boris).toMatchObject({ gender: 'female', description: 'set by the user mid-run' });
     /* ...and the analysis-owned counts are this run's. */
     expect(boris.lines).toBeGreaterThan(0);
+  });
+
+  it('F2 (R4): a completed run leaves no run-owned addedRows and no runAddedPairs; the rows it added stay known as added-once', async () => {
+    const b = twoWrens();
+    const two = { roster: [NARR, WREN_FRESH], speakerId: [FRESH_ID, PRIOR_ID] };
+    const first = await run(b.manuscriptId, b.bookDir, 'main', two);
+    expect(first.some((e) => e.kind === 'result')).toBe(true);
+    expect(ids(readCast(b.bookDir))).toContain(FRESH_ID);
+    const cache = readCache(b.manuscriptId)!;
+    expect(cache.runAddedPairs).toBeUndefined();
+    expect(Object.values(cache.addedRows ?? {}).filter((e) => e.state === 'run-owned')).toEqual([]);
+    expect(cache.addedRows?.[FRESH_ID]).toEqual({ state: 'added-once' });
+    /* A non-fresh re-run over the completed cache knows the row as the run's own: no -n1. */
+    const second = await run(b.manuscriptId, b.bookDir, 'main', two);
+    expect(second.some((e) => e.kind === 'result')).toBe(true);
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith(FRESH_ID))).toEqual([FRESH_ID]);
+    expect(readCache(b.manuscriptId)?.matchPlan?.decisions[FRESH_ID]).toMatchObject({
+      kind: 'new',
+      id: FRESH_ID,
+      minted: false,
+    });
   });
 
   it('item 17: a twin roster whose takes come from edits-derived cache chapters is not demoted', async () => {

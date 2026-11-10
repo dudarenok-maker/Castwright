@@ -19,7 +19,7 @@ import {
   endpointIdsForModelIds,
   markEndpointRunActive,
 } from '../analyzer/analyzer-concurrency.js';
-import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
+import { applyNarratorIdentity, NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { RunFallbackSwitch, type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -165,7 +165,7 @@ import type {
   SupersededKind,
 } from '../store/reanalysis-types.js';
 import { buildReservedIds, extendPlan, matchFreshToPrior } from '../store/match-fresh-to-prior.js';
-import { applyMatchPlan, planConstraintsFor, remapSentenceIds } from '../store/plan-overlay.js';
+import { applyMatchPlan, planConstraintsFor, remapSentenceIds, rerouteDeletedTargets } from '../store/plan-overlay.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadStoredSuggestions, pairKey } from '../store/cast-merge-suggestions.js';
 import { unionNotLinkedTo } from '../store/cast-name-match.js';
@@ -7705,6 +7705,8 @@ export async function runMainAnalyzerJob(
          it completes with the cast.json/state.json writes skipped, and
          `catch (persistErr)` swallows a failed write. */
       let wroteStateJson = false;
+      /* Plan 291 — what the planned persist wrote (set only once cast.json landed). */
+      let persisted: PersistOutcome | undefined;
       /* #2196 — resolve the SINGLE verified write target before ANY write.
          Identity-gated (full `.audiobook/state.json` check on liveBookDir(job),
          invalidate + re-hydrate on a miss — C2). Throwing BookDirUnresolvedError
@@ -7834,6 +7836,7 @@ export async function runMainAnalyzerJob(
           }
           if (outcome) {
             const out = outcome;
+            persisted = out;
             if (out.written) castBase?.noteExternalWrite(out.written);
             /* The result event carries what was persisted, not the fresh roster. */
             response.characters = out.characters as unknown as CharacterOutput[];
@@ -8090,7 +8093,38 @@ export async function runMainAnalyzerJob(
       if (wroteStateJson) {
         cache.takesPersisted = true;
         cache.confirmReached = true;
-        await mutateAnalysisCache(manuscriptId, { fields: { takesPersisted: true, confirmReached: true } });
+        /* Plan 291 (F2, R4) — a completed persist ends the run's ledger: the
+           `run-owned` entry of every row it wrote becomes `added-once` (sticky), and
+           `clearLedger` then drops the remaining `run-owned` entries and the run's
+           suggestion pairs. A later re-run that reuses the cached plan therefore
+           still knows those rows as the run's own (no re-mint), and a user delete of
+           one sticks. The cache takes follow the persist's reroute of lines a
+           deleted plan target held to the narrator (rule 13), applied to the cache
+           on disk inside the op so a merge's rewrite of the takes is not reverted. */
+        const writtenIds = new Set((persisted?.characters ?? []).map((c) => c.id));
+        const addedOnce: Record<string, LedgerEntry> = {};
+        for (const [k, e] of Object.entries(persisted?.ledger ?? {})) {
+          if (e.state === 'run-owned' ? writtenIds.has(k) : true) addedOnce[k] = { state: 'added-once' };
+        }
+        const deleted = new Set(persisted?.deletedTargets ?? []);
+        const narratorId = (persisted?.characters ?? []).map((c) => c.id).find((id) => NARRATOR_CHARACTER_IDS.includes(id)) ?? 'narrator';
+        cache.addedRows = Object.keys(addedOnce).length > 0 ? addedOnce : undefined;
+        delete cache.runAddedPairs;
+        await mutateAnalysisCache(manuscriptId, {
+          fields: { takesPersisted: true, confirmReached: true },
+          clearLedger: true,
+          ledger: addedOnce,
+          ...(deleted.size > 0
+            ? {
+                transform: (c) => ({
+                  ...c,
+                  chapters: Object.fromEntries(
+                    Object.entries(c.chapters).map(([k, ss]) => [k, rerouteDeletedTargets(ss, deleted, narratorId)]),
+                  ),
+                }),
+              }
+            : {}),
+        });
       }
     }
 
