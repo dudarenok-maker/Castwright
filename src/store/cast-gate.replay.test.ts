@@ -52,10 +52,14 @@ import { chaptersSlice } from './chapters-slice';
 import { resetBookSlices } from './reset-book-slices';
 import { createBookStateDisk, type BookStateDisk } from '../test/book-state-disk';
 import fixture from '../test-fixtures/analysis-cast-update-frames.json';
+import endOfRun from '../test-fixtures/analysis-end-of-run-cast.json';
 import type { Character, PutStateRequest } from '../lib/types';
 
 const BOOK = 'book-replay';
 const frames = fixture.frames as Array<{ kind: 'cast-update'; characters: Character[] }>;
+/* What the server's persist left on disk when the recorded run ended (Task 20's
+   recording): the roster a post-run re-hydrate must land. */
+const DISK_CAST = endOfRun.characters as Character[];
 
 /* The voiced, locked prior (test-seeded; see the header). */
 const PRIOR_WREN: Character = {
@@ -242,5 +246,81 @@ describe('replay (during run)', () => {
     expect(body).toContain('v-wren-locked');
     expect(body).toContain('qwen-wren-locked');
     expect(body).toContain('"voiceState":"locked"');
+  });
+});
+
+/* The run ends: the persist has written the roster the recorder captured, busy
+   no longer lists the analysis, and the client has to learn that on its own. */
+const castPutIds = (put: { args: unknown[] }) =>
+  (((put.args[1] as PutStateRequest).patch as { characters: Character[] }).characters).map((c) => c.id);
+
+describe('replay (end of run)', () => {
+  it('after a running snapshot ends, busy clears and the re-hydrate lands, the first edit\'s PUT carries the full disk cast', async () => {
+    const store = makeStore();
+    openWithPrior(store);
+    store.dispatch(analysisActions.setActiveStream(snap()));
+    for (const frame of frames) {
+      store.dispatch(castActions.replaceLiveRoster(frame.characters, { bookId: BOOK }));
+    }
+    expect(selectCastReadOnly(store.getState(), BOOK)).toBe(true);
+
+    /* The run persists its cast, then ends. */
+    disk.write(BOOK, 'cast', { characters: DISK_CAST });
+    busy = [];
+    store.dispatch(analysisActions.clearActiveStream());
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(selectCastReadOnly(store.getState(), BOOK)).toBe(false);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(DISK_CAST.map((c) => c.id));
+    expect(castPuts()).toHaveLength(0);
+
+    const target = DISK_CAST.find((c) => c.role === 'lead')!;
+    store.dispatch(castActions.renameCharacter({ characterId: target.id, name: 'Renamed after the run' }));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(castPuts()).toHaveLength(1);
+    expect(castPutIds(castPuts()[0])).toEqual(DISK_CAST.map((c) => c.id));
+    const sent = (castPuts()[0].args[1] as PutStateRequest).patch as { characters: Character[] };
+    expect(sent.characters.find((c) => c.id === target.id)!.name).toBe('Renamed after the run');
+  });
+
+  it('replay (stop): a paused run keeps the cast read-only until busy clears, then the re-hydrate lands and the next edit carries the full disk cast', async () => {
+    const store = makeStore();
+    openWithPrior(store);
+    store.dispatch(analysisActions.setActiveStream(snap()));
+    for (const frame of frames) {
+      store.dispatch(castActions.replaceLiveRoster(frame.characters, { bookId: BOOK }));
+    }
+    const lead = () => store.getState().cast.characters.find((c) => c.role === 'lead')!;
+
+    /* Pause: the run is still live on the server (busy lists it). */
+    store.dispatch(analysisActions.setPaused({ manuscriptId: `m-${BOOK}` }));
+    expect(store.getState().analysis.activeStream?.state).toBe('paused');
+    /* The pause alone does not release the gate: an edit in the same tick, before
+       any busy answer is back, is still refused. */
+    expect(selectCastReadOnly(store.getState(), BOOK)).toBe(true);
+    editEveryWay(store, lead());
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(puts()).toHaveLength(0);
+    expect(selectCastReadOnly(store.getState(), BOOK)).toBe(true);
+    const before = requests.length;
+    editEveryWay(store, lead());
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(puts()).toHaveLength(0);
+    expect(requests.slice(before).filter((r) => r.name !== 'getBookBusy')).toEqual([]);
+    expect(selectCastReadOnly(store.getState(), BOOK)).toBe(true);
+
+    /* The run stops on the server: its cast is on disk, busy clears. Nothing
+       dispatches; the state-driven poll has to notice. */
+    disk.write(BOOK, 'cast', { characters: DISK_CAST });
+    busy = [];
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(selectCastReadOnly(store.getState(), BOOK)).toBe(false);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(DISK_CAST.map((c) => c.id));
+
+    store.dispatch(castActions.renameCharacter({ characterId: 'w2', name: 'Wren after the stop' }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(castPuts()).toHaveLength(1);
+    expect(castPutIds(castPuts()[0])).toEqual(DISK_CAST.map((c) => c.id));
   });
 });

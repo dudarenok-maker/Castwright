@@ -1425,10 +1425,17 @@ export async function mockGetBookState(
     : withRevisions;
 }
 
+/* e2e seam (plan 291, #4031): every mock PUT, in order, exposed on
+   `window.__castwrightMockCalls` so a spec can assert what was (and was not)
+   written. Mock mode only: nothing else reaches `mockPutBookState`. */
+const e2eCallLog: Array<{ name: 'putBookState'; bookId: string; req: PutStateRequest }> = [];
+
 export async function mockPutBookState(
   bookId: string,
   req: PutStateRequest,
 ): Promise<PutStateResponse> {
+  e2eCallLog.push({ name: 'putBookState', bookId, req: JSON.parse(JSON.stringify(req)) });
+  (globalThis as unknown as { __castwrightMockCalls?: typeof e2eCallLog }).__castwrightMockCalls = e2eCallLog;
   await wait(20);
   const prev = MOCK_BOOK_STATES.get(bookId) ?? emptyBookStateResponse(bookId);
   const next = applyMockSliceWrite(prev, req);
@@ -1659,18 +1666,54 @@ async function mockUploadManuscript({
   };
 }
 
-export async function mockAnalyseManuscript(
+/* Plan 291 (#4031) — the books whose mock analysis run is in flight, and the
+   run itself keyed by manuscript. `mockGetBookBusy` answers `['analysis']` for
+   a book in the set; a second `mockAnalyseManuscript` for a manuscript whose run
+   is live attaches to it (the real server's subscribe path) and never starts a
+   second run. */
+const MOCK_RUNNING_ANALYSIS = new Set<string>();
+const MOCK_ANALYSIS_RUNS = new Map<
+  string,
+  { subs: Set<AnalyseOpts>; promise: Promise<AnalyseResponse> }
+>();
+
+export function mockAnalyseManuscript(
   manuscriptId: string,
-  { onPhase, onHeartbeat }: AnalyseOpts = {},
+  opts: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
+  const live = MOCK_ANALYSIS_RUNS.get(manuscriptId);
+  if (live) {
+    live.subs.add(opts);
+    return live.promise;
+  }
+  const subs = new Set<AnalyseOpts>([opts]);
+  const promise = runMockAnalysis(manuscriptId, subs).finally(() => {
+    MOCK_ANALYSIS_RUNS.delete(manuscriptId);
+    MOCK_RUNNING_ANALYSIS.delete(ANALYSIS_NORTHERN_STAR.bookId);
+  });
+  MOCK_ANALYSIS_RUNS.set(manuscriptId, { subs, promise });
+  return promise;
+}
+
+async function runMockAnalysis(
+  manuscriptId: string,
+  subs: Set<AnalyseOpts>,
+): Promise<AnalyseResponse> {
+  const each = (fn: (o: AnalyseOpts) => void) => subs.forEach(fn);
   if (DEMO_CAPTURE) {
     const p = HOLLOW_TIDE_POSED.analysing;
-    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live });
+    each((o) => o.onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live }));
     // Freeze on the analysing screen: never resolve, never advance.
     return new Promise<never>(() => {});
   }
   const res = ANALYSIS_NORTHERN_STAR;
+  MOCK_RUNNING_ANALYSIS.add(res.bookId);
   let heartbeatEmitted = false;
+  /* Roster frames: Phase 0 grows the cast in thirds (a third at 40% progress, two
+     thirds at 70%, the whole roster when the phase ends), as the real stream's
+     `cast-update` does, so the client's live-roster path runs end to end. */
+  const rosterFrames = [0.4, 0.7, 1];
+  let rosterEmitted = 0;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
     await new Promise<void>((resolve) => {
@@ -1716,13 +1759,23 @@ export async function mockAnalyseManuscript(
              HeartbeatRow speed pulse alongside the sentence headline. */
           if (!heartbeatEmitted) {
             heartbeatEmitted = true;
-            onHeartbeat?.({
-              phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
-              elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
-            });
+            each((o) =>
+              o.onHeartbeat?.({
+                phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
+                elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
+              }),
+            );
           }
         }
-        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live });
+        each((o) => o.onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live }));
+        if (ph.id === 0) {
+          while (rosterEmitted < rosterFrames.length && progress >= rosterFrames[rosterEmitted]) {
+            const n = Math.ceil(res.characters.length * rosterFrames[rosterEmitted]);
+            const characters = res.characters.slice(0, n);
+            each((o) => o.onCastUpdate?.({ characters }));
+            rosterEmitted += 1;
+          }
+        }
         if (progress >= 1) {
           clearInterval(t);
           resolve();
@@ -1730,6 +1783,12 @@ export async function mockAnalyseManuscript(
       }, 60);
     });
   }
+  /* e2e seam: a spec holds the finished run open (busy still `['analysis']`)
+     by setting `window.__castwrightMockAnalysisHold` to a promise before it
+     starts the analysis, then resolves that promise when it wants the run to
+     end. Undefined in normal dev/prod. */
+  await (globalThis as unknown as { __castwrightMockAnalysisHold?: Promise<void> })
+    .__castwrightMockAnalysisHold;
   /* The real server mints the manuscript id once at confirm and writes it to
      state.json, so the analysed book's state always reports the id the
      client holds. The mock resolves every upload to the one fixture book,
@@ -2521,8 +2580,8 @@ async function realGetBookBusy(bookId: string): Promise<BookBusyKinds> {
   return ((await res.json()) as { kinds: BookBusyKinds }).kinds;
 }
 
-async function mockGetBookBusy(_bookId: string): Promise<BookBusyKinds> {
-  return [];
+export async function mockGetBookBusy(bookId: string): Promise<BookBusyKinds> {
+  return MOCK_RUNNING_ANALYSIS.has(bookId) ? ['analysis'] : [];
 }
 
 /* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR
