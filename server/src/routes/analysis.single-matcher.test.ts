@@ -41,6 +41,7 @@ import {
   readJson,
   readCast,
   readEdits,
+  readHistory,
   readSuggestions,
   recordCastUpdateFrames,
   resetHarness,
@@ -59,8 +60,11 @@ import * as stateIo from '../workspace/state-io.js';
 import request from 'supertest';
 import { ANALYSIS_CACHE_VERSION, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
-import { castMergeSuggestionsJsonPath } from '../workspace/paths.js';
-import { linkSeriesReuseOnNewRows, resolveCurrentIds, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
+import { castJsonPath, castMergeSuggestionsJsonPath } from '../workspace/paths.js';
+import { withCastLock } from '../workspace/cast-lock.js';
+import { LockAcquisitionTimeoutError, withKeyLock } from '../workspace/file-lock.js';
+import { dedupAndPrepare, linkSeriesReuseOnNewRows, resolveCurrentIds, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
+import { EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -109,6 +113,22 @@ vi.mock('../store/analysis-cache.js', async (importOriginal) => {
 vi.mock('../store/cast-id-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-id-history.js')>();
   return { ...actual, retireCharacterId: vi.fn(actual.retireCharacterId) };
+});
+/* Passthrough; a test may replace what the planned persist returns with the failure
+   it documents (`PersistOutcomeError`: the edits write failed after cast.json landed). */
+const castIoSpy = vi.hoisted(() => ({
+  afterPersist: undefined as undefined | ((outcome: unknown) => unknown),
+}));
+vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
+  return {
+    ...actual,
+    persistPlannedCast: async (...a: Parameters<typeof actual.persistPlannedCast>) => {
+      const out = await actual.persistPlannedCast(...a);
+      if (castIoSpy.afterPersist) throw castIoSpy.afterPersist(out);
+      return out;
+    },
+  };
 });
 
 const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
@@ -944,7 +964,8 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
   });
 });
 
-/* ---- Plan 291 Task 16 - the linker runs on `new` rows only ------------------- */
+/* ---- Plan 291 Task 16 - the linker runs on 
+ew` rows only ------------------- */
 
 describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
   const BOOK1 = 'book-1';
@@ -1428,7 +1449,8 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       KIT.id,
     );
     setPhase1Hook(m.hook);
-    /* The merge re-targets the on-disk decision for w2 to kit's `new` decision, while the
+    /* The merge re-targets the on-disk decision for w2 to kit's 
+ew` decision, while the
        in-memory plan still says `join -> w2`. Kit speaks too, so it clears the minor-cast fold. */
     const SELF = { roster: [NARR, { ...WREN_FRESH, id: PRIOR_ID }, KIT], speakerId: [PRIOR_ID, KIT.id] };
     const after: Array<{ edits: string[]; takes: string[] }> = [];
@@ -1563,5 +1585,228 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       const dir = mkDir([{ id: 'b' }], { raw: 'b' });
       expect((await resolveCurrentIds(dir, {}, take('raw'), ids('b')))[0].characterId).toBe('raw');
     });
+  });
+});
+
+/* ---- Plan 291 Task 20 - the main job persists through persistPlannedCast ---- */
+
+describe('#4031 main job: the planned persist (Task 20)', () => {
+  const orig = process.env.STAGE2_COVERAGE_RETRIES;
+  const books: HarnessBook[] = [];
+  const seed = (...a: Parameters<typeof mkBook>): HarnessBook => {
+    const b = mkBook(...a);
+    books.push(b);
+    return b;
+  };
+  const OLGA: Row = { id: 'olga', name: 'Olga', role: 'minor', color: '#444444', voiceState: 'generated' };
+  const LEAD_WREN: Row = { ...PRIOR_WREN, role: 'lead', color: '#111111' };
+  const PRIORS = (): Row[] => [{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }];
+  const BORIS = {
+    id: 'boris',
+    name: 'Boris Vane',
+    role: 'minor',
+    color: '#555555',
+    gender: 'male',
+    evidence: [{ quote: 'Wren asked' }],
+  } as unknown as CharacterOutput;
+  const ids = (rows: Row[]): string[] => rows.map((r) => String(r.id));
+  const errCode = (events: Array<{ kind: string; code?: unknown }>): unknown =>
+    events.find((e) => e.kind === 'error')?.code;
+  /* Two prior Wrens a dismissal keeps apart: the fresh "Wren Ashby" is a new row with a
+     suggestion to each (the run's own suggestion pairs). */
+  const twoWrens = (): HarnessBook => {
+    const b = seed([
+      { ...NARR },
+      { ...LEAD_WREN },
+      { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' },
+    ]);
+    writeFileSync(
+      join(b.bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        notSamePerson: [{ a: PRIOR_ID, b: 'w2b', at: '2026-11-01T00:00:00.000Z' }],
+      }),
+    );
+    return b;
+  };
+  type History = { supersededBy: Record<string, string>; supersededByKind?: Record<string, string> };
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    castIoSpy.afterPersist = undefined;
+    if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = orig;
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+
+  it("the result event's characters equal the persisted cast", async () => {
+    /* olga is a prior row the fresh run never mentions: carried forward on disk (rule 1),
+       so a result built from the fresh roster would omit it. */
+    const b = seed(PRIORS());
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    const result = events.find((e) => e.kind === 'result')!;
+    expect(result).toBeDefined();
+    expect(result.response!.characters).toEqual(readCast(b.bookDir));
+    expect(ids(result.response!.characters)).toContain('olga');
+  });
+
+  it('persist records analyzer-tagged retirements after releasing the lock', async () => {
+    const b = seed(PRIORS());
+    const actual = await vi.importActual<typeof import('../store/cast-id-history.js')>('../store/cast-id-history.js');
+    const seen: Array<{ from: string; to: string; kind?: string; castLockHeld: boolean }> = [];
+    vi.mocked(historyStore.retireCharacterId).mockImplementation(async (dir, from, to, kind) => {
+      let castLockHeld = false;
+      try {
+        await withKeyLock(castJsonPath(dir), async () => {}, 200);
+      } catch (err) {
+        if (!(err instanceof LockAcquisitionTimeoutError)) throw err;
+        castLockHeld = true;
+      }
+      seen.push({ from, to, kind, castLockHeld });
+      return actual.retireCharacterId(dir, from, to, kind);
+    });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    /* The plan's join (raw "wren-ashby" -> the prior "w2"), recorded once, analyzer-tagged,
+       outside the cast lock. The narrator's join records nothing. */
+    expect(seen.filter((r) => r.from === FRESH_ID)).toEqual([
+      { from: FRESH_ID, to: PRIOR_ID, kind: 'analyzer', castLockHeld: false },
+    ]);
+    expect(seen.some((r) => r.from === 'narrator')).toBe(false);
+    expect(seen.every((r) => !r.castLockHeld)).toBe(true);
+    const history = readHistory(b.bookDir) as History;
+    expect(history.supersededBy[FRESH_ID]).toBe(PRIOR_ID);
+    expect(history.supersededByKind?.[FRESH_ID]).toBe('analyzer');
+  });
+
+  it('an analyzer join never replaces a user merge already keyed on the raw id', async () => {
+    /* "wren-ashby" was merged into olga by the user; the fresh "Wren Ashby" row still
+       carries that id, so the plan follows the merge and the entry is left alone. */
+    const b = seed(PRIORS(), { [FRESH_ID]: 'olga' });
+    await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    const history = readHistory(b.bookDir) as History;
+    expect(history.supersededBy[FRESH_ID]).toBe('olga');
+    expect(history.supersededByKind?.[FRESH_ID]).toBeUndefined();
+  });
+
+  it('item 13: at a completed persist a new row already on disk keeps its user-owned fields from disk', async () => {
+    const b = seed(PRIORS());
+    /* After the Phase-0b snapshot wrote boris (a new row), a route-like write changes its
+       user-owned fields on disk, under the cast lock. */
+    let edited = false;
+    setPhase1Hook(async () => {
+      if (edited) return;
+      edited = true;
+      await withCastLock(b.bookDir, async () => {
+        const p = castJsonPath(b.bookDir);
+        const cast = JSON.parse(readFileSync(p, 'utf8')) as { characters: Row[] };
+        for (const c of cast.characters) {
+          if (c.id === 'boris') Object.assign(c, { gender: 'female', description: 'set by the user mid-run' });
+        }
+        writeFileSync(p, JSON.stringify(cast));
+      });
+    });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, WREN_FRESH, BORIS],
+      speakerId: ['boris', PRIOR_ID],
+    });
+    expect(edited).toBe(true);
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    const boris = readCast(b.bookDir).find((c) => c.id === 'boris')!;
+    expect(boris).toMatchObject({ gender: 'female', description: 'set by the user mid-run' });
+    /* ...and the analysis-owned counts are this run's. */
+    expect(boris.lines).toBeGreaterThan(0);
+  });
+
+  it('item 17: a twin roster whose takes come from edits-derived cache chapters is not demoted', async () => {
+    /* Two prior Wrens a dismissal keeps apart, and a cache rebuilt from the book's edits:
+       its takes name the twins themselves, and the fresh roster holds one "Wren Ashby"
+       (planned new, a suggestion to each twin). */
+    const b = twoWrens();
+    const take = (chapterId: number, characterId: string) => [
+      { id: chapterId * 100 + 1, chapterId, characterId, confidence: 0.9, text: 'Are you sure this will work' },
+    ];
+    await saveAnalysisCache(b.manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION,
+      chapters: { 1: take(1, PRIOR_ID), 2: take(2, 'w2b'), 3: take(3, PRIOR_ID) },
+      takesPersisted: true,
+    } as never);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+    expect(errCode(events)).toBeUndefined();
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    const edits = readEdits(b.bookDir);
+    expect(edits.filter((s) => s.characterId === PRIOR_ID).map((s) => s.chapterId)).toEqual([1, 3]);
+    expect(edits.filter((s) => s.characterId === 'w2b').map((s) => s.chapterId)).toEqual([2]);
+    expect(ids(readCast(b.bookDir))).toEqual(expect.arrayContaining([PRIOR_ID, 'w2b']));
+  });
+
+  it('A24 (route): a drift-refused run writes no suggestions', async () => {
+    /* Two fresh rows the dedup will not merge (a diminutive: a suggestion, not a merge),
+       and a Phase 1 that attributes almost every line to an unknown id. */
+    const b = seed([{ ...NARR }]);
+    const olga = { id: 'olga', name: 'Olga Petrov', aliases: ['Doc'], role: 'minor', color: '#444444', gender: 'female', evidence: [{ quote: 'Olga nodded' }] } as unknown as CharacterOutput;
+    const olya = { id: 'olya', name: 'Mira Stone', aliases: ['Doc'], role: 'minor', color: '#555555', gender: 'female', evidence: [{ quote: 'Olga nodded' }] } as unknown as CharacterOutput;
+    /* Precondition (non-vacuous): the dedup refuses to merge these two and suggests the pair. */
+    expect(dedupAndPrepare([NARR, olga, olya], [], 'en', EMPTY_DEDUP_CONSTRAINTS).suggestions.map((s) => [s.a, s.b])).toEqual([['olga', 'olya']]);
+    const rec = getManuscript(b.manuscriptId)!;
+    const ghost: Analyzer = {
+      ...phase1('olga'),
+      runStage2Chapter: (async (_m: string, chapterId: number) => ({
+        sentences: Array.from({ length: 120 }, (_, k) => ({
+          id: chapterId * 1000 + k + 1,
+          chapterId,
+          characterId: k < 6 ? 'olga' : k < 12 ? 'olya' : 'ghost',
+          confidence: 0.9,
+          text: `Are you sure this will work (${k})`,
+        })),
+      })) as unknown as Analyzer['runStage2Chapter'],
+    };
+    (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(ghost, 'phase1-model');
+    const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'main');
+    await runMainAnalyzerJob(job, rec as never, sel(phase0([NARR, olga, olya]), 'phase0-model'), {
+      requestedFresh: false,
+      allowStage1Shrink: true,
+      requestedModel: undefined,
+    } as never);
+    expect(errCode(events)).toBe('attribution_drift');
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+    /* The refused run still writes the edits (disk consistent). */
+    expect(readEdits(b.bookDir).length).toBeGreaterThan(0);
+  });
+
+  it('A7c (#4023 S3, completed): an unvoiced prior row the fresh run omits survives a completed run (rule 1)', async () => {
+    const b = seed([
+      { ...NARR },
+      { ...LEAD_WREN },
+      { id: 'brann', name: 'Brann', role: 'minor', color: '#555555', notLinkedTo: ['w2'] },
+    ]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(cast.find((c) => c.id === 'brann')).toMatchObject({ name: 'Brann', notLinkedTo: ['w2'] });
+    expect(cast.find((c) => c.id === PRIOR_ID)).toMatchObject({ name: 'Wren', voiceState: 'locked' });
+  });
+
+  it('a failed edits write after cast.json landed still records the retirements and leaks no path to the client', async () => {
+    const b = seed(PRIORS());
+    const editsPath = join(b.bookDir, '.audiobook', 'manuscript-edits.json');
+    castIoSpy.afterPersist = (outcome) =>
+      Object.assign(new Error(`EPERM: operation not permitted, rename '${editsPath}'`), {
+        code: 'EPERM',
+        syscall: 'rename',
+        path: editsPath,
+        persistOutcome: outcome,
+      });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    expect(events.length).toBeGreaterThan(0);
+    for (const e of events) {
+      const text = JSON.stringify(e);
+      expect(text).not.toContain(b.bookDir);
+      expect(text).not.toContain(b.bookDir.replace(/\\/g, '\\\\'));
+    }
+    expect(readHistory(b.bookDir).supersededBy[FRESH_ID]).toBe(PRIOR_ID);
   });
 });

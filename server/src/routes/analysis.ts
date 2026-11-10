@@ -19,7 +19,7 @@ import {
   endpointIdsForModelIds,
   markEndpointRunActive,
 } from '../analyzer/analyzer-concurrency.js';
-import { applyNarratorIdentity, NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { RunFallbackSwitch, type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -43,7 +43,7 @@ import {
   type ThirdPartyGuardChapter,
 } from '../analyzer/third-party-front-matter-guard.js';
 import { mergeCharacterFields } from '../analyzer/roster-merge-fields.js';
-import { dedupeRosterByName, composeRewrites, stripEstablishedAsciiRewrites, pruneSuggestionsToRoster, EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
+import { dedupeRosterByName, composeRewrites, stripEstablishedAsciiRewrites, pruneSuggestionsToRoster, EMPTY_DEDUP_CONSTRAINTS, type MergedNewGroup } from '../analyzer/roster-dedup.js';
 import { fillToneFromAttributes } from '../analyzer/fill-tone.js';
 import {
   loadCastMerges,
@@ -172,10 +172,12 @@ import { unionNotLinkedTo } from '../store/cast-name-match.js';
 import {
   materialisePriorAtRunStart,
   readHealOpts,
+  persistPlannedCast,
   readPriorCastLockFree,
-  removeRunAddedSuggestionPairs,
   sameBookDeclinePredicate,
   writePlanSnapshot,
+  type PersistOutcome,
+  type PersistOutcomeError,
   type PriorCastSnapshot,
 } from '../workspace/analysis-cast-io.js';
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
@@ -1161,6 +1163,8 @@ export function dedupAndPrepare(
       tier alone isn't a sound gate). Passed through for diagnostics/tests
       that want to distinguish which tier produced a given rewrite entry. */
   tier1RewriteKeys: Set<string>;
+  /** Plan 291 (#4031) - the dedup's `new`+`new` merges, for `rekeyPlanForMergedNew`. */
+  mergedNew: MergedNewGroup[];
 } {
   // Capture pre-dedup lineage BEFORE any rewrite (journal needs the original ids/names).
   const preDedupSentences = sentences.map((s) => ({
@@ -1183,6 +1187,7 @@ export function dedupAndPrepare(
     preDedupSentences,
     preDedupRoster,
     tier1RewriteKeys: dd.tier1RewriteKeys,
+    mergedNew: dd.mergedNew,
   };
 }
 
@@ -1228,6 +1233,28 @@ export async function linkSeriesReuseOnNewRows(
     for (const [k, v] of Object.entries(views[i])) if (k !== 'notLinkedTo' && row[k] !== v) row[k] = v;
   });
   return linked;
+}
+
+/* Plan 291 (#4031) - a dedup merge of `new` rows re-keys the plan: each merged row's
+   decision now lands on the survivor, and the survivor's decision takes the group's
+   candidates and cross-book declines, so the plan's suggestion pairs follow the survivor
+   and the persist overlays both onto one row. */
+function rekeyPlanForMergedNew(plan: MatchPlan, groups: ReadonlyArray<MergedNewGroup>): MatchPlan {
+  if (groups.length === 0) return plan;
+  const decisions = { ...plan.decisions };
+  for (const g of groups) {
+    const merged = new Set(g.merged);
+    for (const [raw, d] of Object.entries(decisions)) {
+      if (d.kind !== 'new' || (d.id !== g.survivor && !merged.has(d.id))) continue;
+      decisions[raw] = {
+        ...d,
+        id: g.survivor,
+        suggest: [...new Set([...d.suggest, ...g.candidates])].filter((c) => c !== g.survivor),
+        inheritedDeclines: unionNotLinkedTo(d.inheritedDeclines, g.inheritedDeclines) as typeof d.inheritedDeclines,
+      };
+    }
+  }
+  return { ...plan, decisions };
 }
 
 /* The questions the plan asks the user: one suggestion from each `new` row to each
@@ -4946,20 +4973,6 @@ export async function runMainAnalyzerJob(
       broadcastToJob(job, stamped);
       trackForReplay(job, stamped);
     };
-    /* #2015 §4 — a genuine stale merge base stops being silent. The write still
-       proceeds with the same base it uses today, so NO data is lost that is not
-       already lost today; what changes is that it is now visible. */
-    const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
-      console.warn(
-        `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
-          `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
-      );
-      send({
-        kind: 'warning',
-        code: CAST_MERGE_BASE_STALE_CODE,
-        message: CAST_MERGE_BASE_STALE_MESSAGE,
-      });
-    };
     const log = (phaseId: number, message: string) => {
       send({ kind: 'log', phaseId, message });
       lastStep = `phase=${phaseId} ${message}`;
@@ -5425,10 +5438,12 @@ export async function runMainAnalyzerJob(
 
       if (bookDir) {
         const newIds = new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'new' ? [d.id] : [])));
-        /* Unfolded, with palette colours; a new row gets the lines/scenes placeholders
-           (a joined row keeps the prior counts - lines/scenes are analysis-owned, so an
-           explicit 0 here would zero them). */
-        const snapshot = assignPaletteColors(characters).map((c) =>
+        /* Unfolded, with palette colours and the narrator identity (as the persist's
+           roster carries it: the snapshot is the row's first write, and the persist
+           keeps a run row's user-owned fields from disk); a new row gets the lines/scenes
+           placeholders (a joined row keeps the prior counts - lines/scenes are
+           analysis-owned, so an explicit 0 here would zero them). */
+        const snapshot = applyNarratorIdentity(assignPaletteColors(characters), bookLanguage).map((c) =>
           newIds.has(c.id) ? { ...c, lines: c.lines ?? 0, scenes: c.scenes ?? 0 } : c,
         );
         const out: { s?: Awaited<ReturnType<typeof writePlanSnapshot>> } = {};
@@ -7518,9 +7533,12 @@ export async function runMainAnalyzerJob(
     }
     stage1.characters = guarded.characters;
     recovered.sentences = guarded.sentences;
+    /* Plan 291 (R29) - the fold runs on plan-applied ids and never folds a row the plan
+       joined to a prior row (`planProtectIds`, as the live-view fold does). */
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
       language: bookLanguage,
+      protectIds: planProtectIds,
     });
     /* Fill each folded survivor's tone from its attributes where the analyzer
        left it blank (axes default to a neutral 50). */
@@ -7548,58 +7566,31 @@ export async function runMainAnalyzerJob(
       bookLanguage,
     );
 
-    /* #2040 §4.4 — adopt the EXISTING cast's ids for characters this run merely
-       re-slugged, before anything derives from the fresh ids. Roster and sentences
-       move together: phase1ValidIds (below) is built from the roster, and
-       reconcileSentenceCharacterIds would otherwise demote every renamed
-       character's lines to the narrator.
-
-       §11 Q2 — composed against the SAME dedup→fold cumulative rewrite table
-       Site 1 (applyRewriteToPriorCast, below at the cast.json persist point)
-       later applies to the prior cast, so a prior row already headed
-       elsewhere via THIS run's own dedup is recognised as already-converged
-       instead of being matched here first and rewritten backwards. Recomputed
-       here (composeRewrites is pure and dd/folded are already in scope) —
-       the later computation at the cast.json persist point (currently
-       :4834, feeding applyRewriteToPriorCast at :4835) is left as written,
-       not hoisted, so this never touches its own retirement bookkeeping.
-
-       #2584/#2570 — stripEstablishedAsciiRewrites filters out the narrow
-       coincidence where THIS run's own fresh-side dedup (dd.rewrites) happens
-       to key on an established ASCII prior id while targeting a non-ASCII
-       survivor of its own choosing (analyzer non-determinism minting several
-       fresh duplicate rows for one character this run) — see the function's
-       own doc comment. Without it, the entry above falsely reads as
-       "already converged" and this remap skips, silently discarding the
-       established id.
-
-       `characters0` (declared above) is the fresh roster in the SAME
-       pre-remap fresh-id space `cumulativeForRemap`'s values live in — the
-       composed rewrite table's `to` ids resolve against `folded.characters`
-       (plus the narrator-identity/palette/lines fields characters0 layers
-       on, none of which touch `name`), never against a roster already
-       rewritten by remapFreshToPriorIds itself. */
-    const cumulativeForRemap = stripEstablishedAsciiRewrites(
-      composeRewrites(dd.rewrites, folded.rewrites),
-      priorCastForMerge,
-      characters0,
-    );
-    const remappedToPrior = remapFreshToPriorIds(
-      characters0,
-      folded.sentences,
-      priorCastForMerge,
-      cumulativeForRemap,
-      record.bookId ?? undefined,
-    );
-    const characters = remappedToPrior.characters;
-    folded.sentences = remappedToPrior.sentences;
+    /* Plan 291 (#4031) - the roster is already in plan-applied ids (Phase 0b applied the
+       match plan before the dedup and the fold), and the persist re-reads the cast and
+       joins nothing by name. No fresh->prior remap runs here: `remapFreshToPriorIds`
+       would re-match a planned row a second time (rule 1, invariant 1). */
+    const characters = characters0;
 
     /* Phase 1 character-id reconciliation (see reconcileSentenceCharacterIds
        comment for motivation). Demote orphan ids to narrator before the
        manuscript-edits write; abort with `attribution_drift` if the
        demotion rate exceeds the threshold on a non-trivial sample so the
-       confirm screen never advances against a corrupted run. */
+       confirm screen never advances against a corrupted run.
+
+       Plan 291 (item 17) - valid = the roster plus every id live in cast.json, read
+       lock-free just before the gate: a take replayed from a cache rebuilt from the
+       book's edits names prior rows the fresh roster may not hold (twins the plan kept
+       apart), and those lines are not orphans. */
     const phase1ValidIds = new Set(characters.map((c) => c.id));
+    const validIdsDir = liveBookDir(job) ?? record.bookDir;
+    if (validIdsDir) {
+      try {
+        for (const r of (await readPriorCastLockFree(validIdsDir)).rows) phase1ValidIds.add(r.id);
+      } catch (err) {
+        console.warn(`[analysis] drift gate counted against the roster only - cast.json could not be read: ${(err as Error)?.message ?? err}`);
+      }
+    }
     /* CJK books: rescue honorific/title-variant orphans (奥杜万师傅 ↔ 奥杜万)
        back to their roster id before demotion, so a Phase-0/Phase-1 title
        disagreement can't false-trip the drift gate. No-op for non-CJK. */
@@ -7702,10 +7693,11 @@ export async function runMainAnalyzerJob(
          into the job's top-level catch, which ends the job via
          `endJob(…, {kind:'error'})`.
 
-         #2295 — this slot now has TWO producers, hence the name: the identity
-         block below, and the AUTHORITATIVE cast.json write above it. Which
-         WRITE timed out is what decides; which HANDLER caught it is not (see
-         the wrap on `writeChecked` below). */
+         #2295 — this slot has several producers, hence the name: the identity
+         block below, the AUTHORITATIVE cast.json write (plan 291: the planned
+         persist's cast lock) and the state.json write. Which WRITE timed out is
+         what decides; which HANDLER caught it is not (see the wrap on
+         `persistPlannedCast` below). */
       let persistLockTimeout: unknown;
       let staleBookDirError: unknown;
       /* #3435 (plan 287 M17/S14) — set only once THIS block's state.json write
@@ -7723,14 +7715,6 @@ export async function runMainAnalyzerJob(
          re-keyed onto `writeDir` (R3 — no ordering bet). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        /* #3784 — `book`-locked, so the slice PUT's manuscript check + write
-           cannot straddle it. Nothing is held here (the cast lock is taken per
-           write below, after this). */
-        await withOptionalBookLock(record.bookId, () =>
-          writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
-            sentences: reconciled.sentences,
-          }),
-        );
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
            a journal failure must never fail the analysis persist. */
         try {
@@ -7751,8 +7735,9 @@ export async function runMainAnalyzerJob(
              is the one that parks and fails the run. */
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
         }
-        /* srv-1 — record this run's dedup lineage + persist diminutive
-           suggestions. Non-fatal, mirroring the fold journal. */
+        /* srv-1 — record this run's dedup lineage. Non-fatal, mirroring the fold
+           journal. Plan 291 (A24): its suggestions are no longer written here - they
+           ride the planned persist's suggestions step, after the drift gate. */
         try {
           await writeDedupJournal(
             writeDir,
@@ -7760,249 +7745,201 @@ export async function runMainAnalyzerJob(
             dd.preDedupSentences,
             dd.preDedupRoster,
           );
-          // dd.suggestions carries ids in the pre-remap fresh-id space (#2040
-          // §4.4) — prune against characters0, not the remapped `characters`,
-          // or every suggestion fails both id checks and the list empties.
-          await reconcileDedupSuggestions(writeDir, record.bookId ?? undefined, dd.suggestions, characters0);
         } catch (dedupErr) {
           /* #2295 — same deliberate swallow as the fold journal above, same
-             reason: dedup lineage + diminutive suggestions are advisory, and a
-             lock timeout on either must not fail a completed analysis. */
-          console.warn('[analysis] failed to write dedup journal/suggestions', dedupErr);
+             reason: dedup lineage is advisory, and a lock timeout on it must not
+             fail a completed analysis. */
+          console.warn('[analysis] failed to write dedup journal', dedupErr);
         }
+        /* Plan 291 (#4031) — the run's terminal cast write is `persistPlannedCast`
+           (workspace/analysis-cast-io.ts): under the cast lock it re-reads cast.json
+           and the history, plans the rows created since Phase 0b (the fold's
+           buckets), overlays the plan-applied roster (persist mode: prior rows are
+           carried forward, rule 1; a run-added row the roster no longer holds is
+           removed unless the user edited it, rule 11), writes cast.json, writes
+           manuscript-edits.json under the nested `book` lock and reconciles the
+           suggestions. It replaces the old merge (`mergeAnalysisResultWithExistingCast`
+           + `castBase.writeChecked`, #2015), which re-matched planned rows by name.
+
+           A `LockAcquisitionTimeoutError` from its cast lock means NOTHING was
+           written: it is parked in `persistLockTimeout` and the remaining writes
+           (state.json) still run before the deferred rethrow below (#2260 C1, #2295).
+           An edits-write failure AFTER cast.json landed carries the computed outcome
+           (`PersistOutcomeError`): the retirements and the cache patch still run
+           from it, then the error goes to `catch (persistErr)`, which logs it
+           server-side only (an fs error names an absolute path). Any other throw
+           wrote nothing and goes straight there. */
+        const persistPlan = rekeyPlanForMergedNew(
+          cache.matchPlan ?? { version: 1, runToken: randomBytes(4).toString('hex'), decisions: {} },
+          dd.mergedNew,
+        );
+        const persistArgs = (driftRefused: boolean): Parameters<typeof persistPlannedCast>[0] => ({
+          bookDir: writeDir,
+          bookId: record.bookId ?? undefined,
+          plan: persistPlan,
+          roster: characters,
+          sentences: reconciled.sentences,
+          ledger: cache.addedRows ?? {},
+          /* The plan's questions and the dedup's refused pairs (in roster ids: the dedup
+             ran on plan-applied ids), each pruned against the persisted cast inside. */
+          runSuggestions: driftRefused
+            ? []
+            : [
+                ...planSuggestionsFor(persistPlan, characters, priorCastForMerge as PriorRow[]),
+                ...pruneSuggestionsToRoster(dd.suggestions, characters0),
+              ],
+          runAddedPairs: cache.runAddedPairs ?? [],
+          driftRefused,
+        });
         if (phase1DriftExceeded) {
           log(
             1,
             `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
-          /* Plan 291 (#4031, item 20): the refused run keeps none of its suggestions - the
-             pairs the Phase-0b snapshot added, including a stopped run's (the cache holds
-             them across a resume). Advisory: cast.json is untouched either way. */
+          /* Plan 291 (A24, item 20): the refused run writes only manuscript-edits.json
+             (the demoted sentences, so the disk stays consistent) and keeps none of its
+             suggestions — the persist removes the pairs its snapshots added, a stopped
+             run's included (the cache holds them across a resume). cast.json is left
+             byte-for-byte alone. */
           try {
-            await removeRunAddedSuggestionPairs(writeDir, cache.runAddedPairs ?? []);
-          } catch (pairsErr) {
-            console.warn('[analysis] failed to remove the refused run\'s suggestions', pairsErr);
+            await persistPlannedCast(persistArgs(true));
+          } catch (castErr) {
+            if (isLockAcquisitionTimeout(castErr)) persistLockTimeout = castErr;
+            else throw castErr;
           }
         } else {
-          /* Remap the prior cast's ids through the cumulative dedup→fold rewrite
-             so designed voices ride onto the surviving canonical ids instead of
-             stranding on a collapsed source id.
-
-             #2584/#2570 — stripEstablishedAsciiRewrites (same guard as the
-             remapFreshToPriorIds call above) so this Site-1 write never
-             retires an established ASCII id in favour of a non-ASCII
-             survivor a fresh-side dedup collision happened to pick.
-             `characters0` again — this rewrite table is composed from the
-             SAME dd/folded ids as `cumulativeForRemap` above, so the fresh
-             roster that resolves its `to` names must be the same one:
-             `characters0`, not `characters` (already remapped onto prior
-             ids by this point) or anything reconciled/CJK-remapped further
-             down, whose names may already have been overwritten by a merge. */
-          const cumulative = stripEstablishedAsciiRewrites(
-            composeRewrites(dd.rewrites, folded.rewrites),
-            priorCastForMerge,
-            characters0,
-          );
-          const remapped = applyRewriteToPriorCast(priorCastForMerge, cumulative);
-          if (remapped.droppedVoices.length) {
-            log(
-              1,
-              `Dedup collapsed ${remapped.droppedVoices.length} prior voiced row(s) onto a canonical survivor (${remapped.droppedVoices.map((d) => d.id).join(', ')}).`,
-            );
-          }
-          /* Plan 291 (#4031) — the plan's decline guard, until this merge is replaced
-             by the plan overlay (Task 20). A `new` row may be any of its candidates, so
-             it carries the declines they inherited (the plan's `inheritedDeclines`):
-             this merge's name fallback then never hands it a link one of them
-             declined, and the decline survives on the row. Phase 0b used to seed the
-             same guard from the prior cast (`seedReuseGuardsFromPriorCast`). */
-          const guarded = characters.map((c) => {
-            const p = planConstraints.planned.get(c.id);
-            return p?.kind === 'new' && p.inheritedDeclines.length > 0
-              ? { ...c, notLinkedTo: unionNotLinkedTo((c as { notLinkedTo?: unknown[] }).notLinkedTo, [...p.inheritedDeclines]) }
-              : c;
-          });
-          const mergedFinal = mergeAnalysisResultWithExistingCast(remapped.priorCast, guarded, record.bookId ?? undefined);
-          /* #2295 — the AUTHORITATIVE cast.json write, and one of the two
-             writes reaching `catch (persistErr)` below that take a lock at all
-             (`writeChecked` -> `withCastLock`, workspace/cast-merge-base.ts:85;
-             the other is the state.json write, #3700).
-             A concurrent `performCastMerge` holding `cast:<bookDir>` made this
-             throw a `LockAcquisitionTimeoutError`, which `catch (persistErr)`
-             swallowed: cast.json AND state.json unwritten, `result` emitted
-             anyway. That is the silent success #2260 exists to remove, one
-             level up from the identity block below.
-
-             DISCRIMINATED BY WHICH WRITE TIMED OUT, not by which handler
-             caught it — discriminating by handler is what produced this bug in
-             the first place. The same `catch (persistErr)` also covers the
-             fold/dedup/suggestions journals (their own handlers above keep
-             swallowing, deliberately), so parking from there would escalate a
-             best-effort lineage write into a failed run. The state.json write
-             further down is authoritative too and (#3400 pass 8, #3700) takes
-             the book lock and then the per-book `state-json` leaf lock through
-             `updateStateAtDir`. The book lock has no acquisition bound, but the
-             leaf lock does, so that write CAN produce this class: it parks its
-             own timeout at its own call, in the same slot.
-
-             Rethrown immediately, not deferred: unlike the identity block
-             below there is nothing left to finish here — cast.json did NOT
-             land, so recording retirements against a roster that was never
-             persisted would be worse than skipping them. Control flow is
-             therefore byte-for-byte what it was (the persist aborts,
-             `catch (persistErr)` logs); the only change is that the parked
-             value makes the job's terminal an error instead of a result. */
+          const retirementBookId = bookIdForRetirementCleanup(record);
+          /* #2166 / PR #2202 gate review (Critical) — decide whether
+             cast-id-history.json is READABLE before anything below rewrites
+             it. Every history step after the persist (`recordRetirements`, both
+             `dropSuperseded*` helpers) reads through the collapsing
+             `loadCastIdHistory` and writes back unconditionally, so a degraded
+             file is REPLACED by a valid, empty one within a few lines of here.
+             Taking the verdict after that laundering would read `ok` on a file
+             whose real content was lost, and the reconciliation below would then
+             delete every same-book reject edge. The verdict must be captured
+             here, first, and carried down. */
+          const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(writeDir);
+          let outcome: PersistOutcome | undefined;
+          let editsWriteErr: unknown;
           try {
-            await castBase!.writeChecked(
-              { characters: mergedFinal.characters },
-              reportCastConflict('final'),
-            );
-          } catch (castWriteErr) {
-            if (isLockAcquisitionTimeout(castWriteErr)) persistLockTimeout = castWriteErr;
-            throw castWriteErr;
+            outcome = await persistPlannedCast(persistArgs(false));
+          } catch (castErr) {
+            const carried = (castErr as PersistOutcomeError | null)?.persistOutcome;
+            if (isLockAcquisitionTimeout(castErr)) persistLockTimeout = castErr;
+            else if (carried) {
+              outcome = carried;
+              editsWriteErr = castErr;
+            } else throw castErr;
           }
-          /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
-             authoritative cast.json write, and never let a throwing history
-             write (EPERM/ENOSPC on cast-id-history.json) skip cast.json /
-             state.json. Mirrors writeFoldJournal/writeDedupJournal above.
-             #2260 round 3 (C1) — still true for the one class this handler
-             no longer swallows: a lock-acquisition timeout DEFERS out of
-             this block (parked in `persistLockTimeout`, rethrown once the
-             persist's own try/catch has closed) rather than skipping the
-             writes below. */
-          try {
-            /* Wave 2 final-review finding 1(b) — every retirement recorded
-               at this final write is filtered against the roster that was
-               just persisted (`mergedFinal.characters`, the same binding the
-               drop below uses, so "live" means the same thing to both). A
-               retirement naming a live id is bogus by construction here; the
-               filter is defence in depth for a future producer that stops
-               guaranteeing that, not a fix for a reachable case today. */
-            const liveIds = mergedFinal.characters.map((c) => c.id);
-            const retirementBookId = bookIdForRetirementCleanup(record);
-            /* #2166 / PR #2202 gate review (Critical) — decide whether
-               cast-id-history.json is READABLE before anything below rewrites
-               it. Every history step in this block (`recordRetirements`, both
-               `dropSuperseded*` helpers) reads through the collapsing
-               `loadCastIdHistory` and writes back unconditionally, so a
-               degraded file is REPLACED by a valid, empty one within a few
-               lines of here. Taking the verdict after that laundering would
-               read `ok` on a file whose real content was lost, and the
-               reconciliation below would then delete every same-book reject
-               edge — destroying the surviving half of a decision whose durable
-               half is already unreadable. The verdict must be captured here,
-               first, and carried down. */
-            const { status: historyStatusBeforePersist, history: historyBeforePersist } =
-              await loadCastIdHistoryWithStatus(writeDir);
-            await recordRetirements(writeDir, retirementBookId, remapped.retirements, liveIds, log, castBase, 'analyzer');
-            await recordRetirements(writeDir, retirementBookId, mergedFinal.retirements, liveIds, log, castBase, 'analyzer');
-            /* §4.4 call site 4 — the early remap (Task 10) also retires an
-               id, one entry per `remappedToPrior.rewrites` key. The fresh id
-               it retires never lands on disk, but the analysis cache is
-               written BEFORE the remap runs (§11 Q3) and keeps the pre-remap
-               fresh ids, so without this the resolver has no way to map a
-               later cache/segment reference back onto the live prior id. */
-            const remapRetirements: Retirement[] = Object.entries(remappedToPrior.rewrites).map(
-              ([from, to]) => ({ from, to }),
+          if (outcome) {
+            const out = outcome;
+            if (out.written) castBase?.noteExternalWrite(out.written);
+            /* The result event carries what was persisted, not the fresh roster. */
+            response.characters = out.characters as unknown as CharacterOutput[];
+            response.sentences = out.sentences;
+            /* The persist's own decisions (the rows it planned, its re-mints) and its
+               rule-11 ledger, patched into the cache (Q2: every post-0b decision is
+               saved). A ledger entry the overlay dropped is deleted. */
+            const known = cache.matchPlan?.decisions ?? {};
+            const decisions = Object.fromEntries(
+              Object.entries(out.plan.decisions).filter(([k, d]) => JSON.stringify(known[k]) !== JSON.stringify(d)),
             );
-            await recordRetirements(writeDir, retirementBookId, remapRetirements, liveIds, log, castBase, 'analyzer');
-            /* Plan 291 (#4031) — the plan's joins are retirements too: `raw -> prior`,
-               tagged `analyzer`, when the two differ and `raw` is neither live (the
-               live-id filter) nor already a `supersededBy` key (a user's merge is never
-               repointed). Phase 0b applies the plan before the remap above runs, so the
-               remap no longer sees these raw ids. The narrator's join is exempt, as the
-               remap's was. */
-            const planJoinRetirements: Retirement[] = Object.values(cache.matchPlan?.decisions ?? {}).flatMap((d) =>
-              d.kind === 'join' &&
-              d.rawId !== d.priorId &&
-              !NARRATOR_CHARACTER_IDS.includes(d.rawId) &&
-              !Object.hasOwn(historyBeforePersist.supersededBy, d.rawId)
-                ? [{ from: d.rawId, to: d.priorId }]
-                : [],
-            );
-            await recordRetirements(writeDir, retirementBookId, planJoinRetirements, liveIds, log, castBase, 'analyzer');
-            /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
-               exact-id-first, so a history entry keyed to an id this write
-               just reintroduced as live would silently lose to it (no tie,
-               no warning). Drop it here, last, so it can't survive past the
-               same write cycle that reintroduced the live row — whether the
-               entry predates this run or one of the three recordRetirements
-               calls above just (re)wrote it. `mergedFinal.characters` is the
-               exact roster this write just persisted, not an intermediate
-               (fresh `characters` or `remapped.priorCast`), so "live" here
-               means "actually on disk after this write". The dropped
-               entries are reported so a future banner can flag their
-               segments as needs-your-decision (§4.6, Wave 3) — this call
-               only drops and returns, it does not surface anything itself. */
-            const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
-              writeDir,
-              liveIds,
-            );
-            /* #2040 Task 14 review item 2a — operator-visible, mirrors the
-               "Dedup collapsed N prior voiced row(s)..." log above. The
-               dropped pairs are also persisted (item 2b, cast-id-history.ts's
-               `displaced`), so this line is a heads-up, not the only record. */
-            if (displacedByReclaim.length) {
-              log(
-                1,
-                `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
-                  .map((d) => `${d.id} -> ${d.supersededBy}`)
-                  .join(', ')}) — affected segments need review.`,
+            const ledgerPatch: Record<string, LedgerEntry | null> = { ...out.ledger };
+            for (const k of Object.keys(cache.addedRows ?? {})) if (!Object.hasOwn(out.ledger, k)) ledgerPatch[k] = null;
+            const idMap = Object.fromEntries(Object.entries(out.idMap).filter(([k, v]) => k !== v));
+            cache.addedRows = out.ledger;
+            if (cache.matchPlan) cache.matchPlan = { ...cache.matchPlan, decisions: { ...cache.matchPlan.decisions, ...decisions } };
+            await mutateAnalysisCache(manuscriptId, {
+              ledger: ledgerPatch,
+              ...(cache.matchPlan && Object.keys(decisions).length > 0 ? { decisions } : {}),
+              ...(Object.keys(idMap).length > 0 ? { remapCharacterIds: idMap } : {}),
+            });
+            /* §4.4 / Task 8 fix round 1 (item 1) — record AFTER the
+               authoritative cast.json write (the persist has released the cast
+               lock), and never let a throwing history write (EPERM/ENOSPC on
+               cast-id-history.json) skip state.json. #2260 round 3 (C1) — a
+               lock-acquisition timeout DEFERS out of this block (parked in
+               `persistLockTimeout`, rethrown once the persist's own try/catch has
+               closed) rather than skipping the writes below. */
+            try {
+              /* Wave 2 final-review finding 1(b) — every retirement is filtered
+                 against the roster that was just persisted. */
+              const liveIds = out.characters.map((c) => c.id);
+              /* Plan 291 — the plan's joins (`raw -> target`, tagged `analyzer`,
+                 each target re-resolved through the history the persist re-read;
+                 never one whose raw id is live or already a `supersededBy` key, and
+                 never the narrator's join). A degraded history records none. */
+              await recordRetirements(writeDir, retirementBookId, out.retirements, liveIds, log, castBase, 'analyzer');
+              /* #2040 Task 14, spec §4.4 closing paragraph — resolution is
+                 exact-id-first, so a history entry keyed to an id this write
+                 just reintroduced as live would silently lose to it (no tie,
+                 no warning). Drop it here, last, so it can't survive past the
+                 same write cycle that reintroduced the live row. The dropped
+                 entries are reported so a future banner can flag their segments
+                 as needs-your-decision (§4.6, Wave 3). */
+              const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
+                writeDir,
+                liveIds,
               );
-            }
-            /* #2110 — the mirror-image drop: an entry whose TARGET (not key)
-               has quietly stopped being live (this run's carry-forward
-               dropped an unvoiced character with no name-fallback match, and
-               nothing else ever recorded that as a retirement). Left alone
-               it's worse than inert — see the function's own doc comment —
-               so prune it against this exact just-persisted roster, same as
-               the reclaim drop above. */
-            const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
-              writeDir,
-              liveIds,
-            );
-            if (displacedByDeadTarget.length) {
-              log(
-                1,
-                `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
-                  .map((d) => `${d.id} -> ${d.supersededBy}`)
-                  .join(', ')}) — affected segments need review.`,
+              /* #2040 Task 14 review item 2a — operator-visible. The dropped
+                 pairs are also persisted (item 2b, cast-id-history.ts's
+                 `displaced`), so this line is a heads-up, not the only record. */
+              if (displacedByReclaim.length) {
+                log(
+                  1,
+                  `Dropped ${displacedByReclaim.length} history alias(es) superseded by a re-minted live id (${displacedByReclaim
+                    .map((d) => `${d.id} -> ${d.supersededBy}`)
+                    .join(', ')}) — affected segments need review.`,
+                );
+              }
+              /* #2110 — the mirror-image drop: an entry whose TARGET (not key)
+                 has quietly stopped being live. Pruned against this exact
+                 just-persisted roster, same as the reclaim drop above. */
+              const displacedByDeadTarget = await dropSupersededTargetsNoLongerLive(
+                writeDir,
+                liveIds,
               );
+              if (displacedByDeadTarget.length) {
+                log(
+                  1,
+                  `Dropped ${displacedByDeadTarget.length} history alias(es) whose target no longer exists (${displacedByDeadTarget
+                    .map((d) => `${d.id} -> ${d.supersededBy}`)
+                    .join(', ')}) — affected segments need review.`,
+                );
+              }
+              /* #2166 — heal any reject whose two writes came apart, against
+                 this exact just-persisted roster. Best-effort; see the
+                 helper's own doc comment. `historyStatusBeforePersist` is the
+                 pre-rewrite verdict captured at the top of this block. */
+              await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist, castBase);
+            } catch (historyErr) {
+              /* #2260 round 2/3 — a lock-acquisition timeout must not be swallowed
+                 here, nor thrown from here (that would skip the state.json
+                 rewrite below and land in `catch (persistErr)`, which reports the
+                 job as a SUCCESS anyway). Park it; the rethrow is after this
+                 persist's own catch. */
+              if (isLockAcquisitionTimeout(historyErr)) {
+                persistLockTimeout = historyErr;
+              } else {
+                console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
+                /* #2214/#2201 — a degraded cast-id-history.json makes the
+                   unconditional `dropSupersededIdsReclaimedByLiveCast` call above
+                   throw before `reconcileRejectEdgesOnDisk` is ever reached, so
+                   emit the same user-facing wording here. */
+                logIfDegradedCastIdHistory(historyErr, log);
+              }
             }
-            /* #2166 — heal any reject whose two writes came apart, against
-               this exact just-persisted roster. Best-effort; see the
-               helper's own doc comment. `historyStatusBeforePersist` is the
-               pre-rewrite verdict captured at the top of this block — without
-               it the helper's own read sees the file the steps above just
-               rewrote, not the one the persist started with. */
-            await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist, castBase);
-          } catch (historyErr) {
-            /* #2260 round 2 — see the dedup site near the top of this job for
-               why a lock-acquisition timeout must NOT be swallowed here.
-               Round 3 (C1) — but nor may it be thrown from HERE: that skipped
-               logCarriedForwardCharacters + the state.json rewrite below and
-               was then caught by `catch (persistErr)`, which reports the job
-               as a SUCCESS anyway. Park it; the rethrow is after this
-               persist's own catch. */
-            if (isLockAcquisitionTimeout(historyErr)) {
-              persistLockTimeout = historyErr;
-            } else {
-              console.warn('[analysis] failed to record character-id retirement(s)', historyErr);
-              /* #2214/#2201 — a degraded cast-id-history.json now makes the
-                 unconditional `dropSupersededIdsReclaimedByLiveCast` call
-                 above throw before `reconcileRejectEdgesOnDisk` is ever
-                 reached, so its own degraded-read log line never fires on
-                 this path. Emit the same user-facing wording here so a run
-                 against a damaged file still shows something in the in-app
-                 log instead of reading as clean. */
-              logIfDegradedCastIdHistory(historyErr, log);
-            }
+            const carriedIds = new Set(out.carriedForward.map((c) => c.id));
+            await logCarriedForwardCharacters(
+              record.bookId ?? undefined,
+              writeDir,
+              voicedSurvivorsDropped(out.characters.filter((c) => carriedIds.has(c.id)) as never, []),
+            );
           }
-          await logCarriedForwardCharacters(
-            record.bookId ?? undefined,
-            writeDir,
-            voicedSurvivorsDropped(remapped.priorCast, characters),
-          );
+          /* The edits write failed after cast.json landed (see above): everything the
+             outcome owed is recorded; the error goes to `catch (persistErr)`. */
+          if (editsWriteErr !== undefined) throw editsWriteErr;
           /* #2196 review (🟡 TOCTOU) — re-verify the write target immediately
              before the terminal authoritative state.json record. A book-folder
              move landing mid-persist (after the block-top resolve) leaves
@@ -8120,8 +8057,8 @@ export async function runMainAnalyzerJob(
         }
       } catch (persistErr) {
         /* #2196 — a MID-BLOCK guard failure (TOCTOU move landing after the
-           block-top resolve — e.g. from `castBase!.writeChecked`'s own guard
-           resolver) must not be swallowed into a false success. Park and
+           block-top resolve — e.g. from `assertWriteTargetStable` at the
+           state.json write) must not be swallowed into a false success. Park and
            rethrow after this try/catch, mirroring the lock-timeout below.
            The block-top resolve already threw PAST this catch for the
            primary stale-dir case. The durable STALE_BOOK_DIR fail-loud log

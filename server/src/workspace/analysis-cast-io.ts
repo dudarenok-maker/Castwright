@@ -414,14 +414,6 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
   });
 }
 
-/** A drift-refused run (the old persist's refusal branch, until the planned persist replaces
-    it): under the cast lock, drop the suggestion pairs the run's snapshots added - the ones a
-    stopped run left in the cache (`runAddedPairs`) included. Advisory like the persist's. */
-export async function removeRunAddedSuggestionPairs(bookDir: string, pairs: Array<[string, string]>): Promise<void> {
-  if (pairs.length === 0) return;
-  await withCastLock(bookDir, () => removeSuggestionPairsLocked(bookDir, pairs));
-}
-
 export interface PersistOutcome {
   characters: Array<{ id: string } & Record<string, unknown>>;
   sentences: SentenceOutput[];
