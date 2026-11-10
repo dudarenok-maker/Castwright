@@ -1386,6 +1386,36 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     }
   });
 
+  it('A23: when the raw id is the prior id itself, the cache take and the roll both follow the merge', async () => {
+    const b = seedWren();
+    let merged = false;
+    const m = mergeAfterChapterOne(b, () => {
+      merged = true;
+    });
+    setPhase1Hook(m.hook);
+    /* A tier-1 self-join: the analyzer emits the prior id, and the merge re-targets the on-disk
+       plan's decision for it to `join -> olga` while the in-memory plan still says `join -> w2`. */
+    const SELF = { roster: [NARR, { ...WREN_FRESH, id: PRIOR_ID }], speakerId: PRIOR_ID };
+    const after: Array<{ edits: string[]; takes: string[] }> = [];
+    rollSpy.isPlanned = () => merged;
+    rollSpy.after = (mergedAtCall) => {
+      if (!mergedAtCall) return;
+      after.push({
+        edits: (readEdits(b.bookDir) as Array<{ characterId: string }>).map((s) => s.characterId),
+        takes: Object.values(readCache(b.manuscriptId)!.chapters).flatMap((ss) => ss.map((s) => s.characterId)),
+      });
+    };
+    await run(b.manuscriptId, b.bookDir, 'main', SELF);
+    expect(await m.status()).toBe(200);
+    expect(after.length).toBeGreaterThan(0);
+    for (const seen of after) {
+      expect(seen.edits).not.toContain(PRIOR_ID);
+      expect(seen.edits).toContain('olga');
+      expect(seen.takes).not.toContain(PRIOR_ID);
+      expect(seen.takes).toContain('olga');
+    }
+  });
+
   it('item 8: a Phase-1 save after a failure keeps pendingAttributionChapterIds and takesPersisted', async () => {
     const b = seedWren();
     /* An earlier stopped run left chapter 3's take (the prior Wren's) pending and unpersisted. */
@@ -1478,6 +1508,13 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), asJoin))[0].characterId).toBe('y');
       expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), {}))[0].characterId).toBe('y');
       expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), undefined))[0].characterId).toBe('y');
+    });
+    it('a decision the merge re-targeted to the survivor (join -> y) still follows; a join to another prior does not', async () => {
+      const dir = mkDir([{ id: 'y' }, { id: 'z' }], { x: 'y' });
+      const retargeted = { x: { kind: 'join', rawId: 'x', priorId: 'y' } };
+      const other = { x: { kind: 'join', rawId: 'x', priorId: 'z' } };
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), retargeted))[0].characterId).toBe('y');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), other))[0].characterId).toBe('x');
     });
     it('R33: a raw analyzer-chain key that is not a prior id stays itself', async () => {
       const dir = mkDir([{ id: 'b' }], { raw: 'b' });
