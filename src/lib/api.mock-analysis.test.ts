@@ -54,6 +54,31 @@ describe('mockAnalyseManuscript', () => {
   });
 });
 
+describe('mockAnalyseManuscript hold seam', () => {
+  it('keeps a finished run open and busy until the spec releases __castwrightMockAnalysisHold', async () => {
+    const g = globalThis as unknown as { __castwrightMockAnalysisHold?: Promise<void> };
+    let release!: () => void;
+    g.__castwrightMockAnalysisHold = new Promise<void>((r) => (release = r));
+    try {
+      let done = false;
+      const run = mockAnalyseManuscript('mns_hold', {}).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(done).toBe(false);
+      expect(await mockGetBookBusy(BOOK)).toEqual(['analysis']);
+
+      release();
+      await vi.advanceTimersByTimeAsync(10);
+      await run;
+      expect(done).toBe(true);
+      expect(await mockGetBookBusy(BOOK)).toEqual([]);
+    } finally {
+      delete g.__castwrightMockAnalysisHold;
+    }
+  });
+});
+
 describe('mockPutBookState call log', () => {
   it('appends every PUT, in order, to window.__castwrightMockCalls', async () => {
     const put = mockPutBookState('log-book', { slice: 'state', patch: { title: 'A' } });

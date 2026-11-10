@@ -1429,13 +1429,18 @@ export async function mockGetBookState(
    `window.__castwrightMockCalls` so a spec can assert what was (and was not)
    written. Mock mode only: nothing else reaches `mockPutBookState`. */
 const e2eCallLog: Array<{ name: 'putBookState'; bookId: string; req: PutStateRequest }> = [];
+/* Recorded only under the e2e (and unit-test) mode, so `dev:mock` and the
+   marketing capture never accumulate it. */
+const RECORD_MOCK_CALLS = import.meta.env.MODE === 'e2e' || import.meta.env.MODE === 'test';
 
 export async function mockPutBookState(
   bookId: string,
   req: PutStateRequest,
 ): Promise<PutStateResponse> {
-  e2eCallLog.push({ name: 'putBookState', bookId, req: JSON.parse(JSON.stringify(req)) });
-  (globalThis as unknown as { __castwrightMockCalls?: typeof e2eCallLog }).__castwrightMockCalls = e2eCallLog;
+  if (RECORD_MOCK_CALLS) {
+    e2eCallLog.push({ name: 'putBookState', bookId, req: JSON.parse(JSON.stringify(req)) });
+    (globalThis as unknown as { __castwrightMockCalls?: typeof e2eCallLog }).__castwrightMockCalls = e2eCallLog;
+  }
   await wait(20);
   const prev = MOCK_BOOK_STATES.get(bookId) ?? emptyBookStateResponse(bookId);
   const next = applyMockSliceWrite(prev, req);
@@ -1671,7 +1676,7 @@ async function mockUploadManuscript({
    a book in the set; a second `mockAnalyseManuscript` for a manuscript whose run
    is live attaches to it (the real server's subscribe path) and never starts a
    second run. */
-const MOCK_RUNNING_ANALYSIS = new Set<string>();
+const MOCK_RUNNING_ANALYSIS = new Set<{ bookId: string }>();
 const MOCK_ANALYSIS_RUNS = new Map<
   string,
   { subs: Set<AnalyseOpts>; promise: Promise<AnalyseResponse> }
@@ -1686,10 +1691,16 @@ export function mockAnalyseManuscript(
     live.subs.add(opts);
     return live.promise;
   }
+  /* The demo capture freezes every call on its pose; nothing to attach to. */
+  if (DEMO_CAPTURE) return runMockAnalysis(manuscriptId, new Set([opts]));
   const subs = new Set<AnalyseOpts>([opts]);
+  /* Cleared by this run's own token, so an older run ending never clears a
+     newer run's registration of the same book. */
+  const token = { bookId: ANALYSIS_NORTHERN_STAR.bookId };
+  MOCK_RUNNING_ANALYSIS.add(token);
   const promise = runMockAnalysis(manuscriptId, subs).finally(() => {
     MOCK_ANALYSIS_RUNS.delete(manuscriptId);
-    MOCK_RUNNING_ANALYSIS.delete(ANALYSIS_NORTHERN_STAR.bookId);
+    MOCK_RUNNING_ANALYSIS.delete(token);
   });
   MOCK_ANALYSIS_RUNS.set(manuscriptId, { subs, promise });
   return promise;
@@ -1707,7 +1718,6 @@ async function runMockAnalysis(
     return new Promise<never>(() => {});
   }
   const res = ANALYSIS_NORTHERN_STAR;
-  MOCK_RUNNING_ANALYSIS.add(res.bookId);
   let heartbeatEmitted = false;
   /* Roster frames: Phase 0 grows the cast in thirds (a third at 40% progress, two
      thirds at 70%, the whole roster when the phase ends), as the real stream's
@@ -2581,7 +2591,7 @@ async function realGetBookBusy(bookId: string): Promise<BookBusyKinds> {
 }
 
 export async function mockGetBookBusy(bookId: string): Promise<BookBusyKinds> {
-  return MOCK_RUNNING_ANALYSIS.has(bookId) ? ['analysis'] : [];
+  return [...MOCK_RUNNING_ANALYSIS].some((r) => r.bookId === bookId) ? ['analysis'] : [];
 }
 
 /* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR

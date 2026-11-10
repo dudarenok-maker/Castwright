@@ -92,21 +92,19 @@ test('while a re-analysis runs the cast is read-only and nothing is saved; when 
   const banner = page.getByTestId('cast-edits-paused-banner');
   await expect(banner.first()).toBeVisible({ timeout: 10_000 });
 
-  /* The controls only stop OFFERING a change; the persistence middleware is
-     what refuses it. A cast edit dispatched straight at the store (no control
-     involved) builds no save and raises the one read-only toast. */
-  await page.evaluate(() => {
-    const w = window as unknown as Win;
-    const target = w.__store__.getState().cast.characters[0];
-    w.__store__.dispatch({
-      type: 'cast/renameCharacter',
-      payload: { characterId: target.id, name: 'Bypassed edit' },
-    });
+  /* The run's last roster frame has landed in the slice (the mock grows the
+     cast in thirds; the final frame is the whole canned roster). */
+  const frameRoster = await page.evaluate(async () => {
+    const { ANALYSIS_NORTHERN_STAR } = await import('/src/mocks/canned-data.ts');
+    return ANALYSIS_NORTHERN_STAR.characters.map((c) => c.id);
   });
-  await page.waitForFunction(() =>
-    (window as unknown as Win).__store__
-      .getState()
-      .notifications.toasts.some((t) => t.dedupeKey === 'cast-read-only'),
+  await page.waitForFunction(
+    (ids) => {
+      const have = (window as unknown as Win).__store__.getState().cast.characters.map((c) => c.id);
+      return ids.every((id) => have.includes(id));
+    },
+    frameRoster,
+    { timeout: 10_000 },
   );
 
   /* Voice-assign is disabled and does not start a tap-assign. */
@@ -133,13 +131,39 @@ test('while a re-analysis runs the cast is read-only and nothing is saved; when 
   await rename.click({ force: true });
   await expect(drawer.getByRole('textbox', { name: 'Character name' })).toHaveCount(0);
 
+  /* Back on the Cast view for the release: the Confirm route does an entry read
+     of its own when the gate lifts, which would mask a gate that never
+     re-hydrated. The Cast view has no read of its own. */
+  await page.evaluate((id) => {
+    location.hash = `#/books/${id}/cast`;
+  }, BOOK);
+  await waitForRouteReady(page);
+  await expect(banner.first()).toBeVisible({ timeout: 10_000 });
+
+  /* The controls only stop OFFERING a change; the persistence middleware is
+     what refuses it. A cast edit dispatched straight at the store (no control
+     involved) builds no save and raises the one read-only toast. The reducer
+     still applies it to the slice, so the re-read after the run must wipe it. */
+  await page.evaluate(() => {
+    const w = window as unknown as Win;
+    const target = w.__store__.getState().cast.characters[0];
+    w.__store__.dispatch({
+      type: 'cast/renameCharacter',
+      payload: { characterId: target.id, name: 'Bypassed edit' },
+    });
+  });
+  await page.waitForFunction(() =>
+    (window as unknown as Win).__store__
+      .getState()
+      .notifications.toasts.some((t) => t.dedupeKey === 'cast-read-only'),
+  );
+
   /* Nothing was written while the run was live. */
   expect(await putCount(page)).toBe(putsBeforeRun);
 
   /* Let the mock run resolve: its busy clears, the gate re-reads the cast. */
   await page.evaluate(() => (window as unknown as Win).__castwrightReleaseAnalysis?.());
   await expect(banner).toHaveCount(0, { timeout: 30_000 });
-  await expect(rename).not.toHaveAttribute('aria-disabled', 'true', { timeout: 10_000 });
   await page.waitForFunction(
     (id) => {
       const era = (window as unknown as Win).__store__.getState().cast.analysisEra;
@@ -148,14 +172,49 @@ test('while a re-analysis runs the cast is read-only and nothing is saved; when 
     BOOK,
     { timeout: 10_000 },
   );
-  const roster = await page.evaluate(() =>
-    (window as unknown as Win).__store__.getState().cast.characters.map((c) => c.id),
-  );
-  expect(roster.length).toBeGreaterThanOrEqual(4);
+  /* The slice now holds what the mock serves for the book, field by field: the
+     re-read landed (a gate that cleared without hydrating would leave the
+     refused 'Bypassed edit' in the slice and in every later PUT). */
+  const disk = await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const res = await api.getBookState('ns');
+    return (res?.cast?.characters ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      role: c.role,
+      aliases: c.aliases ?? [],
+    }));
+  });
+  expect(disk.length).toBeGreaterThanOrEqual(4);
+  const sliceFields = () =>
+    page.evaluate(() =>
+      (window as unknown as Win).__store__.getState().cast.characters.map((c) => ({
+        id: c.id,
+        name: c.name,
+        role: (c as unknown as { role?: string }).role,
+        aliases: (c as unknown as { aliases?: string[] }).aliases ?? [],
+      })),
+    );
+  expect(await sliceFields()).toEqual(disk);
+  const roster = disk.map((c) => c.id);
+  expect(disk.some((c) => c.name === 'Bypassed edit')).toBe(false);
 
-  /* A rename now persists. The app's own post-load voice match may also write
-     the roster unchanged; only the PUT carrying the new name is the edit. */
-  await rename.click();
+  /* Confirm's arrival runs the app's own voice match, which writes the roster
+     once (the mock takes 450 ms, the debounce is 500 ms); let it settle before
+     renaming. */
+  await page.evaluate((id) => {
+    location.hash = `#/books/${id}/confirm`;
+  }, BOOK);
+  await waitForRouteReady(page);
+  await expect
+    .poll(async () => (await castPutsSince(page, putsBeforeRun)).length, { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(1);
+
+  /* A rename now persists. Only the PUT carrying the new name is the edit. */
+  await page.getByRole('button', { name: /Open profile for Captain Halloran/i }).click();
+  const renameNow = page.getByRole('complementary').getByRole('button', { name: 'Rename character' });
+  await expect(renameNow).not.toHaveAttribute('aria-disabled', 'true');
+  await renameNow.click();
   const input = drawer.getByRole('textbox', { name: 'Character name' });
   await expect(input).toHaveValue('Captain Halloran');
   await input.fill('Admiral Halloran');
@@ -167,8 +226,28 @@ test('while a re-analysis runs the cast is read-only and nothing is saved; when 
     );
   await expect.poll(async () => (await renamedPuts()).length, { timeout: 10_000 }).toBe(1);
 
-  /* Every cast PUT since the run began carried every row of the re-read roster. */
+  /* ...and stays one: a late second PUT carrying the rename is caught. */
+  await expect(
+    page.waitForFunction(
+      (start) =>
+        ((window as unknown as Win).__castwrightMockCalls ?? [])
+          .slice(start)
+          .filter(
+            (c) =>
+              c.req.slice === 'cast' &&
+              (c.req.patch.characters ?? []).some((ch) => ch.name === 'Admiral Halloran'),
+          ).length > 1,
+      putsBeforeRun,
+      { timeout: 1500 },
+    ),
+  ).rejects.toThrow();
+
+  /* Every cast PUT since the run began carried every row of the re-read roster,
+     and none carries the refused edit. */
   const puts = await castPutsSince(page, putsBeforeRun);
-  for (const p of puts) expect(p.map((r) => r.split(':')[0])).toEqual(roster);
+  for (const p of puts) {
+    expect(p.map((r) => r.split(':')[0])).toEqual(roster);
+    expect(p.some((r) => r.endsWith(':Bypassed edit'))).toBe(false);
+  }
   expect(await renamedPuts()).toHaveLength(1);
 });
