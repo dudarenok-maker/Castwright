@@ -42,4 +42,30 @@ describe('evictIdleQwenBase with a registered splice/repair', () => {
     });
     expect(reconcile).toHaveBeenCalledTimes(1);
   });
+
+  it('#4075: a render in flight (with or without a splice) answers false, not declined', async () => {
+    const gate = await import('./active-generation-gate.js');
+    const { registerSplice } = await import('../routes/chapter-job-coordination.js');
+    const { evictIdleQwenBase } = await import('./evict-idle-tts.js');
+    gate.setActiveGenerationBooksProvider(() => ['book-1']); // a render is registered
+
+    const reconcile = vi.fn(async () => true);
+    const probe = vi.fn(async () => ({ status: 'ok' as const, kokoroLoaded: true, devices: { kokoro: 'cuda' } }));
+    const ask = () =>
+      evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _probeHealth: probe as never,
+      });
+
+    expect(await ask()).toBe(false);
+    const release = registerSplice('book-2', 1, new AbortController());
+    try {
+      expect(await ask()).toBe(false); // render + splice: the render wins
+    } finally {
+      release();
+    }
+    expect(reconcile).not.toHaveBeenCalled();
+  });
 });

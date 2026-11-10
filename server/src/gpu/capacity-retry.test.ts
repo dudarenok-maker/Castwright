@@ -189,11 +189,11 @@ describe('withCapacityRetry', () => {
     expect(evictIdleTts).toHaveBeenCalledWith('cuda:0');
   });
 
-  it('#4075: a lever declining while generation is active is re-asked on later polls, and frees once it ends', async () => {
-    /* A short repair holds generation active for the first polls. The lever
-       says 'declined' (latch stays armed); when the repair ends it frees the
-       base and admission succeeds. Before the fix it answered `false`, which
-       spent the one-shot latch: one call, then the budget ran out. */
+  it('#4075: a lever declining while a repair is active is re-asked on later polls, and frees once it ends', async () => {
+    /* Behaviour pin on withCapacityRetry's 'declined' handling (the mock lever
+       stands in for evictIdleQwenBase): a short repair holds the lever at
+       'declined' (latch stays armed); when it ends the lever frees the base and
+       admission succeeds. The real-lever test below is the regression test. */
     let generationActive = true;
     const evictIdleTts = vi.fn(async () => (generationActive ? ('declined' as const) : true));
     let calls = 0;
@@ -224,15 +224,18 @@ describe('withCapacityRetry', () => {
 
   it('#4075: a design that hits NoCapacity during a repair is freed by the REAL lever once the repair ends', async () => {
     /* End to end through evictIdleQwenBase: a repair is in flight for the
-       first denials, then ends. Before the fix the lever answered `false`
-       during the repair, the latch was spent, and the base was never freed. */
+       first denials, then ends. Before #4075 the lever answered `false` during
+       the repair, the latch was spent, and the base was never freed - so
+       admission is only granted here once a reconcile (an eviction) has run. */
     let repairActive = true;
     const reconcile = vi.fn(async () => true);
     let calls = 0;
     const doPost = vi.fn(async () => {
       calls += 1;
       if (calls === 3) repairActive = false;
-      return calls < 4 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
     });
 
     const res = await withCapacityRetry(doPost, {
@@ -243,6 +246,7 @@ describe('withCapacityRetry', () => {
           purpose: 'design',
           deviceKey,
           _isAnyGenerationActive: () => repairActive,
+          _isRepairOnlyKnownActive: () => repairActive,
           _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
           _reconcile: reconcile,
         }),
@@ -257,7 +261,52 @@ describe('withCapacityRetry', () => {
     expect(doPost).toHaveBeenCalledTimes(4);
   });
 
+  it('#4075: during a RENDER the real lever is consulted once (latch spent) and never re-asked, even after the render ends', async () => {
+    /* A book render has a gap between one chapter's job deregistering and the
+       next registering; a lever re-asked on every poll would land in it and
+       unload the render's base. So a render answers `false` (spends the
+       latch). The render "ends" on the third denial; the lever must NOT be
+       asked again, so nothing is reconciled and admission is never granted. */
+    let renderActive = true;
+    const reconcile = vi.fn(async () => true);
+    const leverCalls = vi.fn();
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) renderActive = false;
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts: (deviceKey) => {
+          leverCalls();
+          return evictIdleQwenBase({
+            modelKey: 'qwen3-tts-0.6b',
+            purpose: 'design',
+            deviceKey,
+            _isAnyGenerationActive: () => renderActive,
+            _isRepairOnlyKnownActive: () => false,
+            _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+            _reconcile: reconcile,
+          });
+        },
+        analyzerEvictWouldHelp: async () => false,
+        evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+        pollMs: 0,
+        maxAttempts: 5,
+      }),
+    ).rejects.toThrow(NoCapacityError);
+
+    expect(leverCalls).toHaveBeenCalledTimes(1);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
   it('#4075: a lever that keeps declining is bounded by maxAttempts, not retried in a tight loop', async () => {
+    /* Behaviour pin on the retry loop with a mock lever (passes without #4075). */
     const evictIdleTts = vi.fn().mockResolvedValue('declined');
     const doPost = vi.fn(async () => noCapacityResponse(6144, 'cuda:0'));
 

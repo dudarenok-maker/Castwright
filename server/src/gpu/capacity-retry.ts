@@ -148,9 +148,10 @@ export interface CapacityRetryOpts {
       defaults to `evictIdleQwenBase` bound to this call's model key. Takes the
       denied request's `deviceKey`. Returns true when it actually unloaded
       something, and `'declined'` when it held off for a reason that can clear
-      (another design resident on the card #4066, or a render / splice / QA
-      repair in flight #4075) — which leaves the
-      one-shot latch armed so a later poll asks again. */
+      (another design resident on the card #4066, or a splice / QA repair in
+      flight with no render #4075) — which leaves the one-shot latch armed so a
+      later poll asks again. A render in flight answers `false`, which spends
+      the latch. */
   evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'>;
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
@@ -389,7 +390,10 @@ export async function withCapacityRetry(
 
       /* Second lever: free a resident Qwen base this op doesn't need. Guarded to
          "no render in flight" inside evictIdleQwenBase, so it is inert during
-         generation by construction — it answers 'declined' then (#4075), which
+         generation by construction. During a render it answers `false` and the
+         latch is spent (it is never re-asked: a multi-chapter render has a gap
+         between chapter jobs where a re-ask would unload its base). During a
+         splice / QA repair with no render it answers 'declined' (#4075), which
          leaves the latch armed for a later poll. Once it has actually run it is
          spent: at most once per call, like the analyzer. */
       if (!evictedTts) {

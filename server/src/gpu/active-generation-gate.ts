@@ -76,9 +76,14 @@ export function isAnyGenerationActive(): boolean {
 }
 
 /** #4075 — true only when a splice or QA repair is KNOWN to be in flight and
-    NO chapter render is. For wording a message only, like
-    `isGenerationKnownActive` (unregistered resolves to `false`): a repair is
-    not a chapter render and cannot be paused, so its remedy is "wait". */
+    NO chapter render is. Unregistered resolves to `false`, so it never turns a
+    fail-closed "active" into anything but the old answer. It does two jobs:
+    wording (a repair is not a chapter render and cannot be paused, so its
+    remedy is "wait"), and `evictIdleQwenBase`'s choice between `'declined'`
+    (re-arm the caller's latch, repair only) and `false` (spend it, anything
+    that may be a render: a multi-chapter render has a gap between one chapter
+    job deregistering and the next registering, which a re-asked lever must not
+    land in). Only the `isAnyGenerationActive` read decides whether to evict. */
 export function isRepairOnlyKnownActive(): boolean {
   if (!provider) return false;
   return provider().length === 0 && spliceActive();

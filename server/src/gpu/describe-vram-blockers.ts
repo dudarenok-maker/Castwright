@@ -85,7 +85,7 @@ export interface VramBlockerHealth {
   blockedOpIsRender?: boolean;
 }
 
-const REPAIR_WAIT = 'A chapter repair is in progress — wait for it to finish, then try again.';
+const REPAIR_WAIT = 'A chapter repair is in progress and may be using it — wait for it to finish, then try again.';
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];

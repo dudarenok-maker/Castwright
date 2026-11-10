@@ -26,6 +26,12 @@
      once (a character pinned above its book's tier). This also makes the lever
      inert during generation by construction, which is correct: the render path
      already reconciles tiers at run start (ensure-sidecar-loaded.ts:182).
+     A render in flight answers `false` (the caller's one-shot latch is spent,
+     so it is never re-asked); only a splice / QA repair with NO render answers
+     `'declined'` (#4075), because a repair is short and the caller should ask
+     again once it ends. Re-asking during a render would land in the gap
+     between one chapter POST's `deregisterJob` and the next one's
+     `registerJob` and unload the render's base.
 
      KNOWN RESIDUAL WINDOW (#1839 finding 2, investigated and left open on
      purpose): "the render path already reconciles at run start, so the lever
@@ -73,7 +79,7 @@
    its `reconcileResidentQwenTiers` type — a type-only import still counts as
    an edge for cycle detection (see qwen-tier-reconcile-gate.ts), so the
    injection type below is spelled out locally instead. */
-import { isAnyGenerationActive } from './active-generation-gate.js';
+import { isAnyGenerationActive, isRepairOnlyKnownActive } from './active-generation-gate.js';
 import {
   reconcileResidentQwenTiersIfRegistered,
   type ResidentTtsKeep,
@@ -155,6 +161,11 @@ export interface EvictIdleQwenBaseOpts {
   /** Injected for tests. Returns true when a render may be in flight
       anywhere — defaults to the leaf gate's `isAnyGenerationActive`. */
   _isAnyGenerationActive?: typeof isAnyGenerationActive;
+  /** Injected for tests. True only when a splice / QA repair is KNOWN in flight
+      and no render is — defaults to the leaf gate's `isRepairOnlyKnownActive`
+      (unregistered => false, so an unregistered gate answers `false`, like
+      main, and never `'declined'`). */
+  _isRepairOnlyKnownActive?: typeof isRepairOnlyKnownActive;
   /** Injected for tests. Reads what the sidecar has resident — defaults to
       the leaf gate's `probeSidecarHealthIfRegistered`. Only consulted for a
       design or Quality op (#4066). */
@@ -170,18 +181,28 @@ export interface EvictIdleQwenBaseOpts {
     finding 1), which made `capacity-retry.ts` `continue` into an immediate,
     wasted retry attempt instead of falling through to its bounded poll; the
     same is now true of a failed eviction, not just a no-op one.
-    `'declined'` is a hold-off that can clear — a render, splice or QA repair in
-    flight (#4075, before and after the health probe), another design resident,
-    or an unreadable probe (#4066) — and leaves the caller's one-shot latch
-    armed so a later poll asks again. */
+    `'declined'` is a hold-off that can clear — a splice or QA repair in flight
+    with NO render (#4075, before and after the health probe), another design
+    resident, or an unreadable probe (#4066) — and leaves the caller's one-shot
+    latch armed so a later poll asks again. A render in flight answers `false`
+    and spends the latch, as before #4075: a book render is one POST per chapter,
+    so there is a gap between one chapter's job deregistering and the next one
+    registering, and a lever re-asked on every poll would land in it and unload
+    the render's base. */
 export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean | 'declined'> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
+  const repairOnly = opts._isRepairOnlyKnownActive ?? isRepairOnlyKnownActive;
   const { modelKey } = opts;
 
+  /* #4075 — a splice / QA repair (and nothing else) is a short "not yet":
+     'declined' keeps the caller's latch armed so it asks again once the repair
+     ends. A render (or an unregistered gate, which reads as active) answers
+     `false` and spends the latch — never 'declined', so a waiting op is not
+     re-asked every poll across a multi-chapter render's inter-chapter gap. */
+  const activeAnswer = (): false | 'declined' => (repairOnly() ? 'declined' : false);
+
   if (!modelKey) return false;
-  /* #4075 — 'declined', not false: a render, splice or QA repair ends, so this is
-     a "not yet", and `false` would spend the caller's one-shot latch. */
-  if (anyGenerationActive()) return 'declined';
+  if (anyGenerationActive()) return activeAnswer();
 
   /* #1839 finding 5 — a non-Qwen op (Coqui/Kokoro) can never need either
      Qwen base resident, so it may reclaim BOTH idle tiers rather than
@@ -217,7 +238,7 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     }
     if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
-    if (anyGenerationActive()) return 'declined';
+    if (anyGenerationActive()) return activeAnswer();
   }
 
   /* Only the heavy shapes report what they freed (the light ops record no

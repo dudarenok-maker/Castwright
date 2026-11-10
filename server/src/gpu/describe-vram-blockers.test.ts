@@ -55,7 +55,7 @@ describe('describeVramBlockers', () => {
     ]);
     const kokoro = describeVramBlockers({ kokoroLoaded: true, generationActive: true, repairOnly: true });
     expect(kokoro).toEqual([
-      { model: 'Kokoro', remedy: 'A chapter repair is in progress — wait for it to finish, then try again.' },
+      { model: 'Kokoro', remedy: 'A chapter repair is in progress and may be using it — wait for it to finish, then try again.' },
     ]);
     for (const b of [...qwen, ...kokoro]) expect(b.remedy).not.toMatch(/pause|render/i);
   });
