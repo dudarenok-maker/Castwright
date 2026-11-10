@@ -1684,11 +1684,19 @@ async function applyPlannedPersistOutcome(a: {
   );
   const idMap = Object.fromEntries(Object.entries(out.idMap).filter(([k, v]) => k !== v));
   if (cache.matchPlan) cache.matchPlan = { ...cache.matchPlan, decisions: { ...cache.matchPlan.decisions, ...decisions } };
-  await mutateAnalysisCache(a.manuscriptId, {
-    ledger: a.ledgerPatch,
-    ...(cache.matchPlan && Object.keys(decisions).length > 0 ? { decisions } : {}),
-    ...(Object.keys(idMap).length > 0 ? { remapCharacterIds: idMap } : {}),
-  });
+  /* #4031 (I2) — cast.json and the edits have landed: a cache fault here (ENOSPC, EPERM, a
+     rename whose retries ran out) is logged and the persist carries on, as
+     `patchCacheInFailureCatch` does, so the retirements and the caller's state.json still
+     land. The next run re-plans what the cache did not record. */
+  try {
+    await mutateAnalysisCache(a.manuscriptId, {
+      ledger: a.ledgerPatch,
+      ...(cache.matchPlan && Object.keys(decisions).length > 0 ? { decisions } : {}),
+      ...(Object.keys(idMap).length > 0 ? { remapCharacterIds: idMap } : {}),
+    });
+  } catch (cacheErr) {
+    console.warn('[analysis] could not patch the analysis cache after the persist (carrying on)', cacheErr);
+  }
   let parked: unknown;
   try {
     /* Wave 2 final-review finding 1(b) — every retirement is filtered against the

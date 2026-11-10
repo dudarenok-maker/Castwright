@@ -130,6 +130,8 @@ const castIoSpy = vi.hoisted(() => ({
   afterPersist: undefined as undefined | ((outcome: unknown) => unknown),
   /* Throws from the next plan snapshot (`writePlanSnapshot`) while set. */
   failSnapshot: undefined as undefined | (() => Error | undefined),
+  /* Called (no throw) once the planned persist has returned. */
+  onPersisted: undefined as undefined | (() => void),
 }));
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
@@ -143,6 +145,7 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
     persistPlannedCast: async (...a: Parameters<typeof actual.persistPlannedCast>) => {
       const out = await actual.persistPlannedCast(...a);
       if (castIoSpy.afterPersist) throw castIoSpy.afterPersist(out);
+      castIoSpy.onPersisted?.();
       return out;
     },
   };
@@ -3698,6 +3701,76 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     /* Only the covered row: no raw id, no second Boris. */
     expect(ids(readCast(b.bookDir))).not.toContain(FRESH_ID);
     expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+  });
+
+  /* Found in passing (Task 25): a Stop during Phase 1 aborts the job's controller and
+     the in-flight call rejects with an AbortError. The main job reports that as
+     `aborted`; the subset job must too (it reported `unknown`). */
+  for (const kind of ['main', 'subset'] as const) {
+    it(`a Stop during ${kind} Phase 1 ends the run with code aborted`, async () => {
+      const b = seed(PRIORS());
+      if (kind === 'subset') expect(done(await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID }))).toBe(true);
+      const castBefore = readFileSync(join(b.bookDir, '.audiobook', 'cast.json'), 'utf8');
+      /* As a real transport does on a Stop: the controller aborts, the call rejects. */
+      setPhase1Hook(async () => {
+        getLastJob()?.controller.abort();
+        throw new AnalysisAbortedError('Endpoint call aborted (paused or client disconnected).');
+      });
+      const events = await run(b.manuscriptId, b.bookDir, kind, { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+      setPhase1Hook(undefined);
+      expect(errCode(events)).toBe('aborted');
+      expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+      expect(done(events)).toBe(false);
+      if (kind === 'subset') {
+        /* Nothing the Stop interrupted was persisted; no failure recorded for the chapter. */
+        expect(readFileSync(join(b.bookDir, '.audiobook', 'cast.json'), 'utf8')).toBe(castBefore);
+        expect(readCache(b.manuscriptId)?.failedChapterIds ?? []).toEqual([]);
+      }
+    });
+  }
+
+  /* Task 25 fix round 1 (I2): the cache op right after a landed persist (its decisions,
+     re-mints and ledger) can throw an fs error. It must not skip the retirements or
+     state.json - the job would emit `result` over a stale state.json with the plan's
+     joins never recorded. */
+  describe.each(['main', 'subset'] as const)('I2 (%s): a cache-patch fault at persist', (kind) => {
+    afterEach(() => {
+      castIoSpy.onPersisted = undefined;
+      cacheSpy.beforePatch = undefined;
+    });
+    it('no longer skips the retirements and state.json', async () => {
+      const b = seed(PRIORS());
+      let persisted = false;
+      let faulted = 0;
+      castIoSpy.onPersisted = () => {
+        persisted = true;
+      };
+      cacheSpy.beforePatch = async (patch) => {
+        if (persisted && faulted === 0 && Object.hasOwn(patch as object, 'ledger')) {
+          faulted += 1;
+          throw Object.assign(new Error('EPERM: operation not permitted, rename analysis cache'), { code: 'EPERM' });
+        }
+      };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let events: Sent[];
+      try {
+        events = await run(b.manuscriptId, b.bookDir, kind, { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+      } finally {
+        warn.mockRestore();
+        err.mockRestore();
+      }
+      expect(faulted).toBe(1);
+      expect(done(events)).toBe(true);
+      const h = readHistory(b.bookDir) as { supersededBy: Record<string, string>; supersededByKind?: Record<string, string> };
+      expect(h.supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(h.supersededByKind).toEqual({ [FRESH_ID]: 'analyzer' });
+      const state = readJson(b.bookDir, 'state.json') as { analysisProvenance?: { model?: string } };
+      expect(state.analysisProvenance?.model).toBe('phase1-model');
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
   });
 
   /* ---- Task 25: the subset's Phase 1 and its planned persist ---- */
