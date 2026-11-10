@@ -343,18 +343,23 @@ describe('reconcileRejectEdgesOnDisk', () => {
        without this the helper could be exported and never called and the whole
        branch would stay green. Mirrors cast-lock.guard.test.ts's approach. */
     const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
+    /* Plan 291 (#4031, Task 25) — both persists' history steps run through ONE shared
+       helper, `applyPlannedPersistOutcome`: the reconcile is called once, inside it,
+       and each job's persist block calls the helper with its own book id. */
     const calls = src.match(/await reconcileRejectEdgesOnDisk\(writeDir,/g) ?? [];
-
+    expect(calls, 'the shared persist helper no longer calls reconcileRejectEdgesOnDisk — see plan 281 Task 3').toHaveLength(1);
+    const helperStart = src.indexOf('async function applyPlannedPersistOutcome(');
+    expect(helperStart).toBeGreaterThan(-1);
+    const helperEnd = src.indexOf('\n}\n', helperStart);
+    expect(src.slice(helperStart, helperEnd)).toContain(
+      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, a.historyStatusBeforePersist, castBase)',
+    );
     expect(
-      calls,
-      'analysis.ts no longer calls reconcileRejectEdgesOnDisk at both authoritative persists — see plan 281 Task 3',
+      src.match(/await applyPlannedPersistOutcome\(\{/g) ?? [],
+      'analysis.ts no longer runs the shared persist helper at both authoritative persists',
     ).toHaveLength(2);
-    expect(src).toContain(
-      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, historyStatusBeforePersist, castBase)',
-    );
-    expect(src).toContain(
-      'await reconcileRejectEdgesOnDisk(writeDir, subsetBookId, log, historyStatusBeforePersist, castBase)',
-    );
+    expect(src).toMatch(/await applyPlannedPersistOutcome\(\{[^}]*\bretirementBookId,/);
+    expect(src).toMatch(/await applyPlannedPersistOutcome\(\{[^}]*retirementBookId: subsetBookId,/);
   });
 
   /* PR #2202 gate review (Critical) — [C10] proves that taking the verdict
@@ -379,24 +384,30 @@ describe('reconcileRejectEdgesOnDisk', () => {
         'const { status: historyStatusBeforePersist',
         blockStart,
       );
-      const firstRewriteIdx = src.indexOf(
-        `await recordRetirements(writeDir, ${bookIdBinding},`,
-        blockStart,
-      );
-      const reconcileIdx = src.indexOf(
-        `await reconcileRejectEdgesOnDisk(writeDir, ${bookIdBinding}, log, historyStatusBeforePersist, castBase)`,
-        blockStart,
-      );
+      /* Plan 291 (#4031, Task 25) — every step that rewrites the history (the
+         retirements, the two drops, the reconcile) runs inside the shared
+         `applyPlannedPersistOutcome`, which the block calls with the verdict it
+         captured; the persist itself only reads the history. */
+      const persistIdx = src.indexOf('await persistPlannedCast(persistArgs(false))', blockStart);
+      const firstRewriteIdx = src.indexOf('await applyPlannedPersistOutcome({', blockStart);
+      const passesVerdictIdx = src.indexOf('historyStatusBeforePersist,', firstRewriteIdx);
 
       expect(captureIdx, `no pre-persist id-history read in the ${bookIdBinding} block`).toBeGreaterThan(-1);
-      expect(firstRewriteIdx, `no recordRetirements in the ${bookIdBinding} block`).toBeGreaterThan(-1);
-      expect(reconcileIdx, `no reconcile call in the ${bookIdBinding} block`).toBeGreaterThan(-1);
+      expect(persistIdx, `no planned persist in the ${bookIdBinding} block`).toBeGreaterThan(-1);
+      expect(firstRewriteIdx, `no history steps in the ${bookIdBinding} block`).toBeGreaterThan(-1);
       expect(
         captureIdx,
         `the ${bookIdBinding} block reads cast-id-history.json AFTER a step that rewrites it — the degraded guard is defeated (PR #2202 gate review, Critical)`,
-      ).toBeLessThan(firstRewriteIdx);
-      expect(captureIdx).toBeLessThan(reconcileIdx);
+      ).toBeLessThan(persistIdx);
+      expect(persistIdx).toBeLessThan(firstRewriteIdx);
+      expect(passesVerdictIdx - firstRewriteIdx, 'the block does not hand its verdict to the history steps').toBeLessThan(600);
     }
+    /* ...and the helper's rewriting steps use the verdict it was handed, never a
+       read of its own. */
+    const helper = src.slice(src.indexOf('async function applyPlannedPersistOutcome('), src.indexOf('function rerouteDeletedTakesPatch('));
+    expect(helper).not.toContain('loadCastIdHistoryWithStatus(');
+    expect(helper.indexOf('await recordRetirements(writeDir, retirementBookId,')).toBeGreaterThan(-1);
+    expect(helper).toContain('a.historyStatusBeforePersist, castBase)');
   });
 
   /* #2214/#2201 — the #2214 hardening (every id-history mutating helper now
@@ -437,10 +448,12 @@ describe('reconcileRejectEdgesOnDisk', () => {
   it('[C13] both persist-block catch handlers call the shared helper', () => {
     const src = readFileSync(fileURLToPath(new URL('./analysis.ts', import.meta.url)), 'utf8');
 
+    /* Plan 291 (#4031, Task 25) — both persists' history steps share ONE catch
+       handler (in `applyPlannedPersistOutcome`); the subset's own copy is gone. */
     const catchHandlerWarnLines = [
       "console.warn('[analysis] failed to record character-id retirement(s)', historyErr);",
-      "console.warn('[analysis-subset] failed to record character-id retirement(s)', historyErr);",
     ];
+    expect(src).not.toContain("console.warn('[analysis-subset] failed to record character-id retirement(s)'");
 
     for (const warnLine of catchHandlerWarnLines) {
       const warnIdx = src.indexOf(warnLine);
@@ -463,7 +476,7 @@ describe('reconcileRejectEdgesOnDisk', () => {
     // helper ONCE; each catch handler is one call site, plus
     // reconcileRejectEdgesOnDisk's own degraded branch still emits directly
     // (it already has the verdict in hand, not a caught error).
-    expect(src.match(/logIfDegradedCastIdHistory\(historyErr, log\);/g) ?? []).toHaveLength(2);
+    expect(src.match(/logIfDegradedCastIdHistory\(historyErr, log\);/g) ?? []).toHaveLength(1);
     expect(src.match(/log\(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE\);/g) ?? []).toHaveLength(2);
 
     // The shared constant itself carries the user-facing wording a reader of

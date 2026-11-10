@@ -1617,11 +1617,10 @@ describe('#4031 — history provenance (supersededByKind)', () => {
       }
       calls.push(src.slice(re.lastIndex, i - 1));
     }
-    // Plan 291: the main persist records one call (the planned persist's join retirements)
-    // where the old merge recorded four (Task 20); both jobs' run-start heal is one shared
-    // call (Task 24); the subset's old persist records four (its plan joins included) until
-    // Task 25 - hence 6.
-    expect(calls.length).toBeGreaterThanOrEqual(6);
+    // Plan 291: both jobs' run-start heal is one shared call (Task 24), and both jobs'
+    // planned persists record their join retirements through one shared call
+    // (`applyPlannedPersistOutcome`, Task 25; the old merges recorded four each) - hence 2.
+    expect(calls.length).toBeGreaterThanOrEqual(2);
     for (const c of calls) expect(c.trim()).toMatch(/,\s*'(heal|analyzer)',?$/);
   });
 });

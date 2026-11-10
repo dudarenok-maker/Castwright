@@ -858,27 +858,21 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
  * found one level above where it looked.
  *
  * The fix discriminates on WHICH WRITE timed out, not on which handler caught
- * it — which is why these fixtures aim at write SITES through the
- * `createCastMergeBase` seam rather than at the handler. The journal fixture
+ * it — which is why these fixtures aim at write SITES (now the
+ * `persistPlannedCast` seam) rather than at the handler. The journal fixture
  * below is the other half and the reason the handler cannot be the
  * discriminator: `writeFoldJournal` / `writeDedupJournal` / `reconcileSuggestionsLocked`
  * report to the very same `catch (persistErr)` (via their own inner handlers)
  * and must keep being swallowed.
  *
- * WRITE ORDER, verified by instrumenting this seam against a real run rather
- * than read off the source: the main job performs NO `writeChecked` call (plan
- * 291: its Phase-0b snapshot is `writePlanSnapshot` and its authoritative write is
- * `persistPlannedCast`, both with their own seams above) — and the subset job performs FOUR
- * (three interim, then final). Only the final
- * write carries real sentence counts, so `lines > 0` selects it in both jobs;
- * every fixture also asserts the total call count, so a future change to that
- * sequence reddens here instead of silently re-aiming a `selects`.
+ * WRITE ORDER: neither job performs a `writeChecked` call any more (plan 291:
+ * the snapshots are `writePlanSnapshot` and the authoritative write is
+ * `persistPlannedCast`, both with their own seams above - the main job's since
+ * Task 20, the subset's since Task 25). The main timeout fixture and both subset
+ * fixtures assert `castWrite.calls` is empty, so a merge-base write coming back
+ * reddens here.
  */
 describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
-  /** Selects the final write: the only one carrying real sentence counts. */
-  const selectsFinalWrite = (p: { characters: Array<{ lines?: number }> }) =>
-    p.characters.some((c) => (c.lines ?? 0) > 0);
-
   afterEach(() => {
     castWrite.toThrow = null;
     castWrite.selects = null;
@@ -1020,21 +1014,26 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     },
     60_000,
   );
+  /* Plan 291 (Task 25) — the subset's authoritative write is the planned persist too (it
+     was `castBase.writeChecked`), so these aim at the same seam as the main job's above.
+     A cast-lock timeout parks: state.json still lands (no provenance stamp), then the
+     deferred rethrow fails the job (Task 25 carry 10). */
   it(
-    'the subset job mirrors it: a lock timeout on its final write ends with an ERROR',
+    'the subset job mirrors it: a persist cast-lock timeout fails the job after state.json is written',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-authoritative', 10_000);
-      castWrite.selects = selectsFinalWrite;
+      plannedPersist.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-authoritative', 10_000);
 
       const run = await runJob('subset-final-timeout', 'subset');
       try {
-        /* Plan 291 (Task 24): the final write is the subset's only merge-base write - its
-           Phase 0a writes nothing on an unplanned cache (no raw-id row on disk) and its
-           finalise snapshot is `writePlanSnapshot`. (Was 4: three interim writes first.) */
-        expect(castWrite.calls).toHaveLength(1);
-        expect(castWrite.thrown).toBe(1);
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
+        expect(castWrite.calls).toHaveLength(0); // the subset no longer writes through `writeChecked`
+        /* cast.json still holds the finalise snapshot's placeholder (lines 0)... */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        /* ...and state.json WAS written before the job failed, without the provenance stamp. */
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
+        expect(run.state.analysisProvenance).toBeUndefined();
 
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
@@ -1050,17 +1049,19 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   it(
     'the subset job mirrors the other direction too: EPERM on its final write ends with a result',
     async () => {
-      castWrite.toThrow = Object.assign(
+      plannedPersist.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = selectsFinalWrite;
 
       const run = await runJob('subset-final-eperm', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(1); // Plan 291 (Task 24): see the test above
-
-        expect(castWrite.thrown).toBe(1);
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
+        expect(castWrite.calls).toHaveLength(0);
+        /* A throw with no `persistOutcome` wrote nothing; it goes to `catch (persistErr)`. */
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
+        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
 
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('result');

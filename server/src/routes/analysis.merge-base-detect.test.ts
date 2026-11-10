@@ -23,7 +23,7 @@
    cast lock (workspace/analysis-cast-io.ts) - so its controls now pin "no stale warning,
    the foreign write is merged"; the subset controls still pin the detector. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -40,7 +40,7 @@ import type {
   Stage1Output,
   Stage2ChapterOutput,
 } from '../handoff/schemas.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCache, loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, castReuseCarryoverJsonPath } from '../workspace/paths.js';
 import { rejectOrphanedPair, castIdHistoryPath } from '../store/cast-id-history.js';
@@ -325,7 +325,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
   /* Plan 291 (Task 20) — the main job's terminal cast write is the planned persist: it
      re-reads cast.json under the cast lock and overlays onto it, so a foreign write is
      merged in, never "stale", and the main job reports no cast_merge_base_stale at all
-     (the subset controls below remain the detector's positive controls). Evidence that
+     (nor, since Task 25, does the subset job - control 7 below). Evidence that
      the persist really ran: its foreign row is still there and state.json carries this
      run's analysisProvenance. (The run's own rows the foreign write removed stay
      removed — rule 13.) */
@@ -717,81 +717,94 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
     30_000,
   );
 
-  it(
-    /* The subset positive control — and the one that would catch a reporter
-       closing over the wrong `send` binding (a silent misdelivery nothing
-       else in this branch tests): asserts the warning arrives via THIS
-       job's own captured `events`, not merely that some warning fired
-       somewhere.
+  /* Control 7 (subset). Plan 291 (#4031, Task 25 carry 2 / I2): the subset's terminal
+     cast write is the planned persist too, so - like the main job's since Task 20 - a
+     foreign write is merged in, never "stale": the subset reports no
+     cast_merge_base_stale, the foreign row is in the final cast.json, the history
+     records nothing about it, and the persist really ran (this run's provenance).
+     (Was EXACTLY one stale warning; and on an unplanned cache Task 24 had moved the
+     window to Phase 1, where the old merge still reported it.) The ORIGINAL window -
+     Phase 0a, chapter 2 - is restored on both an unplanned and a planned cache (a
+     planned one makes Phase-0a snapshots of its own around the foreign write), and the
+     Phase-1 variant is kept. The warnings assertion is on THIS job's own captured
+     `events`, so a misdelivered warning would still be seen as absent only if it went
+     nowhere at all. */
+  for (const window of ['phase0a (unplanned cache)', 'phase0a (planned cache)', 'phase1'] as const) {
+    it(
+      `control 7 — a foreign write in subset ${window} lands in the final cast.json with no stale warning (route-level, subset)`,
+      async () => {
+        const manuscriptId = `test-merge-base-subset-positive-${Date.now()}-${Math.random()}`;
+        const bookDir = makeBookDir();
+        const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
+        try {
+          process.env.STAGE2_COVERAGE_RETRIES = '0';
+          seedStateJson(bookDir, manuscriptId);
+          seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
+          const chapterHints = registerManuscript(manuscriptId, bookDir);
 
-       The subset Phase-1 loop is a plain sequential `for` (no pool), and the
-       finalise's plan snapshot lands before the first Phase-1 call — injecting
-       on the SECOND call deterministically lands the foreign write between
-       two of this run's own writes. A run that reports a conflict has, by definition, reached
-       a write — no separate disk assertion is needed here the way it is for
-       the zero-warnings controls above. */
-    "control 7 — a foreign write mid-run reports EXACTLY one warning on the subset job's own send (route-level, subset)",
-    async () => {
-      const manuscriptId = `test-merge-base-subset-positive-${Date.now()}-${Math.random()}`;
-      const bookDir = makeBookDir();
-      const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
-      try {
-        process.env.STAGE2_COVERAGE_RETRIES = '0';
-        seedStateJson(bookDir, manuscriptId);
-        seedCastJson(bookDir, [{ id: 'stale', name: 'Stale', role: 'minor', color: '#999999' }]);
-        const chapterHints = registerManuscript(manuscriptId, bookDir);
+          const stage1: Stage1Output = {
+            characters: stage1Roster(),
+            chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
+          };
+          await saveAnalysisCache(manuscriptId, { version: 2, chapters: {}, stage1 }); // #4031: unversioned = legacy (refused)
 
-        const stage1: Stage1Output = {
-          characters: stage1Roster(),
-          chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
-        };
-        await saveAnalysisCache(manuscriptId, { version: 2, chapters: {}, stage1 }); // #4031: unversioned = legacy (refused)
-
-        /* Plan 291 (#4031, Task 24): the subset job no longer writes cast.json in Phase 0a
-           on an unplanned cache (no raw-id row reaches disk); its first own write is the
-           finalise's plan snapshot, which re-reads the cast under the lock. So the
-           foreign write moves to Phase 1 - between that snapshot and the final
-           merge-base write - where the detector still fires. (Was: Phase 0a chapter 2,
-           between two interim writes.) */
-        let calls = 0;
-        const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
-        const phase1Selection = buildSelection(
-          buildPhase1Analyzer(() => {
-            calls += 1;
-            if (calls === 2) {
+          const recordRef = getManuscript(manuscriptId);
+          if (!recordRef) throw new Error('stub manuscript not found');
+          const runOnce = async (inject: { phase0?: (id: number) => void; phase1?: (id: number) => void }): Promise<unknown[]> => {
+            const events: unknown[] = [];
+            const job = makeJob((ev) => events.push(ev), {
+              manuscriptId,
+              bookDir,
+              kind: 'subset',
+              subsetChapterIds: chapterHints.map((c) => c.id),
+            });
+            await runSubsetAnalyzerJob(
+              job,
+              recordRef as never,
+              buildSelection(buildPhase0Analyzer(inject.phase0), 'phase0-model-subset'),
+              buildSelection(buildPhase1Analyzer(inject.phase1), 'phase1-model-subset'),
+              recordRef.chapterHints,
+              false,
+            );
+            return events;
+          };
+          if (window === 'phase0a (planned cache)') {
+            /* A first Retry plans the cache (and persists); the second one reuses the plan. */
+            expect((await runOnce({})).some((e) => (e as { kind?: string }).kind === 'result')).toBe(true);
+            expect((await loadAnalysisCache(manuscriptId)).matchPlan).toBeDefined();
+          }
+          const historyBefore = existsSync(castIdHistoryPath(bookDir)) ? readFileSync(castIdHistoryPath(bookDir), 'utf8') : null;
+          let injected = false;
+          const foreign = (id: number): void => {
+            if (id === 2 && !injected) {
+              injected = true;
               seedCastJson(bookDir, [{ id: 'foreign' }]);
             }
-          }),
-          'phase1-model-subset',
-        );
+          };
+          const events = await runOnce(window === 'phase1' ? { phase1: foreign } : { phase0: foreign });
 
-        const events: unknown[] = [];
-        const job = makeJob((ev) => events.push(ev), {
-          manuscriptId,
-          bookDir,
-          kind: 'subset',
-          subsetChapterIds: chapterHints.map((c) => c.id),
-        });
-
-        const recordRef = getManuscript(manuscriptId);
-        if (!recordRef) throw new Error('stub manuscript not found');
-
-        await runSubsetAnalyzerJob(
-          job,
-          recordRef as never,
-          selection,
-          phase1Selection,
-          recordRef.chapterHints,
-          false,
-        );
-
-        expect(warningCodes(events)).toEqual(['cast_merge_base_stale']);
-      } finally {
-        await teardown(manuscriptId, bookDir, originalRetries);
-      }
-    },
-    30_000,
-  );
+          expect(injected).toBe(true);
+          expect(events.some((e) => (e as { kind?: string }).kind === 'result')).toBe(true);
+          expect(warningCodes(events)).toEqual([]);
+          expect(readCast(bookDir).characters.map((c) => c.id)).toContain('foreign');
+          const history = existsSync(castIdHistoryPath(bookDir))
+            ? (JSON.parse(readFileSync(castIdHistoryPath(bookDir), 'utf8')) as { supersededBy?: Record<string, string> })
+            : { supersededBy: {} };
+          expect(Object.entries(history.supersededBy ?? {}).filter(([k, v]) => k === 'foreign' || v === 'foreign')).toEqual([]);
+          if (historyBefore !== null) {
+            expect((JSON.parse(historyBefore) as { supersededBy?: Record<string, string> }).supersededBy?.foreign).toBeUndefined();
+          }
+          const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')) as {
+            analysisProvenance?: { model?: string; scope?: string };
+          };
+          expect(state.analysisProvenance).toMatchObject({ model: 'phase1-model-subset', scope: 'subset' });
+        } finally {
+          await teardown(manuscriptId, bookDir, originalRetries);
+        }
+      },
+      30_000,
+    );
+  }
 
   /* #2694 — the run's OWN out-of-band writers (`clearNotLinkedEdgesForDroppedRejections`
      via `recordRetirements`, `reconcileRejectEdgesOnDisk`) desynchronise the

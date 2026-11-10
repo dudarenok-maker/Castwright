@@ -75,6 +75,7 @@ import {
 } from '../workspace/paths.js';
 import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
 import { loadSuggestions } from '../store/cast-merge-suggestions.js';
+import { withCastLock } from '../workspace/cast-lock.js';
 
 /* endJob persists its paused/halted snapshot and last-outcome on DETACHED
    promises (`void persistTerminalSnapshot`), so a run that ends in `error`
@@ -8011,7 +8012,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
   }
 
   it(
-    'a fresh roster reintroducing a live "unknown-male" row drops the stale entry keyed to it, on the subset path',
+    'a fresh row carrying the superseded "unknown-male" id is minted a new id (rule 3) on the subset path: the merge entry holds, nothing is displaced, an unrelated entry survives',
     async () => {
       const manuscriptId = `test-subset-reclaimed-id-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -8055,21 +8056,27 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
           true,
         );
 
-        // Sanity check: 'unknown-male' actually landed in cast.json live.
+        // Plan 291 (#4031, Task 25; mirrors the main twin above): the subset
+        // persists through `persistPlannedCast` too, so a merged-away id is never
+        // re-created live (rule 3). The fresh row lands under a minted id, and the
+        // reclaim this test once pinned no longer arises;
+        // `dropSupersededIdsReclaimedByLiveCast` stays as defence in depth
+        // (unit-covered in cast-id-history.test.ts).
         const castAfter = JSON.parse(
           readFileSync(castJsonPath(bookDir), 'utf8'),
         ) as { characters: Array<{ id: string }> };
-        expect(castAfter.characters.map((c) => c.id)).toContain('unknown-male');
+        expect(castAfter.characters.map((c) => c.id)).toContain('unknown-male-n1');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('unknown-male');
 
         const history = await loadCastIdHistory(bookDir);
-        expect(history.supersededBy).not.toHaveProperty('unknown-male');
+        // The merge still holds (its target is live): it stays a `supersededBy`
+        // entry and is never moved to `displaced` (rule 3).
+        expect(history.supersededBy).toHaveProperty('unknown-male', 'timkin');
+        expect(history.displaced ?? {}).toEqual({});
+        // The unrelated entry is untouched — no wholesale history wipe.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
-        expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
-        expect(
-          job.replay.logs.some(
-            (l) => l.message.includes('Dropped 1 history alias') && l.message.includes('unknown-male -> timkin'),
-          ),
-        ).toBe(true);
+        // ...and no history alias was reported dropped.
+        expect(job.replay.logs.some((l) => l.message.includes('Dropped 1 history alias'))).toBe(false);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -8250,7 +8257,7 @@ describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pru
   }
 
   it(
-    'a fresh roster that drops a live-but-unvoiced "антон" prunes the dangling alias keyed to her, on the subset path',
+    'a live-but-unvoiced "антон" the user deletes mid-run prunes the dangling alias keyed to her, on the subset path',
     async () => {
       const manuscriptId = `test-subset-dangling-target-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -8275,7 +8282,30 @@ describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pru
       });
 
       const phase0Selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
-      const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
+      /* Plan 291 (#4031, Task 25; mirrors the main twin in
+         analysis.dangling-superseded-target.e2e.test.ts): the subset persist no
+         longer drops the unvoiced 'антон' - rule 1 carries every prior row
+         forward. The target now dies the way it still can: the user deletes the
+         row while the run is in flight (rule 13: it stays deleted), simulated as
+         the cast routes write it - under the cast lock - on the first Phase-1 call. */
+      let antonDeleted = false;
+      const phase1 = buildPhase1Analyzer();
+      const phase1Selection = buildSelection(
+        {
+          ...phase1,
+          runStage2Chapter: async (...a: Parameters<Analyzer['runStage2Chapter']>) => {
+            if (!antonDeleted) {
+              antonDeleted = true;
+              await withCastLock(bookDir, async () => {
+                const cast = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as { characters: Array<{ id: string }> };
+                writeFileSync(castJsonPath(bookDir), JSON.stringify({ characters: cast.characters.filter((c) => c.id !== 'антон') }));
+              });
+            }
+            return phase1.runStage2Chapter(...a);
+          },
+        },
+        'phase1-model-subset',
+      );
       const job = makeSubsetJob(
         manuscriptId,
         bookDir,
@@ -8295,8 +8325,9 @@ describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pru
           true,
         );
 
-        // Sanity check: 'антон' really vanished (unvoiced, no name match in
-        // the fresh roster) so the scenario actually fired.
+        expect(antonDeleted).toBe(true);
+        // Sanity check: 'антон' really vanished (deleted mid-run, never
+        // re-added) so the scenario actually fired.
         const castAfter = JSON.parse(
           readFileSync(castJsonPath(bookDir), 'utf8'),
         ) as { characters: Array<{ id: string }> };
