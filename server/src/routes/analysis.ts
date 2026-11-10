@@ -7943,6 +7943,9 @@ export async function runMainAnalyzerJob(
           /* The edits write failed after cast.json landed (see above): everything the
              outcome owed is recorded; the error goes to `catch (persistErr)`. */
           if (editsWriteErr !== undefined) throw editsWriteErr;
+          /* Past here an outcome means cast.json and manuscript-edits.json both landed;
+             no outcome means a parked cast-lock timeout wrote nothing. */
+          const editsLanded = outcome !== undefined;
           /* #2196 review (🟡 TOCTOU) — re-verify the write target immediately
              before the terminal authoritative state.json record. A book-folder
              move landing mid-persist (after the block-top resolve) leaves
@@ -8013,8 +8016,11 @@ export async function runMainAnalyzerJob(
                 /* srv-59 Task 11 — record which analyzer produced this cast/
                    sentence set and, when the dialogue-structure engine ran,
                    the aggregated run report. Additive + schema-tolerant: no
-                   reader may require this block (see BookStateJson). */
-                analysisProvenance: {
+                   reader may require this block (see BookStateJson). Plan 291 —
+                   only when the planned persist's writes landed (`editsLanded`):
+                   after a parked cast-lock timeout they did not, and the
+                   previous run's provenance (in `prev`) still describes disk. */
+                ...(editsLanded ? { analysisProvenance: {
                   engine: phase1Selection.engine,
                   model: phase1Selection.model,
                   at: new Date().toISOString(),
@@ -8030,12 +8036,13 @@ export async function runMainAnalyzerJob(
                      run — see design of record §4 and the field's own doc
                      comment on BookStateJson.analysisProvenance. */
                   maxMergedTurnsInParagraph: aggregateMaxMergedTurns(perChapterMaxMergedTurns),
-                },
+                } } : {}),
                 updatedAt: new Date().toISOString(),
               };
-              /* Plan 290 — this run re-keyed every saved sentence to the current
-                 chapters (the edits write above landed), so the stale-evidence
-                 marker goes. Only the main persist clears it. That holds because
+              /* Plan 290 — when this run re-keyed every saved sentence to the
+                 current chapters (the planned persist's edits write landed:
+                 `editsLanded`; a parked cast-lock timeout wrote nothing), the
+                 stale-evidence marker goes. Only the main persist clears it. That holds because
                  every producer of the marker leaves no stale cache behind, and
                  none runs while this job is registered: re-parse and
                  replace-manuscript wipe the analysis cache, a bundle overwrite
@@ -8044,7 +8051,7 @@ export async function runMainAnalyzerJob(
                  refuses with `book_busy` while a long job holds the book (PR
                  #3966 review pass 2), so no chapter's take here was replayed
                  from a cache keyed to an older chapter list. */
-              delete next.sentencesPredateChapters;
+              if (editsLanded) delete next.sentencesPredateChapters;
               return next;
             }, {
               /* Re-verified inside the book lock (a rename holds it) but BEFORE

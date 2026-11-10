@@ -926,6 +926,36 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   );
 
   it(
+    'a persist cast-lock timeout on a book marked sentencesPredateChapters keeps the marker and stamps no provenance',
+    async () => {
+      /* The timed-out persist wrote no manuscript-edits.json, so the saved sentences still
+         predate the chapters: the state.json write that still runs must not clear the
+         marker, nor claim this run's provenance. */
+      plannedPersist.toThrow = new LockAcquisitionTimeoutError('cast:/w/marker', 10_000);
+
+      const run = await runJob('final-timeout-marker', 'main', {
+        onSetup: ({ bookDir }) => {
+          const statePath = join(bookDir, '.audiobook', 'state.json');
+          const state = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+          writeFileSync(statePath, JSON.stringify({ ...state, sentencesPredateChapters: true }));
+        },
+      });
+      try {
+        expect(plannedPersist.thrown).toBe(1);
+        /* The state.json write did run (chapters rebuilt)... */
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        /* ...without the marker clear or the provenance stamp. */
+        expect((run.state as { sentencesPredateChapters?: boolean }).sentencesPredateChapters).toBe(true);
+        expect(run.state.analysisProvenance).toBeUndefined();
+        expect(run.events[run.events.length - 1]?.kind).toBe('error');
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
     'an EPERM-shaped disk fault on the SAME write still ends the job with a result',
     async () => {
       /* Plan 291 (Task 20): aimed at the planned persist (was `writeChecked`). A throw with
