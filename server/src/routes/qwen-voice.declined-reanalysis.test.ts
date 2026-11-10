@@ -302,6 +302,13 @@ async function reanalyse(
   return readRow(title);
 }
 
+/* Two prior rows fresh "Wren" both match by surname (T3), so the plan makes it a
+   `new` row suggesting both; `marker` goes on the first. */
+const twinCandidates = (marker: Record<string, unknown>) => [
+  { id: 'wren-ash', name: 'Wren Ash', role: 'supporting', color: 'sky', ...marker },
+  { id: 'wren-bay', name: 'Wren Bay', role: 'supporting', color: 'sky' },
+];
+
 /* A fresh link onto Book One's Wren, as the series linker would stamp it: what the
    persist must not graft onto a row that joined a prior row. */
 const freshLinkToBookOne = () => ({
@@ -388,13 +395,13 @@ describe('#3992 — Don’t reuse survives re-analysis (the four rows of the pas
     expect(merged.declinedVoiceFrom).toEqual([bookOneId]);
   });
 
-  /* Plan 291 (R43): restated on a `new` row (Book Two holds no Wren), where the
-     linker runs; the marker reaches the linker on the fresh row. */
+  /* Plan 291 (R43, R46): restated on a `new` row, where the linker runs. Fresh
+     "Wren" is ambiguous between two prior rows, so it is `new` and inherits the
+     candidates' decline markers at the linker. */
   it('F. the marker names ONE book: a link to a different earlier book is still made', async () => {
     writeBook('Book One', 1, bookOneId, [{ ...voiced }]);
-    writeBook('Book Two', 2, bookTwoId, []);
-    const merged = await reanalyse({ wren: { declinedVoiceFrom: ['some-other-book'] } });
-    expect(merged.declinedVoiceFrom).toEqual(['some-other-book']);
+    writeBook('Book Two', 2, bookTwoId, twinCandidates({ declinedVoiceFrom: ['some-other-book'] }));
+    const merged = await reanalyse();
     expect(merged.matchedFrom?.bookId).toBe(bookOneId);
   });
 });
@@ -431,12 +438,26 @@ describe('#3992 pass-1 finding 3 — a row nobody declined never forks', () => {
 });
 
 describe('#3992 — the series linker on its own', () => {
-  const linkFresh = async (extra: Record<string, unknown>) => {
+  const linkFresh = async (extra: Record<string, unknown>, bookId = bookTwoId) => {
     const L = await import('../workspace/series-reuse-link.js');
     const fresh = [{ ...freshWren(), ...extra }] as any[];
-    const linked = await L.linkSeriesReuseAtAnalysis(bookTwoId, fresh);
+    const linked = await L.linkSeriesReuseAtAnalysis(bookId, fresh);
     return { linked, row: fresh[0] };
   };
+
+  it('never links a row to a book holding a voice uuid in its declinedVoiceUuids', async () => {
+    writeBook('Book One', 1, bookOneId, [{ ...voiced }]);
+    writeBook('Book Two', 2, bookTwoId, [
+      { ...voiced, matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } },
+    ]);
+    writeBook('Book Three', 3, bookThreeId, []);
+    const { linked, row } = await linkFresh(
+      { declinedVoiceFrom: [bookTwoId], declinedVoiceUuids: ['u_shared'] },
+      bookThreeId,
+    );
+    expect(linked).toBe(0);
+    expect(row.matchedFrom).toBeUndefined();
+  });
 
   it('never links a row to a book in its declinedVoiceFrom, and leaves the row untouched', async () => {
     writeBook('Book One', 1, bookOneId, [{ ...voiced }]);
@@ -490,17 +511,29 @@ describe('#3992 pass-2 V — the marker names a voice, not only a book', () => {
     expect(merged.voiceUuid).toBe('u_own');
   });
 
-  /* Plan 291 (R43): restated on a `new` row (Book Three holds no Wren), where the
-     linker runs; the marker reaches the linker on the fresh row. */
+  /* Plan 291 (R46): a `new` row (fresh "Wren" between two prior candidates) is
+     not linked to Book One when a candidate declined Book Two's voice uuid -
+     Book One holds the same uuid. The new row inherits the marker at the linker. */
+  it('a new row whose candidate declined the voice uuid is not linked to a book holding it', async () => {
+    writeBook('Book One', 1, bookOneId, [{ ...voiced }]);
+    writeBook('Book Two', 2, bookTwoId, [
+      { ...voiced, matchedFrom: { bookId: bookOneId, characterId: 'wren', bookTitle: 'Book One', confidence: 1 } },
+    ]);
+    writeBook('Book Three', 3, bookThreeId, twinCandidates({ declinedVoiceFrom: [bookTwoId], declinedVoiceUuids: ['u_shared'] }));
+    const merged = await reanalyse({ title: 'Book Three' });
+    expect(merged.matchedFrom).toBeUndefined();
+    // The marker stays in the linker's view: the linker never writes it onto the row.
+    expect(merged.declinedVoiceFrom).toBeUndefined();
+    expect(merged.declinedVoiceUuids).toBeUndefined();
+  });
+
+  /* Plan 291 (R43, R46): restated on a `new` row, which inherits the candidates'
+     markers at the linker. */
   it('control: a link to a book holding a DIFFERENT voice is still made', async () => {
     writeBook('Book One', 1, bookOneId, [{ ...voiced, voiceUuid: 'u_other', overrideTtsVoices: { qwen: { name: 'qwen-u_other' } } }]);
     writeBook('Book Two', 2, bookTwoId, [{ ...voiced }]);
-    writeBook('Book Three', 3, bookThreeId, []);
-    const merged = await reanalyse({
-      title: 'Book Three',
-      wren: { declinedVoiceFrom: [bookTwoId], declinedVoiceUuids: ['u_shared'] },
-    });
-    expect(merged.declinedVoiceUuids).toEqual(['u_shared']);
+    writeBook('Book Three', 3, bookThreeId, twinCandidates({ declinedVoiceFrom: [bookTwoId], declinedVoiceUuids: ['u_shared'] }));
+    const merged = await reanalyse({ title: 'Book Three' });
     expect(merged.matchedFrom?.bookId).toBe(bookOneId);
   });
 });

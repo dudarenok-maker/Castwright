@@ -1185,25 +1185,47 @@ export async function linkSeriesReuseOnNewRows(
   characters: CharacterOutput[],
   plan: MatchPlan,
   options?: LinkSeriesReuseOptions,
+  prior: ReadonlyArray<PriorRow> = [],
 ): Promise<number> {
   /* A `new` row may be one of several candidates: it must not take a link any of them
      declined. The decline reaches the linker on a throwaway view of the row (its
      `notLinkedTo` guard), and only what the linker stamped is copied back, so the
      linker never writes the decline onto the row itself (the persist overlay records the
-     cross-book declines on the added row). */
+     cross-book declines on the added row).
+     R46: the candidates' #3992 "Don't reuse" markers (`declinedVoiceFrom` /
+     `declinedVoiceUuids`) reach the linker the same way, on the view only. */
+  const priorById = new Map(prior.map((p) => [p.id, p]));
   const declines = new Map<string, unknown[]>();
+  const voiceDeclines = new Map<string, { from: Set<string>; uuids: Set<string> }>();
   for (const d of Object.values(plan.decisions)) {
-    if (d.kind === 'new') declines.set(d.id, unionNotLinkedTo(declines.get(d.id), d.inheritedDeclines));
+    if (d.kind !== 'new') continue;
+    declines.set(d.id, unionNotLinkedTo(declines.get(d.id), d.inheritedDeclines));
+    const acc = voiceDeclines.get(d.id) ?? { from: new Set<string>(), uuids: new Set<string>() };
+    for (const id of d.suggest) {
+      const p = priorById.get(id) as Record<string, unknown> | undefined;
+      for (const b of Array.isArray(p?.declinedVoiceFrom) ? p.declinedVoiceFrom : []) if (typeof b === 'string') acc.from.add(b);
+      for (const u of Array.isArray(p?.declinedVoiceUuids) ? p.declinedVoiceUuids : []) if (typeof u === 'string') acc.uuids.add(u);
+    }
+    voiceDeclines.set(d.id, acc);
   }
   const targets = characters.filter((c) => declines.has(c.id));
-  const views = targets.map((c) => ({
-    ...c,
-    notLinkedTo: unionNotLinkedTo((c as { notLinkedTo?: unknown[] }).notLinkedTo, declines.get(c.id) ?? []),
-  }));
+  const views = targets.map((c) => {
+    const own = c as { notLinkedTo?: unknown[]; declinedVoiceFrom?: unknown; declinedVoiceUuids?: unknown };
+    const vd = voiceDeclines.get(c.id);
+    const from = [...new Set([...(Array.isArray(own.declinedVoiceFrom) ? own.declinedVoiceFrom : []), ...(vd?.from ?? [])])];
+    const uuids = [...new Set([...(Array.isArray(own.declinedVoiceUuids) ? own.declinedVoiceUuids : []), ...(vd?.uuids ?? [])])];
+    return {
+      ...c,
+      notLinkedTo: unionNotLinkedTo(own.notLinkedTo, declines.get(c.id) ?? []),
+      ...(from.length > 0 ? { declinedVoiceFrom: from } : {}),
+      ...(uuids.length > 0 ? { declinedVoiceUuids: uuids } : {}),
+    };
+  });
   const linked = await linkSeriesReuseAtAnalysis(bookId, views as never, options);
+  const viewOnly = new Set(['notLinkedTo', 'declinedVoiceFrom', 'declinedVoiceUuids']);
   targets.forEach((c, i) => {
     const row = c as unknown as Record<string, unknown>;
-    for (const [k, v] of Object.entries(views[i])) if (k !== 'notLinkedTo' && row[k] !== v) row[k] = v;
+    for (const [k, v] of Object.entries(views[i])) if (!viewOnly.has(k) && row[k] !== v) row[k] = v;
   });
   return linked;
 }
@@ -1539,7 +1561,7 @@ async function planRunCastIdentity(a: {
 
   if (record.bookId) {
     try {
-      const linked = await linkSeriesReuseOnNewRows(record.bookId, characters, plan);
+      const linked = await linkSeriesReuseOnNewRows(record.bookId, characters, plan, undefined, prior);
       if (linked > 0) {
         log(
           0,
