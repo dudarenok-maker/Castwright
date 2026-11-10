@@ -337,7 +337,10 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
   const added: Rec[] = [];
   for (const [target, { row, fresh, declines }] of groups) {
     if (fresh) {
-      const out: Rec = { ...row, id: target };
+      /* #4031 (Task 24, N1) - a row the overlay adds is never written without counts:
+         a snapshot's roster leaves a reused decision's lines/scenes unset (the row is
+         normally on disk with its own), and when it is not, this is its first write. */
+      const out: Rec = { ...row, id: target, lines: row.lines ?? 0, scenes: row.scenes ?? 0 };
       const nl = unionNotLinkedTo(
         crossBookOnly(out.notLinkedTo as unknown[] | undefined, currentBookId),
         crossBookOnly(declines, currentBookId),
