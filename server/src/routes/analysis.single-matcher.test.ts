@@ -61,7 +61,7 @@ import * as stateIo from '../workspace/state-io.js';
 import request from 'supertest';
 import { ANALYSIS_CACHE_VERSION, cachePath, clearAnalysisCache, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { resolveAttributionState } from '../store/attribution-health-io.js';
-import { retargetPlanForMerge } from '../store/plan-overlay.js';
+import { retargetPlanForMerge, userOwnedFingerprint } from '../store/plan-overlay.js';
 import { castJsonPath, castMergeSuggestionsJsonPath, makeBookId } from '../workspace/paths.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { LockAcquisitionTimeoutError, withKeyLock } from '../workspace/file-lock.js';
@@ -3619,6 +3619,57 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     const takeIds = Object.values(cache.chapters).flat().map((s) => s.characterId);
     expect(takeIds).toContain('boris-n1');
     expect(takeIds).not.toContain('boris');
+  });
+
+  it('R3-1: a faulted Phase-0a patch is re-sent before the next snapshot, so its older ledger never rolls back a newer one', async () => {
+    /* A stopped main run leaves `the-jogger` run-owned in addedRows. */
+    const b = seed(PRIORS(), undefined, BODY18);
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    setPhase1Hook(undefined);
+    const fpStopped = (readCache(b.manuscriptId)?.addedRows?.['the-jogger'] as { state: string; fp?: string }) ?? {};
+    expect(fpStopped.state).toBe('run-owned');
+    /* Chapter 1's snapshot patch faults; chapter 2 gives the row a new alias, so its
+       snapshot refreshes the row's fingerprint (a newer ledger); chapter 3's cast fails,
+       so the run ends after Phase 0a with no whole-cache save to paper over the order. */
+    const roster = (id: number): CharacterOutput[] =>
+      id === 1 ? [NARR, WREN_FRESH, JOGGER] : [NARR, WREN_FRESH, { ...JOGGER, aliases: ['Runner'] } as unknown as CharacterOutput];
+    const phase0ByChapter: Analyzer = {
+      ...phase0(FRESH.roster),
+      async runStage1Chapter(_m: string, chapterId: number) {
+        if (chapterId === 3) throw new Error('phase 0 boom');
+        return { characters: roster(chapterId) };
+      },
+    } as Analyzer;
+    let faulted = 0;
+    let ledgerPatches = 0;
+    cacheSpy.beforePatch = async (p) => {
+      if (!('ledger' in (p as Record<string, unknown>))) return;
+      ledgerPatches += 1;
+      if (faulted === 0) {
+        faulted += 1;
+        throw Object.assign(new Error('EPERM: cache write'), { code: 'EPERM' });
+      }
+    };
+    const rec = getManuscript(b.manuscriptId)!;
+    const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'subset');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await runSubsetAnalyzerJob(job, rec as never, sel(phase0ByChapter, 'phase0-model'), sel(phase1(FRESH_ID), 'phase1-model'), rec.chapterHints, true);
+    } finally {
+      cacheSpy.beforePatch = undefined;
+      warn.mockRestore();
+    }
+    expect(faulted).toBe(1);
+    expect(ledgerPatches).toBeGreaterThanOrEqual(2); // the faulted one, then chapter 2's
+    expect(done(events)).toBe(false);
+    const row = readCast(b.bookDir).find((c) => c.id === 'the-jogger')!;
+    expect(row.aliases).toEqual(expect.arrayContaining(['Runner']));
+    /* The cache's entry is the fingerprint of the job's LAST write of the row (chapter 2's),
+       not the faulted chapter-1 patch's older one landing after it. */
+    const entry = readCache(b.manuscriptId)?.addedRows?.['the-jogger'] as { state: string; fp?: string };
+    expect(entry).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(row) });
+    expect(entry.fp).not.toBe(fpStopped.fp);
   });
 
   it("M8b: the Phase-0a snapshot writes a covered joined row's new alias before the finalise", async () => {
