@@ -137,7 +137,7 @@ async function runSingleDesign(
     registerProgressToken(progressToken, job);
     const progressUrl = `${serverLoopbackBaseUrl()}/api/internal/design-progress`;
 
-    const { voiceId, url, voiceUuid, separated } = await designQwenVoiceForCharacter({
+    const { voiceId, url, voiceUuid, separated, seriesShared } = await designQwenVoiceForCharacter({
       bookId: job.bookId,
       bookDir: job.bookDir,
       seriesFilter,
@@ -177,10 +177,12 @@ async function runSingleDesign(
        book instead of sweeping every book in the workspace sharing the
        same bare character id (e.g. "narrator"). */
     const matchKey = character.voiceId ?? character.id;
+    /* F8 — a design the core did not share with the series (its book's cast is not
+       confirmed) persists its slot in this book only. */
     const { updated, skipped } = await applyOverrideToCastFiles(
       matchKey,
       { engine: 'qwen', name: voiceId },
-      seriesFilter,
+      seriesShared ? seriesFilter : undefined,
       job.bookDir,
     );
     if (updated === 0 && skipped.length > 0) {

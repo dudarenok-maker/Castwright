@@ -136,6 +136,7 @@ export function DuplicateReviewModal({
           characterId: loserChar.id,
           matchedFrom: res.matchedFrom,
           voiceId: res.voiceId,
+          voice: res.voice,
         }),
       );
       dispatch(

@@ -668,7 +668,7 @@ async function runDesignJob(
              applyOverrideToCastFiles/persistEmotionVariant — not escape the
              loop and halt the whole job on the first contended character
              (#3027 follow-up, N1). */
-          const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
+          const { voiceId, fellBackToDesignVoice, fallbackReason, seriesShared } = await designQwenVoiceForCharacter({
             bookId: job.bookId,
             bookDir: job.bookDir,
             seriesFilter,
@@ -691,10 +691,11 @@ async function runDesignJob(
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
+            /* F8 — not shared by the core (an unconfirmed book): this book only. */
             const { updated, skipped } = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
-              seriesFilter,
+              seriesShared ? seriesFilter : undefined,
               job.bookDir,
             );
             /* Series-wide veto, mirroring the variant branch's own clone-skip

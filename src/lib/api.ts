@@ -434,6 +434,13 @@ export interface LinkPriorCharacterResponse {
     gender?: import('./types').Character['gender'];
     ageRange?: import('./types').Character['ageRange'];
   };
+  /* F7 — present when the link moved the row back onto the voice of a book it had
+     declined ("Don't reuse"): its new `voiceUuid` (null: that book's row has none)
+     and qwen slot. The client mirrors both via applyManualMatch. */
+  voice?: {
+    voiceUuid: string | null;
+    qwen: NonNullable<import('./types').Character['overrideTtsVoices']>['qwen'] | null;
+  };
 }
 /* Series roster — the union of confirmed casts across every prior book
    in the same (author, series). Powers the Profile Drawer's "From prior

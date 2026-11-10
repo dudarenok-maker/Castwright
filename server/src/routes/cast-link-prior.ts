@@ -40,6 +40,7 @@ import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
+import { holdsUuid, RetryableForkError, scanVoiceHolders, type LinkFollower } from '../workspace/voice-uuid-fork.js';
 
 export const castLinkPriorRouter = Router();
 
@@ -96,10 +97,16 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      body (and its cast.json is written below), so the path gate cannot see it. */
   if (await refuseUnreadRepairedBooks([targetBookId], req, res)) return;
 
+  /* F7 — a relink to a book the row declined moves its followers too: plan them
+     lock-free so their books are locked with the two (re-decided under the locks). */
+  const plannedFollowers = await planRelinkFollowers(sourceBookId, sourceCharacterId, targetBookId);
+
   /* #3711 -- both books' book-op (sorted, so the opposite-role call cannot AB/BA),
      then both cast locks; the handles are resolved UNDER the locks, so a rename
-     of either book queued behind this call lands after it. */
-  const outcome = await withBookOps([sourceBookId, targetBookId], async (books) => {
+     of either book queued behind this call lands after it. F7 -- plus the books
+     of the source's planned followers. */
+  const bookIds = [...new Set([sourceBookId, targetBookId, ...plannedFollowers.map((f) => f.bookId)])];
+  const outcome = await withBookOps(bookIds, async (books) => {
     const sourceLocated = books.find((b) => b.bookId === sourceBookId)!;
     const targetLocated = books.find((b) => b.bookId === targetBookId)!;
 
@@ -124,7 +131,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
        can't AB/BA against it. The read and every decision derived from it
        (aliasesChanged, voiceIdChanged, shouldDenormaliseVoice, profileChanged)
        live inside the lock, per rule 2. */
-    return withCastLocks([sourceLocated.bookDir, targetLocated.bookDir], async () => {
+    return withCastLocks(books.map((b) => b.bookDir), async () => {
     const sourceCast = await readJson<CastFile>(castJsonPath(sourceLocated.bookDir));
     const targetCast = await readJson<CastFile>(castJsonPath(targetLocated.bookDir));
     if (!sourceCast?.characters?.length) {
@@ -259,6 +266,43 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     const remainingDeclined = declinedFrom.filter((b) => b !== targetBookId);
     const remainingUuids = declinedUuids.filter((u) => u !== targetUuid);
 
+    /* F7 (owner decision: adopt Book 1's voice) — a relink to the book the row
+       declined puts it back on that book's voice: its `voiceUuid` (none, for a
+       legacy target, so it renders the target's legacy key again) and its qwen
+       slot, variants included, as a link shares them. The voice the row designed
+       after the decline is dropped from the row; its files stay on disk (the
+       startup variant sweep only removes files no row names). Not for a locked or
+       tuned row (it keeps its own voice, as above), nor across a cloned slot on
+       either side. Its followers (rows on its own voice whose link chain leads to
+       it) move with it, as a decline moves them. */
+    const sourceUuid = source.voiceUuid ?? undefined;
+    const adopt =
+      declineCleared && !keepSourceVoice && !sourceIsCloned && !targetIsCloned && sourceUuid !== (targetUuid ?? undefined);
+    const targetQwenSlot = target.overrideTtsVoices?.qwen;
+    const adoptVoice = <C extends PersistedCharacter>(c: C): C => {
+      const next: C = { ...c };
+      if (targetUuid) next.voiceUuid = targetUuid;
+      else delete next.voiceUuid;
+      const { qwen: _dropped, ...otherSlots } = c.overrideTtsVoices ?? {};
+      void _dropped;
+      next.overrideTtsVoices = targetQwenSlot ? { ...otherSlots, qwen: targetQwenSlot } : otherSlots;
+      return next;
+    };
+    let followers: LinkFollower[] = [];
+    if (adopt && sourceUuid) {
+      const scan = await scanVoiceHolders(sourceLocated.bookDir, source, holdsUuid(sourceUuid));
+      const key = (fs: LinkFollower[]) => fs.map((f) => `${f.bookId}|${f.characterId}`).sort().join('\n');
+      const locked = new Set(books.map((b) => b.bookId));
+      /* A follower set other than the planned one is not what the locks were taken
+         for, and a series book that cannot be read may hold one (F1's rule). */
+      if (scan.chainUnreadable || key(scan.followers) !== key(plannedFollowers) || scan.followers.some((f) => !locked.has(f.bookId))) {
+        return res.status(500).json({
+          error: new RetryableForkError('A book in this series changed or could not be read while the link was being saved; try again.').message,
+        });
+      }
+      followers = scan.followers;
+    }
+
     if (voiceIdChanged || shouldDenormaliseVoice || profileChanged || declineCleared) {
       const mergedSource: PersistedCharacter = {
         ...source,
@@ -284,12 +328,39 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
         };
         mergedSource.voiceStyle = source.voiceStyle ?? target.voiceStyle;
       }
+      const landedSource = adopt ? adoptVoice(mergedSource) : mergedSource;
       const nextSourceCharacters = sourceCast.characters.map((c) =>
-        c.id === sourceCharacterId ? mergedSource : c,
+        c.id === sourceCharacterId ? landedSource : c,
       );
-      await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
-        characters: nextSourceCharacters,
-      });
+      /* F7 — the followers first; a failed source write puts them back. */
+      const written: Array<{ dir: string; before: CastFile }> = [];
+      try {
+        for (const dir of new Set(followers.map((f) => f.dir))) {
+          const cast = await readJson<CastFile>(castJsonPath(dir));
+          if (!cast?.characters) continue;
+          const ids = new Set(followers.filter((f) => f.dir === dir).map((f) => f.characterId));
+          const linkIds = new Set(cast.characters.filter((c) => ids.has(c.id)).map((c) => c.voiceId ?? c.id));
+          let changed = false;
+          const characters = cast.characters.map((c) => {
+            if (c.voiceUuid !== sourceUuid || !linkIds.has(c.voiceId ?? c.id)) return c;
+            changed = true;
+            return adoptVoice(c);
+          });
+          if (!changed) continue;
+          await writeJsonAtomic(castJsonPath(dir), { ...cast, characters });
+          written.push({ dir, before: cast });
+        }
+        await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+          characters: nextSourceCharacters,
+        });
+      } catch (e) {
+        for (const w of written.reverse()) {
+          await writeJsonAtomic(castJsonPath(w.dir), w.before).catch((err) =>
+            console.error('[cast-link-prior] could not roll a follower back', err),
+          );
+        }
+        throw e;
+      }
     }
 
     console.log(
@@ -308,6 +379,9 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
       },
       /* The voice the row KEEPS: a locked/tuned source keeps its own. */
       voiceId: keepSourceVoice ? source.voiceId : canonicalVoiceId,
+      /* F7 — present when the relink moved the row back onto the declined book's
+         voice: the uuid (null: the target has none) and qwen slot to mirror. */
+      voice: adopt ? { voiceUuid: targetUuid ?? null, qwen: targetQwenSlot ?? null } : undefined,
       /* Echo the merged profile so the frontend updates the open drawer +
          redux without a reload. Only present when something changed. */
       profile: profileChanged
@@ -332,6 +406,30 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
   }
   return outcome;
 });
+
+/* F7 — the source row's followers on its own voice (rows whose link chain leads to
+   it), for a relink to a book it declined; lock-free and read-only (the route
+   re-decides under its locks). Empty when there is nothing to move or a read
+   fails (the locked step then finds the real set and refuses on a mismatch). */
+async function planRelinkFollowers(
+  sourceBookId: string,
+  sourceCharacterId: string,
+  targetBookId: string,
+): Promise<LinkFollower[]> {
+  try {
+    const peeked = await peekBook(sourceBookId);
+    if (!peeked) return [];
+    const cast = await readJson<CastFile>(castJsonPath(peeked.bookDir));
+    const source = cast?.characters?.find((c) => c.id === sourceCharacterId) as
+      | (PersistedCharacter & { declinedVoiceFrom?: string[]; declinedVoiceUuids?: string[] })
+      | undefined;
+    if (!source?.voiceUuid) return [];
+    if (!source.declinedVoiceFrom?.includes(targetBookId) && !source.declinedVoiceUuids?.length) return [];
+    return (await scanVoiceHolders(peeked.bookDir, source, holdsUuid(source.voiceUuid))).followers;
+  } catch {
+    return [];
+  }
+}
 
 /* Build the aliases list to write back on target. Identical to
    cast-merge.ts::mergeAliases in spirit: target's existing aliases

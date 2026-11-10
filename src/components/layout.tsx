@@ -2800,6 +2800,7 @@ export function Layout() {
                           matchedFrom: res.matchedFrom,
                           voiceId: res.voiceId,
                           profile: res.profile,
+                          voice: res.voice,
                         }),
                       );
                       /* Close so the user lands back on the confirm card and can see

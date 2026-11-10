@@ -615,6 +615,36 @@ describe('castSlice — addCharacter (POST /cast/add-from-roster response)', () 
 });
 
 describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () => {
+  it('F7: mirrors the voice the server moved the row back onto (uuid and qwen slot), keeping other engines', () => {
+    const start = baseState([
+      makeChar('wren', {
+        voiceUuid: 'u_own',
+        overrideTtsVoices: { qwen: { name: 'qwen-u_own' }, kokoro: { name: 'af_bella' } },
+      }),
+    ]);
+    const matchedFrom = { bookId: 'b1', characterId: 'wren', bookTitle: 'Book One', confidence: 1 };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'wren',
+        matchedFrom,
+        voice: { voiceUuid: 'u_shared', qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+      }),
+    );
+    const wren = next.characters[0];
+    expect(wren.voiceUuid).toBe('u_shared');
+    expect(wren.overrideTtsVoices).toEqual({
+      kokoro: { name: 'af_bella' },
+      qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+    });
+    const legacy = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({ characterId: 'wren', matchedFrom, voice: { voiceUuid: null, qwen: null } }),
+    ).characters[0];
+    expect('voiceUuid' in legacy).toBe(false);
+    expect(legacy.overrideTtsVoices).toEqual({ kokoro: { name: 'af_bella' } });
+  });
+
   it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
     const start = baseState([
       makeChar('hartwell-brennan-vale', { voiceState: 'generated' }),

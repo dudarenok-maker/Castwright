@@ -31,6 +31,8 @@ vi.mock('./qwen-voice.js', async (orig) => ({
       url: `/api/voice-sample/${p.characterId}.mp3`,
       /* #4028 — the core reports the row's uuid as the design landed. */
       voiceUuid: `u-${p.characterId}`,
+      /* F8 — the book's cast is confirmed: the design was shared with the series. */
+      seriesShared: true,
     };
   }),
 }));
@@ -227,6 +229,30 @@ describe('single-design job — first design', () => {
       expect.anything(),
       bookDir, // fs-61 — book-scoped fallback when there's no seriesFilter
     );
+  });
+});
+
+describe('single-design job — F8: an unconfirmed book persists its slot in this book only', () => {
+  const run = () =>
+    request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm, confident voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+  it('the core shared the design (confirmed cast): the slot goes series-wide', async () => {
+    expect((await run()).status).toBe(200);
+    expect(applyOverrideStub).toHaveBeenCalledWith('c1', { engine: 'qwen', name: 'qwen-c1' }, { author: AUTHOR, series: SERIES }, bookDir);
+  });
+
+  it('the core did not (cast not confirmed): no series scope, so no linked earlier book takes the slot', async () => {
+    const qwenMod = await import('./qwen-voice.js');
+    vi.mocked(qwenMod.designQwenVoiceForCharacter).mockResolvedValueOnce({
+      voiceId: 'qwen-u-c1',
+      url: '/api/voice-sample/c1.mp3',
+      voiceUuid: 'u-c1',
+      seriesShared: false,
+    });
+    expect((await run()).status).toBe(200);
+    expect(applyOverrideStub).toHaveBeenCalledWith('c1', { engine: 'qwen', name: 'qwen-u-c1' }, undefined, bookDir);
   });
 });
 
