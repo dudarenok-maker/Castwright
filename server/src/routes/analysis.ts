@@ -1881,7 +1881,8 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
   const resolver = buildCastResolver(cast, read.history);
   const idMap: Record<string, string> = {};
   for (const { characterId } of reminted) {
-    const runAdded = !priorIds.has(characterId) && addedIds.has(characterId);
+    /* A resume reads the stopped leg's snapshot rows as prior, so a run-added id can be a prior id too. */
+    const runAdded = addedIds.has(characterId);
     if (!priorIds.has(characterId) && !runAdded) continue;
     const hit = resolver.resolve(characterId);
     if (hit?.via !== 'history' || hit.character.id === characterId) continue;

@@ -1588,6 +1588,24 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       const dir = mkDir([{ id: 'b' }], { raw: 'b' });
       expect((await resolveCurrentIds(dir, {}, take('raw'), ids('b')))[0].characterId).toBe('raw');
     });
+    describe('R34: ids the run added', () => {
+      const own = { x: { kind: 'new', rawId: 'x', id: 'x' } };
+      it('an added id with no history stays itself', async () => {
+        const dir = mkDir([{ id: 'y' }, { id: 'x' }], {});
+        expect((await resolveCurrentIds(dir, {}, take('x'), ids(), own, ids('x')))[0].characterId).toBe('x');
+      });
+      it('a non-prior, non-added analyzer-chain key still stays itself with addedIds passed', async () => {
+        const dir = mkDir([{ id: 'b' }], { raw: 'b' });
+        expect((await resolveCurrentIds(dir, {}, take('raw'), ids(), {}, ids('x')))[0].characterId).toBe('raw');
+      });
+      it('an added id with its own new decision and a history entry to a live target is rewritten, prior id or not', async () => {
+        const dir = mkDir([{ id: 'y' }], { x: 'y' });
+        expect((await resolveCurrentIds(dir, {}, take('x'), ids(), own, ids('x')))[0].characterId).toBe('y');
+        expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), own, ids('x')))[0].characterId).toBe('y');
+        /* without the added set it is left alone */
+        expect((await resolveCurrentIds(dir, {}, take('x'), ids(), own))[0].characterId).toBe('x');
+      });
+    });
   });
 });
 
@@ -3022,6 +3040,45 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     expect(readCache(b.manuscriptId)!.addedRows?.boris).toBeUndefined();
   });
 
+  it('Review Focus 3 (resume): a merge of a row the stopped leg added, made during the resume, reaches the rolls and the cache', async () => {
+    const b = seed([{ ...NARR }, pr('olga', 'Olga', { role: 'minor' })]);
+    const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+    const BORIS = { roster: [NARR, boris], speakerId: 'boris' };
+    /* Leg one: stopped after the Phase-0b snapshot, which left boris in cast.json. */
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'main', BORIS);
+    setPhase1Hook(undefined);
+    expect(ids(readCast(b.bookDir))).toContain('boris');
+    /* Leg two: the resume reads boris as a prior row; the user merges it away mid-run. */
+    let merged = false;
+    const rolled: string[][] = [];
+    rollSpy.isPlanned = () => merged;
+    rollSpy.after = (mergedAtCall) => {
+      if (mergedAtCall) rolled.push(readEdits(b.bookDir).map((s) => String(s.characterId)));
+    };
+    const m = midRun('phase1', async () => {
+      const res = await mergeRoute(b, 'boris', 'olga');
+      merged = true;
+      return res;
+    });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', BORIS);
+    expect(((await m.result()) as request.Response).status).toBe(200);
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(rolled.length).toBeGreaterThan(0);
+    for (const r of rolled) {
+      expect(r).toEqual(expect.arrayContaining(['olga']));
+      expect(r).toEqual(expect.not.arrayContaining(['boris']));
+    }
+    expect(cacheTakes(b)).toHaveLength(3);
+    for (const s of cacheTakes(b)) expect(s.characterId).toBe('olga');
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga']);
+    expect(editLines(b)).toEqual({ olga: 3 });
+    expect(linesById(b.bookDir).olga).toBe(3);
+    expect(history(b).supersededBy).toEqual({ boris: 'olga' });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
   describe('F8 (rule 9): degraded history at persist fails closed', () => {
     const degraded = (): HarnessBook => {
       const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
@@ -3105,6 +3162,11 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       const rollFailures = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('failed to roll manuscript-edits.json'));
       expect(rollFailures.length).toBeGreaterThan(0);
       for (const c of rollFailures) expect(String((c[1] as Error).message)).toMatch(/cast-id-history\.json could not be read/);
+      /* ...and the persist names the unresolved target, ids only. */
+      const unresolvedLines = warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'));
+      expect(unresolvedLines).toHaveLength(1);
+      expect(unresolvedLines[0]).toMatch(/: w2$/);
+      expect(unresolvedLines[0]).not.toContain(b.bookDir);
     });
   });
 });
