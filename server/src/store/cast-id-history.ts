@@ -349,7 +349,7 @@ function repairSeq(h: CastIdHistory): number {
  *  run is only partial: the add pass rebuilds solely from `rejectedPairs`, so
  *  an edge backed only by the LEGACY id-wide `rejected` list never comes back.
  *
- *  Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel (#2185): a
+ *  Same spirit as `cast-fingerprint.ts`'s `UNREADABLE` sentinel (#2185): a
  *  transient read blip must never be mistaken for evidence.
  *
  *  Never throws, exactly like `loadCastIdHistory` — a lookup side-table must
@@ -418,7 +418,7 @@ export function toMatchHistory(read: CastIdHistoryReadResult): MatchHistory {
  *  as before. Callers already tolerate a throw from these helpers (the write
  *  itself could always fail — EPERM/ENOSPC — see `loadCastIdHistory`'s own
  *  doc comment above); this is the same contract extended to a degraded
- *  READ. Same spirit as `cast-merge-base.ts`'s `UNREADABLE` sentinel
+ *  READ. Same spirit as `cast-fingerprint.ts`'s `UNREADABLE` sentinel
  *  (#2185): a transient read blip must never be mistaken for evidence. */
 export class CastIdHistoryUnreadableError extends Error {
   readonly bookDir: string;
@@ -737,7 +737,7 @@ export async function retireCharacterId(
  *  ones that must not, given the roster that is actually live.
  *
  *  Wave 2 final-review finding 1(b), defence in depth for the Critical the
- *  same review found in `remapFreshToPriorIds`. `retireCharacterId` repoints
+ *  same review found in the old fresh-to-prior remap (deleted by plan 291). `retireCharacterId` repoints
  *  every entry whose VALUE is `from` (:123-127) — sound only when `from` is
  *  genuinely dead, which is what the history entry asserts. A retirement whose
  *  `from` is a LIVE cast id is therefore bogus by definition, and recording it
@@ -882,7 +882,7 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  actually dropped, so pruning against an interim roster would destroy a
  *  valid alias for a character who is merely not yet on stage (#2086's
  *  exact hazard). Only the two end-of-run writes that call
- *  `mergeAnalysisResultWithExistingCast` (analysis.ts's main and subset
+ *  `persistPlannedCast` (analysis.ts's main and subset
  *  persist blocks, both already the sole callers of
  *  `dropSupersededIdsReclaimedByLiveCast`) call this too, with the same
  *  `liveIds` binding (`mergedFinal.characters`, the exact roster the write

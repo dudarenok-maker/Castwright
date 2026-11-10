@@ -7297,11 +7297,10 @@ components:
           type: string
           description: |
             Stable machine-readable warning code. Today only
-            `cast_merge_base_stale` — emitted when another route wrote
-            `cast.json` between two of this run's own merge-base writes, so the
-            analysis result was merged onto an older cast and that write may
-            have been overwritten. Replayed once per code on reconnect.
-          enum: [cast_merge_base_stale]
+            `analyzer-reasoning-overflow-nonstory` — emitted when front-matter
+            detection fell back for the whole run because the model's reasoning
+            overflowed. Replayed once per code on reconnect.
+          enum: [analyzer-reasoning-overflow-nonstory]
         message:
           type: string
           description: Human-readable advisory text.
@@ -9319,8 +9318,8 @@ components:
             pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared
             by steps that re-assign rather than demote (escalation,
             tagged-line recovery). NOT written by the id-remap/merge paths —
-            dedupAndPrepare, foldMinorCast, remapCjkHonorificIds,
-            remapFreshToPriorIds, performCastMerge — which also overwrite
+            dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, the plan
+            overlay (applyMatchPlan), performCastMerge — which also overwrite
             characterId (to another character's id, not narrator); whether a
             re-assignment should also carry a prior is an open design
             question, #2331.

@@ -172,7 +172,6 @@ describe('materialisePriorAtRunStart', () => {
     const out = await materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base });
 
     expect(out.source).toBe('carryover');
-    expect(out.written).not.toBeNull();
     const [olga] = readCast();
     expect(olga).toMatchObject({
       id: 'olga',
@@ -230,8 +229,7 @@ describe('materialisePriorAtRunStart', () => {
   it('writes nothing when there is nothing to change', async () => {
     writeCast([row('alice', 'Alice')]);
     const before = readFileSync(castJsonPath(bookDir), 'utf8');
-    const out = await materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base });
-    expect(out.written).toBeNull();
+    await materialisePriorAtRunStart({ bookDir, bookId: BOOK_ID, ...base });
     expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
   });
 
@@ -295,7 +293,6 @@ describe('writePlanSnapshot', () => {
     expect((await loadStoredSuggestions(bookDir)).map((s) => [s.a, s.b])).toEqual([['carl', 'dina']]);
     expect(out.addedPairs).toEqual([['carl', 'dina']]);
     expect(out.ledger.dina?.state).toBe('run-owned');
-    expect(out.written).not.toBeNull();
   });
 
   it('A13: a merge and a dismissal made after the plan survive the next snapshot', async () => {
@@ -458,7 +455,7 @@ describe('persistPlannedCast', () => {
     writeCast([row('alice', 'Alice'), row('carl', 'Carl')]);
     const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
     writeSuggestions([sug('alice', 'carl'), sug('alice', 'zed')]);
-    const out = await persistPlannedCast(
+    await persistPlannedCast(
       persistArgs({
         plan: planOf(join('alice', 'alice'), join('carl', 'carl')),
         roster: roster(row('alice', 'Alice'), row('carl', 'Carl')),
@@ -468,7 +465,6 @@ describe('persistPlannedCast', () => {
       }),
     );
     expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
-    expect(out.written).toBeNull();
     const edits = JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'));
     expect(edits.sentences.map((s: { characterId: string }) => s.characterId)).toEqual(['alice', 'carl']);
     expect((await loadStoredSuggestions(bookDir)).map((s) => [s.a, s.b])).toEqual([['alice', 'zed']]);
@@ -598,7 +594,6 @@ describe('persistPlannedCast', () => {
     expect(ids(readCast())).toEqual(['alice', 'dina']); // the run-added, unedited, unheld `ghost` is dropped
     expect(ids(out.characters)).toEqual(['alice', 'dina']);
     expect((await loadStoredSuggestions(bookDir)).map((s) => [s.a, s.b])).toEqual([['alice', 'dina']]);
-    expect(out.written).not.toBeNull();
   });
 
   it('R2: the subset persist refreshes the main run\'s ledger entry for a row it writes', async () => {

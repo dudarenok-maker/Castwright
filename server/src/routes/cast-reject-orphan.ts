@@ -345,10 +345,10 @@ castRejectOrphanRouter.post(
     }
     /* Fix round 2 review finding 4 — mirrors cast-not-linked-to.ts's self-pair
        400. Without this, characterId === orphanedId would write a self
-       notLinkedTo edge that remapFreshToPriorIds' notLinkedToId would later
-       honour and use to refuse a legitimate future by-name remap of this
+       notLinkedTo edge that notLinkedToId would later
+       honour and use to refuse a legitimate future by-name join of this
        character onto itself (a no-op that can never fire correctly, since a
-       row is never remapped onto its own id) — a dead, misleading edge with
+       row never joins its own id) — a dead, misleading edge with
        no benefit. */
     if (characterId === orphanedId) {
       return res.status(400).json({ error: 'characterId and orphanedId must differ (self-pair).' });

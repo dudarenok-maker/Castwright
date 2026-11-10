@@ -1,7 +1,7 @@
 /* #3084 wave 3d review pass 4 (J) — the run engine/card the server stamps on its phase events once a
  * fallback switch has happened (`analysisEngine` / `analysisGpu`) reaches `onPhase` over the real SSE
  * wire, on both readers (full-book and the subset/Retry route). Reuses the fetch + ReadableStream SSE
- * harness of api-cast-merge-base-warning.test.ts. */
+ * harness this suite defines for itself. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 

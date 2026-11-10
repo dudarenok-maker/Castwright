@@ -5117,13 +5117,12 @@ export interface components {
             kind: "warning";
             /**
              * @description Stable machine-readable warning code. Today only
-             *     `cast_merge_base_stale` — emitted when another route wrote
-             *     `cast.json` between two of this run's own merge-base writes, so the
-             *     analysis result was merged onto an older cast and that write may
-             *     have been overwritten. Replayed once per code on reconnect.
+             *     `analyzer-reasoning-overflow-nonstory` — emitted when front-matter
+             *     detection fell back for the whole run because the model's reasoning
+             *     overflowed. Replayed once per code on reconnect.
              * @enum {string}
              */
-            code: "cast_merge_base_stale";
+            code: "analyzer-reasoning-overflow-nonstory";
             /** @description Human-readable advisory text. */
             message: string;
         };
@@ -6631,7 +6630,7 @@ export interface components {
             excludeFromSynthesis?: boolean;
             /** @description #1679 — read-only editorial flag: true on the first sentence after a word-free scene break (* * *, <hr>) in the source. Display-only; never spoken, never affects attribution. */
             sceneBreakBefore?: boolean;
-            /** @description #1984 D18 — the characterId this sentence carried before a post-stage-2 step DEMOTED it (never written by the model). Written by every known demotion site: reconcileSentenceCharacterIds, applyNarratorDefault, the dialogue-structure engine's correction pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared by steps that re-assign rather than demote (escalation, tagged-line recovery). NOT written by the id-remap/merge paths — dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, remapFreshToPriorIds, performCastMerge — which also overwrite characterId (to another character's id, not narrator); whether a re-assignment should also carry a prior is an open design question, #2331. */
+            /** @description #1984 D18 — the characterId this sentence carried before a post-stage-2 step DEMOTED it (never written by the model). Written by every known demotion site: reconcileSentenceCharacterIds, applyNarratorDefault, the dialogue-structure engine's correction pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared by steps that re-assign rather than demote (escalation, tagged-line recovery). NOT written by the id-remap/merge paths — dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, the plan overlay (applyMatchPlan), performCastMerge — which also overwrite characterId (to another character's id, not narrator); whether a re-assignment should also carry a prior is an open design question, #2331. */
             priorCharacterId?: string;
         };
         /**

@@ -353,7 +353,7 @@ describe('reconcileRejectEdgesOnDisk', () => {
     expect(helperStart).toBeGreaterThan(-1);
     const helperEnd = src.indexOf('\n}\n', helperStart);
     expect(src.slice(helperStart, helperEnd)).toContain(
-      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, a.historyStatusBeforePersist, castBase)',
+      'await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, a.historyStatusBeforePersist)',
     );
     expect(
       src.match(/await applyPlannedPersistOutcome\(\{/g) ?? [],
@@ -408,7 +408,7 @@ describe('reconcileRejectEdgesOnDisk', () => {
     const helper = src.slice(src.indexOf('async function applyPlannedPersistOutcome('), src.indexOf('function rerouteDeletedTakesPatch('));
     expect(helper).not.toContain('loadCastIdHistoryWithStatus(');
     expect(helper.indexOf('await recordRetirements(writeDir, retirementBookId,')).toBeGreaterThan(-1);
-    expect(helper).toContain('a.historyStatusBeforePersist, castBase)');
+    expect(helper).toContain('a.historyStatusBeforePersist)');
   });
 
   /* #2214/#2201 — the #2214 hardening (every id-history mutating helper now

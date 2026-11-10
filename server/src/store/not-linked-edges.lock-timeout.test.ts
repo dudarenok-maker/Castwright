@@ -79,13 +79,12 @@ describe('clearNotLinkedEdgesForDroppedRejections — lock timeout vs disk fault
     lock.toThrow = eperm;
 
     /* Resolves — the retirement that called this must not fail because a
-       cosmetic edge cleanup hit a locked file. #2694 — the function now
-       returns the written payload (or null) rather than void, so a
-       swallowed failure resolves to `null` ("nothing was written"), not
-       `undefined`. */
+       cosmetic edge cleanup hit a locked file. Plan 291 (#4031) deleted the
+       merge base the #2694 payload return fed, so the function returns void
+       again. */
     await expect(
       clearNotLinkedEdgesForDroppedRejections(BOOK_DIR, BOOK_ID, DROPPED),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('[not-linked-edges]');
@@ -100,7 +99,7 @@ describe('clearNotLinkedEdgesForDroppedRejections — lock timeout vs disk fault
 
     await expect(
       clearNotLinkedEdgesForDroppedRejections(BOOK_DIR, BOOK_ID, DROPPED),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });

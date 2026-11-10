@@ -3285,9 +3285,10 @@ describe('AnalysingView — failed-chapter retry', () => {
   });
 });
 
-/* Mid-run recovery surface. With incremental cast.json writes landing on
-   every Phase 0a chapter (see server/src/routes/analysis.ts buildInterimCast
-   call site), the layout's getBookState hydration now pre-populates the
+/* Mid-run recovery surface. With interim cast.json writes landing mid-run
+   (the Phase 0b plan snapshot, see server/src/routes/analysis.ts
+   snapshotPlannedRoster; before plan 291 they landed on every Phase 0a
+   chapter), the layout's getBookState hydration now pre-populates the
    cast slice on book open — so a re-opened book mid-run shows the cast
    that was found so far without waiting for the SSE to replay. The
    analysing view's contract is "render whatever is in the cast slice on
@@ -3762,114 +3763,6 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
     expect(store.getState().analysis.activeStream).toMatchObject({
       manuscriptId: 'm1',
       state: 'paused',
-    });
-  });
-});
-
-describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
-  it('surfaces a cast_merge_base_stale advisory as a deduped warn toast from the main route', async () => {
-    const { store } = await renderViewWaitingForAnalysis();
-
-    await act(async () => {
-      capturedOpts?.onWarning?.({
-        code: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
-      capturedOpts?.onWarning?.({
-        code: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
-    });
-
-    await waitFor(() => {
-      const toasts = store.getState().notifications.toasts;
-      expect(toasts).toHaveLength(1);
-      expect(toasts[0]).toMatchObject({
-        kind: 'warn',
-        dedupeKey: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
-    });
-  });
-
-  it('forwards onWarning through the subset (runAnalysisForChapters) route too — the second consumer', async () => {
-    /* Regression for the "second reader is a silent-drop trap" note in
-       #2015: two of the five server-side merge-base write sites are on
-       the subset route, and the `handle` chain ignores unknown kinds,
-       so a missed `onWarning` wire-up here drops the advisory with no
-       error anywhere. Drives the same retry-chapter path the existing
-       subset tests use, then fires the captured onWarning directly. */
-    getBookStateImpl = () =>
-      Promise.resolve({
-        state: {
-          bookId: 'b1',
-          manuscriptId: 'm1',
-          title: 'the Coalfall Commission',
-          author: '',
-          series: '',
-          seriesPosition: null,
-          isStandalone: true,
-          manuscriptFile: 'bonus-marlow.txt',
-          castConfirmed: false,
-          chapters: [
-            { id: 44, title: 'Chapter Forty-Two', slug: '44-chapter-forty-two', duration: '0:00' },
-          ],
-          coverGradient: ['#000', '#fff'],
-          createdAt: '2026-05-15T00:00:00.000Z',
-          updatedAt: '2026-05-15T00:00:00.000Z',
-        },
-        cast: null,
-        manuscript: null,
-        manuscriptEdits: null,
-        revisions: null,
-        completedSlugs: [],
-        changeLog: null,
-        analysis: { failedChapterIds: [44] },
-      } as BookStateResponse);
-
-    const store = configureStore({
-      reducer: {
-        ui: uiSlice.reducer,
-        cast: castSlice.reducer,
-        account: accountSlice.reducer,
-        bookMeta: bookMetaSlice.reducer,
-        notifications: notificationsSlice.reducer,
-        analysis: analysisSlice.reducer,
-      },
-    });
-    render(
-      <Provider store={store}>
-        <AnalysingView
-          manuscriptId="m1"
-          bookId="b1"
-          title="the Coalfall Commission"
-          wordCount={2440}
-          onComplete={() => {}}
-        />
-      </Provider>,
-    );
-
-    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
-    await act(async () => {
-      fireEvent.click(retryBtn);
-    });
-
-    expect(capturedSubsetCall).toBeDefined();
-    await act(async () => {
-      capturedSubsetCall!.opts?.onWarning?.({
-        code: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
-    });
-
-    await waitFor(() => {
-      const toasts = store.getState().notifications.toasts;
-      expect(toasts).toHaveLength(1);
-      expect(toasts[0]).toMatchObject({
-        kind: 'warn',
-        dedupeKey: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
     });
   });
 });

@@ -703,11 +703,11 @@ describe('#4031 main job: run start and cache classification', () => {
     expect(readCache(b.manuscriptId)!.version).toBe(2);
   });
 
-  it('no cast_merge_base_stale warning on a run whose start wrote cast.json', async () => {
+  it('no warning frame on a run whose start wrote cast.json', async () => {
     const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP }]);
     const events = await run(b.manuscriptId, b.bookDir, 'main');
     expect(events.some((e) => e.kind === 'result')).toBe(true);
-    expect(events.filter((e) => e.kind === 'warning' && e.code === 'cast_merge_base_stale')).toEqual([]);
+    expect(events.filter((e) => e.kind === 'warning')).toEqual([]);
   });
 });
 
@@ -3334,8 +3334,9 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(linesById(b.bookDir)).toMatchObject({ anna: 5, boris: 4, narrator: 0 });
     /* M6: a further run whose roster still names boris but gives him no line - fold-drop
        pressure. He stays, added-once (his stale count is the ruled stale-count issue). The
-       cached takes go first (plan and ledger kept), so both jobs attribute afresh rather than
-       replay: the silence is real. */
+       cached takes go first (plan and ledger kept) - a test lever, since no user action empties
+       takes in production - so both jobs attribute afresh rather than replay: the silence is
+       real. */
     await mutateAnalysisCache(b.manuscriptId, { transform: (c) => ({ ...c, chapters: {} }) });
     const silent = await go(b, { roster: BORIS_TOO.roster, speakerId: 'anna' }, { seedCache: false });
     expect(errCode(silent)).toBeUndefined();

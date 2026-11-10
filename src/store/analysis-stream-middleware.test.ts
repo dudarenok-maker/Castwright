@@ -460,7 +460,7 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     store.dispatch(
       analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
     );
-    lastCall().onWarning?.({ code: 'cast_merge_base_stale', message: 'x' });
+    lastCall().onWarning?.({ code: 'some-other-warning', message: 'x' });
     expect(store.getState().notifications.toasts).toHaveLength(0);
     lastCall().onWarning?.(NONSTORY);
     expect(store.getState().notifications.toasts).toHaveLength(1);

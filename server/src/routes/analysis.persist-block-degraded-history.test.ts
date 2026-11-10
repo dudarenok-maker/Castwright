@@ -392,9 +392,9 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
 
       // A PRIOR cast.json — 'nova' already exists with a same-book
       // notLinkedTo edge to 'ghost', UNBACKED by any rejectedPairs entry.
-      // seedReuseGuardsFromPriorCast (merge-analysis-cast.ts) copies this
-      // onto the fresh 'nova' row by id before the final merge write, so it
-      // survives onto mergedFinal.characters — the exact shape [C1]
+      // The plan joins the fresh 'nova' row onto it, and a joined row keeps the
+      // prior row's notLinkedTo (plan 291; before it, seedReuseGuardsFromPriorCast
+      // copied the edge), so it survives onto the persisted cast — the exact shape [C1]
       // (analysis-reject-edge-reconcile.test.ts) removes when reconcile
       // actually runs.
       writeFileSync(

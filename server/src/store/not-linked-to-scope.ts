@@ -20,8 +20,8 @@
     self-id is dropped by the book scope like any other.)
 
     The ONE book-scope predicate shared by every notLinkedTo join gate
-    (`merge-analysis-cast.ts` fresh-to-prior match and same-name dedupe,
-    `remap-fresh-to-prior.ts`) - a gate with its own copy drifts. */
+    (`match-fresh-to-prior.ts` and `merge-analysis-cast.ts`' same-name
+    dedupe) - a gate with its own copy drifts. */
 export function notLinkedToId(
   row: Record<string, unknown>,
   targetId: string,

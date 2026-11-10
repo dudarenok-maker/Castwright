@@ -103,16 +103,7 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
    aim a throw at one write SITE rather than at a handler. That distinction is
    the whole of #2295: the persist's `catch (persistErr)` covers the
    authoritative `writeChecked` AND the best-effort journals, so "which handler
-   caught it" cannot decide the outcome and "which write timed out" must.
-
-   `createCastMergeBase` is WRAPPED, not replaced — every call still performs
-   the real locked write unless `selects` picks it — so a fixture that aims at
-   the final write still gets the real interim writes on disk before it, which
-   is what makes the on-disk assertions able to tell the sites apart.
-
-   `value`/`enabled` are re-exposed as getters on purpose: they are getters on
-   the real object (mutable run state, see cast-merge-base.ts's header), and a
-   spread would freeze them at their first read. */
+   caught it" cannot decide the outcome and "which write timed out" must. */
 /* Plan 291: the Phase-0b snapshot is `writePlanSnapshot` (the main job's Phase 0a writes
    nothing), so the swallow tests aim a throw at it instead of at a `writeChecked` ordinal. */
 const planSnapshot = vi.hoisted(() => ({ toThrow: null as unknown, thrown: 0 }));
@@ -141,50 +132,6 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   };
 });
 
-interface CastWritePayload {
-  characters: Array<{ id: string; lines?: number }>;
-}
-const castWrite = vi.hoisted(() => ({
-  toThrow: null as unknown,
-  selects: null as null | ((payload: { characters: Array<{ id: string; lines?: number }> }, index: number) => boolean),
-  calls: [] as Array<{ index: number; ids: string[]; lines: Array<number | undefined> }>,
-  thrown: 0,
-}));
-
-vi.mock('../workspace/cast-merge-base.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/cast-merge-base.js')>();
-  return {
-    ...actual,
-    createCastMergeBase: (resolveBookDir: () => string, captured: string | null) => {
-      const base = actual.createCastMergeBase(resolveBookDir, captured);
-      return {
-        get value() {
-          return base.value;
-        },
-        get enabled() {
-          return base.enabled;
-        },
-        markDeleted: () => base.markDeleted(),
-        noteExternalWrite: (payload: unknown) => base.noteExternalWrite(payload),
-        writeChecked: async (payload: unknown, onConflict: Parameters<typeof base.writeChecked>[1]) => {
-          const p = payload as CastWritePayload;
-          const index = castWrite.calls.length;
-          castWrite.calls.push({
-            index,
-            ids: p.characters.map((c) => c.id),
-            lines: p.characters.map((c) => c.lines),
-          });
-          if (castWrite.toThrow && castWrite.selects?.(p, index)) {
-            castWrite.thrown += 1;
-            throw castWrite.toThrow;
-          }
-          return base.writeChecked(payload, onConflict);
-        },
-      };
-    },
-  };
-});
-
 /* The journal seam for the other half of #2295's discrimination: a lock
    timeout out of `reconcileSuggestionsLocked` must STILL be swallowed, because
    that write is lineage rather than identity. Aimed at `reconcileSuggestionsLocked` (rather
@@ -195,8 +142,7 @@ const suggestionsWrite = vi.hoisted(() => ({
   toThrow: null as unknown,
   /* Plan 291: the Phase-0b snapshot reconciles the plan's suggestions through this
      same seam before the persist does, so a fixture aims its throw at one call by
-     ordinal (`null` = every call) and asserts the total count, as `castWrite`'s
-     `selects` does. */
+     ordinal (`null` = every call) and asserts the total count. */
   throwAt: null as number | null,
   calls: 0,
   thrown: 0,
@@ -574,14 +520,12 @@ async function runJob(
   if (!recordRef) throw new Error('stub manuscript not found');
 
   /* Per-RUN counters, reset here rather than in an `afterEach` so a fixture's
-     own assertions (`castWrite.thrown`, `castWrite.calls.length`) describe THIS
+     own assertions (`plannedPersist.thrown`, `planSnapshot.thrown`) describe THIS
      job and not everything the file has run so far. Those counts are what stop
-     a mis-aimed `selects` from passing vacuously. */
-  castWrite.calls.length = 0;
+     a mis-aimed seam from passing vacuously. */
   planSnapshot.thrown = 0;
   plannedPersist.calls = 0;
   plannedPersist.thrown = 0;
-  castWrite.thrown = 0;
   suggestionsWrite.calls = 0;
   suggestionsWrite.thrown = 0;
 
@@ -849,8 +793,8 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
 /* #2295 — the persist block's OUTER `catch (persistErr)`, one level up from
  * everything above.
  *
- * `castBase.writeChecked` — the AUTHORITATIVE cast.json write — takes
- * `cast:<bookDir>` itself (workspace/cast-merge-base.ts:85), so a concurrent
+ * `castBase.writeChecked` — the AUTHORITATIVE cast.json write before plan 291 — took
+ * `cast:<bookDir>` itself (the deleted workspace/cast-merge-base.ts), so a concurrent
  * `performCastMerge` holding that key made it throw a
  * `LockAcquisitionTimeoutError`. Nothing between there and `catch (persistErr)`
  * discriminated the class, so the job skipped cast.json AND state.json and
@@ -865,17 +809,13 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
  * report to the very same `catch (persistErr)` (via their own inner handlers)
  * and must keep being swallowed.
  *
- * WRITE ORDER: neither job performs a `writeChecked` call any more (plan 291:
- * the snapshots are `writePlanSnapshot` and the authoritative write is
- * `persistPlannedCast`, both with their own seams above - the main job's since
- * Task 20, the subset's since Task 25). The main timeout fixture and both subset
- * fixtures assert `castWrite.calls` is empty, so a merge-base write coming back
- * reddens here.
+ * WRITE ORDER: the snapshots are `writePlanSnapshot` and the authoritative write
+ * is `persistPlannedCast` (plan 291), both with their own seams above - the main
+ * job's since Task 20, the subset's since Task 25. The old merge base and its
+ * `writeChecked` were deleted in Task 28.
  */
 describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   afterEach(() => {
-    castWrite.toThrow = null;
-    castWrite.selects = null;
     plannedPersist.toThrow = null;
     suggestionsWrite.toThrow = null;
     suggestionsWrite.throwAt = null;
@@ -894,10 +834,9 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
 
       const run = await runJob('final-timeout');
       try {
-        /* The seam fired, once — the main job no longer writes through `writeChecked`. */
+        /* The seam fired, once. */
         expect(plannedPersist.calls).toBe(1);
         expect(plannedPersist.thrown).toBe(1);
-        expect(castWrite.calls).toHaveLength(0);
 
         /* cast.json still holds the Phase-0b snapshot's placeholder (lines 0)... */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
@@ -1027,7 +966,6 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
       try {
         expect(plannedPersist.calls).toBe(1);
         expect(plannedPersist.thrown).toBe(1);
-        expect(castWrite.calls).toHaveLength(0); // the subset no longer writes through `writeChecked`
         /* cast.json still holds the finalise snapshot's placeholder (lines 0)... */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
         /* ...and state.json WAS written before the job failed, without the provenance stamp. */
@@ -1058,7 +996,6 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
       try {
         expect(plannedPersist.calls).toBe(1);
         expect(plannedPersist.thrown).toBe(1);
-        expect(castWrite.calls).toHaveLength(0);
         /* A throw with no `persistOutcome` wrote nothing; it goes to `catch (persistErr)`. */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
         expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
@@ -1094,8 +1031,6 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
 describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)', () => {
   afterEach(() => {
     planSnapshot.toThrow = null;
-    castWrite.toThrow = null;
-    castWrite.selects = null;
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
   });
 

@@ -304,9 +304,9 @@ export interface AnalyseOpts {
       prior books" pill so the user sees the context being applied.
       `names` is the first three for display; `count` is the total. */
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
-  /** #2015 — a non-fatal advisory from the server (today only
-      `cast_merge_base_stale`). Both the full-book and the subset stream emit
-      it; the subset route carries two of the five merge-base write sites. */
+  /** A non-fatal advisory from the server (today only the non-story
+      reasoning-overflow fallback, `analyzer-reasoning-overflow-nonstory`).
+      Both the full-book and the subset stream can emit it. */
   onWarning?: (warning: { code: string; message: string }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. */

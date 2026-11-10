@@ -3,14 +3,17 @@
    a bookId (the production shape; the store-level tests pass currentBookId by
    hand and so cannot see a route that forgets to thread it).
 
-   The seed copies a locked prior row's cross-book `notLinkedTo` edge onto its
-   id-drifted twin. A gate that ignores `bookId` then reads that edge as a
-   decline between the two group members, so an interrupted run's two-row prior
-   never heals. Same-book edges (cast-reject-orphan writes them) must still
-   block at every gate. Each of the six `currentBookId` arguments at the
-   analysis.ts call sites (remapFreshToPriorIds, mergeAnalysisResultWithExistingCast
-   and dedupePriorCastByName, main and subset) is pinned by a case that goes
-   red when that one argument alone is removed. */
+   A locked prior row and its id-drifted twin can both carry a cross-book
+   `notLinkedTo` edge (before plan 291 the seed copied it onto the twin). A gate
+   that ignores `bookId` then reads that edge as a decline between the two group
+   members, so an interrupted run's two-row prior never heals. Same-book edges
+   (cast-reject-orphan writes them) must still block at every gate. Before plan
+   291 these were six `currentBookId` arguments at analysis.ts call sites (the
+   deleted remapFreshToPriorIds and mergeAnalysisResultWithExistingCast, and
+   dedupePriorCastByName, main and subset). Plan 291 (#4031): both jobs now
+   thread `currentBookId` through `planRunCastIdentity` (into `matchFreshToPrior`
+   and `planConstraintsFor`) and the persist's heal (`dedupePriorCastByName` in
+   `persistPlannedCast`); the cases below drive both jobs through them. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -12,7 +12,6 @@ import {
   projectChapterEstMsFromOutput,
   refineCastChapterEstMs,
   projectRemainingMs,
-  buildInterimCast,
   clearFailedChapterId,
   recordFailedChapter,
   castFailedChapterIds,
@@ -1341,7 +1340,7 @@ describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
     const job = makeJob();
     trackForReplay(job, {
       kind: 'warning',
-      code: 'cast_merge_base_stale',
+      code: 'example-warning',
       message: 'Another change landed.',
     });
 
@@ -1350,7 +1349,7 @@ describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
 
     expect(sent).toContainEqual({
       kind: 'warning',
-      code: 'cast_merge_base_stale',
+      code: 'example-warning',
       message: 'Another change landed.',
     });
   });
@@ -1360,7 +1359,7 @@ describe('warning replay (#2015 — an advisory survives a disconnect)', () => {
     for (let i = 0; i < 5; i++) {
       trackForReplay(job, {
         kind: 'warning',
-        code: 'cast_merge_base_stale',
+        code: 'example-warning',
         message: `attempt ${i}`,
       });
     }
@@ -2220,158 +2219,6 @@ describe('buildStage1ChapterInbox — #938 byline-author guidance', () => {
   });
 });
 
-/* buildInterimCast underpins the mid-run cast.json writes — the helper
-   must produce a deduped, palette-coloured roster with lines:0/scenes:0
-   placeholders so the file shape matches the post-Phase-1 end-of-run
-   write and frontend cast.json readers don't choke on partial data. */
-describe('buildInterimCast — mid-run cast snapshot', () => {
-  const makeChar = (
-    id: string,
-    name: string,
-    opts: Partial<CharacterOutput> = {},
-  ): CharacterOutput => ({
-    id,
-    name,
-    role: 'character',
-    color: 'unset',
-    evidence: [{ quote: `${name}'s line one, long enough to be representative.` }],
-    ...opts,
-  });
-
-  it('merges per-chapter character lists in chapter-id order and palette-colours the roster', () => {
-    const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [makeChar('narrator', 'Narrator'), makeChar('wren', 'Wren')],
-      2: [makeChar('wren', 'Wren'), makeChar('marlow', 'Marlow')],
-      3: [makeChar('marlow', 'Marlow'), makeChar('maerin', 'Maerin')],
-    };
-
-    const interim = buildInterimCast(chapterCast, [1, 2, 3]);
-
-    /* 4 distinct ids after merge (narrator + wren + marlow + maerin). */
-    expect(interim.map((c) => c.id)).toEqual(['narrator', 'wren', 'marlow', 'maerin']);
-
-    /* Narrator keeps its dedicated palette slot; everyone else gets a
-       deterministic non-narrator slot. */
-    const narrator = interim.find((c) => c.id === 'narrator')!;
-    expect(narrator.color).toBe('narrator');
-    for (const c of interim) {
-      if (c.id === 'narrator') continue;
-      expect(c.color).not.toBe('narrator');
-      expect(c.color).not.toBe('unset');
-    }
-
-    /* lines: 0 / scenes: 0 placeholders so the shape matches the
-       post-Phase-1 end-of-run write — Phase 1 attribution hasn't run
-       yet, so per-character counts can't be known. */
-    for (const c of interim as Array<CharacterOutput & { lines?: number; scenes?: number }>) {
-      expect(c.lines).toBe(0);
-      expect(c.scenes).toBe(0);
-    }
-  });
-
-  it('returns [] when the chapterCast map is empty (caller guards the cast.json write)', () => {
-    expect(buildInterimCast({}, [])).toEqual([]);
-    expect(buildInterimCast({}, [1, 2, 3])).toEqual([]);
-    /* Chapters present in the map but with empty arrays (failure markers)
-       should also produce an empty result — no characters were detected. */
-    expect(buildInterimCast({ 1: [], 2: [] }, [1, 2])).toEqual([]);
-  });
-
-  it('assigns palette colours deterministically across runs with the same input', () => {
-    const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [makeChar('narrator', 'N'), makeChar('a', 'A'), makeChar('b', 'B'), makeChar('c', 'C')],
-    };
-
-    const first = buildInterimCast(chapterCast, [1]);
-    const second = buildInterimCast(chapterCast, [1]);
-
-    expect(first.map((c) => ({ id: c.id, color: c.color }))).toEqual(
-      second.map((c) => ({ id: c.id, color: c.color })),
-    );
-  });
-
-  it('skips chapters that are missing from the chapterCast map (cache predates the chapter, or excluded)', () => {
-    const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [makeChar('wren', 'Wren')],
-      /* chapter 2 missing entirely — buildInterimCast must not throw. */
-      3: [makeChar('marlow', 'Marlow')],
-    };
-
-    const interim = buildInterimCast(chapterCast, [1, 2, 3]);
-    expect(interim.map((c) => c.id)).toEqual(['wren', 'marlow']);
-  });
-
-  it('folds descriptor names ("The Jogger", "Drooly Boy", "Unknown Intruder") into Unknown male/female buckets so the mid-run snapshot matches the post-Phase-1 fold', () => {
-    /* Stage-1 detection emits descriptor names the user never wants to
-       see as standalone cast entries. The on-disk cast.json mid-run
-       must collapse them into the Unknown male / Unknown female
-       buckets — same contract the live SSE cast-update uses — so the
-       user inspecting `.audiobook/cast.json` while Phase 0a is still
-       running sees the same shape they'll see at end-of-run. */
-    const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [
-        makeChar('narrator', 'Narrator'),
-        makeChar('wren', 'Wren', { gender: 'female' }),
-        makeChar('the-jogger', 'The Jogger', { gender: 'male' }),
-      ],
-      2: [
-        makeChar('drooly-boy', 'Drooly Boy', { gender: 'male' }),
-        makeChar('tall-lady', 'Tall Lady', { gender: 'female' }),
-        makeChar('unknown-1', 'Unknown Intruder', { gender: 'male' }),
-      ],
-    };
-
-    const interim = buildInterimCast(chapterCast, [1, 2]);
-
-    expect(interim.map((c) => c.id).sort()).toEqual([
-      'narrator',
-      'unknown-female',
-      'unknown-male',
-      'wren',
-    ]);
-    const male = interim.find((c) => c.id === 'unknown-male')!;
-    const female = interim.find((c) => c.id === 'unknown-female')!;
-    expect(male.aliases).toEqual(['The Jogger', 'Drooly Boy', 'Unknown Intruder']);
-    expect(female.aliases).toEqual(['Tall Lady']);
-  });
-
-  it('dedups same-name characters with divergent model ids in the interim cast (Fix 1)', () => {
-    /* During Phase 0a the running roster merges by model id, so a small model
-       that slugs the same name two ways (anton / антон) yields two pills. The
-       interim cast + live SSE must dedup by name — consistently with the final
-       cast — before the fold. */
-    const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [{ id: 'anton', name: 'Антон', role: 'op', color: 'c' }],
-      2: [{ id: 'антон', name: 'Антон', role: 'op', color: 'c' }],
-    };
-    const cast = buildInterimCast(chapterCast, [1, 2]);
-    expect(cast.filter((c) => c.name === 'Антон')).toHaveLength(1);
-  });
-
-  it('mints localized Russian bucket names end-to-end when language is ru (Wave D, plan 221)', () => {
-    /* A Russian book folds bare generic-noun descriptors and the bucket
-       carries the user-specified Russian display name, matching what the
-       post-Phase-1 fold will produce. */
-    const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [
-        makeChar('narrator', 'Рассказчик'),
-        makeChar('anton', 'Антон', { gender: 'male' }),
-        makeChar('parnishka', 'парень', { gender: 'male' }),
-        makeChar('devushka', 'девушка', { gender: 'female' }),
-      ],
-    };
-
-    const interim = buildInterimCast(chapterCast, [1], 'ru');
-
-    const male = interim.find((c) => c.id === 'unknown-male')!;
-    const female = interim.find((c) => c.id === 'unknown-female')!;
-    expect(male?.name).toBe('Незнакомый Парень');
-    expect(female?.name).toBe('Незнакомая Девушка');
-    /* A real proper name ("Антон") is NOT folded. */
-    expect(interim.some((c) => c.id === 'anton')).toBe(true);
-  });
-});
-
 /* Phase 0b finalise drops non-narrator characters whose verifier
    killed every attributed quote — they failed the Stage-1 skill's
    own inclusion test ("can you copy a verbatim sentence … that is
@@ -2581,7 +2428,6 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
       const prior = await readPriorCastForMerge(dir);
       expect(prior.rows.map((c) => c.id)).toEqual(['live']);
       expect(prior.source).toBe('cast');
-      expect(prior.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2606,19 +2452,17 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
          there is no compare-and-set available. `null` says "I cannot check",
          which is the honest answer and is what disables detection for the run
          rather than producing a wrong verdict. */
-      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('returns no rows and no fingerprint when neither file exists', async () => {
+  it('returns no rows when neither file exists', async () => {
     const dir = makeBookDir();
     try {
       const prior = await readPriorCastForMerge(dir);
       expect(prior.rows).toEqual([]);
       expect(prior.source).toBe('none');
-      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2657,7 +2501,6 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
       const prior = await readPriorCastForMerge(dir);
       expect(prior.rows.map((c) => c.id)).toEqual(['wren']);
       expect(prior.source).toBe('carryover');
-      expect(prior.fingerprint).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2679,7 +2522,7 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
      `retireCharacterId(dir, 'mairin', 'mayrin')` drops `{from: mayrin, to:
      mayrin}`) — seeded here with the matching `notLinkedTo` edge ALSO present
      on cast.json's `mayrin` row, the shape `seedReuseGuardsFromPriorCast`
-     (merge-analysis-cast.ts) produces when a fresh analysis remints an
+     (merge-analysis-cast.ts, deleted by plan 291) produced when a fresh analysis remints an
      orphaned, previously-rejected id as a live character (the module's own
      "an orphaned id is very often the character's own name" case). */
   it('removes the notLinkedTo edge naming the dropped pair\'s `from` id from cast.json', async () => {
@@ -2701,7 +2544,7 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
       const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
       await rejectOrphanedPair(dir, 'mayrin', 'mairin');
 
-      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {}, null, 'analyzer');
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {}, 'analyzer');
 
       const history = await loadCastIdHistory(dir);
       expect(history.rejectedPairs ?? []).toEqual([]);
@@ -2740,7 +2583,7 @@ describe('recordRetirements clears a dropped self-loop notLinkedTo edge (#2133)'
       const { rejectOrphanedPair } = await import('../store/cast-id-history.js');
       await rejectOrphanedPair(dir, 'mayrin', 'mairin');
 
-      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {}, null, 'analyzer');
+      await recordRetirements(dir, bookId, [{ from: 'mairin', to: 'mayrin' }], null, () => {}, 'analyzer');
 
       const cast = JSON.parse(
         readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'),
@@ -3255,33 +3098,6 @@ describe('#938 byline-author exclusion — cached roster path integration', () =
     expect(authorEntry).toBeDefined();
   });
 
-  /* The two cases below exercise buildInterimCast directly — the exported
-     function that wires dropBylineAuthorFromChapter inside its own loop.
-     If the guard is deleted from buildInterimCast specifically, these
-     cases go red even if the rebuildRosterInline cases above stay green. */
-  it('buildInterimCast — excludes the byline author when author arg is supplied', () => {
-    const interim = buildInterimCast(cachedChapterCast, [1], undefined, BOOK_AUTHOR);
-
-    /* Real characters survive. */
-    expect(interim.some((c) => c.id === 'anton')).toBe(true);
-    expect(interim.some((c) => c.id === 'narrator')).toBe(true);
-
-    /* The byline author must be absent. */
-    const authorKey = normaliseNameKey(BOOK_AUTHOR);
-    const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
-    expect(authorEntry).toBeUndefined();
-  });
-
-  it('buildInterimCast — includes the byline author when author arg is omitted (witness: exclusion is from the guard)', () => {
-    /* Without the author arg the guard has nothing to match against, so
-       the author entry passes through. This proves the exclusion in the
-       case above is attributable to the guard, not some other filter. */
-    const interim = buildInterimCast(cachedChapterCast, [1]);
-
-    const authorKey = normaliseNameKey(BOOK_AUTHOR);
-    const authorEntry = interim.find((c) => normaliseNameKey(c.name) === authorKey);
-    expect(authorEntry).toBeDefined();
-  });
 });
 
 describe('dedupAndPrepare — dedup BEFORE fold, sentence rewrite + capture for journal', () => {
@@ -5557,9 +5373,11 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
         // The authoritative cast.json write happened DESPITE every retirement
         // write throwing — this is the actual property under test.
         //
-        // NOT a sufficient check on its own: the PER-CHAPTER interim write
+        // NOT a sufficient check on its own (pre-plan-291 rationale: plan 291
+        // deleted the per-chapter write and `buildInterimCast`, but the Phase 0b
+        // snapshot still writes placeholder counts): the PER-CHAPTER interim write
         // (buildInterimCast -> previewFoldForLiveView -> dedupeRosterByName)
-        // ALSO Tier-1-collapses anton-x/anton-a under a `lines: 0` PLACEHOLDER
+        // ALSO Tier-1-collapsed anton-x/anton-a under a `lines: 0` PLACEHOLDER
         // — so an id-only assertion would pass even if the AUTHORITATIVE
         // final write were skipped entirely by the outer persistErr catch
         // (confirmed by direct experiment: this exact assertion shape passed
@@ -5600,7 +5418,11 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   it(
     'site 4 (#2040 Task 10 round 3): the convergence-skip records nothing, even though Site 1 records its own entry for the same fresh survivor',
     async () => {
-      /* Same roster/attribution shape as the sibling tests above (anton-x
+      /* Plan 291 (#4031): `remapFreshToPriorIds` and Site 1 are deleted; the
+         note below is the pre-plan-291 rationale, and the re-derived assertions
+         are annotated where they run.
+
+         Same roster/attribution shape as the sibling tests above (anton-x
          ch1 / anton-a ch2-3, both "Anton Prime" — Tier-1-deduped to a fresh
          canonical id), but the prior 'anton-x' row's NAME matches "Anton
          Prime" (unlike the FIRST sibling test above, which deliberately
@@ -5710,9 +5532,13 @@ describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)
   );
 });
 
-describe('runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wiring (PR #2640 pass-3 review, N7)', () => {
-  /* N7 — none of the 4 real `stripEstablishedAsciiRewrites` call sites in
-     analysis.ts (main route x2, subset route x2) were covered by a test that
+describe('runMainAnalyzerJob — #2584/#2570 an established ASCII id survives a same-run duplicate (PR #2640 pass-3 review, N7)', () => {
+  /* Plan 291 (#4031) deleted `stripEstablishedAsciiRewrites`: the established
+     prior row now joins by id/name in `matchFreshToPrior`, so nothing retires
+     it. This route-level regression stays, and its assertions are unchanged.
+
+     N7 — the 4 real `stripEstablishedAsciiRewrites` call sites in
+     analysis.ts (main route x2, subset route x2) were not covered by a test that
      drives the actual route/orchestration code: reverting all 4 sites to
      the bare `composeRewrites(...)` call (no strip) still left the full
      server suite green. This test drives the REAL runMainAnalyzerJob against
@@ -6242,7 +6068,11 @@ describe('runMainAnalyzerJob — an interim cast.json write cannot swap a persis
 });
 
 describe('runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)', () => {
-  /* Wiring-level regression for the genuine drift case, distinct from the
+  /* Plan 291 (#4031): the remap and its unit suite (remap-fresh-to-prior.test.ts)
+     are deleted; the plan's join now adopts the prior id (see the annotated
+     assertions). The note below is the pre-plan-291 rationale.
+
+     Wiring-level regression for the genuine drift case, distinct from the
      unit suite in remap-fresh-to-prior.test.ts: a re-analysis re-slugs an
      EXISTING, UNAMBIGUOUS character under a fresh id with no same-run dedup
      collision involved at all — this run's own dd.rewrites/folded.rewrites
@@ -6966,7 +6796,11 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
 });
 
 describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)', () => {
-  /* Mirrors "runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)"
+  /* Plan 291 (#4031): the remap, Site 1 and Site 3 named below are deleted; the
+     subset job's plan joins `mayrin` onto the prior `mairin` and records the
+     retirement. The notes below are the pre-plan-291 rationale.
+
+     Mirrors "runMainAnalyzerJob — early remap pass, main path (#2040 Task 10)"
      above, driving runSubsetAnalyzerJob instead — the SAME helper wired into
      the second (subset/chapter-retry) call site per spec §4.4's five-entry
      list. cache.stage1 is pre-seeded so the subset route takes the "book
@@ -7571,8 +7405,12 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
   );
 });
 
-describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wiring (PR #2640 pass-3 review, N7)', () => {
-  /* Mirrors "runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites
+describe('runSubsetAnalyzerJob — #2584/#2570 an established ASCII id survives a same-run duplicate (PR #2640 pass-3 review, N7)', () => {
+  /* Plan 291 (#4031): `stripEstablishedAsciiRewrites` and its call sites are
+     deleted (see the main twin above); the note below is the pre-plan-291
+     rationale.
+
+     Mirrors "runMainAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites
      wiring" above, driving runSubsetAnalyzerJob instead — the second pair of
      the 4 real call sites (subset route :7295 `cumulativeForRemap` / :7452
      `cumulative`). Mirrors the reference "Task 11" scaffold above: even on
@@ -8907,7 +8745,11 @@ describe('attributeChapterStage2 — per-call stage2CallSeq wiring (#2324 final 
 });
 
 describe('runMainAnalyzerJob — the remap never retires a LIVE prior id (#2040 Wave 2 final review, finding 1)', () => {
-  /* End-to-end proof for the Critical the whole-branch review found, driven
+  /* Plan 291 (#4031): `remapFreshToPriorIds`, Site 1 and Site 3 named below are
+     deleted; the plan now matches the fresh row, and the assertions still pin that
+     no live prior id is retired. The notes below are the pre-plan-291 rationale.
+
+     End-to-end proof for the Critical the whole-branch review found, driven
      through the REAL route with real file I/O and no mocked history.
 
      The shape (verified by the reviewer against the running algorithm):

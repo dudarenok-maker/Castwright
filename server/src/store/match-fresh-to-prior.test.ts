@@ -454,6 +454,47 @@ describe('matchFreshToPrior', () => {
   });
 });
 
+/* Plan 291 Task 28 (#4031) - the cases of the deleted remap-fresh-to-prior.test.ts
+   that no test above already states, restated on the plan. */
+describe('matchFreshToPrior - the deleted remap suite, restated', () => {
+  it('an exact-name drift joins the prior id', () => {
+    expect(join(plan([f('mayrin', 'Мэйрин')], [p('mairin', 'Мэйрин')]).decisions['mayrin']).priorId).toBe('mairin');
+  });
+
+  it('#2584/#2570: an established ASCII id survives a fresh non-ASCII id', () => {
+    const pl = plan([f('одуван', 'Одуван')], [p('oduvan', 'Одуван', { voiceState: 'tuned' })]);
+    expect(join(pl.decisions['одуван']).priorId).toBe('oduvan');
+  });
+
+  it('an ambiguous exact name joins neither, suggesting both', () => {
+    const n = fresh_(plan([f('a1', 'Alden')], [p('alden', 'Alden'), p('aldan', 'Alden')]).decisions['a1']);
+    expect(n.suggest).toEqual(['aldan', 'alden']);
+  });
+
+  it('a same-book decline in the on-disk object shape drops the candidate', () => {
+    const pl = plan([f('x', 'Alden')], [p('alden', 'Alden', { notLinkedTo: [{ bookId: 'book-1', characterId: 'x' }] })]);
+    expect(fresh_(pl.decisions['x']).suggest).toEqual([]);
+  });
+
+  it('does not mutate its inputs', () => {
+    const fresh = [f('mayrin', 'Мэйрин')];
+    const prior = [p('mairin', 'Мэйрин', { notLinkedTo: ['zz'] })];
+    const before = JSON.stringify({ fresh, prior });
+    plan(fresh, prior);
+    expect(JSON.stringify({ fresh, prior })).toBe(before);
+  });
+
+  it('a renamed prior narrator row is never a name candidate for a real character', () => {
+    const n = fresh_(plan([f('sabine', 'The Chronicler')], [p('narrator', 'The Chronicler')]).decisions['sabine']);
+    expect(n.suggest).toEqual([]);
+  });
+
+  it('a fresh narrator never joins a real character that shares its name', () => {
+    const d = plan([f('narrator', 'The Chronicler')], [p('chronicler', 'The Chronicler')]).decisions['narrator'];
+    expect(d.kind === 'join' ? d.priorId : d.id).toBe('narrator');
+  });
+});
+
 describe('extendPlan', () => {
   it('extendPlan uses its own runToken and never re-decides a covered row', () => {
     const prior = [p('a1', 'Anna Kay'), p('a2', 'Anna Lee')];

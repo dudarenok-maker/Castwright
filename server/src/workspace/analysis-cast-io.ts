@@ -70,11 +70,6 @@ type CastSource = 'cast' | 'carryover' | 'none';
 
 export interface PriorCastSnapshot {
   rows: Rows;
-  /** sha256 of cast.json's raw bytes when the rows came from it. `null` means
-      "no compare-and-set is available for this run" - carryover-sourced or
-      empty. A null fingerprint DISABLES conflict detection rather than
-      producing a wrong verdict (design 1a). Retired with `castBase` (Task 28). */
-  fingerprint: string | null;
   source: CastSource;
 }
 
@@ -97,18 +92,12 @@ export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastS
   }
   const fromCast = cast.value?.characters;
   if (fromCast?.length) {
-    /* fingerprint is a hash, never ABSENT, on this branch - the file
-       demonstrably parsed. The guard is for the type, not the case. */
-    return {
-      rows: fromCast,
-      fingerprint: typeof cast.fingerprint === 'string' ? cast.fingerprint : null,
-      source: 'cast',
-    };
+    return { rows: fromCast, source: 'cast' };
   }
   const carry = await readJsonWithFingerprint<{ characters?: Rows }>(castReuseCarryoverJsonPath(bookDir));
   const fromCarryover = carry.value?.characters;
-  if (fromCarryover) return { rows: fromCarryover, fingerprint: null, source: 'carryover' };
-  return { rows: [], fingerprint: null, source: 'none' };
+  if (fromCarryover) return { rows: fromCarryover, source: 'carryover' };
+  return { rows: [], source: 'none' };
 }
 
 /* #4031 A11 - what the run-start identical-name heal must not settle: the
@@ -283,8 +272,7 @@ function remapSuggestions(list: ReadonlyArray<StoredSuggestion>, idMap: Readonly
     HERE, inside the lock) -> write once. A carryover is materialised into
     cast.json in the same write, so every later re-read has a file. Returns the
     healed prior, the heal's retirements (the caller records them, kind `heal`,
-    after the lock) and the refreshed rule-11 ledger (R1). `written` is the
-    payload to hand `castBase?.noteExternalWrite`, or null when nothing changed. */
+    after the lock) and the refreshed rule-11 ledger (R1). */
 export async function materialisePriorAtRunStart(a: {
   bookDir: string;
   bookId?: string;
@@ -296,7 +284,6 @@ export async function materialisePriorAtRunStart(a: {
   healRetirements: Retirement[];
   healDropped: Array<{ id: string; name?: string; voiceState?: string }>;
   source: CastSource;
-  written: unknown | null;
   ledger: RunAddedLedger;
 }> {
   return withCastLock(a.bookDir, async () => {
@@ -314,17 +301,12 @@ export async function materialisePriorAtRunStart(a: {
       healDropped = healed.dropped;
     }
     const changed = snap.source === 'carryover' ? rows.length > 0 : !sameJson(rows, before);
-    let written: unknown | null = null;
-    if (changed) {
-      written = { characters: rows };
-      await writeJsonAtomic(castJsonPath(a.bookDir), written);
-    }
+    if (changed) await writeJsonAtomic(castJsonPath(a.bookDir), { characters: rows });
     return {
       prior: rows,
       healRetirements,
       healDropped,
       source: snap.source,
-      written,
       ledger: refreshLedger(a.ledger, before, rows),
     };
   });
@@ -352,7 +334,6 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
   mainLedger?: RunAddedLedger;
   plan: MatchPlan;
   idMap: Record<string, string>;
-  written: unknown | null;
   addedPairs: Array<[string, string]>;
 }> {
   return withCastLock(a.bookDir, async () => {
@@ -379,11 +360,7 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
       mode: 'snapshot',
     });
     const characters = ov.characters as Rows;
-    let written: unknown | null = null;
-    if (!sameJson(characters, current)) {
-      written = { characters };
-      await writeJsonAtomic(castJsonPath(a.bookDir), written);
-    }
+    if (!sameJson(characters, current)) await writeJsonAtomic(castJsonPath(a.bookDir), { characters });
 
     /* Advisory, like the persist's: cast.json has already landed, so a suggestions
        fault must not throw away the ledger/plan/idMap the caller patches into the
@@ -409,7 +386,6 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
       ...(a.mainLedger ? { mainLedger: refreshLedger(a.mainLedger, current, characters) } : {}),
       plan: re.plan,
       idMap: re.idMap,
-      written,
       addedPairs,
     };
   });
@@ -425,7 +401,6 @@ export interface PersistOutcome {
   deletedTargets: string[];
   unresolved: string[];
   carriedForward: Array<{ id: string; name?: string }>;
-  written: unknown | null;
   ledger: RunAddedLedger;
   mainLedger?: RunAddedLedger;
   droppedRunAdded: string[];
@@ -562,12 +537,10 @@ export async function persistPlannedCast(a: {
       return { ...c, lines: mine.length, scenes: new Set(mine.map((s) => s.chapterId)).size };
     });
 
-    let written: unknown | null = null;
     const retirements: Retirement[] = [];
     if (!a.driftRefused) {
       if (!sameJson(finalChars, current)) {
-        written = { characters: finalChars };
-        await writeJsonAtomic(castJsonPath(a.bookDir), written);
+        await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });
       }
       const live = new Set([...current.map((r) => r.id), ...finalChars.map((r) => r.id)]);
       const seen = new Set<string>();
@@ -630,7 +603,6 @@ export async function persistPlannedCast(a: {
       deletedTargets: ov.deletedTargets,
       unresolved: ov.unresolved,
       carriedForward: ov.carriedForward,
-      written,
       ledger: a.driftRefused ? a.ledger : ov.ledger,
       ...(a.mainLedger
         ? { mainLedger: a.driftRefused ? a.mainLedger : refreshLedger(a.mainLedger, current, finalChars) }

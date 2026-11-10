@@ -776,9 +776,9 @@ export function AnalysingView({
           },
           onWarning: ({ code, message }) => {
             if (cancelled) return;
-            /* dedupeKey collapses a burst across the five merge-base write
-               sites into one toast. Wire kind is 'warning'; ToastKind is
-               'warn' — they are different vocabularies, not a typo. */
+            /* dedupeKey collapses a burst of the same warning into one toast.
+               Wire kind is 'warning'; ToastKind is 'warn' — they are
+               different vocabularies, not a typo. */
             dispatch(
               notificationsActions.pushToast({ kind: 'warn', message, dedupeKey: code }),
             );
@@ -1186,9 +1186,9 @@ export function AnalysingView({
           }));
         },
         onWarning: ({ code, message }) => {
-          /* dedupeKey collapses a burst across the five merge-base write
-             sites into one toast. Wire kind is 'warning'; ToastKind is
-             'warn' — they are different vocabularies, not a typo. */
+          /* dedupeKey collapses a burst of the same warning into one toast.
+             Wire kind is 'warning'; ToastKind is 'warn' — they are
+             different vocabularies, not a typo. */
           dispatch(
             notificationsActions.pushToast({ kind: 'warn', message, dedupeKey: code }),
           );

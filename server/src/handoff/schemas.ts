@@ -153,7 +153,7 @@ export const sentenceSchema = z
        that re-assign rather than demote (escalation, tagged-line
        recovery). NOT written by the id-remap/merge paths —
        dedupAndPrepare, foldMinorCast, remapCjkHonorificIds,
-       remapFreshToPriorIds, performCastMerge — which also overwrite
+       the plan overlay (applyMatchPlan), performCastMerge — which also overwrite
        characterId (to another character's id, not narrator); whether a
        re-assignment should also carry a prior is an open design question,
        #2331. Additive. */

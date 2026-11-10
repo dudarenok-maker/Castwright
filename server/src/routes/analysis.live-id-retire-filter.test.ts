@@ -80,8 +80,8 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
    `brann -> brann-weir` even though a different, live prior row still holds
    'brann'. Plan 291 (#4031): the retirement producer is now the planned persist
    (`persistPlannedCast` returns the plan's join retirements for the caller to
-   record after the cast lock), and `remapFreshToPriorIds` no longer runs in the
-   main job, so the bogus retirement is appended to the persist's outcome. The real
+   record after the cast lock), and `remapFreshToPriorIds` is deleted, so the
+   bogus retirement is appended to the persist's outcome. The real
    persist still runs and writes, so the mock can't become the thing under test. */
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();

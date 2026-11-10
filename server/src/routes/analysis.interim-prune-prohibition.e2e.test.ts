@@ -4,8 +4,10 @@
    two authoritative persist blocks, bound to `mergedFinal.characters`, and
    NEVER at any of the three mid-run "Cast so far" interim writes.
 
-   The hazard (already fixed once as #2086): during an interim write,
-   `buildInterimCast` has folded only the chapters analysed so far. A
+   The hazard (already fixed once as #2086): during an interim write, the
+   roster holds only the chapters analysed so far (before plan 291,
+   `buildInterimCast` folded it; now the interim snapshot writes the
+   plan-applied roster). A
    character who simply has not been reached yet is indistinguishable, at
    that moment, from one the analyzer actually dropped. Pruning a
    `supersededBy` entry against that partial roster would delete a valid

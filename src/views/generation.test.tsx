@@ -2410,7 +2410,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       onWarning?: (w: { code: string; message: string }) => void;
     };
     act(() => {
-      opts.onWarning?.({ code: 'cast_merge_base_stale', message: 'other' });
+      opts.onWarning?.({ code: 'some-other-warning', message: 'other' });
       opts.onWarning?.({ code: 'analyzer-reasoning-overflow-nonstory', message: 'fell back' });
     });
     const toasts = store.getState().notifications.toasts;

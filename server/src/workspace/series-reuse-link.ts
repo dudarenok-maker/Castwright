@@ -244,7 +244,7 @@ function clearStaleLink(c: LinkableCharacter): void {
    not a same-author + same-series, strictly-EARLIER book (exactly what
    linkSeriesReuseAtAnalysis links against). This heals links that go stale when
    a book is re-homed to another series or made standalone after the link was
-   stamped: seedReuseGuardsFromPriorCast preserves the old link across re-
+   stamped: the plan overlay keeps the prior row's `matchedFrom` across re-
    analysis, and the UI unmatch refuses non-series-mates, so without this the
    dead link is unclearable. Conservative: a same-series link with an unknown
    position on either side is LEFT intact (a flaky scan must not nuke a

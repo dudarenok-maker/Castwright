@@ -75,19 +75,11 @@
    recorded in cast-lock.ts's own header) were deferred, with an entry here;
    its one `rm` (the "Start fresh" delete, Task 11) was never deferred — it
    IS locked, and always was. (That delete is gone since plan 291 rule 8,
-   #4031: Start fresh keeps cast.json.) #2155 Task 5 closed the deferred half: the five
-   writes now go through `createCastMergeBase`'s `writeChecked`, which takes
-   the lock itself — true, but **this guard cannot check that claim**. The
-   write it actually emits (`cast-merge-base.ts`'s `const path =
-   castJsonPath(bookDir); … writeJsonAtomic(path, payload)`) is the
-   extracted-path-variable false negative documented below, so the scan
-   never sees an occurrence there to test at all; `writeChecked`'s locking is
-   proven by `cast-merge-base.test.ts`'s concurrency test instead (see the
-   false-negatives entry for the full pointer), not by this file going green.
-   What this file's green DOES prove is that `analysis.ts` now scans clean —
-   its entry is gone (see below), not zeroed, which is a real fact about
-   `analysis.ts`'s own source text even though it says nothing about what's
-   inside `writeChecked`. The allowlist is keyed on FILE **AND** COUNT, never
+   #4031: Start fresh keeps cast.json.) The deferred half was closed by #2155 Task 5 and, since plan 291
+   (#4031), every analysis-job cast.json write sits textually inside
+   `withCastLock` in `workspace/analysis-cast-io.ts` (the old `castBase.writeChecked`
+   merge base was deleted). What this file's green proves is that `analysis.ts`
+   scans clean — its entry is gone, not zeroed. The allowlist is keyed on FILE **AND** COUNT, never
    file alone, and the count is asserted in BOTH directions — a fix that
    makes a file's unlocked count go DOWN must shrink or remove its entry just
    as much as a regression that makes it go UP must fail the guard; drifting
@@ -102,20 +94,8 @@
    green when it should not):
      - An extracted path variable: `const p = castJsonPath(dir); await
        writeJsonAtomic(p, …)` — the literal `writeJsonAtomic(castJsonPath(`
-       substring never appears, so the occurrence regex never fires. **Live,
-       not just illustrative, as of #2015/#2155**: `workspace/cast-merge-
-       base.ts`'s `writeChecked` is written exactly this way (`const path =
-       castJsonPath(bookDir); … writeJsonAtomic(path, payload)`), so this
-       guard pins ZERO facts about the write path all five of Task 5's sites
-       now go through — it neither proves `writeChecked` takes the lock nor
-       would catch a regression that dropped the `withCastLock` around it.
-       The compensating control lives elsewhere: `cast-merge-base.test.ts`'s
-       "two concurrent `writeChecked` calls do not interleave
-       read-compare-write" is the outcome-shaped proof that the lock is
-       real — it asserts exactly one conflict is observed under real
-       concurrency, not that a `withCastLock` token appears at the call
-       site, so it can't be satisfied by a lock-shaped no-op the way a
-       source-text scan could be.
+       substring never appears, so the occurrence regex never fires. (The merge-base `writeChecked` that once
+       wrote this way was deleted by plan 291; the shape stays unguarded.)
      - An aliased writer import: `import { writeJsonAtomic as saveJson }
        from '../workspace/state-io.js'` — the occurrence regex matches the
        literal name `writeJsonAtomic`, not the binding, so a call written as
@@ -350,11 +330,8 @@ function scanFile(content: string): ScanResult | null {
    unlocked write must shrink or delete its entry, exactly as a regression
    that adds one must fail the guard.
 
-   #2015/#2155 — routes/analysis.ts's entry is GONE, not zeroed: its five
-   merge-base writes now go through createCastMergeBase's writeChecked (which
-   takes the lock itself — see the file-header ACCEPTANCE TARGET paragraph
-   for why this scan can't verify that claim directly) and its reuse-carryover
-   rm rides the same hold as cast.json's. A file that scans clean must not
+   #2015/#2155 — routes/analysis.ts's entry is GONE, not zeroed: its cast.json
+   writes live in analysis-cast-io.ts, inside withCastLock. A file that scans clean must not
    stay on the allowlist; `scanFile` returns null for it and the trailing
    unmatched-key check below would fail. Any NEW unlocked write in that file
    now fails the guard directly, with no entry to inherit. */
