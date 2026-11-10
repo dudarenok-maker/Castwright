@@ -2,11 +2,13 @@
    step, so they counted the declined book's consented clone on the shared voice even though a
    "Don't reuse" row is (or is about to be) on a new voice uuid U' that clone is not on. That
    refused a design that should succeed. A row carrying a decline marker now skips the early
-   series scan and leaves it to the write-time check in applyOverrideToCastFiles, which knows
-   U' (#4069). The row's own slots, and a row with no marker, are still refused early. */
+   series scan; the design's landing runs it after the uuid step and before writing anything,
+   scoped to the rows on U' (#4069), so a refusal leaves the disk as it was. The row's own
+   slots, and a row with no marker, are still refused early. The emotion-variant gates scope
+   the same way. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -106,6 +108,7 @@ beforeAll(async () => {
   const { singleDesignRouter } = await import('./single-design.js');
   const { castDesignRouter } = await import('./cast-design.js');
   const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
+  const { qwenVoiceRouter } = await import('./qwen-voice.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
@@ -115,6 +118,7 @@ beforeAll(async () => {
   app.use('/api/books', singleDesignRouter);
   app.use('/api/books', castDesignRouter);
   app.use('/api/books', castDeclineVoiceLinkRouter);
+  app.use('/api/books', qwenVoiceRouter);
 });
 
 beforeEach(() => {
@@ -174,6 +178,15 @@ const single = () =>
   request(app)
     .post(`/api/books/${bookTwoId}/cast/wren/design-voice/stream`)
     .send({ persona: 'a warm voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+const variantRoute = () =>
+  request(app)
+    .post(`/api/books/${bookTwoId}/cast/wren/design-voice`)
+    .send({ persona: 'a warm voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, emotion: 'angry' });
+const bulkVariant = () =>
+  request(app)
+    .post(`/api/books/${bookTwoId}/cast/design`)
+    .send({ scope: 'variants', variantTasks: [{ characterId: 'wren', emotions: ['angry'] }], modelKey: QWEN_KEY });
+const qwenFiles = (): string[] => (existsSync(qwenDir()) ? readdirSync(qwenDir()).sort() : []);
 const bulk = () =>
   request(app).post(`/api/books/${bookTwoId}/cast/design`).send({ characterIds: ['wren'], modelKey: QWEN_KEY });
 
@@ -246,15 +259,73 @@ describe('single design -- a declined row is gated after its uuid step (#4074)',
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("a clone on another book's row that IS on the new uuid is refused at write time with clone_protected", async () => {
+  it("a clone on another book's row that IS on the new uuid is refused with clone_protected and writes nothing", async () => {
     seedLinked({});
     const u = await decline();
     writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    const filesBefore = qwenFiles();
     const res = await single();
     expect(res.status).toBe(200);
     const events = collectSse(res);
     expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'clone_protected' });
     expect(events.find((e) => e.type === 'designed')).toBeUndefined();
+    /* the refusal came before the landing: no key file, no staged leftovers, no slot */
+    expect(existsSync(join(qwenDir(), `qwen-${u}.pt`))).toBe(false);
+    expect(existsSync(join(qwenDir(), `qwen-${u}.json`))).toBe(false);
+    expect(qwenFiles()).toEqual(filesBefore);
+    expect(readRow('Book Two').overrideTtsVoices?.qwen).toBeUndefined();
+    expect(readRow('Book Three').overrideTtsVoices.qwen).toBeUndefined();
+  });
+
+  it('a refused redesign over an existing base leaves its bytes and rev untouched', async () => {
+    seedLinked({});
+    const u = await decline();
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    mkdirSync(qwenDir(), { recursive: true });
+    const pt = join(qwenDir(), `qwen-${u}.pt`);
+    const json = join(qwenDir(), `qwen-${u}.json`);
+    writeFileSync(pt, Buffer.from('OLD'));
+    writeFileSync(json, JSON.stringify({ instruct: 'old', rev: 'r1' }));
+    const filesBefore = qwenFiles();
+    const jsonBefore = readFileSync(json, 'utf8');
+    const res = await single();
+    expect(collectSse(res).find((e) => e.type === 'error')).toMatchObject({ code: 'clone_protected' });
+    expect(readFileSync(pt, 'utf8')).toBe('OLD');
+    expect(readFileSync(json, 'utf8')).toBe(jsonBefore);
+    expect(qwenFiles()).toEqual(filesBefore);
+  });
+
+  it('a bulk run after a refused single design is not freshness-skipped as designed', async () => {
+    seedLinked({});
+    const u = await decline();
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    await single();
+    fetchMock.mockClear();
+    const res = await bulk();
+    expect(res.text).toContain('already_cloned');
+    expect(res.text).toContain('"clonedSkips":[{"characterId":"wren"');
+    expect(res.text).not.toContain('character_designed');
+  });
+
+  it('an emotion variant of a declined, separated row succeeds when the clone is only on the declined book', async () => {
+    seedLinked({});
+    const u = await decline();
+    expect((await single()).status).toBe(200);
+    const res = await variantRoute();
+    expect(res.status).toBe(200);
+    expect(readRow('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${u}__angry`);
+  });
+
+  it('an emotion variant is still refused (409) when the clone is on a row of the separated uuid', async () => {
+    seedLinked({});
+    const u = await decline();
+    expect((await single()).status).toBe(200);
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    fetchMock.mockClear();
+    const res = await variantRoute();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('clone_protected');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -279,14 +350,55 @@ describe('bulk design -- a declined row is gated after its uuid step (#4074)', (
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("a clone on another book's row that IS on the new uuid lands in clonedSkips at write time", async () => {
+  it("a clone on another book's row that IS on the new uuid lands in clonedSkips and writes nothing", async () => {
     seedLinked({});
     const u = await decline();
     writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    const filesBefore = qwenFiles();
     const res = await bulk();
     expect(res.status).toBe(200);
     expect(res.text).toContain('already_cloned');
     expect(res.text).not.toContain('character_designed');
     expect(res.text).toContain('"clonedSkips":[{"characterId":"wren"');
+    expect(existsSync(join(qwenDir(), `qwen-${u}.pt`))).toBe(false);
+    expect(qwenFiles()).toEqual(filesBefore);
+    expect(readRow('Book Two').overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('a refused bulk redesign over an existing base leaves its bytes and rev untouched', async () => {
+    seedLinked({});
+    const u = await decline();
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    mkdirSync(qwenDir(), { recursive: true });
+    const json = join(qwenDir(), `qwen-${u}.json`);
+    writeFileSync(join(qwenDir(), `qwen-${u}.pt`), Buffer.from('OLD'));
+    writeFileSync(json, JSON.stringify({ instruct: 'old', rev: 'r1' }));
+    const filesBefore = qwenFiles();
+    const jsonBefore = readFileSync(json, 'utf8');
+    const res = await bulk();
+    expect(res.text).toContain('already_cloned');
+    expect(readFileSync(join(qwenDir(), `qwen-${u}.pt`), 'utf8')).toBe('OLD');
+    expect(readFileSync(json, 'utf8')).toBe(jsonBefore);
+    expect(qwenFiles()).toEqual(filesBefore);
+  });
+
+  it('an emotion variant of a declined, separated row succeeds when the clone is only on the declined book', async () => {
+    seedLinked({});
+    const u = await decline();
+    expect((await bulk()).text).toContain('character_designed');
+    const res = await bulkVariant();
+    expect(res.text).toContain('variant_designed');
+    expect(res.text).not.toContain('already_cloned');
+    expect(readRow('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${u}__angry`);
+  });
+
+  it('an emotion variant is still skipped as already_cloned when the clone is on a row of the separated uuid', async () => {
+    seedLinked({});
+    const u = await decline();
+    expect((await bulk()).text).toContain('character_designed');
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    const res = await bulkVariant();
+    expect(res.text).toContain('already_cloned');
+    expect(res.text).not.toContain('variant_designed');
   });
 });

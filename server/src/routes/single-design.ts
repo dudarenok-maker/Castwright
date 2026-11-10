@@ -29,7 +29,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter, CharacterGoneError, hasDeclineMarker } from './qwen-voice.js';
+import { designQwenVoiceForCharacter, CharacterGoneError, SeriesCloneRefusedError, hasDeclineMarker } from './qwen-voice.js';
 import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
 import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
@@ -149,6 +149,7 @@ async function runSingleDesign(
       language,
       preview: job.preview,
       persistSlot: !job.preview,
+      refuseIfSeriesCloned: !job.preview && hasDeclineMarker(character),
       progressToken,
       progressUrl,
     });
@@ -203,6 +204,16 @@ async function runSingleDesign(
     /* #3992 — the character vanished between the read above and the fork/mint. */
     if (e instanceof CharacterGoneError) {
       endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
+      return;
+    }
+    /* #4074 -- the clone scan refused the design after its uuid step and before the
+       landing: nothing of the design was written. */
+    if (e instanceof SeriesCloneRefusedError) {
+      endJob(job, {
+        type: 'error',
+        code: 'clone_protected',
+        message: `"${job.characterName}" has a consented cloned voice on this character, or a linked one elsewhere in the series — the design was not persisted.`,
+      });
       return;
     }
     /* #2260 FINAL ROUND (B2) — this try encloses `ensureCharacterVoiceUuid` and
@@ -315,9 +326,11 @@ singleDesignRouter.post(
        itself (the uuid step runs AFTER the GPU render), so a clone on the
        voice it is leaving — the declined book's — is not one this design
        could retarget. Only the row's own slots are checked here for such a
-       row; the series scan is left to the write-time check below, which
-       knows the new uuid (#4069) and still answers `clone_protected`, at the
-       cost of one GPU render. */
+       row; the series scan runs in the design's landing (refuseIfSeriesCloned),
+       after the uuid step and before anything is written, scoped to the rows
+       on the new uuid (#4069). A refusal there answers `clone_protected` and
+       writes nothing, at the cost of one GPU render; applyOverrideToCastFiles
+       below stays as the residual-window backstop. */
     if (
       !preview &&
       (characterHasClonedSlot(character) ||

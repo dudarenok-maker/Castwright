@@ -235,7 +235,7 @@ export async function persistEmotionVariant(
        caller's stale pre-GPU snapshot. A hit refuses the WHOLE propagation:
        no book is written. See the qwen-voice spec's "Series-wide check,
        reused, not reimplemented". */
-    const stillCloned = await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter);
+    const stillCloned = await seriesClonedOnRowsVoice(character, seriesFilter);
     if (stillCloned) return 'skippedClone';
 
     /* Residual-window backstop: the walk still takes nonzero time after the
@@ -1333,6 +1333,11 @@ export interface DesignQwenVoiceParams {
       under its lock, so a decline right after it moves a row that has one (pass 11,
       Y1). The caller's series-wide applyOverrideToCastFiles still follows. */
   persistSlot?: boolean;
+  /** A base design whose caller skipped the early series clone gate (#4074: a declined
+      row, which the design may move onto a new voice uuid): the landing runs the scan
+      after the uuid step, under the row's cast lock and before it writes anything,
+      and throws SeriesCloneRefusedError on a hit. */
+  refuseIfSeriesCloned?: boolean;
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
@@ -1532,6 +1537,31 @@ interface FirstDesignShare {
 /* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
 export const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
 
+/* #4074 — does a consented clone sit on the row's own voice anywhere in the series? A
+   row on a "Don't reuse"-separated uuid (separated-voices.ts) shares that voice with only
+   the rows that hold the same uuid, so only those count: a clone on the declined book's
+   row is on the voice this row left. Any other row (no uuid, an ordinary shared one, a
+   stale marker) keeps the full `voiceId` scan -- what applyOverrideToCastFiles decides. */
+export async function seriesClonedOnRowsVoice(
+  character: CastCharacter,
+  seriesFilter: { author: string; series: string } | undefined,
+  bookDir?: string,
+): Promise<boolean> {
+  const uuid = character.voiceUuid;
+  const scoped = uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
+  return hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, bookDir, scoped);
+}
+
+/* #4074 — a base design the series clone scan refused after the uuid step and before the
+   landing: nothing was written for the design (the staged files are removed). The two
+   base callers map it to `clone_protected` / `already_cloned`. */
+export class SeriesCloneRefusedError extends Error {
+  constructor() {
+    super('A consented clone sits on this voice elsewhere in the series.');
+    this.name = 'SeriesCloneRefusedError';
+  }
+}
+
 /* PR #4007 pass 13 (owner decision: a voice "Don't reuse" created is never shared
    with anyone outside the chain that moved with it) — may a first design of this
    row's voice be shared at all? Only an ordinary series voice: the row is on a
@@ -1676,6 +1706,11 @@ async function landStagedDesign(
     if (base !== watcher.key) throw new DesignVoiceChangedError();
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
+    /* #4074 -- before anything is written: a refusal here leaves the key, its rev and
+       every row's slots as they were. */
+    if (p.refuseIfSeriesCloned && !p.emotion && !p.preview && (await seriesClonedOnRowsVoice(row, p.seriesFilter, p.bookDir))) {
+      throw new SeriesCloneRefusedError();
+    }
     const sharing = await firstDesignOf(row); // decided before the move creates the file
     /* #4040 — a base design over an existing base is a redesign (decided before the
        move, like `sharing`); a first design, a preview and a variant are not. */
@@ -2100,7 +2135,7 @@ qwenVoiceRouter.post(
     if (
       emotion &&
       (characterHasClonedSlot(character) ||
-        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
+        (await seriesClonedOnRowsVoice(character, seriesInfo ?? undefined, bookDir)))
     ) {
       return res.status(409).json({
         error: clonedVariantRefusal(character.name ?? characterId),

@@ -50,7 +50,14 @@ import {
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, hasDeclineMarker, persistEmotionVariant } from './qwen-voice.js';
+import {
+  SeriesCloneRefusedError,
+  VARIANT_EMOTIONS,
+  designQwenVoiceForCharacter,
+  hasDeclineMarker,
+  persistEmotionVariant,
+  seriesClonedOnRowsVoice,
+} from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
   applyOverrideToCastFiles,
@@ -58,6 +65,7 @@ import {
   hasClonedSlotAmongMatches,
 } from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
+import { isSeparatedVoice } from '../workspace/separated-voices.js';
 import { personaSharesGpu, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import {
   AnalysisAbortedError,
@@ -420,10 +428,14 @@ async function runDesignJob(
   const seriesClonedVoiceIds = seriesFilter
     ? await findClonedVoiceIdsAmongMatches(seriesFilter)
     : null;
-  const clonedOnLinkedBook = (character: CastCharacter): Promise<boolean> | boolean =>
-    seriesClonedVoiceIds
-      ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
-      : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
+  /* #4074 -- a row on a "Don't reuse"-separated uuid counts only the clones on rows of that
+     uuid (seriesClonedOnRowsVoice), which the precomputed per-voiceId set cannot answer. */
+  const clonedOnLinkedBook = async (character: CastCharacter): Promise<boolean> =>
+    character.voiceUuid && (await isSeparatedVoice(character.voiceUuid))
+      ? seriesClonedOnRowsVoice(character, seriesFilter, job.bookDir)
+      : seriesClonedVoiceIds
+        ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
+        : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
 
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
@@ -469,9 +481,11 @@ async function runDesignJob(
          (`declinedVoiceFrom`) may be moved onto a new voice uuid by the design
          itself (after the render), so a clone on the voice it is leaving —
          the declined book's — is not one this design could retarget. Only its
-         own slots are checked here; the series scan is left to the
-         write-time check in applyOverrideToCastFiles below, which knows the
-         new uuid (#4069) and reports through the same `clonedSkips` channel. */
+         own slots are checked here; the series scan runs in the design's
+         landing (refuseIfSeriesCloned), after the uuid step and before
+         anything is written, scoped to the rows on the new uuid (#4069), and
+         reports through the same `clonedSkips` channel; the write-time check in
+         applyOverrideToCastFiles below stays as the residual-window backstop. */
       if (
         characterHasClonedSlot(character) ||
         (!hasDeclineMarker(character) && (await clonedOnLinkedBook(character)))
@@ -666,6 +680,7 @@ async function runDesignJob(
             language,
             emotion,
             persistSlot: !emotion,
+            refuseIfSeriesCloned: !emotion && hasDeclineMarker(character),
             signal: job.controller.signal,
           });
 
@@ -726,6 +741,19 @@ async function runDesignJob(
           }
           break;
         } catch (e) {
+          /* #4074 -- the landing refused the design (a clone on a row of its new uuid)
+             before writing anything: the same skip as the early gate. */
+          if (e instanceof SeriesCloneRefusedError) {
+            job.skipped += 1;
+            job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+            broadcast(job, {
+              type: 'character_skipped',
+              characterId,
+              name: character.name ?? characterId,
+              reason: 'already_cloned',
+            });
+            break;
+          }
           const message = (e as Error).message || 'Voice design failed.';
           if (isSidecarRestartClass(e, message)) {
             /* Sidecar down/recycling/poison-restarting. Ride out the respawn
