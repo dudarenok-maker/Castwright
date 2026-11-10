@@ -112,7 +112,8 @@ describe('reconcileRejectEdgesOnDisk', () => {
     writeFileSync(join(bookDir, '.audiobook', 'cast.json'), 'not json at all');
     const { log } = collectLog();
 
-    await expect(reconcileRejectEdgesOnDisk(bookDir, BOOK_ID, log)).resolves.toBeUndefined();
+    /* #4031 Task 27: it reports what it wrote; nothing written is `null`. */
+    await expect(reconcileRejectEdgesOnDisk(bookDir, BOOK_ID, log)).resolves.toBeNull();
   });
 
   it('[C6] does not undo clearNotLinkedEdgesForDroppedRejections', async () => {

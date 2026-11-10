@@ -162,6 +162,7 @@ import {
   materialisePriorAtRunStart,
   persistPlannedCast,
   readPriorCastLockFree,
+  refreshLedger,
   sameBookDeclinePredicate,
   writePlanSnapshot,
   type PersistOutcome,
@@ -523,14 +524,16 @@ export async function reconcileRejectEdgesOnDisk(
   log: (phaseId: number, message: string) => void,
   statusBeforePersist?: CastIdHistoryStatus,
   castBase?: CastMergeBase | null,
-): Promise<void> {
+): Promise<{ before: CharacterOutput[]; after: CharacterOutput[] } | null> {
   /* No bookId means no way to tell this book's edges from a cross-book one —
      see bookIdForRetirementCleanup, which already warns for this run. */
-  if (!bookId) return;
+  if (!bookId) return null;
   try {
-    await withCastLock(bookDir, async () => {
+    /* Plan 291 (#4031, Task 27 F2) — the rows before and after a write, so the caller can
+       refresh a run's addedRows fingerprints for the edges this heal wrote (rule 11). */
+    return await withCastLock(bookDir, async (): Promise<{ before: CharacterOutput[]; after: CharacterOutput[] } | null> => {
       const cast = await readJson<{ characters?: CharacterOutput[] }>(castJsonPath(bookDir));
-      if (!cast?.characters?.length) return;
+      if (!cast?.characters?.length) return null;
       /* #2166 final review (Critical) — the removal pass treats an empty
          history as PROOF that every same-book edge is stranded. A `degraded`
          read (the file exists but is unreadable or the wrong shape) produces
@@ -564,10 +567,10 @@ export async function reconcileRejectEdgesOnDisk(
            write actually happened): this one fires only when nothing changed
            because the file could not be trusted. */
         log(1, DEGRADED_CAST_ID_HISTORY_LOG_MESSAGE);
-        return;
+        return null;
       }
       const { adds, removes, next } = reconcileRejectEdges(bookId, cast.characters, history);
-      if (!adds.length && !removes.length) return;
+      if (!adds.length && !removes.length) return null;
       const payload = { characters: next };
       await writeJsonAtomic(castJsonPath(bookDir), payload);
       // #2694 — this write bypasses `writeChecked` (see this function's own
@@ -588,6 +591,7 @@ export async function reconcileRejectEdgesOnDisk(
             `(${adds.map((e) => `${e.characterId} -/- ${e.orphanedId}`).join(', ')}).`,
         );
       }
+      return { before: cast.characters, after: next };
     });
   } catch (err) {
     /* #2260 round 4 (owner decision) — the FIRST deliberate exception. Every
@@ -614,6 +618,7 @@ export async function reconcileRejectEdgesOnDisk(
        disproportionate, so the whole handler stays best-effort — a lock
        timeout included. */
     console.warn('[analysis] failed to reconcile reject edges (non-fatal)', err);
+    return null;
   }
 }
 
@@ -1783,7 +1788,34 @@ async function applyPlannedPersistOutcome(a: {
        just-persisted roster. Best-effort; see the helper's own doc comment.
        `historyStatusBeforePersist` is the caller's pre-rewrite verdict, captured before
        the persist (the steps above launder a degraded file into a valid empty one). */
-    await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, a.historyStatusBeforePersist, castBase);
+    const healed = await reconcileRejectEdgesOnDisk(writeDir, retirementBookId, log, a.historyStatusBeforePersist, castBase);
+    /* Plan 291 (#4031, Task 27 F2) — the heal is this run's own write of the rows it
+       touched, so a `run-owned` entry it changed takes the fingerprint of what it wrote
+       (rule 11, compare-then-refresh); otherwise the next run reads the edge as a user
+       edit and keeps a row it should fold-drop. The cache patch runs after the cast lock
+       is released; a fault joins `unsentPatch`. */
+    if (healed) {
+      /* Against the cache's ledger as it stands inside the op, not the persist's patch (which
+         names only the entries it changed). */
+      const heal: CachePatch = {
+        transform: (c) => ({
+          ...c,
+          addedRows: refreshLedger(c.addedRows ?? {}, healed.before as PriorRow[], healed.after as PriorRow[]),
+        }),
+      };
+      /* An already-unsent persist patch carries the older fingerprints: fold into it (the
+         transform runs last), so its re-send cannot roll this refresh back. */
+      if (unsentPatch) {
+        unsentPatch = { ...unsentPatch, ...heal };
+      } else {
+        try {
+          await mutateAnalysisCache(a.manuscriptId, heal);
+        } catch (cacheErr) {
+          console.warn('[analysis] could not refresh the ledger after the reject-edge heal (re-sent at the end of the persist)', cacheErr);
+          unsentPatch = heal;
+        }
+      }
+    }
   } catch (historyErr) {
     if (isLockAcquisitionTimeout(historyErr)) {
       parked = historyErr;

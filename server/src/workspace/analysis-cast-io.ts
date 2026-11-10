@@ -173,7 +173,7 @@ const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON
     (never re-added); a row this write changed keeps `run-owned` with the
     fingerprint of what was just written. A row this write leaves alone keeps its
     entry. Returns a new ledger. */
-function refreshLedger(ledger: RunAddedLedger, before: Rows, after: Rows): RunAddedLedger {
+export function refreshLedger(ledger: RunAddedLedger, before: Rows, after: Rows): RunAddedLedger {
   const out: RunAddedLedger = { ...ledger };
   const was = new Map(before.map((r) => [r.id, r]));
   const now = new Map(after.map((r) => [r.id, r]));
