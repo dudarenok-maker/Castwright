@@ -61,9 +61,24 @@ describe('evictIdleQwenBase', () => {
       modelKey: 'qwen3-tts-1.7b',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => true,
+      _isRepairOnlyKnownActive: () => false,
     });
 
+    /* #4075 - a render answers false (spends the caller's latch), never 'declined'. */
     expect(freed).toBe(false);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('#4075: a splice / QA repair with NO render answers declined (the caller re-asks once it ends)', async () => {
+    const reconcile = vi.fn();
+    const freed = await evictIdleQwenBase({
+      modelKey: 'qwen3-tts-1.7b',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => true,
+      _isRepairOnlyKnownActive: () => true,
+    });
+
+    expect(freed).toBe('declined');
     expect(reconcile).not.toHaveBeenCalled();
   });
 
@@ -100,6 +115,7 @@ describe('evictIdleQwenBase', () => {
       modelKey: 'kokoro-v1',
       _reconcile: reconcile,
       _isAnyGenerationActive: () => true,
+      _isRepairOnlyKnownActive: () => false,
     });
 
     expect(freed).toBe(false);
@@ -221,6 +237,7 @@ describe('evictIdleQwenBase', () => {
         purpose: 'design',
         _reconcile: reconcile,
         _isAnyGenerationActive: () => true,
+        _isRepairOnlyKnownActive: () => false,
         _probeHealth: probeHealth,
       });
 
@@ -343,12 +360,29 @@ describe('evictIdleQwenBase', () => {
         purpose: 'design',
         _reconcile: reconcile,
         _isAnyGenerationActive: gate,
+        _isRepairOnlyKnownActive: () => false,
         _probeHealth: async () => ({ qwenLoaded: true }),
       });
 
       expect(result).toBe(false);
       expect(reconcile).not.toHaveBeenCalled();
       expect(getLastTtsAutoFree()).toBeNull();
+    });
+
+    it('#4075: a repair that starts during the probe keeps the latch armed (declined)', async () => {
+      const reconcile = reconcileFreeing(['Qwen 0.6B'], true);
+      const gate = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+      const result = await evictIdleQwenBase({
+        modelKey: 'qwen3-tts-0.6b',
+        purpose: 'design',
+        _reconcile: reconcile,
+        _isAnyGenerationActive: gate,
+        _isRepairOnlyKnownActive: () => true,
+        _probeHealth: async () => ({ qwenLoaded: true }),
+      });
+
+      expect(result).toBe('declined');
+      expect(reconcile).not.toHaveBeenCalled();
     });
   });
 
@@ -363,7 +397,7 @@ describe('evictIdleQwenBase', () => {
       _reconcile: reconcile,
     });
 
-    expect(freed).toBe(false);
+    expect(freed).toBe(false); // unregistered reads as active, and a repair is never known: false, like main
     expect(reconcile).not.toHaveBeenCalled();
   });
 

@@ -46,4 +46,45 @@ describe('active-generation-gate', () => {
     expect(isAnyGenerationActive()).toBe(true);
     expect(isGenerationKnownActive()).toBe(true);
   });
+
+  /* #4075 - wording-only: a repair-only state must be distinguishable from a render. */
+  it('isRepairOnlyKnownActive is true only for a splice/repair with no render, and false unregistered', async () => {
+    const { setActiveGenerationBooksProvider, setInFlightSpliceCounter, isRepairOnlyKnownActive } = await import(
+      './active-generation-gate.js'
+    );
+    expect(isRepairOnlyKnownActive()).toBe(false); // unregistered
+
+    let books: string[] = [];
+    let splices = 0;
+    setActiveGenerationBooksProvider(() => books);
+    setInFlightSpliceCounter(() => splices);
+    expect(isRepairOnlyKnownActive()).toBe(false); // idle
+
+    splices = 1;
+    expect(isRepairOnlyKnownActive()).toBe(true); // repair only
+
+    books = ['book-1'];
+    expect(isRepairOnlyKnownActive()).toBe(false); // a render is also running: render wording
+  });
+
+  /* #4075 - the quiet-poll rule's splice epoch. */
+  it('readSpliceEpoch is null unregistered (callers treat it as moved) and reads the registered reader', async () => {
+    const { setSpliceEpochReader, readSpliceEpoch } = await import('./active-generation-gate.js');
+    expect(readSpliceEpoch()).toBeNull();
+    let n = 7;
+    setSpliceEpochReader(() => n);
+    expect(readSpliceEpoch()).toBe(7);
+    n = 8;
+    expect(readSpliceEpoch()).toBe(8);
+  });
+
+  it('registerSplice bumps the epoch even when the splice releases before anyone looks', async () => {
+    const { readSpliceEpoch } = await import('./active-generation-gate.js');
+    const { registerSplice } = await import('../routes/chapter-job-coordination.js');
+    const before = readSpliceEpoch();
+    expect(before).not.toBeNull();
+    const release = registerSplice('book-epoch', 1, new AbortController());
+    release();
+    expect(readSpliceEpoch()).toBe((before as number) + 1);
+  });
 });

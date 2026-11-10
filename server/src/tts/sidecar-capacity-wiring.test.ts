@@ -13,7 +13,7 @@ import { fetch as undiciFetch } from 'undici';
 import { SidecarTtsProvider } from './sidecar.js';
 import { NoCapacityError } from './tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
-import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
+import { setActiveGenerationBooksProvider, setInFlightSpliceCounter } from '../gpu/active-generation-gate.js';
 import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 
 vi.mock('undici', async (importOriginal) => {
@@ -29,6 +29,7 @@ afterEach(() => {
   mockEvictIdle.mockClear();
   setProbeSidecarHealthProvider(null);
   setActiveGenerationBooksProvider(() => []);
+  setInFlightSpliceCounter(() => 0);
 });
 
 function noCapacity(deviceKey: string): Response {
@@ -78,6 +79,16 @@ describe('SidecarTtsProvider → withCapacityRetry wiring (#4066)', () => {
     expect(msg).toMatch(/in use by the chapter render/);
   });
 
+  it('#4075: with only a splice/repair in flight (default gate wiring), the blocker names the repair', async () => {
+    mockFetch.mockImplementation((async () => noCapacity('cuda:0')) as unknown as typeof undiciFetch);
+    setActiveGenerationBooksProvider(() => []); // no render
+    setInFlightSpliceCounter(() => 1); // a repair is registered
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true }));
+    const msg = await messageOf(() => makeProvider().synthesize(INPUT));
+    expect(msg).toMatch(/chapter repair/);
+    expect(msg).not.toMatch(/chapter render/);
+  });
+
   it('a chapter render synth (renderSynth) is never told it is blocked by itself', async () => {
     arrangeRenderInFlight();
     const msg = await messageOf(() => makeProvider().synthesize({ ...INPUT, renderSynth: true }));
@@ -102,5 +113,12 @@ describe('SidecarTtsProvider → withCapacityRetry wiring (#4066)', () => {
     expect(mockEvictIdle).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: 'qwen3-tts-0.6b', deviceKey: 'cuda:1' }),
     );
+    // #4075: withCapacityRetry's own per-admission quiet state reaches the lever; without it the
+    // quiet-poll rule never runs for a Quality preview / sample.
+    const quiet = mockEvictIdle.mock.calls[0][0].quiet;
+    expect(quiet).toMatchObject({ sawRepair: false, idleSince: null, epoch: null });
+    expect(typeof quiet?.minGapMs).toBe('number');
+    // The same object on every ask of one admission, so a streak can accumulate.
+    for (const c of mockEvictIdle.mock.calls) expect(c[0].quiet).toBe(quiet);
   });
 });

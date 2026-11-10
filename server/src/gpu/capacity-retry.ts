@@ -30,7 +30,11 @@ import {
   probeSidecarHealthIfRegistered,
   type SidecarHealthSnapshot,
 } from './sidecar-health-gate.js';
-import { isGenerationKnownActive } from './active-generation-gate.js';
+import {
+  isGenerationKnownActive,
+  isRepairOnlyKnownActive,
+  type QuietPollState,
+} from './active-generation-gate.js';
 import { getKnob } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
 
@@ -148,9 +152,11 @@ export interface CapacityRetryOpts {
       defaults to `evictIdleQwenBase` bound to this call's model key. Takes the
       denied request's `deviceKey`. Returns true when it actually unloaded
       something, and `'declined'` when it held off for a reason that can clear
-      (another design resident on the card, #4066) — which leaves the
-      one-shot latch armed so a later poll asks again. */
-  evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'>;
+      (another design resident on the card #4066, or a splice / QA repair in
+      flight with no render #4075) — which leaves the one-shot latch armed so a
+      later poll asks again. A render in flight answers `false`, which spends
+      the latch. */
+  evictIdleTts?: (deviceKey: string, quiet: QuietPollState) => Promise<boolean | 'declined'>;
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
@@ -167,6 +173,10 @@ export interface CapacityRetryOpts {
       default `describeBlockers`; defaults to the leaf gate's
       `isGenerationKnownActive`. */
   isGenerationKnownActive?: () => boolean;
+  /** #4075 — injected "only a splice/QA repair is in flight, no render" read
+      for the default `describeBlockers`; defaults to the leaf gate's
+      `isRepairOnlyKnownActive`. */
+  isRepairOnlyKnownActive?: () => boolean;
   /** #4066 — true when the blocked op is a chapter render's own synth call
       (`SidecarTtsProvider`). The render is then the one asking for capacity,
       so the give-up message never names it as what holds the model. */
@@ -201,6 +211,7 @@ export interface CapacityRetryOpts {
 interface BlockerMessageContext {
   isKokoroPreloadOn: () => boolean;
   isGenerationKnownActive: () => boolean;
+  isRepairOnlyKnownActive: () => boolean;
   isRenderSynth: boolean;
 }
 
@@ -222,6 +233,7 @@ async function defaultDescribeBlockers(
   ctx: BlockerMessageContext = {
     isKokoroPreloadOn: defaultIsKokoroPreloadOn,
     isGenerationKnownActive,
+    isRepairOnlyKnownActive,
     isRenderSynth: false,
   },
 ): Promise<VramBlocker[]> {
@@ -234,6 +246,7 @@ async function defaultDescribeBlockers(
       kokoroDevice: health.devices?.kokoro,
       kokoroPreload: health.kokoroLoaded ? ctx.isKokoroPreloadOn() : false,
       generationActive: ctx.isGenerationKnownActive(),
+      repairOnly: ctx.isRepairOnlyKnownActive(),
       blockedOpIsRender: ctx.isRenderSynth,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
@@ -317,12 +330,16 @@ export async function withCapacityRetry(
   const messageCtx: BlockerMessageContext = {
     isKokoroPreloadOn: opts.isKokoroPreloadOn ?? defaultIsKokoroPreloadOn,
     isGenerationKnownActive: opts.isGenerationKnownActive ?? isGenerationKnownActive,
+    isRepairOnlyKnownActive: opts.isRepairOnlyKnownActive ?? isRepairOnlyKnownActive,
     isRenderSynth: opts.isRenderSynth === true,
   };
   const describeBlockers =
     opts.describeBlockers ?? ((deviceKey: string) => defaultDescribeBlockers(deviceKey, undefined, messageCtx));
   const designMaxAttempts = opts.designMaxAttempts ?? GPU_CAPACITY_DESIGN_MAX_ATTEMPTS;
 
+  /* #4075 — this admission's own quiet-poll state for the TTS lever (never
+     shared across concurrent admissions). */
+  const quiet: QuietPollState = { minGapMs: pollMs, sawRepair: false, idleSince: null, epoch: null };
   let evicted = false;
   let evictedTts = false;
   let waiting = false;
@@ -380,9 +397,16 @@ export async function withCapacityRetry(
 
       /* Second lever: free a resident Qwen base this op doesn't need. Guarded to
          "no render in flight" inside evictIdleQwenBase, so it is inert during
-         generation by construction. At most once per call, like the analyzer. */
+         generation by construction. During a render it answers `false` and the
+         latch is spent (it is never re-asked: a multi-chapter render has a gap
+         between chapter jobs where a re-ask would unload its base). During a
+         splice / QA repair with no render it answers 'declined' (#4075), which
+         leaves the latch armed for a later poll; having seen a repair it then
+         waits for a quiet streak (`quiet`, a Fix-audio batch's chapter gap).
+         Once it has actually run it is
+         spent: at most once per call, like the analyzer. */
       if (!evictedTts) {
-        const freedTts = await evictIdleTts(noCap.deviceKey);
+        const freedTts = await evictIdleTts(noCap.deviceKey, quiet);
         if (freedTts !== 'declined') {
           evictedTts = true;
           if (freedTts) continue; // immediate retry after freeing VRAM

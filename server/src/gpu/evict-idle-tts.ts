@@ -26,6 +26,19 @@
      once (a character pinned above its book's tier). This also makes the lever
      inert during generation by construction, which is correct: the render path
      already reconciles tiers at run start (ensure-sidecar-loaded.ts:182).
+     A render in flight answers `false` (the caller's one-shot latch is spent,
+     so it is never re-asked); only a splice / QA repair with NO render answers
+     `'declined'` (#4075), because a repair is short and the caller should ask
+     again once it ends. Re-asking during a render would land in the gap
+     between one chapter POST's `deregisterJob` and the next one's
+     `registerJob` and unload the render's base. A Fix-audio splice BATCH has
+     the same gap (one splice POST per chapter), so once an admission has seen
+     a repair the lever evicts only after a quiet streak: the gate idle at two
+     consecutive polls at least one poll interval apart AND no splice
+     registered between them (a splice epoch, so a chapter that starts and
+     ends between two polls still restarts the streak), the idle and epoch
+     checks repeated immediately before the unload. The
+     streak is per admission (`QuietPollState`), never module-global.
 
      KNOWN RESIDUAL WINDOW (#1839 finding 2, investigated and left open on
      purpose): "the render path already reconciles at run start, so the lever
@@ -46,11 +59,13 @@
      loop), so marking-then-clearing around just the run-start reconcile would
      either leak scope-breaking `let` hoists across a huge function or clear
      too early to actually close the window — not a change to make with
-     confidence under this fix. The outcome if the race is hit is a sidecar
-     lazy cold-reload on that chapter, NOT corruption or data loss — cold-
-     reload is already documented as a correct fallback
-     (tts/ensure-sidecar-loaded.ts:31-36) — so this is a narrow, benign-outcome
-     gap, not a safety hole. See also active-generation-gate.ts's file header.
+     confidence under this fix. The outcome if the race is hit is NOT
+     corruption or data loss, but it is no longer just a lazy cold-reload
+     (tts/ensure-sidecar-loaded.ts:31-36): since #4066 the op that evicts in
+     this window can be a voice design, which then holds ~6 GB, so a Quality
+     render's next chapter cannot reload its 1.7B base next to it and waits on
+     the capacity budget, and can fail. A narrow gap, not a safety hole. See
+     also active-generation-gate.ts's file header.
 
    Reads both outside dependencies from stateless leaf gates rather than
    importing their owning modules directly:
@@ -73,7 +88,12 @@
    its `reconcileResidentQwenTiers` type — a type-only import still counts as
    an edge for cycle detection (see qwen-tier-reconcile-gate.ts), so the
    injection type below is spelled out locally instead. */
-import { isAnyGenerationActive } from './active-generation-gate.js';
+import {
+  isAnyGenerationActive,
+  isRepairOnlyKnownActive,
+  readSpliceEpoch,
+  type QuietPollState,
+} from './active-generation-gate.js';
 import {
   reconcileResidentQwenTiersIfRegistered,
   type ResidentTtsKeep,
@@ -148,6 +168,15 @@ export interface EvictIdleQwenBaseOpts {
       means unknown, which declines on any resident VoiceDesign. */
   deviceKey?: string;
   signal?: AbortSignal;
+  /** #4075 — the admission's own quiet-poll state, created per
+      `withCapacityRetry` call and passed to every ask. Absent = no quiet-poll
+      rule (a one-off ask). */
+  quiet?: QuietPollState;
+  /** Injected for tests. Monotonic clock for the quiet-poll gap. */
+  _now?: () => number;
+  /** Injected for tests. The splice epoch (defaults to the leaf gate's
+      `readSpliceEpoch`; `null` = unregistered, which counts as moved). */
+  _spliceEpoch?: () => number | null;
   /** Injected for tests. Defaults to the registered-accessor leaf gate
       (./qwen-tier-reconcile-gate.ts), which fails closed to "did not evict"
       when tts/ensure-sidecar-loaded.ts hasn't registered. */
@@ -155,6 +184,11 @@ export interface EvictIdleQwenBaseOpts {
   /** Injected for tests. Returns true when a render may be in flight
       anywhere — defaults to the leaf gate's `isAnyGenerationActive`. */
   _isAnyGenerationActive?: typeof isAnyGenerationActive;
+  /** Injected for tests. True only when a splice / QA repair is KNOWN in flight
+      and no render is — defaults to the leaf gate's `isRepairOnlyKnownActive`
+      (unregistered => false, so an unregistered gate answers `false`, like
+      main, and never `'declined'`). */
+  _isRepairOnlyKnownActive?: typeof isRepairOnlyKnownActive;
   /** Injected for tests. Reads what the sidecar has resident — defaults to
       the leaf gate's `probeSidecarHealthIfRegistered`. Only consulted for a
       design or Quality op (#4066). */
@@ -169,13 +203,70 @@ export interface EvictIdleQwenBaseOpts {
     drop was never resident" — that used to collapse into `true` here (#1839
     finding 1), which made `capacity-retry.ts` `continue` into an immediate,
     wasted retry attempt instead of falling through to its bounded poll; the
-    same is now true of a failed eviction, not just a no-op one. */
+    same is now true of a failed eviction, not just a no-op one.
+    `'declined'` is a hold-off that can clear — a splice or QA repair in flight
+    with NO render (#4075, before and after the health probe), another design
+    resident, or an unreadable probe (#4066) — and leaves the caller's one-shot
+    latch armed so a later poll asks again. A render in flight answers `false`
+    and spends the latch, as before #4075: a book render is one POST per chapter,
+    so there is a gap between one chapter's job deregistering and the next one
+    registering, and a lever re-asked on every poll would land in it and unload
+    the render's base. */
 export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean | 'declined'> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
+  const repairOnly = opts._isRepairOnlyKnownActive ?? isRepairOnlyKnownActive;
   const { modelKey } = opts;
 
+  const quiet = opts.quiet;
+  const now = opts._now ?? (() => performance.now());
+  const readEpoch = opts._spliceEpoch ?? readSpliceEpoch;
+  /* A splice registered since `idleSince` was set (even one that already
+     released: the gate is only sampled at a poll). `null` = unregistered
+     reader = moved, so the rule can never complete unverified. */
+  const epochMoved = (): boolean => {
+    const cur = readEpoch();
+    return cur === null || cur !== quiet?.epoch;
+  };
+  const restartStreak = (t: number): 'declined' => {
+    if (quiet) {
+      quiet.idleSince = t;
+      quiet.epoch = readEpoch();
+    }
+    return 'declined';
+  };
+
+  /* #4075 — a splice / QA repair (and nothing else) is a short "not yet":
+     'declined' keeps the caller's latch armed so it asks again once the repair
+     ends. A render (or an unregistered gate, which reads as active) answers
+     `false` and spends the latch — never 'declined', so a waiting op is not
+     re-asked every poll across a multi-chapter render's inter-chapter gap.
+     One residue: a Listen-row QA repair can run during a render
+     (listen-player-region.tsx), and in the render's chapter gap it reads as
+     repair-only. That is no wider than main's #1839 residual window (the gate
+     already reads idle between a render's POSTs); the quiet-poll rule below
+     narrows it further. Any activity also ends the admission's quiet streak. */
+  const activeAnswer = (): false | 'declined' => {
+    if (quiet) quiet.idleSince = null;
+    if (!repairOnly()) return false;
+    if (quiet) quiet.sawRepair = true;
+    return 'declined';
+  };
+
   if (!modelKey) return false;
-  if (anyGenerationActive()) return false;
+  if (anyGenerationActive()) return activeAnswer();
+
+  /* #4075 quiet-poll rule — a Fix-audio batch is one splice POST per chapter,
+     so the gate reads idle between chapters. Once THIS admission has seen a
+     repair, evict only after the gate has read idle at two consecutive polls
+     at least one poll interval apart with no splice REGISTERED since the first
+     (the splice epoch: a chapter that starts and ends between two polls is
+     never seen by the gate itself, but still restarts the streak). The state is the admission's own (`quiet`), not module-global.
+     No repair seen: nothing changes, the first idle ask evicts. */
+  if (quiet?.sawRepair) {
+    const t = now();
+    if (quiet.idleSince === null || epochMoved()) return restartStreak(t);
+    if (t - quiet.idleSince < quiet.minGapMs) return 'declined';
+  }
 
   /* #1839 finding 5 — a non-Qwen op (Coqui/Kokoro) can never need either
      Qwen base resident, so it may reclaim BOTH idle tiers rather than
@@ -211,7 +302,8 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     }
     if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
-    if (anyGenerationActive()) return false;
+    if (anyGenerationActive()) return activeAnswer();
+    if (quiet?.sawRepair && epochMoved()) return restartStreak(now());
   }
 
   /* Only the heavy shapes report what they freed (the light ops record no

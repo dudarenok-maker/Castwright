@@ -193,8 +193,8 @@ export async function postDesignAndCacheAudition(
              `purpose: 'design'` (#4066): `modelKey` is the book's tier, not
              the design's, so without it a 0.6B book kept its 0.6B base
              resident and the design could never fit on an 8 GB card. */
-          evictIdleTts: (deviceKey) =>
-            evictIdleQwenBase({ modelKey, purpose: 'design', deviceKey, signal: controller.signal }),
+          evictIdleTts: (deviceKey, quiet) =>
+            evictIdleQwenBase({ modelKey, purpose: 'design', deviceKey, signal: controller.signal, quiet }),
         },
       );
     } catch (e) {

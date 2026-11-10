@@ -8,6 +8,7 @@ import {
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from './sidecar-health-gate.js';
 import { registerEndpointCallInFlight } from '../analyzer/analyzer-concurrency.js';
+import { evictIdleQwenBase } from './evict-idle-tts.js';
 
 /* Free-function contract for the reusable no-capacity retry helper (Task 5,
    #1720). Unlike the old SidecarTtsProvider.postWithCapacityRetry, this
@@ -185,7 +186,240 @@ describe('withCapacityRetry', () => {
 
     expect(res.status).toBe(200);
     expect(evictIdleTts).toHaveBeenCalledTimes(2);
-    expect(evictIdleTts).toHaveBeenCalledWith('cuda:0');
+    expect(evictIdleTts).toHaveBeenCalledWith('cuda:0', expect.objectContaining({ sawRepair: false }));
+  });
+
+  it('#4075: a lever declining while a repair is active is re-asked on later polls, and frees once it ends', async () => {
+    /* Behaviour pin on withCapacityRetry's 'declined' handling (the mock lever
+       stands in for evictIdleQwenBase): a short repair holds the lever at
+       'declined' (latch stays armed); when it ends the lever frees the base and
+       admission succeeds. The real-lever test below is the regression test. */
+    let generationActive = true;
+    const evictIdleTts = vi.fn(async () => (generationActive ? ('declined' as const) : true));
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) generationActive = false; // the repair ends during the third poll
+      return calls < 4 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+    const pollMs = 20;
+
+    const start = Date.now();
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs,
+      maxAttempts: 6,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(200);
+    expect(evictIdleTts).toHaveBeenCalledTimes(3); // declined x2, then the real free
+    expect(doPost).toHaveBeenCalledTimes(4);
+    /* No tight loop: each declined attempt takes the poll wait (2 waits before the free). */
+    expect(elapsed).toBeGreaterThanOrEqual(2 * pollMs - 10);
+  });
+
+  it('#4075: a design that hits NoCapacity during a repair is freed by the REAL lever once the repair ends', async () => {
+    /* End to end through evictIdleQwenBase: a repair is in flight for the
+       first denials, then ends. Before #4075 the lever answered `false` during
+       the repair, the latch was spent, and the base was never freed - so
+       admission is only granted here once a reconcile (an eviction) has run. */
+    let repairActive = true;
+    const reconcile = vi.fn(async () => true);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) repairActive = false;
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: (deviceKey, quiet) =>
+        evictIdleQwenBase({
+          modelKey: 'qwen3-tts-0.6b',
+          purpose: 'design',
+          deviceKey,
+          quiet,
+          _spliceEpoch: () => 0,
+          _isAnyGenerationActive: () => repairActive,
+          _isRepairOnlyKnownActive: () => repairActive,
+          _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+          _reconcile: reconcile,
+        }),
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 6,
+    });
+
+    expect(res.status).toBe(200);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    /* Quiet-poll rule: the first idle poll (call 3) does NOT evict; the second
+       (call 4) does, so admission is granted on call 5. */
+    expect(doPost).toHaveBeenCalledTimes(5);
+  });
+
+  it('#4075: a splice-batch gap (idle, then the next chapter registers) does not evict; a real quiet streak does', async () => {
+    /* Fix-audio batch: one splice POST per chapter, so the gate reads idle
+       between chapters. Poll 3 is a gap (idle), poll 4 is chapter 2 (active),
+       polls 5-6 are idle for good. Only the second consecutive idle poll may
+       evict. */
+    const activeByPoll = [true, true, false, true, false, false];
+    const epoch = 0;
+    let calls = 0;
+    const reconcile = vi.fn(async () => true);
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+    let evictedAtPoll = 0;
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: async (deviceKey, quiet) => {
+        const active = activeByPoll[calls - 1] ?? false;
+        const out = await evictIdleQwenBase({
+          modelKey: 'qwen3-tts-0.6b',
+          purpose: 'design',
+          deviceKey,
+          quiet,
+          _spliceEpoch: () => epoch,
+          _isAnyGenerationActive: () => active,
+          _isRepairOnlyKnownActive: () => active,
+          _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+          _reconcile: async () => {
+            evictedAtPoll = calls;
+            return reconcile();
+          },
+        });
+        return out;
+      },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 10,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictedAtPoll).toBe(6);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('#4075: a short chapter that splices wholly BETWEEN two polls (unseen by the gate) does not let poll 3 evict', async () => {
+    /* Reviewer's repro: gap 1, an unseen short chapter, gap 2. The gate reads
+       idle at every poll after the first, but the splice epoch moves between
+       polls 2 and 3, so poll 3 restarts the streak; only poll 4 may evict. */
+    let epoch = 0;
+    let calls = 0;
+    let evictedAtPoll = 0;
+    const reconcile = vi.fn(async () => true);
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) epoch += 1; // chapter 2 registers and releases before poll 3's ask
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: async (deviceKey, quiet) => {
+        const active = calls === 1;
+        return evictIdleQwenBase({
+          modelKey: 'qwen3-tts-0.6b',
+          purpose: 'design',
+          deviceKey,
+          quiet,
+          _spliceEpoch: () => epoch,
+          _isAnyGenerationActive: () => active,
+          _isRepairOnlyKnownActive: () => active,
+          _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+          _reconcile: async () => {
+            evictedAtPoll = calls;
+            return reconcile();
+          },
+        });
+      },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 10,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictedAtPoll).toBe(4);
+  });
+
+  it('#4075: during a RENDER the real lever is consulted once (latch spent) and never re-asked, even after the render ends', async () => {
+    /* A book render has a gap between one chapter's job deregistering and the
+       next registering; a lever re-asked on every poll would land in it and
+       unload the render's base. So a render answers `false` (spends the
+       latch). The render "ends" on the third denial; the lever must NOT be
+       asked again, so nothing is reconciled and admission is never granted. */
+    let renderActive = true;
+    const reconcile = vi.fn(async () => true);
+    const leverCalls = vi.fn();
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) renderActive = false;
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts: (deviceKey) => {
+          leverCalls();
+          return evictIdleQwenBase({
+            modelKey: 'qwen3-tts-0.6b',
+            purpose: 'design',
+            deviceKey,
+            _isAnyGenerationActive: () => renderActive,
+            _isRepairOnlyKnownActive: () => false,
+            _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+            _reconcile: reconcile,
+          });
+        },
+        analyzerEvictWouldHelp: async () => false,
+        evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+        pollMs: 0,
+        maxAttempts: 5,
+      }),
+    ).rejects.toThrow(NoCapacityError);
+
+    expect(leverCalls).toHaveBeenCalledTimes(1);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('#4075: a lever that keeps declining is bounded by maxAttempts, not retried in a tight loop', async () => {
+    /* Behaviour pin on the retry loop with a mock lever (passes without #4075). */
+    const evictIdleTts = vi.fn().mockResolvedValue('declined');
+    const doPost = vi.fn(async () => noCapacityResponse(6144, 'cuda:0'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts,
+        analyzerEvictWouldHelp: async () => false,
+        evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toThrow(NoCapacityError);
+
+    expect(doPost).toHaveBeenCalledTimes(3);
+    expect(evictIdleTts).toHaveBeenCalledTimes(3);
   });
 
   it('#1839 finding 1: evictIdleTts reporting false does not burn an immediate no-op retry — it still takes the poll wait', async () => {
@@ -1074,6 +1308,25 @@ describe('withCapacityRetry — #4066 give-up message and the auto-free lever', 
       generationActive: true,
     });
     expect(msg).toMatch(/The standard Qwen voice model is loaded — It is in use by the chapter render in progress/);
+  });
+
+  it('#4075: a repair-only blocker is worded as a repair with no pause advice', async () => {
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, kokoroLoaded: false }));
+    const err = await withCapacityRetry(async () => noCapacityResponse(6_144, 'cuda:0'), {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      endpointUnloadNotes: () => [],
+      evictIdleTts: async () => 'declined',
+      isGenerationKnownActive: () => true,
+      isRepairOnlyKnownActive: () => true,
+      pollMs: 0,
+      maxAttempts: 2,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect((err as Error).message).toMatch(/in use by the chapter repair in progress — wait for it to finish/);
+    expect((err as Error).message).not.toMatch(/pause/);
   });
 
   it('does not blame the render for holding the model when the blocked op IS the render synth', async () => {

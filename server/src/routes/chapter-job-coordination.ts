@@ -10,7 +10,7 @@
    `abortInFlightChapterJob` from generation.ts. generation.ts never imports the
    splice route. */
 
-import { setInFlightSpliceCounter } from '../gpu/active-generation-gate.js';
+import { setInFlightSpliceCounter, setSpliceEpochReader } from '../gpu/active-generation-gate.js';
 
 const inFlightSplices = new Map<string, AbortController>();
 
@@ -19,6 +19,11 @@ const inFlightSplices = new Map<string, AbortController>();
    `isAnyGenerationActive()` sees them (the gate imports nothing, so this edge
    cannot close a cycle). */
 setInFlightSpliceCounter(() => inFlightSplices.size);
+
+/* #4075 — monotonic count of registrations, so the gate's quiet-poll rule can
+   see a splice that registered and released between two polls. */
+let spliceEpoch = 0;
+setSpliceEpochReader(() => spliceEpoch);
 
 function key(bookId: string, chapterId: number): string {
   return `${bookId}::${chapterId}`;
@@ -32,6 +37,7 @@ export function registerSplice(
   chapterId: number,
   controller: AbortController,
 ): () => void {
+  spliceEpoch += 1;
   const k = key(bookId, chapterId);
   const prev = inFlightSplices.get(k);
   if (prev) prev.abort();
