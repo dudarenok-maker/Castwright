@@ -34,8 +34,10 @@
      `registerJob` and unload the render's base. A Fix-audio splice BATCH has
      the same gap (one splice POST per chapter), so once an admission has seen
      a repair the lever evicts only after a quiet streak: the gate idle at two
-     consecutive polls at least one poll interval apart, activity in between
-     resetting it, the idle check repeated immediately before the unload. The
+     consecutive polls at least one poll interval apart AND no splice
+     registered between them (a splice epoch, so a chapter that starts and
+     ends between two polls still restarts the streak), the idle and epoch
+     checks repeated immediately before the unload. The
      streak is per admission (`QuietPollState`), never module-global.
 
      KNOWN RESIDUAL WINDOW (#1839 finding 2, investigated and left open on
@@ -89,6 +91,7 @@
 import {
   isAnyGenerationActive,
   isRepairOnlyKnownActive,
+  readSpliceEpoch,
   type QuietPollState,
 } from './active-generation-gate.js';
 import {
@@ -171,6 +174,9 @@ export interface EvictIdleQwenBaseOpts {
   quiet?: QuietPollState;
   /** Injected for tests. Monotonic clock for the quiet-poll gap. */
   _now?: () => number;
+  /** Injected for tests. The splice epoch (defaults to the leaf gate's
+      `readSpliceEpoch`; `null` = unregistered, which counts as moved). */
+  _spliceEpoch?: () => number | null;
   /** Injected for tests. Defaults to the registered-accessor leaf gate
       (./qwen-tier-reconcile-gate.ts), which fails closed to "did not evict"
       when tts/ensure-sidecar-loaded.ts hasn't registered. */
@@ -213,6 +219,21 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
 
   const quiet = opts.quiet;
   const now = opts._now ?? (() => performance.now());
+  const readEpoch = opts._spliceEpoch ?? readSpliceEpoch;
+  /* A splice registered since `idleSince` was set (even one that already
+     released: the gate is only sampled at a poll). `null` = unregistered
+     reader = moved, so the rule can never complete unverified. */
+  const epochMoved = (): boolean => {
+    const cur = readEpoch();
+    return cur === null || cur !== quiet?.epoch;
+  };
+  const restartStreak = (t: number): 'declined' => {
+    if (quiet) {
+      quiet.idleSince = t;
+      quiet.epoch = readEpoch();
+    }
+    return 'declined';
+  };
 
   /* #4075 — a splice / QA repair (and nothing else) is a short "not yet":
      'declined' keeps the caller's latch armed so it asks again once the repair
@@ -237,15 +258,13 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   /* #4075 quiet-poll rule — a Fix-audio batch is one splice POST per chapter,
      so the gate reads idle between chapters. Once THIS admission has seen a
      repair, evict only after the gate has read idle at two consecutive polls
-     at least one poll interval apart (any activity in between resets the
-     streak). The state is the admission's own (`quiet`), not module-global.
+     at least one poll interval apart with no splice REGISTERED since the first
+     (the splice epoch: a chapter that starts and ends between two polls is
+     never seen by the gate itself, but still restarts the streak). The state is the admission's own (`quiet`), not module-global.
      No repair seen: nothing changes, the first idle ask evicts. */
   if (quiet?.sawRepair) {
     const t = now();
-    if (quiet.idleSince === null) {
-      quiet.idleSince = t;
-      return 'declined';
-    }
+    if (quiet.idleSince === null || epochMoved()) return restartStreak(t);
     if (t - quiet.idleSince < quiet.minGapMs) return 'declined';
   }
 
@@ -284,6 +303,7 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
     if (anyGenerationActive()) return activeAnswer();
+    if (quiet?.sawRepair && epochMoved()) return restartStreak(now());
   }
 
   /* Only the heavy shapes report what they freed (the light ops record no

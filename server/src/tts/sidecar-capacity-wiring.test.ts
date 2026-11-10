@@ -113,5 +113,12 @@ describe('SidecarTtsProvider → withCapacityRetry wiring (#4066)', () => {
     expect(mockEvictIdle).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: 'qwen3-tts-0.6b', deviceKey: 'cuda:1' }),
     );
+    // #4075: withCapacityRetry's own per-admission quiet state reaches the lever; without it the
+    // quiet-poll rule never runs for a Quality preview / sample.
+    const quiet = mockEvictIdle.mock.calls[0][0].quiet;
+    expect(quiet).toMatchObject({ sawRepair: false, idleSince: null, epoch: null });
+    expect(typeof quiet?.minGapMs).toBe('number');
+    // The same object on every ask of one admission, so a streak can accumulate.
+    for (const c of mockEvictIdle.mock.calls) expect(c[0].quiet).toBe(quiet);
   });
 });

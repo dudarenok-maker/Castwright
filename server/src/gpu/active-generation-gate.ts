@@ -53,15 +53,20 @@
     concurrent admissions never share a streak. `minGapMs` is its poll
     interval; `sawRepair` latches once the lever declined because a repair or
     splice was active; `idleSince` is the time of the first idle poll in the
-    current quiet streak (null = no streak, reset by any activity). */
+    current quiet streak (null = no streak). The streak restarts on any
+    activity seen at a poll AND on any splice that registered since
+    `idleSince` was set, even one that already released (the splice epoch, see
+    `readSpliceEpoch`); `epoch` is the epoch read when `idleSince` was set. */
 export interface QuietPollState {
   minGapMs: number;
   sawRepair: boolean;
   idleSince: number | null;
+  epoch: number | null;
 }
 
 let provider: (() => string[]) | null = null;
 let spliceCounter: (() => number) | null = null;
+let spliceEpochReader: (() => number) | null = null;
 
 /** Registered by routes/generation.ts at module init with its existing
     `activeGenerationBooks` accessor. */
@@ -77,6 +82,25 @@ export function setActiveGenerationBooksProvider(fn: () => string[]): void {
     one, and a splice can only exist once its registry (the registrant) has loaded. */
 export function setInFlightSpliceCounter(fn: () => number): void {
   spliceCounter = fn;
+}
+
+/** #4075 — registered by routes/chapter-job-coordination.ts with a monotonic
+    count of every `registerSplice` ever made. The quiet-poll rule needs it
+    because the gate is only SAMPLED at each poll: a chapter that registers and
+    releases wholly between two polls is invisible to the count above, but
+    moves this epoch. A render's registration bumps nothing: a render is never
+    'declined' (it spends the caller's latch), so it never reaches the quiet
+    rule. */
+export function setSpliceEpochReader(fn: () => number): void {
+  spliceEpochReader = fn;
+}
+
+/** Current splice epoch, or `null` when no reader is registered. Callers must
+    treat `null` as "moved" (fail closed): an unregistered reader can never
+    complete the quiet rule, so the lever declines rather than evicting on a
+    streak it cannot verify. */
+export function readSpliceEpoch(): number | null {
+  return spliceEpochReader ? spliceEpochReader() : null;
 }
 
 function spliceActive(): boolean {

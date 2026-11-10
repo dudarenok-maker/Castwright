@@ -246,6 +246,7 @@ describe('withCapacityRetry', () => {
           purpose: 'design',
           deviceKey,
           quiet,
+          _spliceEpoch: () => 0,
           _isAnyGenerationActive: () => repairActive,
           _isRepairOnlyKnownActive: () => repairActive,
           _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
@@ -270,6 +271,7 @@ describe('withCapacityRetry', () => {
        polls 5-6 are idle for good. Only the second consecutive idle poll may
        evict. */
     const activeByPoll = [true, true, false, true, false, false];
+    const epoch = 0;
     let calls = 0;
     const reconcile = vi.fn(async () => true);
     const doPost = vi.fn(async () => {
@@ -289,6 +291,7 @@ describe('withCapacityRetry', () => {
           purpose: 'design',
           deviceKey,
           quiet,
+          _spliceEpoch: () => epoch,
           _isAnyGenerationActive: () => active,
           _isRepairOnlyKnownActive: () => active,
           _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
@@ -308,6 +311,51 @@ describe('withCapacityRetry', () => {
     expect(res.status).toBe(200);
     expect(evictedAtPoll).toBe(6);
     expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('#4075: a short chapter that splices wholly BETWEEN two polls (unseen by the gate) does not let poll 3 evict', async () => {
+    /* Reviewer's repro: gap 1, an unseen short chapter, gap 2. The gate reads
+       idle at every poll after the first, but the splice epoch moves between
+       polls 2 and 3, so poll 3 restarts the streak; only poll 4 may evict. */
+    let epoch = 0;
+    let calls = 0;
+    let evictedAtPoll = 0;
+    const reconcile = vi.fn(async () => true);
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) epoch += 1; // chapter 2 registers and releases before poll 3's ask
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: async (deviceKey, quiet) => {
+        const active = calls === 1;
+        return evictIdleQwenBase({
+          modelKey: 'qwen3-tts-0.6b',
+          purpose: 'design',
+          deviceKey,
+          quiet,
+          _spliceEpoch: () => epoch,
+          _isAnyGenerationActive: () => active,
+          _isRepairOnlyKnownActive: () => active,
+          _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+          _reconcile: async () => {
+            evictedAtPoll = calls;
+            return reconcile();
+          },
+        });
+      },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 10,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictedAtPoll).toBe(4);
   });
 
   it('#4075: during a RENDER the real lever is consulted once (latch spent) and never re-asked, even after the render ends', async () => {

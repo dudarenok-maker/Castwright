@@ -66,4 +66,25 @@ describe('active-generation-gate', () => {
     books = ['book-1'];
     expect(isRepairOnlyKnownActive()).toBe(false); // a render is also running: render wording
   });
+
+  /* #4075 - the quiet-poll rule's splice epoch. */
+  it('readSpliceEpoch is null unregistered (callers treat it as moved) and reads the registered reader', async () => {
+    const { setSpliceEpochReader, readSpliceEpoch } = await import('./active-generation-gate.js');
+    expect(readSpliceEpoch()).toBeNull();
+    let n = 7;
+    setSpliceEpochReader(() => n);
+    expect(readSpliceEpoch()).toBe(7);
+    n = 8;
+    expect(readSpliceEpoch()).toBe(8);
+  });
+
+  it('registerSplice bumps the epoch even when the splice releases before anyone looks', async () => {
+    const { readSpliceEpoch } = await import('./active-generation-gate.js');
+    const { registerSplice } = await import('../routes/chapter-job-coordination.js');
+    const before = readSpliceEpoch();
+    expect(before).not.toBeNull();
+    const release = registerSplice('book-epoch', 1, new AbortController());
+    release();
+    expect(readSpliceEpoch()).toBe((before as number) + 1);
+  });
 });

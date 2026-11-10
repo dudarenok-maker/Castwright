@@ -339,7 +339,7 @@ export async function withCapacityRetry(
 
   /* #4075 — this admission's own quiet-poll state for the TTS lever (never
      shared across concurrent admissions). */
-  const quiet: QuietPollState = { minGapMs: pollMs, sawRepair: false, idleSince: null };
+  const quiet: QuietPollState = { minGapMs: pollMs, sawRepair: false, idleSince: null, epoch: null };
   let evicted = false;
   let evictedTts = false;
   let waiting = false;

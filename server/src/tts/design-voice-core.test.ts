@@ -187,10 +187,13 @@ describe('runVoiceDesign', () => {
     // chance to free VRAM before the ~60s poll-then-fail.
     expect(capturedOpts?.evictIdleTts).toBeTypeOf('function');
     mockEvictIdleQwenBase.mockClear();
-    await capturedOpts!.evictIdleTts!('cuda:0', { minGapMs: 0, sawRepair: false, idleSince: null });
+    const q: QuietPollState = { minGapMs: 0, sawRepair: false, idleSince: null, epoch: null };
+    await capturedOpts!.evictIdleTts!('cuda:0', q);
     expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: 'qwen3-tts-1.7b', deviceKey: 'cuda:0' }),
     );
+    // #4075: the admission's own quiet state is forwarded by identity, or the quiet-poll rule is dead.
+    expect(mockEvictIdleQwenBase.mock.calls[0][0].quiet).toBe(q);
   });
 
   it('#4066 — tells the lever this is a voice DESIGN, so it frees the standard Qwen base even on a 0.6B book', async () => {
@@ -208,10 +211,12 @@ describe('runVoiceDesign', () => {
     });
 
     mockEvictIdleQwenBase.mockClear();
-    await capturedOpts!.evictIdleTts!('cuda:0', { minGapMs: 0, sawRepair: false, idleSince: null });
+    const q: QuietPollState = { minGapMs: 0, sawRepair: false, idleSince: null, epoch: null };
+    await capturedOpts!.evictIdleTts!('cuda:0', q);
     expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: 'qwen3-tts-0.6b', purpose: 'design' }),
     );
+    expect(mockEvictIdleQwenBase.mock.calls[0][0].quiet).toBe(q);
   });
 
   it("#1839 finding 4 — a capacity failure's own message (naming the blocking model) reaches the caller, not a generic fallback", async () => {
