@@ -320,6 +320,8 @@ export interface RunOpts {
   /** Subset only. Default true: pre-seed `cache.stage1` so the subset takes the
       book-already-analysed branch. False leaves the cache as the last run left it. */
   seedCache?: boolean;
+  /** Replace the stock Phase-1 analyzer built from `fresh.speakerId`. */
+  phase1?: Analyzer;
 }
 
 export async function run(
@@ -337,7 +339,7 @@ export async function run(
   opts.onJob?.(job);
   const rec = getManuscript(manuscriptId);
   if (!rec) throw new Error('manuscript missing');
-  const phase1Sel = sel(phase1(fresh.speakerId), 'phase1-model');
+  const phase1Sel = sel(opts.phase1 ?? phase1(fresh.speakerId), 'phase1-model');
   if (kind === 'subset') {
     if (opts.seedCache !== false) {
       await saveAnalysisCache(manuscriptId, {
@@ -368,6 +370,18 @@ export async function run(
   } as never);
   return events;
 }
+
+/** Plan 291 R18 (Tasks 26, 27): the one job-runner seam. A
+    `describe.each(['main', 'subset'])` body takes `runJob(kind)` and never branches on
+    the kind; the subset leg seeds its cache as `run` does. */
+export const runJob =
+  (kind: 'main' | 'subset') =>
+  (
+    book: HarnessBook,
+    fresh?: { roster: CharacterOutput[]; speakerId: string | string[] | ((chapterId: number) => string) },
+    opts?: RunOpts,
+  ): Promise<Sent[]> =>
+    run(book.manuscriptId, book.bookDir, kind, fresh, opts);
 
 /** Replay a subset run on the cache the previous run left behind (a
     `cast_incomplete` Retry): same as `run(..., 'subset')` without re-seeding. */

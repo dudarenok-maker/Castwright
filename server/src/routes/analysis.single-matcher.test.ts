@@ -47,6 +47,7 @@ import {
   resetHarness,
   routeVoice,
   run,
+  runJob,
   runSubsetRetry,
   sel,
   setPhase0Hook,
@@ -454,6 +455,7 @@ describe('#4031 main job: run start and cache classification', () => {
     return seen;
   }
 
+  /* A17 is main-only (R14): the subset job builds no Phase-0 watermark, so Phase 1 never pipelines there. */
   it('A17a: with per-phase models on a cast book, no Phase-1 take exists before Phase 0b', async () => {
     const b = seed([{ ...NARR }, { ...PRIOR_WREN }]);
     expect(await stage1AtFirstPhase1(b)).toBe(true);
@@ -559,6 +561,7 @@ describe('#4031 main job: run start and cache classification', () => {
     expect(await stage1AtFirstPhase1(b)).toBe(true);
   });
 
+  /* A16 is main-only (R14): a Re-parse clears the analysis cache (book-state.ts reparse, `clearAnalysisCache` ~:1768), so the next run is a main one. */
   it('A16 (route): Re-parse, then re-analyse - the carryover is in cast.json at run start with its dismissal records', async () => {
     const b = seed([]);
     const olga = {
@@ -733,9 +736,10 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
     b: HarnessBook,
     fresh: Parameters<typeof run>[3] = FRESH,
     opts?: Parameters<typeof run>[4],
+    kind: 'main' | 'subset' = 'main',
   ): Promise<void> => {
     setPhase1Hook(abortAtFirstPhase1());
-    await run(b.manuscriptId, b.bookDir, 'main', fresh, opts);
+    await runJob(kind)(b, fresh, opts);
     setPhase1Hook(undefined);
   };
   const ids = (rows: Row[]): string[] => rows.map((r) => String(r.id));
@@ -749,9 +753,11 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
     for (const b of books.splice(0)) await cleanupBook(b);
   });
 
+  /* Plan 291 R14 (Task 26): A14 runs through both jobs; the subset's snapshot is its Phase 0a one. */
+  describe.each(['main', 'subset'] as const)('A14a + F14 (%s)', (kind) => {
   it('A14a: stopped after the Phase-0b snapshot and never resumed, the cast is only extended', async () => {
     const b = seed([{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }], undefined, BODY16);
-    await stopAtPhase1(b);
+    await stopAtPhase1(b, FRESH, undefined, kind);
     const cast = readCast(b.bookDir);
     /* Every prior row is still there, the joined analyzer row is the prior row, and the
        descriptor-named new row is its own (unfolded) row - not the Unknown male bucket. */
@@ -786,11 +792,12 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
       e.name = 'AbortError';
       throw e;
     });
-    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    await runJob(kind)(b, FRESH);
     setPhase1Hook(undefined);
     expect(voice?.status).toBe(200);
     const row = readCast(b.bookDir).find((c) => c.id === 'the-jogger')!;
     expect((row.overrideTtsVoices as { qwen?: { name: string } }).qwen?.name).toBe('route-voice-the-jogger');
+  });
   });
 
   it("R8/carry 4: a merge's cache re-target landing between Phase 0b's two cache patches survives", async () => {
@@ -1175,6 +1182,9 @@ describe('#4031 main job: resume', () => {
     expect(decisionsOf(b)).toEqual(decisionsOf(straight));
   });
 
+  /* A14b's subset leg is STOPPED pending a design decision (Task 26): a stopped subset run's
+     snapshot marks its rows `added-once` (R35), so the resumed subset keeps the fold-dropped
+     `the-jogger` and does not equal an uninterrupted subset run (spec acceptance 14). */
   it('A14b: stopped after the snapshot and resumed, the result equals an uninterrupted run (a fold-dropped run-added row is gone)', async () => {
     const straight = await straightRun();
     /* The row this run added (a descriptor-named speaker nobody attributes to) is folded away
@@ -1921,15 +1931,19 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
   });
 });
 
-/* ---- Plan 291 Task 22 - re-analysis identity acceptance through the main job ---- */
+/* ---- Plan 291 Tasks 22 and 26 - re-analysis identity acceptance through both jobs ---- */
 
 /** A main run whose Phase 1 attributes `perChapter` lines per chapter, handed out in turn to
     `speakers`. Three chapters of 40 clear the drift gate's 100-sentence floor
     (`attributionDriftExceeded`), under which the gate cannot fire at all. Runs the harness's
     Phase-1 hook first, so `setPhase1Hook` / `midRun` still apply. */
-async function runLots(b: HarnessBook, rosterRows: CharacterOutput[], speakers: string[], perChapter = 40): Promise<Sent[]> {
-  const rec = getManuscript(b.manuscriptId);
-  if (!rec) throw new Error('manuscript missing');
+async function runLots(
+  b: HarnessBook,
+  rosterRows: CharacterOutput[],
+  speakers: string[],
+  perChapter = 40,
+  kind: 'main' | 'subset' = 'main',
+): Promise<Sent[]> {
   const base = phase1(speakers[0]);
   const lots: Analyzer = {
     ...base,
@@ -1946,17 +1960,11 @@ async function runLots(b: HarnessBook, rosterRows: CharacterOutput[], speakers: 
       };
     }) as unknown as Analyzer['runStage2Chapter'],
   };
-  (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(lots, 'phase1-model');
-  const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'main');
-  await runMainAnalyzerJob(job, rec as never, sel(phase0(rosterRows), 'phase0-model'), {
-    requestedFresh: false,
-    allowStage1Shrink: true,
-    requestedModel: undefined,
-  } as never);
-  return events;
+  return runJob(kind)(b, { roster: rosterRows, speakerId: speakers[0] }, { phase1: lots });
 }
 
-describe('#4031 main job: identity acceptance (Task 22)', () => {
+describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (Tasks 22, 26)', (kind) => {
+  const go = runJob(kind);
   const orig = {
     retries: process.env.STAGE2_COVERAGE_RETRIES,
     lag: process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS,
@@ -2064,7 +2072,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       { ...NARR },
       pr(PRIOR_ID, 'Wren', { voiceState: 'locked', voiceId: 'wren-voice-id', overrideTtsVoices: voice }),
     ]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
       speakerId: PRIOR_ID,
     });
@@ -2101,7 +2109,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     ]);
     /* Boris is the control: a new minor row with no lines is dropped by the same fold. */
     const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr(FRESH_ID, 'Wren Ashby', { role: 'minor' }), boris],
       speakerId: 'narrator',
     });
@@ -2135,7 +2143,8 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     { title: 'wren-a + wren-b', twins: ['wren-a', 'wren-b'], fresh: ['wren-a', 'wren-b'] },
     { title: 'wren + wren-2', twins: ['wren', 'wren-2'], fresh: ['wren', 'wren-2'] },
   ];
-  for (const pipelined of [false, true]) {
+  /* A17b is main-only: the subset job builds no Phase-0 watermark, so it has no pipelined path. */
+  for (const pipelined of kind === 'main' ? [false, true] : [false]) {
     for (const { title, twins, fresh } of TWINS) {
       it(`A2${pipelined ? '/A17b (pipelined)' : ''}: twin roster ${title} keeps both twins, their declines and their own lines`, async () => {
         if (pipelined) {
@@ -2149,7 +2158,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
           pr(ta, 'Wren', { notLinkedTo: [tb] }),
           pr(tb, 'Wren', { notLinkedTo: [ta] }),
         ]);
-        const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        const events = await go(b, {
           roster: [NARR, ...fresh.map((id) => fr(id, 'Wren'))],
           speakerId: two(fresh[0], fresh[1]),
         });
@@ -2192,7 +2201,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
         const d = readCache(b.manuscriptId)?.matchPlan?.decisions[raw];
         return d?.kind === 'new' ? d.id : raw;
       };
-      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      const events = await go(b, {
         /* "Anna Kay" still joins a1 by name; the join would normally be recorded as a retirement. */
         roster: [NARR, fr('fresh-one', 'Nobody Known'), fr('fresh-two', 'Anna'), fr('ak', 'Anna Kay')],
         speakerId: (chapterId) => (chapterId === 2 ? minted('fresh-two') : minted('fresh-one')),
@@ -2221,7 +2230,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
   it('A4 (N2): a merged-away id and a same-name row both join the survivor - no new row, nothing displaced', async () => {
     const b = seed([{ ...NARR }, pr('old-weir', 'Old Weir', { voiceState: 'locked', voiceId: 'ow-voice' })]);
     writeHistory(b, { supersededBy: { 'brann-weir': 'old-weir' }, supersededByKind: { 'brann-weir': 'user' } });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('brann-weir', 'Brann Weir'), fr('ow2', 'Old Weir')],
       speakerId: 'old-weir',
     });
@@ -2245,7 +2254,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
 
   it('A5 (P4-2): "John Smith" joins js; "John" is a new row with suggestions to js and jd', async () => {
     const b = seed([{ ...NARR }, pr('js', 'John Smith'), pr('jd', 'John Doe')]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('x1', 'John Smith'), fr('x2', 'John')],
       speakerId: two('js', 'x2'),
     });
@@ -2259,7 +2268,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
 
   it('A6: a T3 name with one voiced and one unvoiced candidate gives a suggestion, not a join', async () => {
     const b = seed([{ ...NARR }, pr('a1', 'Anna Kay', { voiceId: 'v1' }), pr('a2', 'Anna Lee')]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('x', 'Anna')],
       speakerId: 'x',
     });
@@ -2296,7 +2305,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       writeHistory(b, { supersededBy: { 'brann-weir': 'old-weir' }, supersededByKind: { 'brann-weir': 'user' } });
       /* Every fresh row carries a link of its own, to a character the prior rows never chose. */
       const stray = { matchedFrom: quinnLink, notLinkedTo: [{ bookId: sib, characterId: 'wren-s' }] };
-      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      const events = await go(b, {
         roster: [NARR, fr('brann-weir', 'Brann Weir', stray), fr('ow2', 'Old Weir', stray), fr('quinn', 'Quinn', stray)],
         speakerId: two('old-weir', 'quinn'),
       });
@@ -2333,7 +2342,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
             ],
           }),
         );
-        const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        const events = await go(b, {
           roster: [NARR, fr('anna', 'Anna', { ageRange: 'teen' })],
           speakerId: 'anna',
         });
@@ -2363,7 +2372,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
           characters: [{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked', matchedFrom: link })],
         }),
       );
-      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      const events = await go(b, {
         roster: [NARR, fr(FRESH_ID, 'Wren Ashby', { ageRange: 'teen' })],
         speakerId: PRIOR_ID,
       });
@@ -2383,7 +2392,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     const quiet = pr('quiet', 'Quiet');
     const decl = pr('decl', 'Decl', { notLinkedTo: [{ bookId: 'book-0', characterId: 'z' }, 'anna'] });
     const b = seed([{ ...NARR }, pr('anna', 'Anna', { voiceId: 'v-anna' }), quiet, decl]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, fr('anna', 'Anna')], speakerId: 'anna' });
+    const events = await go(b, { roster: [NARR, fr('anna', 'Anna')], speakerId: 'anna' });
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
     const cast = readCast(b.bookDir);
@@ -2401,7 +2410,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       pr('wren', 'Wren', { aliases: ['Ren'] }),
       pr('brann', 'Brann', { aliases: ['Bran'] }),
     ]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('wren', 'Wren Ashby'), fr('b1', 'Brann Weir')],
       speakerId: two('wren', 'brann'),
     });
@@ -2419,7 +2428,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
   it('A10 (rule 3): a fresh row carrying a merged-away id lands on the survivor even when its name matches another row', async () => {
     const b = seed([{ ...NARR }, pr('keep', 'Keeper'), pr('mira', 'Mira')]);
     writeHistory(b, { supersededBy: { gone: 'keep' } });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('gone', 'Mira')],
       speakerId: 'keep',
     });
@@ -2440,7 +2449,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
   it('A15: a forced-new row mints an id that is no live, superseded, displaced or raw id, and its sentences carry it', async () => {
     const b = seed([{ ...NARR }, pr('wren', 'Wren Ash'), pr('wren-2', 'Wren')]);
     writeHistory(b, { supersededBy: { 'wren-n1': 'wren-2' }, displaced: { 'wren-n2': 'wren-2' } });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('wren', 'Wren'), fr('wren-n3', 'Cora Vale')],
       speakerId: two('wren-n4', 'wren-n3'),
     });
@@ -2461,7 +2470,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
   it('A18: a book whose narrator row is char-narrator re-analyses without attribution_drift and prose lands on it', async () => {
     const b = seed([{ ...NARR, id: 'char-narrator' }, pr(PRIOR_ID, 'Wren')]);
     /* 120 lines: under 100 the drift gate cannot fire, so the claim would be vacuous. */
-    const events = await runLots(b, [NARR, fr(FRESH_ID, 'Wren Ashby')], ['narrator', PRIOR_ID]);
+    const events = await runLots(b, [NARR, fr(FRESH_ID, 'Wren Ashby')], ['narrator', PRIOR_ID], 40, kind);
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
     const cast = readCast(b.bookDir);
@@ -2472,11 +2481,38 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
+  /* M8 (item 17): the drift gate's valid ids are the roster plus the ids live on disk, read
+     lock-free just before the gate - not a run-start read. */
+  it('item 17: a take naming a row added on disk mid-run is kept; a take naming a dead id goes to the narrator', async () => {
+    const app = mkApp();
+    const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren')]);
+    const zed = pr('zed', 'Zed');
+    let put: number | undefined;
+    setPhase1Hook(async () => {
+      if (put !== undefined) return;
+      put = 0;
+      put = (await putCast(app, b.bookId, [...readCast(b.bookDir), zed])).status;
+    });
+    const events = await go(b, { roster: [NARR, fr(FRESH_ID, 'Wren Ashby')], speakerId: ['zed', 'ghost', PRIOR_ID] });
+    setPhase1Hook(undefined);
+    expect(put).toBe(200);
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['narrator', PRIOR_ID, 'zed']);
+    expect(editLines(b)).toEqual({ zed: 3, narrator: 3, [PRIOR_ID]: 3 });
+    /* zed's own cast.json `lines` is not asserted: a row the user added mid-run is carried
+       forward from disk uncounted (reported as a Task 26 finding). */
+    expect(linesById(b.bookDir)).toMatchObject({ narrator: 3, [PRIOR_ID]: 3 });
+    expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
   describe('A21 (rule 12): history provenance', () => {
     it('an untagged and a user entry are T1: the merged-away ids land on the survivor, not on the name match', async () => {
       const b = seed([{ ...NARR }, pr('survivor', 'Old Name'), pr('other', 'Zed')]);
       writeHistory(b, { supersededBy: { u1: 'survivor', u2: 'survivor' }, supersededByKind: { u2: 'user' } });
-      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      const events = await go(b, {
         roster: [NARR, fr('u1', 'Zed'), fr('u2', 'Zed')],
         speakerId: 'survivor',
       });
@@ -2496,7 +2532,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     it('an analyzer entry is not T1: a later ambiguous name gives a suggestion, not a join', async () => {
       const b = seed([{ ...NARR }, pr('survivor', 'Old Name'), pr('z1', 'Zed Kay'), pr('z2', 'Zed Lee')]);
       writeHistory(b, { supersededBy: { 'ana-x': 'survivor' }, supersededByKind: { 'ana-x': 'analyzer' } });
-      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      const events = await go(b, {
         roster: [NARR, fr('ana-x', 'Zed')],
         speakerId: 'ana-x-n1',
       });
