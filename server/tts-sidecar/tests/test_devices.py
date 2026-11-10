@@ -592,7 +592,7 @@ class _FakeEvictQwen(main.QwenEngine):
         self._design = None
         return True
 
-    def maybe_free_idle_base17(self, ttl_seconds):
+    def maybe_free_idle_base17(self, ttl_seconds, reason="idle watchdog"):
         self.base17_freed += 1
         self._base17 = None
         return True
