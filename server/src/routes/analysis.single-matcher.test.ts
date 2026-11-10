@@ -1128,6 +1128,7 @@ describe('#4031 main job: resume', () => {
   };
   const errCode = (events: Array<{ kind: string; code?: unknown }>): unknown =>
     events.find((e) => e.kind === 'error')?.code;
+  const done = (events: Array<{ kind: string }>): boolean => events.some((e) => e.kind === 'result');
 
   it('F1: cast_incomplete -> subset Retry -> resume_required -> main resume plans and completes', async () => {
     const straight = await straightRun();
@@ -1182,9 +1183,61 @@ describe('#4031 main job: resume', () => {
     expect(decisionsOf(b)).toEqual(decisionsOf(straight));
   });
 
-  /* A14b's subset leg is STOPPED pending a design decision (Task 26): a stopped subset run's
-     snapshot marks its rows `added-once` (R35), so the resumed subset keeps the fold-dropped
-     `the-jogger` and does not equal an uninterrupted subset run (spec acceptance 14). */
+  /* The end state compared across runs: cast.json, line counts (narrator included), history, suggestions. */
+  const endState = (b: HarnessBook) => ({
+    shape: shape(b),
+    lines: linesById(b.bookDir),
+    edits: readEdits(b.bookDir).reduce<Record<string, number>>((a, s) => ({ ...a, [String(s.characterId)]: (a[String(s.characterId)] ?? 0) + 1 }), {}),
+    history: (readHistory(b.bookDir) as { supersededBy: Record<string, string> }).supersededBy,
+    suggestions: readSuggestions(b.bookDir),
+  });
+  /** A subset run stopped at its first Phase-1 call (after its snapshot), then resumed. */
+  const stoppedThenResumedSubset = async (b: HarnessBook): Promise<Sent[]> => {
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'subset', FRESH);
+    setPhase1Hook(undefined);
+    expect(ids(readCast(b.bookDir))).toContain('the-jogger'); /* the stop left the snapshot's row */
+    expect(readCache(b.manuscriptId)?.addedRows?.['the-jogger']).toMatchObject({ state: 'run-owned' });
+    return runSubsetRetry(b, FRESH);
+  };
+
+  it("A14b (subset): a resumed subset keeps the stopped attempt's fold-dropped row; the next main run converges on the uninterrupted run", async () => {
+    /* R42: invariant 6 outranks acceptance 14 for a subset resuming a stopped subset. */
+    const straight = seed(PRIORS(), undefined, BODY18);
+    expect(done(await run(straight.manuscriptId, straight.bookDir, 'subset', FRESH))).toBe(true);
+    expect(ids(readCast(straight.bookDir))).not.toContain('the-jogger');
+    const b = seed(PRIORS(), undefined, BODY18);
+    expect(done(await stoppedThenResumedSubset(b))).toBe(true);
+    /* (a) The documented divergence: the subset deletes nothing by ledger, so the stopped
+       attempt's fold-dropped row is still there, still the run's own (R35a). */
+    expect(ids(readCast(b.bookDir))).toContain('the-jogger');
+    expect(readCache(b.manuscriptId)?.addedRows?.['the-jogger']).toMatchObject({ state: 'run-owned' });
+    /* The run-owned entry still marks it as a known run row: the resume re-minted no duplicate. */
+    expect(JSON.stringify(readCast(b.bookDir))).not.toContain('the-jogger-n');
+    /* (b) Convergence: the next main run fold-drops the untouched row (rule 11). */
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+    expect(ids(readCast(b.bookDir))).not.toContain('the-jogger');
+    expect(endState(b)).toEqual(endState(straight));
+  });
+
+  it('R35a: a user edit made between runs on such a row survives the next main persist', async () => {
+    const b = seed(PRIORS(), undefined, BODY18);
+    expect(done(await stoppedThenResumedSubset(b))).toBe(true);
+    await withCastLock(b.bookDir, async () => {
+      const p = castJsonPath(b.bookDir);
+      const cast = JSON.parse(readFileSync(p, 'utf8')) as { characters: Row[] };
+      for (const c of cast.characters) if (c.id === 'the-jogger') c.name = 'The Morning Jogger';
+      writeFileSync(p, JSON.stringify(cast));
+    });
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+    /* Rule 11's fingerprint compare: the user's edit makes the row theirs. */
+    expect(readCast(b.bookDir).find((c) => c.id === 'the-jogger')).toMatchObject({ name: 'The Morning Jogger' });
+    expect(readCache(b.manuscriptId)?.addedRows?.['the-jogger']).toEqual({ state: 'added-once' });
+    expect(linesById(b.bookDir)).toMatchObject(endState(b).edits);
+    expect((readHistory(b.bookDir) as { supersededBy: Record<string, string> }).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
   it('A14b: stopped after the snapshot and resumed, the result equals an uninterrupted run (a fold-dropped run-added row is gone)', async () => {
     const straight = await straightRun();
     /* The row this run added (a descriptor-named speaker nobody attributes to) is folded away
@@ -4119,7 +4172,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
         expect(routed).toBe(routeEdit);
         if (routeEdit) {
           /* Rule 11 on the subset's own ledger: a user change keeps the row; it is now
-             added-once in the cache too (R35). */
+             added-once in the cache too (R35a: the completed persist's R4 for a row it keeps). */
           expect(rowOf(b, 'boris')).toMatchObject({ overrideTtsVoices: expect.anything() });
           expect(entryOf(b, 'boris')).toEqual({ state: 'added-once' });
         } else {
