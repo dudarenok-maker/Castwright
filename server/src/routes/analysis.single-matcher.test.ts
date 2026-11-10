@@ -2235,7 +2235,8 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
   it('A1: #3954 - a single-candidate T3 join keeps the prior id; the voice key does not move', async () => {
     const voice = { qwen: { name: 'wren-voice' } };
     const b = seed([
-      { ...NARR },
+      /* A stale narrator count (fix round 2, I3): the afterEach check needs this run's recount (0). */
+      { ...NARR, lines: 7 },
       pr(PRIOR_ID, 'Wren', { voiceState: 'locked', voiceId: 'wren-voice-id', overrideTtsVoices: voice }),
     ]);
     const events = await go(b, {
@@ -3332,10 +3333,14 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(editLines(b)).toEqual({ anna: 5, boris: 4 });
     expect(linesById(b.bookDir)).toMatchObject({ anna: 5, boris: 4, narrator: 0 });
     /* M6: a further run whose roster still names boris but gives him no line - fold-drop
-       pressure. He stays, added-once (his stale count is the ruled stale-count issue). */
+       pressure. He stays, added-once (his stale count is the ruled stale-count issue). The
+       cached takes go first (plan and ledger kept), so both jobs attribute afresh rather than
+       replay: the silence is real. */
+    await mutateAnalysisCache(b.manuscriptId, { transform: (c) => ({ ...c, chapters: {} }) });
     const silent = await go(b, { roster: BORIS_TOO.roster, speakerId: 'anna' }, { seedCache: false });
     expect(errCode(silent)).toBeUndefined();
     expect(done(silent)).toBe(true);
+    expect(editLines(b)).toEqual({ anna: 3 });
     expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris', 'narrator']);
     expect(entryOf(b, 'boris')).toEqual({ state: 'added-once' });
     expect(history(b).supersededBy).toEqual({});
@@ -3348,7 +3353,8 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     it('F2: a subset run after a stopped main run deletes nothing by its ledger and refreshes the fingerprints of the rows it writes', async () => {
       const JOGGER = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', ageRange: 'adult', evidence: [{ quote: 'The Jogger waved' }] });
       const FRESH = { roster: [NARR, fr(FRESH_ID, 'Wren Ashby'), JOGGER], speakerId: PRIOR_ID };
-      const priors = (): Row[] => [{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })];
+      /* The narrator's stale count (fix round 2, I3) makes the afterEach recount check bite here. */
+      const priors = (): Row[] => [{ ...NARR, lines: 7 }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })];
       const body = `${NEUTRAL}\n\nThe Jogger waved.`;
       const straight = seed(priors(), undefined, body);
       expect(done(await run(straight.manuscriptId, straight.bookDir, 'main', FRESH))).toBe(true);
