@@ -1118,6 +1118,24 @@ recite:
     both outcomes, list the server's separating conditions and test each one's
     starting state against the mirror's inference.
 
+88. **A pre-check moved later must land before the side effects it guarded, not
+    onto a check that sits past them** — PR #4077 pass 1 (#4074): the clone
+    gate of a declined row's design ran before the design's uuid step, so it
+    counted a clone on the voice the row was leaving. The first fix deferred it
+    to `applyOverrideToCastFiles`, the write-time check that knows the new uuid.
+    That check runs after `landStagedDesign` has moved the files onto the key,
+    stamped a new base `rev` and given rows a qwen slot, so a refused design was
+    half-saved while the route said "the design was not persisted"; a redesign
+    destroyed the prior base and staled every follower's variants, and the bulk
+    run's freshness skip read the leftover slot as already designed. It is the
+    guard-shaped sibling of 37. Checkable: when a diff moves a refusal later,
+    list every write between the old and new position and what is left on disk
+    when the refusal fires; the refusal belongs after the step that supplies
+    what it needs and before the first of those writes, ideally under the lock
+    the landing already holds. Test by asserting on disk after a refusal: no new
+    file, an existing file's bytes and `rev` unchanged, no slot, no staged
+    leftovers; then a follow-up run that must not read the refusal as done.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

@@ -3853,11 +3853,17 @@ export interface components {
             previewUrl?: string;
             /** @description preview_ready only — the persona text the preview was designed from. */
             persona?: string;
-            /** @description preview_ready / designed only. */
+            /**
+             * @description preview_ready / designed only, and on the `clone_protected` error when
+             *     the design's uuid step separated the row before the landing refused:
+             *     the separation persists, so the event carries the new uuid with
+             *     `separated: true`.
+             */
             voiceUuid?: string;
             /**
-             * @description preview_ready / designed only. True when this design first separated a
-             *     declined ("Don't reuse") row onto a voice of its own, which minted the
+             * @description preview_ready / designed / error (`clone_protected` only) only. True when
+             *     this design first separated a declined ("Don't reuse") row onto a voice of
+             *     its own, which minted the
              *     `voiceUuid`, renamed the row's qwen slot to `qwen-<voiceUuid>` and dropped
              *     its emotion variants. The client mirrors exactly that when true; absent or
              *     false, a `voiceUuid` the row had none of before is a plain first mint and

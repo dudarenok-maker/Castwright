@@ -582,6 +582,46 @@ describe('castDesignMiddleware', () => {
     expect(row.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 
+  /* #4074: the design's uuid step separated the row, then the landing refused on a clone;
+     the separation persists, so the error event carries it and the tab mirrors the fork. */
+  it('a clone_protected error that carries a separation mirrors the fork and drops the variants', () => {
+    const store = makeStore();
+    openBook(store, 'b1');
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        {
+          id: 'c1',
+          name: 'Aria',
+          voiceUuid: 'u_shared',
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+          },
+        } as never,
+      ]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'first',
+      }),
+    );
+    singleStartCalls[0].cb.onError?.({
+      code: 'clone_protected',
+      message: 'refused',
+      characterId: 'c1',
+      voiceUuid: 'u_forked',
+      separated: true,
+    });
+    const row = store.getState().cast.characters.find((c) => c.id === 'c1')!;
+    expect(row.voiceUuid).toBe('u_forked');
+    expect(row.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
   it('onPreviewReady without a voiceUuid leaves the row alone', () => {
     const store = makeStore();
     store.dispatch(
