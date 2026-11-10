@@ -1305,7 +1305,7 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     existsSync(join(b.bookDir, '.audiobook', 'manuscript-edits.json')) &&
     readEdits(b.bookDir).some((s) => s.chapterId === 1);
   /* The user merges the prior Wren (the row the run joined) into olga (the route: cast.json, history, edits and cache) once, after chapter 1. */
-  const mergeAfterChapterOne = (b: HarnessBook, onMerged?: () => void) => {
+  const mergeAfterChapterOne = (b: HarnessBook, onMerged?: () => void, targetId = 'olga') => {
     const app = mkApp();
     let merged: Promise<{ status: number }> | undefined;
     return {
@@ -1315,7 +1315,7 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
         merged ??= request(app)
           .post(`/api/books/${b.bookId}/cast/merge`)
           .set('Content-Type', 'application/json')
-          .send({ sourceId: PRIOR_ID, targetId: 'olga' })
+          .send({ sourceId: PRIOR_ID, targetId })
           .then((r) => {
             onMerged?.();
             return r;
@@ -1413,6 +1413,42 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       expect(seen.edits).toContain('olga');
       expect(seen.takes).not.toContain(PRIOR_ID);
       expect(seen.takes).toContain('olga');
+    }
+  });
+
+  it('A23: a merge of the prior id into a row this run added: the cache take and the roll both carry the new row', async () => {
+    const b = seedWren();
+    const KIT = { ...WREN_FRESH, id: 'kit-marlow', name: 'Kit Marlow', role: 'minor', gender: 'male' } as CharacterOutput;
+    let merged = false;
+    const m = mergeAfterChapterOne(
+      b,
+      () => {
+        merged = true;
+      },
+      KIT.id,
+    );
+    setPhase1Hook(m.hook);
+    /* The merge re-targets the on-disk decision for w2 to kit's `new` decision, while the
+       in-memory plan still says `join -> w2`. Kit speaks too, so it clears the minor-cast fold. */
+    const SELF = { roster: [NARR, { ...WREN_FRESH, id: PRIOR_ID }, KIT], speakerId: [PRIOR_ID, KIT.id] };
+    const after: Array<{ edits: string[]; takes: string[] }> = [];
+    rollSpy.isPlanned = () => merged;
+    rollSpy.after = (mergedAtCall) => {
+      if (!mergedAtCall) return;
+      after.push({
+        edits: (readEdits(b.bookDir) as Array<{ characterId: string }>).map((s) => s.characterId),
+        takes: Object.values(readCache(b.manuscriptId)!.chapters).flatMap((ss) => ss.map((s) => s.characterId)),
+      });
+    };
+    await run(b.manuscriptId, b.bookDir, 'main', SELF);
+    expect(await m.status()).toBe(200);
+    expect(readCache(b.manuscriptId)!.matchPlan?.decisions[PRIOR_ID]).toMatchObject({ kind: 'new', id: KIT.id });
+    expect(after.length).toBeGreaterThan(0);
+    for (const seen of after) {
+      expect(seen.edits).not.toContain(PRIOR_ID);
+      expect(seen.edits).toContain(KIT.id);
+      expect(seen.takes).not.toContain(PRIOR_ID);
+      expect(seen.takes).toContain(KIT.id);
     }
   });
 
@@ -1515,6 +1551,13 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       const other = { x: { kind: 'join', rawId: 'x', priorId: 'z' } };
       expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), retargeted))[0].characterId).toBe('y');
       expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), other))[0].characterId).toBe('x');
+    });
+    it('a merge into a run-added row (re-targeted to new -> y) follows; a plan-new minted elsewhere does not', async () => {
+      const dir = mkDir([{ id: 'y' }], { x: 'y' });
+      const retargeted = { x: { kind: 'new', rawId: 'x', id: 'y' } };
+      const minted = { x: { kind: 'new', rawId: 'x', id: 'x-n1' } };
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), retargeted))[0].characterId).toBe('y');
+      expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), minted))[0].characterId).toBe('x');
     });
     it('R33: a raw analyzer-chain key that is not a prior id stays itself', async () => {
       const dir = mkDir([{ id: 'b' }], { raw: 'b' });
