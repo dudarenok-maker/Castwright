@@ -29,7 +29,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter, CharacterGoneError } from './qwen-voice.js';
+import { designQwenVoiceForCharacter, CharacterGoneError, hasDeclineMarker } from './qwen-voice.js';
 import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
 import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
@@ -309,11 +309,20 @@ singleDesignRouter.post(
        #2006 series-wide veto: a clone anywhere in the linked series is as
        routine and deterministic a refusal as a clone on this exact book —
        checked here too, so the request 409s before any GPU round rather
-       than failing at the write-time check below. */
+       than failing at the write-time check below.
+       #4074 exception: a row carrying a "Don't reuse" marker
+       (`declinedVoiceFrom`) may be moved onto a new voice uuid by the design
+       itself (the uuid step runs AFTER the GPU render), so a clone on the
+       voice it is leaving — the declined book's — is not one this design
+       could retarget. Only the row's own slots are checked here for such a
+       row; the series scan is left to the write-time check below, which
+       knows the new uuid (#4069) and still answers `clone_protected`, at the
+       cost of one GPU render. */
     if (
       !preview &&
       (characterHasClonedSlot(character) ||
-        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
+        (!hasDeclineMarker(character) &&
+          (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir))))
     ) {
       return res.status(409).json({
         error: `"${character.name ?? characterId}" has a consented cloned voice on this character, or a linked one elsewhere in the series, and cannot be designed on Qwen without silently retargeting it off that clone.`,

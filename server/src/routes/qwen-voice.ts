@@ -1530,7 +1530,7 @@ interface FirstDesignShare {
 }
 
 /* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
-const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
+export const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
 
 /* PR #4007 pass 13 (owner decision: a voice "Don't reuse" created is never shared
    with anyone outside the chain that moved with it) — may a first design of this

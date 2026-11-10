@@ -50,7 +50,7 @@ import {
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant } from './qwen-voice.js';
+import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, hasDeclineMarker, persistEmotionVariant } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
   applyOverrideToCastFiles,
@@ -464,8 +464,18 @@ async function runDesignJob(
          engine (coqui). The owner's decision (GATE 2 review): skip this
          character and report it — refusing the whole sweep would let one
          cloned character block designing the rest; retargeting is the
-         defect itself. */
-      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
+         defect itself.
+         #4074 exception: a row carrying a "Don't reuse" marker
+         (`declinedVoiceFrom`) may be moved onto a new voice uuid by the design
+         itself (after the render), so a clone on the voice it is leaving —
+         the declined book's — is not one this design could retarget. Only its
+         own slots are checked here; the series scan is left to the
+         write-time check in applyOverrideToCastFiles below, which knows the
+         new uuid (#4069) and reports through the same `clonedSkips` channel. */
+      if (
+        characterHasClonedSlot(character) ||
+        (!hasDeclineMarker(character) && (await clonedOnLinkedBook(character)))
+      ) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
