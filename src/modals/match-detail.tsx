@@ -23,7 +23,13 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
   const [sampleBusy, setSampleBusy] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
   if (!character || !voice) return null;
-  const factors = MATCH_FACTORS[character.id] || MATCH_FACTORS.narrator;
+  /* The factor breakdown is design-fixture text keyed by demo character ids; the
+     API returns no factors, so real mode omits the section rather than show it
+     (A120 run 2, F5). */
+  const factors =
+    import.meta.env.VITE_USE_MOCKS === 'true'
+      ? MATCH_FACTORS[character.id] || MATCH_FACTORS.narrator
+      : [];
   const overall = character.matchedFrom?.confidence ?? 0.92;
   async function playSample() {
     if (!voice || !character) return;
@@ -113,37 +119,41 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
                 />
               </div>
               <p className="mt-3 font-bold text-ink truncate">{voice.character}</p>
-              <p className="text-xs text-purple-deep/70 mt-0.5 truncate">{voice.bookTitle}</p>
+              <p className="text-xs text-purple-deep/70 mt-0.5 truncate">
+                {character.matchedFrom?.bookTitle ?? voice.bookTitle}
+              </p>
               {sampleError && (
                 <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {sampleError}</p>
               )}
             </div>
           </section>
 
-          <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
-              Match factors
-            </p>
-            <div className="space-y-3">
-              {factors.map((f) => (
-                <div key={f.id} className="p-3 rounded-2xl bg-canvas border border-ink/5">
-                  <div className="flex items-center justify-between mb-2 gap-3">
-                    <span className="text-sm font-semibold text-ink">{f.label}</span>
-                    <span className="text-xs font-bold text-ink tabular-nums">
-                      {Math.round(f.score * 100)}%
-                    </span>
+          {factors.length > 0 && (
+            <section>
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+                Match factors
+              </p>
+              <div className="space-y-3">
+                {factors.map((f) => (
+                  <div key={f.id} className="p-3 rounded-2xl bg-canvas border border-ink/5">
+                    <div className="flex items-center justify-between mb-2 gap-3">
+                      <span className="text-sm font-semibold text-ink">{f.label}</span>
+                      <span className="text-xs font-bold text-ink tabular-nums">
+                        {Math.round(f.score * 100)}%
+                      </span>
+                    </div>
+                    <div className="h-1 rounded-full bg-ink/6 overflow-hidden mb-2">
+                      <div
+                        className="h-full rounded-full bg-gradient-progress"
+                        style={{ width: `${f.score * 100}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-ink/60 leading-relaxed">{f.detail}</p>
                   </div>
-                  <div className="h-1 rounded-full bg-ink/6 overflow-hidden mb-2">
-                    <div
-                      className="h-full rounded-full bg-gradient-progress"
-                      style={{ width: `${f.score * 100}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-ink/60 leading-relaxed">{f.detail}</p>
-                </div>
-              ))}
-            </div>
-          </section>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section>
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">

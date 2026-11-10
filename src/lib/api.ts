@@ -5007,7 +5007,7 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Don't-reuse failed (${res.status}).`);
+    throw new Error(detail || 'Check the server is running, then try again.');
   }
   return res.json();
 }

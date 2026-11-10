@@ -796,6 +796,17 @@ export function ConfirmRoute() {
     };
   }, [bookId, dispatch]);
 
+  /* The cast slice holds ONE book. Until it names this route's book (its read has
+     landed), it still holds the previous one, and a failed read leaves it so; show
+     a loading state rather than that book's rows under this URL (A120 run 2, F6). */
+  if (manuscript.bookId !== bookId) {
+    return (
+      <div role="status" className="p-10 text-center text-sm text-ink/60">
+        Loading this book's cast…
+      </div>
+    );
+  }
+
   return (
     <>
       <ConfirmCastView
