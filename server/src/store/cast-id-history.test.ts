@@ -1617,7 +1617,9 @@ describe('#4031 — history provenance (supersededByKind)', () => {
       }
       calls.push(src.slice(re.lastIndex, i - 1));
     }
-    expect(calls.length).toBeGreaterThanOrEqual(8);
+    // Plan 291 (Task 20): the main persist records one call (the planned persist's join
+    // retirements) where the old merge recorded four, hence 6, not 8.
+    expect(calls.length).toBeGreaterThanOrEqual(6);
     for (const c of calls) expect(c.trim()).toMatch(/,\s*'(heal|analyzer)',?$/);
   });
 });

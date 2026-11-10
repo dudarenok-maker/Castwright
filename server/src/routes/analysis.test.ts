@@ -6870,7 +6870,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
   }
 
   it(
-    'a fresh roster reintroducing a live "unknown-male" row drops the stale entry keyed to it, and an unrelated entry survives',
+    'a fresh row carrying the superseded "unknown-male" id is minted a new id (rule 3): the merge entry holds, nothing is displaced, an unrelated entry survives',
     async () => {
       const manuscriptId = `test-reclaimed-id-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -6879,7 +6879,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
       seedStateJson(bookDir, manuscriptId);
       registerManuscript(manuscriptId, bookDir);
 
-      // Legacy entry this run's fresh 'unknown-male' row must displace —
+      // Legacy merge entry keyed on the id this run's fresh 'unknown-male' row carries —
       // written by a real retireCharacterId call (an earlier run/repair
       // once folded these lines into the generic bucket, then figured out
       // they belonged to 'timkin' and retired the bucket id in his favour).
@@ -6927,32 +6927,27 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
           requestedModel: undefined,
         });
 
-        // Sanity check on the fixture: 'unknown-male' actually landed in
-        // cast.json as a LIVE row (if this fails, the scenario never fired
-        // and the assertions below would be vacuous).
+        // Plan 291 (#4031, rule 3 and the minted-id rule): a merged-away id is
+        // never re-created live. The fresh row lands under a minted id, so the
+        // scenario this test once pinned (a run reclaiming the superseded id as
+        // a live row) no longer arises; `dropSupersededIdsReclaimedByLiveCast`
+        // stays as defence in depth (unit-covered in cast-id-history.test.ts).
         const castAfter = JSON.parse(
           readFileSync(castJsonPath(bookDir), 'utf8'),
         ) as { characters: Array<{ id: string }> };
-        expect(castAfter.characters.map((c) => c.id)).toContain('unknown-male');
+        expect(castAfter.characters.map((c) => c.id)).toContain('unknown-male-n1');
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('unknown-male');
 
         const history = await loadCastIdHistory(bookDir);
-        // The reclaimed entry is gone — it no longer protects anything now
-        // that 'unknown-male' resolves straight to the live row (tier 1,
-        // §4.3), so leaving it in place would just be misleading.
-        expect(history.supersededBy).not.toHaveProperty('unknown-male');
-        // The unrelated entry is untouched — this is a scoped drop, not a
-        // wholesale history wipe.
+        // The entry is a merge that still holds (its target is live), so it
+        // stays a `supersededBy` entry and is never moved to `displaced`
+        // (rule 3) — before plan 291 the reclaimed row displaced it.
+        expect(history.supersededBy).toHaveProperty('unknown-male', 'timkin');
+        expect(history.displaced ?? {}).toEqual({});
+        // The unrelated entry is untouched — no wholesale history wipe.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
-        // #2040 Task 14 review item 2b — the pair isn't discarded, it's
-        // moved to `displaced` so Wave 3 has something to read.
-        expect(history.displaced).toEqual({ 'unknown-male': 'timkin' });
-        // #2040 Task 14 review item 2a — an operator-visible log line names
-        // the dropped pair, mirroring the sibling dedup-collapse log.
-        expect(
-          job.replay.logs.some(
-            (l) => l.message.includes('Dropped 1 history alias') && l.message.includes('unknown-male -> timkin'),
-          ),
-        ).toBe(true);
+        // ...and no history alias was reported dropped.
+        expect(job.replay.logs.some((l) => l.message.includes('Dropped 1 history alias'))).toBe(false);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

@@ -116,6 +116,9 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
 /* Plan 291: the Phase-0b snapshot is `writePlanSnapshot` (the main job's Phase 0a writes
    nothing), so the swallow tests aim a throw at it instead of at a `writeChecked` ordinal. */
 const planSnapshot = vi.hoisted(() => ({ toThrow: null as unknown, thrown: 0 }));
+/* Plan 291 (Task 20): the main job's AUTHORITATIVE cast.json write is the planned persist,
+   `persistPlannedCast` (it takes the cast lock itself), so the #2295 fixtures aim at it. */
+const plannedPersist = vi.hoisted(() => ({ toThrow: null as unknown, calls: 0, thrown: 0 }));
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
   return {
@@ -126,6 +129,14 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
         return Promise.reject(planSnapshot.toThrow);
       }
       return actual.writePlanSnapshot(...a);
+    },
+    persistPlannedCast: (...a: Parameters<typeof actual.persistPlannedCast>) => {
+      plannedPersist.calls += 1;
+      if (plannedPersist.toThrow) {
+        plannedPersist.thrown += 1;
+        return Promise.reject(plannedPersist.toThrow);
+      }
+      return actual.persistPlannedCast(...a);
     },
   };
 });
@@ -567,6 +578,8 @@ async function runJob(
      a mis-aimed `selects` from passing vacuously. */
   castWrite.calls.length = 0;
   planSnapshot.thrown = 0;
+  plannedPersist.calls = 0;
+  plannedPersist.thrown = 0;
   castWrite.thrown = 0;
   suggestionsWrite.calls = 0;
   suggestionsWrite.thrown = 0;
@@ -852,9 +865,9 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
  * and must keep being swallowed.
  *
  * WRITE ORDER, verified by instrumenting this seam against a real run rather
- * than read off the source: the main job performs ONE `writeChecked` call —
- * the authoritative final (plan 291: its Phase 0a / 0b snapshots go through
- * `writePlanSnapshot`, not this seam) — and the subset job performs FOUR
+ * than read off the source: the main job performs NO `writeChecked` call (plan
+ * 291: its Phase-0b snapshot is `writePlanSnapshot` and its authoritative write is
+ * `persistPlannedCast`, both with their own seams above) — and the subset job performs FOUR
  * (three interim, then final). Only the final
  * write carries real sentence counts, so `lines > 0` selects it in both jobs;
  * every fixture also asserts the total call count, so a future change to that
@@ -868,39 +881,39 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   afterEach(() => {
     castWrite.toThrow = null;
     castWrite.selects = null;
+    plannedPersist.toThrow = null;
     suggestionsWrite.toThrow = null;
     suggestionsWrite.throwAt = null;
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
   });
 
+  /* Plan 291 (Task 20) — replaces "a lock timeout on the final write ends the job with an
+     ERROR, not a result" (that write was the main job's `castBase.writeChecked`, which the
+     planned persist replaced). The persist's cast lock timed out, so nothing it owns was
+     written; the timeout is parked, the remaining write (state.json) still lands, and only
+     then does the deferred rethrow fail the job (carry 6, CLAUDE.md's deferred rethrow). */
   it(
-    'a lock timeout on the final write ends the job with an ERROR, not a result',
+    'a persist cast-lock timeout fails the job after state.json is written',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/authoritative', 10_000);
-      castWrite.selects = selectsFinalWrite;
+      plannedPersist.toThrow = new LockAcquisitionTimeoutError('cast:/w/authoritative', 10_000);
 
       const run = await runJob('final-timeout');
       try {
-        /* The seam actually fired, once, at the write the fixture aimed at —
-           without this the whole test could pass on a `selects` that never
-           matched anything. */
-        expect(castWrite.calls).toHaveLength(1);
-        expect(castWrite.thrown).toBe(1);
+        /* The seam fired, once — the main job no longer writes through `writeChecked`. */
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
+        expect(castWrite.calls).toHaveLength(0);
 
-        /* THE HARM IS REAL, and asserted rather than assumed: the
-           authoritative write did not land (cast.json still holds the
-           placeholder roster the interim writes left, lines 0) and state.json
-           still holds the previous run's seed. */
+        /* cast.json still holds the Phase-0b snapshot's placeholder (lines 0)... */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
+        /* ...and state.json WAS written before the job failed. */
         expect(run.state.chapters.map((c) => c.title)).toEqual([
-          STALE_CHAPTER_TITLE,
-          STALE_CHAPTER_TITLE,
-          STALE_CHAPTER_TITLE,
+          'Chapter One',
+          'Chapter Two',
+          'Chapter Three',
         ]);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
 
-        /* ...and THAT is now reported as a failure. This is the assertion the
-           bug reddens: before the fix the terminal was `result`. */
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
@@ -915,18 +928,19 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   it(
     'an EPERM-shaped disk fault on the SAME write still ends the job with a result',
     async () => {
-      castWrite.toThrow = Object.assign(
+      /* Plan 291 (Task 20): aimed at the planned persist (was `writeChecked`). A throw with
+         no `persistOutcome` wrote nothing; it goes to `catch (persistErr)` as before. */
+      plannedPersist.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = selectsFinalWrite;
 
       const run = await runJob('final-eperm');
       try {
-        expect(castWrite.calls).toHaveLength(1);
-        expect(castWrite.thrown).toBe(1);
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
 
-        /* Identical disk outcome to the timeout case — the discrimination is
+        /* Identical disk outcome to a write that never landed — the discrimination is
            about the TERMINAL, not about what got written. */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
         expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
@@ -950,7 +964,8 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     async () => {
       /* The reason the discrimination cannot be "the outer handler saw a
          timeout": `reconcileSuggestionsLocked` reports into the same
-         `catch (persistErr)` chain, and it is lineage, not identity. */
+         persist, and it is lineage, not identity. Plan 291 (Task 20): the persist's call
+         is inside `persistPlannedCast`, whose own advisory handler logs it. */
       suggestionsWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/journal', 10_000);
       suggestionsWrite.throwAt = 1; // the persist's call; 0 is the Phase-0b snapshot's
 
@@ -967,16 +982,13 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
            write landed with real counts and state.json was rewritten. */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
         expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
-        expect(
-          run.warnings.some((w) => w.includes('failed to write dedup journal/suggestions')),
-        ).toBe(true);
+        expect(run.warnings.some((w) => w.includes('failed to write merge suggestions'))).toBe(true);
       } finally {
         await run.cleanup();
       }
     },
     60_000,
   );
-
   it(
     'the subset job mirrors it: a lock timeout on its final write ends with an ERROR',
     async () => {

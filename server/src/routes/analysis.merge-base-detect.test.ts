@@ -16,7 +16,12 @@
    only, leaving runSubsetAnalyzerJob's other two write sites (subset-interim,
    subset-final), its OWN reportCastConflict closure, and its OWN `send`
    binding pinned by nothing but a by-hand read. "Verified by review is not
-   coverage." */
+   coverage."
+
+   Plan 291 (Task 20): the main job no longer writes cast.json through the merge base
+   at all - its Phase-0b snapshot and its terminal persist re-read the cast under the
+   cast lock (workspace/analysis-cast-io.ts) - so its controls now pin "no stale warning,
+   the foreign write is merged"; the subset controls still pin the detector. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -317,6 +322,21 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
     expect(ids).toContain('narrator');
   }
 
+  /* Plan 291 (Task 20) — the main job's terminal cast write is the planned persist: it
+     re-reads cast.json under the cast lock and overlays onto it, so a foreign write is
+     merged in, never "stale", and the main job reports no cast_merge_base_stale at all
+     (the subset controls below remain the detector's positive controls). Evidence that
+     the persist really ran: its foreign row is still there and state.json carries this
+     run's analysisProvenance. (The run's own rows the foreign write removed stay
+     removed — rule 13.) */
+  function assertMainPersistMergedForeign(bookDir: string): void {
+    expect(readCast(bookDir).characters.map((c) => c.id)).toContain('foreign');
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')) as {
+      analysisProvenance?: { model?: string };
+    };
+    expect(state.analysisProvenance?.model).toBe('phase1-model');
+  }
+
   function warningCodes(events: unknown[]): Array<string | undefined> {
     return events
       .filter((ev) => (ev as { kind?: string }).kind === 'warning')
@@ -483,7 +503,10 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
           requestedModel: undefined,
         });
 
-        expect(warningCodes(events)).toEqual(['cast_merge_base_stale']);
+        /* Plan 291 (Task 20): was EXACTLY one stale warning (the old final write's
+           merge base went stale). See `assertMainPersistMergedForeign`. */
+        expect(warningCodes(events)).toEqual([]);
+        assertMainPersistMergedForeign(bookDir);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
@@ -543,6 +566,10 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         });
 
         expect(warningCodes(events)).toEqual([]);
+        /* Plan 291 (Task 20): the run's own rows (narrator included) were removed by the
+           foreign write and stay removed (rule 13), so the persist's evidence is the
+           merged foreign row and state.json — was `assertRunWroteRoster`. */
+        assertMainPersistMergedForeign(bookDir);
         /* Fix round 1 (Important finding 2) — this control previously had
            ZERO execution evidence of its own: it stays green under both
            mutations by design, asserts only an empty array, and never
@@ -552,8 +579,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
            route-level's only pin on the fingerprint:null third state, so it
            needs its own proof the run actually reached a write — not just
            that the (vacuous) zero-warnings assertion above happened to
-           hold. */
-        assertRunWroteRoster(bookDir);
+           hold. (Its evidence is now ssertMainPersistMergedForeign, above.) */
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
@@ -941,7 +967,9 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
         const cast = readCast(bookDir);
         const olga = cast.characters.find((c) => c.id === 'olga');
         expect(olga?.notLinkedTo ?? []).toEqual([]);
-        expect(warningCodes(events)).toEqual(['cast_merge_base_stale']);
+        /* Plan 291 (Task 20): was EXACTLY one stale warning. See `assertMainPersistMergedForeign`. */
+        expect(warningCodes(events)).toEqual([]);
+        assertMainPersistMergedForeign(bookDir);
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }
