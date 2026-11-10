@@ -579,7 +579,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
            route-level's only pin on the fingerprint:null third state, so it
            needs its own proof the run actually reached a write — not just
            that the (vacuous) zero-warnings assertion above happened to
-           hold. (Its evidence is now ssertMainPersistMergedForeign, above.) */
+           hold. (Its evidence is now `assertMainPersistMergedForeign`, above.) */
       } finally {
         await teardown(manuscriptId, bookDir, originalRetries);
       }

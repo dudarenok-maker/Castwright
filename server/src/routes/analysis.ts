@@ -19,7 +19,7 @@ import {
   endpointIdsForModelIds,
   markEndpointRunActive,
 } from '../analyzer/analyzer-concurrency.js';
-import { applyNarratorIdentity, NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { RunFallbackSwitch, type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -8087,9 +8087,10 @@ export async function runMainAnalyzerJob(
          `send({kind:'result'})`. From here it reaches this job's top-level
          catch, which classifies it and calls `endJob(job, {kind:'error', …})`
          — the loud outcome the timeout exists to produce — while every write
-         in the persist has already completed. (#2295 — "every write" is the
-         identity-block producer's property; the authoritative-write producer
-         aborts the persist by design, since its own write did not land.) */
+         in the persist has already completed. (Plan 291 — a cast-lock timeout
+         at the planned persist parks too: its own writes did not land, the
+         remaining state.json write still does, without the provenance stamp or
+         the stale-evidence marker clear, and the job then ends with the error.) */
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. */
@@ -8114,7 +8115,9 @@ export async function runMainAnalyzerJob(
           if (e.state === 'run-owned' ? writtenIds.has(k) : true) addedOnce[k] = { state: 'added-once' };
         }
         const deleted = new Set(persisted?.deletedTargets ?? []);
-        const narratorId = (persisted?.characters ?? []).map((c) => c.id).find((id) => NARRATOR_CHARACTER_IDS.includes(id)) ?? 'narrator';
+        /* The cache's own id space: its other narrator takes say 'narrator' too (the
+           persisted narrator id, e.g. `char-narrator`, is applied only at the persist). */
+        const narratorId = 'narrator';
         cache.addedRows = Object.keys(addedOnce).length > 0 ? addedOnce : undefined;
         delete cache.runAddedPairs;
         await mutateAnalysisCache(manuscriptId, {

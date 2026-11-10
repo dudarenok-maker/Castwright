@@ -964,8 +964,7 @@ describe('#4031 main job: Phase 0b plans cast identity once', () => {
   });
 });
 
-/* ---- Plan 291 Task 16 - the linker runs on 
-ew` rows only ------------------- */
+/* ---- Plan 291 Task 16 - the linker runs on `new` rows only ------------------- */
 
 describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
   const BOOK1 = 'book-1';
@@ -1451,8 +1450,7 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       KIT.id,
     );
     setPhase1Hook(m.hook);
-    /* The merge re-targets the on-disk decision for w2 to kit's 
-ew` decision, while the
+    /* The merge re-targets the on-disk decision for w2 to kit's `new` decision, while the
        in-memory plan still says `join -> w2`. Kit speaks too, so it clears the minor-cast fold. */
     const SELF = { roster: [NARR, { ...WREN_FRESH, id: PRIOR_ID }, KIT], speakerId: [PRIOR_ID, KIT.id] };
     const after: Array<{ edits: string[]; takes: string[] }> = [];
@@ -1831,6 +1829,26 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
       expect(text).not.toContain(b.bookDir.replace(/\\/g, '\\\\'));
     }
     expect(readHistory(b.bookDir).supersededBy[FRESH_ID]).toBe(PRIOR_ID);
+  });
+
+  it("rule 13: a plan target deleted mid-run sends its cached takes to the cache's 'narrator' id", async () => {
+    /* The book's narrator row is "char-narrator"; the user deletes the joined w2 mid-run. */
+    const b = seed([{ ...NARR, id: 'char-narrator' }, { ...LEAD_WREN }, { ...OLGA }]);
+    let deleted = false;
+    setPhase1Hook(async () => {
+      if (deleted) return;
+      deleted = true;
+      await withCastLock(b.bookDir, async () => {
+        const p = castJsonPath(b.bookDir);
+        const cast = JSON.parse(readFileSync(p, 'utf8')) as { characters: Row[] };
+        writeFileSync(p, JSON.stringify({ characters: cast.characters.filter((c) => c.id !== PRIOR_ID) }));
+      });
+    });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID });
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    expect(ids(readCast(b.bookDir))).not.toContain(PRIOR_ID);
+    const takeIds = new Set(Object.values(readCache(b.manuscriptId)!.chapters).flat().map((s) => s.characterId));
+    expect([...takeIds]).toEqual(['narrator']);
   });
 
   /** A committed text fixture, with CRLF line endings normalised to LF. */
