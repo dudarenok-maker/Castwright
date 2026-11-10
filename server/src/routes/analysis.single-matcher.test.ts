@@ -3742,6 +3742,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
      state.json - the job would emit `result` over a stale state.json with the plan's
      joins never recorded. */
   describe.each(['main', 'subset'] as const)('I2 (%s): a cache-patch fault at persist', (kind) => {
+    const app = mkApp();
     afterEach(() => {
       castIoSpy.onPersisted = undefined;
       cacheSpy.beforePatch = undefined;
@@ -3782,9 +3783,11 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
 
     /* Fix round 2 (N2): the faulted patch carried the persist's ledger (the fold bucket's
        entry, which only the persist records) and its decisions. They must still reach the
-       cache before the run ends, or the next run meets a live `new` id it does not know
-       and re-mints it. */
-    it("is re-sent: the cache keeps that persist's ledger and decisions, and a later main run mints no -n1 duplicate", async () => {
+       cache before the run ends. The user-visible loss without them (fix round 3, F3) is
+       R4: the bucket is no longer known as the run's own row, so a user delete of it does
+       not stick - the next run re-plans it as a fresh row and re-adds it. (The main job's
+       completion op rewrites the ledger, so there only the decision was at risk.) */
+    it("is re-sent: the cache keeps that persist's ledger and decisions, so a user delete of the row it added sticks (R4)", async () => {
       const b = seed(PRIORS(), undefined, BODY18);
       /* The subset's fold bucket is new at ITS persist: the main run before it has no
          jogger, so no bucket. */
@@ -3818,11 +3821,12 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       /* The persist's ledger and its bucket decision reached the cache after all. */
       expect(readCache(b.manuscriptId)?.addedRows?.['unknown-male']).toEqual({ state: 'added-once' });
       expect(readCache(b.manuscriptId)?.matchPlan?.decisions['unknown-male']).toMatchObject({ kind: 'new', id: 'unknown-male' });
-      /* ...so the next main run knows the bucket as a run row: no -n1. */
+      /* R4: the user deletes the bucket through the cast route; the next main run, which
+         produces the bucket again, must not re-add it. */
+      expect((await putCast(app, b.bookId, readCast(b.bookDir).filter((c) => c.id !== 'unknown-male'))).status).toBe(200);
       expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
-      expect(ids(readCast(b.bookDir)).filter((id) => id.includes('-n1'))).toEqual([]);
-      expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('unknown-male'))).toEqual(['unknown-male']);
-      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('unknown-male'))).toEqual([]);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
       expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
@@ -3977,9 +3981,9 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     });
 
     it("item 10: a subset persist's refresh of a stopped main run's row it wrote lets a later main persist still fold-drop it", async () => {
-      /* Fix round 2 (Step-5 chain): a main run stops; subset A completes with the-jogger
-         speaking, so A's persist WRITES the row (its tone); subset B re-attributes it
-         silent, so B's fold takes it and it is carried; a main run follows. Every run
+      /* Fix round 2 (Step-5 chain): a main run stops; subset A completes with boris
+         speaking, so A's persist WRITES his row (counts and tone); subset B re-attributes
+         him silent, so B's fold takes him and he is carried; a main run follows. Every run
          start compares disk with the entry's fp (refreshLedger), so A's persist must
          have refreshed it or B turns the row added-once and the main run keeps it. */
       const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
