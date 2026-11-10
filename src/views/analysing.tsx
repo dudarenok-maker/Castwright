@@ -1286,6 +1286,20 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
+        /* #4031 (A22) — `analysis_cache_legacy`: the book's saved analysis predates
+           the current cache version, so the server stopped this Retry before writing
+           anything. The chapter is not fixed: keep its row and show the server's
+           message on it (which says to run the full analysis). The kept row also
+           keeps the cast_incomplete auto-resume disarmed. */
+        if (err instanceof AnalysisError && err.code === 'analysis_cache_legacy') {
+          setFailedChapters((prev) => {
+            const existing = prev.find((f) => f.chapterId === chapterId);
+            const filtered = prev.filter((f) => f.chapterId !== chapterId);
+            return [...filtered, { chapterId, message: err.message, code: err.code, phase: existing?.phase ?? 'cast' }];
+          });
+          setConn('idle');
+          return;
+        }
         /* #3435 — a soft stop (`cast_incomplete`, `stage1_shrink_refused`,
            `resume_required`) is the user's call to action, not a failure: halt
            the snapshot with the server's message (the needs-action line and the

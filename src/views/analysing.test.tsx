@@ -2460,6 +2460,23 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'stage1_shrink_refused' });
     });
 
+    /* #4031 (A22) - a Retry on a book whose saved analysis predates the current cache
+       version stops before writing anything; the user must read why and what to do. */
+    it('the analysing view shows the analysis_cache_legacy message', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await idleRetry();
+      const message =
+        "This book's saved analysis is from an older version of Castwright, so its chapters can't be re-analysed one at a time. Run the full analysis again to rebuild it.";
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'analysis_cache_legacy'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+    });
+
     /* #3435 - a Retry whose Phase 1 fails with a non-overflow analyzer error. The
        server sends chapter-failed (the Phase-1 catch records it), then the
        terminal `error`. The row must stay with its message, not be dropped as the
