@@ -4338,6 +4338,17 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         await waitFor(() => expect(gapOf(store, 1)).toEqual({ message: 'Cast detection failed for this chapter.' }));
       });
 
+      /* #4031 (A22) - the server refused the Re-analyse before writing anything (a legacy
+         cache): the chapter's take is untouched, so it is no analysis gap. */
+      it('Re-analyse: analysis_cache_legacy shows the message and sets no gap', async () => {
+        const store = makeIncludeStore();
+        const msg = "This book's saved analysis is from an older version of Castwright. Run the full analysis again to rebuild it.";
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(msg, 'analysis_cache_legacy'));
+        await reanalyse(store);
+        expect(await screen.findByText(`Re-analysis failed: ${msg}`)).toBeInTheDocument();
+        expect(gapOf(store, 1)).toBeUndefined();
+      });
+
       it('Include: a failed include POST leaves the chapter excluded, with no gap', async () => {
         const store = makeIncludeStore();
         setChapterExcludedSpy.mockRejectedValueOnce(new Error('include failed'));
