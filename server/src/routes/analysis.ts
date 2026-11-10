@@ -1366,30 +1366,49 @@ function ledgerDelta(
   return out;
 }
 
-/** R4 at a COMPLETED subset persist (R35a): the rows the subset added that its own result
-    keeps (its own ledger's keys that are in the persisted roster: not dropped, not merged
-    away mid-run) become `added-once`, and so does one the user deleted mid-run (rule 13:
-    the delete sticks). A key the cache already holds is left as it is. */
-function subsetAddedOnce(own: RunAddedLedger, cacheLedger: RunAddedLedger, kept: ReadonlySet<string>): RunAddedLedger {
-  const out: RunAddedLedger = {};
-  for (const id of Object.keys(own)) if (kept.has(id) && !Object.hasOwn(cacheLedger, id)) out[id] = { state: 'added-once' };
-  return out;
+/** R4 at a COMPLETED subset persist (R35a, R35b): `added-once` for the rows the run's own
+    result keeps - written by this persist, not carried forward (a row carried only because
+    invariant 6 bars the subset from deleting it stays `run-owned`):
+    - its own rows, and any own row the overlay already made `added-once` (a user edit or a
+      mid-run delete, a degraded history's included - main's R4 predicate);
+    - another run's `run-owned` row a SUBSET wrote (`by: 'subset'`, a stopped attempt's), so a
+      resumed subset equals an uninterrupted one (acceptance 14).
+    A stopped MAIN run's rows (no tag) are left as the persist refreshed them (R38). The own
+    and other-runs keys are disjoint by construction (`otherRunsLedger`). */
+export function subsetCompletedAddedOnce(out: {
+  characters: ReadonlyArray<{ id: string }>;
+  carriedForward: ReadonlyArray<{ id: string }>;
+  ledger: RunAddedLedger;
+  mainLedger?: RunAddedLedger;
+}): RunAddedLedger {
+  const carried = new Set(out.carriedForward.map((c) => c.id));
+  const written = new Set(out.characters.map((c) => c.id).filter((id) => !carried.has(id)));
+  const res: RunAddedLedger = {};
+  for (const [id, e] of Object.entries(out.ledger)) {
+    if (e.state === 'added-once' || written.has(id)) res[id] = { state: 'added-once' };
+  }
+  for (const [id, e] of Object.entries(out.mainLedger ?? {})) {
+    if (e.state === 'run-owned' && e.by === 'subset' && written.has(id)) res[id] = { state: 'added-once' };
+  }
+  return res;
 }
 
-/** R35a: at a subset snapshot, the rows the subset added go into the cache ledger as its own
-    ledger holds them (`run-owned` with the fingerprint of its write), so a later run reusing
-    the cached plan knows each as a run row (no `-n1` re-mint) and, if the subset stops, the
-    next main persist may still fold-drop one the user left untouched (rule 11). A key the
-    cache already holds is left as it is. */
-function subsetOwnEntries(own: RunAddedLedger, cacheLedger: RunAddedLedger): RunAddedLedger {
-  const out: RunAddedLedger = {};
-  for (const [id, entry] of Object.entries(own)) if (!Object.hasOwn(cacheLedger, id)) out[id] = entry;
-  return out;
+/** R35a/R35b: at a subset snapshot, the rows the subset added go into the cache ledger as its
+    own ledger holds them (`run-owned` with the fingerprint of its write, tagged `by: 'subset'`),
+    so a later run reusing the cached plan knows each as a run row (no `-n1` re-mint) and, if
+    the subset stops, the next main persist may still fold-drop one the user left untouched
+    (rule 11) while a resumed subset converts one it keeps. Own keys never collide with
+    another run's entry: `otherRunsLedger` strips them from the other side. */
+function subsetOwnEntries(own: RunAddedLedger): RunAddedLedger {
+  return Object.fromEntries(
+    Object.entries(own).map(([id, e]): [string, LedgerEntry] => [id, e.state === 'run-owned' ? { ...e, by: 'subset' } : e]),
+  );
 }
 
 /** The cache's ledger as the OTHER runs' entries (`mainLedger`): the subset's own rows are
-    tracked by its own ledger, never refreshed as another run's (R35a). */
-function otherRunsLedger(cacheLedger: RunAddedLedger, own: RunAddedLedger): RunAddedLedger {
+    tracked by its own ledger, never refreshed as another run's (R35a). Its keys and `own`'s
+    are disjoint. */
+export function otherRunsLedger(cacheLedger: RunAddedLedger, own: RunAddedLedger): RunAddedLedger {
   return Object.fromEntries(Object.entries(cacheLedger).filter(([id]) => !Object.hasOwn(own, id)));
 }
 
@@ -1497,7 +1516,7 @@ async function snapshotPlannedRoster(a: {
     };
     const cacheLedger = ledgerDelta(ledgerBefore, {
       ...(s.mainLedger ?? {}),
-      ...subsetOwnEntries(s.ledger, s.mainLedger ?? {}),
+      ...subsetOwnEntries(s.ledger),
     }) as RunAddedLedger;
     if (Object.keys(cacheLedger).length > 0) {
       cache.addedRows = { ...ledgerBefore, ...cacheLedger };
@@ -1831,7 +1850,10 @@ async function applyPlannedPersistOutcome(a: {
       /* An already-unsent persist patch carries the older fingerprints: fold into it (the
          transform runs last), so its re-send cannot roll this refresh back. */
       if (unsentPatch) {
-        unsentPatch = { ...unsentPatch, ...heal };
+        /* Composed, not overwritten: a transform already on the unsent patch still runs first. */
+        const prev = unsentPatch.transform;
+        const healT = heal.transform!;
+        unsentPatch = { ...unsentPatch, transform: async (c) => healT(prev ? await prev(c) : c) };
       } else {
         try {
           await mutateAnalysisCache(a.manuscriptId, heal);
@@ -10369,7 +10391,7 @@ export async function runSubsetAnalyzerJob(
                the entry its snapshot recorded, so a later run may add it again. */
             const persistLedger: Record<string, LedgerEntry | null> = {
               ...(out.mainLedger ?? {}),
-              ...subsetAddedOnce(out.ledger, out.mainLedger ?? {}, new Set([...out.characters.map((c) => c.id), ...out.deletedTargets])),
+              ...subsetCompletedAddedOnce(out),
             };
             for (const id of out.droppedRunAdded) persistLedger[id] = null;
             /* Only what changed is sent (M5): a mid-run merge's deletion stays deleted. */

@@ -60,7 +60,9 @@ export interface MatchInput {
   currentBookId?: string;
 }
 /** Rule-11 ledger. `fp` = fingerprint of the job's LAST write of the row; disk ≠ fp before a write → `added-once` (sticky). */
-export type LedgerEntry = { state: 'run-owned'; fp: string } | { state: 'added-once' };
+/* `by: 'subset'` (R35b, #4031): a run-owned entry a subset job wrote. Absent = a main run's.
+   It is not part of any fingerprint (those hash rows, not entries). */
+export type LedgerEntry = { state: 'run-owned'; fp: string; by?: 'subset' } | { state: 'added-once' };
 export type RunAddedLedger = Record<string, LedgerEntry>;
 export type PlannedRowInfo =
   | { kind: 'join'; priorId: string }

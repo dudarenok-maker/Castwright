@@ -69,12 +69,15 @@ import { LockAcquisitionTimeoutError, withKeyLock } from '../workspace/file-lock
 import {
   dedupAndPrepare,
   linkSeriesReuseOnNewRows,
+  otherRunsLedger,
   resolveCurrentIds,
+  subsetCompletedAddedOnce,
   runMainAnalyzerJob,
   runSubsetAnalyzerJob,
   type AnalysisJob,
 } from './analysis.js';
 import { EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
+import { refreshLedger } from '../workspace/analysis-cast-io.js';
 import { AnalysisAbortedError } from '../analyzer/errors.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
@@ -1183,23 +1186,44 @@ describe('#4031 main job: resume', () => {
     expect(decisionsOf(b)).toEqual(decisionsOf(straight));
   });
 
-  /* The end state compared across runs: cast.json, line counts (narrator included), history, suggestions. */
+  const rowOfB = (b: HarnessBook, id: string): Row | undefined => readCast(b.bookDir).find((c) => c.id === id);
+  /* The end state compared across runs: cast.json, line counts (narrator included), history,
+     suggestions and the cache ledger. */
   const endState = (b: HarnessBook) => ({
     shape: shape(b),
     lines: linesById(b.bookDir),
     edits: readEdits(b.bookDir).reduce<Record<string, number>>((a, s) => ({ ...a, [String(s.characterId)]: (a[String(s.characterId)] ?? 0) + 1 }), {}),
     history: (readHistory(b.bookDir) as { supersededBy: Record<string, string> }).supersededBy,
     suggestions: readSuggestions(b.bookDir),
+    addedRows: readCache(b.manuscriptId)?.addedRows,
   });
   /** A subset run stopped at its first Phase-1 call (after its snapshot), then resumed. */
-  const stoppedThenResumedSubset = async (b: HarnessBook): Promise<Sent[]> => {
+  const stoppedThenResumedSubset = async (
+    b: HarnessBook,
+    fresh: { roster: CharacterOutput[]; speakerId: string | string[] } = FRESH,
+  ): Promise<Sent[]> => {
     setPhase1Hook(abortAtFirstPhase1());
-    await run(b.manuscriptId, b.bookDir, 'subset', FRESH);
+    await run(b.manuscriptId, b.bookDir, 'subset', fresh);
     setPhase1Hook(undefined);
     expect(ids(readCast(b.bookDir))).toContain('the-jogger'); /* the stop left the snapshot's row */
     expect(readCache(b.manuscriptId)?.addedRows?.['the-jogger']).toMatchObject({ state: 'run-owned' });
-    return runSubsetRetry(b, FRESH);
+    return runSubsetRetry(b, fresh);
   };
+
+  it("R35b (I1): a resumed subset converts the stopped attempt's row it keeps speaking to added-once, as an uninterrupted subset does", async () => {
+    const boris = { ...JOGGER, id: 'boris', name: 'Boris Vane', evidence: [{ quote: 'Wren asked' }] } as unknown as CharacterOutput;
+    const WITH_BORIS = { roster: [...FRESH.roster, boris], speakerId: ['boris', PRIOR_ID] };
+    const straight = seed(PRIORS(), undefined, BODY18);
+    expect(done(await run(straight.manuscriptId, straight.bookDir, 'subset', WITH_BORIS))).toBe(true);
+    expect(readCache(straight.manuscriptId)?.addedRows?.boris).toEqual({ state: 'added-once' });
+    const b = seed(PRIORS(), undefined, BODY18);
+    expect(done(await stoppedThenResumedSubset(b, WITH_BORIS))).toBe(true);
+    expect(readCache(b.manuscriptId)?.addedRows?.boris).toEqual(readCache(straight.manuscriptId)?.addedRows?.boris);
+    expect(rowOfB(b, 'boris')?.lines).toBe(rowOfB(straight, 'boris')?.lines);
+    expect(linesById(b.bookDir).narrator ?? 0).toBe(endState(b).edits.narrator ?? 0);
+    expect(endState(b).history).toEqual(endState(straight).history);
+    expect(endState(b).suggestions).toEqual(endState(straight).suggestions);
+  });
 
   it("A14b (subset): a resumed subset keeps the stopped attempt's fold-dropped row; the next main run converges on the uninterrupted run", async () => {
     /* R42: invariant 6 outranks acceptance 14 for a subset resuming a stopped subset. */
@@ -1648,6 +1672,32 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     expect((await merge)?.status).toBe(200);
     expect(chapterId).toBeDefined();
     expect(readCache(b.manuscriptId)!.chapters[chapterId!].map((s) => s.characterId)).toEqual(['olga']);
+  });
+
+  /* Fix round 1 (M1, I1): the subset's ledger helpers, as units. */
+  describe('subset ledger helpers (R35a, R35b)', () => {
+    const ro = (fp: string, by?: 'subset') => ({ state: 'run-owned' as const, fp, ...(by ? { by } : {}) });
+    it('otherRunsLedger never shares a key with the own ledger (the disjointness the R4 helpers rely on)', () => {
+      const cache = { a: ro('1'), b: ro('2', 'subset'), c: { state: 'added-once' as const } };
+      const own = { b: ro('9'), d: ro('4') };
+      const other = otherRunsLedger(cache, own);
+      expect(other).toEqual({ a: ro('1'), c: { state: 'added-once' } });
+      expect(Object.keys(other).filter((k) => Object.hasOwn(own, k))).toEqual([]);
+    });
+    it("subsetCompletedAddedOnce converts written own rows, own rows the overlay made added-once, and a subset's tagged written rows - never a main run's or a carried one", () => {
+      const out = subsetCompletedAddedOnce({
+        characters: [{ id: 'own-w' }, { id: 'own-c' }, { id: 'sub-w' }, { id: 'sub-c' }, { id: 'main-w' }],
+        carriedForward: [{ id: 'own-c' }, { id: 'sub-c' }],
+        ledger: { 'own-w': ro('1'), 'own-c': ro('2'), 'own-del': { state: 'added-once' }, 'own-gone': ro('3') },
+        mainLedger: { 'sub-w': ro('4', 'subset'), 'sub-c': ro('5', 'subset'), 'main-w': ro('6') },
+      });
+      expect(out).toEqual({ 'own-w': { state: 'added-once' }, 'own-del': { state: 'added-once' }, 'sub-w': { state: 'added-once' } });
+    });
+    it('refreshLedger keeps the by tag when it refreshes a fingerprint', () => {
+      const row = { id: 'x', name: 'X' };
+      const next = { id: 'x', name: 'X', aliases: ['Ex'] };
+      expect(refreshLedger({ x: ro(userOwnedFingerprint(row), 'subset') }, [row], [next])).toEqual({ x: ro(userOwnedFingerprint(next), 'subset') });
+    });
   });
 
   describe('resolveCurrentIds', () => {
@@ -3360,6 +3410,36 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(unresolvedLines[0]).toMatch(/: w2$/);
       expect(unresolvedLines[0]).not.toContain(b.bookDir);
       /* The unreadable file is left exactly as it was: no retirement, no replacement. */
+      expect(historyFile(b)).toBe(unreadable);
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it('M2: a row the run added and the user deleted mid-run is recorded added-once though the history is degraded (rule 13)', async () => {
+      const b = degraded();
+      const minted = (raw: string): string => {
+        const d = readCache(b.manuscriptId)?.matchPlan?.decisions[raw];
+        return d?.kind === 'new' ? d.id : raw;
+      };
+      let gone = '';
+      const m = midRun('phase1', async () => {
+        gone = minted('boris');
+        await deleteRow(b, gone);
+      });
+      const events = await go(b, {
+        roster: [NARR, WREN_FRESH, fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' })],
+        speakerId: (chapterId) => (chapterId === 1 ? minted('boris') : PRIOR_ID),
+      });
+      await m.result();
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(gone).toMatch(/^boris-r/);
+      /* The delete sticks: the row is gone and known as added-once, never re-added. */
+      expect(ids(readCast(b.bookDir))).not.toContain(gone);
+      expect(readCache(b.manuscriptId)!.addedRows?.[gone]).toEqual({ state: 'added-once' });
+      /* Rule 9: the degraded history cannot tell the delete from a merge, so its lines stay on its
+         id (unresolved, not rerouted); the narrator speaks none. */
+      expect(editLines(b)).toEqual({ [gone]: 3, [PRIOR_ID]: 6 });
+      expect(linesById(b.bookDir)).toEqual({ narrator: 0, [PRIOR_ID]: 6, olga: undefined });
       expect(historyFile(b)).toBe(unreadable);
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });

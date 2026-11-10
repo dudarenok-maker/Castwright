@@ -166,11 +166,13 @@ async function readCurrentCast(bookDir: string): Promise<Rows> {
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-/** Rule 11 for a ledger the overlay does not maintain itself (`materialise`'s
-    own, and the other job's `mainLedger`). Per `run-owned` entry whose row was on
+/** Rule 11 for a ledger the overlay does not maintain itself. Three callers:
+    `materialise`'s own, the other job's `mainLedger` (snapshot and persist), and the
+    reject-edge heal after a persist (analysis.ts `applyPlannedPersistOutcome`). Per
+    `run-owned` entry whose row was on
     disk: a row that no longer matches the fingerprint of the job's last write was
     changed by the user -> `added-once`; a row this write dropped -> `added-once`
-    (never re-added); a row this write changed keeps `run-owned` with the
+    (never re-added); a row this write changed keeps `run-owned` (its `by` tag too) with the
     fingerprint of what was just written. A row this write leaves alone keeps its
     entry. Returns a new ledger. */
 export function refreshLedger(ledger: RunAddedLedger, before: Rows, after: Rows): RunAddedLedger {
@@ -187,7 +189,7 @@ export function refreshLedger(ledger: RunAddedLedger, before: Rows, after: Rows)
       continue;
     }
     const fp = userOwnedFingerprint(next);
-    if (fp !== entry.fp) out[id] = { state: 'run-owned', fp };
+    if (fp !== entry.fp) out[id] = { ...entry, fp };
   }
   return out;
 }

@@ -366,7 +366,7 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
     out.aliases = addAliases(cur.name, cur.aliases, [row.name, ...((row.aliases as unknown[]) ?? [])]);
     written.set(target, out);
     const after = ledger[target];
-    if (after?.state === 'run-owned') ledger[target] = { state: 'run-owned', fp: userOwnedFingerprint(out) };
+    if (after?.state === 'run-owned') ledger[target] = { ...after, fp: userOwnedFingerprint(out) };
   }
 
   const characters: Array<C | PriorRow> = [];
