@@ -74,6 +74,7 @@ import {
   type AnalysisJob,
 } from './analysis.js';
 import { EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
+import { AnalysisAbortedError } from '../analyzer/errors.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
@@ -127,11 +128,18 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
    it documents (`PersistOutcomeError`: the edits write failed after cast.json landed). */
 const castIoSpy = vi.hoisted(() => ({
   afterPersist: undefined as undefined | ((outcome: unknown) => unknown),
+  /* Throws from the next plan snapshot (`writePlanSnapshot`) while set. */
+  failSnapshot: undefined as undefined | (() => Error | undefined),
 }));
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
   return {
     ...actual,
+    writePlanSnapshot: async (...a: Parameters<typeof actual.writePlanSnapshot>) => {
+      const err = castIoSpy.failSnapshot?.();
+      if (err) throw err;
+      return actual.writePlanSnapshot(...a);
+    },
     persistPlannedCast: async (...a: Parameters<typeof actual.persistPlannedCast>) => {
       const out = await actual.persistPlannedCast(...a);
       if (castIoSpy.afterPersist) throw castIoSpy.afterPersist(out);
@@ -3507,6 +3515,110 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(readCache(b.manuscriptId)?.failedChapterIds ?? []).toEqual([]);
     expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
     expect(linesById(b.bookDir)).toMatchObject(speakingLines(b));
+  });
+
+  it('N1: a reused new row that never reached disk is added by the subset finalise with counts', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    /* The main run's Phase-0b snapshot fails (swallowed, #2292) and the run stops in
+       Phase 1: the plan decides `boris`, but no boris row is on disk. */
+    castIoSpy.failSnapshot = () => new Error('EPERM: snapshot');
+    setPhase1Hook(abortAtFirstPhase1());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW);
+    } finally {
+      castIoSpy.failSnapshot = undefined;
+      warn.mockRestore();
+    }
+    expect(readCache(b.manuscriptId)?.matchPlan?.decisions.boris).toMatchObject({ kind: 'new', id: 'boris' });
+    expect(ids(readCast(b.bookDir))).not.toContain('boris');
+    /* A Retry reuses that decision (not a placeholder id), stops in Phase 1: its
+       finalise snapshot is boris's first write. */
+    setPhase1Hook(abortAtFirstPhase1());
+    expect(done(await runSubsetRetry(b, ONE_ROW))).toBe(false);
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+    expect(countsOf(b, 'boris')).toEqual({ lines: 0, scenes: 0 });
+    expect(history(b).supersededBy).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('N2: a Phase-0a re-mint whose cache patch faulted reaches the cache before an early exit', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
+    /* `boris` is live but in no ledger (as a row a previous subset run added): the
+       Phase-0a snapshot re-mints the plan's `new` boris. */
+    const cached = readCache(b.manuscriptId)!;
+    const { addedRows: _drop, ...unledgered } = cached;
+    await saveAnalysisCache(b.manuscriptId, unledgered as never);
+    let faulted = 0;
+    cacheSpy.beforePatch = async (p) => {
+      if (faulted === 0 && 'remapCharacterIds' in (p as Record<string, unknown>)) {
+        faulted += 1;
+        throw Object.assign(new Error('EPERM: cache write'), { code: 'EPERM' });
+      }
+    };
+    /* Chapters 2 and 3 fail their cast: the run ends right after Phase 0a, with no
+       later snapshot and no finalise. */
+    setPhase0Hook((id) => {
+      if (id >= 2) throw new Error('phase 0 boom');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let events: Sent[];
+    try {
+      events = await runSubsetRetry(b, ONE_ROW);
+    } finally {
+      cacheSpy.beforePatch = undefined;
+      warn.mockRestore();
+    }
+    expect(faulted).toBe(1);
+    expect(done(events)).toBe(false);
+    const castIds = ids(readCast(b.bookDir));
+    expect(castIds).toContain('boris-n1');
+    const cache = readCache(b.manuscriptId)!;
+    /* The cache names the id cast.json holds: the decision and every take. */
+    expect(cache.matchPlan?.decisions.boris).toMatchObject({ kind: 'new', id: 'boris-n1' });
+    const takeIds = Object.values(cache.chapters).flat().map((s) => s.characterId);
+    expect(takeIds).toContain('boris-n1');
+    expect(takeIds).not.toContain('boris');
+    expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+  });
+
+  it('N2 (pause): a Phase-0a re-mint whose cache patch faulted reaches the cache when the run is paused in Phase 0a', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
+    const { addedRows: _drop, ...unledgered } = readCache(b.manuscriptId)!;
+    await saveAnalysisCache(b.manuscriptId, unledgered as never);
+    let faulted = 0;
+    cacheSpy.beforePatch = async (p) => {
+      if (faulted === 0 && 'remapCharacterIds' in (p as Record<string, unknown>)) {
+        faulted += 1;
+        throw Object.assign(new Error('EPERM: cache write'), { code: 'EPERM' });
+      }
+    };
+    /* The user pauses during chapter 2's cast detection. */
+    const pauseAtChapter2 = (job: AnalysisJob): void => {
+      setPhase0Hook((id) => {
+        if (id < 2) return;
+        job.controller.abort();
+        throw new AnalysisAbortedError('paused');
+      });
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let events: Sent[];
+    try {
+      events = await runSubsetRetry(b, ONE_ROW, { onJob: pauseAtChapter2 });
+    } finally {
+      cacheSpy.beforePatch = undefined;
+      warn.mockRestore();
+    }
+    expect(faulted).toBe(1);
+    expect(errCode(events)).toBe('aborted');
+    expect(ids(readCast(b.bookDir))).toContain('boris-n1');
+    const cache = readCache(b.manuscriptId)!;
+    expect(cache.matchPlan?.decisions.boris).toMatchObject({ kind: 'new', id: 'boris-n1' });
+    const takeIds = Object.values(cache.chapters).flat().map((s) => s.characterId);
+    expect(takeIds).toContain('boris-n1');
+    expect(takeIds).not.toContain('boris');
   });
 
   it("M8b: the Phase-0a snapshot writes a covered joined row's new alias before the finalise", async () => {

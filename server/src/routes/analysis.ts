@@ -1398,8 +1398,10 @@ type RunLedgers = { kind: 'main' } | { kind: 'subset'; own: RunAddedLedger; ownP
     already in the cache, and the persist re-plans whatever it did not land. With
     `bestEffortPatch` (the subset's Phase-0a snapshots, which run inside a chapter's
     failure handling), a failed cache patch after the snapshot landed is logged, not
-    thrown: the finalise's patches carry the same plan and ledger, so they heal it,
-    and the chapter's own cast must not be recorded as failed over it (#4031 M8a).
+    thrown - the chapter's own cast must not be recorded as failed over it (#4031
+    M8a) - and handed back as `unsentPatch`. The caller re-sends it once before its
+    next cache write or exit (N2): it can carry a re-mint (decisions and the takes'
+    remap) that no later patch repeats.
     Mutates `cache` (plan, ledgers, takes) to match what it patched; returns the
     roster with any re-mint applied. */
 async function snapshotPlannedRoster(a: {
@@ -1416,7 +1418,14 @@ async function snapshotPlannedRoster(a: {
   placeholderIds: ReadonlySet<string>;
   bestEffortPatch?: boolean;
   site: string;
-}): Promise<{ characters: CharacterOutput[]; plan: MatchPlan; idMap: Record<string, string>; ledgers: RunLedgers }> {
+}): Promise<{
+  characters: CharacterOutput[];
+  plan: MatchPlan;
+  idMap: Record<string, string>;
+  ledgers: RunLedgers;
+  /** With `bestEffortPatch`: the cache patch that faulted, for the caller to re-send. */
+  unsentPatch?: CachePatch;
+}> {
   const { job, cache, castBase } = a;
   let { plan, characters, ledgers } = a;
   const snapshot = applyNarratorIdentity(assignPaletteColors(characters), a.bookLanguage).map((c) =>
@@ -1486,20 +1495,22 @@ async function snapshotPlannedRoster(a: {
     Object.entries(plan.decisions).filter(([, d]) => d.kind === 'new' && remintedIds.has(d.id)),
   );
   const patch: CachePatch = { ...ledgerPatch, ...(remint ? { decisions: reminted, remapCharacterIds: s.idMap } : {}) };
+  let unsentPatch: CachePatch | undefined;
   if (Object.keys(patch).length > 0) {
     let written: AnalysisCache | null = null;
     try {
       written = await mutateAnalysisCache(job.manuscriptId, patch);
     } catch (patchErr) {
       if (!a.bestEffortPatch) throw patchErr;
-      console.warn(`[analysis] ${a.site} cache patch failed (the finalise patch carries it again)`, patchErr);
+      console.warn(`[analysis] ${a.site} cache patch failed (the job re-sends it before its next write or exit)`, patchErr);
+      unsentPatch = patch;
     }
     /* ...and the job's cached copy takes the plan as written, so it matches the
        file, re-target included (a copy: the returned payload is the live one). The
        caller's constraints keep the plan this roster was built from. */
     if (written?.matchPlan) cache.matchPlan = structuredClone(written.matchPlan);
   }
-  return { characters, plan, idMap: s.idMap, ledgers };
+  return { characters, plan, idMap: s.idMap, ledgers, ...(unsentPatch ? { unsentPatch } : {}) };
 }
 
 /* ── Plan 291 (#4031): a job's one cast-identity decision, shared by the main job
@@ -8900,6 +8911,23 @@ export async function runSubsetAnalyzerJob(
   /* #3435 — hoisted for the terminal catch, as in the main route. */
   let phase1TerminalLabel: string | undefined;
   let lastStep = 'init';
+  /* #4031 (Task 24, N2) — a Phase-0a snapshot's cache patch that faulted (it can carry
+     a re-mint: decisions plus the takes' remap, which no later patch repeats). It is
+     re-sent once, on its own, before the job's next Phase-0a snapshot, after the
+     Phase-0a loop (before any finalise write or gate exit), and in the terminal catch
+     (a pause or failure during Phase 0a). A re-send that fails too is logged. Hoisted
+     for the catch. */
+  let pendingCachePatch: CachePatch | undefined;
+  const flushPendingCachePatch = async (): Promise<void> => {
+    if (!pendingCachePatch) return;
+    const p = pendingCachePatch;
+    pendingCachePatch = undefined;
+    try {
+      await mutateAnalysisCache(manuscriptId, p);
+    } catch (resendErr) {
+      console.warn('[analysis-subset] re-sending a faulted Phase-0a cache patch failed', resendErr);
+    }
+  };
 
   try {
     /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
@@ -9272,6 +9300,7 @@ export async function runSubsetAnalyzerJob(
           const covered = Array.from(rebuildRoster().values()).filter((c) => Object.hasOwn(cachedPlan.decisions, c.id));
           if (covered.length > 0) {
             const prior = priorCastForMerge as PriorRow[];
+            await flushPendingCachePatch();
             const snap = await snapshotPlannedRoster({
               job,
               bookId: record.bookId ?? undefined,
@@ -9288,6 +9317,7 @@ export async function runSubsetAnalyzerJob(
               site: 'subset Phase-0a',
             });
             if (snap.ledgers.kind === 'subset') subsetLedgers = { own: snap.ledgers.own, ownPairs: snap.ledgers.ownPairs };
+            if (snap.unsentPatch) pendingCachePatch = snap.unsentPatch;
           }
         }
         log(
@@ -9340,6 +9370,8 @@ export async function runSubsetAnalyzerJob(
        and let Phase 1 run against the partial roster. Leave stage1
        unset in that case; the main route's [[cast_incomplete]] gate
        will re-run Phase 0a once the user kicks it. */
+    /* #4031 N2 — before any finalise write or gate exit. */
+    await flushPendingCachePatch();
     const finalRoster = rebuildRoster();
     const rawCharacters = Array.from(finalRoster.values());
     sortEvidence(rawCharacters);
@@ -10416,6 +10448,8 @@ export async function runSubsetAnalyzerJob(
 
     endJob(job, { kind: 'result', response });
   } catch (e) {
+    /* #4031 N2 — a pause or failure during Phase 0a still lands a faulted re-mint. */
+    await flushPendingCachePatch();
     if (e instanceof AnalysisAbortedError) {
       /* Plan 32 D1: subset retries now survive a client disconnect,
          so AnalysisAbortedError here means an EXPLICIT /pause
