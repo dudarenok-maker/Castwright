@@ -121,7 +121,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restructure-gate.js';
-import { rollManuscriptEdits } from '../workspace/edits-roll.js';
+import { rollManuscriptEdits, type RollSnapshot } from '../workspace/edits-roll.js';
 import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { withBookLock } from '../workspace/book-lock.js';
@@ -421,10 +421,7 @@ async function materialiseRunStartPrior(a: {
   if (m.written) castBase?.noteExternalWrite(m.written);
   /* R1 - the refreshed rule-11 ledger: in memory (so the job's copy matches the
      file) and in the cache file. */
-  const ledgerPatch: Record<string, LedgerEntry> = {};
-  for (const [id, entry] of Object.entries(m.ledger)) {
-    if (JSON.stringify(ledgerIn[id]) !== JSON.stringify(entry)) ledgerPatch[id] = entry;
-  }
+  const ledgerPatch = ledgerDelta(ledgerIn, m.ledger);
   if (Object.keys(ledgerPatch).length > 0) {
     cache.addedRows = m.ledger;
     await mutateAnalysisCache(job.manuscriptId, { ledger: ledgerPatch });
@@ -1349,6 +1346,21 @@ interface PlannedCastIdentity {
     only refreshed for the rows it writes, never deleted by (invariant 6). */
 type RunLedgers = { kind: 'main' } | { kind: 'subset'; own: RunAddedLedger; ownPairs: Array<[string, string]> };
 
+/** A ledger patch of only what changed: the entries of `next` that differ from the job's
+    copy `before`, and every `null`. Re-sending an unchanged entry would restore one a mid-run
+    merge deleted from the cache file (`ledger: {[source]: null}`, cast-merge.ts) from the job's
+    older copy (#4031 M5). */
+function ledgerDelta(
+  before: RunAddedLedger,
+  next: Readonly<Record<string, LedgerEntry | null>>,
+): Record<string, LedgerEntry | null> {
+  const out: Record<string, LedgerEntry | null> = {};
+  for (const [id, entry] of Object.entries(next)) {
+    if (entry === null || JSON.stringify(before[id]) !== JSON.stringify(entry)) out[id] = entry;
+  }
+  return out;
+}
+
 /** R35: the cache entries for the rows the subset job added (its own ledger's keys), as
     `added-once`; a key the cache already holds is left as it is. */
 function subsetAddedOnce(own: RunAddedLedger, cacheLedger: RunAddedLedger): RunAddedLedger {
@@ -1436,6 +1448,7 @@ async function snapshotPlannedRoster(a: {
   }
   cache.matchPlan = plan;
   let ledgerPatch: CachePatch = {};
+  const ledgerBefore = cache.addedRows ?? {};
   if (ledgers.kind === 'main') {
     cache.addedRows = s.ledger;
     const seen = new Set((cache.runAddedPairs ?? []).map(([x, y]) => `${x}\u0000${y}`));
@@ -1443,7 +1456,7 @@ async function snapshotPlannedRoster(a: {
       ...(cache.runAddedPairs ?? []),
       ...s.addedPairs.filter(([x, y]) => !seen.has(`${x}\u0000${y}`)),
     ];
-    ledgerPatch = { ledger: s.ledger, runAddedPairs: s.addedPairs };
+    ledgerPatch = { ledger: ledgerDelta(ledgerBefore, s.ledger), runAddedPairs: s.addedPairs };
   } else {
     /* The subset's own rule-11 ledger stays in memory; the main run's entries it
        touched are refreshed in the cache (compare-then-refresh, invariant 6). R35: each
@@ -1456,9 +1469,12 @@ async function snapshotPlannedRoster(a: {
       own: s.ledger,
       ownPairs: [...ledgers.ownPairs, ...s.addedPairs.filter(([x, y]) => !seen.has(`${x}\u0000${y}`))],
     };
-    const cacheLedger = { ...(s.mainLedger ?? {}), ...subsetAddedOnce(s.ledger, s.mainLedger ?? {}) };
+    const cacheLedger = ledgerDelta(ledgerBefore, {
+      ...(s.mainLedger ?? {}),
+      ...subsetAddedOnce(s.ledger, s.mainLedger ?? {}),
+    }) as RunAddedLedger;
     if (Object.keys(cacheLedger).length > 0) {
-      cache.addedRows = { ...(cache.addedRows ?? {}), ...cacheLedger };
+      cache.addedRows = { ...ledgerBefore, ...cacheLedger };
       ledgerPatch = { ledger: cacheLedger };
     }
   }
@@ -1647,6 +1663,29 @@ function plannedPersistArgs(a: {
       ? { ledger: a.cache.addedRows ?? {}, runAddedPairs: a.cache.runAddedPairs ?? [] }
       : { ledger: a.ledgers.own, runAddedPairs: a.ledgers.ownPairs, mainLedger: a.cache.addedRows ?? {} }),
   });
+}
+
+/* Plan 291 (#4031) — one planned persist, classified the same way for both jobs:
+   - a `LockAcquisitionTimeoutError` from its cast lock wrote nothing: returned as
+     `lockTimeout`, for the caller to park (its remaining writes, state.json, still run
+     before the deferred rethrow; #2260 C1, #2295);
+   - an edits-write failure AFTER cast.json landed carries the computed outcome
+     (`PersistOutcomeError`): returned as `outcome` + `editsWriteErr`, so the caller still
+     records the retirements and the cache patch, then hands the error to
+     `catch (persistErr)` (server-side only: an fs error names an absolute path). A
+     drift-refused persist wrote no cast.json, so its edits failure is just rethrown;
+   - any other throw wrote nothing and is rethrown. */
+async function runPlannedPersist(
+  args: Parameters<typeof persistPlannedCast>[0],
+): Promise<{ outcome?: PersistOutcome; editsWriteErr?: unknown; lockTimeout?: unknown }> {
+  try {
+    return { outcome: await persistPlannedCast(args) };
+  } catch (castErr) {
+    if (isLockAcquisitionTimeout(castErr)) return { lockTimeout: castErr };
+    const carried = (castErr as PersistOutcomeError | null)?.persistOutcome;
+    if (carried && !args.driftRefused) return { outcome: carried, editsWriteErr: castErr };
+    throw castErr;
+  }
 }
 
 /* Plan 291 (#4031) — what a landed planned persist owes, shared by both jobs, in order:
@@ -2414,6 +2453,49 @@ function chapterTakeCachePatch(a: {
       } catch (e) {
         /* The persist resolves every id again; the take keeps the run's own ids until then. */
         console.warn('[analysis] could not resolve ids against the merge history for the cache take', e);
+      }
+      return out;
+    },
+  };
+}
+
+/* #4031 (R39) — a per-chapter roll's chapter set, shared by both jobs. `snapshot`: only the
+   chapters this run produced or replayed (`produced`), in book order. The roll re-reads the
+   file under the `book` lock and replaces just these (an empty take clears its chapter), so
+   a chapter it did not produce (a cached take, a merge's remap of one, a manuscript PUT made
+   mid-run) stays as the file has it. Excluded chapters leave the file, as the wholesale roll
+   left them out. `fallback` (#3435): a chapter not attributed this run falls back to its
+   cached take where the file has none, so a pending take stays in the edits until it is
+   replaced. Both are built when the roll runs (getters), inside its queue step. */
+function rollChapterSet(
+  hints: () => ReadonlyArray<{ id: number; excluded?: boolean }>,
+  produced: ReadonlyMap<number, SentenceOutput[]>,
+  cached: () => Readonly<Record<number, SentenceOutput[]>>,
+): { snapshot: () => RollSnapshot; fallback: () => SentenceOutput[] } {
+  return {
+    snapshot: () => {
+      const sentences: SentenceOutput[] = [];
+      const chapterIds: number[] = [];
+      const dropChapterIds: number[] = [];
+      for (const order of hints()) {
+        if (order.excluded) {
+          dropChapterIds.push(order.id);
+          continue;
+        }
+        const arr = produced.get(order.id);
+        if (!arr) continue;
+        chapterIds.push(order.id);
+        sentences.push(...arr);
+      }
+      return { sentences, chapterIds, dropChapterIds };
+    },
+    fallback: () => {
+      const out: SentenceOutput[] = [];
+      const c = cached();
+      for (const order of hints()) {
+        if (order.excluded || produced.has(order.id)) continue;
+        const arr = c[order.id];
+        if (arr) out.push(...arr);
       }
       return out;
     },
@@ -7474,29 +7556,11 @@ export async function runMainAnalyzerJob(
              persist block is the single halt gate (C4).
              The snapshot is built inside `rollManuscriptEdits`, in the same
              synchronous step that joins the write queue (#3427). */
+          /* #4031 (R39) — the chapters this run produced, and the cached-take fallback. */
+          const rollSet = rollChapterSet(() => recordRef.chapterHints, sentencesByChapter, () => cachedChapters);
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-            () => {
-              /* #4031 — only the chapters this run produced or replayed, in book order. The
-                 roll re-reads the file under the `book` lock and replaces just these (an
-                 empty take clears its chapter), so a chapter it did not produce (a cached
-                 take, a merge's remap of one) stays as the file has it. Excluded chapters
-                 leave the file, as the wholesale roll left them out. */
-              const running: SentenceOutput[] = [];
-              const chapterIds: number[] = [];
-              const dropChapterIds: number[] = [];
-              for (const order of recordRef.chapterHints) {
-                if (order.excluded) {
-                  dropChapterIds.push(order.id);
-                  continue;
-                }
-                const arr = sentencesByChapter.get(order.id);
-                if (!arr) continue;
-                chapterIds.push(order.id);
-                running.push(...arr);
-              }
-              return { sentences: running, chapterIds, dropChapterIds };
-            },
+            rollSet.snapshot,
             recordRef.bookId ?? undefined,
             /* R8: a take captured before a Phase-0b re-mint still carries the old id,
                which may now be a user's row; a mid-run merge's survivor replaces the
@@ -7510,17 +7574,7 @@ export async function runMainAnalyzerJob(
                 cache.matchPlan?.decisions,
                 addedIds,
               ),
-            /* #3435 — a chapter not attributed this run falls back to its cached take where
-               the file has none, so a pending take stays in the edits until it is replaced. */
-            () => {
-              const cached: SentenceOutput[] = [];
-              for (const order of recordRef.chapterHints) {
-                if (order.excluded || sentencesByChapter.has(order.id)) continue;
-                const arr = cachedChapters[order.id];
-                if (arr) cached.push(...arr);
-              }
-              return cached;
-            },
+            rollSet.fallback,
           );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll manuscript-edits.json', persistErr);
@@ -8125,12 +8179,8 @@ export async function runMainAnalyzerJob(
              suggestions — the persist removes the pairs its snapshots added, a stopped
              run's included (the cache holds them across a resume). cast.json is left
              byte-for-byte alone. */
-          try {
-            await persistPlannedCast(persistArgs(true));
-          } catch (castErr) {
-            if (isLockAcquisitionTimeout(castErr)) persistLockTimeout = castErr;
-            else throw castErr;
-          }
+          const refused = await runPlannedPersist(persistArgs(true));
+          if (refused.lockTimeout !== undefined) persistLockTimeout = refused.lockTimeout;
         } else {
           const retirementBookId = bookIdForRetirementCleanup(record);
           /* #2166 / PR #2202 gate review (Critical) — decide whether
@@ -8144,27 +8194,19 @@ export async function runMainAnalyzerJob(
              delete every same-book reject edge. The verdict must be captured
              here, first, and carried down. */
           const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(writeDir);
-          let outcome: PersistOutcome | undefined;
-          let editsWriteErr: unknown;
-          try {
-            outcome = await persistPlannedCast(persistArgs(false));
-          } catch (castErr) {
-            const carried = (castErr as PersistOutcomeError | null)?.persistOutcome;
-            if (isLockAcquisitionTimeout(castErr)) persistLockTimeout = castErr;
-            else if (carried) {
-              outcome = carried;
-              editsWriteErr = castErr;
-            } else throw castErr;
-          }
+          const { outcome, editsWriteErr, lockTimeout } = await runPlannedPersist(persistArgs(false));
+          if (lockTimeout !== undefined) persistLockTimeout = lockTimeout;
           if (outcome) {
             const out = outcome;
             persisted = out;
             /* The result event carries what was persisted, not the fresh roster. */
             response.characters = out.characters as unknown as CharacterOutput[];
             response.sentences = out.sentences;
-            /* The rule-11 ledger: a ledger entry the overlay dropped is deleted. */
-            const ledgerPatch: Record<string, LedgerEntry | null> = { ...out.ledger };
-            for (const k of Object.keys(cache.addedRows ?? {})) if (!Object.hasOwn(out.ledger, k)) ledgerPatch[k] = null;
+            /* The rule-11 ledger: a ledger entry the overlay dropped is deleted; only what
+               changed is sent (M5). */
+            const nextLedger: Record<string, LedgerEntry | null> = { ...out.ledger };
+            for (const k of Object.keys(cache.addedRows ?? {})) if (!Object.hasOwn(out.ledger, k)) nextLedger[k] = null;
+            const ledgerPatch = ledgerDelta(cache.addedRows ?? {}, nextLedger);
             cache.addedRows = out.ledger;
             const parked = await applyPlannedPersistOutcome({
               out,
@@ -9600,6 +9642,9 @@ export async function runSubsetAnalyzerJob(
        Only chapters actually re-run here (`toRun`) can contribute — a
        subset retry never touches other chapters' cached sentences. */
     const subsetStructureReports: EngineReport[] = [];
+    /* #4031 (R39) — the takes this subset pass produced, by chapter: the only chapters its
+       per-chapter roll replaces. */
+    const subsetProduced = new Map<number, SentenceOutput[]>();
     /* #2267 — mirrors the main route's `perChapterMaxMergedTurns`: computed
        up front from EVERY non-excluded chapter's text + the book's resolved
        language, independent of whether the structure engine ran for a given
@@ -9837,6 +9882,7 @@ export async function runSubsetAnalyzerJob(
       cache.takesPersisted = false;
       for (const s of chapterSentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = chapterSentences;
+      subsetProduced.set(ch.id, chapterSentences);
       if (subsetStructureReport) subsetStructureReports.push(subsetStructureReport);
       cache.chapters = cachedChapters;
       /* #4031 (item 8, R33/R34) — a field-scoped patch of this chapter's take, resolved
@@ -9866,32 +9912,19 @@ export async function runSubsetAnalyzerJob(
         try {
           /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
              (no stale-dir recreation); the terminal persist halt-gates.
-             #4031 (R33/R34) — the roll re-reads the file under the `book` lock and
-             replaces the chapters it carries with their ids resolved through the
-             current history, with the main job's decision gate, so a mid-run merge's
-             edits remap is not reverted. Excluded chapters leave the file, as the
-             wholesale roll left them out. */
+             #4031 (R33/R34, R39) — as the main job's roll: only the chapters this run
+             produced, their ids resolved through the current history with the main
+             job's decision gate, plus the cached-take fallback; so neither a mid-run
+             merge's edits remap nor a manuscript PUT to an untouched chapter is
+             reverted. */
+          const rollSet = rollChapterSet(() => hints, subsetProduced, () => cachedChapters);
           await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-            () => {
-              const running: SentenceOutput[] = [];
-              const chapterIds: number[] = [];
-              const dropChapterIds: number[] = [];
-              for (const order of hints) {
-                if (order.excluded) {
-                  dropChapterIds.push(order.id);
-                  continue;
-                }
-                const arr = cachedChapters[order.id];
-                if (!arr) continue;
-                chapterIds.push(order.id);
-                running.push(...arr);
-              }
-              return { sentences: running, chapterIds, dropChapterIds };
-            },
+            rollSet.snapshot,
             record.bookId ?? undefined,
             (sentences) =>
               resolveCurrentIds(liveBookDir(job) ?? undefined, {}, sentences, priorIds, cache.matchPlan?.decisions, addedIds),
+            rollSet.fallback,
           );
         } catch (persistErr) {
           console.warn('[analysis] failed to roll subset manuscript-edits.json', persistErr);
@@ -10230,30 +10263,16 @@ export async function runSubsetAnalyzerJob(
           );
           /* The refused run writes only manuscript-edits.json and removes the pairs its
              own snapshots added; cast.json is left byte-for-byte alone. */
-          try {
-            await persistPlannedCast(persistArgs(true));
-          } catch (castErr) {
-            if (isLockAcquisitionTimeout(castErr)) persistLockTimeout = castErr;
-            else throw castErr;
-          }
+          const refused = await runPlannedPersist(persistArgs(true));
+          if (refused.lockTimeout !== undefined) persistLockTimeout = refused.lockTimeout;
         } else {
           const subsetBookId = bookIdForRetirementCleanup(record);
           /* #2166 / PR #2202 gate review (Critical) — mirrors the main path's
              same-named capture: the id-history verdict is decided BEFORE any step
              below rewrites cast-id-history.json. */
           const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(writeDir);
-          let outcome: PersistOutcome | undefined;
-          let editsWriteErr: unknown;
-          try {
-            outcome = await persistPlannedCast(persistArgs(false));
-          } catch (castErr) {
-            const carried = (castErr as PersistOutcomeError | null)?.persistOutcome;
-            if (isLockAcquisitionTimeout(castErr)) persistLockTimeout = castErr;
-            else if (carried) {
-              outcome = carried;
-              editsWriteErr = castErr;
-            } else throw castErr;
-          }
+          const { outcome, editsWriteErr, lockTimeout } = await runPlannedPersist(persistArgs(false));
+          if (lockTimeout !== undefined) persistLockTimeout = lockTimeout;
           if (outcome) {
             const out = outcome;
             /* The result event carries what was persisted, not the fresh roster. */
@@ -10264,11 +10283,13 @@ export async function runSubsetAnalyzerJob(
                every row the subset added and wrote recorded `added-once`. A row the
                subset added that this persist removed (rule 11, its own ledger) loses
                the entry its snapshot recorded, so a later run may add it again. */
-            const ledgerPatch: Record<string, LedgerEntry | null> = {
+            const persistLedger: Record<string, LedgerEntry | null> = {
               ...(out.mainLedger ?? {}),
               ...subsetAddedOnce(out.ledger, out.mainLedger ?? {}),
             };
-            for (const id of out.droppedRunAdded) ledgerPatch[id] = null;
+            for (const id of out.droppedRunAdded) persistLedger[id] = null;
+            /* Only what changed is sent (M5): a mid-run merge's deletion stays deleted. */
+            const ledgerPatch = ledgerDelta(cache.addedRows ?? {}, persistLedger);
             const nextLedger: RunAddedLedger = { ...(cache.addedRows ?? {}) };
             for (const [k, e] of Object.entries(ledgerPatch)) {
               if (e === null) delete nextLedger[k];

@@ -3287,14 +3287,15 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     setPhase0Hook(() => {
       atStart ??= { cast: readCast(b.bookDir), history: readJson(b.bookDir, 'cast-id-history.json') };
     });
-    const events = await run(b.manuscriptId, b.bookDir, 'subset');
+    /* The narrator speaks too, so the narrator-inclusive count check below can fail (M4). */
+    const events = await run(b.manuscriptId, b.bookDir, 'subset', { roster: [NARR, WREN_FRESH], speakerId: [PRIOR_ID, 'narrator'] });
     expect(done(events)).toBe(true);
     expect(atStart!.cast.filter((r) => r.name === 'Wren').map((r) => r.id)).toEqual([PRIOR_ID]);
     expect(atStart!.history.supersededBy).toEqual({ w2b: PRIOR_ID });
     expect(atStart!.history.supersededByKind).toEqual({ w2b: 'heal' });
     /* ...and it stays healed through the persist. */
     expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', PRIOR_ID]);
-    expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 }); // one line in each of three chapters
+    expect(editLines(b)).toEqual({ [PRIOR_ID]: 5, narrator: 4 }); // three lines a chapter, handed out in turn
     expect(linesById(b.bookDir)).toMatchObject(editLines(b)); // cast.json counts match the edits, narrator included (Task 25 carry 5)
     /* The heal, and the persist's record of the plan's join (raw -> prior). */
     expect(history(b).supersededBy).toEqual({ w2b: PRIOR_ID, [FRESH_ID]: PRIOR_ID });
@@ -3500,9 +3501,17 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
 
   it('M8a: a cache-patch fault after a landed Phase-0a snapshot does not record the chapter as a cast failure', async () => {
     const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
-    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
-    /* The first ledger patch of the planned subset run is its Phase-0a snapshot's
-       (the run start refreshes nothing: the completed run's entries are added-once). */
+    /* Task 25 fix round 1 (M5) — a ledger patch now carries only what changed, so the
+       Phase-0a snapshot must change an entry: a STOPPED main run's run-owned boris, given
+       an alias the snapshot writes (its fingerprint is refreshed). The run start refreshes
+       nothing (the row is untouched), so the first ledger patch is the Phase-0a
+       snapshot's. (Was: a completed main run, whose added-once entries the snapshot
+       re-sent unchanged.) */
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW);
+    setPhase1Hook(undefined);
+    expect((readCache(b.manuscriptId)?.addedRows?.boris as { state: string }).state).toBe('run-owned');
+    const withAlias = { roster: [NARR, WREN_FRESH, { ...BORIS, aliases: ['Bo'] } as unknown as CharacterOutput], speakerId: ['boris', FRESH_ID] };
     let faulted = 0;
     cacheSpy.beforePatch = async (p) => {
       if (faulted === 0 && 'ledger' in (p as Record<string, unknown>)) {
@@ -3514,7 +3523,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     let events: Sent[];
     let warned: string[];
     try {
-      events = await runSubsetRetry(b, ONE_ROW);
+      events = await runSubsetRetry(b, withAlias);
     } finally {
       warned = warn.mock.calls.map((c) => String(c[0]));
       cacheSpy.beforePatch = undefined;
@@ -3780,6 +3789,8 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       castIoSpy.afterPersist = undefined;
       castIoSpy.failSnapshot = undefined;
       cacheSpy.beforePatch = undefined;
+      /* M6 — the retirement probe's mockImplementation never outlives its test. */
+      vi.mocked(historyStore.retireCharacterId).mockReset();
     });
     type History = { supersededBy: Record<string, string>; supersededByKind?: Record<string, string> };
     const app = mkApp();
@@ -3893,7 +3904,10 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       });
     }
 
-    it("item 10: subset aliases, notLinkedTo, a stale-link prune and a linker stamp on a stopped main run's rows refresh that row's addedRows fingerprint", async () => {
+    /* Covers the subset's snapshot write (an alias) and its persist's own analysis (the
+       tone it fills); the run-start stale-link prune has its own test below. The linker
+       stamp and notLinkedTo writes are carried to Task 27's F2 (they need series fixtures). */
+    it("item 10: a subset alias (its snapshots) and its persist's own write (tone) on a stopped main run's row refresh that row's addedRows fingerprint", async () => {
       /* A main run stopped after its Phase-0b snapshot: boris is its run-owned row on disk. */
       const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
       await stoppedMain(b, ONE_ROW as never);
@@ -3913,6 +3927,41 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       expect(entryOf(b, 'boris')).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(row) });
       expect(linesById(b.bookDir)).toMatchObject(editLines(b));
       expect((readHistory(b.bookDir) as History).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it("item 10: the subset run start's stale-link prune on a stopped main run's row refreshes its fingerprint, and the next main persist still fold-drops it", async () => {
+      const b = seed(PRIORS(), undefined, BODY18);
+      await stoppedMain(b, FRESH);
+      /* As t:632 seeds it: the stopped run's own last write of the-jogger carried a reuse
+         link to a book outside this series (a linker stamp), and its ledger fingerprint is
+         of that write. */
+      await withCastLock(b.bookDir, async () => {
+        const p = castJsonPath(b.bookDir);
+        const cast = JSON.parse(readFileSync(p, 'utf8')) as { characters: Row[] };
+        for (const c of cast.characters) {
+          if (c.id === 'the-jogger') c.matchedFrom = { bookId: 'not-in-this-series', characterId: 'x' };
+        }
+        writeFileSync(p, JSON.stringify(cast));
+      });
+      const stamped = rowOf(b, 'the-jogger')!;
+      await mutateAnalysisCache(b.manuscriptId, { ledger: { 'the-jogger': { state: 'run-owned', fp: userOwnedFingerprint(stamped) } } });
+      let atStart: { row?: Row; entry?: unknown } | undefined;
+      setPhase0Hook(() => {
+        atStart ??= { row: rowOf(b, 'the-jogger'), entry: entryOf(b, 'the-jogger') };
+      });
+      expect(done(await runSubsetRetry(b, FRESH))).toBe(true);
+      setPhase0Hook(undefined);
+      /* The run start pruned the stale link and refreshed the stopped run's entry. */
+      expect(atStart!.row).toBeDefined();
+      expect(atStart!.row!.matchedFrom).toBeUndefined();
+      expect(atStart!.entry).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(atStart!.row!) });
+      expect(entryOf(b, 'the-jogger')).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(rowOf(b, 'the-jogger')!) });
+      /* ...so the next main persist still fold-drops it as untouched. */
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+      expect(rowOf(b, 'the-jogger')).toBeUndefined();
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
 
@@ -3955,6 +4004,53 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       expect(rowOf(b, 'the-jogger')).toMatchObject({ overrideTtsVoices: expect.anything() });
       expect(linesById(b.bookDir)).toMatchObject(editLines(b));
       expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it('R39: a manuscript PUT to an untouched chapter mid-subset survives the next roll', async () => {
+      const b = seed(PRIORS());
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID }))).toBe(true);
+      const castBefore = readFileSync(join(b.bookDir, '.audiobook', 'cast.json'), 'utf8');
+      /* A Retry of chapters 1 and 2. While chapter 1 is attributed the user edits chapter
+         3's text (a manuscript PUT is allowed mid-run); chapter 1's roll follows. The run is
+         then stopped in chapter 2, so no persist rewrites the file afterwards. */
+      let put: number | undefined;
+      setPhase1Hook(async (chapterId) => {
+        if (chapterId === 1) {
+          const sentences = readEdits(b.bookDir).map((s) => (s.chapterId === 3 ? { ...s, text: 'EDITED BY THE USER' } : s));
+          put = (await request(app).put(`/api/books/${b.bookId}/state`).send({ slice: 'manuscript', patch: { sentences } })).status;
+        }
+        if (chapterId === 2) throw new AnalysisAbortedError('paused in chapter 2');
+      });
+      const events = await runSubsetOn(b, { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID }, [1, 2]);
+      setPhase1Hook(undefined);
+      expect(put).toBe(200);
+      expect(errCode(events)).toBe('aborted');
+      const ch3 = readEdits(b.bookDir).filter((s) => s.chapterId === 3);
+      expect(ch3.length).toBeGreaterThan(0);
+      expect(ch3.every((s) => s.text === 'EDITED BY THE USER')).toBe(true);
+      /* Chapter 1's own roll did land. */
+      expect(readEdits(b.bookDir).filter((s) => s.chapterId === 1).map((s) => s.characterId)).toEqual([PRIOR_ID]);
+      expect(readFileSync(join(b.bookDir, '.audiobook', 'cast.json'), 'utf8')).toBe(castBefore);
+      expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it("M5: a mid-subset merge of a stopped main run's row leaves no addedRows entry for the source", async () => {
+      const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+      await stoppedMain(b, ONE_ROW as never);
+      expect((entryOf(b, 'boris') as { state: string }).state).toBe('run-owned');
+      /* The user merges boris into Wren while the subset is in Phase 1; the merge drops
+         boris's ledger entry from the cache. No later patch of this run may bring it back. */
+      const merge = mergeMidRun(app, b.bookId, 'boris', PRIOR_ID, 'phase1');
+      const events = await runSubsetRetry(b, ONE_ROW);
+      expect((await merge.done)?.status).toBe(200);
+      expect(done(events)).toBe(true);
+      expect(Object.keys(readCache(b.manuscriptId)?.addedRows ?? {})).not.toContain('boris');
+      expect(rowOf(b, 'boris')).toBeUndefined();
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', PRIOR_ID]);
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(history(b).supersededBy).toMatchObject({ boris: PRIOR_ID });
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
 

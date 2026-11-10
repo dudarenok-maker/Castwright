@@ -388,7 +388,7 @@ describe('reconcileRejectEdgesOnDisk', () => {
          retirements, the two drops, the reconcile) runs inside the shared
          `applyPlannedPersistOutcome`, which the block calls with the verdict it
          captured; the persist itself only reads the history. */
-      const persistIdx = src.indexOf('await persistPlannedCast(persistArgs(false))', blockStart);
+      const persistIdx = src.indexOf('await runPlannedPersist(persistArgs(false))', blockStart);
       const firstRewriteIdx = src.indexOf('await applyPlannedPersistOutcome({', blockStart);
       const passesVerdictIdx = src.indexOf('historyStatusBeforePersist,', firstRewriteIdx);
 
