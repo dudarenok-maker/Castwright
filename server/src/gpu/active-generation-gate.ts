@@ -67,6 +67,7 @@ export interface QuietPollState {
 let provider: (() => string[]) | null = null;
 let spliceCounter: (() => number) | null = null;
 let spliceEpochReader: (() => number) | null = null;
+let jobEpochReader: (() => number) | null = null;
 
 /** Registered by routes/generation.ts at module init with its existing
     `activeGenerationBooks` accessor. */
@@ -88,19 +89,28 @@ export function setInFlightSpliceCounter(fn: () => number): void {
     count of every `registerSplice` ever made. The quiet-poll rule needs it
     because the gate is only SAMPLED at each poll: a chapter that registers and
     releases wholly between two polls is invisible to the count above, but
-    moves this epoch. A render's registration bumps nothing: a render is never
-    'declined' (it spends the caller's latch), so it never reaches the quiet
-    rule. */
+    moves this epoch. */
 export function setSpliceEpochReader(fn: () => number): void {
   spliceEpochReader = fn;
 }
 
-/** Current splice epoch, or `null` when no reader is registered. Callers must
-    treat `null` as "moved" (fail closed): an unregistered reader can never
-    complete the quiet rule, so the lever declines rather than evicting on a
-    streak it cannot verify. */
+/** #4075 — registered by routes/generation.ts with a monotonic count of every
+    `registerJob` ever made. A render is never 'declined' (it spends the
+    caller's latch), but a render chapter that registers and releases wholly
+    between two polls, after a repair set `sawRepair`, is just as invisible to
+    the sampled gate as a short splice; it moves the same epoch. Unregistered
+    counts as zero: the splice reader below is the fail-closed one. */
+export function setJobEpochReader(fn: () => number): void {
+  jobEpochReader = fn;
+}
+
+/** Current registration epoch (splices plus render jobs), or `null` when no
+    splice reader is registered. Callers must treat `null` as "moved" (fail
+    closed): an unregistered reader can never complete the quiet rule, so the
+    lever declines rather than evicting on a streak it cannot verify. */
 export function readSpliceEpoch(): number | null {
-  return spliceEpochReader ? spliceEpochReader() : null;
+  if (!spliceEpochReader) return null;
+  return spliceEpochReader() + (jobEpochReader?.() ?? 0);
 }
 
 function spliceActive(): boolean {

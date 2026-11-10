@@ -104,6 +104,7 @@ import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import {
   setActiveGenerationBooksProvider,
+  setJobEpochReader,
   isAnyGenerationActive,
 } from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
@@ -570,7 +571,12 @@ async function markQueueEntryAwaitingConfirmOnDisk(
   });
 }
 
+/* #4075 — monotonic count of registrations, so the gate's quiet-poll rule can
+   see a render chapter that registered and released between two polls. */
+let jobEpoch = 0;
+
 function registerJob(key: string, job: RunningJob): void {
+  jobEpoch += 1;
   /* side-11 investigation (2026-07-06) — an overnight generation was found
      asleep for ~7h after Windows entered Modern Standby mid-run. Hold the
      system awake for as long as ANYTHING is in flight, across every book —
@@ -666,6 +672,7 @@ export function activeGenerationBooks(): string[] {
    tts/sidecar.ts. See active-generation-gate.ts's file header for the
    fail-closed contract this registration satisfies. */
 setActiveGenerationBooksProvider(activeGenerationBooks);
+setJobEpochReader(() => jobEpoch);
 
 function broadcast(job: RunningJob, ev: unknown): void {
   /* Inject run-level aggregates into every outgoing tick (Bug E).
