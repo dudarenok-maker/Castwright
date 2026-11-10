@@ -38,7 +38,11 @@ import {
   mkJob,
   phase0,
   phase1,
+  linesById,
   readCast,
+  readEdits,
+  readHistory,
+  readSuggestions,
   resetHarness,
   sel,
   setPhase0Hook,
@@ -161,7 +165,7 @@ describe('#4031 rule 8 - a cast writer racing Start fresh', () => {
       signalReached();
       await held;
     });
-    const { job } = mkJob(b.manuscriptId, b.bookDir, 'main');
+    const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'main');
     const rec = getManuscript(b.manuscriptId);
     if (!rec) throw new Error('manuscript missing');
     (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(phase1('nova'), 'phase1-model');
@@ -171,7 +175,7 @@ describe('#4031 rule 8 - a cast writer racing Start fresh', () => {
       requestedModel: undefined,
     } as never);
     done.catch(() => {});
-    return { reached, release, done };
+    return { reached, release, done, events };
   }
 
   const addAlias = (b: HarnessBook) =>
@@ -248,6 +252,19 @@ describe('#4031 rule 8 - a cast writer racing Start fresh', () => {
        and the row kept its place. */
     expect(aliasesOfNova(b)).toEqual(['Supernova']);
     expect(readCast(b.bookDir).map((c) => c.id).sort()).toEqual(['narrator', 'nova']);
+    /* ...and the run itself succeeded and wrote its lines: one per chapter, on nova. */
+    expect(run.events.filter((e) => e.kind === 'error')).toEqual([]);
+    expect(run.events.some((e) => e.kind === 'result')).toBe(true);
+    expect(linesById(b.bookDir).nova).toBe(3);
+    expect(readEdits(b.bookDir).map((s) => s.characterId)).toEqual(['nova', 'nova', 'nova']);
+    let superseded: Record<string, string> = {};
+    try {
+      superseded = readHistory(b.bookDir).supersededBy;
+    } catch {
+      // no history file: nothing was retired
+    }
+    expect(superseded).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
   /* The journal ref clear is its own read-modify-write inside Start fresh, and the

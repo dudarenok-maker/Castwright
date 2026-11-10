@@ -54,6 +54,7 @@ import {
   setPipelined,
   type HarnessBook,
   type Row,
+  type Sent,
 } from './__test-helpers__/analysis-job-harness.js';
 import * as historyStore from '../store/cast-id-history.js';
 import * as stateIo from '../workspace/state-io.js';
@@ -1889,6 +1890,39 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
 
 /* ---- Plan 291 Task 22 - re-analysis identity acceptance through the main job ---- */
 
+/** A main run whose Phase 1 attributes `perChapter` lines per chapter, handed out in turn to
+    `speakers`. Three chapters of 40 clear the drift gate's 100-sentence floor
+    (`attributionDriftExceeded`), under which the gate cannot fire at all. Runs the harness's
+    Phase-1 hook first, so `setPhase1Hook` / `midRun` still apply. */
+async function runLots(b: HarnessBook, rosterRows: CharacterOutput[], speakers: string[], perChapter = 40): Promise<Sent[]> {
+  const rec = getManuscript(b.manuscriptId);
+  if (!rec) throw new Error('manuscript missing');
+  const base = phase1(speakers[0]);
+  const lots: Analyzer = {
+    ...base,
+    runStage2Chapter: (async (m: string, chapterId: number, ...rest: unknown[]) => {
+      await (base.runStage2Chapter as unknown as (...a: unknown[]) => Promise<unknown>)(m, chapterId, ...rest);
+      return {
+        sentences: Array.from({ length: perChapter }, (_, k) => ({
+          id: chapterId * 1000 + k + 1,
+          chapterId,
+          characterId: speakers[k % speakers.length],
+          confidence: 0.9,
+          text: `Are you sure this will work (${k})`,
+        })),
+      };
+    }) as unknown as Analyzer['runStage2Chapter'],
+  };
+  (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(lots, 'phase1-model');
+  const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'main');
+  await runMainAnalyzerJob(job, rec as never, sel(phase0(rosterRows), 'phase0-model'), {
+    requestedFresh: false,
+    allowStage1Shrink: true,
+    requestedModel: undefined,
+  } as never);
+  return events;
+}
+
 describe('#4031 main job: identity acceptance (Task 22)', () => {
   const orig = {
     retries: process.env.STAGE2_COVERAGE_RETRIES,
@@ -2393,16 +2427,14 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
 
   it('A18: a book whose narrator row is char-narrator re-analyses without attribution_drift and prose lands on it', async () => {
     const b = seed([{ ...NARR, id: 'char-narrator' }, pr(PRIOR_ID, 'Wren')]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
-      roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
-      speakerId: ['narrator', PRIOR_ID],
-    });
+    /* 120 lines: under 100 the drift gate cannot fire, so the claim would be vacuous. */
+    const events = await runLots(b, [NARR, fr(FRESH_ID, 'Wren Ashby')], ['narrator', PRIOR_ID]);
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
     const cast = readCast(b.bookDir);
     expect(ids(cast).sort()).toEqual(['char-narrator', PRIOR_ID]);
-    expect(editLines(b)).toEqual({ 'char-narrator': 5, [PRIOR_ID]: 4 });
-    expect(linesById(b.bookDir)['char-narrator']).toBe(5);
+    expect(editLines(b)).toEqual({ 'char-narrator': 60, [PRIOR_ID]: 60 });
+    expect(linesById(b.bookDir)['char-narrator']).toBe(60);
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
@@ -2466,6 +2498,8 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   });
   afterEach(async () => {
     resetHarness();
+    rollSpy.isPlanned = undefined;
+    rollSpy.after = undefined;
     if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
     else process.env.STAGE2_COVERAGE_RETRIES = orig;
     for (const b of books.splice(0)) await cleanupBook(b);
@@ -2498,8 +2532,6 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   };
   const history = (b: HarnessBook): History =>
     existsSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'))
-    rollSpy.isPlanned = undefined;
-    rollSpy.after = undefined;
       ? (readHistory(b.bookDir) as never)
       : { supersededBy: {} };
   const dismissals = (b: HarnessBook): Array<[string, string]> =>
@@ -2642,6 +2674,13 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     };
     dismissed();
 
+    /* A plain re-run replays the cached plan, which still says "new row, ask about both": its
+       suggestions are planned again, and only the dismissal keeps the answered pair out. */
+    const replay = await run(b.manuscriptId, b.bookDir, 'main', ASHBY);
+    expect(errCode(replay)).toBeUndefined();
+    expect(done(replay)).toBe(true);
+    dismissed();
+
     /* A re-analysis (reconcile included). */
     const second = await reanalyse(b, ASHBY);
     expect(errCode(second)).toBeUndefined();
@@ -2668,6 +2707,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     expect(dismissals(b)).toEqual([['olga', PRIOR_ID], ['olga', FRESH_ID]].map(([x, y]) => [x, y] as [string, string]).sort());
     expect(row(b, 'olga')!.notLinkedTo).toEqual(expect.arrayContaining([edgeTo(b, FRESH_ID), edgeTo(b, PRIOR_ID)]));
     /* The pair is not suggested again, and the open question to the other Wren is still open. */
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID, FRESH_ID].sort());
     expect(pairs(b)).toEqual(kept);
     expect(editLines(b)).toEqual({ [FRESH_ID]: 3 });
     expect(history(b).supersededBy).toEqual({ w2b: 'olga' });
@@ -2705,7 +2745,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   /* ---- A13: a merge and a dismissal made during the run ---- */
 
   for (const phase of ['phase0', 'phase1'] as const) {
-    it(`A13 (${phase}): a merge and a dismissal made during the run survive the next interim snapshot and the persist`, async () => {
+    it(`A13 (${phase}): a merge and a dismissal made during the run survive ${phase === 'phase0' ? 'the Phase-0b snapshot, the rolls and the persist' : 'the rolls and the persist'}`, async () => {
       const b = seed([
         { ...NARR },
         pr(PRIOR_ID, 'Wren'),
@@ -2822,10 +2862,45 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     const edits = readEdits(b.bookDir);
     expect(edits).toHaveLength(3);
     for (const s of edits) expect(s).toMatchObject({ characterId: 'narrator', priorCharacterId: PRIOR_ID });
+    expect(cacheTakes(b)).toHaveLength(3);
     for (const s of cacheTakes(b)) expect(s).toMatchObject({ characterId: 'narrator', priorCharacterId: PRIOR_ID });
     expect(linesById(b.bookDir).narrator).toBe(3);
     expect(await demotedNarrator(b)).toBe(3);
     expect(history(b).supersededBy).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  /* The two tests above run 3 lines, under the drift gate's 100-sentence floor, so they cannot
+     show the gate staying quiet. These run 120 on the deleted or merged-away main speaker. */
+  it('Review Focus 4 (drift gate live): a merge-away of the main speaker whose history write failed does not end the run with attribution_drift', async () => {
+    const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
+    failNextRetirement();
+    const m = midRun('phase1', () => mergeRoute(b, PRIOR_ID, 'olga'));
+    const events = await runLots(b, [NARR, WREN_FRESH], [PRIOR_ID]);
+    expect(((await m.result()) as request.Response).status).toBe(500);
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga']);
+    expect(editLines(b)).toEqual({ narrator: 120 });
+    for (const s of readEdits(b.bookDir)) expect(s.priorCharacterId).toBe(PRIOR_ID);
+    expect(linesById(b.bookDir).narrator).toBe(120);
+    expect(history(b).supersededBy).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('Review Focus 4 (drift gate live): a plain delete of the main speaker does not end the run with attribution_drift', async () => {
+    const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
+    const m = midRun('phase1', () => deleteRow(b, PRIOR_ID));
+    const events = await runLots(b, [NARR, WREN_FRESH], [PRIOR_ID]);
+    await m.result();
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga']);
+    expect(editLines(b)).toEqual({ narrator: 120 });
+    for (const s of readEdits(b.bookDir)) expect(s.priorCharacterId).toBe(PRIOR_ID);
+    expect(linesById(b.bookDir).narrator).toBe(120);
+    expect(history(b).supersededBy).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
   it('item 3: a row the run added and the user deleted mid-run stays deleted, reported and rerouted to the narrator', async () => {
@@ -2864,9 +2939,15 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     for (const s of edits) expect(s.characterId).toBe('narrator');
     for (const s of cacheTakes(b)) expect(s.characterId).toBe('narrator');
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
-    /* Narrator is structural: the lines are not rerouted away from it, and none is marked as
-       rerouted from a deleted row. */
-    expect(edits.filter((s) => s.priorCharacterId !== undefined && s.priorCharacterId !== 'narrator')).toEqual([]);
+    /* The end state TODAY, stated so that it flips visibly when the narrator rule-13 exemption is
+       decided (an open design question): the narrator row is gone (rule 13 treats the user's delete
+       as a delete), and every narrator line is marked as rerouted from 'narrator' itself. */
+    expect(ids(readCast(b.bookDir))).toEqual([PRIOR_ID]);
+    for (const s of edits) expect(s.priorCharacterId).toBe('narrator');
+    expect(cacheTakes(b)).toHaveLength(3);
+    for (const s of cacheTakes(b)) expect(s.priorCharacterId).toBe('narrator');
+    expect(editLines(b)).toEqual({ narrator: 3 });
+    expect(linesById(b.bookDir)).toEqual({ [PRIOR_ID]: 0 });
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
@@ -2942,7 +3023,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   });
 
   describe('F8 (rule 9): degraded history at persist fails closed', () => {
-    const degraded =(): HarnessBook => {
+    const degraded = (): HarnessBook => {
       const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
       writeFileSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'), '{ not json');
       return b;
@@ -2967,10 +3048,26 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       /* The target is gone and is not re-added, and no line is sent to the narrator as a delete. */
       expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga']);
       expect(readEdits(b.bookDir).filter((s) => s.characterId === 'narrator')).toEqual([]);
+      expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
       expect(linesById(b.bookDir).narrator ?? 0).toBe(0);
+      /* Logged server-side with the ids (and no path): their lines stay on them. */
+      const unresolvedLines = warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'));
+      expect(unresolvedLines).toHaveLength(1);
+      expect(unresolvedLines[0]).toMatch(/: w2$/);
+      expect(unresolvedLines[0]).not.toContain(b.bookDir);
       /* The unreadable file is left exactly as it was: no retirement, no replacement. */
       expect(historyFile(b)).toBe(unreadable);
       expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it('F8 control: a degraded history with no merge or delete logs no unresolved targets', async () => {
+      const b = degraded();
+      const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
+      expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
+      expect(warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'))).toEqual([]);
     });
 
     it("F8 consequence: a mid-run merge's edits remap is undone for the chapters the run rewrites, and it is logged", async () => {
@@ -3002,6 +3099,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
       expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga']);
       expect(historyFile(b)).toBe(unreadable);
+      expect(readSuggestions(b.bookDir)).toEqual([]);
       /* Logged: every interim roll of the run fails loudly because the history cannot be read, and
          the operator is told the file needs attention. */
       const rollFailures = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('failed to roll manuscript-edits.json'));
@@ -3010,18 +3108,3 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     });
   });
 });
-      /* Logged server-side with the ids (and no path): their lines stay on them. */
-      const unresolvedLines = warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'));
-      expect(unresolvedLines).toHaveLength(1);
-      expect(unresolvedLines[0]).toMatch(/: w2$/);
-      expect(unresolvedLines[0]).not.toContain(b.bookDir);
-    it('F8 control: a degraded history with no merge or delete logs no unresolved targets', async () => {
-      const b = degraded();
-      const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
-      expect(errCode(events)).toBeUndefined();
-      expect(done(events)).toBe(true);
-      expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
-      expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
-      expect(warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'))).toEqual([]);
-    });
-
