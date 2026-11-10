@@ -1182,8 +1182,8 @@ export async function linkSeriesReuseOnNewRows(
   bookId: string,
   characters: CharacterOutput[],
   plan: MatchPlan,
-  options?: LinkSeriesReuseOptions,
-  prior: ReadonlyArray<PriorRow> = [],
+  options: LinkSeriesReuseOptions | undefined,
+  prior: ReadonlyArray<PriorRow>,
 ): Promise<number> {
   /* A `new` row may be one of several candidates: it must not take a link any of them
      declined. The decline reaches the linker on a throwaway view of the row (its

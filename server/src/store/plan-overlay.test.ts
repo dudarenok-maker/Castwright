@@ -198,6 +198,24 @@ describe('overlayPlanOntoCast', () => {
     expect(r.characters[0]).toMatchObject({ id: 'char-narrator', voice: 'nv', lines: 7 });
   });
 
+  it("R47: the default-name check accepts another language's default, not only English 'Narrator'", () => {
+    const r = overlayPlanOntoCast({
+      current: [{ id: 'narrator', name: 'Рассказчик' }], plan: planOf(join('narrator', 'narrator', 'narrator')),
+      resolve: same, historyStatus: 'ok', ledger: {}, currentBookId: BOOK, mode: 'snapshot',
+      roster: [{ id: 'narrator', name: 'Narrator', lines: 3 }],
+    });
+    expect(r.characters[0]).toMatchObject({ id: 'narrator', name: 'Narrator' });
+  });
+
+  it("R47: only narrator rows re-localise; a non-narrator joined row named 'Narrator' keeps its name", () => {
+    const r = overlayPlanOntoCast({
+      current: [{ id: 'anna', name: 'Narrator' }], plan: planOf(join('anna', 'anna', 'id')),
+      resolve: same, historyStatus: 'ok', ledger: {}, currentBookId: BOOK, mode: 'snapshot',
+      roster: [{ id: 'anna', name: 'Anna Petrova', lines: 3 }],
+    });
+    expect(r.characters[0]).toMatchObject({ id: 'anna', name: 'Narrator' });
+  });
+
   it('field ownership: tone, gender, description and color from the user, filled from the analyzer when absent', () => {
     const current: PriorRow[] = [{ id: 'a', name: 'A', tone: 'warm', gender: 'f', description: '', color: undefined }];
     const r = overlay({

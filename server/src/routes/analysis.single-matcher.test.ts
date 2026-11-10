@@ -1039,7 +1039,7 @@ describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
       [FRESH_ID]: { kind: 'join', rawId: FRESH_ID, priorId: PRIOR_ID, tier: 'surname' },
       'marlow-x': newD('marlow-x'),
     });
-    const linked = await linkSeriesReuseOnNewRows(BOOK2, rows, plan, options());
+    const linked = await linkSeriesReuseOnNewRows(BOOK2, rows, plan, options(), []);
     expect(linked).toBe(1);
     expect((rows[0] as { matchedFrom?: unknown }).matchedFrom).toBeUndefined();
     expect((rows[1] as { matchedFrom?: { bookId: string } }).matchedFrom?.bookId).toBe(BOOK1);
@@ -1048,11 +1048,11 @@ describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
   it('a new row never takes a series link one of its candidates declined (inheritedDeclines)', async () => {
     const mk = (): never[] => [{ id: 'wren-x', name: 'Wren', gender: 'female', ageRange: 'teen' }] as never[];
     const control = mk();
-    expect(await linkSeriesReuseOnNewRows(BOOK2, control, planOf({ 'wren-x': newD('wren-x') }), options())).toBe(1);
+    expect(await linkSeriesReuseOnNewRows(BOOK2, control, planOf({ 'wren-x': newD('wren-x') }), options(), [])).toBe(1);
 
     const declined = mk();
     const plan = planOf({ 'wren-x': newD('wren-x', [{ bookId: BOOK1, characterId: 'wren' }]) });
-    expect(await linkSeriesReuseOnNewRows(BOOK2, declined, plan, options())).toBe(0);
+    expect(await linkSeriesReuseOnNewRows(BOOK2, declined, plan, options(), [])).toBe(0);
     expect((declined[0] as { matchedFrom?: unknown }).matchedFrom).toBeUndefined();
     /* The linker does not write the decline onto the row (the persist overlay records the
        cross-book declines on the added row; see the Task 22 A7 route test). */

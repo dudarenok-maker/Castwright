@@ -49,7 +49,7 @@ export async function readJsonWithStatus<T>(
      readJson. Windows editors and PowerShell 5.1's -Encoding utf8 write a BOM,
      so a hand-edited cast.json would otherwise fail to parse here and be
      treated as an empty prior cast. */
-  const stripped = raw.startsWith('﻿') ? raw.slice(1) : raw;
+  const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
   try {
     return { value: JSON.parse(stripped) as T, status: READ };
   } catch {
