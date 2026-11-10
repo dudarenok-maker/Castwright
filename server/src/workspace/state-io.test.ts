@@ -4,7 +4,8 @@
    to the retry list; this file pins that contract. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, stat, readdir, writeFile, open } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, mkdir, readFile, rm, stat, readdir, writeFile, open, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -327,19 +328,77 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
 
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    /* A read started INSIDE a held rename would (correctly) wait for that rename
+       to finish, so start it un-awaited and settle it after the rename lands. */
     const seenAtRename: unknown[] = [];
+    const pending: Promise<unknown>[] = [];
     setRenameImpl(async (src: string, dest: string) => {
-      seenAtRename.push(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true }));
+      pending.push(readJsonWithRecovery(target, { keep: 3, recoverMissing: true }));
       await actual.rename(src, dest);
-      seenAtRename.push(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true }));
+      pending.push(readJsonWithRecovery(target, { keep: 3, recoverMissing: true }));
     });
     await writeJsonAtomic(target, { v: 3 }, { rotate: { keep: 3 } });
+    seenAtRename.push(...(await Promise.all(pending)));
 
     expect(seenAtRename.length).toBeGreaterThan(0);
     for (const seen of seenAtRename) expect([{ v: 2 }, { v: 3 }]).toContainEqual(seen);
     expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ v: 3 });
     expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 2 });
     expect(JSON.parse(await readFile(`${target}.bak.2`, 'utf8'))).toEqual({ v: 1 });
+  });
+
+  /* A lock-free reader that lands in the absent window must wait for the live
+     write to finish and serve the NEW document, not the pre-write .bak.1 with a
+     false "was missing" warning (seen on-box 2026-11-10 during a scan's lazy
+     chapter-uuid mint). */
+  it('a recovering reader waits out a live rotating write instead of serving .bak.1', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    setRenameImpl(async (src: string, dest: string) => {
+      if (dest === target) await gate;
+      return actual.rename(src, dest);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const write = writeJsonAtomic(target, { v: 3 }, { rotate: { keep: 3 } });
+    while (existsSync(target)) await new Promise((r) => setTimeout(r, 2));
+    const read = readJsonWithRecovery(target, { keep: 3, recoverMissing: true });
+    await new Promise((r) => setTimeout(r, 40));
+    release();
+    await write;
+    expect(await read).toEqual({ v: 3 });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('was missing'));
+    warn.mockRestore();
+  });
+
+  it('a stranded main with no live marker still recovers .bak.1 with the warning', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    await rm(target);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 1 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('was missing'));
+    warn.mockRestore();
+  });
+
+  it('a stale foreign marker does not make the reader wait', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    await rm(target);
+    const marker = `${target}.writing-999999-1`;
+    await writeFile(marker, '');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(marker, old, old);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t0 = Date.now();
+    expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 1 });
+    expect(Date.now() - t0).toBeLessThan(500);
+    warn.mockRestore();
   });
 
   /* #3625 delta review 3 (M8): the marker exists to cover the moment main is

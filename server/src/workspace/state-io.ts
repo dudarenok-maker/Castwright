@@ -76,6 +76,12 @@ function listWriteMarkers(path: string): string[] {
  *  four `renameWithRetry` calls (~3.6 s each at worst), so 30 s is a wide margin. */
 const STALE_MARKER_MS = 30_000;
 
+/** How long a recovering reader waits for a live write to rename main back in
+ *  (`readJsonWithRecovery`), polling every MISSING_POLL_MS. Covers
+ *  `renameWithRetry`'s retry budget on a contended Windows file. */
+const MISSING_WAIT_MS = 2_000;
+const MISSING_POLL_MS = 8;
+
 /** Markers this process created for writes that are still running. */
 const liveMarkers = new Set<string>();
 
@@ -230,14 +236,33 @@ export async function readJsonWithRecovery<T>(
     raw = await readFile(path, 'utf8');
   } catch (readErr) {
     if (isEnoent(readErr)) {
-      if (opts.recoverMissing) {
+      if (!opts.recoverMissing) {
+        /* #3700 — vanished between the check and the read: "missing", like the
+           check above, not a corrupt file to recover from a backup. */
+        return null;
+      }
+      /* A LIVE write-in-flight marker means main is absent only between a
+         rotating write's two renames: wait for the rename-in rather than serve
+         the pre-write .bak.1 with a false "was missing" warning. Bounded by
+         `renameWithRetry`'s budget; no live marker (stranded, stale, or a
+         deliberate delete) falls straight through to the backup. */
+      const deadline = Date.now() + MISSING_WAIT_MS;
+      let landed: string | undefined;
+      while (landed === undefined && Date.now() < deadline && sweepDeadWriteMarkers(path, false)) {
+        await new Promise((r) => setTimeout(r, MISSING_POLL_MS));
+        try {
+          landed = await readFile(path, 'utf8');
+        } catch (retryErr) {
+          if (!isEnoent(retryErr)) throw retryErr;
+        }
+      }
+      if (landed === undefined) {
         return (await readNewestBackup<T>(path, opts.keep, 'was missing')) ?? null;
       }
-      /* #3700 — vanished between the check and the read: "missing", like the
-         check above, not a corrupt file to recover from a backup. */
-      return null;
+      raw = landed;
+    } else {
+      throw readErr;
     }
-    throw readErr;
   }
   try {
     /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
@@ -426,8 +451,10 @@ async function rotateBackups(path: string, keep: number): Promise<boolean> {
      Windows that fails with EPERM while any reader holds main open (Node's own
      readers included); the retry budget then runs out and the write throws.
      Renaming main away is not blocked by an open handle. The cost is a
-     sub-millisecond absent window, which the write-in-flight marker and
-     `recoverMissing` cover (see the header). */
+     absent window (normally sub-millisecond, but `renameWithRetry` stretches it
+     to ~1 s under contention), which the write-in-flight marker and
+     `recoverMissing` cover: a recovering reader waits on the live marker
+     (see the header). */
   await renameWithRetry(path, `${path}.bak.1`);
   return true;
 }
