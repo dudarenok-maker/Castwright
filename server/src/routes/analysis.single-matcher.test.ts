@@ -1894,6 +1894,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
   };
   const books: HarnessBook[] = [];
   const siblings: string[] = [];
+  let logSpy: ReturnType<typeof vi.spyOn> | undefined;
   /* No "<Name> asked" tag in the body: the roster-coverage guard would otherwise add a "Wren"
      row of its own, and the narrator-line recovery would hand a joined row lines the Phase-1
      mock never gave it. */
@@ -1915,6 +1916,8 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
+    logSpy?.mockRestore();
+    logSpy = undefined;
     for (const b of books.splice(0)) await cleanupBook(b);
     for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
   });
@@ -2014,7 +2017,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
-  it('A1 (0-line variant): a joined row that gets no lines would fold, and survives as its prior id with its voice', async () => {
+  it('A1 (0-line variant): a joined row that gets no lines stays a joined row: this run\'s 0 counts and the analyzer alias', async () => {
     const voice = { qwen: { name: 'wren-voice' } };
     const b = seed([
       { ...NARR },
@@ -2052,6 +2055,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     });
     expect(editLines(b)[PRIOR_ID]).toBeUndefined();
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
   /* The five #4033 twin rosters, each also through the pipelined path (A17b). */
@@ -2068,6 +2072,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
         if (pipelined) {
           process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
           setPipelined(true);
+          logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
         }
         const [ta, tb] = twins;
         const b = seed([
@@ -2081,6 +2086,11 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
         });
         expect(errCode(events)).toBeUndefined();
         expect(done(events)).toBe(true);
+        if (logSpy) {
+          /* The pipelined path was engaged and held for the plan, not silently the plain one. */
+          const line = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).find((l: string) => l.includes('pipelined phase0=')) ?? '';
+          expect(line).toContain('held-for-plan');
+        }
         const cast = readCast(b.bookDir);
         const planNew = fresh.find((id) => !twins.includes(id));
         /* Neither twin is lost, and a row the plan made new is its own row. */
@@ -2129,6 +2139,11 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       /* The unreadable file is left exactly as it was: no retirement, no replacement. */
       expect(readFileSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'), 'utf8')).toBe('{ not json');
       expect(cast.find((c) => c.id === 'a1')).toMatchObject({ name: 'Anna Kay', voiceId: 'v1' });
+      /* "Anna" is ambiguous between a1 and a2: a question for each, on the minted row. */
+      expect(pairs(b)).toEqual([
+        [`fresh-two-r${token}`, 'a1', 'plan'],
+        [`fresh-two-r${token}`, 'a2', 'plan'],
+      ]);
     } finally {
       warn.mockRestore();
     }
@@ -2226,6 +2241,13 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       const quinn = cast.find((c) => c.id === 'quinn')!;
       expect(quinn).not.toHaveProperty('matchedFrom');
       expect(quinn).not.toHaveProperty('notLinkedTo');
+      expect(editLines(b)).toEqual({ 'old-weir': 5, quinn: 4 });
+      expect(linesById(b.bookDir)['old-weir']).toBe(5);
+      expect(linesById(b.bookDir).quinn).toBe(4);
+      const h = history(b);
+      expect(h.supersededBy).toEqual({ 'brann-weir': 'old-weir', ow2: 'old-weir' });
+      expect(h.supersededByKind).toEqual({ 'brann-weir': 'user', ow2: 'analyzer' });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
     });
 
     it('a new row with candidates X and Y takes no link either of them declined', async () => {
@@ -2249,6 +2271,9 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
         expect(errCode(events)).toBeUndefined();
         expect(done(events)).toBe(true);
         expect(pairs(b)).toEqual([['anna', 'x-kay', 'plan'], ['anna', 'y-lee', 'plan']]);
+        expect(editLines(b)).toEqual({ anna: 3 });
+        expect(linesById(b.bookDir).anna).toBe(3);
+        expect(history(b).supersededBy).toEqual({});
         return readCast(b.bookDir).find((c) => c.id === 'anna')!;
       };
       /* Control: with no decline the linker links the new row to the sibling's Anna. */
@@ -2279,6 +2304,9 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       expect(ids(cast).sort()).toEqual(['narrator', PRIOR_ID]);
       expect(cast.find((c) => c.id === PRIOR_ID)).toMatchObject({ voiceState: 'locked', matchedFrom: link });
       expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
+      expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(history(b).supersededByKind).toEqual({ [FRESH_ID]: 'analyzer' });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
     });
   });
 
@@ -2294,6 +2322,8 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     expect(cast.find((c) => c.id === 'quiet')).toEqual(quiet);
     expect(cast.find((c) => c.id === 'decl')).toEqual(decl);
     expect(editLines(b)).toEqual({ anna: 3 });
+    expect(history(b).supersededBy).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
   it('A9 (rule 2): a by-id join and a name join both keep the prior display name and gain the analyzer name as an alias', async () => {
@@ -2314,6 +2344,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     expect(cast.find((c) => c.id === 'brann')).toMatchObject({ name: 'Brann', aliases: ['Bran', 'Brann Weir'] });
     expect(editLines(b)).toEqual({ wren: 5, brann: 4 });
     expect(history(b).supersededBy).toEqual({ b1: 'brann' });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
   it('A10 (rule 3): a fresh row carrying a merged-away id lands on the survivor even when its name matches another row', async () => {
@@ -2371,6 +2402,7 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
     expect(editLines(b)).toEqual({ 'char-narrator': 5, [PRIOR_ID]: 4 });
     expect(linesById(b.bookDir)['char-narrator']).toBe(5);
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
   describe('A21 (rule 12): history provenance', () => {
@@ -2388,6 +2420,9 @@ describe('#4031 main job: identity acceptance (Task 22)', () => {
       expect(cast.find((c) => c.id === 'survivor')).toMatchObject({ name: 'Old Name', aliases: ['Zed'] });
       expect(cast.find((c) => c.id === 'other')).toEqual(pr('other', 'Zed'));
       expect(editLines(b)).toEqual({ survivor: 3 });
+      /* Both ids are already supersededBy keys: left exactly as written, nothing re-tagged. */
+      expect(history(b).supersededBy).toEqual({ u1: 'survivor', u2: 'survivor' });
+      expect(history(b).supersededByKind).toEqual({ u2: 'user' });
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
 
