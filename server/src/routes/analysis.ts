@@ -1366,12 +1366,31 @@ function ledgerDelta(
   return out;
 }
 
-/** R35: the cache entries for the rows the subset job added (its own ledger's keys), as
-    `added-once`; a key the cache already holds is left as it is. */
-function subsetAddedOnce(own: RunAddedLedger, cacheLedger: RunAddedLedger): RunAddedLedger {
+/** R4 at a COMPLETED subset persist (R35a): the rows the subset added that its own result
+    keeps (its own ledger's keys that are in the persisted roster: not dropped, not merged
+    away mid-run) become `added-once`, and so does one the user deleted mid-run (rule 13:
+    the delete sticks). A key the cache already holds is left as it is. */
+function subsetAddedOnce(own: RunAddedLedger, cacheLedger: RunAddedLedger, kept: ReadonlySet<string>): RunAddedLedger {
   const out: RunAddedLedger = {};
-  for (const id of Object.keys(own)) if (!Object.hasOwn(cacheLedger, id)) out[id] = { state: 'added-once' };
+  for (const id of Object.keys(own)) if (kept.has(id) && !Object.hasOwn(cacheLedger, id)) out[id] = { state: 'added-once' };
   return out;
+}
+
+/** R35a: at a subset snapshot, the rows the subset added go into the cache ledger as its own
+    ledger holds them (`run-owned` with the fingerprint of its write), so a later run reusing
+    the cached plan knows each as a run row (no `-n1` re-mint) and, if the subset stops, the
+    next main persist may still fold-drop one the user left untouched (rule 11). A key the
+    cache already holds is left as it is. */
+function subsetOwnEntries(own: RunAddedLedger, cacheLedger: RunAddedLedger): RunAddedLedger {
+  const out: RunAddedLedger = {};
+  for (const [id, entry] of Object.entries(own)) if (!Object.hasOwn(cacheLedger, id)) out[id] = entry;
+  return out;
+}
+
+/** The cache's ledger as the OTHER runs' entries (`mainLedger`): the subset's own rows are
+    tracked by its own ledger, never refreshed as another run's (R35a). */
+function otherRunsLedger(cacheLedger: RunAddedLedger, own: RunAddedLedger): RunAddedLedger {
+  return Object.fromEntries(Object.entries(cacheLedger).filter(([id]) => !Object.hasOwn(own, id)));
 }
 
 /** An interim cast.json snapshot of a PLAN-APPLIED roster, and the cache patch that
@@ -1433,7 +1452,7 @@ async function snapshotPlannedRoster(a: {
           runSuggestions: a.runSuggestions(snapshot),
           ...(ledgers.kind === 'main'
             ? { ledger: cache.addedRows ?? {} }
-            : { ledger: ledgers.own, mainLedger: cache.addedRows ?? {} }),
+            : { ledger: ledgers.own, mainLedger: otherRunsLedger(cache.addedRows ?? {}, ledgers.own) }),
         });
       },
     );
@@ -1464,10 +1483,12 @@ async function snapshotPlannedRoster(a: {
     ledgerPatch = { ledger: ledgerDelta(ledgerBefore, s.ledger), runAddedPairs: s.addedPairs };
   } else {
     /* The subset's own rule-11 ledger stays in memory; the main run's entries it
-       touched are refreshed in the cache (compare-then-refresh, invariant 6). R35: each
-       row the subset added is also recorded in the cache as `added-once`, so a later
-       run reusing the cached plan (a main resume, a second subset) knows its `new`
-       decision's live row as a run row and re-mints no `-n1` duplicate. */
+       touched are refreshed in the cache (compare-then-refresh, invariant 6). R35a: each
+       row the subset added is also recorded in the cache as its own ledger holds it
+       (`run-owned`, fingerprinted), so a later run reusing the cached plan (a main
+       resume, a second subset) knows its `new` decision's live row as a run row and
+       re-mints no `-n1` duplicate; if this run stops, the next main persist may still
+       fold-drop it when untouched. */
     const seen = new Set(ledgers.ownPairs.map(([x, y]) => `${x}\u0000${y}`));
     ledgers = {
       kind: 'subset',
@@ -1476,7 +1497,7 @@ async function snapshotPlannedRoster(a: {
     };
     const cacheLedger = ledgerDelta(ledgerBefore, {
       ...(s.mainLedger ?? {}),
-      ...subsetAddedOnce(s.ledger, s.mainLedger ?? {}),
+      ...subsetOwnEntries(s.ledger, s.mainLedger ?? {}),
     }) as RunAddedLedger;
     if (Object.keys(cacheLedger).length > 0) {
       cache.addedRows = { ...ledgerBefore, ...cacheLedger };
@@ -1666,7 +1687,11 @@ function plannedPersistArgs(a: {
     driftRefused,
     ...(a.ledgers.kind === 'main'
       ? { ledger: a.cache.addedRows ?? {}, runAddedPairs: a.cache.runAddedPairs ?? [] }
-      : { ledger: a.ledgers.own, runAddedPairs: a.ledgers.ownPairs, mainLedger: a.cache.addedRows ?? {} }),
+      : {
+          ledger: a.ledgers.own,
+          runAddedPairs: a.ledgers.ownPairs,
+          mainLedger: otherRunsLedger(a.cache.addedRows ?? {}, a.ledgers.own),
+        }),
   });
 }
 
@@ -10336,14 +10361,15 @@ export async function runSubsetAnalyzerJob(
             /* The result event carries what was persisted, not the fresh roster. */
             response.characters = out.characters as unknown as CharacterOutput[];
             response.sentences = out.sentences;
-            /* R4 (subset) / R35 — the cache's `addedRows`: the stopped main run's
-               entries as the persist refreshed them (never converted or deleted), and
-               every row the subset added and wrote recorded `added-once`. A row the
+            /* R4 (subset) / R35a — the cache's `addedRows`: other runs' entries as the
+               persist refreshed them (never converted or deleted: a row kept only because
+               invariant 6 bars the subset from deleting it stays `run-owned`), and every
+               row the subset added that its own result keeps recorded `added-once`. A row the
                subset added that this persist removed (rule 11, its own ledger) loses
                the entry its snapshot recorded, so a later run may add it again. */
             const persistLedger: Record<string, LedgerEntry | null> = {
               ...(out.mainLedger ?? {}),
-              ...subsetAddedOnce(out.ledger, out.mainLedger ?? {}),
+              ...subsetAddedOnce(out.ledger, out.mainLedger ?? {}, new Set([...out.characters.map((c) => c.id), ...out.deletedTargets])),
             };
             for (const id of out.droppedRunAdded) persistLedger[id] = null;
             /* Only what changed is sent (M5): a mid-run merge's deletion stays deleted. */
