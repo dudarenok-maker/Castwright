@@ -226,11 +226,10 @@ describe('#4031 rule 8 - a cast writer racing Start fresh', () => {
     expect(aliasesOfNova(b)).toEqual(expect.arrayContaining(['Supernova']));
   });
 
-  /* Only the write itself is pinned here. Whether it SURVIVES the run's later interim
-     and final writes is rule 13 (a mid-run route write is respected), which the legacy
-     merge does not do yet (it logs cast_merge_base_stale and overwrites); that is owned
-     by the main-job rewrite (Tasks 15+), not by this task. */
-  it('rule 8: a cast writer landing after Start fresh began finds its cast and writes it', async () => {
+  /* The write lands (Start fresh no longer deletes cast.json, rule 8), and it SURVIVES the
+     run's later interim and final writes to the end of the run (rule 13: a mid-run route
+     write is respected). */
+  it('rule 8 / rule 13: a cast writer landing after Start fresh began finds its cast, writes it, and the write survives to the end of the run', async () => {
     const b = mkBook([{ ...NARR }, { ...PRIOR_NOVA }], undefined, BODY);
     books.push(b);
     const run = startFresh(b);
@@ -244,6 +243,11 @@ describe('#4031 rule 8 - a cast writer racing Start fresh', () => {
 
     run.release();
     await within(run.done, 'the run never finished');
+    /* The run's snapshots and its persist overlaid onto the cast as re-read: the alias is
+       the whole alias list (the analyzer's own name equals the display name, so adds none),
+       and the row kept its place. */
+    expect(aliasesOfNova(b)).toEqual(['Supernova']);
+    expect(readCast(b.bookDir).map((c) => c.id).sort()).toEqual(['narrator', 'nova']);
   });
 
   /* The journal ref clear is its own read-modify-write inside Start fresh, and the
