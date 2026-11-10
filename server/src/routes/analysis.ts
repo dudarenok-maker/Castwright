@@ -1217,7 +1217,8 @@ export async function linkSeriesReuseOnNewRows(
   /* A `new` row may be one of several candidates: it must not take a link any of them
      declined. The decline reaches the linker on a throwaway view of the row (its
      `notLinkedTo` guard), and only what the linker stamped is copied back, so the
-     decline is never written onto the row itself. */
+     linker never writes the decline onto the row itself (the persist overlay records the
+     cross-book declines on the added row). */
   const declines = new Map<string, unknown[]>();
   for (const d of Object.values(plan.decisions)) {
     if (d.kind === 'new') declines.set(d.id, unionNotLinkedTo(declines.get(d.id), d.inheritedDeclines));

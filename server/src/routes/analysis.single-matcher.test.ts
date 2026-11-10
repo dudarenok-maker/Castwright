@@ -1027,7 +1027,8 @@ describe('#4031 linkSeriesReuseOnNewRows (Phase 0b linker)', () => {
     const plan = planOf({ 'wren-x': newD('wren-x', [{ bookId: BOOK1, characterId: 'wren' }]) });
     expect(await linkSeriesReuseOnNewRows(BOOK2, declined, plan, options())).toBe(0);
     expect((declined[0] as { matchedFrom?: unknown }).matchedFrom).toBeUndefined();
-    /* The decline is a guard for the link pass, not data: it is not written onto the row. */
+    /* The linker does not write the decline onto the row (the persist overlay records the
+       cross-book declines on the added row; see the Task 22 A7 route test). */
     expect((declined[0] as { notLinkedTo?: unknown }).notLinkedTo).toBeUndefined();
   });
 });

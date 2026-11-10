@@ -127,7 +127,8 @@ function inheritedOf(ds: ReadonlyArray<MatchDecision>): NotLinkedEntry[] {
 /** Apply the plan to the analyzer roster: each row takes its output id, rows that
     map to one output id collapse, and a joined row takes the prior id and display
     name with `aliases` = prior ∪ analyzer names. A `new` row gets no
-    `notLinkedTo` from the plan. The narrator keeps its own id through Phase 1:
+    `notLinkedTo` from this step (the persist overlay records the cross-book
+    declines on the added row). The narrator keeps its own id through Phase 1:
     its join is applied at persist, by `overlayPlanOntoCast`. */
 export function applyMatchPlan<C extends { id: string; name: string; aliases?: string[] }>(
   roster: C[],
