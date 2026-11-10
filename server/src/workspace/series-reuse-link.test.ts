@@ -14,11 +14,19 @@ import { describe, it, expect } from 'vitest';
 import {
   applyStaleLinkPrune,
   linkSeriesReuseAtAnalysis,
-  pruneStaleReuseLinks,
   staleReuseLinkKeys,
   type LinkableCharacter,
   type LinkSeriesReuseOptions,
 } from './series-reuse-link.js';
+
+/* Plan 291 (#4031, Task 24): the one-call `pruneStaleReuseLinks` is gone (its last
+   production caller was the subset job's lock-free prune). The prune is its two
+   halves, as `materialisePriorAtRunStart` runs them; these tests drive exactly that. */
+const pruneStaleReuseLinks = async (
+  bookId: string,
+  characters: LinkableCharacter[],
+  options: LinkSeriesReuseOptions = {},
+): Promise<number> => applyStaleLinkPrune(characters, await staleReuseLinkKeys(bookId, characters, options));
 import {
   seedReuseGuardsFromPriorCast,
   mergeAnalysisResultWithExistingCast,
@@ -733,8 +741,8 @@ describe('GATE 2 D-2: clearStaleLink never erases a cloned voice', () => {
    no longer seeds: it plans identity once at Phase 0b, applies the plan and links
    `new` rows only (`linkSeriesReuseOnNewRows`, pinned through the real job in
    analysis.single-matcher.test.ts), and the prune runs at run start. The subset
-   job still seeds (after its dedup) until plan 291 Task 24, and Task 28 deletes
-   the seed and these compositions with it. The pre-plan order:
+   job does the same since plan 291 Task 24; no job seeds any more, and Task 28
+   deletes the seed and these compositions with it. The pre-plan order:
 
      seedReuseGuardsFromPriorCast(priorCastForMerge, characters)
      pruneStaleReuseLinks(bookId, characters)
@@ -1437,11 +1445,5 @@ describe('staleReuseLinkKeys / applyStaleLinkPrune', () => {
     expect(reread[0].matchedFrom).toBeFalsy();
     expect(reread[0].voiceState).toBe('generated');
     expect(reread[1].matchedFrom?.bookId).toBe('some__other__book');
-  });
-
-  it('pruneStaleReuseLinks is the two halves composed', async () => {
-    const chars = [staleRow()];
-    expect(await pruneStaleReuseLinks(HOME, chars, opts())).toBe(1);
-    expect(chars[0].matchedFrom).toBeFalsy();
   });
 });

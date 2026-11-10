@@ -200,7 +200,7 @@ async function reanalyse(
   const prior = readRows(title);
   const fresh = freshRoster() as any[];
   if (opts.seed !== false) M.seedReuseGuardsFromPriorCast(prior, fresh);
-  await L.pruneStaleReuseLinks(id, fresh);
+  L.applyStaleLinkPrune(fresh, await L.staleReuseLinkKeys(id, fresh)); // plan 291: the prune's two halves
   await L.linkSeriesReuseAtAnalysis(id, fresh);
   const cumulative = D.stripEstablishedAsciiRewrites(D.composeRewrites({}, {}), prior, fresh);
   const remappedToPrior = R.remapFreshToPriorIds(fresh, [], prior, cumulative);

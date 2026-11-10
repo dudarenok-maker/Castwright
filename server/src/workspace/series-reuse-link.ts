@@ -46,7 +46,7 @@ import type { TtsEngine } from '../tts/index.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 
 /* Memoize a per-bookId async lookup within one linkSeriesReuseAtAnalysis /
-   pruneStaleReuseLinks call. Each of resolveAuthorSeries/isStandaloneBookId/
+   staleReuseLinkKeys call. Each of resolveAuthorSeries/isStandaloneBookId/
    resolveBookLanguageForBookId re-walks the ENTIRE workspace tree to find one
    bookId's state.json (see findBookStateForBookId in series-cast-scan.ts) —
    with many characters sharing the same bookId (a typical book has a dozen),
@@ -249,17 +249,13 @@ function clearStaleLink(c: LinkableCharacter): void {
    dead link is unclearable. Conservative: a same-series link with an unknown
    position on either side is LEFT intact (a flaky scan must not nuke a
    legitimate link), and the whole pass no-ops when the current book can't be
-   resolved. Mutates in place; returns the count dropped. Run BEFORE the link
-   pass so a series book can then re-link to its correct earlier sibling. */
-export async function pruneStaleReuseLinks(
-  bookId: string,
-  characters: LinkableCharacter[],
-  options: LinkSeriesReuseOptions = {},
-): Promise<number> {
-  return applyStaleLinkPrune(characters, await staleReuseLinkKeys(bookId, characters, options));
-}
+   resolved. Run BEFORE the link pass so a series book can then re-link to its
+   correct earlier sibling. Plan 291 (#4031): the prune is two halves - this
+   one (`staleReuseLinkKeys`, slow, before the cast lock) decides, and
+   `applyStaleLinkPrune` applies under it (`materialisePriorAtRunStart`, the
+   run start of both analysis jobs).
 
-/* #4031 — the slow half of the prune, split out so it can run before a lock is
+   #4031 — the slow half of the prune, split out so it can run before a lock is
    taken: which (row, link) pairs are stale. A key is `<row id>\0<link's bookId>`,
    so a row the user re-linked since the keys were computed no longer matches and
    is left alone by `applyStaleLinkPrune`. Does not mutate `characters`. */

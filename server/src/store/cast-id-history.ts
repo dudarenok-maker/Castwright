@@ -873,14 +873,11 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  out of circulation.
  *
  *  MUST be called only against the full, final roster of an AUTHORITATIVE
- *  write — never an interim one. The three mid-run "Cast so far" writes —
- *  two inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
- *  (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
- *  those two functions — cited by symbol, not line: F2, #2163, a line
- *  citation here was stale the moment it was written twice already) —
- *  go through `overlayInterimCastForLiveView`, never this function,
- *  precisely because `buildInterimCast` has
- *  folded only the chapters analysed so far there: a character who simply
+ *  write — never an interim one. Plan 291 (#4031): the only mid-run cast.json
+ *  writes are the plan snapshots (`writePlanSnapshot`, workspace/analysis-cast-io.ts
+ *  - the main job's Phase 0b and the subset job's Phase-0a and finalise
+ *  snapshots); they never call this function, precisely because an interim
+ *  roster covers only what the run has reached so far: a character who simply
  *  hasn't been reached yet is indistinguishable from one the analyzer
  *  actually dropped, so pruning against an interim roster would destroy a
  *  valid alias for a character who is merely not yet on stage (#2086's
