@@ -1832,4 +1832,37 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
     }
     expect(readHistory(b.bookDir).supersededBy[FRESH_ID]).toBe(PRIOR_ID);
   });
+
+  /** A committed text fixture, with CRLF line endings normalised to LF. */
+  const readFixtureText = (path: string): string => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+  const END_OF_RUN_PATH = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '..',
+    'src',
+    'test-fixtures',
+    'analysis-end-of-run-cast.json',
+  );
+
+  it('record: the end-of-run cast fixture is current', async () => {
+    /* The scripted run: a joined prior (Wren), a carried-forward prior (olga), a new row
+       (boris) and the narrator. Task 21 reads the fixture. */
+    const b = seed(PRIORS());
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, WREN_FRESH, BORIS],
+      speakerId: ['boris', PRIOR_ID],
+    });
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    const fresh = `${JSON.stringify({ characters: readCast(b.bookDir) }, null, 2)}\n`;
+    if (process.env.RECORD_FIXTURES === '1') {
+      mkdirSync(dirname(END_OF_RUN_PATH), { recursive: true });
+      writeFileSync(END_OF_RUN_PATH, fresh);
+    }
+    /* Staleness: the committed file must equal a fresh capture (re-record with RECORD_FIXTURES=1),
+       compared line-ending-normalised (.gitattributes pins it to LF). */
+    expect(existsSync(END_OF_RUN_PATH)).toBe(true);
+    expect(readFixtureText(END_OF_RUN_PATH)).toBe(fresh);
+    expect(ids(JSON.parse(fresh).characters)).toEqual(expect.arrayContaining(['narrator', PRIOR_ID, 'olga', 'boris']));
+  });
 });
