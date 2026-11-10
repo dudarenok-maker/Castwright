@@ -1,4 +1,4 @@
-/* #4031 A11 — analysis.ts's call-site half of the run-start name heal: an
+/* #4031 A11 — the run-start name heal's read of its refusals (`readHealOpts`): an
    unreadable cast-merge-suggestions.json must not fail the run start, but must
    switch the heal off for the run (a heal never merges across a decision it
    cannot read). The refusal rules are unit-tested in
@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadHealOpts } from './analysis.js';
+import { readHealOpts } from '../workspace/analysis-cast-io.js';
 import { dedupePriorCastByName } from '../store/merge-analysis-cast.js';
 
 let bookDir: string;
@@ -28,12 +28,12 @@ const pair = [
   { id: 'антон', name: 'Антон', voiceState: 'generated', lines: 2 },
 ];
 
-describe('loadHealOpts (#4031 A11)', () => {
+describe('readHealOpts (#4031 A11)', () => {
   it('a malformed suggestions file: the heal merges nothing, the run goes on, the error is logged', async () => {
     writeFileSync(join(bookDir, '.audiobook', 'cast-merge-suggestions.json'), '{ not json');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const opts = await loadHealOpts(bookDir);
+    const opts = await readHealOpts(bookDir);
     const { cast, retirements } = dedupePriorCastByName(pair, undefined, opts);
 
     expect(cast).toHaveLength(2);
@@ -42,7 +42,7 @@ describe('loadHealOpts (#4031 A11)', () => {
   });
 
   it('a readable (absent) suggestions file leaves the heal on', async () => {
-    const opts = await loadHealOpts(bookDir);
+    const opts = await readHealOpts(bookDir);
     expect(dedupePriorCastByName(pair, undefined, opts).cast).toHaveLength(1);
   });
 });

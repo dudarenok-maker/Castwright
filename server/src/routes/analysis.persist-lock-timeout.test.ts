@@ -44,7 +44,7 @@ import type {
   Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import type { Response } from '../http.js';
 
@@ -534,6 +534,7 @@ async function runJob(
      jobs' persist blocks are exercised against the same book. */
   if (kind === 'subset') {
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       stage1: { characters: stage1Roster(), chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })) },
       chapters: {},
     });
@@ -1027,7 +1028,10 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
 
       const run = await runJob('subset-final-timeout', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(4);
+        /* Plan 291 (Task 24): the final write is the subset's only merge-base write - its
+           Phase 0a writes nothing on an unplanned cache (no raw-id row on disk) and its
+           finalise snapshot is `writePlanSnapshot`. (Was 4: three interim writes first.) */
+        expect(castWrite.calls).toHaveLength(1);
         expect(castWrite.thrown).toBe(1);
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
         expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
@@ -1054,7 +1058,8 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
 
       const run = await runJob('subset-final-eperm', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(4);
+        expect(castWrite.calls).toHaveLength(1); // Plan 291 (Task 24): see the test above
+
         expect(castWrite.thrown).toBe(1);
 
         const terminal = run.events[run.events.length - 1];
@@ -1148,20 +1153,19 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
     60_000,
   );
 
+  /* Plan 291 (Task 24): these replace the subset job's per-chapter interim-write tests. Its
+     Phase 0a writes nothing on an unplanned cache, so its one pre-final write is the
+     finalise's plan snapshot (`writePlanSnapshot`), which keeps the same swallow. */
   it(
-    'the subset job interim write swallows a lock timeout too',
+    'the subset job finalise snapshot swallows a lock timeout too',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-interim', 10_000);
-      castWrite.selects = (_p, index) => index === 0;
+      planSnapshot.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-finalise', 10_000);
 
       const run = await runJob('subset-interim-timeout', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(4);
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        expect(
-          run.warnings.some((w) => w.includes('[analysis-subset] interim cast.json write failed')),
-        ).toBe(true);
+        expect(run.warnings.some((w) => w.includes('subset finalise cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }
@@ -1170,21 +1174,18 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
   );
 
   it(
-    'the subset job interim write behaves identically on an EPERM',
+    'the subset job finalise snapshot behaves identically on an EPERM',
     async () => {
-      castWrite.toThrow = Object.assign(
+      planSnapshot.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = (_p, index) => index === 0;
 
       const run = await runJob('subset-interim-eperm', 'subset');
       try {
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        expect(
-          run.warnings.some((w) => w.includes('[analysis-subset] interim cast.json write failed')),
-        ).toBe(true);
+        expect(run.warnings.some((w) => w.includes('subset finalise cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }

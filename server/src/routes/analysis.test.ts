@@ -3056,6 +3056,7 @@ describe('bookIdForRetirementCleanup wired into every real call site (F8, #2163)
       // / the persist block the F8 persist site lives in, rather than
       // stopping after cast-update.
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: roster,
@@ -4322,7 +4323,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
         characters: stage1Roster(),
         chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
       };
-      await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
+      await saveAnalysisCache(manuscriptId, { version: 2, chapters: {}, stage1 });
 
       const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
       const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
@@ -4460,6 +4461,7 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
       // reached Confirm, the subset result gate ends `resume_required` (no
       // persist) while any chapter outside `toRun` lacks one.
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {
           1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 1, text: 'Реплика 0' }],
         },
@@ -4867,6 +4869,7 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
          Pre-seed `failedChapterIds` too: this chapter is the one the user
          is retrying BECAUSE it previously failed. */
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: { characters: stage1Roster(), chapters: [{ id: 1, title: 'Chapter One' }] },
         failedChapterIds: [1],
@@ -4954,6 +4957,7 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
           bookDir,
         });
         await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
           chapters: {},
           ...(opts.seedStage1
             ? { stage1: { characters: stage1Roster(), chapters: [{ id: 1, title: 'Chapter One' }] } }
@@ -7134,6 +7138,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
       // stage1Existed === true so Phase 1 (and the persist block the remap
       // lives in) actually runs this pass.
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: stage1RosterForChapter(),
@@ -7337,6 +7342,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
       );
 
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: suggestionStage1Roster(),
@@ -7373,16 +7379,15 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         expect(idsAfter).not.toContain('olga');
         expect(idsAfter).toContain('olga-legacy');
 
+        // Plan 291 (#4031, Task 24): as on the main path, the plan joins `olga` to
+        // `olga-legacy` at the subset's finalise, so the post-stage-2 dedup already
+        // speaks prior ids and its diminutive suggestion targets the live
+        // `olga-legacy` (it used to name the pre-remap `olga`). Exactly that
+        // suggestion, nothing else.
         const suggestionsFile = await loadSuggestions(bookDir);
-        expect(suggestionsFile.suggestions.length).toBeGreaterThan(0);
-        // The diminutive suggestion references the PRE-remap 'olga' id
-        // (dd.suggestions is built before the remap runs) — confirms this
-        // survived because pruneSuggestionsToRoster was checked against the
-        // pre-remap roster, not because some unrelated suggestion snuck
-        // through.
-        expect(
-          suggestionsFile.suggestions.some((s) => s.sourceId === 'olga' || s.targetId === 'olga'),
-        ).toBe(true);
+        expect(suggestionsFile.suggestions).toEqual([
+          expect.objectContaining({ sourceId: 'olya', targetId: 'olga-legacy' }),
+        ]);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -7395,19 +7400,13 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
   );
 
   it(
-    "site 4 convergence-skip on the subset path: no spurious retirement when the prior row already converged via this run's own dedup (mirrors the Task 8 / Task-10-round-3 guard)",
+    'subset path: two same-name fresh rows both join the prior row - the prior id is kept and only the raw id retires (was: site 4 convergence-skip)',
     async () => {
       /* Same roster/attribution shape as the main-path Task 8 guard fixture:
          chapter 1 introduces 'anton-x', chapters 2-3 introduce 'anton-a' —
-         same name "Anton Prime", different id, which dedupeRosterByName's
-         Tier-1 collapses to the lowest member id (dd.rewrites hit). The
-         prior 'anton-x' row's NAME matches "Anton Prime" exactly, so
-         remapFreshToPriorIds attempts the pair — and because 'anton-x' is
-         ALSO a same-run dedup rewrite key, priorIdAfter('anton-x') already
-         resolves to the canonical survivor via the cumulative table (§11
-         Q2). The pair has already converged; the remap must record NOTHING
-         for it, while Site 1 (applyRewriteToPriorCast) still records its own
-         'anton-x' -> canonical entry via the SAME table. */
+         same name "Anton Prime", different id. Before plan 291 the dedup collapsed
+         them onto the survivor and the remap had to skip the converged pair; now
+         the plan settles both before the dedup runs (assertions below). */
       const CONVERGE_CHAPTER_BODY =
         '“Are you sure this will work,” Anton asked.\n\nOlga nodded and looked away.';
 
@@ -7513,6 +7512,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
       );
 
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: convergeStage1RosterForChapter(1),
@@ -7544,24 +7544,20 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         const castAfter = JSON.parse(
           readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
         ) as { characters: Array<{ id: string; name: string }> };
-        const antonPrime = castAfter.characters.find((c) => c.name === 'Anton Prime');
-        expect(antonPrime).toBeDefined();
-        const antonPrimeId = antonPrime!.id;
-        // Confirms the remap correctly skipped (converged) rather than
-        // reversing the roster back onto the stale prior id.
-        expect(antonPrimeId).not.toBe('anton-x');
+        // Plan 291 (#4031, Task 24) - re-derived as the main path's twin was in Task 16
+        // ("a full analysis over a book whose history already has an entry"): the
+        // subset's finalise now applies the plan, which joins both fresh rows
+        // (`anton-x` by id, `anton-a` by name) to the prior `anton-x`. The prior id is
+        // kept - nothing retires it onto a dedup survivor any more - and the join
+        // records `anton-a -> anton-x`, tagged analyzer.
+        const antonRows = castAfter.characters.filter((c) => c.name === 'Anton Prime');
+        expect(antonRows.map((c) => c.id)).toEqual(['anton-x']);
+        expect(castAfter.characters.map((c) => c.id)).not.toContain('anton-a');
 
         const history = await loadCastIdHistory(bookDir);
-        // Site 1 still records its own entry for this exact pair.
-        expect(history.supersededBy).toHaveProperty('anton-x', antonPrimeId);
-        // #2040 Task 14 review item 4: same note as the sibling test above
-        // (main path, ~:3648) — this assertion no longer isolates "the early
-        // remap recorded nothing" on its own, since
-        // dropSupersededIdsReclaimedByLiveCast guarantees a LIVE id
-        // (antonPrimeId) can never remain a history KEY after this write
-        // regardless of whether that bug exists. The real proof is the
-        // sibling assertion one line up. Left in place as a secondary check.
-        expect(history.supersededBy).not.toHaveProperty(antonPrimeId);
+        expect(history.supersededBy).toHaveProperty('anton-a', 'anton-x');
+        expect(history.supersededByKind).toHaveProperty('anton-a', 'analyzer');
+        expect(history.supersededBy).not.toHaveProperty('anton-x');
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -7760,6 +7756,7 @@ describe('runSubsetAnalyzerJob — #2584/#2570 stripEstablishedAsciiRewrites wir
       // each requested chapter runs; this seed only needs to be a valid
       // starting roster so the "already analysed" gate is satisfied.
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: stage1RosterForChapter(1),
@@ -8029,6 +8026,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
       // stage1Existed === true so Phase 1 (and the persist block the drop
       // lives in) actually runs this pass, same as the Task 11 fixture.
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: stage1RosterForChapter(),
@@ -8268,6 +8266,7 @@ describe('runSubsetAnalyzerJob — a supersededBy entry whose target died is pru
       // stage1Existed === true so Phase 1 (and the persist block the prune
       // lives in) actually runs this pass.
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: stage1RosterForChapter(),
@@ -10258,6 +10257,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       ];
       const book = makeBook('subset-word-free', chapters);
       await saveAnalysisCache(book.manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         stage1: stage1For(chapters),
         chapterCast: { 1: roster(), 2: roster() },
         chapters: { 1: takeOf(1, WORDED[1]) },
@@ -10277,6 +10277,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       ];
       const book = makeBook('subset-pending', chapters);
       await saveAnalysisCache(book.manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         stage1: stage1For(chapters),
         chapterCast: { 1: roster(), 2: roster() },
         chapters: { 1: takeOf(1, WORDED[1]), 2: takeOf(2, 'A stale pending take.') },
@@ -10304,6 +10305,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       ];
       /** Every chapter has a current take: a finished book. */
       const finishedCache = (chapters: BookChapter[]) => ({
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         stage1: stage1For(chapters),
         chapterCast: Object.fromEntries(chapters.map((c) => [c.id, roster()])),
         chapters: Object.fromEntries(chapters.map((c) => [c.id, takeOf(c.id, c.body)])),
@@ -10521,6 +10523,7 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     ];
     const book = makeBook('invariant-6', chapters, { castConfirmed: true });
     await saveAnalysisCache(book.manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
       stage1: stage1For(chapters),
       chapterCast: { 1: roster(), 2: roster() },
       chapters: { 1: takeOf(1, WORDED[1]) },
@@ -10692,6 +10695,7 @@ async function suggestedPairsAfterJob(
       });
     } else {
       await saveAnalysisCache(manuscriptId, {
+        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
         chapters: {},
         stage1: {
           characters: stage1Roster(),

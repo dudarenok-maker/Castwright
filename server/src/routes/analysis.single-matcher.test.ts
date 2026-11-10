@@ -59,7 +59,7 @@ import {
 import * as historyStore from '../store/cast-id-history.js';
 import * as stateIo from '../workspace/state-io.js';
 import request from 'supertest';
-import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { ANALYSIS_CACHE_VERSION, cachePath, clearAnalysisCache, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { resolveAttributionState } from '../store/attribution-health-io.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { castJsonPath, castMergeSuggestionsJsonPath, makeBookId } from '../workspace/paths.js';
@@ -1113,14 +1113,11 @@ describe('#4031 main job: resume', () => {
     const first = await run(b.manuscriptId, b.bookDir, 'main', FRESH);
     setPhase0Hook(undefined);
     expect(errCode(first)).toBe('cast_incomplete');
-    const castPath = join(b.bookDir, '.audiobook', 'cast.json');
-    const castBeforeRetry = readFileSync(castPath, 'utf8');
     const retry = await runSubsetRetry(b, FRESH);
     expect(errCode(retry)).toBe('resume_required');
-    /* TODO(Task 24): flow (b) still writes the raw roster into cast.json, which the resume then
-       reads as prior rows. Until it plans instead, put cast.json back so this test isolates the
-       resume; delete this line with that change. */
-    writeFileSync(castPath, castBeforeRetry);
+    /* Flow (b) never plans, so it puts no raw-id row into cast.json (spec :117-119). */
+    expect(ids(readCast(b.bookDir))).not.toContain(FRESH_ID);
+    expect(ids(readCast(b.bookDir))).not.toContain('the-jogger');
     /* The Retry left the normal "current-unplanned" cache: a roster, no plan. */
     expect(readCache(b.manuscriptId)?.stage1).toBeDefined();
     expect(readCache(b.manuscriptId)?.matchPlan).toBeUndefined();
@@ -3168,5 +3165,240 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       expect(unresolvedLines[0]).toMatch(/: w2$/);
       expect(unresolvedLines[0]).not.toContain(b.bookDir);
     });
+  });
+});
+
+describe('#4031 subset job: classification, run start, Phase 0a and finalise (Task 24)', () => {
+  const orig = process.env.STAGE2_COVERAGE_RETRIES;
+  const books: HarnessBook[] = [];
+  const seed = (...a: Parameters<typeof mkBook>): HarnessBook => {
+    const b = mkBook(...a);
+    books.push(b);
+    return b;
+  };
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = orig;
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+
+  const audiobook = (b: HarnessBook, file: string): string => join(b.bookDir, '.audiobook', file);
+  const bytes = (p: string): string | null => (existsSync(p) ? readFileSync(p, 'utf8') : null);
+  const JOGGER = {
+    id: 'the-jogger',
+    name: 'The Jogger',
+    role: 'minor',
+    color: '#222222',
+    gender: 'male',
+    evidence: [{ quote: 'The Jogger waved' }],
+  } as unknown as CharacterOutput;
+  const BORIS = {
+    id: 'boris',
+    name: 'Boris Vane',
+    role: 'minor',
+    color: '#555555',
+    gender: 'male',
+    evidence: [{ quote: 'Wren asked' }],
+  } as unknown as CharacterOutput;
+  const BODY18 = `${BODY}\n\nThe Jogger waved.`;
+  const OLGA: Row = { id: 'olga', name: 'Olga', role: 'minor', color: '#444444', voiceState: 'generated' };
+  const LEAD_WREN: Row = { ...PRIOR_WREN, role: 'lead', color: '#111111' };
+  const WREN_DUP: Row = { id: 'w2b', name: 'Wren', role: 'minor', color: '#333333', voiceState: 'generated' };
+  const FRESH = { roster: [NARR, WREN_FRESH, JOGGER], speakerId: FRESH_ID };
+  const PRIORS = (): Row[] => [{ ...NARR }, { ...LEAD_WREN }, { ...OLGA }];
+  const ids = (rows: Row[]): string[] => rows.map((r) => String(r.id));
+  const errCode = (events: Array<{ kind: string; code?: unknown }>): unknown =>
+    events.find((e) => e.kind === 'error')?.code;
+  const done = (events: Array<{ kind: string }>): boolean => events.some((e) => e.kind === 'result');
+  const history = (b: HarnessBook): { supersededBy: Record<string, string>; supersededByKind?: Record<string, string> } =>
+    existsSync(audiobook(b, 'cast-id-history.json')) ? (readHistory(b.bookDir) as never) : { supersededBy: {} };
+  const editLines = (b: HarnessBook): Record<string, number> =>
+    readEdits(b.bookDir).reduce<Record<string, number>>((acc, s) => {
+      const id = String(s.characterId);
+      return { ...acc, [id]: (acc[id] ?? 0) + 1 };
+    }, {});
+  const decisionsOf = (b: HarnessBook): Record<string, unknown> =>
+    JSON.parse(JSON.stringify(readCache(b.manuscriptId)?.matchPlan?.decisions ?? {}));
+
+  it('A22 subset: a legacy cache ends analysis_cache_legacy before any write; cast.json and history stay byte-identical', async () => {
+    /* A same-name prior pair: a run start that ran would heal it (cast.json and history). */
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP, lines: 2 }]);
+    writeFileSync(audiobook(b, 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy: { w9: PRIOR_ID } }));
+    writeFileSync(
+      castMergeSuggestionsJsonPath(b.bookDir),
+      JSON.stringify({ suggestions: [{ sourceId: 'w2b', targetId: PRIOR_ID, a: PRIOR_ID, b: 'w2b', reason: 'x', origin: 'dedup' }] }),
+    );
+    /* No `version`: a cache an older build wrote. */
+    await saveAnalysisCache(b.manuscriptId, {
+      chapters: { 1: [{ id: 101, chapterId: 1, characterId: FRESH_ID, confidence: 0.9, text: 'LEGACY-SENTINEL' }] },
+      stage1: { characters: [NARR, WREN_FRESH], chapters: [{ id: 1, title: 'Chapter One' }] },
+    } as never);
+    const before = {
+      cast: bytes(audiobook(b, 'cast.json')),
+      history: bytes(audiobook(b, 'cast-id-history.json')),
+      suggestions: bytes(castMergeSuggestionsJsonPath(b.bookDir)),
+      edits: bytes(audiobook(b, 'manuscript-edits.json')),
+      cache: bytes(cachePath(b.manuscriptId)),
+    };
+    let phase0Calls = 0;
+    setPhase0Hook(() => {
+      phase0Calls += 1;
+    });
+    const events = await runSubsetRetry(b, FRESH);
+    expect(errCode(events)).toBe('analysis_cache_legacy');
+    expect(String(events.find((e) => e.kind === 'error')?.message)).toMatch(/older version/);
+    expect(done(events)).toBe(false);
+    expect(phase0Calls).toBe(0);
+    expect(bytes(audiobook(b, 'cast.json'))).toBe(before.cast);
+    expect(linesById(b.bookDir)).toEqual({ narrator: undefined, [PRIOR_ID]: 40, w2b: 2 });
+    expect(bytes(audiobook(b, 'cast-id-history.json'))).toBe(before.history);
+    expect(bytes(castMergeSuggestionsJsonPath(b.bookDir))).toBe(before.suggestions);
+    expect(bytes(audiobook(b, 'manuscript-edits.json'))).toBe(before.edits);
+    expect(bytes(cachePath(b.manuscriptId))).toBe(before.cache);
+  });
+
+  it('A11 subset: identical names heal at the subset run start, in cast.json and in the history as a heal', async () => {
+    const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP }]);
+    let atStart: { cast: Row[]; history: Record<string, unknown> } | undefined;
+    setPhase0Hook(() => {
+      atStart ??= { cast: readCast(b.bookDir), history: readJson(b.bookDir, 'cast-id-history.json') };
+    });
+    const events = await run(b.manuscriptId, b.bookDir, 'subset');
+    expect(done(events)).toBe(true);
+    expect(atStart!.cast.filter((r) => r.name === 'Wren').map((r) => r.id)).toEqual([PRIOR_ID]);
+    expect(atStart!.history.supersededBy).toEqual({ w2b: PRIOR_ID });
+    expect(atStart!.history.supersededByKind).toEqual({ w2b: 'heal' });
+    /* ...and it stays healed through the persist. */
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', PRIOR_ID]);
+    expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 }); // one line in each of three chapters
+    /* The heal, and the persist's record of the plan's join (raw -> prior). */
+    expect(history(b).supersededBy).toEqual({ w2b: PRIOR_ID, [FRESH_ID]: PRIOR_ID });
+    expect(history(b).supersededByKind).toEqual({ w2b: 'heal', [FRESH_ID]: 'analyzer' });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('subset flow (b) on a v2 cache writes stage1 with no plan', async () => {
+    const b = seed(PRIORS(), undefined, BODY18);
+    setPhase0Hook((id) => {
+      if (id === 3) throw new Error('phase 0 boom');
+    });
+    expect(errCode(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe('cast_incomplete');
+    setPhase0Hook(undefined);
+    expect(readCache(b.manuscriptId)?.version).toBe(2);
+    const castBefore = bytes(audiobook(b, 'cast.json'));
+    const historyBefore = bytes(audiobook(b, 'cast-id-history.json'));
+    /* Every Phase-0a snapshot the Retry makes: none may put a raw analyzer id on disk. */
+    const seen: string[][] = [];
+    setPhase0Hook(() => {
+      seen.push(ids(readCast(b.bookDir)));
+    });
+    const retry = await runSubsetRetry(b, FRESH);
+    expect(errCode(retry)).toBe('resume_required');
+    const cache = readCache(b.manuscriptId)!;
+    expect(cache.version).toBe(2);
+    expect(cache.stage1?.characters.map((c) => c.id).sort()).toEqual(['narrator', 'the-jogger', FRESH_ID]);
+    expect(cache.matchPlan).toBeUndefined();
+    /* No raw-id row on disk: cast.json is what the stopped run left (spec :117-119). */
+    for (const s of [...seen, ids(readCast(b.bookDir))]) {
+      expect(s).not.toContain(FRESH_ID);
+      expect(s).not.toContain('the-jogger');
+    }
+    expect(bytes(audiobook(b, 'cast.json'))).toBe(castBefore);
+    expect(linesById(b.bookDir)).toEqual({ narrator: undefined, [PRIOR_ID]: undefined, olga: undefined });
+    expect(bytes(audiobook(b, 'cast-id-history.json'))).toBe(historyBefore);
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('Q2: subset flow (a) saves its extension decisions', async () => {
+    const b = seed(PRIORS(), undefined, BODY18);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+    const kept = readCache(b.manuscriptId)!.matchPlan!;
+    expect(Object.keys(kept.decisions)).toEqual(expect.arrayContaining(['narrator', 'the-jogger', FRESH_ID]));
+    expect(kept.decisions.boris).toBeUndefined();
+    const historyAfterMain = history(b).supersededBy;
+    /* The Retry's roster has a row the cached plan does not cover. */
+    let atPhase1: { cast: Row[]; decisions: Record<string, unknown> } | undefined;
+    setPhase1Hook(() => {
+      atPhase1 ??= { cast: readCast(b.bookDir), decisions: decisionsOf(b) };
+    });
+    const events = await runSubsetRetry(b, { roster: [NARR, WREN_FRESH, JOGGER, BORIS], speakerId: ['boris', FRESH_ID] });
+    expect(done(events)).toBe(true);
+    /* Saved before Phase 1: same token, the reused decisions as they were, Boris added. */
+    const after = readCache(b.manuscriptId)!.matchPlan!;
+    expect(after.runToken).toBe(kept.runToken);
+    for (const [k, d] of Object.entries(kept.decisions)) expect(after.decisions[k]).toEqual(d);
+    expect(after.decisions.boris).toMatchObject({ kind: 'new', id: 'boris', minted: false });
+    expect(atPhase1!.decisions.boris).toMatchObject({ kind: 'new', id: 'boris' });
+    expect(ids(atPhase1!.cast)).toContain('boris');
+    const cast = ids(readCast(b.bookDir));
+    expect(cast.filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+    expect(cast).toContain(PRIOR_ID);
+    expect(cast).not.toContain(FRESH_ID);
+    expect(editLines(b).boris).toBeGreaterThan(0);
+    expect(editLines(b)[FRESH_ID]).toBeUndefined();
+    /* The subset run retires nothing beyond what the main run already recorded. */
+    expect(history(b).supersededBy).toEqual(historyAfterMain);
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('subset: one analyzer row never gets two cast rows', async () => {
+    const fresh = { roster: [NARR, WREN_FRESH, BORIS], speakerId: ['boris', FRESH_ID] };
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', fresh))).toBe(true);
+    expect(ids(readCast(b.bookDir))).toContain('boris');
+    const plan = decisionsOf(b);
+    const linesAfterMain = editLines(b);
+    const historyAfterMain = history(b).supersededBy;
+    expect(historyAfterMain).toEqual({ [FRESH_ID]: PRIOR_ID }); // the main run's analyzer join
+    const events = await runSubsetRetry(b, fresh);
+    expect(done(events)).toBe(true);
+    /* The cached plan is reused as it was: Boris is the row the main run added, not a second one. */
+    expect(decisionsOf(b)).toEqual(plan);
+    const cast = ids(readCast(b.bookDir));
+    expect(cast.filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+    expect(cast.filter((id) => id.startsWith('w2') || id === FRESH_ID)).toEqual([PRIOR_ID]);
+    expect(editLines(b)).toEqual(linesAfterMain);
+    expect(history(b).supersededBy).toEqual(historyAfterMain);
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('Task 9 carry: a subset Retry after a stop in Phase 1 reuses the surviving stage1 and its plan', async () => {
+    const straight = seed(PRIORS(), undefined, BODY18);
+    expect(done(await run(straight.manuscriptId, straight.bookDir, 'main', FRESH))).toBe(true);
+    const b = seed(PRIORS(), undefined, BODY18);
+    setPhase1Hook(abortAtFirstPhase1());
+    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    setPhase1Hook(undefined);
+    const stopped = readCache(b.manuscriptId)!;
+    expect(stopped.stage1).toBeDefined();
+    expect(stopped.matchPlan).toBeDefined();
+    const plan = decisionsOf(b);
+    const events = await runSubsetRetry(b, FRESH);
+    /* stage1 existed: flow (a) attributes the chapters (no resume_required) on the stopped plan. */
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(readCache(b.manuscriptId)!.matchPlan!.runToken).toBe(stopped.matchPlan!.runToken);
+    expect(decisionsOf(b)).toEqual(plan);
+    const cast = ids(readCast(b.bookDir));
+    expect(cast).toContain(PRIOR_ID);
+    expect(cast).not.toContain(FRESH_ID);
+    expect(JSON.stringify(cast)).not.toContain('-n1');
+    expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 }); // one line in each of three chapters
+    /* The run-added row the fold takes is gone into the fold's bucket, as in an
+       uninterrupted main run. (The rest of the persisted cast - rule 1 for the omitted
+       unvoiced prior row - is the subset persist's, Task 25.) */
+    expect(cast).toEqual(expect.arrayContaining(['narrator', 'unknown-male', PRIOR_ID]));
+    expect(ids(readCast(straight.bookDir))).toEqual(expect.arrayContaining(['narrator', 'unknown-male', PRIOR_ID]));
+    expect(cast).not.toContain('the-jogger');
+    /* No prior id is retired; the plan's join is recorded as in an uninterrupted main
+       run. The fold's retirement of the stopped run's row is the subset's pre-plan
+       persist (Task 25 moves it to `persistPlannedCast`). */
+    expect(history(straight).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+    expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID, 'the-jogger': 'unknown-male' });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 });

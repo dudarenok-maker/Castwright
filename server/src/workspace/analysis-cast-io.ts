@@ -117,9 +117,8 @@ export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastS
    server-side only - the error text can carry the workspace path): a heal must
    never merge across a decision it cannot read. A degraded history read yields
    no dismissals ("undetermined", not evidence) rather than refusing every heal.
-   Called INSIDE the cast lock by `materialisePriorAtRunStart`; `loadHealOpts`
-   in routes/analysis.ts is the same read for the call sites that have not moved
-   under the lock yet. */
+   Called INSIDE the cast lock by `materialisePriorAtRunStart`, the run start of
+   both analysis jobs. */
 export async function readHealOpts(
   bookDir: string | undefined,
   skipIds: ReadonlySet<string> = new Set(),

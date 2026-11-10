@@ -22,7 +22,7 @@ import {
 } from './analysis.js';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
 import type { CharacterOutput, Stage1ChapterOutput } from '../handoff/schemas.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript } from '../store/manuscripts.js';
 
 const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
@@ -213,6 +213,7 @@ async function run(
     /* Pre-seed cache.stage1 so the subset route takes the book-already-analysed
        branch (stage1Existed), the only one that reaches the subset persist. */
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       chapters: {},
       stage1: {
         characters: roster,

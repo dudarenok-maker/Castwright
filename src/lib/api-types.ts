@@ -5171,12 +5171,16 @@ export interface components {
          *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
          *     `design_in_progress`, `bad_request`, `chapter_excluded`,
          *     `main_analysis_running`, `subset_analysis_running`,
-         *     `chapters_restructuring`) carry `code`
+         *     `chapters_restructuring`, `analysis_cache_legacy`) carry `code`
          *     and `message` only — `main_analysis_running` also carries
          *     `draining` (#3435: the late refusal check, after the stream opened).
          *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
          *     the chapters it ran are done, but the book still needs a main
          *     resume to attribute the rest; nothing was persisted as final.
+         *     `analysis_cache_legacy` (#4031, `/analysis/chapters` only): the
+         *     book's saved analysis progress predates the current cache version,
+         *     so a chapter re-analysis stops before writing anything; a full
+         *     analysis rebuilds it.
          */
         AnalyseErrorEvent: {
             /** @enum {string} */

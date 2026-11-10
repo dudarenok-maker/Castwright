@@ -46,6 +46,7 @@ import { bookStateRouter } from '../book-state.js';
 import type { Analyzer, AnalyzerSelection } from '../../analyzer/index.js';
 import type { CharacterOutput, Stage1ChapterOutput } from '../../handoff/schemas.js';
 import {
+  ANALYSIS_CACHE_VERSION,
   cachePath,
   clearAnalysisCache,
   saveAnalysisCache,
@@ -340,6 +341,8 @@ export async function run(
   if (kind === 'subset') {
     if (opts.seedCache !== false) {
       await saveAnalysisCache(manuscriptId, {
+        /* Plan 291 - a current cache (an unversioned one is legacy, which the subset job refuses). */
+        version: ANALYSIS_CACHE_VERSION,
         chapters: {},
         stage1: {
           characters: fresh.roster,

@@ -14,7 +14,7 @@
    interim, stage1, final). Controls 6-7 were added by the independent
    review of Task 5 — the plan as first written drove runMainAnalyzerJob
    only, leaving runSubsetAnalyzerJob's other two write sites (subset-interim,
-   subset-final), its OWN reportCastConflict closure, and its OWN `send`
+   which plan 291 Task 24 replaced with `writePlanSnapshot`, and subset-final), its OWN reportCastConflict closure, and its OWN `send`
    binding pinned by nothing but a by-hand read. "Verified by review is not
    coverage."
 
@@ -661,7 +661,8 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
 
   it(
     /* #2015 addendum (Task 5 review) — runSubsetAnalyzerJob carries its own
-       two write sites (subset-interim, subset-final), its own
+       merge-base write site (subset-final; plan 291 moved its interim writes to
+       `writePlanSnapshot`), its own
        reportCastConflict, and its own `send` binding. Nothing above drives
        it; this is the subset negative control. */
     'control 6 — an uncontended subset run emits ZERO stale warnings (route-level, subset)',
@@ -682,7 +683,7 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
           characters: stage1Roster(),
           chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
         };
-        await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
+        await saveAnalysisCache(manuscriptId, { version: 2, chapters: {}, stage1 }); // #4031: unversioned = legacy (refused)
 
         const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
         const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
@@ -723,11 +724,10 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
        job's own captured `events`, not merely that some warning fired
        somewhere.
 
-       The subset Phase-0a loop is a plain sequential `for` (no pool), so
-       the first chapter's subset-interim write always lands strictly before
-       the second chapter's own analyzer call — injecting on the SECOND call
-       deterministically lands the foreign write between two of this run's
-       own writes. A run that reports a conflict has, by definition, reached
+       The subset Phase-1 loop is a plain sequential `for` (no pool), and the
+       finalise's plan snapshot lands before the first Phase-1 call — injecting
+       on the SECOND call deterministically lands the foreign write between
+       two of this run's own writes. A run that reports a conflict has, by definition, reached
        a write — no separate disk assertion is needed here the way it is for
        the zero-warnings controls above. */
     "control 7 — a foreign write mid-run reports EXACTLY one warning on the subset job's own send (route-level, subset)",
@@ -745,19 +745,25 @@ describe('#2015 Task 9 — route-level cast_merge_base_stale controls', () => {
           characters: stage1Roster(),
           chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })),
         };
-        await saveAnalysisCache(manuscriptId, { chapters: {}, stage1 });
+        await saveAnalysisCache(manuscriptId, { version: 2, chapters: {}, stage1 }); // #4031: unversioned = legacy (refused)
 
+        /* Plan 291 (#4031, Task 24): the subset job no longer writes cast.json in Phase 0a
+           on an unplanned cache (no raw-id row reaches disk); its first own write is the
+           finalise's plan snapshot, which re-reads the cast under the lock. So the
+           foreign write moves to Phase 1 - between that snapshot and the final
+           merge-base write - where the detector still fires. (Was: Phase 0a chapter 2,
+           between two interim writes.) */
         let calls = 0;
-        const selection = buildSelection(
-          buildPhase0Analyzer(() => {
+        const selection = buildSelection(buildPhase0Analyzer(), 'phase0-model-subset');
+        const phase1Selection = buildSelection(
+          buildPhase1Analyzer(() => {
             calls += 1;
             if (calls === 2) {
               seedCastJson(bookDir, [{ id: 'foreign' }]);
             }
           }),
-          'phase0-model-subset',
+          'phase1-model-subset',
         );
-        const phase1Selection = buildSelection(buildPhase1Analyzer(), 'phase1-model-subset');
 
         const events: unknown[] = [];
         const job = makeJob((ev) => events.push(ev), {
