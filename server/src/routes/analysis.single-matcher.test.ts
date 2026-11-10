@@ -4588,3 +4588,41 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     });
   });
 });
+
+/* R47 (#4031 Task 28 fix round 1): a code-seeded default narrator name is
+   analysis-owned. A book first analysed as English keeps "Narrator"; once its
+   language is corrected to `ru`, re-analysis re-localises the joined narrator.
+   A name the user chose stays. */
+describe.each(['main', 'subset'] as const)('R47: the narrator name on re-analysis (%s job)', (kind) => {
+  const books: HarnessBook[] = [];
+  const orig = process.env.STAGE2_COVERAGE_RETRIES;
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+    else process.env.STAGE2_COVERAGE_RETRIES = orig;
+    for (const b of books.splice(0)) await cleanupBook(b);
+  });
+  const ruBook = (narratorName: string): HarnessBook => {
+    const b = mkBook([{ ...NARR, name: narratorName }, { ...PRIOR_WREN }]);
+    books.push(b);
+    const statePath = join(b.bookDir, '.audiobook', 'state.json');
+    writeFileSync(statePath, JSON.stringify({ ...JSON.parse(readFileSync(statePath, 'utf8')), language: 'ru' }));
+    return b;
+  };
+  const narratorName = (b: HarnessBook) => readCast(b.bookDir).find((c) => c.id === 'narrator')?.name;
+
+  it('a default "Narrator" re-localises to the book language', async () => {
+    const b = ruBook('Narrator');
+    await runJob(kind)(b);
+    expect(narratorName(b)).toBe('Рассказчик');
+  });
+
+  it('control: a user-renamed narrator keeps its name', async () => {
+    const b = ruBook('The Chronicler');
+    await runJob(kind)(b);
+    expect(narratorName(b)).toBe('The Chronicler');
+  });
+});

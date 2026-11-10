@@ -5,6 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { unionNotLinkedTo } from './cast-name-match.js';
 import type {
   DedupConstraints,
@@ -363,7 +364,13 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
       if ((ANALYSIS_OWNED as readonly string[]).includes(k)) continue;
       if (isAbsent(out[k]) && !isAbsent(v)) out[k] = v;
     }
-    out.aliases = addAliases(cur.name, cur.aliases, [row.name, ...((row.aliases as unknown[]) ?? [])]);
+    /* R47: a code-seeded default narrator name ("Narrator", or any language's
+       default) is analysis-owned, so the fresh, re-localised name wins; a name
+       the user chose stays. */
+    if (NARRATOR_CHARACTER_IDS.includes(target) && isDefaultNarratorName(cur.name as string) && typeof row.name === 'string') {
+      out.name = row.name;
+    }
+    out.aliases = addAliases(out.name, cur.aliases, [row.name, ...((row.aliases as unknown[]) ?? [])]);
     written.set(target, out);
     const after = ledger[target];
     if (after?.state === 'run-owned') ledger[target] = { ...after, fp: userOwnedFingerprint(out) };
