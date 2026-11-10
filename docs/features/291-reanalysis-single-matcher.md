@@ -1,12 +1,13 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 291 — Re-analysis: one authoritative cast matcher (#4031)
 
-> Status: draft. Implementation plan; no code has landed. Revised 2026-11-08 after three
+> Status: active. Implemented on `fix/server-4031-single-matcher` (Tasks 1–29); on-box
+> acceptance owed (register row B-group, see Ship notes). Revised 2026-11-08 after three
 > assumption-checker rounds, an owner-authorised focused review of the client save path, and the
 > owner's and coordinator's rulings recorded below.
 >
@@ -273,7 +274,7 @@ snapshot.
   `routes/index.tsx:824`, `voices.tsx:856` and `duplicate-review-modal.tsx:135`.
 - **6 — a 409 latches the era**, and the re-hydrate is single-flight per book. *Reason:* a 409 is
   proof of a running analysis the client had not seen.
-- **8 — the era also latches when the gate sees an analysis by any route**, including another
+- **8b — the era also latches when the gate sees an analysis by any route**, including another
   tab's broadcast (`broadcast-middleware.ts:316-337`, `:402-410`). The fe-11 limitation narrows to
   a tab that never saw the run. *Reason:* an analysis can reach the gate without any preview apply.
 - **10 — the rule-11 fingerprint is the job's own last write.**
@@ -291,8 +292,9 @@ snapshot.
   - The mock analysis emits `onCastUpdate`, and the mock busy is keyed by the mock book
     (`api.ts:1662-1751`, `:1672`, `:1737`, `:2524-2526`), with no second run on subscribe.
   - Task 20 records the end-of-run fixture.
-- **12 — ConfirmRoute's read (`routes/index.tsx:751-797`) is the busy-gated re-hydrate.** Layout's
-  Confirm override is dropped. *Reason:* one owner for Confirm's read.
+- **12 — ConfirmRoute's read (`routes/index.tsx:751-797`) is the busy-gated re-hydrate.**
+  ~~Layout's Confirm override is dropped.~~ *Struck at Task 29: no such override exists in
+  Layout (Task 12 found nothing to drop).* *Reason:* one owner for Confirm's read.
 - **13 — the voice-match once-guard arms only when the match runs.** Between Tasks 11 and 12 the
   catch-all absorbs its save. *Reason:* each task stays green.
 - **The 409 reuses the existing `book_busy` + `busySentence` shape** (`book-state.ts:1113-1115`,
@@ -345,6 +347,39 @@ snapshot.
 9. **Rule 13's only remaining trigger** is a merge whose history write failed, which C3 makes a
    failed request. With the cast locked mid-run, no user delete exists. Rule 13 is therefore
    defensive; its A20 tests use `failNextRetirement` and assert the merge request reported failure.
+   Spec acceptance 20 is amended to match (ruling R13).
+10. **R11 — drift-refused suggestions.** The plan wins (ruling Q3). Suggestions written transiently
+    at the Phase-0b snapshot are removed when a run is drift-refused, so the run leaves none behind.
+    Spec acceptance 24 is amended.
+11. **R12 — New UI.** The plan wins (owner ruling, 2026-11-08): a paused-edits banner, disabled edit
+    controls and a 409 `book_busy` on the whole-slice cast PUT. The spec's "New UI" non-goal is
+    amended.
+12. **Struck: "Layout's Confirm override is dropped"** (Task 12, ruling 12 and its Task 12 line).
+    No such override exists in Layout; ConfirmRoute is the only Confirm read.
+13. **R22 — two "item 8" labels.** The focused-review ruling about another tab's broadcast is now
+    `8b`; `item 8` is Task 19's cache-fields item.
+14. **R42 / R35a / R35b — "Resumed = uninterrupted".** Holds for both jobs, including a subset
+    resuming a subset, because a subset tags the rows it mints in the ledger (`by: 'subset'`,
+    R35b). One documented exception, invariant 6 (a subset deletes nothing by ledger): a stopped
+    attempt's fold-dropped rows survive a resumed SUBSET until the next main run removes them.
+    Spec acceptance 14 is amended.
+15. **R38 — stopped main run, then a completed subset Retry.** A fold-taken row the stopped main run
+    added survives the subset Retry until the next main persist removes it. Accepted; the cost is
+    a 0-line row visible in the Cast view in between.
+16. **R43 — the series linker runs only on `new` rows.** A character declined ("Don't reuse") before
+    #3992 whose series link was dropped is a JOINED row, and re-analysis no longer re-links it
+    (plan-overlay A7b). Strictly safer; the user re-links by hand.
+17. **R46 — declined voices follow the candidates.** A `new` row inherits its candidates'
+    `declinedVoiceFrom` / `declinedVoiceUuids` at the linker, so a re-minted row for the same
+    person cannot be linked to a voice its candidate declined.
+18. **R47 — the default narrator name re-localises.** A joined narrator whose prior name is a
+    default (`isDefaultNarratorName`) takes the fresh, language-localised name on re-analysis; any
+    other name stays.
+19. **M4 — a restored dismissal counts as the run's write.** A user dismissal whose `notLinkedTo`
+    edge the reject-edge heal restores (the user's two writes came apart) counts as the run's own
+    write, so a row the run added stays fold-droppable. On the normal path the dismiss route's own
+    edge write changes the fingerprint and the row is kept (`added-once`). Rare; known consequence
+    of the heal refreshing the ledger (carry 4), accepted (Tasks 26/27).
 
 ---
 
@@ -1123,7 +1158,8 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
 
 Each disabled control carries `aria-disabled` and a tooltip.
 
-**Confirm (item 12).** Layout's Confirm override is dropped. ConfirmRoute's read
+**Confirm (item 12).** ~~Layout's Confirm override is dropped.~~ (Struck at Task 29: Layout has
+no Confirm override; there was nothing to drop.) ConfirmRoute's read
 (`routes/index.tsx:751-797`) becomes the busy-gated re-hydrate when the gate is up.
 
 **Voice-match once-guard (item 13).** The Confirm voice-match (`layout.tsx:1366-1392`;
@@ -1662,7 +1698,7 @@ Each test asserts cast.json, per-character line counts, history and suggestions.
 | Rule 12 | 1, 2 | `untagged reads as user`, `A21` |
 | Rule 13 | 7, 23 | `A20`, `item 3`, `Review Focus 4` |
 | Owner: delete never trips drift | 23 | `Review Focus 4` |
-| Owner: lock until reloaded (+ B1–B3) | 10, 11, 12, 17, 21 | PUT 409 `book_busy` ×2 + audit; `B1` ×3 (per-book era, no leak A→B); `B2` ×4 (running-only snapshot leg, every exit releases via busy, single-flight backoff, epoch re-run); `item 8` other tab; `B3 lands` / `B3 409`; catch-all toast; 409 handler; UI banner/disabled/ConfirmRoute/voice-match once-guard/a11y; replays (during run ×3 incl. component; end of run; `replay (stop)` mutation target); Playwright with mock call log |
+| Owner: lock until reloaded (+ B1–B3) | 10, 11, 12, 17, 21 | PUT 409 `book_busy` ×2 + audit; `B1` ×3 (per-book era, no leak A→B); `B2` ×4 (running-only snapshot leg, every exit releases via busy, single-flight backoff, epoch re-run); `item 8b` other tab; `B3 lands` / `B3 409`; catch-all toast; 409 handler; UI banner/disabled/ConfirmRoute/voice-match once-guard/a11y; replays (during run ×3 incl. component; end of run; `replay (stop)` mutation target); Playwright with mock call log |
 | Cache lifecycle | 6, 15, 18, 24 | `classifyAnalysisCache`; `item 9`; `F1` ×2; `Q2` ×2; `item 20`; `subset flow (b)` |
 
 ### PR #4023 tests and where they land
@@ -1722,7 +1758,18 @@ chapter splitting, and the fe-11 class (tabs that missed the run). `remapCjkHono
 
 ## Ship notes
 
-(Filled in on merge.)
+Shipped date and merge SHA: (filled in on merge, when this plan moves to `archive/`).
+
+- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4) are
+  recorded under *Spec conflicts found* above; the spec's acceptance 14, 20 and 24 and its
+  "New UI" non-goal are amended to match.
+- On-box acceptance owed: one Group B row in `docs/testing/onbox-acceptance-register.md`
+  (run sheet `docs/testing/cast-id-drift-onbox-acceptance.md`).
+- Rollback: not data-safe on its own (see *Architectural impact*): revert, then Start fresh (old
+  code) on books analysed under v2, or delete their analysis cache.
+- Docs chores done in Task 29: plan 278 invariant 9, `archive/281` backing line, `CLAUDE.md`
+  recounts, reviewer-brief entry 77, release notes.
+- PR #4023 (`fix/server-3954-keep-prior-id-on-name-join`) was already closed, unmerged.
 
 ---
 

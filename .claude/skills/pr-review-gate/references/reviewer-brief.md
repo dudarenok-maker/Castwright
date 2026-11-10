@@ -1090,6 +1090,24 @@ recite:
     (here: the in-flight design's key moves only with a separation of the row,
     and anything else discards the render).
 
+86. **A refusal in the first matcher that the fallback matcher does not
+    mirror** — PR #4023 passes 1-3 (#3954; the shape plan 291 / #4031
+    removed by making `matchFreshToPrior` the only matcher):
+    `remapFreshToPriorIds`, the first matcher, refuses a join, and
+    `mergeCore`'s name fallback then makes the same join anyway. Three times:
+    F3 (the tolerant twin-decline), P3-1 (a degraded history read skipped the
+    remap while mergeCore kept the fresh id) and P3-2 (N2's "neither join"
+    refusal for a row another fresh id's history adopts). Each time a unit
+    test at the first matcher passed while the end-to-end outcome was the join
+    it refused. Checkable: for every refusal (`continue` / `return undefined`)
+    a change adds to a matcher with a fallback downstream, find the
+    fallback's own gate for the same pair and prove it refuses too, with a
+    test through the real jobs asserting the end state (cast ids, history),
+    not the first matcher's return value. Use a fixture without the field that
+    masks the defect (P3-2's `voiceId` carried the voice across the id
+    change). A second place that compares a fresh row with a prior one is
+    itself the finding (`single-matcher.guard.test.ts` pins this).
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
