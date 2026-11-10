@@ -651,7 +651,8 @@ Design rationale:
   discriminating by handler is what produced that bug, since one handler can
   cover an authoritative write and a best-effort one at once). NINE sites fail
   loud *by rethrowing into their job's or request's terminal outcome*: the four
-  best-effort `catch` blocks around identity writes (plan 291 folded the
+  `catch` blocks around identity writes (three best-effort; `cast-merge.ts`'s
+  parks every write error since plan 291; plan 291 folded the
   main-job and subset-job pairs in `analysis.ts` into two shared ones, the
   run-start heal and the persist's retirements), plus the ONE
   AUTHORITATIVE `persistPlannedCast` call (`runPlannedPersist`, shared by both
@@ -771,7 +772,7 @@ Design rationale:
   `voice-override-linked.ts`'s one write, which **is** locked but through a
   helper the deliberately-syntactic scan cannot follow (`analysis.ts`'s five
   merge-base writes are gone: every analysis-job cast.json write sits inside
-  `withCastLock` in `workspace/analysis-cast-io.ts`, plan 291). The guard is
+  `withCastLock`, the plan writes in `workspace/analysis-cast-io.ts`, plan 291). The guard is
   call-graph-blind by design — a new *unlocked* caller of an already-locked
   helper adds no occurrence text and passes; its header lists that and the
   other blind spots.

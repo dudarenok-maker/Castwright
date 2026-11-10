@@ -433,8 +433,8 @@ fresh then offers lines by alias match alone.
 
 - The series linker's own cross-book matching. It now runs on `new` rows only.
 - New UI. Accept, dismiss and the display-name flip already exist. One
-  exception (owner, 2026-11-08, plan 291 ruling): while a re-analysis runs the
-  cast is read-only behind a banner, with its edit controls disabled, and the
+  exception (owner, 2026-11-08, plan 291 ruling): while a re-analysis runs, and until
+  the cast has reloaded, the cast is read-only behind a banner, with its edit controls disabled, and the
   server refuses a whole-slice cast PUT with 409 `book_busy`.
 - The analyzer prompts and chapter splitting.
 
@@ -507,9 +507,9 @@ the suggestions store:
       and a user edit made on a new row survives.
     - Resumed: the same result as an uninterrupted run. This holds for both
       jobs, including a subset resuming a subset (its stopped attempt's rows
-      are tagged in the ledger, R35b, so the resume treats them as its own).
+      are tagged in the ledger, plan 291 R35b, so the resume treats them as its own).
       One documented exception: a stopped attempt's fold-dropped rows survive
-      a resumed SUBSET (subset never deletes by ledger, invariant 6) until the
+      a resumed SUBSET (subset never deletes by ledger, plan 291 invariant 6) until the
       next main run removes them (plan 291 R38/R42).
 15. **Minted ids.** In the `wren`+`wren-2` roster with a forced `new`, the
     minted id is not any live, superseded, displaced or raw id, and the row's

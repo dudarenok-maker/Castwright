@@ -7,7 +7,7 @@ owner: null
 # 291 — Re-analysis: one authoritative cast matcher (#4031)
 
 > Status: active. Implemented on `fix/server-4031-single-matcher` (Tasks 1–29); on-box
-> acceptance owed (register row B-group, see Ship notes). Revised 2026-11-08 after three
+> acceptance owed (register row B109, see Ship notes). Revised 2026-11-08 after three
 > assumption-checker rounds, an owner-authorised focused review of the client save path, and the
 > owner's and coordinator's rulings recorded below.
 >
@@ -356,8 +356,9 @@ snapshot.
     amended.
 12. **Struck: "Layout's Confirm override is dropped"** (Task 12, ruling 12 and its Task 12 line).
     No such override exists in Layout; ConfirmRoute is the only Confirm read.
-13. **R22 — two "item 8" labels.** The focused-review ruling about another tab's broadcast is now
-    `8b`; `item 8` is Task 19's cache-fields item.
+13. **R22 — three "item 8" labels.** The focused-review ruling about another tab's broadcast is now
+    `8b` (and Task 11's "external snapshot" test group is `Item 8b`); Task 11's re-hydrate-on-failed-merge
+    item is `8a`; a bare `item 8` is only Task 19's cache-fields item.
 14. **R42 / R35a / R35b — "Resumed = uninterrupted".** Holds for both jobs, including a subset
     resuming a subset, because a subset tags the rows it mints in the ledger (`by: 'subset'`,
     R35b). One documented exception, invariant 6 (a subset deletes nothing by ledger): a stopped
@@ -1083,7 +1084,7 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
       sentence;
     - latches the era;
     - starts the single-flight re-hydrate.
-- **Item 8.** `layout.tsx:2777-2779`, `voices.tsx:1005` and the accept caller re-hydrate when a
+- **Item 8a.** `layout.tsx:2777-2779`, `voices.tsx:1005` and the accept caller re-hydrate when a
   merge fails.
 - **Tests:**
   `npm test -- src/store/cast-slice.test.ts src/store/book-busy-slice.test.ts src/store/cast-gate.test.ts src/store/persistence-middleware.test.ts src/store/broadcast-middleware.test.ts src/components/layout.test.tsx src/views/voices.test.tsx`.
@@ -1098,7 +1099,7 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
     - `pause, subset cancel, stream_no_result, aborted, reload mid-run and a stale paused snapshot each release only once busy has no 'analysis'`
     - `the busy poll is single-flight per book and backs off`
     - `an analysis apply after the re-hydrate was issued moves the epoch; the re-hydrate re-runs`
-  - *Item 8 (external snapshot):*
+  - *Item 8b (external snapshot):*
     - `another tab's applyExternalAnalysisSnapshot latches the open book's era`
   - *B3 (gate-up flush):*
     - `B3 lands: a unit queued just before the gate flushes and lands before the job registers`
@@ -1713,7 +1714,7 @@ Each test asserts cast.json, per-character line counts, history and suggestions.
 | merge-analysis-cast finding 3/7, N4; N1, P3-2/N2; P4-2 | Task 1 `A2`, `A7`, `A4/N2` (N2 overturned), `A5` |
 | remap R1–R17, N1a/b, N2 | Task 1 (R4, R7, R17 overturned) |
 | series-reuse-link S1–S3 | Task 16 `A7c`, Task 22 `A1` |
-| reviewer-brief entry 77 | Task 29 |
+| reviewer-brief entry 89 (77 was taken on main) | Task 29 |
 
 ## Test plan
 
@@ -1763,12 +1764,12 @@ Shipped date and merge SHA: (filled in on merge, when this plan moves to `archiv
 - Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4) are
   recorded under *Spec conflicts found* above; the spec's acceptance 14, 20 and 24 and its
   "New UI" non-goal are amended to match.
-- On-box acceptance owed: one Group B row in `docs/testing/onbox-acceptance-register.md`
+- On-box acceptance owed: one Group B row (B109) in `docs/testing/onbox-acceptance-register.md`
   (run sheet `docs/testing/cast-id-drift-onbox-acceptance.md`).
 - Rollback: not data-safe on its own (see *Architectural impact*): revert, then Start fresh (old
   code) on books analysed under v2, or delete their analysis cache.
 - Docs chores done in Task 29: plan 278 invariant 9, `archive/281` backing line, `CLAUDE.md`
-  recounts, reviewer-brief entry 77, release notes.
+  recounts, reviewer-brief entry 89, release notes.
 - PR #4023 (`fix/server-3954-keep-prior-id-on-name-join`) was already closed, unmerged.
 
 ---

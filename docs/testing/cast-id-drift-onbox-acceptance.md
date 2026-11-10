@@ -1138,7 +1138,8 @@ Register row: [B109](onbox-acceptance-register.md) (Group B). Plan:
 [`docs/superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md`](../superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md).
 
 **Needs:** a real local Ollama analyzer (real backend, `npm run dev`), per-phase
-models for pass 2, and a real voiced book with a merged pair, a dismissed merge
+models for pass 2, the Qwen TTS sidecar with VoiceDesign weights (step 1 designs
+a voice mid-run), and a real voiced book with a merged pair, a dismissed merge
 suggestion and a locked character a re-analysis would join by name. Before each
 pass copy `.audiobook/cast.json`, `.audiobook/cast-id-history.json` and
 `.audiobook/cast-merge-suggestions.json` aside.
@@ -1153,7 +1154,7 @@ with per-phase models set (the pipelined path).
    paused"; rename, drawer Save and voice assign are disabled; the link-prior and
    duplicate-review controls are disabled. Mid-run, design a voice for a
    different character through the voice route (profile drawer, Design voice):
-   it works and is the only cast write.
+   it works (it is a cast write that stays live, with merges and accept/dismiss).
 
    Result (pass 1): _______________________________________________________
    Result (pass 2): _______________________________________________________

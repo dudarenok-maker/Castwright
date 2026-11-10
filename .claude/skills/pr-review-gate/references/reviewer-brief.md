@@ -1090,7 +1090,7 @@ recite:
     (here: the in-flight design's key moves only with a separation of the row,
     and anything else discards the render).
 
-86. **A refusal in the first matcher that the fallback matcher does not
+89. **A refusal in the first matcher that the fallback matcher does not
     mirror** — PR #4023 passes 1-3 (#3954; the shape plan 291 / #4031
     removed by making `matchFreshToPrior` the only matcher):
     `remapFreshToPriorIds`, the first matcher, refuses a join, and

@@ -216,8 +216,8 @@ its rebuild half was withdrawn.)
   a run can start after a handler is admitted). Both are recorded on #2015
   so the next attempt doesn't re-propose them.
   **Update (plan 291, #4031):** these five writes and their allowlist entry are
-  gone. Every analysis-job cast.json write now takes the cast lock and re-reads
-  under it (`workspace/analysis-cast-io.ts`); the merge base was deleted.
+  gone. Every analysis-job cast.json write now takes the cast lock (the plan writes
+  re-read under it, in `workspace/analysis-cast-io.ts`); the merge base was deleted.
 - **Three clone-consent gates validate cast.json and write elsewhere**
   (`Refs #2006`) — `voices.ts`'s `PUT /:voiceId/override` (a cross-book veto
   that a per-book lock would demote to per-book, honouring it mid-walk would
