@@ -1409,6 +1409,23 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     expect(cache.failedChapterErrors?.['3']).toMatchObject({ phase: 'attribution' });
   });
 
+  /* Task 27 (R18, carry 5): A23 runs through both jobs; the subset leg reaches the subset's own
+     take patch and roll resolver. */
+  describe.each(['main', 'subset'] as const)('A23 (%s)', (kind) => {
+  const go = runJob(kind);
+  /* The test bar (carry 8): cast.json, per-character line counts (narrator included), history
+     and suggestions at the end of the run. */
+  const endState = (b: HarnessBook) => {
+    const edits: Record<string, number> = {};
+    for (const s of readEdits(b.bookDir)) edits[String(s.characterId)] = (edits[String(s.characterId)] ?? 0) + 1;
+    return {
+      cast: readCast(b.bookDir).map((c) => String(c.id)).sort(),
+      edits,
+      lines: linesById(b.bookDir),
+      history: (readHistory(b.bookDir) as { supersededBy: Record<string, string> }).supersededBy,
+      suggestions: readSuggestions(b.bookDir),
+    };
+  };
   it('A23: after a mid-run merge the rolled manuscript-edits.json and the cache carry the survivor id', async () => {
     const b = seedWren();
     let merged = false;
@@ -1426,8 +1443,15 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
         takes: Object.values(readCache(b.manuscriptId)!.chapters).flatMap((ss) => ss.map((s) => s.characterId)),
       });
     };
-    await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+    await go(b, FRESH);
     expect(await m.status()).toBe(200);
+    expect(endState(b)).toEqual({
+      cast: ['narrator', 'olga'],
+      edits: { olga: 3 },
+      lines: { narrator: 0, olga: 3 },
+      history: { [PRIOR_ID]: 'olga', [FRESH_ID]: 'olga' },
+      suggestions: [],
+    });
     expect(after.length).toBeGreaterThan(0);
     for (const seen of after) {
       expect(seen.edits).not.toContain(PRIOR_ID);
@@ -1455,8 +1479,15 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
         takes: Object.values(readCache(b.manuscriptId)!.chapters).flatMap((ss) => ss.map((s) => s.characterId)),
       });
     };
-    await run(b.manuscriptId, b.bookDir, 'main', SELF);
+    await go(b, SELF);
     expect(await m.status()).toBe(200);
+    expect(endState(b)).toEqual({
+      cast: ['narrator', 'olga'],
+      edits: { olga: 3 },
+      lines: { narrator: 0, olga: 3 },
+      history: { [PRIOR_ID]: 'olga' },
+      suggestions: [],
+    });
     expect(after.length).toBeGreaterThan(0);
     for (const seen of after) {
       expect(seen.edits).not.toContain(PRIOR_ID);
@@ -1490,8 +1521,15 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
         takes: Object.values(readCache(b.manuscriptId)!.chapters).flatMap((ss) => ss.map((s) => s.characterId)),
       });
     };
-    await run(b.manuscriptId, b.bookDir, 'main', SELF);
+    await go(b, SELF);
     expect(await m.status()).toBe(200);
+    expect(endState(b)).toEqual({
+      cast: ['kit-marlow', 'narrator', 'olga'],
+      edits: { [KIT.id]: 9 },
+      lines: { narrator: 0, [KIT.id]: 9, olga: undefined },
+      history: { [PRIOR_ID]: KIT.id },
+      suggestions: [],
+    });
     expect(readCache(b.manuscriptId)!.matchPlan?.decisions[PRIOR_ID]).toMatchObject({ kind: 'new', id: KIT.id });
     expect(after.length).toBeGreaterThan(0);
     for (const seen of after) {
@@ -1500,6 +1538,7 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       expect(seen.takes).not.toContain(PRIOR_ID);
       expect(seen.takes).toContain(KIT.id);
     }
+  });
   });
 
   it('item 8: a Phase-1 save after a failure keeps pendingAttributionChapterIds and takesPersisted', async () => {
@@ -1810,6 +1849,8 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
     expect(ids(readCast(b.bookDir))).toEqual(expect.arrayContaining([PRIOR_ID, 'w2b']));
   });
 
+  /* Task 27 (R18): A24 runs through both jobs. */
+  describe.each(['main', 'subset'] as const)('A24 (%s)', (kind) => {
   it('A24 (route): a drift-refused run writes no suggestions', async () => {
     /* Two fresh rows the dedup will not merge (a diminutive: a suggestion, not a merge),
        and a Phase 1 that attributes almost every line to an unknown id. */
@@ -1818,7 +1859,6 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
     const olya = { id: 'olya', name: 'Mira Stone', aliases: ['Doc'], role: 'minor', color: '#555555', gender: 'female', evidence: [{ quote: 'Olga nodded' }] } as unknown as CharacterOutput;
     /* Precondition (non-vacuous): the dedup refuses to merge these two and suggests the pair. */
     expect(dedupAndPrepare([NARR, olga, olya], [], 'en', EMPTY_DEDUP_CONSTRAINTS).suggestions.map((s) => [s.a, s.b])).toEqual([['olga', 'olya']]);
-    const rec = getManuscript(b.manuscriptId)!;
     const ghost: Analyzer = {
       ...phase1('olga'),
       runStage2Chapter: (async (_m: string, chapterId: number) => ({
@@ -1831,17 +1871,22 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
         })),
       })) as unknown as Analyzer['runStage2Chapter'],
     };
-    (globalThis as Record<string, unknown>)[PHASE1_GLOBAL] = sel(ghost, 'phase1-model');
-    const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'main');
-    await runMainAnalyzerJob(job, rec as never, sel(phase0([NARR, olga, olya]), 'phase0-model'), {
-      requestedFresh: false,
-      allowStage1Shrink: true,
-      requestedModel: undefined,
-    } as never);
+    const events = await runJob(kind)(b, { roster: [NARR, olga, olya], speakerId: 'olga' }, { phase1: ghost });
     expect(errCode(events)).toBe('attribution_drift');
     expect(readSuggestions(b.bookDir)).toEqual([]);
     /* The refused run still writes the edits (disk consistent). */
     expect(readEdits(b.bookDir).length).toBeGreaterThan(0);
+    /* The test bar (carry 8). The snapshot's rows are on disk, but the refused persist never flips
+       their counts; the ghost's lines are demoted onto the narrator in the edits. */
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', 'olya', 'wren']);
+    expect(linesById(b.bookDir)).toEqual({ narrator: undefined, olga: 0, olya: 0, wren: 0 });
+    expect(readEdits(b.bookDir).reduce<Record<string, number>>((a, s) => ({ ...a, [String(s.characterId)]: (a[String(s.characterId)] ?? 0) + 1 }), {})).toEqual({
+      olga: 18,
+      olya: 18,
+      narrator: 324,
+    });
+    expect(existsSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'))).toBe(false);
+  });
   });
 
   it('A7c (#4023 S3, completed): an unvoiced prior row the fresh run omits survives a completed run (rule 1)', async () => {
@@ -1930,6 +1975,39 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
     expect(ids(JSON.parse(fresh).characters)).toEqual(expect.arrayContaining(['narrator', PRIOR_ID, 'olga', 'boris']));
   });
 });
+
+/** A sibling book earlier in b's series, with the given confirmed cast; its dir is pushed onto
+    `cleanup` for the caller's afterEach. */
+function mkSibling(b: HarnessBook, characters: Row[], cleanup: string[]): string {
+  const seriesDir = dirname(b.bookDir);
+  const series = basename(seriesDir);
+  const dir = join(seriesDir, 'Book One');
+  const sibId = makeBookId('Author', series, 'Book One');
+  mkdirSync(join(dir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: sibId,
+      manuscriptId: `sib-${sibId}`,
+      title: 'Book One',
+      author: 'Author',
+      language: 'en',
+      series,
+      seriesPosition: 1,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.md',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(dir, 'manuscript.md'), BODY);
+  writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+  cleanup.push(dir);
+  return sibId;
+}
 
 /* ---- Plan 291 Tasks 22 and 26 - re-analysis identity acceptance through both jobs ---- */
 
@@ -2035,36 +2113,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
   /** Three lines per chapter, handed out in turn: the first speaker gets 5, the second 4. */
   const two = (a: string, b: string): string[] => [a, b];
   /** A sibling book earlier in b's series, with the given confirmed cast. */
-  const sibling = (b: HarnessBook, characters: Row[]): string => {
-    const seriesDir = dirname(b.bookDir);
-    const series = basename(seriesDir);
-    const dir = join(seriesDir, 'Book One');
-    const sibId = makeBookId('Author', series, 'Book One');
-    mkdirSync(join(dir, '.audiobook'), { recursive: true });
-    writeFileSync(
-      join(dir, '.audiobook', 'state.json'),
-      JSON.stringify({
-        bookId: sibId,
-        manuscriptId: `sib-${sibId}`,
-        title: 'Book One',
-        author: 'Author',
-        language: 'en',
-        series,
-        seriesPosition: 1,
-        isStandalone: false,
-        manuscriptFile: 'manuscript.md',
-        castConfirmed: true,
-        chapters: [],
-        coverGradient: ['#000', '#fff'],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
-    );
-    writeFileSync(join(dir, 'manuscript.md'), BODY);
-    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
-    siblings.push(dir);
-    return sibId;
-  };
+  const sibling = (b: HarnessBook, characters: Row[]): string => mkSibling(b, characters, siblings);
 
   it('A1: #3954 - a single-candidate T3 join keeps the prior id; the voice key does not move', async () => {
     const voice = { qwen: { name: 'wren-voice' } };
@@ -2550,7 +2599,9 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
 
 /* ---- Plan 291 Task 23 - mid-run user writes survive a re-analysis (main job) ---- */
 
-describe('#4031 main job: mid-run acceptance (Task 23)', () => {
+/* Task 27: through both jobs (R18). A16 is main-only: see its exemption in the run-start block. */
+describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Tasks 23, 27)', (kind) => {
+  const go = runJob(kind);
   const orig = process.env.STAGE2_COVERAGE_RETRIES;
   const books: HarnessBook[] = [];
   /* No "<Name> asked" tag in the body (see the Task 22 block); `BODY` is used by the tests that
@@ -2572,7 +2623,9 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
     else process.env.STAGE2_COVERAGE_RETRIES = orig;
     for (const b of books.splice(0)) await cleanupBook(b);
+    for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
   });
+  const siblings: string[] = [];
 
   const fr = (id: string, name: string, extra: Record<string, unknown> = {}): CharacterOutput =>
     ({
@@ -2680,7 +2733,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     fresh: { roster: CharacterOutput[]; speakerId: string | string[] },
   ): ReturnType<typeof run> => {
     await clearAnalysisCache(b.manuscriptId);
-    return run(b.manuscriptId, b.bookDir, 'main', fresh);
+    return go(b, fresh);
   };
 
   /* ---- A12 / F9: the suggestion lifecycle ---- */
@@ -2690,7 +2743,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     const castIds = ['a1', 'a2', 'narrator', 'q'];
     const open = [['q', 'a1', 'plan'], ['q', 'a2', 'plan']];
     /* "Anna" is ambiguous between the two Annas: a new row, with a question to each. */
-    const first = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, fr('q', 'Anna')], speakerId: 'q' });
+    const first = await go(b, { roster: [NARR, fr('q', 'Anna')], speakerId: 'q' });
     expect(errCode(first)).toBeUndefined();
     expect(done(first)).toBe(true);
     expect(pairs(b)).toEqual(open);
@@ -2728,7 +2781,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
 
   it('A12 (rule 7): a dismissal survives a re-analysis, a Start fresh and a later merge of one of the pair into a third character', async () => {
     const b = twoWrens([pr('olga', 'Olga Marsh', { role: 'minor' })]);
-    const first = await run(b.manuscriptId, b.bookDir, 'main', ASHBY);
+    const first = await go(b, ASHBY);
     expect(done(first)).toBe(true);
     expect(pairs(b)).toEqual([[FRESH_ID, PRIOR_ID, 'plan'], [FRESH_ID, 'w2b', 'plan']]);
 
@@ -2745,7 +2798,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
 
     /* A plain re-run replays the cached plan, which still says "new row, ask about both": its
        suggestions are planned again, and only the dismissal keeps the answered pair out. */
-    const replay = await run(b.manuscriptId, b.bookDir, 'main', ASHBY);
+    const replay = await go(b, ASHBY, { seedCache: false });
     expect(errCode(replay)).toBeUndefined();
     expect(done(replay)).toBe(true);
     dismissed();
@@ -2793,7 +2846,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     expect(row(b, PRIOR_ID)!.notLinkedTo ?? []).toEqual([]);
     expect(history(b).supersededBy).toEqual({ w2b: PRIOR_ID });
 
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       /* The merged-away id (rule 3) and a bare "Wren" that used to be ambiguous between the two. */
       roster: [NARR, fr('w2b', 'Wren Lee'), fr('wx', 'Wren')],
       speakerId: PRIOR_ID,
@@ -2826,7 +2879,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
         (await mergeRoute(b, 'kit', 'rae')).status,
         (await dismissRoute(b, 'olga', 'rae')).status,
       ]);
-      const events = await run(b.manuscriptId, b.bookDir, 'main', { ...ASHBY, speakerId: PRIOR_ID });
+      const events = await go(b, { ...ASHBY, speakerId: PRIOR_ID });
       expect(await m.result()).toEqual([200, 200]);
       expect(errCode(events)).toBeUndefined();
       expect(done(events)).toBe(true);
@@ -2854,7 +2907,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     it('A19: a fold-dropped run-owned row is gone; one the user gave a voice mid-run through a voice route is kept', async () => {
       const b = annaBook();
       const m = midRun('phase1', async () => (await routeVoice(app, b.bookId, 'boris')).status);
-      const events = await run(b.manuscriptId, b.bookDir, 'main', BORIS_RUN);
+      const events = await go(b, BORIS_RUN);
       expect(await m.result()).toBe(200);
       expect(errCode(events)).toBeUndefined();
       expect(done(events)).toBe(true);
@@ -2875,7 +2928,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       const b = annaBook();
       /* The same wait at the same point, with nothing written: only the voice differs. */
       midRun('phase1', async () => undefined);
-      const events = await run(b.manuscriptId, b.bookDir, 'main', BORIS_RUN);
+      const events = await go(b, BORIS_RUN);
       expect(errCode(events)).toBeUndefined();
       expect(done(events)).toBe(true);
       expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator']);
@@ -2898,7 +2951,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
     const failed = failNextRetirement();
     const m = midRun('phase1', () => mergeRoute(b, PRIOR_ID, 'olga'));
-    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+    const events = await go(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
     expect(failed.calls()).toBe(1);
     expect(((await m.result()) as request.Response).status).toBe(500);
     expect(errCode(events)).toBeUndefined();
@@ -2923,7 +2976,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   it('Review Focus 4: a plain mid-run delete of the main speaker never trips the drift gate; its lines are on the narrator', async () => {
     const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
     const m = midRun('phase1', () => deleteRow(b, PRIOR_ID));
-    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+    const events = await go(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
     await m.result();
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
@@ -2945,7 +2998,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
     failNextRetirement();
     const m = midRun('phase1', () => mergeRoute(b, PRIOR_ID, 'olga'));
-    const events = await runLots(b, [NARR, WREN_FRESH], [PRIOR_ID]);
+    const events = await runLots(b, [NARR, WREN_FRESH], [PRIOR_ID], 40, kind);
     expect(((await m.result()) as request.Response).status).toBe(500);
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
@@ -2960,7 +3013,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   it('Review Focus 4 (drift gate live): a plain delete of the main speaker does not end the run with attribution_drift', async () => {
     const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })], undefined, BODY);
     const m = midRun('phase1', () => deleteRow(b, PRIOR_ID));
-    const events = await runLots(b, [NARR, WREN_FRESH], [PRIOR_ID]);
+    const events = await runLots(b, [NARR, WREN_FRESH], [PRIOR_ID], 40, kind);
     await m.result();
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
@@ -2975,7 +3028,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   it('item 3: a row the run added and the user deleted mid-run stays deleted, reported and rerouted to the narrator', async () => {
     const b = seed([{ ...NARR }, pr('anna', 'Anna')]);
     const m = midRun('phase1', () => deleteRow(b, 'boris'));
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('anna', 'Anna'), fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' })],
       speakerId: two('anna', 'boris'),
     });
@@ -2996,7 +3049,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   it("carry (Task 8): a narrator row deleted mid-run leaves the run's narrator sentences on 'narrator'", async () => {
     const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren')]);
     const m = midRun('phase1', () => deleteRow(b, 'narrator'));
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
       speakerId: 'narrator',
     });
@@ -3029,7 +3082,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       pr('wren-b', 'Wren', { notLinkedTo: ['wren-a'] }),
     ]);
     writeHistory(b, { notSamePerson: [{ a: 'wren-a', b: 'wren-b', at: '2026-11-01T00:00:00.000Z' }] });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+    const events = await go(b, {
       roster: [NARR, fr('wren-a', 'Wren'), fr('wren-b', 'Wren'), fr('wren-c', 'Wren')],
       speakerId: ['wren-a', 'wren-b', 'wren-c'],
     });
@@ -3065,7 +3118,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       merged = true;
       return res;
     });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, boris], speakerId: 'boris' });
+    const events = await go(b, { roster: [NARR, boris], speakerId: 'boris' });
     /* The new row was already in cast.json (the Phase-0b snapshot) when the user merged it away. */
     expect(((await m.result()) as request.Response).status).toBe(200);
     expect(errCode(events)).toBeUndefined();
@@ -3097,7 +3150,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     const BORIS = { roster: [NARR, boris], speakerId: 'boris' };
     /* Leg one: stopped after the Phase-0b snapshot, which left boris in cast.json. */
     setPhase1Hook(abortAtFirstPhase1());
-    await run(b.manuscriptId, b.bookDir, 'main', BORIS);
+    await go(b, BORIS);
     setPhase1Hook(undefined);
     expect(ids(readCast(b.bookDir))).toContain('boris');
     /* Leg two: the resume reads boris as a prior row; the user merges it away mid-run. */
@@ -3112,7 +3165,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       merged = true;
       return res;
     });
-    const events = await run(b.manuscriptId, b.bookDir, 'main', BORIS);
+    const events = await go(b, BORIS, { seedCache: false });
     expect(((await m.result()) as request.Response).status).toBe(200);
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
@@ -3129,6 +3182,96 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     expect(history(b).supersededBy).toEqual({ boris: 'olga' });
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
+
+  /* ---- F2: a run after a main run deletes nothing by the earlier run's ledger ---- */
+
+  const entryOf = (b: HarnessBook, id: string): unknown => readCache(b.manuscriptId)?.addedRows?.[id];
+
+  it(`F2: a ${kind} run after a completed main run deletes nothing`, async () => {
+    const b = seed([{ ...NARR }, pr('anna', 'Anna')]);
+    const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+    const BORIS_TOO = { roster: [NARR, fr('anna', 'Anna'), boris], speakerId: two('anna', 'boris') };
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', BORIS_TOO))).toBe(true);
+    expect(entryOf(b, 'boris')).toEqual({ state: 'added-once' });
+    /* The next run, on the cache the main run left (a subset Retry; the main job's re-run of a
+       finished cache replays it). */
+    const events = await go(b, BORIS_TOO, { seedCache: false });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris', 'narrator']);
+    expect(entryOf(b, 'boris')).toEqual({ state: 'added-once' });
+    expect(editLines(b)).toEqual({ anna: 5, boris: 4 });
+    expect(linesById(b.bookDir)).toMatchObject({ anna: 5, boris: 4 });
+    expect(history(b).supersededBy).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  /* Subset-only (one line, R18): a main run after a stopped main run is its resume, which
+     fold-drops the stopped run's untouched rows by ledger (A14b). */
+  if (kind === 'subset')
+    it('F2: a subset run after a stopped main run deletes nothing by its ledger and refreshes the fingerprints of the rows it writes', async () => {
+      const JOGGER = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', ageRange: 'adult', evidence: [{ quote: 'The Jogger waved' }] });
+      const FRESH = { roster: [NARR, fr(FRESH_ID, 'Wren Ashby'), JOGGER], speakerId: PRIOR_ID };
+      const priors = (): Row[] => [{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked' }), pr('olga', 'Olga', { role: 'minor' })];
+      const body = `${NEUTRAL}\n\nThe Jogger waved.`;
+      const straight = seed(priors(), undefined, body);
+      expect(done(await run(straight.manuscriptId, straight.bookDir, 'main', FRESH))).toBe(true);
+      expect(ids(readCast(straight.bookDir))).not.toContain('the-jogger');
+
+      const b = seed(priors(), undefined, body);
+      setPhase1Hook(abortAtFirstPhase1());
+      await run(b.manuscriptId, b.bookDir, 'main', FRESH);
+      setPhase1Hook(undefined);
+      expect((entryOf(b, 'the-jogger') as { state: string }).state).toBe('run-owned');
+      /* Between the stop and the subset run, with no user edit of the row:
+         - a stale reuse link on it (the stopped run's own last write, as at t:632), which the
+           subset's run start prunes;
+         - a sibling book whose Jogger the subset's linker stamps onto it;
+         - a recorded "not the same person" between it and olga, whose edge the subset's
+           reconcile writes onto it. */
+      await withCastLock(b.bookDir, async () => {
+        const p = castJsonPath(b.bookDir);
+        const cast = JSON.parse(readFileSync(p, 'utf8')) as { characters: Row[] };
+        for (const c of cast.characters) if (c.id === 'the-jogger') c.matchedFrom = { bookId: 'not-in-this-series', characterId: 'x' };
+        writeFileSync(p, JSON.stringify(cast));
+      });
+      await mutateAnalysisCache(b.manuscriptId, { ledger: { 'the-jogger': { state: 'run-owned', fp: userOwnedFingerprint(row(b, 'the-jogger')!) } } });
+      const sib = mkSibling(b, [{ id: 'jog-s', name: 'The Jogger', gender: 'male', ageRange: 'adult', voiceId: 'jog-s' }], siblings);
+      writeHistory(b, { supersededBy: history(b).supersededBy, notSamePerson: [{ a: 'olga', b: 'the-jogger', at: '2026-11-01T00:00:00.000Z' }] });
+      let atStart: Row | undefined;
+      setPhase0Hook(() => {
+        atStart ??= row(b, 'the-jogger');
+      });
+      /* The subset also gives the row an alias (its snapshots). */
+      const runner = { ...JOGGER, aliases: ['Runner'] } as unknown as CharacterOutput;
+      const events = await runSubsetRetry(b, { roster: [NARR, fr(FRESH_ID, 'Wren Ashby'), runner], speakerId: PRIOR_ID });
+      setPhase0Hook(undefined);
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(atStart?.matchedFrom).toBeUndefined(); /* the run-start prune */
+      /* Deletes nothing: the stopped run's silent row is still there (invariant 6). */
+      const written = row(b, 'the-jogger')!;
+      expect(written).toBeDefined();
+      expect(written.aliases).toEqual(expect.arrayContaining(['Runner']));
+      /* The linker's stamp: the sibling's voice, reused. */
+      expect(sib).toBeTruthy();
+      expect(written).toMatchObject({ voiceId: 'jog-s', voiceState: 'reused' });
+      expect(written.notLinkedTo).toEqual(expect.arrayContaining([edgeTo(b, 'olga')]));
+      /* ...and still the main run's row, with the fingerprint of the subset's last write of it. */
+      expect(entryOf(b, 'the-jogger')).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(written) });
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
+      expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+
+      /* The resumed main persist still fold-drops the untouched row: the uninterrupted cast. */
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+      expect(row(b, 'the-jogger')).toBeUndefined();
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(ids(readCast(straight.bookDir)).sort());
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(history(b).supersededBy).toEqual(history(straight).supersededBy);
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
 
   describe('F8 (rule 9): degraded history at persist fails closed', () => {
     const degraded = (): HarnessBook => {
@@ -3149,7 +3292,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     it('F8: a plan target merged away mid-run is unresolved, not deleted - the run completes and nothing is rerouted, re-added or written to the history', async () => {
       const b = degraded();
       const m = midRun('phase1', () => mergeRoute(b, PRIOR_ID, 'olga'));
-      const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+      const events = await go(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
       expect(((await m.result()) as request.Response).status).toBe(200);
       expect(errCode(events)).toBeUndefined();
       expect(done(events)).toBe(true);
@@ -3170,7 +3313,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
 
     it('F8 control: a degraded history with no merge or delete logs no unresolved targets', async () => {
       const b = degraded();
-      const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+      const events = await go(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
       expect(errCode(events)).toBeUndefined();
       expect(done(events)).toBe(true);
       expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
@@ -3196,7 +3339,7 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
         editsAfterMerge = readEdits(b.bookDir).map((s) => String(s.characterId));
         return res;
       });
-      const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+      const events = await go(b, { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
       expect(((await m.result()) as request.Response).status).toBe(200);
       expect(errCode(events)).toBeUndefined();
       expect(done(events)).toBe(true);
@@ -3210,7 +3353,8 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
       expect(readSuggestions(b.bookDir)).toEqual([]);
       /* Logged: every interim roll of the run fails loudly because the history cannot be read, and
          the operator is told the file needs attention. */
-      const rollFailures = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('failed to roll manuscript-edits.json'));
+      /* The subset job names itself in the same line ("failed to roll subset manuscript-edits.json"). */
+      const rollFailures = warn.mock.calls.filter((c: unknown[]) => /failed to roll (subset )?manuscript-edits\.json/.test(String(c[0])));
       expect(rollFailures.length).toBeGreaterThan(0);
       for (const c of rollFailures) expect(String((c[1] as Error).message)).toMatch(/cast-id-history\.json could not be read/);
       /* ...and the persist names the unresolved target, ids only. */
