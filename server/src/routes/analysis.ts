@@ -1390,13 +1390,18 @@ type RunLedgers = { kind: 'main' } | { kind: 'subset'; own: RunAddedLedger; ownP
     snapshots). The roster is written unfolded, with palette colours and the
     narrator identity (as the persist's roster carries it: the snapshot is the row's
     first write, and the persist keeps a run row's user-owned fields from disk); a
-    `new` row gets the lines/scenes placeholders when `placeholders` is set (a
-    joined row keeps the prior counts - lines/scenes are analysis-owned, so an
-    explicit 0 here would zero them). A failed snapshot is a deliberate swallow
-    (#2292, owner decision, a lock timeout included): the ids are already in the
-    cache, and the persist re-plans whatever it did not land. Mutates `cache`
-    (plan, ledgers, takes) to match what it patched; returns the roster with any
-    re-mint applied. */
+    row in `placeholderIds` - a `new` row not yet on disk - gets the lines/scenes
+    placeholders. Any other row keeps its counts on disk: lines/scenes are
+    analysis-owned, so an explicit 0 here would zero a joined row's, or the counts a
+    completed main run persisted for its own rows (#4031 I1). A failed snapshot is a
+    deliberate swallow (#2292, owner decision, a lock timeout included): the ids are
+    already in the cache, and the persist re-plans whatever it did not land. With
+    `bestEffortPatch` (the subset's Phase-0a snapshots, which run inside a chapter's
+    failure handling), a failed cache patch after the snapshot landed is logged, not
+    thrown: the finalise's patches carry the same plan and ledger, so they heal it,
+    and the chapter's own cast must not be recorded as failed over it (#4031 M8a).
+    Mutates `cache` (plan, ledgers, takes) to match what it patched; returns the
+    roster with any re-mint applied. */
 async function snapshotPlannedRoster(a: {
   job: AnalysisJob;
   bookId: string | undefined;
@@ -1408,14 +1413,14 @@ async function snapshotPlannedRoster(a: {
   castBase: CastMergeBase | null;
   ledgers: RunLedgers;
   runSuggestions: (roster: ReadonlyArray<{ id: string; name?: string }>) => StoredSuggestion[];
-  placeholders: boolean;
+  placeholderIds: ReadonlySet<string>;
+  bestEffortPatch?: boolean;
   site: string;
 }): Promise<{ characters: CharacterOutput[]; plan: MatchPlan; idMap: Record<string, string>; ledgers: RunLedgers }> {
   const { job, cache, castBase } = a;
   let { plan, characters, ledgers } = a;
-  const newIds = new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'new' ? [d.id] : [])));
   const snapshot = applyNarratorIdentity(assignPaletteColors(characters), a.bookLanguage).map((c) =>
-    a.placeholders && newIds.has(c.id) ? { ...c, lines: c.lines ?? 0, scenes: c.scenes ?? 0 } : c,
+    a.placeholderIds.has(c.id) ? { ...c, lines: c.lines ?? 0, scenes: c.scenes ?? 0 } : c,
   );
   const out: { s?: Awaited<ReturnType<typeof writePlanSnapshot>> } = {};
   try {
@@ -1482,7 +1487,13 @@ async function snapshotPlannedRoster(a: {
   );
   const patch: CachePatch = { ...ledgerPatch, ...(remint ? { decisions: reminted, remapCharacterIds: s.idMap } : {}) };
   if (Object.keys(patch).length > 0) {
-    const written = await mutateAnalysisCache(job.manuscriptId, patch);
+    let written: AnalysisCache | null = null;
+    try {
+      written = await mutateAnalysisCache(job.manuscriptId, patch);
+    } catch (patchErr) {
+      if (!a.bestEffortPatch) throw patchErr;
+      console.warn(`[analysis] ${a.site} cache patch failed (the finalise patch carries it again)`, patchErr);
+    }
     /* ...and the job's cached copy takes the plan as written, so it matches the
        file, re-target included (a copy: the returned payload is the live one). The
        caller's constraints keep the plan this roster was built from. */
@@ -1542,6 +1553,9 @@ async function planRunCastIdentity(a: {
     runToken: randomBytes(4).toString('hex'),
     currentBookId,
   };
+  /* The decisions the run held before it planned: for the subset job, rows of the
+     run that produced its other chapters, already on disk with their counts. */
+  const decidedBefore = new Set(Object.keys(cache.matchPlan?.decisions ?? {}));
   let plan: MatchPlan;
   if (cache.matchPlan) {
     const uncovered = input.fresh.filter((r) => !Object.hasOwn(cache.matchPlan!.decisions, r.id));
@@ -1586,7 +1600,14 @@ async function planRunCastIdentity(a: {
       castBase: a.castBase,
       ledgers,
       runSuggestions: (roster) => planSuggestionsFor(plan, roster, prior),
-      placeholders: true,
+      /* Main job: every `new` row (as before). Subset job: only the `new` rows this
+         call added - a reused decision's row is already on disk with its counts
+         (I1: a completed main run's row must not be zeroed if no persist follows). */
+      placeholderIds: new Set(
+        Object.entries(plan.decisions).flatMap(([raw, d]) =>
+          d.kind === 'new' && (!a.ownLedger || !decidedBefore.has(raw)) ? [d.id] : [],
+        ),
+      ),
       site: a.ownLedger ? 'subset finalise' : 'Phase-0b',
     });
     ({ characters, idMap, ledgers } = snap);
@@ -9262,7 +9283,8 @@ export async function runSubsetAnalyzerJob(
               castBase,
               ledgers: { kind: 'subset', ...subsetLedgers },
               runSuggestions: () => [],
-              placeholders: false,
+              placeholderIds: new Set<string>(), // covered rows only: each is on disk with its counts
+              bestEffortPatch: true,
               site: 'subset Phase-0a',
             });
             if (snap.ledgers.kind === 'subset') subsetLedgers = { own: snap.ledgers.own, ownPairs: snap.ledgers.ownPairs };

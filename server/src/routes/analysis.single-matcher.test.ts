@@ -65,7 +65,14 @@ import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { castJsonPath, castMergeSuggestionsJsonPath, makeBookId } from '../workspace/paths.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { LockAcquisitionTimeoutError, withKeyLock } from '../workspace/file-lock.js';
-import { dedupAndPrepare, linkSeriesReuseOnNewRows, resolveCurrentIds, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
+import {
+  dedupAndPrepare,
+  linkSeriesReuseOnNewRows,
+  resolveCurrentIds,
+  runMainAnalyzerJob,
+  runSubsetAnalyzerJob,
+  type AnalysisJob,
+} from './analysis.js';
 import { EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
 import { getManuscript } from '../store/manuscripts.js';
 import type { Analyzer } from '../analyzer/index.js';
@@ -3223,6 +3230,9 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     }, {});
   const decisionsOf = (b: HarnessBook): Record<string, unknown> =>
     JSON.parse(JSON.stringify(readCache(b.manuscriptId)?.matchPlan?.decisions ?? {}));
+  /** The edits' line counts of the speaking rows (the narrator's prose is not a line count). */
+  const speakingLines = (b: HarnessBook): Record<string, number> =>
+    Object.fromEntries(Object.entries(editLines(b)).filter(([id]) => id !== 'narrator'));
 
   it('A22 subset: a legacy cache ends analysis_cache_legacy before any write; cast.json and history stay byte-identical', async () => {
     /* A same-name prior pair: a run start that ran would heal it (cast.json and history). */
@@ -3243,6 +3253,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       suggestions: bytes(castMergeSuggestionsJsonPath(b.bookDir)),
       edits: bytes(audiobook(b, 'manuscript-edits.json')),
       cache: bytes(cachePath(b.manuscriptId)),
+      state: bytes(audiobook(b, 'state.json')),
     };
     let phase0Calls = 0;
     setPhase0Hook(() => {
@@ -3259,6 +3270,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(bytes(castMergeSuggestionsJsonPath(b.bookDir))).toBe(before.suggestions);
     expect(bytes(audiobook(b, 'manuscript-edits.json'))).toBe(before.edits);
     expect(bytes(cachePath(b.manuscriptId))).toBe(before.cache);
+    expect(bytes(audiobook(b, 'state.json'))).toBe(before.state);
   });
 
   it('A11 subset: identical names heal at the subset run start, in cast.json and in the history as a heal', async () => {
@@ -3275,6 +3287,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     /* ...and it stays healed through the persist. */
     expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', PRIOR_ID]);
     expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 }); // one line in each of three chapters
+    expect(linesById(b.bookDir)).toMatchObject(speakingLines(b)); // cast.json counts match the edits
     /* The heal, and the persist's record of the plan's join (raw -> prior). */
     expect(history(b).supersededBy).toEqual({ w2b: PRIOR_ID, [FRESH_ID]: PRIOR_ID });
     expect(history(b).supersededByKind).toEqual({ w2b: 'heal', [FRESH_ID]: 'analyzer' });
@@ -3340,6 +3353,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(cast).not.toContain(FRESH_ID);
     expect(editLines(b).boris).toBeGreaterThan(0);
     expect(editLines(b)[FRESH_ID]).toBeUndefined();
+    expect(linesById(b.bookDir)).toMatchObject(speakingLines(b)); // cast.json counts match the edits
     /* The subset run retires nothing beyond what the main run already recorded. */
     expect(history(b).supersededBy).toEqual(historyAfterMain);
     expect(readSuggestions(b.bookDir)).toEqual([]);
@@ -3352,6 +3366,8 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(ids(readCast(b.bookDir))).toContain('boris');
     const plan = decisionsOf(b);
     const linesAfterMain = editLines(b);
+    const borisLinesAfterMain = linesById(b.bookDir).boris;
+    expect(borisLinesAfterMain).toBeGreaterThan(0);
     const historyAfterMain = history(b).supersededBy;
     expect(historyAfterMain).toEqual({ [FRESH_ID]: PRIOR_ID }); // the main run's analyzer join
     const events = await runSubsetRetry(b, fresh);
@@ -3362,6 +3378,8 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(cast.filter((id) => id.startsWith('boris'))).toEqual(['boris']);
     expect(cast.filter((id) => id.startsWith('w2') || id === FRESH_ID)).toEqual([PRIOR_ID]);
     expect(editLines(b)).toEqual(linesAfterMain);
+    expect(linesById(b.bookDir)).toMatchObject(speakingLines(b)); // cast.json counts match the edits
+    expect(linesById(b.bookDir).boris).toBe(borisLinesAfterMain);
     expect(history(b).supersededBy).toEqual(historyAfterMain);
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
@@ -3388,6 +3406,7 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(cast).not.toContain(FRESH_ID);
     expect(JSON.stringify(cast)).not.toContain('-n1');
     expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 }); // one line in each of three chapters
+    expect(linesById(b.bookDir)).toMatchObject(speakingLines(b)); // cast.json counts match the edits
     /* The run-added row the fold takes is gone into the fold's bucket, as in an
        uninterrupted main run. (The rest of the persisted cast - rule 1 for the omitted
        unvoiced prior row - is the subset persist's, Task 25.) */
@@ -3400,5 +3419,109 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(history(straight).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID, 'the-jogger': 'unknown-male' });
     expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  /* ---- Fix round 1 ---- */
+
+  const ONE_ROW = { roster: [NARR, WREN_FRESH, BORIS], speakerId: ['boris', FRESH_ID] };
+  const countsOf = (b: HarnessBook, id: string): { lines: unknown; scenes: unknown } => {
+    const r = readCast(b.bookDir).find((c) => c.id === id);
+    return { lines: r?.lines, scenes: r?.scenes };
+  };
+
+  it("I1: a subset Retry that stops in Phase 1 leaves a completed run's row with its line and scene counts", async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
+    const before = countsOf(b, 'boris');
+    expect(before.lines).toBeGreaterThan(0);
+    const historyBefore = history(b).supersededBy;
+    setPhase1Hook(abortAtFirstPhase1());
+    const events = await runSubsetRetry(b, ONE_ROW);
+    expect(done(events)).toBe(false);
+    /* The finalise snapshot wrote no placeholder over the row the main run persisted. */
+    expect(countsOf(b, 'boris')).toEqual(before);
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+    expect(history(b).supersededBy).toEqual(historyBefore);
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it("I1 (drift-refused): a subset persist that refuses to flip cast.json leaves a completed run's row with its counts", async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
+    const before = countsOf(b, 'boris');
+    expect(before.lines).toBeGreaterThan(0);
+    /* A Phase 1 whose speaker is unknown for almost every sentence: attribution drift. */
+    const ghost: Analyzer = {
+      ...phase1(FRESH_ID),
+      runStage2Chapter: (async (_m: string, chapterId: number) => ({
+        sentences: Array.from({ length: 120 }, (_, k) => ({
+          id: chapterId * 1000 + k + 1,
+          chapterId,
+          characterId: k < 10 ? 'boris' : 'ghost',
+          confidence: 0.9,
+          text: `Are you sure this will work (${k})`,
+        })),
+      })) as unknown as Analyzer['runStage2Chapter'],
+    };
+    const rec = getManuscript(b.manuscriptId)!;
+    const { job, events } = mkJob(b.manuscriptId, b.bookDir, 'subset');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await runSubsetAnalyzerJob(job, rec as never, sel(phase0(ONE_ROW.roster), 'phase0-model'), sel(ghost, 'phase1-model'), rec.chapterHints, true);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(events.some((e) => e.kind === 'log' && String(e.message).includes('Attribution drift exceeded'))).toBe(true);
+    expect(countsOf(b, 'boris')).toEqual(before);
+  });
+
+  it('M8a: a cache-patch fault after a landed Phase-0a snapshot does not record the chapter as a cast failure', async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
+    /* The first ledger patch of the planned subset run is its Phase-0a snapshot's
+       (the run start refreshes nothing: the completed run's entries are added-once). */
+    let faulted = 0;
+    cacheSpy.beforePatch = async (p) => {
+      if (faulted === 0 && 'ledger' in (p as Record<string, unknown>)) {
+        faulted += 1;
+        throw Object.assign(new Error('EPERM: cache write'), { code: 'EPERM' });
+      }
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let events: Sent[];
+    let warned: string[];
+    try {
+      events = await runSubsetRetry(b, ONE_ROW);
+    } finally {
+      warned = warn.mock.calls.map((c) => String(c[0]));
+      cacheSpy.beforePatch = undefined;
+      warn.mockRestore();
+    }
+    expect(faulted).toBe(1);
+    expect(errCode(events)).toBeUndefined();
+    expect(warned.filter((m) => m.includes('cache patch failed'))).toEqual([
+      expect.stringContaining('subset Phase-0a cache patch failed'),
+    ]);
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+    expect(done(events)).toBe(true);
+    expect(readCache(b.manuscriptId)?.failedChapterIds ?? []).toEqual([]);
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
+    expect(linesById(b.bookDir)).toMatchObject(speakingLines(b));
+  });
+
+  it("M8b: the Phase-0a snapshot writes a covered joined row's new alias before the finalise", async () => {
+    const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW))).toBe(true);
+    expect(JSON.stringify(readCast(b.bookDir))).not.toContain('Wrennie');
+    let atChapter2: Row | undefined;
+    setPhase0Hook((id) => {
+      if (id === 2) atChapter2 = readCast(b.bookDir).find((c) => c.id === PRIOR_ID);
+    });
+    const withAlias = { ...WREN_FRESH, aliases: ['Wrennie'] } as unknown as CharacterOutput;
+    expect(done(await runSubsetRetry(b, { roster: [NARR, withAlias, BORIS], speakerId: ['boris', FRESH_ID] }))).toBe(true);
+    expect(atChapter2?.aliases).toEqual(expect.arrayContaining(['Wrennie']));
+    /* Only the covered row: no raw id, no second Boris. */
+    expect(ids(readCast(b.bookDir))).not.toContain(FRESH_ID);
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
   });
 });

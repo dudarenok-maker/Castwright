@@ -10523,7 +10523,6 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
     ];
     const book = makeBook('invariant-6', chapters, { castConfirmed: true });
     await saveAnalysisCache(book.manuscriptId, {
-        version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
       stage1: stage1For(chapters),
       chapterCast: { 1: roster(), 2: roster() },
       chapters: { 1: takeOf(1, WORDED[1]) },
