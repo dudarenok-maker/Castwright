@@ -1867,6 +1867,9 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
   sentences: S[],
   priorIds: ReadonlySet<string>,
   decisions?: Readonly<Record<string, { kind: string; priorId?: string; id?: string }>>,
+  /* R34: the ids this run added (its plan's `new` rows). Mid-run, a history key on one of them
+     can only be a user merge (the run's own retirements are recorded after the persist). */
+  addedIds: ReadonlySet<string> = new Set(),
 ): Promise<S[]> {
   const reminted = remapSentenceIds(sentences, remint);
   if (!bookDir) return reminted;
@@ -1878,7 +1881,8 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
   const resolver = buildCastResolver(cast, read.history);
   const idMap: Record<string, string> = {};
   for (const { characterId } of reminted) {
-    if (!priorIds.has(characterId)) continue;
+    const runAdded = !priorIds.has(characterId) && addedIds.has(characterId);
+    if (!priorIds.has(characterId) && !runAdded) continue;
     const hit = resolver.resolve(characterId);
     if (hit?.via !== 'history' || hit.character.id === characterId) continue;
     /* A join of X, or the decision the merge moved onto X's survivor: the merge re-targets the
@@ -1887,7 +1891,9 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
     const decision = decisions?.[characterId];
     const joined = decision?.kind === 'join' && [characterId, hit.character.id].includes(decision.priorId ?? '');
     const intoNew = decision?.kind === 'new' && decision.id === hit.character.id;
-    if (decision && !joined && !intoNew) continue;
+    /* A run-added id's own `new` decision (the in-memory plan; the merge re-targets the on-disk one). */
+    const ownNew = runAdded && decision?.kind === 'new' && decision.id === characterId;
+    if (decision && !joined && !intoNew && !ownNew) continue;
     idMap[characterId] = hit.character.id;
   }
   return remapSentenceIds(reminted, idMap);
@@ -7105,6 +7111,10 @@ export async function runMainAnalyzerJob(
          this job last wrote them. The take speaks the ids that are current now. */
       const takeBookDir = liveBookDir(job) ?? undefined;
       const priorIds = new Set(priorCastForMerge.map((r) => r.id));
+      /* R34: the in-memory plan still names the rows this run added (a merge re-targets the on-disk one). */
+      const addedIds = new Set(
+        Object.values(cache.matchPlan?.decisions ?? {}).flatMap((d) => (d.kind === 'new' ? [d.id] : [])),
+      );
       await mutateAnalysisCache(manuscriptId, {
         chapters: { [ch.id]: remapSentenceIds(stage2Sentences, remintIdMap) },
         fields: cacheFields(cache, [...PHASE1_RECORD_FIELDS, 'stage2DurationsEngine']),
@@ -7117,7 +7127,7 @@ export async function runMainAnalyzerJob(
           try {
             out.chapters = {
               ...c.chapters,
-              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id], priorIds, c.matchPlan?.decisions),
+              [ch.id]: await resolveCurrentIds(takeBookDir, remintIdMap, c.chapters[ch.id], priorIds, c.matchPlan?.decisions, addedIds),
             };
           } catch (e) {
             /* The persist resolves every id again; the take keeps the run's own ids until then. */
@@ -7168,6 +7178,7 @@ export async function runMainAnalyzerJob(
                 sentences,
                 new Set(priorCastForMerge.map((r) => r.id)),
                 cache.matchPlan?.decisions,
+                addedIds,
               ),
             /* #3435 — a chapter not attributed this run falls back to its cached take where
                the file has none, so a pending take stays in the edits until it is replaced. */

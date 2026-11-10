@@ -2498,6 +2498,8 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   };
   const history = (b: HarnessBook): History =>
     existsSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'))
+    rollSpy.isPlanned = undefined;
+    rollSpy.after = undefined;
       ? (readHistory(b.bookDir) as never)
       : { supersededBy: {} };
   const dismissals = (b: HarnessBook): Array<[string, string]> =>
@@ -2901,7 +2903,18 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
   it('Review Focus 3: a user merge whose source is this run\'s new row, between Phase 0b and the persist, resolves onto the survivor', async () => {
     const b = seed([{ ...NARR }, pr('olga', 'Olga', { role: 'minor' })]);
     const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
-    const m = midRun('phase1', () => mergeRoute(b, 'boris', 'olga'));
+    /* Every roll made after the merge answered, before the persist: what the edits file says then. */
+    let merged = false;
+    const rolled: string[][] = [];
+    rollSpy.isPlanned = () => merged;
+    rollSpy.after = (mergedAtCall) => {
+      if (mergedAtCall) rolled.push(readEdits(b.bookDir).map((s) => String(s.characterId)));
+    };
+    const m = midRun('phase1', async () => {
+      const res = await mergeRoute(b, 'boris', 'olga');
+      merged = true;
+      return res;
+    });
     const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, boris], speakerId: 'boris' });
     /* The new row was already in cast.json (the Phase-0b snapshot) when the user merged it away. */
     expect(((await m.result()) as request.Response).status).toBe(200);
@@ -2912,10 +2925,14 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     expect(cast.find((c) => c.id === 'olga')).toMatchObject({ name: 'Olga', aliases: expect.arrayContaining(['Boris Vane']) });
     expect(editLines(b)).toEqual({ olga: 3 });
     expect(linesById(b.bookDir).olga).toBe(3);
-    /* The cache keeps the id the run attributed under (a run-added row is not a prior id, so the
-       take is not rewritten); the merge's history entry resolves it to the survivor, and the
-       plan the merge re-targeted now sends the row to the survivor. */
-    for (const s of cacheTakes(b)) expect(s.characterId).toBe('boris');
+    /* R34: the cache takes and the mid-run rolled edits speak the survivor too, though the merged-away
+       row is one this run added. */
+    expect(rolled.length).toBeGreaterThan(0);
+    for (const ids of rolled) expect(ids).toEqual(expect.not.arrayContaining(['boris']));
+    for (const ids of rolled) expect(ids.length).toBeGreaterThan(0);
+    for (const ids of rolled) expect(ids).toEqual(expect.arrayContaining(['olga']));
+    expect(cacheTakes(b)).toHaveLength(3);
+    for (const s of cacheTakes(b)) expect(s.characterId).toBe('olga');
     expect(readCache(b.manuscriptId)!.matchPlan?.decisions.boris).toMatchObject({ kind: 'join', priorId: 'olga' });
     expect(history(b).supersededBy).toEqual({ boris: 'olga' });
     expect(history(b).supersededByKind).toEqual({ boris: 'user' });
