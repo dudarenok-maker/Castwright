@@ -235,7 +235,7 @@ export async function persistEmotionVariant(
        caller's stale pre-GPU snapshot. A hit refuses the WHOLE propagation:
        no book is written. See the qwen-voice spec's "Series-wide check,
        reused, not reimplemented". */
-    const stillCloned = await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter);
+    const stillCloned = await seriesClonedOnRowsVoice(character, seriesFilter);
     if (stillCloned) return 'skippedClone';
 
     /* Residual-window backstop: the walk still takes nonzero time after the
@@ -243,7 +243,11 @@ export async function persistEmotionVariant(
        (rather than discarding it, as an earlier revision did) is what lets
        'applied' and 'notFound' be told apart below. */
     let residualSkip = false;
+    const scopedUuid = await separatedUuidOf(character);
     const updated = await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) => {
+      /* A separated row's variant lands only on rows holding its uuid (the scan above
+         counted only their clones), so a clone on any other row is not a race. */
+      if (scopedUuid && c.voiceUuid !== scopedUuid) return c;
       if (characterHasClonedSlot(c)) {
         residualSkip = true;
         return c; // unchanged — this book's own write correctly declined
@@ -1333,6 +1337,11 @@ export interface DesignQwenVoiceParams {
       under its lock, so a decline right after it moves a row that has one (pass 11,
       Y1). The caller's series-wide applyOverrideToCastFiles still follows. */
   persistSlot?: boolean;
+  /** A base design whose caller skipped the early series clone gate (#4074: a declined
+      row, which the design may move onto a new voice uuid): the landing runs the scan
+      after the uuid step, under the row's cast lock and before it writes anything,
+      and throws SeriesCloneRefusedError on a hit. */
+  refuseIfSeriesCloned?: boolean;
   /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
       controller on a Cancel) in addition to the internal timeout. */
   signal?: AbortSignal;
@@ -1530,7 +1539,40 @@ interface FirstDesignShare {
 }
 
 /* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
-const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
+export const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
+
+/* #4074 — does a consented clone sit on the row's own voice anywhere in the series? A
+   row on a "Don't reuse"-separated uuid (separated-voices.ts) shares that voice with only
+   the rows that hold the same uuid, so only those count: a clone on the declined book's
+   row is on the voice this row left. Any other row (no uuid, an ordinary shared one, a
+   stale marker) keeps the full `voiceId` scan -- what applyOverrideToCastFiles decides. */
+export async function seriesClonedOnRowsVoice(
+  character: CastCharacter,
+  seriesFilter: { author: string; series: string } | undefined,
+  bookDir?: string,
+): Promise<boolean> {
+  return hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, bookDir, await separatedUuidOf(character));
+}
+
+/* The row's uuid when it is a "Don't reuse"-separated voice, else undefined. */
+async function separatedUuidOf(character: CastCharacter): Promise<string | undefined> {
+  const uuid = character.voiceUuid;
+  return uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
+}
+
+/* #4074 — a base design the series clone scan refused after the uuid step and before the
+   landing: nothing was written for the design (the staged files are removed). The two
+   base callers map it to `clone_protected` / `already_cloned`. The core stamps the uuid
+   step's answer on it: a step that separated the row persists even though the landing
+   refused, and the single route tells the open tab. */
+export class SeriesCloneRefusedError extends Error {
+  voiceUuid?: string;
+  separated = false;
+  constructor() {
+    super('A consented clone sits on this voice elsewhere in the series.');
+    this.name = 'SeriesCloneRefusedError';
+  }
+}
 
 /* PR #4007 pass 13 (owner decision: a voice "Don't reuse" created is never shared
    with anyone outside the chain that moved with it) — may a first design of this
@@ -1676,6 +1718,11 @@ async function landStagedDesign(
     if (base !== watcher.key) throw new DesignVoiceChangedError();
     const designed = p.emotion ? `${base}__${p.emotion}` : base;
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
+    /* #4074 -- before anything is written: a refusal here leaves the key, its rev and
+       every row's slots as they were. */
+    if (p.refuseIfSeriesCloned && !p.emotion && !p.preview && (await seriesClonedOnRowsVoice(row, p.seriesFilter, p.bookDir))) {
+      throw new SeriesCloneRefusedError();
+    }
     const sharing = await firstDesignOf(row); // decided before the move creates the file
     /* #4040 — a base design over an existing base is a redesign (decided before the
        move, like `sharing`); a first design, a preview and a variant are not. */
@@ -1852,7 +1899,17 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)), separated: step.separated || !!watcher.separated };
+      let landed: Awaited<ReturnType<typeof landStagedDesign>>;
+      try {
+        landed = await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev);
+      } catch (err) {
+        if (err instanceof SeriesCloneRefusedError) {
+          err.voiceUuid = uuid;
+          err.separated = step.separated || !!watcher.separated;
+        }
+        throw err;
+      }
+      return { ...rendered, ...landed, separated: step.separated || !!watcher.separated };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);
@@ -2100,7 +2157,7 @@ qwenVoiceRouter.post(
     if (
       emotion &&
       (characterHasClonedSlot(character) ||
-        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
+        (await seriesClonedOnRowsVoice(character, seriesInfo ?? undefined, bookDir)))
     ) {
       return res.status(409).json({
         error: clonedVariantRefusal(character.name ?? characterId),

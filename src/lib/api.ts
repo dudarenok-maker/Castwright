@@ -6662,7 +6662,15 @@ export interface CastDesignCallbacks {
     failures: Array<{ characterId: string; name: string; error: string }>;
   }) => void;
   /** Catastrophic abort (NOT a per-character failure). */
-  onError?: (e: { code: string; message: string }) => void;
+  onError?: (e: {
+    code: string;
+    message: string;
+    /** A single design's `clone_protected` refusal after its uuid step separated the
+        row: the separation persists, so the event names the row and its new uuid. */
+    characterId?: string;
+    voiceUuid?: string;
+    separated?: boolean;
+  }) => void;
   /** Single-design sub-phase tick (honest progress). */
   onPhase?: (e: { characterId: string; phase: DesignPhase }) => void;
   /** Single re-design finished — preview staged, awaiting A/B compare. */
@@ -6861,7 +6869,13 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
         });
         break;
       case 'error':
-        cb.onError?.({ code: e.code ?? 'unknown', message: e.message ?? 'Cast design failed.' });
+        cb.onError?.({
+          code: e.code ?? 'unknown',
+          message: e.message ?? 'Cast design failed.',
+          characterId: e.characterId,
+          voiceUuid: e.voiceUuid,
+          separated: e.separated,
+        });
         break;
       default:
         break;
