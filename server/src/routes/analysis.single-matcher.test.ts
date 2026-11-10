@@ -3712,9 +3712,8 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('boris'))).toEqual(['boris']);
   });
 
-  /* Found in passing (Task 25): a Stop during Phase 1 aborts the job's controller and
-     the in-flight call rejects with an AbortError. The main job reports that as
-     `aborted`; the subset job must too (it reported `unknown`). */
+  /* Regression pins: a real Stop ends `aborted` in both jobs (the controller aborts and the
+     in-flight call rejects with `AnalysisAbortedError`, as the transports throw it). */
   for (const kind of ['main', 'subset'] as const) {
     it(`a Stop during ${kind} Phase 1 ends the run with code aborted`, async () => {
       const b = seed(PRIORS());
@@ -3778,6 +3777,53 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       expect(state.analysisProvenance?.model).toBe('phase1-model');
       expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
       expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    /* Fix round 2 (N2): the faulted patch carried the persist's ledger (the fold bucket's
+       entry, which only the persist records) and its decisions. They must still reach the
+       cache before the run ends, or the next run meets a live `new` id it does not know
+       and re-mints it. */
+    it("is re-sent: the cache keeps that persist's ledger and decisions, and a later main run mints no -n1 duplicate", async () => {
+      const b = seed(PRIORS(), undefined, BODY18);
+      /* The subset's fold bucket is new at ITS persist: the main run before it has no
+         jogger, so no bucket. */
+      if (kind === 'subset') {
+        expect(done(await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: PRIOR_ID }))).toBe(true);
+        expect(ids(readCast(b.bookDir))).not.toContain('unknown-male');
+      }
+      let persisted = false;
+      let faulted = 0;
+      castIoSpy.onPersisted = () => {
+        persisted = true;
+      };
+      cacheSpy.beforePatch = async (patch) => {
+        if (persisted && faulted === 0 && Object.hasOwn(patch as object, 'ledger')) {
+          faulted += 1;
+          throw Object.assign(new Error('EPERM: operation not permitted, rename analysis cache'), { code: 'EPERM' });
+        }
+      };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let events: Sent[];
+      try {
+        events = await run(b.manuscriptId, b.bookDir, kind, FRESH);
+      } finally {
+        warn.mockRestore();
+        castIoSpy.onPersisted = undefined;
+        cacheSpy.beforePatch = undefined;
+      }
+      expect(faulted).toBe(1);
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir))).toContain('unknown-male');
+      /* The persist's ledger and its bucket decision reached the cache after all. */
+      expect(readCache(b.manuscriptId)?.addedRows?.['unknown-male']).toEqual({ state: 'added-once' });
+      expect(readCache(b.manuscriptId)?.matchPlan?.decisions['unknown-male']).toMatchObject({ kind: 'new', id: 'unknown-male' });
+      /* ...so the next main run knows the bucket as a run row: no -n1. */
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+      expect(ids(readCast(b.bookDir)).filter((id) => id.includes('-n1'))).toEqual([]);
+      expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('unknown-male'))).toEqual(['unknown-male']);
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
   });
@@ -3927,6 +3973,31 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
       expect(entryOf(b, 'boris')).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(row) });
       expect(linesById(b.bookDir)).toMatchObject(editLines(b));
       expect((readHistory(b.bookDir) as History).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it("item 10: a subset persist's refresh of a stopped main run's row it wrote lets a later main persist still fold-drop it", async () => {
+      /* Fix round 2 (Step-5 chain): a main run stops; subset A completes with the-jogger
+         speaking, so A's persist WRITES the row (its tone); subset B re-attributes it
+         silent, so B's fold takes it and it is carried; a main run follows. Every run
+         start compares disk with the entry's fp (refreshLedger), so A's persist must
+         have refreshed it or B turns the row added-once and the main run keeps it. */
+      const b = seed([{ ...NARR }, { ...LEAD_WREN }]);
+      await stoppedMain(b, ONE_ROW as never);
+      expect((entryOf(b, 'boris') as { state: string }).state).toBe('run-owned');
+      /* A: boris speaks, so A's persist writes his row (counts and the tone it fills). */
+      expect(done(await runSubsetRetry(b, { roster: ONE_ROW.roster, speakerId: ['boris', PRIOR_ID] }))).toBe(true);
+      expect(rowOf(b, 'boris')!.lines).toBeGreaterThan(0);
+      expect(rowOf(b, 'boris')!.tone).toBeDefined();
+      /* B: boris is silent; B's fold drops him and he is carried forward. */
+      expect(done(await runSubsetRetry(b, { roster: ONE_ROW.roster, speakerId: PRIOR_ID }))).toBe(true);
+      expect(rowOf(b, 'boris')).toBeDefined(); // the subset never deletes by addedRows
+      expect((entryOf(b, 'boris') as { state: string }).state).toBe('run-owned');
+      /* The main run (B's takes are current) fold-drops the untouched row. */
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', ONE_ROW as never))).toBe(true);
+      expect(rowOf(b, 'boris')).toBeUndefined();
+      expect(linesById(b.bookDir)).toMatchObject(editLines(b));
+      expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
 

@@ -1700,9 +1700,10 @@ async function runPlannedPersist(
       the reject-edge heal, all against the roster just persisted;
    4. the operator log of the voiced rows carried forward.
    A throwing history write never skips the caller's state.json: a lock-acquisition
-   timeout is RETURNED for the caller to park and rethrow after its remaining writes
-   (#2260 round 2/3 - thrown from here it would skip state.json and land in
-   `catch (persistErr)`, which reports success); anything else is logged. */
+   timeout is RETURNED (`parked`) for the caller to park and rethrow after its remaining
+   writes (#2260 round 2/3 - thrown from here it would skip state.json and land in
+   `catch (persistErr)`, which reports success); anything else is logged. A faulted cache
+   op is returned as `unsentPatch` (see step 2's comment). */
 async function applyPlannedPersistOutcome(a: {
   out: PersistOutcome;
   cache: AnalysisCache;
@@ -1714,7 +1715,7 @@ async function applyPlannedPersistOutcome(a: {
   historyStatusBeforePersist: Awaited<ReturnType<typeof loadCastIdHistoryWithStatus>>['status'];
   castBase: CastMergeBase | null;
   log: (phaseId: number, message: string) => void;
-}): Promise<unknown> {
+}): Promise<{ parked: unknown; unsentPatch?: CachePatch }> {
   const { out, cache, writeDir, retirementBookId, castBase, log } = a;
   if (out.written) castBase?.noteExternalWrite(out.written);
   const known = cache.matchPlan?.decisions ?? {};
@@ -1726,15 +1727,22 @@ async function applyPlannedPersistOutcome(a: {
   /* #4031 (I2) — cast.json and the edits have landed: a cache fault here (ENOSPC, EPERM, a
      rename whose retries ran out) is logged and the persist carries on, as
      `patchCacheInFailureCatch` does, so the retirements and the caller's state.json still
-     land. The next run re-plans what the cache did not record. */
+     land. The patch is handed back as `unsentPatch` and the caller re-sends it once, at
+     the end of its persist (N2): it is the only write of the persist's decisions and, in
+     the subset job, of its ledger (R35). If the re-send fails too, the cache lacks them:
+     the next run re-plans a row it does not cover against the live cast (it joins that
+     row), and the row is no longer known as the run's own (rule 11). */
+  const patch: CachePatch = {
+    ledger: a.ledgerPatch,
+    ...(cache.matchPlan && Object.keys(decisions).length > 0 ? { decisions } : {}),
+    ...(Object.keys(idMap).length > 0 ? { remapCharacterIds: idMap } : {}),
+  };
+  let unsentPatch: CachePatch | undefined;
   try {
-    await mutateAnalysisCache(a.manuscriptId, {
-      ledger: a.ledgerPatch,
-      ...(cache.matchPlan && Object.keys(decisions).length > 0 ? { decisions } : {}),
-      ...(Object.keys(idMap).length > 0 ? { remapCharacterIds: idMap } : {}),
-    });
+    await mutateAnalysisCache(a.manuscriptId, patch);
   } catch (cacheErr) {
-    console.warn('[analysis] could not patch the analysis cache after the persist (carrying on)', cacheErr);
+    console.warn('[analysis] could not patch the analysis cache after the persist (re-sent at the end of the persist)', cacheErr);
+    unsentPatch = patch;
   }
   let parked: unknown;
   try {
@@ -1794,7 +1802,7 @@ async function applyPlannedPersistOutcome(a: {
     writeDir,
     voicedSurvivorsDropped(out.characters.filter((c) => carriedIds.has(c.id)) as never, []),
   );
-  return parked;
+  return { parked, ...(unsentPatch ? { unsentPatch } : {}) };
 }
 
 /* Rule 13 for the cache: the takes follow a completed persist's reroute of lines a
@@ -2347,6 +2355,16 @@ const PHASE1_RECORD_FIELDS = [
 /** What a subset Phase-0a (and finalise) save carries: the chapter casts and the
     per-chapter records the Retry moves (#4031). */
 const SUBSET_PHASE0_FIELDS = ['chapterCast', ...PHASE1_RECORD_FIELDS] as const;
+
+/** #4031 (N2) — re-send a cache patch that faulted once, best-effort: a second fault is
+    logged, never thrown (the writes it follows have already landed). */
+async function resendCachePatch(manuscriptId: string, patch: CachePatch): Promise<void> {
+  try {
+    await mutateAnalysisCache(manuscriptId, patch);
+  } catch (resendErr) {
+    console.warn('[analysis] re-sending a faulted analysis-cache patch failed', resendErr);
+  }
+}
 
 /* #3435 — patch the cache from INSIDE a per-chapter failure catch. That patch can
    itself throw (ENOSPC, renameWithRetry exhausted); unguarded, its error replaces
@@ -8095,6 +8113,8 @@ export async function runMainAnalyzerJob(
       let wroteStateJson = false;
       /* Plan 291 — what the planned persist wrote (set only once cast.json landed). */
       let persisted: PersistOutcome | undefined;
+      /* #4031 (N2) — the persist's cache op, when it faulted; re-sent once below. */
+      let persistUnsentPatch: CachePatch | undefined;
       /* #2196 — resolve the SINGLE verified write target before ANY write.
          Identity-gated (full `.audiobook/state.json` check on liveBookDir(job),
          invalidate + re-hydrate on a miss — C2). Throwing BookDirUnresolvedError
@@ -8208,7 +8228,7 @@ export async function runMainAnalyzerJob(
             for (const k of Object.keys(cache.addedRows ?? {})) if (!Object.hasOwn(out.ledger, k)) nextLedger[k] = null;
             const ledgerPatch = ledgerDelta(cache.addedRows ?? {}, nextLedger);
             cache.addedRows = out.ledger;
-            const parked = await applyPlannedPersistOutcome({
+            const { parked, unsentPatch } = await applyPlannedPersistOutcome({
               out,
               cache,
               manuscriptId,
@@ -8221,6 +8241,7 @@ export async function runMainAnalyzerJob(
               log,
             });
             if (parked !== undefined) persistLockTimeout = parked;
+            persistUnsentPatch = unsentPatch;
           }
           /* The edits write failed after cast.json landed (see above): everything the
              outcome owed is recorded; the error goes to `catch (persistErr)`. */
@@ -8373,6 +8394,9 @@ export async function runMainAnalyzerJob(
          at the planned persist parks too: its own writes did not land, the
          remaining state.json write still does, without the provenance stamp or
          the stale-evidence marker clear, and the job then ends with the error.) */
+      /* #4031 (N2) — before anything can end the run, the persist's faulted cache op is
+         re-sent once (its decisions, re-mints and ledger have no other writer). */
+      if (persistUnsentPatch) await resendCachePatch(manuscriptId, persistUnsentPatch);
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. */
@@ -10196,6 +10220,8 @@ export async function runSubsetAnalyzerJob(
       let wroteStateJson = false;
       /* Plan 291 — what the planned persist wrote (set only once cast.json landed). */
       let persisted: PersistOutcome | undefined;
+      /* #4031 (N2) — the persist's cache op, when it faulted; re-sent once below. */
+      let persistUnsentPatch: CachePatch | undefined;
       /* #2196 — resolve the SINGLE verified write target before ANY write,
          mirroring the main job. Throwing BookDirUnresolvedError here skips
          every write in this block (no stale mkdir), which then propagates to
@@ -10297,7 +10323,7 @@ export async function runSubsetAnalyzerJob(
             }
             cache.addedRows = nextLedger;
             subsetLedgers = { own: out.ledger, ownPairs: subsetLedgers.ownPairs };
-            const parked = await applyPlannedPersistOutcome({
+            const { parked, unsentPatch } = await applyPlannedPersistOutcome({
               out,
               cache,
               manuscriptId,
@@ -10310,6 +10336,7 @@ export async function runSubsetAnalyzerJob(
               log,
             });
             if (parked !== undefined) persistLockTimeout = parked;
+            persistUnsentPatch = unsentPatch;
           }
           /* The edits write failed after cast.json landed: everything the outcome owed
              is recorded; the error goes to `catch (persistErr)`. */
@@ -10426,6 +10453,9 @@ export async function runSubsetAnalyzerJob(
          it escapes `catch (persistErr)` and reaches this job's top-level
          catch, which ends the job via `endJob(job, {kind:'error', …})`.
          Mirrors the main job. */
+      /* #4031 (N2) — before anything can end the run, the persist's faulted cache op is
+         re-sent once (its decisions, re-mints and ledger have no other writer). */
+      if (persistUnsentPatch) await resendCachePatch(manuscriptId, persistUnsentPatch);
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. Mirrors main. */
