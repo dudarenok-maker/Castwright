@@ -44,33 +44,30 @@ vi.mock('../gpu/gpu-load.js', () => ({
 }));
 vi.mock('../gpu/sidecar-vram-sample.js', () => ({ maybeSampleSidecarEngine: async () => {} }));
 vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
-/* #4072 — holds the FIRST cast-lock acquisition of `dir` until a second one has
-   run (or `ms` pass), so one mint's walk stamps Book One and then waits at Book Two
-   while the other mint's walk reaches Book Two first: the interleaving that split
-   the link before the fix. */
-const holdLock = vi.hoisted(() => ({ dir: null as string | null, ms: 400, waiting: null as null | (() => void) }));
-vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
-  const withCastLock: typeof actual.withCastLock = async (dir, fn) => {
-    if (holdLock.dir && resolve(dir) === holdLock.dir) {
-      if (!holdLock.waiting) {
-        let release!: () => void;
-        const gate = new Promise<void>((r) => (release = r));
-        holdLock.waiting = release;
-        await Promise.race([gate, new Promise((r) => setTimeout(r, holdLock.ms))]);
-        holdLock.dir = null;
-      } else {
-        const release = holdLock.waiting;
-        try {
-          return await actual.withCastLock(dir, fn);
-        } finally {
-          release();
-        }
-      }
+/* #4072 — pauses the FIRST series-mint walk at Book Two (its state.json read, made
+   outside any lock) until Book Two's row carries a uuid, or `ms` pass: the walk
+   has stamped Book One and waits while a second mint's walk reaches Book Two first.
+   That is the interleaving that split the link before the fix. */
+const holdWalk = vi.hoisted(() => ({ statePath: null as string | null, castPath: '', ms: 1500 }));
+vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+  const { readFileSync: read } = await import('node:fs');
+  const twoHasUuid = (): boolean => {
+    try {
+      return !!JSON.parse(read(holdWalk.castPath, 'utf8')).characters[0].voiceUuid;
+    } catch {
+      return false;
     }
-    return actual.withCastLock(dir, fn);
   };
-  return { ...actual, withCastLock };
+  const readStateJsonWithRecovery: typeof actual.readStateJsonWithRecovery = async (path) => {
+    if (holdWalk.statePath && path === holdWalk.statePath && (new Error().stack ?? '').includes('forEachMatchingCastCharacter')) {
+      holdWalk.statePath = null;
+      const until = Date.now() + holdWalk.ms;
+      while (!twoHasUuid() && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    }
+    return actual.readStateJsonWithRecovery(path);
+  };
+  return { ...actual, readStateJsonWithRecovery };
 });
 
 const AUTHOR = 'Della Renwick';
@@ -85,8 +82,6 @@ let app: Express;
 const ids = {} as Record<Title, string>;
 let counter = 0;
 const fetchMock = vi.fn();
-/* #4072 — when set, every design render waits here until `n` renders arrived. */
-const barrier = { n: 0, arrived: 0, open: null as null | (() => void), gate: null as Promise<void> | null };
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 const bookDir = (t: string) => join(workspaceRoot, 'books', AUTHOR, SERIES, t);
@@ -185,11 +180,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  holdLock.dir = null;
-  holdLock.waiting = null;
-  barrier.n = 0;
-  barrier.arrived = 0;
-  barrier.gate = null;
+  holdWalk.statePath = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -200,14 +191,6 @@ beforeEach(() => {
       /* not JSON */
     }
     if (voiceId && String(url).includes('/qwen/') && !String(url).includes('evict')) {
-      if (barrier.n) {
-        if (!barrier.gate) barrier.gate = new Promise<void>((r) => (barrier.open = r));
-        if (++barrier.arrived >= barrier.n) {
-          if (holdLock.dir === 'arm') holdLock.dir = resolve(bookDir('Book Two'));
-          barrier.open?.();
-        }
-        await barrier.gate;
-      }
       mkdirSync(qwenDir(), { recursive: true });
       writeFileSync(join(qwenDir(), `${voiceId}.pt`), Buffer.from(`DESIGN-${++counter}`));
     }
@@ -303,9 +286,14 @@ describe('#4072 — two concurrent base mints of one legacy series link end on o
   it('a mint that starts while another of the same link is in flight adopts its uuid: one voiceUuid, one family', async () => {
     seedLegacyDesigned(true);
     writeBook('Book Three', [{ id: 'other', name: 'Other', role: 'supporting', color: 'sky' }]);
-    barrier.n = 2;
-    holdLock.dir = 'arm';
-    const [a, b] = await Promise.all([design('Book One'), design('Book Two')]);
+    holdWalk.statePath = resolve(statePath('Book Two'));
+    holdWalk.castPath = castPath('Book Two');
+    /* Book One's design mints first; Book Two's starts once that mint's walk has
+       stamped Book One (and is paused before Book Two). */
+    const first = design('Book One').then((r) => r);
+    const until = Date.now() + 5000;
+    while (!row('Book One').voiceUuid && Date.now() < until) await new Promise((r) => setTimeout(r, 10));
+    const [a, b] = await Promise.all([first, design('Book Two')]);
     expect(a.status, JSON.stringify(a.body)).toBe(200);
     expect(b.status, JSON.stringify(b.body)).toBe(200);
     const u = row('Book One').voiceUuid as string;
@@ -317,7 +305,6 @@ describe('#4072 — two concurrent base mints of one legacy series link end on o
 
   it('a design in an UNCONFIRMED book never registers a series mint: a concurrent confirmed mint does not adopt its uuid', async () => {
     seedLegacyDesigned(false);
-    barrier.n = 2;
     const [two, three] = await Promise.all([design('Book Two'), design('Book Three')]);
     expect(two.status, JSON.stringify(two.body)).toBe(200);
     expect(three.status, JSON.stringify(three.body)).toBe(200);
