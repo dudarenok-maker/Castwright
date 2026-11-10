@@ -4,8 +4,8 @@
    (Tasks 15-27) are added on top of `__test-helpers__/analysis-job-harness.ts`.
    The mock blocks below are the ones the harness header requires. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /* Before any import binds BOOKS_ROOT: the harness books live in this workspace. */
@@ -60,7 +60,7 @@ import * as stateIo from '../workspace/state-io.js';
 import request from 'supertest';
 import { ANALYSIS_CACHE_VERSION, mutateAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { retargetPlanForMerge } from '../store/plan-overlay.js';
-import { castJsonPath, castMergeSuggestionsJsonPath } from '../workspace/paths.js';
+import { castJsonPath, castMergeSuggestionsJsonPath, makeBookId } from '../workspace/paths.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { LockAcquisitionTimeoutError, withKeyLock } from '../workspace/file-lock.js';
 import { dedupAndPrepare, linkSeriesReuseOnNewRows, resolveCurrentIds, runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
@@ -1882,5 +1882,530 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
     expect(existsSync(END_OF_RUN_PATH)).toBe(true);
     expect(readFixtureText(END_OF_RUN_PATH)).toBe(fresh);
     expect(ids(JSON.parse(fresh).characters)).toEqual(expect.arrayContaining(['narrator', PRIOR_ID, 'olga', 'boris']));
+  });
+});
+
+/* ---- Plan 291 Task 22 - re-analysis identity acceptance through the main job ---- */
+
+describe('#4031 main job: identity acceptance (Task 22)', () => {
+  const orig = {
+    retries: process.env.STAGE2_COVERAGE_RETRIES,
+    lag: process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS,
+  };
+  const books: HarnessBook[] = [];
+  const siblings: string[] = [];
+  /* No "<Name> asked" tag in the body: the roster-coverage guard would otherwise add a "Wren"
+     row of its own, and the narrator-line recovery would hand a joined row lines the Phase-1
+     mock never gave it. */
+  const NEUTRAL = 'The rain fell on the quiet street.\n\nOlga nodded and looked away.';
+  const seed = (characters: Row[], supersededBy?: Record<string, string>): HarnessBook => {
+    const b = mkBook(characters, supersededBy, NEUTRAL);
+    books.push(b);
+    return b;
+  };
+  beforeEach(() => {
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+  });
+  afterEach(async () => {
+    resetHarness();
+    for (const [k, v] of [
+      ['STAGE2_COVERAGE_RETRIES', orig.retries],
+      ['ANALYZER_PHASE1_MIN_LAG_CHAPTERS', orig.lag],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    for (const b of books.splice(0)) await cleanupBook(b);
+    for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** A fresh analyzer row. Its evidence quote is in the body, or the row is dropped. */
+  const fr = (id: string, name: string, extra: Record<string, unknown> = {}): CharacterOutput =>
+    ({
+      id,
+      name,
+      role: 'lead',
+      color: '#123456',
+      gender: 'female',
+      evidence: [{ quote: 'Olga nodded' }],
+      ...extra,
+    }) as unknown as CharacterOutput;
+  /** A prior cast.json row. */
+  const pr = (id: string, name: string, extra: Row = {}): Row => ({ id, name, role: 'lead', color: '#222222', ...extra });
+  const ids = (rows: Row[]): string[] => rows.map((r) => String(r.id));
+  const errCode = (events: Array<{ kind: string; code?: unknown }>): unknown =>
+    events.find((e) => e.kind === 'error')?.code;
+  const done = (events: Array<{ kind: string }>): boolean => events.some((e) => e.kind === 'result');
+  /** manuscript-edits.json sentence count per characterId. */
+  const editLines = (b: HarnessBook): Record<string, number> =>
+    readEdits(b.bookDir).reduce<Record<string, number>>((acc, s) => {
+      const id = String(s.characterId);
+      return { ...acc, [id]: (acc[id] ?? 0) + 1 };
+    }, {});
+  const history = (b: HarnessBook): { supersededBy: Record<string, string>; supersededByKind?: Record<string, string>; displaced?: Record<string, string> } =>
+    existsSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'))
+      ? (readHistory(b.bookDir) as never)
+      : { supersededBy: {} };
+  const writeHistory = (b: HarnessBook, h: Record<string, unknown>): void =>
+    writeFileSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy: {}, ...h }));
+  const pairs = (b: HarnessBook): Array<[unknown, unknown, unknown]> =>
+    readSuggestions(b.bookDir)
+      .map((s): [unknown, unknown, unknown] => [s.newRow, s.candidate, s.origin])
+      .sort((x, y) => (String(x) < String(y) ? -1 : 1));
+  /** Three lines per chapter, handed out in turn: the first speaker gets 5, the second 4. */
+  const two = (a: string, b: string): string[] => [a, b];
+  /** A sibling book earlier in b's series, with the given confirmed cast. */
+  const sibling = (b: HarnessBook, characters: Row[]): string => {
+    const seriesDir = dirname(b.bookDir);
+    const series = basename(seriesDir);
+    const dir = join(seriesDir, 'Book One');
+    const sibId = makeBookId('Author', series, 'Book One');
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: sibId,
+        manuscriptId: `sib-${sibId}`,
+        title: 'Book One',
+        author: 'Author',
+        language: 'en',
+        series,
+        seriesPosition: 1,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(dir, 'manuscript.md'), BODY);
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters }));
+    siblings.push(dir);
+    return sibId;
+  };
+
+  it('A1: #3954 - a single-candidate T3 join keeps the prior id; the voice key does not move', async () => {
+    const voice = { qwen: { name: 'wren-voice' } };
+    const b = seed([
+      { ...NARR },
+      pr(PRIOR_ID, 'Wren', { voiceState: 'locked', voiceId: 'wren-voice-id', overrideTtsVoices: voice }),
+    ]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
+      speakerId: PRIOR_ID,
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['narrator', PRIOR_ID]);
+    expect(cast.find((c) => c.id === PRIOR_ID)).toMatchObject({
+      name: 'Wren',
+      voiceState: 'locked',
+      voiceId: 'wren-voice-id',
+      overrideTtsVoices: voice,
+      aliases: ['Wren Ashby'],
+    });
+    expect(linesById(b.bookDir)[PRIOR_ID]).toBe(3);
+    expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
+    expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+    expect(history(b).supersededByKind).toEqual({ [FRESH_ID]: 'analyzer' });
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('A1 (0-line variant): a joined row that gets no lines would fold, and survives as its prior id with its voice', async () => {
+    const voice = { qwen: { name: 'wren-voice' } };
+    const b = seed([
+      { ...NARR },
+      pr(PRIOR_ID, 'Wren', {
+        role: 'minor',
+        voiceState: 'locked',
+        voiceId: 'wren-voice-id',
+        overrideTtsVoices: voice,
+        lines: 40,
+        scenes: 3,
+      }),
+    ]);
+    /* Boris is the control: a new minor row with no lines is dropped by the same fold. */
+    const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr(FRESH_ID, 'Wren Ashby', { role: 'minor' }), boris],
+      speakerId: 'narrator',
+    });
+    expect(events.filter((e) => e.kind === 'error')).toEqual([]);
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast)).not.toContain('boris');
+    expect(ids(cast)).not.toContain('unknown-male');
+    expect(ids(cast).filter((i) => i !== 'narrator')).toEqual([PRIOR_ID]);
+    /* The row went through the run as a roster row, not as a carried-forward prior: it has
+       this run's line count (0, not the stale 40) and gained the analyzer's name. */
+    expect(cast.find((c) => c.id === PRIOR_ID)).toMatchObject({
+      name: 'Wren',
+      voiceState: 'locked',
+      voiceId: 'wren-voice-id',
+      overrideTtsVoices: voice,
+      aliases: ['Wren Ashby'],
+      lines: 0,
+      scenes: 0,
+    });
+    expect(editLines(b)[PRIOR_ID]).toBeUndefined();
+    expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+  });
+
+  /* The five #4033 twin rosters, each also through the pipelined path (A17b). */
+  const TWINS: Array<{ title: string; twins: [string, string]; fresh: [string, string] }> = [
+    { title: 'wren-a + wren-9', twins: ['wren-a', 'wren-b'], fresh: ['wren-a', 'wren-9'] },
+    { title: 'wren-9 + wren-a', twins: ['wren-a', 'wren-b'], fresh: ['wren-9', 'wren-a'] },
+    { title: 'wren-2 + wren-7', twins: ['wren-2', 'wren-7'], fresh: ['wren-2', 'wren-7'] },
+    { title: 'wren-a + wren-b', twins: ['wren-a', 'wren-b'], fresh: ['wren-a', 'wren-b'] },
+    { title: 'wren + wren-2', twins: ['wren', 'wren-2'], fresh: ['wren', 'wren-2'] },
+  ];
+  for (const pipelined of [false, true]) {
+    for (const { title, twins, fresh } of TWINS) {
+      it(`A2${pipelined ? '/A17b (pipelined)' : ''}: twin roster ${title} keeps both twins, their declines and their own lines`, async () => {
+        if (pipelined) {
+          process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+          setPipelined(true);
+        }
+        const [ta, tb] = twins;
+        const b = seed([
+          { ...NARR },
+          pr(ta, 'Wren', { notLinkedTo: [tb] }),
+          pr(tb, 'Wren', { notLinkedTo: [ta] }),
+        ]);
+        const events = await run(b.manuscriptId, b.bookDir, 'main', {
+          roster: [NARR, ...fresh.map((id) => fr(id, 'Wren'))],
+          speakerId: two(fresh[0], fresh[1]),
+        });
+        expect(errCode(events)).toBeUndefined();
+        expect(done(events)).toBe(true);
+        const cast = readCast(b.bookDir);
+        const planNew = fresh.find((id) => !twins.includes(id));
+        /* Neither twin is lost, and a row the plan made new is its own row. */
+        expect(ids(cast).sort()).toEqual(['narrator', ta, tb, ...(planNew ? [planNew] : [])].sort());
+        /* No row holds a declined link without its decline. */
+        expect(cast.find((c) => c.id === ta)!.notLinkedTo).toEqual([tb]);
+        expect(cast.find((c) => c.id === tb)!.notLinkedTo).toEqual([ta]);
+        if (planNew) {
+          const row = cast.find((c) => c.id === planNew)!;
+          expect(row).not.toHaveProperty('matchedFrom');
+          expect(row.notLinkedTo ?? []).toEqual([]);
+        }
+        /* Each twin's lines stay on that twin: the first speaker has 5, the second 4. */
+        expect(editLines(b)).toEqual({ [fresh[0]]: 5, [fresh[1]]: 4 });
+        expect(linesById(b.bookDir)[fresh[0]]).toBe(5);
+        expect(linesById(b.bookDir)[fresh[1]]).toBe(4);
+        /* The only row the plan made new asks about both twins; a twin join records nothing. */
+        expect(pairs(b)).toEqual(planNew ? [[planNew, ta, 'plan'], [planNew, tb, 'plan']] : []);
+        expect(history(b).supersededBy).toEqual({});
+      });
+    }
+  }
+
+  it('A3: degraded history - the run completes, every new row gets a minted id, no retirement is written', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const b = seed([{ ...NARR }, pr('a1', 'Anna Kay', { voiceId: 'v1' }), pr('a2', 'Anna Lee')]);
+      writeFileSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'), '{ not json');
+      const minted = (raw: string): string => {
+        const d = readCache(b.manuscriptId)?.matchPlan?.decisions[raw];
+        return d?.kind === 'new' ? d.id : raw;
+      };
+      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        /* "Anna Kay" still joins a1 by name; the join would normally be recorded as a retirement. */
+        roster: [NARR, fr('fresh-one', 'Nobody Known'), fr('fresh-two', 'Anna'), fr('ak', 'Anna Kay')],
+        speakerId: (chapterId) => (chapterId === 2 ? minted('fresh-two') : minted('fresh-one')),
+      });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      const token = readCache(b.manuscriptId)!.matchPlan!.runToken;
+      expect(readCache(b.manuscriptId)!.matchPlan!.decisions.ak).toMatchObject({ kind: 'join', priorId: 'a1' });
+      const cast = readCast(b.bookDir);
+      expect(ids(cast).sort()).toEqual(['a1', 'a2', `fresh-one-r${token}`, `fresh-two-r${token}`, 'narrator'].sort());
+      expect(editLines(b)).toEqual({ [`fresh-one-r${token}`]: 6, [`fresh-two-r${token}`]: 3 });
+      expect(linesById(b.bookDir)[`fresh-one-r${token}`]).toBe(6);
+      /* The unreadable file is left exactly as it was: no retirement, no replacement. */
+      expect(readFileSync(join(b.bookDir, '.audiobook', 'cast-id-history.json'), 'utf8')).toBe('{ not json');
+      expect(cast.find((c) => c.id === 'a1')).toMatchObject({ name: 'Anna Kay', voiceId: 'v1' });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('A4 (N2): a merged-away id and a same-name row both join the survivor - no new row, nothing displaced', async () => {
+    const b = seed([{ ...NARR }, pr('old-weir', 'Old Weir', { voiceState: 'locked', voiceId: 'ow-voice' })]);
+    writeHistory(b, { supersededBy: { 'brann-weir': 'old-weir' }, supersededByKind: { 'brann-weir': 'user' } });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr('brann-weir', 'Brann Weir'), fr('ow2', 'Old Weir')],
+      speakerId: 'old-weir',
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['narrator', 'old-weir']);
+    expect(cast.find((c) => c.id === 'old-weir')).toMatchObject({
+      name: 'Old Weir',
+      voiceState: 'locked',
+      voiceId: 'ow-voice',
+      aliases: ['Brann Weir'],
+    });
+    expect(editLines(b)).toEqual({ 'old-weir': 3 });
+    const h = history(b);
+    expect(h.supersededBy).toEqual({ 'brann-weir': 'old-weir', ow2: 'old-weir' });
+    expect(h.supersededByKind).toEqual({ 'brann-weir': 'user', ow2: 'analyzer' });
+    expect(h.displaced ?? {}).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('A5 (P4-2): "John Smith" joins js; "John" is a new row with suggestions to js and jd', async () => {
+    const b = seed([{ ...NARR }, pr('js', 'John Smith'), pr('jd', 'John Doe')]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr('x1', 'John Smith'), fr('x2', 'John')],
+      speakerId: two('js', 'x2'),
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['jd', 'js', 'narrator', 'x2']);
+    expect(editLines(b)).toEqual({ js: 5, x2: 4 });
+    expect(pairs(b)).toEqual([['x2', 'jd', 'plan'], ['x2', 'js', 'plan']]);
+    expect(history(b).supersededBy).toEqual({ x1: 'js' });
+  });
+
+  it('A6: a T3 name with one voiced and one unvoiced candidate gives a suggestion, not a join', async () => {
+    const b = seed([{ ...NARR }, pr('a1', 'Anna Kay', { voiceId: 'v1' }), pr('a2', 'Anna Lee')]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr('x', 'Anna')],
+      speakerId: 'x',
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['a1', 'a2', 'narrator', 'x']);
+    expect(cast.find((c) => c.id === 'a1')).toMatchObject({ name: 'Anna Kay', voiceId: 'v1' });
+    expect(cast.find((c) => c.id === 'a1')).not.toHaveProperty('aliases');
+    expect(editLines(b)).toEqual({ x: 3 });
+    expect(pairs(b)).toEqual([['x', 'a1', 'plan'], ['x', 'a2', 'plan']]);
+    expect(history(b).supersededBy).toEqual({});
+  });
+
+  describe('A7 (P5-2): series links are never inherited across a collapse', () => {
+    const wrenS = { id: 'wren-s', name: 'Wren', gender: 'female', ageRange: 'teen', voiceId: 'wren-s' };
+    const annaS = { id: 'anna-s', name: 'Anna', gender: 'female', ageRange: 'teen', voiceId: 'anna-s' };
+
+    it('a joined row keeps its own link and gains none from another row that collapsed into it', async () => {
+      const b = seed([{ ...NARR }]);
+      const sib = sibling(b, [wrenS, annaS]);
+      const link = { bookId: sib, characterId: 'wren-s' };
+      const quinnLink = { bookId: sib, characterId: 'anna-s' };
+      writeFileSync(
+        join(b.bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [
+            { ...NARR },
+            pr('old-weir', 'Old Weir', { matchedFrom: link, notLinkedTo: ['p-x'] }),
+            pr('quinn', 'Quinn'),
+          ],
+        }),
+      );
+      writeHistory(b, { supersededBy: { 'brann-weir': 'old-weir' }, supersededByKind: { 'brann-weir': 'user' } });
+      /* Every fresh row carries a link of its own, to a character the prior rows never chose. */
+      const stray = { matchedFrom: quinnLink, notLinkedTo: [{ bookId: sib, characterId: 'wren-s' }] };
+      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        roster: [NARR, fr('brann-weir', 'Brann Weir', stray), fr('ow2', 'Old Weir', stray), fr('quinn', 'Quinn', stray)],
+        speakerId: two('old-weir', 'quinn'),
+      });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      const cast = readCast(b.bookDir);
+      expect(ids(cast).sort()).toEqual(['narrator', 'old-weir', 'quinn']);
+      const weir = cast.find((c) => c.id === 'old-weir')!;
+      expect(weir.matchedFrom).toEqual(link);
+      expect(weir.notLinkedTo).toEqual(['p-x']);
+      const quinn = cast.find((c) => c.id === 'quinn')!;
+      expect(quinn).not.toHaveProperty('matchedFrom');
+      expect(quinn).not.toHaveProperty('notLinkedTo');
+    });
+
+    it('a new row with candidates X and Y takes no link either of them declined', async () => {
+      const outcome = async (declined: boolean): Promise<Row> => {
+        const b = seed([{ ...NARR }]);
+        const sib = sibling(b, [annaS]);
+        writeFileSync(
+          join(b.bookDir, '.audiobook', 'cast.json'),
+          JSON.stringify({
+            characters: [
+              { ...NARR },
+              pr('x-kay', 'Anna Kay', declined ? { notLinkedTo: [{ bookId: sib, characterId: 'anna-s' }] } : {}),
+              pr('y-lee', 'Anna Lee'),
+            ],
+          }),
+        );
+        const events = await run(b.manuscriptId, b.bookDir, 'main', {
+          roster: [NARR, fr('anna', 'Anna', { ageRange: 'teen' })],
+          speakerId: 'anna',
+        });
+        expect(errCode(events)).toBeUndefined();
+        expect(done(events)).toBe(true);
+        expect(pairs(b)).toEqual([['anna', 'x-kay', 'plan'], ['anna', 'y-lee', 'plan']]);
+        return readCast(b.bookDir).find((c) => c.id === 'anna')!;
+      };
+      /* Control: with no decline the linker links the new row to the sibling's Anna. */
+      expect((await outcome(false)).matchedFrom).toMatchObject({ characterId: 'anna-s' });
+      const row = await outcome(true);
+      expect(row).not.toHaveProperty('matchedFrom');
+      /* ...and the new row inherits the decline itself, so no later link pass offers it either. */
+      expect(row.notLinkedTo).toEqual([expect.objectContaining({ characterId: 'anna-s' })]);
+    });
+
+    it('A7c (#4023 S2, completed run): a prior row that carries its own link keeps it when it joins', async () => {
+      const b = seed([{ ...NARR }]);
+      const sib = sibling(b, [wrenS]);
+      const link = { bookId: sib, characterId: 'wren-s' };
+      writeFileSync(
+        join(b.bookDir, '.audiobook', 'cast.json'),
+        JSON.stringify({
+          characters: [{ ...NARR }, pr(PRIOR_ID, 'Wren', { voiceState: 'locked', matchedFrom: link })],
+        }),
+      );
+      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        roster: [NARR, fr(FRESH_ID, 'Wren Ashby', { ageRange: 'teen' })],
+        speakerId: PRIOR_ID,
+      });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      const cast = readCast(b.bookDir);
+      expect(ids(cast).sort()).toEqual(['narrator', PRIOR_ID]);
+      expect(cast.find((c) => c.id === PRIOR_ID)).toMatchObject({ voiceState: 'locked', matchedFrom: link });
+      expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
+    });
+  });
+
+  it('A8 (rule 1): an unvoiced prior row and a decline-only prior row the fresh run omits are both still present with their declines', async () => {
+    const quiet = pr('quiet', 'Quiet');
+    const decl = pr('decl', 'Decl', { notLinkedTo: [{ bookId: 'book-0', characterId: 'z' }, 'anna'] });
+    const b = seed([{ ...NARR }, pr('anna', 'Anna', { voiceId: 'v-anna' }), quiet, decl]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, fr('anna', 'Anna')], speakerId: 'anna' });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['anna', 'decl', 'narrator', 'quiet']);
+    expect(cast.find((c) => c.id === 'quiet')).toEqual(quiet);
+    expect(cast.find((c) => c.id === 'decl')).toEqual(decl);
+    expect(editLines(b)).toEqual({ anna: 3 });
+  });
+
+  it('A9 (rule 2): a by-id join and a name join both keep the prior display name and gain the analyzer name as an alias', async () => {
+    const b = seed([
+      { ...NARR },
+      pr('wren', 'Wren', { aliases: ['Ren'] }),
+      pr('brann', 'Brann', { aliases: ['Bran'] }),
+    ]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr('wren', 'Wren Ashby'), fr('b1', 'Brann Weir')],
+      speakerId: two('wren', 'brann'),
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['brann', 'narrator', 'wren']);
+    expect(cast.find((c) => c.id === 'wren')).toMatchObject({ name: 'Wren', aliases: ['Ren', 'Wren Ashby'] });
+    expect(cast.find((c) => c.id === 'brann')).toMatchObject({ name: 'Brann', aliases: ['Bran', 'Brann Weir'] });
+    expect(editLines(b)).toEqual({ wren: 5, brann: 4 });
+    expect(history(b).supersededBy).toEqual({ b1: 'brann' });
+  });
+
+  it('A10 (rule 3): a fresh row carrying a merged-away id lands on the survivor even when its name matches another row', async () => {
+    const b = seed([{ ...NARR }, pr('keep', 'Keeper'), pr('mira', 'Mira')]);
+    writeHistory(b, { supersededBy: { gone: 'keep' } });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr('gone', 'Mira')],
+      speakerId: 'keep',
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['keep', 'mira', 'narrator']);
+    expect(cast.find((c) => c.id === 'keep')).toMatchObject({ name: 'Keeper', aliases: ['Mira'] });
+    expect(cast.find((c) => c.id === 'mira')).toEqual(pr('mira', 'Mira'));
+    expect(editLines(b)).toEqual({ keep: 3 });
+    /* The merge stays a merge: it is not moved to `displaced`, and nothing is added. */
+    const h = history(b);
+    expect(h.supersededBy).toEqual({ gone: 'keep' });
+    expect(h.displaced ?? {}).toEqual({});
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('A15: a forced-new row mints an id that is no live, superseded, displaced or raw id, and its sentences carry it', async () => {
+    const b = seed([{ ...NARR }, pr('wren', 'Wren Ash'), pr('wren-2', 'Wren')]);
+    writeHistory(b, { supersededBy: { 'wren-n1': 'wren-2' }, displaced: { 'wren-n2': 'wren-2' } });
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr('wren', 'Wren'), fr('wren-n3', 'Cora Vale')],
+      speakerId: two('wren-n4', 'wren-n3'),
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['narrator', 'wren', 'wren-2', 'wren-n3', 'wren-n4']);
+    expect(cast.find((c) => c.id === 'wren')).toEqual(pr('wren', 'Wren Ash'));
+    expect(cast.find((c) => c.id === 'wren-2')).toEqual(pr('wren-2', 'Wren'));
+    expect(editLines(b)).toEqual({ 'wren-n4': 5, 'wren-n3': 4 });
+    expect(linesById(b.bookDir)['wren-n4']).toBe(5);
+    expect(pairs(b)).toEqual([['wren-n4', 'wren', 'plan'], ['wren-n4', 'wren-2', 'plan']]);
+    const h = history(b);
+    expect(h.supersededBy).toEqual({ 'wren-n1': 'wren-2' });
+    expect(h.displaced).toEqual({ 'wren-n2': 'wren-2' });
+  });
+
+  it('A18: a book whose narrator row is char-narrator re-analyses without attribution_drift and prose lands on it', async () => {
+    const b = seed([{ ...NARR, id: 'char-narrator' }, pr(PRIOR_ID, 'Wren')]);
+    const events = await run(b.manuscriptId, b.bookDir, 'main', {
+      roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
+      speakerId: ['narrator', PRIOR_ID],
+    });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = readCast(b.bookDir);
+    expect(ids(cast).sort()).toEqual(['char-narrator', PRIOR_ID]);
+    expect(editLines(b)).toEqual({ 'char-narrator': 5, [PRIOR_ID]: 4 });
+    expect(linesById(b.bookDir)['char-narrator']).toBe(5);
+    expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
+  });
+
+  describe('A21 (rule 12): history provenance', () => {
+    it('an untagged and a user entry are T1: the merged-away ids land on the survivor, not on the name match', async () => {
+      const b = seed([{ ...NARR }, pr('survivor', 'Old Name'), pr('other', 'Zed')]);
+      writeHistory(b, { supersededBy: { u1: 'survivor', u2: 'survivor' }, supersededByKind: { u2: 'user' } });
+      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        roster: [NARR, fr('u1', 'Zed'), fr('u2', 'Zed')],
+        speakerId: 'survivor',
+      });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      const cast = readCast(b.bookDir);
+      expect(ids(cast).sort()).toEqual(['narrator', 'other', 'survivor']);
+      expect(cast.find((c) => c.id === 'survivor')).toMatchObject({ name: 'Old Name', aliases: ['Zed'] });
+      expect(cast.find((c) => c.id === 'other')).toEqual(pr('other', 'Zed'));
+      expect(editLines(b)).toEqual({ survivor: 3 });
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    it('an analyzer entry is not T1: a later ambiguous name gives a suggestion, not a join', async () => {
+      const b = seed([{ ...NARR }, pr('survivor', 'Old Name'), pr('z1', 'Zed Kay'), pr('z2', 'Zed Lee')]);
+      writeHistory(b, { supersededBy: { 'ana-x': 'survivor' }, supersededByKind: { 'ana-x': 'analyzer' } });
+      const events = await run(b.manuscriptId, b.bookDir, 'main', {
+        roster: [NARR, fr('ana-x', 'Zed')],
+        speakerId: 'ana-x-n1',
+      });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      const cast = readCast(b.bookDir);
+      expect(ids(cast).sort()).toEqual(['ana-x-n1', 'narrator', 'survivor', 'z1', 'z2']);
+      expect(cast.find((c) => c.id === 'survivor')).toEqual(pr('survivor', 'Old Name'));
+      expect(editLines(b)).toEqual({ 'ana-x-n1': 3 });
+      expect(pairs(b)).toEqual([['ana-x-n1', 'z1', 'plan'], ['ana-x-n1', 'z2', 'plan']]);
+      expect(history(b).supersededBy).toEqual({ 'ana-x': 'survivor' });
+    });
   });
 });
