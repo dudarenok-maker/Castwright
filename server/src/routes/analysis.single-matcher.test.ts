@@ -2079,6 +2079,14 @@ describe('#4031 main job: the planned persist (Task 20)', () => {
   });
 });
 
+/** manuscript-edits.json sentence count per characterId (`{}` when the file is absent). */
+function editLinesOrEmpty(b: HarnessBook): Record<string, number> {
+  if (!existsSync(join(b.bookDir, '.audiobook', 'manuscript-edits.json'))) return {};
+  const out: Record<string, number> = {};
+  for (const s of readEdits(b.bookDir)) out[String(s.characterId)] = (out[String(s.characterId)] ?? 0) + 1;
+  return out;
+}
+
 /** A sibling book earlier in b's series, with the given confirmed cast; its dir is pushed onto
     `cleanup` for the caller's afterEach. */
 function mkSibling(b: HarnessBook, characters: Row[], cleanup: string[]): string {
@@ -2176,8 +2184,14 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     }
     logSpy?.mockRestore();
     logSpy = undefined;
-    for (const b of books.splice(0)) await cleanupBook(b);
-    for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
+    try {
+      /* Carry 8 (fix round 1, I3): every test's book ends with the narrator's cast count equal to
+         its edits count (0 when the narrator speaks none). */
+      for (const b of books) expect(linesById(b.bookDir).narrator ?? 0, `narrator lines (${kind})`).toBe(editLinesOrEmpty(b).narrator ?? 0);
+    } finally {
+      for (const b of books.splice(0)) await cleanupBook(b);
+      for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
+    }
   });
 
   /** A fresh analyzer row. Its evidence quote is in the body, or the row is dropped. */
@@ -2725,9 +2739,20 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     rollSpy.after = undefined;
     if (orig === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
     else process.env.STAGE2_COVERAGE_RETRIES = orig;
-    for (const b of books.splice(0)) await cleanupBook(b);
-    for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
+    try {
+      /* Carry 8 (fix round 1, I3): every test's book ends with the narrator's cast count equal to
+         its edits count (0 when the narrator speaks none). The narrator-deleted carry opts out:
+         its end state (no narrator row) is pinned in the test itself. */
+      if (!narratorRowDeleted) {
+        for (const b of books) expect(linesById(b.bookDir).narrator ?? 0, `narrator lines (${kind})`).toBe(editLinesOrEmpty(b).narrator ?? 0);
+      }
+    } finally {
+      narratorRowDeleted = false;
+      for (const b of books.splice(0)) await cleanupBook(b);
+      for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
+    }
   });
+  let narratorRowDeleted = false;
   const siblings: string[] = [];
 
   const fr = (id: string, name: string, extra: Record<string, unknown> = {}): CharacterOutput =>
@@ -3151,6 +3176,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
 
   it("carry (Task 8): a narrator row deleted mid-run leaves the run's narrator sentences on 'narrator'", async () => {
     const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren')]);
+    narratorRowDeleted = true;
     const m = midRun('phase1', () => deleteRow(b, 'narrator'));
     const events = await go(b, {
       roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
@@ -3304,7 +3330,14 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris', 'narrator']);
     expect(entryOf(b, 'boris')).toEqual({ state: 'added-once' });
     expect(editLines(b)).toEqual({ anna: 5, boris: 4 });
-    expect(linesById(b.bookDir)).toMatchObject({ anna: 5, boris: 4 });
+    expect(linesById(b.bookDir)).toMatchObject({ anna: 5, boris: 4, narrator: 0 });
+    /* M6: a further run whose roster still names boris but gives him no line - fold-drop
+       pressure. He stays, added-once (his stale count is the ruled stale-count issue). */
+    const silent = await go(b, { roster: BORIS_TOO.roster, speakerId: 'anna' }, { seedCache: false });
+    expect(errCode(silent)).toBeUndefined();
+    expect(done(silent)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris', 'narrator']);
+    expect(entryOf(b, 'boris')).toEqual({ state: 'added-once' });
     expect(history(b).supersededBy).toEqual({});
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
