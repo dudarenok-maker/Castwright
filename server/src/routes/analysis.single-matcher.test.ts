@@ -3010,3 +3010,18 @@ describe('#4031 main job: mid-run acceptance (Task 23)', () => {
     });
   });
 });
+      /* Logged server-side with the ids (and no path): their lines stay on them. */
+      const unresolvedLines = warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'));
+      expect(unresolvedLines).toHaveLength(1);
+      expect(unresolvedLines[0]).toMatch(/: w2$/);
+      expect(unresolvedLines[0]).not.toContain(b.bookDir);
+    it('F8 control: a degraded history with no merge or delete logs no unresolved targets', async () => {
+      const b = degraded();
+      const events = await run(b.manuscriptId, b.bookDir, 'main', { roster: [NARR, WREN_FRESH], speakerId: FRESH_ID });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', 'olga', PRIOR_ID]);
+      expect(editLines(b)).toEqual({ [PRIOR_ID]: 3 });
+      expect(warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((l: string) => l.includes('plan target(s) are gone'))).toEqual([]);
+    });
+

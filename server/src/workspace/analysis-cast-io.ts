@@ -536,6 +536,13 @@ export async function persistPlannedCast(a: {
       mode: 'persist',
     });
 
+    if (ov.unresolved.length > 0) {
+      // Server-side only: ids, never a path. A merge cannot be told from a delete without the history.
+      console.warn(
+        `[analysis] ${ov.unresolved.length} plan target(s) are gone from the cast (merged or deleted mid-run) and cast-id-history.json could not be read, so their lines stay on those ids: ${ov.unresolved.join(', ')}`,
+      );
+    }
+
     // Sentence ids -> the ids the cast now holds.
     const toFinal: Record<string, string> = {};
     for (const id of new Set(sentences.map((s) => s.characterId))) {
