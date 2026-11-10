@@ -1498,6 +1498,13 @@ async function moveStaged(staging: string, target: string): Promise<void> {
   }
 }
 
+async function stampLandedVoiceId(staging: string, voiceId: string): Promise<void> {
+  const path = qwenVoiceSidecarPath(staging);
+  const json = await readJson<Record<string, unknown>>(path);
+  if (!json || json.voiceId === voiceId) return;
+  await writeJsonAtomic(path, { ...json, voiceId });
+}
+
 /* #4040 — the base at `baseKey` was redesigned: give it a fresh `rev`, which makes
    every emotion variant designed against the old base stale in every book on the
    key (variant-base-rev.ts). Best-effort after the move: the redesign has landed,
@@ -1736,6 +1743,12 @@ async function landStagedDesign(
           console.error('[qwen-voice] could not record the base an emotion variant was designed against', e),
         );
       }
+      /* The sidecar wrote its own `voiceId` (the staging key) into the json; point
+         it at the key it lands on, before the move so the landed json is complete.
+         Best-effort: nothing reads the field. */
+      await stampLandedVoiceId(staging, voiceId).catch((e) =>
+        console.error('[qwen-voice] could not record the landed key in the voice json', e),
+      );
       await moveStaged(staging, voiceId); // P11-2
       if (redesign) await markBaseRedesigned(voiceId);
     });
@@ -2100,7 +2113,16 @@ qwenVoiceRouter.post(
        voiceStyle. Neither present → 400 (the user must generate or type
        a persona first). */
     const personaFromBody = typeof body.persona === 'string' ? body.persona.trim() : '';
-    const persona = personaFromBody || (character.voiceStyle ?? '').trim();
+    let persona = personaFromBody || (character.voiceStyle ?? '').trim();
+    /* An emotion variant is designed from the base's persona: when the row records
+       none (the analyzer gave no voiceStyle), use the one the base design stored on
+       its voice json, which is what the drawer's persona box shows. */
+    if (!persona && emotion) {
+      const base = await readJson<{ instruct?: unknown }>(
+        qwenVoiceSidecarPath(character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(character, characterId)),
+      ).catch(() => null);
+      persona = typeof base?.instruct === 'string' ? base.instruct.trim() : '';
+    }
     if (!persona) {
       return res.status(400).json({
         error:

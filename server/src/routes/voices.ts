@@ -272,7 +272,15 @@ async function aggregateVoices(
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
-        const cast = await readJson<CastJson>(castJsonPath(bookDir));
+        /* One unreadable cast.json (empty, torn) must not fail the whole library:
+           skip that book and log it. */
+        let cast: CastJson | null;
+        try {
+          cast = await readJson<CastJson>(castJsonPath(bookDir));
+        } catch (e) {
+          console.error(`[voices] skipping book ${state.bookId}: cast.json unreadable`, e);
+          continue;
+        }
         if (!cast?.characters?.length) continue;
 
         bookMeta.set(state.bookId, {

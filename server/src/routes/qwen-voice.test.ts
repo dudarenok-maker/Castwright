@@ -454,6 +454,25 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('#F10b: the landed sidecar json carries the landed voiceId, not the staging key', async () => {
+    /* The real sidecar writes `{ voiceId: <the key it was given>, instruct }` to the
+       private staging key; the landing renames the file, so the field must follow. */
+    fetchMock.mockImplementationOnce(async (_url: unknown, init: { body: string }) => {
+      const sent = JSON.parse(init.body);
+      writeQwenSidecar(sent.voiceId, 'a poised, confident teenage girl');
+      return okSidecarResponse();
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    const landed = JSON.parse(
+      readFileSync(join(workspaceRoot, 'voices', 'qwen', `${res.body.voiceId}.json`), 'utf8'),
+    );
+    expect(landed.voiceId).toBe(res.body.voiceId);
+    expect(landed.instruct).toBe('a poised, confident teenage girl');
+  });
+
   it('400s when sampleVoiceId is missing', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
@@ -623,6 +642,23 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     const cast = readCast();
     const maerin = cast.characters.find((c) => c.id === 'maerin') as Record<string, any>;
     expect(maerin.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_maerin__angry' });
+  });
+
+  it('#F4: a variant with no body persona and no voiceStyle falls back to the persona recorded with the base design', async () => {
+    writeQwenSidecar('qwen-nopersona', 'a gruff old sailor');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-nopersona__angry');
+  });
+
+  it('#F4: a variant still 400s when no persona exists anywhere', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/No persona to design from/);
   });
 
   it("fs-59 CJK: EMOTION_INSTRUCT is language-invariant — a 'zh' book gets the same clause as English, no crash", async () => {
