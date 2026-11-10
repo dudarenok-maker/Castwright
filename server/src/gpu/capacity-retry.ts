@@ -30,7 +30,11 @@ import {
   probeSidecarHealthIfRegistered,
   type SidecarHealthSnapshot,
 } from './sidecar-health-gate.js';
-import { isGenerationKnownActive, isRepairOnlyKnownActive } from './active-generation-gate.js';
+import {
+  isGenerationKnownActive,
+  isRepairOnlyKnownActive,
+  type QuietPollState,
+} from './active-generation-gate.js';
 import { getKnob } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
 
@@ -152,7 +156,7 @@ export interface CapacityRetryOpts {
       flight with no render #4075) — which leaves the one-shot latch armed so a
       later poll asks again. A render in flight answers `false`, which spends
       the latch. */
-  evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'>;
+  evictIdleTts?: (deviceKey: string, quiet: QuietPollState) => Promise<boolean | 'declined'>;
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
@@ -333,6 +337,9 @@ export async function withCapacityRetry(
     opts.describeBlockers ?? ((deviceKey: string) => defaultDescribeBlockers(deviceKey, undefined, messageCtx));
   const designMaxAttempts = opts.designMaxAttempts ?? GPU_CAPACITY_DESIGN_MAX_ATTEMPTS;
 
+  /* #4075 — this admission's own quiet-poll state for the TTS lever (never
+     shared across concurrent admissions). */
+  const quiet: QuietPollState = { minGapMs: pollMs, sawRepair: false, idleSince: null };
   let evicted = false;
   let evictedTts = false;
   let waiting = false;
@@ -394,10 +401,12 @@ export async function withCapacityRetry(
          latch is spent (it is never re-asked: a multi-chapter render has a gap
          between chapter jobs where a re-ask would unload its base). During a
          splice / QA repair with no render it answers 'declined' (#4075), which
-         leaves the latch armed for a later poll. Once it has actually run it is
+         leaves the latch armed for a later poll; having seen a repair it then
+         waits for a quiet streak (`quiet`, a Fix-audio batch's chapter gap).
+         Once it has actually run it is
          spent: at most once per call, like the analyzer. */
       if (!evictedTts) {
-        const freedTts = await evictIdleTts(noCap.deviceKey);
+        const freedTts = await evictIdleTts(noCap.deviceKey, quiet);
         if (freedTts !== 'declined') {
           evictedTts = true;
           if (freedTts) continue; // immediate retry after freeing VRAM

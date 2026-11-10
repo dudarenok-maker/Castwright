@@ -34,9 +34,12 @@
    `reconcileResidentQwenTiers` well before that point) is invisible here, so
    `isAnyGenerationActive()` can report `false` for a render that is, in
    fact, mid-startup. A blocked op's `evictIdleQwenBase` racing that window
-   is a narrow gap whose worst case is a sidecar lazy cold-reload on the
-   starting render's first chapter (documented as a correct fallback at
-   tts/ensure-sidecar-loaded.ts:31-36), not corruption or data loss. Closing
+   is a narrow gap. Its worst case is no longer just a lazy cold-reload on the
+   starting render's first chapter (tts/ensure-sidecar-loaded.ts:31-36): since
+   #4066 the op that evicts there can be a voice design, which then holds
+   ~6 GB, so a Quality render's next chapter cannot reload its 1.7B base next
+   to it and waits on the capacity budget, and can fail. No corruption or data
+   loss either way. Closing
    it would need a "starting" marker set before that render's own reconcile
    and cleared once `registerJob` (or any earlier exit) hands off — not added
    here because `routes/generation.ts` declares `job`/`key`/`controller` in
@@ -44,6 +47,18 @@
    render loop hundreds of lines later, so the marker's lifetime can't be
    scoped to a clean try/finally without hoisting those declarations across a
    much larger span than this fix should touch. */
+
+/** #4075 — per-ADMISSION state for `evictIdleQwenBase`'s quiet-poll rule.
+    `withCapacityRetry` creates one per call and hands it to every ask, so two
+    concurrent admissions never share a streak. `minGapMs` is its poll
+    interval; `sawRepair` latches once the lever declined because a repair or
+    splice was active; `idleSince` is the time of the first idle poll in the
+    current quiet streak (null = no streak, reset by any activity). */
+export interface QuietPollState {
+  minGapMs: number;
+  sawRepair: boolean;
+  idleSince: number | null;
+}
 
 let provider: (() => string[]) | null = null;
 let spliceCounter: (() => number) | null = null;
@@ -83,7 +98,14 @@ export function isAnyGenerationActive(): boolean {
     (re-arm the caller's latch, repair only) and `false` (spend it, anything
     that may be a render: a multi-chapter render has a gap between one chapter
     job deregistering and the next registering, which a re-asked lever must not
-    land in). Only the `isAnyGenerationActive` read decides whether to evict. */
+    land in). Only the `isAnyGenerationActive` read decides whether to evict.
+    A Fix-audio splice BATCH has the same gap (one POST per chapter), so a
+    lever that has seen a repair additionally waits for a quiet streak
+    (`QuietPollState`) before it evicts. One residue remains: a Listen-row QA
+    repair can run during a render, and in the render's chapter gap it reads as
+    repair-only. That is no wider than #1839's residual window above (the gate
+    already reads idle between a render's POSTs), and the quiet-poll rule
+    narrows it further. */
 export function isRepairOnlyKnownActive(): boolean {
   if (!provider) return false;
   return provider().length === 0 && spliceActive();

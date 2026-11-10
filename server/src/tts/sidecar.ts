@@ -444,7 +444,7 @@ export class SidecarTtsProvider implements TtsProvider {
       pollMs: this.capacityPollMs,
       maxAttempts: this.maxCapacityAttempts,
       isRenderSynth: renderSynth === true,
-      evictIdleTts: (deviceKey) => evictIdleQwenBase({ modelKey, deviceKey, signal }),
+      evictIdleTts: (deviceKey, quiet) => evictIdleQwenBase({ modelKey, deviceKey, signal, quiet }),
     });
     if (!response.ok) await throwForResponse(response);
     return response;

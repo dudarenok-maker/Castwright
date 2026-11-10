@@ -186,7 +186,7 @@ describe('withCapacityRetry', () => {
 
     expect(res.status).toBe(200);
     expect(evictIdleTts).toHaveBeenCalledTimes(2);
-    expect(evictIdleTts).toHaveBeenCalledWith('cuda:0');
+    expect(evictIdleTts).toHaveBeenCalledWith('cuda:0', expect.objectContaining({ sawRepair: false }));
   });
 
   it('#4075: a lever declining while a repair is active is re-asked on later polls, and frees once it ends', async () => {
@@ -240,11 +240,12 @@ describe('withCapacityRetry', () => {
 
     const res = await withCapacityRetry(doPost, {
       engine: 'qwen',
-      evictIdleTts: (deviceKey) =>
+      evictIdleTts: (deviceKey, quiet) =>
         evictIdleQwenBase({
           modelKey: 'qwen3-tts-0.6b',
           purpose: 'design',
           deviceKey,
+          quiet,
           _isAnyGenerationActive: () => repairActive,
           _isRepairOnlyKnownActive: () => repairActive,
           _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
@@ -258,7 +259,55 @@ describe('withCapacityRetry', () => {
 
     expect(res.status).toBe(200);
     expect(reconcile).toHaveBeenCalledTimes(1);
-    expect(doPost).toHaveBeenCalledTimes(4);
+    /* Quiet-poll rule: the first idle poll (call 3) does NOT evict; the second
+       (call 4) does, so admission is granted on call 5. */
+    expect(doPost).toHaveBeenCalledTimes(5);
+  });
+
+  it('#4075: a splice-batch gap (idle, then the next chapter registers) does not evict; a real quiet streak does', async () => {
+    /* Fix-audio batch: one splice POST per chapter, so the gate reads idle
+       between chapters. Poll 3 is a gap (idle), poll 4 is chapter 2 (active),
+       polls 5-6 are idle for good. Only the second consecutive idle poll may
+       evict. */
+    const activeByPoll = [true, true, false, true, false, false];
+    let calls = 0;
+    const reconcile = vi.fn(async () => true);
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return reconcile.mock.calls.length > 0
+        ? new Response('ok', { status: 200 })
+        : noCapacityResponse(6144, 'cuda:0');
+    });
+    let evictedAtPoll = 0;
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: async (deviceKey, quiet) => {
+        const active = activeByPoll[calls - 1] ?? false;
+        const out = await evictIdleQwenBase({
+          modelKey: 'qwen3-tts-0.6b',
+          purpose: 'design',
+          deviceKey,
+          quiet,
+          _isAnyGenerationActive: () => active,
+          _isRepairOnlyKnownActive: () => active,
+          _probeHealth: async () => ({ status: 'ok', qwenLoaded: true }) as never,
+          _reconcile: async () => {
+            evictedAtPoll = calls;
+            return reconcile();
+          },
+        });
+        return out;
+      },
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 10,
+    });
+
+    expect(res.status).toBe(200);
+    expect(evictedAtPoll).toBe(6);
+    expect(reconcile).toHaveBeenCalledTimes(1);
   });
 
   it('#4075: during a RENDER the real lever is consulted once (latch spent) and never re-asked, even after the render ends', async () => {

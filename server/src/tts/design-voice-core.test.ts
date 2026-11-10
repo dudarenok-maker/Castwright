@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import type { QuietPollState } from '../gpu/active-generation-gate.js';
 import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
 import { NoCapacityError } from './tts-errors.js';
 
@@ -168,7 +169,7 @@ describe('runVoiceDesign', () => {
   });
 
   it('#1839 finding 4 — passes withCapacityRetry an evictIdleTts lever that frees an idle Qwen base for THIS design\'s own tier', async () => {
-    let capturedOpts: { evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'> } | undefined;
+    let capturedOpts: { evictIdleTts?: (deviceKey: string, quiet: QuietPollState) => Promise<boolean | 'declined'> } | undefined;
     mockWithCapacityRetry.mockImplementation((doPost, opts) => {
       capturedOpts = opts;
       return doPost(opts.signal);
@@ -186,14 +187,14 @@ describe('runVoiceDesign', () => {
     // chance to free VRAM before the ~60s poll-then-fail.
     expect(capturedOpts?.evictIdleTts).toBeTypeOf('function');
     mockEvictIdleQwenBase.mockClear();
-    await capturedOpts!.evictIdleTts!('cuda:0');
+    await capturedOpts!.evictIdleTts!('cuda:0', { minGapMs: 0, sawRepair: false, idleSince: null });
     expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: 'qwen3-tts-1.7b', deviceKey: 'cuda:0' }),
     );
   });
 
   it('#4066 — tells the lever this is a voice DESIGN, so it frees the standard Qwen base even on a 0.6B book', async () => {
-    let capturedOpts: { evictIdleTts?: (deviceKey: string) => Promise<boolean | 'declined'> } | undefined;
+    let capturedOpts: { evictIdleTts?: (deviceKey: string, quiet: QuietPollState) => Promise<boolean | 'declined'> } | undefined;
     mockWithCapacityRetry.mockImplementation((doPost, opts) => {
       capturedOpts = opts;
       return doPost(opts.signal);
@@ -207,7 +208,7 @@ describe('runVoiceDesign', () => {
     });
 
     mockEvictIdleQwenBase.mockClear();
-    await capturedOpts!.evictIdleTts!('cuda:0');
+    await capturedOpts!.evictIdleTts!('cuda:0', { minGapMs: 0, sawRepair: false, idleSince: null });
     expect(mockEvictIdleQwenBase).toHaveBeenCalledWith(
       expect.objectContaining({ modelKey: 'qwen3-tts-0.6b', purpose: 'design' }),
     );
