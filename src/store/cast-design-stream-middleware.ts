@@ -309,7 +309,10 @@ export function createCastDesignMiddleware(): Middleware {
           }
         }, SUMMARY_LINGER_MS);
       },
-      onError: ({ code, message }) => {
+      onError: ({ code, message, characterId: cid, voiceUuid, separated }) => {
+        /* #4074 — a refused design whose uuid step had separated the row: the server
+           kept the separation, so mirror it as a `designed` would. */
+        if (cid && voiceUuid && separated && holdsBook(bookId)) mirrorVoiceUuid(cid, voiceUuid, separated);
         const fail = (): void => {
           dispatch(castDesignActions.halt({ bookId, lastTickAt: Date.now() }));
           dispatch(

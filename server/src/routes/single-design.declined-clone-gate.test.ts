@@ -214,6 +214,21 @@ function seedUnseparatedDecline(bookOneUuid: string) {
   );
 }
 
+/* Book Two's row is on an ordinary (never separated) uuid with a designed base; the linked
+   Book One row has no uuid and holds the clone. A variant must keep the full voiceId scan. */
+function seedOrdinaryUuidWithLinkedClone() {
+  writeBook('Book One', 1, bookOneId, wren({ ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+  writeBook(
+    'Book Two',
+    2,
+    bookTwoId,
+    wren({ ...linkedToBookOne(), voiceUuid: 'w1', ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-w1' } } }),
+  );
+  mkdirSync(qwenDir(), { recursive: true });
+  writeFileSync(join(qwenDir(), 'qwen-w1.pt'), Buffer.from('PT'));
+  writeFileSync(join(qwenDir(), 'qwen-w1.json'), JSON.stringify({ instruct: 'persona', rev: 'r1' }));
+}
+
 describe('single design -- a declined row is gated after its uuid step (#4074)', () => {
   it('designs a declined row whose shared voice is cloned only on the declined book', async () => {
     seedLinked({});
@@ -316,6 +331,59 @@ describe('single design -- a declined row is gated after its uuid step (#4074)',
     expect(readRow('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${u}__angry`);
   });
 
+  it('an emotion variant of a row on an ordinary uuid is still refused (409) for a clone on a linked no-uuid row', async () => {
+    seedOrdinaryUuidWithLinkedClone();
+    const res = await variantRoute();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('clone_protected');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a refusal after the design separated the row tells the open tab: the error carries separated and the new uuid', async () => {
+    seedUnseparatedDecline('u_shared');
+    writeBook(
+      'Book Three',
+      3,
+      bookThreeId,
+      wren({
+        voiceUuid: 'u_shared',
+        ttsEngine: 'coqui',
+        overrideTtsVoices: coquiClone,
+        matchedFrom: { bookId: bookTwoId, characterId: 'wren', bookTitle: 'Book Two', confidence: 1 },
+      }),
+    );
+    const res = await single();
+    const events = collectSse(res);
+    expect(events.find((e) => e.type === 'designed')).toBeUndefined();
+    const error = events.find((e) => e.type === 'error');
+    const moved = readRow('Book Two').voiceUuid;
+    expect(moved).not.toBe('u_shared');
+    expect(error).toMatchObject({ code: 'clone_protected', characterId: 'wren', separated: true, voiceUuid: moved });
+  });
+
+  it('a refusal on a row the design did not separate carries no separation', async () => {
+    seedLinked({});
+    const u = await decline();
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: u, ttsEngine: 'coqui', overrideTtsVoices: coquiClone }));
+    const error = collectSse(await single()).find((e) => e.type === 'error');
+    expect(error).toMatchObject({ code: 'clone_protected' });
+    expect(error).not.toHaveProperty('separated');
+    expect(error).not.toHaveProperty('voiceUuid');
+  });
+
+  it('an emotion variant of a separated row logs no residual-window warning for a clone on another uuid', async () => {
+    seedLinked({});
+    await decline();
+    expect((await single()).status).toBe(200);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await variantRoute()).status).toBe(200);
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('residual-window'))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('an emotion variant is still refused (409) when the clone is on a row of the separated uuid', async () => {
     seedLinked({});
     const u = await decline();
@@ -390,6 +458,13 @@ describe('bulk design -- a declined row is gated after its uuid step (#4074)', (
     expect(res.text).toContain('variant_designed');
     expect(res.text).not.toContain('already_cloned');
     expect(readRow('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${u}__angry`);
+  });
+
+  it('an emotion variant of a row on an ordinary uuid is still skipped as already_cloned for a clone on a linked no-uuid row', async () => {
+    seedOrdinaryUuidWithLinkedClone();
+    const res = await bulkVariant();
+    expect(res.text).toContain('already_cloned');
+    expect(res.text).not.toContain('variant_designed');
   });
 
   it('an emotion variant is still skipped as already_cloned when the clone is on a row of the separated uuid', async () => {

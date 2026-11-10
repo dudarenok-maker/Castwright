@@ -243,7 +243,11 @@ export async function persistEmotionVariant(
        (rather than discarding it, as an earlier revision did) is what lets
        'applied' and 'notFound' be told apart below. */
     let residualSkip = false;
+    const scopedUuid = await separatedUuidOf(character);
     const updated = await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) => {
+      /* A separated row's variant lands only on rows holding its uuid (the scan above
+         counted only their clones), so a clone on any other row is not a race. */
+      if (scopedUuid && c.voiceUuid !== scopedUuid) return c;
       if (characterHasClonedSlot(c)) {
         residualSkip = true;
         return c; // unchanged — this book's own write correctly declined
@@ -1547,15 +1551,23 @@ export async function seriesClonedOnRowsVoice(
   seriesFilter: { author: string; series: string } | undefined,
   bookDir?: string,
 ): Promise<boolean> {
+  return hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, bookDir, await separatedUuidOf(character));
+}
+
+/* The row's uuid when it is a "Don't reuse"-separated voice, else undefined. */
+async function separatedUuidOf(character: CastCharacter): Promise<string | undefined> {
   const uuid = character.voiceUuid;
-  const scoped = uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
-  return hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, bookDir, scoped);
+  return uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
 }
 
 /* #4074 — a base design the series clone scan refused after the uuid step and before the
    landing: nothing was written for the design (the staged files are removed). The two
-   base callers map it to `clone_protected` / `already_cloned`. */
+   base callers map it to `clone_protected` / `already_cloned`. The core stamps the uuid
+   step's answer on it: a step that separated the row persists even though the landing
+   refused, and the single route tells the open tab. */
 export class SeriesCloneRefusedError extends Error {
+  voiceUuid?: string;
+  separated = false;
   constructor() {
     super('A consented clone sits on this voice elsewhere in the series.');
     this.name = 'SeriesCloneRefusedError';
@@ -1887,7 +1899,17 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       }
       const after = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
-      return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev)), separated: step.separated || !!watcher.separated };
+      let landed: Awaited<ReturnType<typeof landStagedDesign>>;
+      try {
+        landed = await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev);
+      } catch (err) {
+        if (err instanceof SeriesCloneRefusedError) {
+          err.voiceUuid = uuid;
+          err.separated = step.separated || !!watcher.separated;
+        }
+        throw err;
+      }
+      return { ...rendered, ...landed, separated: step.separated || !!watcher.separated };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);

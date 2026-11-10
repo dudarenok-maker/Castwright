@@ -209,9 +209,12 @@ async function runSingleDesign(
     /* #4074 -- the clone scan refused the design after its uuid step and before the
        landing: nothing of the design was written. */
     if (e instanceof SeriesCloneRefusedError) {
+      /* The uuid step's separation persists, so the open tab is told like a `designed`. */
       endJob(job, {
         type: 'error',
         code: 'clone_protected',
+        characterId: job.characterId,
+        ...(e.separated && e.voiceUuid ? { voiceUuid: e.voiceUuid, separated: true } : {}),
         message: `"${job.characterName}" has a consented cloned voice on this character, or a linked one elsewhere in the series — the design was not persisted.`,
       });
       return;
