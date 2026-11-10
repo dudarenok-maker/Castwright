@@ -702,13 +702,10 @@ describe('#4031 main job: run start and cache classification', () => {
     expect(atStart?.version).toBe(2);
     expect(readCache(b.manuscriptId)!.version).toBe(2);
   });
-
-  it('no warning frame on a run whose start wrote cast.json', async () => {
-    const b = seed([{ ...NARR }, { ...PRIOR_WREN, lines: 40 }, { ...WREN_DUP }]);
-    const events = await run(b.manuscriptId, b.bookDir, 'main');
-    expect(events.some((e) => e.kind === 'result')).toBe(true);
-    expect(events.filter((e) => e.kind === 'warning')).toEqual([]);
-  });
+  /* Task 28 fix round 1 (M4): "no warning frame on a run whose start wrote
+     cast.json" was deleted - the phantom merge-base advisory it guarded has no
+     emitter any more (the guard's reverse check pins CAST_MERGE_BASE_STALE_CODE
+     deleted), and it would fail on an unrelated warning. */
 });
 
 /* ---- Plan 291 Task 16 - the main job's Phase 0b plan and snapshots ----------- */

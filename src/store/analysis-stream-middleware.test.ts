@@ -454,7 +454,7 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     });
   });
 
-  it('delivers it on the subset route too, and ignores warning codes the view owns', () => {
+  it('delivers it on the subset route too, and ignores any other warning code (the view owns them)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] }));
     store.dispatch(

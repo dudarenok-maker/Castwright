@@ -842,11 +842,12 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  whose KEY was reclaimed; this one prunes an entry whose TARGET died).
  *
  *  The real case: `supersededBy` holds `{anton: 'антон'}` — 'антон' is live
- *  but unvoiced. A later re-analysis's carry-forward only re-adds
- *  voiced/reused survivors (`isVoicedOrReused`,
- *  `merge-analysis-cast.ts`), and the id-drift name-fallback only retires an
- *  id when a same-name fresh row exists to retire it onto; with neither,
- *  'антон' simply vanishes with NO `Retirement` ever recorded — nothing else
+ *  but unvoiced. Before plan 291, a later re-analysis's carry-forward only
+ *  re-added voiced/reused survivors and the id-drift name-fallback only
+ *  retired an id onto a same-name fresh row; with neither, 'антон' simply
+ *  vanished with NO `Retirement` recorded. Plan 291 carries every prior row
+ *  forward (rule 1), but a target the user deletes still dies with no
+ *  retirement — nothing else
  *  notices, and `buildCastResolver` already skips a history entry whose
  *  target isn't live (`cast-resolve.ts:89-90`), so the dangling entry looks
  *  perfectly inert. It is not: `POST /cast/create` only treats a
@@ -885,7 +886,7 @@ export async function dropSupersededIdsReclaimedByLiveCast(
  *  `persistPlannedCast` (analysis.ts's main and subset
  *  persist blocks, both already the sole callers of
  *  `dropSupersededIdsReclaimedByLiveCast`) call this too, with the same
- *  `liveIds` binding (`mergedFinal.characters`, the exact roster the write
+ *  `liveIds` binding (the roster `persistPlannedCast` wrote, the exact roster the write
  *  just persisted).
  *
  *  Dropped pairs move into `displaced`, the same bookkeeping

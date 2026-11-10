@@ -31,7 +31,7 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { withCastLock } from './cast-lock.js';
 import { withBookLock } from './book-lock.js';
-import { ABSENT, UNREADABLE, readJsonWithFingerprint } from './cast-fingerprint.js';
+import { ABSENT, UNREADABLE, readJsonWithStatus } from './cast-fingerprint.js';
 import { PriorCastUnreadableError } from './prior-cast-error.js';
 import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link.js';
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
@@ -82,9 +82,9 @@ export { PriorCastUnreadableError };
     CALLER HOLDS THE CAST LOCK - this is the lock-free inner read (it moved here
     from `readPriorCastForMerge`, which wraps it in the lock). */
 export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastSnapshot> {
-  const cast = await readJsonWithFingerprint<{ characters?: Rows }>(castJsonPath(bookDir));
-  if (cast.fingerprint === UNREADABLE) throw new PriorCastUnreadableError('unreadable');
-  if (cast.fingerprint !== ABSENT) {
+  const cast = await readJsonWithStatus<{ characters?: Rows }>(castJsonPath(bookDir));
+  if (cast.status === UNREADABLE) throw new PriorCastUnreadableError('unreadable');
+  if (cast.status !== ABSENT) {
     // Read, but not a cast: truncated, not JSON, or no `characters` array.
     if (cast.value === null || typeof cast.value !== 'object' || !Array.isArray(cast.value.characters)) {
       throw new PriorCastUnreadableError('corrupt');
@@ -94,7 +94,7 @@ export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastS
   if (fromCast?.length) {
     return { rows: fromCast, source: 'cast' };
   }
-  const carry = await readJsonWithFingerprint<{ characters?: Rows }>(castReuseCarryoverJsonPath(bookDir));
+  const carry = await readJsonWithStatus<{ characters?: Rows }>(castReuseCarryoverJsonPath(bookDir));
   const fromCarryover = carry.value?.characters;
   if (fromCarryover) return { rows: fromCarryover, source: 'carryover' };
   return { rows: [], source: 'none' };

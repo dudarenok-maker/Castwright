@@ -1,6 +1,8 @@
 /* #2015 — the single-read primitive behind `readPriorCastLockFree`: one
-   `readFile`, the parsed value plus the hash of the exact bytes parsed, with
-   `ABSENT` / `UNREADABLE` kept distinct from a parse failure. */
+   `readFile`, the parsed value plus the read's status, with `ABSENT` /
+   `UNREADABLE` kept distinct from a parse failure. (Plan 291 Task 28 fix
+   round 1: the bytes' hash fed the deleted merge base and is gone; its
+   hash-only cases went with it.) */
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,88 +32,58 @@ function setReadFileImpl(fn: ReadFileUtf8 | null): void {
 }
 
 /* Import AFTER vi.mock so cast-fingerprint.ts picks up the mocked readFile. */
-const {
-  ABSENT,
-  UNREADABLE,
-  hashBytes,
-  readJsonWithFingerprint,
-} = await import('./cast-fingerprint.js');
+const { ABSENT, UNREADABLE, READ, readJsonWithStatus } = await import('./cast-fingerprint.js');
 
 function tmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'castwright-fingerprint-'));
 }
 
-describe('readJsonWithFingerprint', () => {
-  it('returns ABSENT — not null, not a hash — for a file that does not exist', async () => {
+describe('readJsonWithStatus', () => {
+  it('returns ABSENT for a file that does not exist', async () => {
     const dir = tmpDir();
     try {
-      const got = await readJsonWithFingerprint(join(dir, 'nope.json'));
+      const got = await readJsonWithStatus(join(dir, 'nope.json'));
       expect(got.value).toBeNull();
-      expect(got.fingerprint).toBe(ABSENT);
+      expect(got.status).toBe(ABSENT);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('hashes the RAW bytes, not a re-serialised form', async () => {
+  it('reads and parses a cast.json', async () => {
     const dir = tmpDir();
     const p = join(dir, 'cast.json');
     try {
-      /* Deliberately non-canonical whitespace: a normalising implementation
-         would hash this identically to the compact form below, which is the
-         bug this asserts against. */
       writeFileSync(p, '{  "characters"  :  [ ]  }', 'utf8');
-      const loose = await readJsonWithFingerprint(p);
-      writeFileSync(p, '{"characters":[]}', 'utf8');
-      const tight = await readJsonWithFingerprint(p);
-
-      expect(loose.value).toEqual({ characters: [] });
-      expect(tight.value).toEqual({ characters: [] });
-      expect(loose.fingerprint).not.toBe(tight.fingerprint);
-      expect(loose.fingerprint).toBe(hashBytes('{  "characters"  :  [ ]  }'));
+      const got = await readJsonWithStatus(p);
+      expect(got.value).toEqual({ characters: [] });
+      expect(got.status).toBe(READ);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('still fingerprints unparseable bytes (a malformed cast.json is a real on-disk state)', async () => {
+  it('unparseable bytes are READ with a null value (a malformed cast.json is a real on-disk state)', async () => {
     const dir = tmpDir();
     const p = join(dir, 'cast.json');
     try {
       writeFileSync(p, '{ not json', 'utf8');
-      const got = await readJsonWithFingerprint(p);
+      const got = await readJsonWithStatus(p);
       expect(got.value).toBeNull();
-      expect(got.fingerprint).toBe(hashBytes('{ not json'));
-      expect(got.fingerprint).not.toBe(ABSENT);
+      expect(got.status).toBe(READ);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('parses a BOM-prefixed cast.json, hashing the RAW (unstripped) bytes (#2365 C1)', async () => {
+  it('parses a BOM-prefixed cast.json (#2365 C1)', async () => {
     const dir = tmpDir();
     const p = join(dir, 'cast.json');
-    const pNoBom = join(dir, 'cast-no-bom.json');
     try {
-      const body = '{"characters":[]}';
-      writeFileSync(p, '\ufeff' + body, 'utf8');
-      writeFileSync(pNoBom, body, 'utf8');
-
-      const withBom = await readJsonWithFingerprint(p);
-      const withoutBom = await readJsonWithFingerprint(pNoBom);
-
-      /* The parse must succeed despite the BOM. */
-      expect(withBom.value).toEqual({ characters: [] });
-
-      /* The fingerprint must be over the RAW bytes actually on disk — a BOM'd
-         file and its BOM-less twin are different bytes and MUST fingerprint
-         differently. A stripped-then-hashed implementation would collapse
-         the two, which would silently invalidate every fingerprint stored
-         before this fix (they were computed over un-stripped bytes) the
-         moment a BOM'd file was introduced. */
-      expect(withBom.fingerprint).not.toBe(withoutBom.fingerprint);
-      expect(withBom.fingerprint).toBe(hashBytes('\ufeff' + body));
-      expect(withoutBom.fingerprint).toBe(hashBytes(body));
+      writeFileSync(p, '﻿{"characters":[]}', 'utf8');
+      const got = await readJsonWithStatus(p);
+      expect(got.value).toEqual({ characters: [] });
+      expect(got.status).toBe(READ);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -127,11 +99,11 @@ describe('readJsonWithFingerprint', () => {
         throw err;
       });
 
-      const got = await readJsonWithFingerprint(p);
+      const got = await readJsonWithStatus(p);
 
       expect(got.value).toBeNull();
-      expect(got.fingerprint).toBe(UNREADABLE);
-      expect(got.fingerprint).not.toBe(ABSENT);
+      expect(got.status).toBe(UNREADABLE);
+      expect(got.status).not.toBe(ABSENT);
     } finally {
       setReadFileImpl(null);
       rmSync(dir, { recursive: true, force: true });
@@ -142,9 +114,9 @@ describe('readJsonWithFingerprint', () => {
     const dir = tmpDir();
     try {
       setReadFileImpl(null); // default pass-through — ENOENT comes from the real fs
-      const got = await readJsonWithFingerprint(join(dir, 'nope.json'));
+      const got = await readJsonWithStatus(join(dir, 'nope.json'));
       expect(got.value).toBeNull();
-      expect(got.fingerprint).toBe(ABSENT);
+      expect(got.status).toBe(ABSENT);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

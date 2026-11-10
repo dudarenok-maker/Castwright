@@ -43,8 +43,10 @@
        route tests A1/A2 are the behavioural defence for that.
      - Only `server/src` non-test `.ts`: `scripts/`, the frontend, and test
        files are out of scope.
-     - Lock-free occurrence counting: a comparator moved between two
-       functions of one listed file keeps the count and passes. */
+     - Location-free occurrence counting: a comparator moved between two
+       functions of one listed file keeps the count and passes.
+     - Name comparators not on the list: `nameTokens(` / `jaccard(`
+       (`util/text-match.ts`) score names but are not scanned. */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -120,6 +122,18 @@ function comparatorCounts(content: string): Record<string, number> {
   return out;
 }
 
+/** Rule 2: files NOT on the list that read the prior cast and hold a comparator. */
+function readsPriorOffenders(files: ReadonlyArray<{ path: string; content: string }>): string[] {
+  const offenders: string[] = [];
+  for (const s of files) {
+    if (s.path in ALLOWED) continue;
+    if (codeMatches(s.content, READERS_RE).length === 0) continue;
+    const counts = comparatorCounts(s.content);
+    if (Object.keys(counts).length) offenders.push(`${s.path}: ${JSON.stringify(counts)}`);
+  }
+  return offenders;
+}
+
 const sources = collectSourceFiles(SRC_ROOT)
   .filter((f) => !rel(f).startsWith('test-utils/'))
   .map((f) => ({ path: rel(f), content: readFileSync(f, 'utf8') }));
@@ -136,14 +150,7 @@ describe('single-matcher guard (plan 291 / #4031)', () => {
   });
 
   it('a file outside the list that reads the prior cast holds no comparator', () => {
-    const offenders: string[] = [];
-    for (const s of sources) {
-      if (s.path in ALLOWED) continue;
-      if (codeMatches(s.content, READERS_RE).length === 0) continue;
-      const counts = comparatorCounts(s.content);
-      if (Object.keys(counts).length) offenders.push(`${s.path}: ${JSON.stringify(counts)}`);
-    }
-    expect(offenders).toEqual([]);
+    expect(readsPriorOffenders(sources)).toEqual([]);
   });
 
   it('the matchers matchFreshToPrior replaced stay deleted', () => {
@@ -167,6 +174,19 @@ describe('single-matcher guard (plan 291 / #4031)', () => {
         'const b = t.trim().toLowerCase();',
       ].join('\n');
       expect(comparatorCounts(src)).toEqual({ normaliseNameKey: 2, 'trim-toLowerCase': 1 });
+    });
+
+    /* Task 28 fix round 1 (I4): rule 2 has no real subject today (both reader
+       files are listed), so this positive control is what shows it can fail. */
+    it('rule 2 flags an unlisted file that reads the prior cast and holds a comparator', () => {
+      const reader = "import { readPriorCastLockFree } from './analysis-cast-io.js';\n";
+      const comparator = 'const k = a.trim().toLowerCase();\n';
+      expect(readsPriorOffenders([{ path: 'workspace/x.ts', content: reader + comparator }])).toEqual([
+        'workspace/x.ts: {"trim-toLowerCase":1}',
+      ]);
+      // Not flagged: no reader, or the file is on the list.
+      expect(readsPriorOffenders([{ path: 'workspace/x.ts', content: comparator }])).toEqual([]);
+      expect(readsPriorOffenders([{ path: 'store/plan-overlay.ts', content: reader + comparator }])).toEqual([]);
     });
 
     it('sees a reader import / call but not a comment naming it', () => {

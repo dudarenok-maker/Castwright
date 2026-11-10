@@ -38,10 +38,10 @@ vi.mock('./cast-fingerprint.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./cast-fingerprint.js')>();
   return {
     ...actual,
-    readJsonWithFingerprint: async (path: string) =>
+    readJsonWithStatus: async (path: string) =>
       hooks.fingerprintFault
-        ? { value: null, fingerprint: actual.UNREADABLE }
-        : actual.readJsonWithFingerprint(path),
+        ? { value: null, status: actual.UNREADABLE }
+        : actual.readJsonWithStatus(path),
   };
 });
 

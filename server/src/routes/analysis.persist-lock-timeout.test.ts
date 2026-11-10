@@ -54,7 +54,8 @@ import type { Response } from '../http.js';
    `toThrow` fires from `dropSupersededIdsReclaimedByLiveCast` — a step INSIDE
    the persist's `catch (historyErr)`, i.e. one of the eight sites that fail
    loud (six identity handlers plus, since #2295, the two authoritative
-   `writeChecked` calls the last two describes below drive).
+   cast.json writes - `writeChecked` before plan 291, `persistPlannedCast`
+   now - the last two describes below drive).
 
    `reconcileThrow` fires from inside `reconcileRejectEdgesOnDisk` — the one
    IDENTITY-path site that does not (round 4, owner decision; #2292 added
@@ -102,7 +103,8 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
 /* #2295 / #2292 — a seam on the cast.json WRITES themselves, so a fixture can
    aim a throw at one write SITE rather than at a handler. That distinction is
    the whole of #2295: the persist's `catch (persistErr)` covers the
-   authoritative `writeChecked` AND the best-effort journals, so "which handler
+   authoritative write (`writeChecked` before plan 291, `persistPlannedCast`
+   now) AND the best-effort journals, so "which handler
    caught it" cannot decide the outcome and "which write timed out" must. */
 /* Plan 291: the Phase-0b snapshot is `writePlanSnapshot` (the main job's Phase 0a writes
    nothing), so the swallow tests aim a throw at it instead of at a `writeChecked` ordinal. */

@@ -257,7 +257,7 @@ export async function readPriorCastForMerge(bookDir: string): Promise<PriorCastS
    list is empty.
 
    `liveIds` is the roster that is actually persisted at this point — pass
-   `mergedFinal.characters`' ids at a final cast.json write. Anything naming
+   ids of the roster `persistPlannedCast` wrote at a final cast.json write. Anything naming
    one of them as `from` is refused and logged (Wave 2 final-review finding
    1(b); see `refuseRetirementsOfLiveIds` for why that shape is bogus by
    definition and why the end-of-run drop cannot repair it). Pass `null` ONLY
@@ -1056,18 +1056,6 @@ export function mergeRosterChapter(
   }
 }
 
-/* Name-only descriptor fold used by both the interim cast.json write
-   and the live SSE cast-update payload. Collapses "The Jogger" /
-   "Drooly Boy" / "Unknown Intruder" into the Unknown male / Unknown
-   female buckets the moment they appear in a chapter's roster, so
-   the user sees the same buckets they'd see post-Phase-1 instead of
-   a churn of descriptor-named one-offs.
-
-   No line-count rule and no zero-line drop — both need stage-2 data
-   the verifier hasn't produced yet during Phase 0a, and applying
-   them prematurely would drop legitimate characters who simply
-   haven't been processed yet. The full fold runs at Phase 1's tail
-   with sentence counts in hand. */
 /* srv-1 — persist a fold pass's lineage to the merge journal. Replace-all keeps
    kind:'fold' entries in lockstep with the current manuscript-edits.json
    (manual entries are preserved). Co-locate the CALL with the edits write so the
@@ -1163,7 +1151,17 @@ export function dedupAndPrepare(
   };
 }
 
-function previewFoldForLiveView(
+/* Name-only descriptor fold for the live SSE cast-update payload ("Cast so
+   far"). Collapses "The Jogger" / "Drooly Boy" / "Unknown Intruder" into the
+   Unknown male / Unknown female buckets the moment they appear in a chapter's
+   roster, so the user sees the same buckets they'd see post-Phase-1 instead of
+   a churn of descriptor-named one-offs.
+
+   No line-count rule and no zero-line drop — both need stage-2 data the
+   verifier hasn't produced yet during Phase 0a, and applying them prematurely
+   would drop legitimate characters who simply haven't been processed yet. The
+   full fold runs at Phase 1's tail with sentence counts in hand. */
+export function previewFoldForLiveView(
   characters: CharacterOutput[],
   language: string | undefined,
   constraints: DedupConstraints,
@@ -3869,9 +3867,9 @@ export interface AnalysisJobReplayState {
       first subscriber would see the SeriesPriorPill but the second
       one — post-reload, post-navigate-back — would miss it). */
   lastSeriesPrior: { kind: 'series-prior'; count: number; names: string[] } | null;
-  /** #2015 — advisories emitted during the run, keyed by `code` so a burst
-      across the five merge-base write sites replays as ONE. Not cleared:
-      a stale merge base stays true for the rest of the run. */
+  /** #2015 — advisories emitted during the run, keyed by `code` so a burst of
+      one warning replays as ONE. Not cleared: an advisory stays true for the
+      rest of the run. */
   warnings: Map<string, { kind: 'warning'; code: string; message: string }>;
 }
 
