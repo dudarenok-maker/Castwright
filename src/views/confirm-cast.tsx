@@ -53,7 +53,7 @@ type Decision = 'match' | 'generate';
    voice-match payloads omitted the field). The Reuse-decision flip
    is unchanged: every eligible row still gets `decisions[id] = 'match'`
    on bulk apply regardless of confidence. */
-const SYNC_AUTO_THRESHOLD = 0.9;
+export const SYNC_AUTO_THRESHOLD = 0.9;
 
 export function ConfirmCastView({
   characters,
