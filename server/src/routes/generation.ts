@@ -105,6 +105,7 @@ import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import {
   setActiveGenerationBooksProvider,
   setJobEpochReader,
+  setQualityRenderCounter,
   isAnyGenerationActive,
 } from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
@@ -464,6 +465,11 @@ interface RunningJob {
       cleared, so once a chapter's wall time overlapped another render its QA
       sub-costs stay tainted for the rest of this job's life. */
   hadSibling: boolean;
+  /** #4079 — this run uses the Quality (1.7B) base tier (a Quality run, or any
+      character set to Quality): `usedQwenTiers.keep17`. Read through the
+      active-generation gate by the render lease, which only holds a tier a
+      Quality render uses. Absent/false for a Kokoro-only or standard run. */
+  usesQuality17?: boolean;
   /** Chapter ids the loop has reported chapter_complete for in this
       run. The frontend reads `runDone` as `runDoneBase + this.size`. */
   completedThisRun: Set<number>;
@@ -624,9 +630,11 @@ function deregisterJob(key: string, job: RunningJob): void {
 export function __registerFakeJobForTest(
   bookId: string,
   subscribers: { send: (ev: unknown) => void; res: Response }[],
+  usesQuality17 = false,
 ): () => void {
   const key = `${bookId}::test-${Math.random().toString(36).slice(2)}`;
   const job: RunningJob = {
+    usesQuality17,
     controller: new AbortController(),
     subscribers: new Set(subscribers),
     bookId,
@@ -673,6 +681,11 @@ export function activeGenerationBooks(): string[] {
    fail-closed contract this registration satisfies. */
 setActiveGenerationBooksProvider(activeGenerationBooks);
 setJobEpochReader(() => jobEpoch);
+setQualityRenderCounter(() => {
+  let n = 0;
+  for (const j of inFlightByChapter.values()) if (j.usesQuality17 === true) n += 1;
+  return n;
+});
 
 function broadcast(job: RunningJob, ev: unknown): void {
   /* Inject run-level aggregates into every outgoing tick (Bug E).
@@ -1394,6 +1407,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     completedThisRun: new Set(),
     runInProgress: new Set(),
     hadSibling: false,
+    usesQuality17: usedQwenTiers.keep17,
     children: [],
   };
   registerJob(key, job);

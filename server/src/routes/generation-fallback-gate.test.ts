@@ -371,6 +371,45 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
   }, 10_000);
 });
 
+describe('#4079 a real chapter render feeds the render-lease gate only when it uses the Quality tier', () => {
+  /* Runs one POST that parks inside synth, samples the gate while the job is
+     registered, then lets it finish and samples again. */
+  async function qualityActiveWhileRendering(modelKey: string): Promise<[boolean, boolean]> {
+    const { isQualityRenderKnownActive } = await import('../gpu/active-generation-gate.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    synthesiseImpl = async () => {
+      await gate;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [{ characterId: 'wren', sentenceIds: [1] }],
+      };
+    };
+    const run = runStream({ modelKey, fallbackConfirmed: true });
+    let during = false;
+    try {
+      await vi.waitFor(() => expect(synthCalled).toBe(true));
+      during = isQualityRenderKnownActive();
+    } finally {
+      release();
+      await run;
+    }
+    return [during, isQualityRenderKnownActive()];
+  }
+
+  it('a Standard-only cast takes no lease while its job is registered', async () => {
+    expect(await qualityActiveWhileRendering('qwen3-tts-0.6b')).toEqual([false, false]);
+  }, 10_000);
+
+  it('a Quality (1.7B) cast makes the gate true while registered, and false once released', async () => {
+    expect(await qualityActiveWhileRendering('qwen3-tts-1.7b')).toEqual([true, false]);
+  }, 10_000);
+});
+
 /* fs-2 — never-cross-language enforcement at the generation route. A non-English
    book forces every character (incl. narrator) onto Qwen, threads
    forbidKokoroFallback + bookLanguage into synth, and a cross-language reused

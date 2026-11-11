@@ -68,6 +68,7 @@ let provider: (() => string[]) | null = null;
 let spliceCounter: (() => number) | null = null;
 let spliceEpochReader: (() => number) | null = null;
 let jobEpochReader: (() => number) | null = null;
+let qualityRenderCounter: (() => number) | null = null;
 
 /** Registered by routes/generation.ts at module init with its existing
     `activeGenerationBooks` accessor. */
@@ -102,6 +103,22 @@ export function setSpliceEpochReader(fn: () => number): void {
     counts as zero: the splice reader below is the fail-closed one. */
 export function setJobEpochReader(fn: () => number): void {
   jobEpochReader = fn;
+}
+
+/** #4079 — registered by routes/generation.ts with the number of in-flight
+    render jobs that use the Quality (1.7B) base tier. Unregistered counts as
+    zero (no render is KNOWN to use it), which is the safe side for its one
+    reader, the render lease: no lease means the sidecar's idle timer frees a
+    leftover 1.7B as before. */
+export function setQualityRenderCounter(fn: () => number): void {
+  qualityRenderCounter = fn;
+}
+
+/** #4079 — true only when a running chapter render is KNOWN to use the
+    Quality (1.7B) tier. Gates the render lease (gpu/render-lease.ts): a
+    Kokoro-only or standard render takes no lease. */
+export function isQualityRenderKnownActive(): boolean {
+  return (qualityRenderCounter?.() ?? 0) > 0;
 }
 
 /** Current registration epoch (splices plus render jobs), or `null` when no
@@ -149,7 +166,8 @@ export function isRepairOnlyKnownActive(): boolean {
     `false`. For wording a message only (#4066, `describeVramBlockers`): there
     the worst case of a wrong `false` is a less specific error, while a wrong
     `true` would tell the user a render is running when none is. Never use it
-    to decide whether an eviction is safe — that is `isAnyGenerationActive`. */
+    to decide whether an eviction is safe — that is `isAnyGenerationActive`.
+    (The render lease does not read it: it uses `isQualityRenderKnownActive`.) */
 export function isGenerationKnownActive(): boolean {
   if (!provider) return false;
   return provider().length > 0 || spliceActive();

@@ -261,6 +261,20 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(m.unloads()).toEqual([{ engine: 'qwen' }, { engine: 'kokoro' }]);
   });
 
+  it('#4079 — the reconcile log lists tiers space-separated with no padding inside the brackets', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      global.fetch = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true }).fetch as unknown as typeof fetch;
+      await reconcileResidentQwenTiers({ keep06: true, keep17: false });
+      global.fetch = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true, kokoro_loaded: true }).fetch as unknown as typeof fetch;
+      await reconcileResidentQwenTiers({ keep06: false, keep17: false, keepKokoro: false });
+      const lines = info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('VRAM reconcile'));
+      expect(lines.map((l) => l.slice(l.lastIndexOf('['))).sort()).toEqual(['[0.6B 1.7B Kokoro]', '[1.7B]']);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it('#4066 — reports into freedOut only the models whose /unload succeeded', async () => {
     const f = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true, kokoro_loaded: true }) };
