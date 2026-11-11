@@ -1373,7 +1373,8 @@ export function otherRunsLedger(cacheLedger: RunAddedLedger, own: RunAddedLedger
     analysis-owned, so an explicit 0 here would zero a joined row's, or the counts a
     completed main run persisted for its own rows (#4031 I1). A failed snapshot is a
     deliberate swallow (#2292, owner decision, a lock timeout included): the ids are
-    already in the cache, and the persist re-plans whatever it did not land. With
+    already in the cache, and the persist re-plans whatever it did not land - except a
+    damaged cast.json (`PriorCastUnreadableError`), which ends the run (R2-M3). With
     `bestEffortPatch` (the subset's Phase-0a snapshots, which run inside a chapter's
     failure handling), a failed cache patch after the snapshot landed is logged, not
     thrown - the chapter's own cast must not be recorded as failed over it (#4031
@@ -1426,6 +1427,10 @@ async function snapshotPlannedRoster(a: {
       },
     );
   } catch (persistErr) {
+    /* #4031 R2-M3 — a damaged cast.json is not a snapshot fault the persist can fix: it
+       will refuse it too. End the run here (curated `cast-unreadable`) rather than
+       running all of Phase 1 first. Nothing was written to the damaged file. */
+    if (persistErr instanceof PriorCastUnreadableError) throw persistErr;
     console.warn(`[analysis] ${a.site} cast.json snapshot failed`, persistErr);
   }
   if (!out.s) return { characters, plan, idMap: {}, ledgers };
@@ -8435,10 +8440,11 @@ export async function runMainAnalyzerJob(
          re-sent once (its decisions, re-mints and ledger have no other writer). */
       if (persistUnsentPatch) await resendCachePatch(manuscriptId, persistUnsentPatch);
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
-      if (persistWriteError !== undefined) throw persistWriteError;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
-         top-level catch (Task 6), which ends the job halted. */
+         top-level catch (Task 6), which ends the job halted. Ahead of a parked write
+         error (R2-M4): a moved book must halt the run, not end it as a save failure. */
       if (staleBookDirError !== undefined) throw staleBookDirError;
+      if (persistWriteError !== undefined) throw persistWriteError;
       /* #3435 M17/S14 — the takes are persisted and the book has reached
          Confirm (decision F); `confirmReached` is never cleared except with the
          cache. */
@@ -9452,6 +9458,8 @@ export async function runSubsetAnalyzerJob(
         emitCastUpdate();
       } catch (chErr) {
         if (chErr instanceof AnalysisAbortedError) throw chErr;
+        /* #4031 R2-M3 — the Phase-0a snapshot found a damaged cast.json: whole-book-fatal. */
+        if (chErr instanceof PriorCastUnreadableError) throw chErr;
         /* Whole-book-fatal content-filter block — rethrow to the terminal
            handler rather than grinding chapter-by-chapter (see the main-loop
            sibling above). */
@@ -10496,10 +10504,11 @@ export async function runSubsetAnalyzerJob(
          re-sent once (its decisions, re-mints and ledger have no other writer). */
       if (persistUnsentPatch) await resendCachePatch(manuscriptId, persistUnsentPatch);
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
-      if (persistWriteError !== undefined) throw persistWriteError;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
-         top-level catch (Task 6), which ends the job halted. Mirrors main. */
+         top-level catch (Task 6), which ends the job halted. Mirrors main, including
+         its order ahead of a parked write error (R2-M4). */
       if (staleBookDirError !== undefined) throw staleBookDirError;
+      if (persistWriteError !== undefined) throw persistWriteError;
       /* #3435 M17/S14 — the takes are persisted and the book has reached
          Confirm (decision F); `confirmReached` is never cleared except with the
          cache. */

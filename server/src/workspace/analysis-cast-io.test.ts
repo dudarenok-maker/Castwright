@@ -858,6 +858,7 @@ describe('I1 (#4031 final review): a mid-run cast.json of the wrong shape is nev
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PriorCastUnreadableError);
     expect((err as PriorCastUnreadableError).reason).toBe('corrupt');
+    expect((err as PriorCastUnreadableError).midRun).toBe(true);
     expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(bytes);
   });
 
@@ -876,6 +877,7 @@ describe('I1 (#4031 final review): a mid-run cast.json of the wrong shape is nev
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PriorCastUnreadableError);
     expect((err as PriorCastUnreadableError).reason).toBe('corrupt');
+    expect((err as PriorCastUnreadableError).midRun).toBe(true);
     expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(bytes);
   });
 

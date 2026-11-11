@@ -290,7 +290,7 @@ const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR, FS_FAILURE_R
   '../workspace/file-lock.js'
 );
 const { PERSIST_FAILED_MESSAGE_PREFIX } = await import('./failure-taxonomy.js');
-const { PRIOR_CAST_CORRUPT_MESSAGE } = await import('../workspace/prior-cast-error.js');
+const { PRIOR_CAST_CORRUPT_MID_RUN_MESSAGE } = await import('../workspace/prior-cast-error.js');
 
 /* #4031 R48 — an authoritative persist write that failed for a reason other than a
    lock timeout ends the job in `error` with a curated, path-free sentence. */
@@ -985,6 +985,31 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   );
 
   it.each(['main', 'subset'] as const)(
+    '%s: a damaged cast.json found at a plan snapshot ends the run there, before the persist (R2-M3)',
+    async (kind) => {
+      const { PriorCastUnreadableError } = await import('../workspace/prior-cast-error.js');
+      planSnapshot.toThrow = new PriorCastUnreadableError('corrupt', { midRun: true });
+      /* The harness reads cast.json back; no snapshot lands here, so seed one. */
+      const run = await runJob(`corrupt-at-snapshot-${kind}`, kind, {
+        onSetup: (c) => writeFileSync(join(c.bookDir, '.audiobook', 'cast.json'), '{"characters":[]}'),
+      });
+      try {
+        expect(planSnapshot.thrown).toBeGreaterThan(0);
+        expect(plannedPersist.calls).toBe(0);
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(terminal?.code).toBe('cast-unreadable');
+        expect(terminal?.message).toBe(PRIOR_CAST_CORRUPT_MID_RUN_MESSAGE);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+      } finally {
+        planSnapshot.toThrow = null;
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
     '%s: a cast.json damaged to `{}` mid-run is refused at the persist, not overwritten (I1)',
     async (kind) => {
       let castPath = '';
@@ -997,7 +1022,9 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(terminal?.code).toBe('cast-unreadable');
-        expect(terminal?.message).toBe(PRIOR_CAST_CORRUPT_MESSAGE);
+        /* Mid-run, "stopped before changing anything" would be untrue (R2-M2). */
+        expect(terminal?.message).toBe(PRIOR_CAST_CORRUPT_MID_RUN_MESSAGE);
+        expect(terminal?.message).not.toMatch(/before changing anything/);
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
       } finally {
         plannedPersist.before = null;
@@ -1349,6 +1376,22 @@ describe.each(['main', 'subset'] as const)(
         /* The write did not land: the seed is intact, not half-written. */
         expect(run.state.chapters.every((c) => c.title === STALE_CHAPTER_TITLE)).toBe(true);
       } finally {
+        await run.cleanup();
+      }
+    }, 60_000);
+
+    it('a parked write error does not mask a stale book dir at the state.json step: the run halts (R2-M4)', async () => {
+      const { BookDirUnresolvedError } = await import('../workspace/book-dir-guard.js');
+      plannedPersist.toThrow = Object.assign(new Error('EPERM: cast.json'), { code: 'EPERM' });
+      stateStep.toThrow = new BookDirUnresolvedError();
+      const run = await runJob(`${kind}-parked-then-stale`, kind);
+      try {
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(terminal?.code).toBe('STALE_BOOK_DIR');
+      } finally {
+        plannedPersist.toThrow = null;
+        stateStep.toThrow = null;
         await run.cleanup();
       }
     }, 60_000);

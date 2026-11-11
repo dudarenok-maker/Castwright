@@ -69,6 +69,7 @@ import {
 } from '../workspace/file-lock.js';
 import {
   PriorCastUnreadableError,
+  PRIOR_CAST_CORRUPT_MID_RUN_REMEDIATION,
   PRIOR_CAST_CORRUPT_REMEDIATION,
   PRIOR_CAST_UNREADABLE_REMEDIATION,
 } from '../workspace/prior-cast-error.js';
@@ -1109,7 +1110,11 @@ export function classifyAnalysisFailure(
       'cast-unreadable',
       err.message,
       undefined,
-      err.reason === 'corrupt' ? PRIOR_CAST_CORRUPT_REMEDIATION : PRIOR_CAST_UNREADABLE_REMEDIATION,
+      err.midRun
+        ? PRIOR_CAST_CORRUPT_MID_RUN_REMEDIATION
+        : err.reason === 'corrupt'
+          ? PRIOR_CAST_CORRUPT_REMEDIATION
+          : PRIOR_CAST_UNREADABLE_REMEDIATION,
     );
   }
   /* #4031 R48 — fixed, path-free message; NO `detail` (the raw cause is in the log). */

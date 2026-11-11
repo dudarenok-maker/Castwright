@@ -156,7 +156,7 @@ async function readCurrentCast(bookDir: string): Promise<Rows> {
   const cast = await readJson<{ characters?: Rows }>(castJsonPath(bookDir));
   if (cast === null) return [];
   if (typeof cast !== 'object' || !Array.isArray(cast.characters)) {
-    throw new PriorCastUnreadableError('corrupt');
+    throw new PriorCastUnreadableError('corrupt', { midRun: true });
   }
   return cast.characters;
 }
