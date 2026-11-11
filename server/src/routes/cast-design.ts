@@ -720,7 +720,8 @@ async function runDesignJob(
           } else {
             /* Variant path — record the slot and propagate it across the
                series (linked cast), the same scope the base voice uses. */
-            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
+            /* F8 — not shared by the core (an unconfirmed book): this book only. */
+            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesShared ? seriesFilter : undefined);
             if (outcome === 'skippedClone') {
               job.skipped += 1;
               job.clonedSkips.push({ characterId, name: character.name ?? characterId });

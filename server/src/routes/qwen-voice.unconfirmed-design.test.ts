@@ -49,6 +49,9 @@ vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
    has stamped Book One and waits while a second mint's walk reaches Book Two first.
    That is the interleaving that split the link before the fix. */
 const holdWalk = vi.hoisted(() => ({ statePath: null as string | null, castPath: '', ms: 1500 }));
+/* Review pass 1, 🟠5 — the design core's own read of the book's castConfirmed fails
+   (a transient EBUSY) while every other read of state.json works. */
+const failConfirmedRead = vi.hoisted(() => ({ on: false }));
 vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/state-migrate.js')>();
   const { readFileSync: read } = await import('node:fs');
@@ -60,6 +63,9 @@ vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
     }
   };
   const readStateJsonWithRecovery: typeof actual.readStateJsonWithRecovery = async (path) => {
+    if (failConfirmedRead.on && (new Error().stack ?? '').includes('readBookCastConfirmed')) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${path}'`), { code: 'EBUSY', syscall: 'open', path });
+    }
     if (holdWalk.statePath && path === holdWalk.statePath && (new Error().stack ?? '').includes('forEachMatchingCastCharacter')) {
       holdWalk.statePath = null;
       const until = Date.now() + holdWalk.ms;
@@ -70,10 +76,26 @@ vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
   return { ...actual, readStateJsonWithRecovery };
 });
 
+/* #4072 — when armed, the next series walk stamps its first book and then throws
+   (a lock timeout partway through a walk). */
+const failWalk = vi.hoisted(() => ({ armed: false }));
+vi.mock('./voices.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voices.js')>();
+  const forEachMatchingCastCharacter: typeof actual.forEachMatchingCastCharacter = async (voiceId, series, mutate, only, onWritten) => {
+    if (!failWalk.armed || !series) return actual.forEachMatchingCastCharacter(voiceId, series, mutate, only, onWritten);
+    failWalk.armed = false;
+    return actual.forEachMatchingCastCharacter(voiceId, series, mutate, only, (dir) => {
+      onWritten?.(dir);
+      throw new Error('walk failed after its first book');
+    });
+  };
+  return { ...actual, forEachMatchingCastCharacter };
+});
+
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
-const TITLES = ['Book One', 'Book Two', 'Book Three'] as const;
+const TITLES = ['Book One', 'Book Two', 'Book Three', 'Book Four'] as const;
 type Title = (typeof TITLES)[number];
 
 let workspaceRoot: string;
@@ -181,6 +203,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   holdWalk.statePath = null;
+  holdWalk.ms = 1500;
+  failWalk.armed = false;
+  failConfirmedRead.on = false;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
     let voiceId: string | undefined;
@@ -282,7 +307,129 @@ describe('F8 — a design in a book whose cast is not confirmed stays on that ro
   });
 });
 
+/* Review pass 1, blocker — the analysis-time linker stamps an earlier book's uuid
+   onto a freshly analysed (so unconfirmed) row (series-reuse-link.ts). A design of
+   that row wrote straight to the shared key, Book One's file. */
+const BOOK_ONE_PT = Buffer.from('BOOK-ONE-UUID-PT');
+const BOOK_ONE_ANGRY = Buffer.from('BOOK-ONE-UUID-ANGRY');
+function seedUuidDesigned() {
+  reset();
+  writeFileSync(pt('qwen-u1'), BOOK_ONE_PT);
+  writeFileSync(join(qwenDir(), 'qwen-u1.json'), '{"instruct":"book one"}');
+  writeFileSync(pt('qwen-u1__angry'), BOOK_ONE_ANGRY);
+  writeFileSync(join(qwenDir(), 'qwen-u1__angry.json'), '{"instruct":"book one angry"}');
+  const s = { overrideTtsVoices: { qwen: { name: 'qwen-u1', variants: { angry: { name: 'qwen-u1__angry' } } } } };
+  writeBook('Book One', [{ ...legacy, voiceUuid: 'u1', ...s }]);
+  writeBook('Book Two', [{ ...legacy, voiceUuid: 'u1', ...linkTo('Book One'), ...s }]);
+  /* Book Three: unconfirmed, auto-linked by the analysis linker (a wrong match). */
+  writeBook('Book Three', [{ ...legacy, voiceUuid: 'u1', voiceState: 'reused', ...linkTo('Book Two'), ...s }], false);
+}
+
+describe('F8 — an unconfirmed row already on an earlier book\'s uuid moves onto its own before it is designed', () => {
+  it('a BASE design: Book Three gets its own uuid (a copy of the family), Book One\'s and Book Two\'s files and rows are unchanged', async () => {
+    seedUuidDesigned();
+    const one = readFileSync(castPath('Book One'), 'utf8');
+    const two = readFileSync(castPath('Book Two'), 'utf8');
+    const res = await design('Book Three');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).not.toBe('u1');
+    expect(res.body.voiceId).toBe(`qwen-${own}`);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(pt('qwen-u1__angry')).equals(BOOK_ONE_ANGRY)).toBe(true);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(one);
+    expect(readFileSync(castPath('Book Two'), 'utf8')).toBe(two);
+    expect(row('Book Three').overrideTtsVoices.qwen.variants).toBeUndefined();
+  });
+
+  it('a VARIANT design: lands on Book Three\'s own key; Book One\'s angry take is unchanged', async () => {
+    seedUuidDesigned();
+    const res = await design('Book Three', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).not.toBe('u1');
+    expect(res.body.voiceId).toBe(`qwen-${own}__angry`);
+    expect(readFileSync(pt('qwen-u1__angry')).equals(BOOK_ONE_ANGRY)).toBe(true);
+    expect(readFileSync(pt(`qwen-${own}`)).equals(BOOK_ONE_PT)).toBe(true); // its base is the copy
+    expect(row('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u1__angry');
+  });
+
+  it('a legacy row\'s VARIANT in an unconfirmed book no longer writes the shared legacy key', async () => {
+    seedLegacyDesigned(false);
+    const LEGACY_ANGRY = Buffer.from('BOOK-ONE-LEGACY-ANGRY');
+    writeFileSync(pt('qwen-v_wren__angry'), LEGACY_ANGRY);
+    const res = await design('Book Three', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt('qwen-v_wren__angry')).equals(LEGACY_ANGRY)).toBe(true);
+    expect(row('Book One').voiceUuid).toBeUndefined();
+    expect(row('Book Three').voiceUuid).toBeTruthy();
+  });
+
+  it('a state.json that cannot be read is not "unconfirmed": the design answers "try again." and writes nothing', async () => {
+    seedLegacyDesigned(true);
+    const casts = TITLES.slice(0, 3).map((t) => readFileSync(castPath(t), 'utf8'));
+    failConfirmedRead.on = true;
+    const res = await design('Book Three');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+    expect(TITLES.slice(0, 3).map((t) => readFileSync(castPath(t), 'utf8'))).toEqual(casts);
+    expect(uuidBases()).toEqual([]);
+  });
+});
+
+/* Review pass 1, owner decision (a): the design-time separation of a row declined
+   before the decline route existed refuses too while a book in its chain cannot be
+   read (F1's rule), instead of leaving the chain on Book One's voice. */
+describe('F1 — the design-time separation refuses while a chain member is unreadable', () => {
+  it('Book Three unreadable: the design of the marked Book Two answers "try again." and nothing moves; once it reads, the chain moves', async () => {
+    reset();
+    const ONE_PT = Buffer.from('BOOK-ONE-PT');
+    writeFileSync(pt('qwen-u_shared'), ONE_PT);
+    writeFileSync(join(qwenDir(), 'qwen-u_shared.json'), '{"instruct":"book one"}');
+    const s = { overrideTtsVoices: { qwen: { name: 'qwen-u_shared' } } };
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_shared', ...s }]);
+    writeBook('Book Two', [{ ...legacy, voiceUuid: 'u_shared', declinedVoiceFrom: [ids['Book One']], ...s }]);
+    writeBook('Book Three', [{ ...legacy, voiceUuid: 'u_shared', ...linkTo('Book Two'), ...s }]);
+    writeBook('Book Four', [{ ...legacy, voiceUuid: 'u_shared', ...linkTo('Book Three'), ...s }]);
+    const three = readFileSync(castPath('Book Three'), 'utf8');
+    writeFileSync(castPath('Book Three'), '{"characters":[');
+    const res = await design('Book Two');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(row('Book Two').voiceUuid).toBe('u_shared');
+    expect(row('Book Four').voiceUuid).toBe('u_shared');
+    expect(readFileSync(pt('qwen-u_shared')).equals(ONE_PT)).toBe(true);
+    writeFileSync(castPath('Book Three'), three);
+    expect((await design('Book Two')).status).toBe(200);
+    const own = row('Book Two').voiceUuid;
+    expect(own).not.toBe('u_shared');
+    expect(row('Book Three').voiceUuid).toBe(own);
+    expect(row('Book Four').voiceUuid).toBe(own);
+    expect(readFileSync(pt('qwen-u_shared')).equals(ONE_PT)).toBe(true);
+  });
+});
+
 describe('#4072 — two concurrent base mints of one legacy series link end on one uuid', () => {
+  it('a first mint that stamped a book and then failed: the waiting mint adopts the uuid it stamped, never one of its own', async () => {
+    seedLegacyDesigned(true);
+    writeBook('Book Three', [{ id: 'other', name: 'Other', role: 'supporting', color: 'sky' }]);
+    /* Hold the first walk (before Book One) long enough for Book Two's design to
+       reach its mint and wait; then that walk stamps Book One and throws. */
+    holdWalk.statePath = resolve(statePath('Book One'));
+    holdWalk.castPath = join(workspaceRoot, 'never-there.json');
+    holdWalk.ms = 800;
+    failWalk.armed = true;
+    const first = design('Book One');
+    await new Promise((r) => setTimeout(r, 100));
+    const [a, b] = await Promise.all([first, design('Book Two')]);
+    expect(a.status).toBeGreaterThanOrEqual(500);
+    expect(b.status, JSON.stringify(b.body)).toBe(200);
+    const u = row('Book One').voiceUuid as string;
+    expect(u).toBeTruthy();
+    expect(row('Book Two').voiceUuid).toBe(u);
+  });
+
   it('a mint that starts while another of the same link is in flight adopts its uuid: one voiceUuid, one family', async () => {
     seedLegacyDesigned(true);
     writeBook('Book Three', [{ id: 'other', name: 'Other', role: 'supporting', color: 'sky' }]);

@@ -658,6 +658,8 @@ export const castSlice = createSlice({
         voice?: {
           voiceUuid: string | null;
           qwen: NonNullable<Character['overrideTtsVoices']>['qwen'] | null;
+          /* Review pass 1 — same-book rows on its voice that moved with it. */
+          movedCharacterIds?: string[];
         };
       }>,
     ) => {
@@ -670,11 +672,15 @@ export const castSlice = createSlice({
         c.voiceState = 'reused';
       }
       if (voice) {
-        if (voice.voiceUuid) c.voiceUuid = voice.voiceUuid;
-        else delete c.voiceUuid;
-        const { qwen: _left, ...otherSlots } = c.overrideTtsVoices ?? {};
-        void _left;
-        c.overrideTtsVoices = voice.qwen ? { ...otherSlots, qwen: voice.qwen } : otherSlots;
+        const moved = new Set(voice.movedCharacterIds ?? []);
+        for (const row of s.characters) {
+          if (row !== c && !moved.has(row.id)) continue;
+          if (voice.voiceUuid) row.voiceUuid = voice.voiceUuid;
+          else delete row.voiceUuid;
+          const { qwen: _left, ...otherSlots } = row.overrideTtsVoices ?? {};
+          void _left;
+          row.overrideTtsVoices = voice.qwen ? { ...otherSlots, qwen: voice.qwen } : otherSlots;
+        }
       }
       if (profile) {
         if (profile.evidence !== undefined) c.evidence = profile.evidence;

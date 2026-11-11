@@ -2338,3 +2338,52 @@ describe('cast-design — persona-write lock timeout is curated, not leaked (PR 
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
   });
 });
+
+/* F8 (#4096), review pass 1 — the bulk job ("Design full cast") propagates a base
+   design's qwen slot series-wide only when the design core shared it, i.e. only
+   in a book whose cast is confirmed. */
+describe('F8 — Design full cast in an unconfirmed book keeps the slot in that book', () => {
+  const otherDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, 'Book Zero');
+  function writeOtherBook() {
+    mkdirSync(join(otherDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_zero', manuscriptId: 'm_b_zero', title: 'Book Zero', author: AUTHOR, series: SERIES,
+        seriesPosition: 0, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
+        chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(otherDir(), 'manuscript.txt'), 'placeholder');
+    /* The same character, linked by voiceId, never designed (no uuid, no slot). */
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'aria', name: 'Aria', role: 'lead', color: 'rose', voiceId: 'v_aria' }] }),
+    );
+  }
+  const setConfirmed = (confirmed: boolean) => {
+    const p = join(bookDir, '.audiobook', 'state.json');
+    writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, 'utf8')), castConfirmed: confirmed }));
+  };
+  const otherSlot = () =>
+    JSON.parse(readFileSync(join(otherDir(), '.audiobook', 'cast.json'), 'utf8')).characters[0].overrideTtsVoices;
+  afterEach(() => rmSync(otherDir(), { recursive: true, force: true }));
+
+  it('unconfirmed: the linked row in a confirmed book takes no slot', async () => {
+    writeOtherBook();
+    setConfirmed(false);
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).filter((e) => e.type === 'character_designed').map((e) => e.characterId)).toEqual(['aria']);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+    expect(otherSlot()).toBeUndefined();
+  });
+
+  it('control: confirmed, the linked row takes the slot as before', async () => {
+    writeOtherBook();
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(otherSlot()?.qwen?.name).toBe('qwen-v_aria');
+  });
+});

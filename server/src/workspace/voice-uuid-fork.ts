@@ -116,12 +116,14 @@ export async function readBookCastConfirmed(dir: string): Promise<boolean> {
 }
 
 /* A book whose cast.json (or state.json) could not be read, with what its
-   state.json still says about it, if anything (`known`: it was read). */
+   state.json still says about it, if anything (`known`: it was read), and its cast
+   rows when only its state.json could not be read. */
 interface UnreadableBook {
   dir: string;
   known: boolean;
   bookId?: string;
   series?: { author: string; series: string };
+  rows?: CastRow[];
 }
 
 interface OtherBook {
@@ -166,7 +168,7 @@ async function loadOtherBooks(
         } catch (e) {
           console.warn(`[voice-uuid-fork] skipping unreadable state.json in ${dir}: ${(e as Error).message}`);
           unreadableDirs.push(resolve(dir));
-          unreadable.push({ dir: resolve(dir), known: false });
+          unreadable.push({ dir: resolve(dir), known: false, rows: cast.characters });
           continue;
         }
         out.push({ dir, bookId: identity.bookId, series: identity.series, rows: cast.characters });
@@ -307,14 +309,20 @@ export async function scanVoiceHolders(
   const followers = await chainFollowers(selfDir, character, holds, books, declined);
   /* F1 (owner decision: refuse while unreadable) — every link is series-scoped
      (link-prior, the linker and Confirm's matcher all are), so only a book of X's
-     own series can be in its chain. A book whose state.json cannot be read either
-     cannot be told apart, and counts. A declined book is never a follower (P10-1),
-     and a book with no bookId cannot be one either. */
-  const selfSeries = (await readBookIdentity(selfDir)).series;
+     own series can be in its chain. A declined book is never a follower (P10-1),
+     and a book with no bookId cannot be one either. A book whose state.json cannot
+     be read is judged by its cast rows when those read (review pass 1: does a row
+     on X's voice link to X or a follower's book?); one whose cast.json cannot be
+     read either counts. */
+  const selfIdentity = await readBookIdentity(selfDir);
+  const selfSeries = selfIdentity.series;
   const sameSeries = (s?: { author: string; series: string }): boolean =>
     !!s && !!selfSeries && s.author === selfSeries.author && s.series === selfSeries.series;
-  const chainUnreadable = unreadable.some(
-    (b) => !b.known || (!!b.bookId && !declined.has(b.bookId) && sameSeries(b.series)),
+  const chainBookIds = new Set([selfIdentity.bookId, ...followers.map((f) => f.bookId)].filter(Boolean) as string[]);
+  const linksIntoChain = (rows: CastRow[]): boolean =>
+    rows.some((y) => holds(y) && chainBookIds.has((y.matchedFrom as MatchedFrom)?.bookId ?? ''));
+  const chainUnreadable = unreadable.some((b) =>
+    b.known ? !!b.bookId && !declined.has(b.bookId) && sameSeries(b.series) : b.rows ? linksIntoChain(b.rows) : true,
   );
   /* F1 — the rows a decline left behind (before this rule, a decline went through
      with a chain member unreadable): linked down to X, on the voice X left. */

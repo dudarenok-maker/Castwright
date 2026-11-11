@@ -414,34 +414,11 @@ export interface LinkPriorCharacterArgs {
   targetBookId: string;
   targetCharacterId: string;
 }
-export interface LinkPriorCharacterResponse {
-  matchedFrom: {
-    bookId: string;
-    characterId: string;
-    bookTitle: string;
-    confidence: number;
-  };
-  voiceId?: string;
-  /* Profile content merged FROM the prior character onto the source at link
-     time (representative quotes + descriptors). Present only when the merge
-     actually changed something. The frontend applies it via applyManualMatch
-     so the open drawer shows the reused character's quotes without a reload. */
-  profile?: {
-    evidence?: import('./types').Character['evidence'];
-    attributes?: string[];
-    description?: string;
-    tone?: import('./types').Character['tone'];
-    gender?: import('./types').Character['gender'];
-    ageRange?: import('./types').Character['ageRange'];
-  };
-  /* F7 — present when the link moved the row back onto the voice of a book it had
-     declined ("Don't reuse"): its new `voiceUuid` (null: that book's row has none)
-     and qwen slot. The client mirrors both via applyManualMatch. */
-  voice?: {
-    voiceUuid: string | null;
-    qwen: NonNullable<import('./types').Character['overrideTtsVoices']>['qwen'] | null;
-  };
-}
+/* POST /api/books/:bookId/cast/link-prior — generated from openapi.yaml. `voice`
+   (F7 / #4095) is present when the link moved the row onto the target's voice;
+   the client mirrors it onto the row and `movedCharacterIds` via applyManualMatch. */
+export type LinkPriorCharacterResponse =
+  ApiPaths['/api/books/{bookId}/cast/link-prior']['post']['responses']['200']['content']['application/json'];
 /* Series roster — the union of confirmed casts across every prior book
    in the same (author, series). Powers the Profile Drawer's "From prior
    books in <series>" optgroup so the user can manually link to a

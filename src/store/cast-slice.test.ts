@@ -645,6 +645,21 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
     expect(legacy.overrideTtsVoices).toEqual({ kokoro: { name: 'af_bella' } });
   });
 
+  it('F7, review pass 1: the same-book rows the server moved with it take the voice too; others do not', () => {
+    const own = { voiceUuid: 'u_own', overrideTtsVoices: { qwen: { name: 'qwen-u_own' } } };
+    const start = baseState([makeChar('wren', own), makeChar('wren_b', own), makeChar('other', own)]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'wren',
+        matchedFrom: { bookId: 'b1', characterId: 'wren', bookTitle: 'Book One', confidence: 1 },
+        voice: { voiceUuid: 'u_shared', qwen: { name: 'qwen-u_shared' }, movedCharacterIds: ['wren_b'] },
+      }),
+    );
+    expect(next.characters.map((c) => c.voiceUuid)).toEqual(['u_shared', 'u_shared', 'u_own']);
+    expect(next.characters[1].overrideTtsVoices?.qwen?.name).toBe('qwen-u_shared');
+  });
+
   it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
     const start = baseState([
       makeChar('hartwell-brennan-vale', { voiceState: 'generated' }),
