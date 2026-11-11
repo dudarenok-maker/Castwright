@@ -88,7 +88,7 @@ import {
   RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
-import { readBaseRev, stampBaseRedesign, stampVariantBaseRev } from '../workspace/variant-base-rev.js';
+import { readBaseRev, stampBaseRedesign, stampKeyVoiceId, stampVariantBaseRev } from '../workspace/variant-base-rev.js';
 import { STAGING_MAX_AGE_MS } from '../workspace/portable-staging.js';
 
 /* fs-38 Wave 1, Task 9 — the sidecar-POST + audition-cache mechanics, the
@@ -439,6 +439,9 @@ async function copyBaseFamily(oldKey: string, newKey: string): Promise<string[]>
       throw e;
     }
   }
+  await stampKeyVoiceId(newKey).catch((e) =>
+    console.error('[qwen-voice] could not record the copied key in the voice json', e),
+  );
   return copied;
 }
 
@@ -1242,6 +1245,36 @@ async function dropStagedPreviews(oldKey: string, rows: Array<{ bookId: string; 
    are unaffected. */
 export { qwenVoicePtPath };
 
+const BASE_PERSONA_RETRY_DELAYS_MS = [25, 75, 200];
+
+/* The persona a design starts from: the body's, else the row's `voiceStyle`, else
+   (an emotion variant only) the `instruct` the base design stored on its voice json.
+   Shared by the single route and the bulk job. Only an ABSENT json answers ''; a
+   read error is retried, then a RetryableForkError (the persona exists, so "no
+   persona" would be a lie). */
+export async function resolveVariantPersona(
+  character: CastCharacter,
+  characterId: string,
+  explicit: string,
+  emotion?: string,
+): Promise<string> {
+  const direct = explicit || (character.voiceStyle ?? '').trim();
+  if (direct || !emotion) return direct;
+  const key = character.overrideTtsVoices?.qwen?.name ?? qwenStorageKey(character, characterId);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const base = await readJson<{ instruct?: unknown }>(qwenVoiceSidecarPath(key));
+      return typeof base?.instruct === 'string' ? base.instruct.trim() : '';
+    } catch (err) {
+      if (attempt >= BASE_PERSONA_RETRY_DELAYS_MS.length) {
+        console.error('[qwen-voice] base json unreadable for a variant persona', err);
+        throw new RetryableForkError('The base voice could not be read right now; try again.');
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, BASE_PERSONA_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 /* GET /api/books/:bookId/cast/:characterId/designed-persona
 
    Plan 149 — surfaces the persona text (`instruct`) of a character's already
@@ -1498,6 +1531,15 @@ async function moveStaged(staging: string, target: string): Promise<void> {
   }
 }
 
+async function stampLandedVoiceId(staging: string, voiceId: string, voiceUuid: string | undefined): Promise<void> {
+  const path = qwenVoiceSidecarPath(staging);
+  const json = await readJson<Record<string, unknown>>(path);
+  if (!json || typeof json.voiceId !== 'string') return;
+  const uuid = voiceUuid ?? null;
+  if (json.voiceId === voiceId && (!('voiceUuid' in json) || json.voiceUuid === uuid)) return;
+  await writeJsonAtomic(path, { ...json, voiceId, ...('voiceUuid' in json ? { voiceUuid: uuid } : {}) });
+}
+
 /* #4040 — the base at `baseKey` was redesigned: give it a fresh `rev`, which makes
    every emotion variant designed against the old base stale in every book on the
    key (variant-base-rev.ts). Best-effort after the move: the redesign has landed,
@@ -1736,6 +1778,12 @@ async function landStagedDesign(
           console.error('[qwen-voice] could not record the base an emotion variant was designed against', e),
         );
       }
+      /* The sidecar wrote its own `voiceId` (the staging key) into the json; point
+         it at the key it lands on, before the move so the landed json is complete.
+         Best-effort: nothing reads the field. */
+      await stampLandedVoiceId(staging, voiceId, row.voiceUuid ?? undefined).catch((e) =>
+        console.error('[qwen-voice] could not record the landed key in the voice json', e),
+      );
       await moveStaged(staging, voiceId); // P11-2
       if (redesign) await markBaseRedesigned(voiceId);
     });
@@ -2100,7 +2148,13 @@ qwenVoiceRouter.post(
        voiceStyle. Neither present → 400 (the user must generate or type
        a persona first). */
     const personaFromBody = typeof body.persona === 'string' ? body.persona.trim() : '';
-    const persona = personaFromBody || (character.voiceStyle ?? '').trim();
+    let persona: string;
+    try {
+      persona = await resolveVariantPersona(character, characterId, personaFromBody, emotion);
+    } catch (e) {
+      if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
+      throw e;
+    }
     if (!persona) {
       return res.status(400).json({
         error:
@@ -2388,6 +2442,9 @@ qwenVoiceRouter.post(
       } else {
         await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
       }
+      await stampKeyVoiceId(realVoiceId).catch((e) =>
+        console.error('[qwen-voice] could not record the promoted key in the voice json', e),
+      );
       /* #4040 — a promote over an existing base is a redesign: a fresh `rev` makes
          every variant designed against the old base stale. A first file has no
          variants of its own to invalidate. */

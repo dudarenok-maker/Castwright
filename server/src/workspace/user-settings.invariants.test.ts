@@ -64,6 +64,7 @@ vi.mock('node:fs', async () => {
 });
 
 import * as mod from './user-settings.js';
+import { setMissingWaitMsForTests } from './state-io.js';
 
 const P = mod.USER_SETTINGS_PATH;
 const bak = (n: number) => `${P}.bak.${n}`;
@@ -78,6 +79,9 @@ function clean(): void {
 }
 
 beforeEach(() => {
+  /* The planted foreign markers read as live writers; keep the reader's wait for
+     them short, these tests assert what happens after it, not the wait itself. */
+  setMissingWaitMsForTests(50);
   hooks.rename = null;
   hooks.readFile = null;
   hooks.readFileAfter = null;
