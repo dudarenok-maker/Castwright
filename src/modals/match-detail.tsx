@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { IconCheckCircle, IconClose } from '../lib/icons';
 import { Avatar, VoiceSwatch, PrimaryButton } from '../components/primitives';
+import { SYNC_AUTO_THRESHOLD } from '../views/confirm-cast';
 import type { Character, Voice } from '../lib/types';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
@@ -98,11 +99,9 @@ export function MatchDetailDrawer({
                 <span className="text-2xl text-ink/50">%</span>
               </p>
               <p className="mt-2 text-xs text-ink/60">
-                {overall >= 0.85
+                {overall >= SYNC_AUTO_THRESHOLD
                   ? 'Strong match — voice continuity recommended.'
-                  : overall >= 0.6
-                    ? 'Likely match — listen to the voice before you reuse it.'
-                    : 'Weak match — listen to the voice before you reuse it.'}
+                  : 'Lower-confidence match — listen to the voice before you reuse it.'}
               </p>
             </section>
           )}

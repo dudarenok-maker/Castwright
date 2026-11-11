@@ -23,9 +23,11 @@ import { persistenceMiddleware } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
 import type { Character } from '../lib/types';
 
+const { getBookStateMock } = vi.hoisted(() => ({ getBookStateMock: vi.fn() }));
+
 vi.mock('../lib/api', () => ({
   api: {
-    getBookState: () => Promise.reject(new Error('proxy down')),
+    getBookState: (...a: unknown[]) => getBookStateMock(...a),
     putBookState: vi.fn().mockResolvedValue(undefined),
     matchVoices: () => new Promise(() => {}),
     listBookExports: () => Promise.resolve([]),
@@ -50,7 +52,10 @@ vi.mock('../store/exports-thunks', async (orig) => ({
 
 import { ReadyRoute } from './index';
 
-function renderAt(view: string, sliceBookId: string | null) {
+function renderAt(view: string, sliceBookId: string | null, reply?: unknown) {
+  getBookStateMock.mockReset();
+  if (reply === undefined) getBookStateMock.mockRejectedValue(new Error('proxy down'));
+  else getBookStateMock.mockResolvedValue(reply);
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -104,5 +109,13 @@ describe.each(['cast', 'listen'])("ReadyRoute %s — never shows another book's 
   it('renders the rows once the slice names this book', async () => {
     renderAt(view, 'chain-b2');
     expect(await screen.findByText('Maerin from Legacy Book 1')).toBeTruthy();
+  });
+});
+
+describe.each(['cast', 'listen', 'generate'])('ReadyRoute %s — a book the server does not have', (view) => {
+  it('shows a not-found message with a way back instead of loading forever', async () => {
+    renderAt(view, null, null);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /library/i })).toBeTruthy();
   });
 });

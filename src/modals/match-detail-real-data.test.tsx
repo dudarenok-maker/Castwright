@@ -84,13 +84,19 @@ describe('MatchDetailDrawer — real match data only', () => {
     renderDrawer(withMatch({ confidence: 0.35 }));
     expect(screen.getByText('35')).toBeTruthy();
     expect(screen.queryByText(/Strong match/)).toBeNull();
-    expect(screen.getByText(/Weak match/)).toBeTruthy();
+    expect(screen.getByText(/Lower-confidence match/)).toBeTruthy();
   });
 
   it('shows no confidence block when the link has none', () => {
     renderDrawer(withMatch({ confidence: undefined }));
     expect(screen.queryByText('Overall confidence')).toBeNull();
     expect(screen.queryByText('92')).toBeNull();
+  });
+
+  it("uses the Confirm screen's 0.9 bar: 0.85 is not Strong", () => {
+    renderDrawer(withMatch({ confidence: 0.85 }));
+    expect(screen.queryByText(/Strong match/)).toBeNull();
+    expect(screen.getByText(/Lower-confidence match/)).toBeTruthy();
   });
 
   it('says strong for a high-confidence link', () => {

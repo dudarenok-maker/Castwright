@@ -223,8 +223,10 @@ export function BooksRoute() {
            means the next read adopts it as a different book, without depending
            on the `manuscriptActions.reset()` beside it forcing a full reload
            (OD31: and drop its preview — the new take stays live). */
-        dispatch(castActions.hydrateCharacters([]));
-        dispatch(manuscriptActions.reset());
+        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+          dispatch(castActions.hydrateCharacters([]));
+          dispatch(manuscriptActions.reset());
+        }
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -272,16 +274,15 @@ export function BooksRoute() {
            circuit and leave the cleared slices unrefreshed when the user
            navigates back into the analysing stage.
 
-           Unconditional reset: this code runs from the books library, where
-           ui.stage.bookId is always undefined at the time of the click, so
-           gating on the render-time `bookId === b.bookId` would never fire
-           (the separate "left the book" check after the await reads the LIVE
-           stage instead). Any per-book state still in redux is by definition
-           the *previous* open's residue, so wiping it is correct regardless
-           of which book is being re-parsed — the next book open re-hydrates
-           from disk. */
-        dispatch(castActions.hydrateCharacters([]));
-        dispatch(manuscriptActions.reset());
+           Gated on the LIVE manuscript identity (not the render-time stage,
+           which is undefined here): the await above may have let the user open
+           another book, and wiping the slices then would strand that book's
+           Ready view with no identity to re-hydrate from. A different book's
+           residue is not this re-parse's to clear; its own open re-reads it. */
+        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+          dispatch(castActions.hydrateCharacters([]));
+          dispatch(manuscriptActions.reset());
+        }
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -712,6 +713,31 @@ export function AnalysingRoute() {
    book (its read has landed), they still hold the previous one, and a failed read
    leaves them so; show this instead of that book's rows under this URL (A120 run
    2, F6). `notFound` is a read that answered "no such book": it will not arrive. */
+/* Did the server answer "no such book" for this route's book? Layout's own read
+   answers `null` without stamping an identity when the slices hold none, so a
+   Ready route would wait for it forever. One bounded read while `enabled`; the
+   id that answered is stored, so the flag never outlives its book. */
+function useBookNotFound(bookId: string, enabled: boolean): boolean {
+  const [answeredNullFor, setAnsweredNullFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled || !bookId) return;
+    const life = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers)
+      .then((res) => {
+        if (res === null && !life.signal.aborted) setAnsweredNullFor(bookId);
+      })
+      .catch(() => {
+        /* a failing read is Layout's retry notice to report; keep loading */
+      });
+    return () => {
+      life.abort();
+      timers.forEach(clearTimeout);
+    };
+  }, [bookId, enabled]);
+  return answeredNullFor === bookId;
+}
+
 function BookNotLoaded({ notFound = false }: { notFound?: boolean }) {
   const navigate = useNavigate();
   if (notFound) {
@@ -730,7 +756,7 @@ function BookNotLoaded({ notFound = false }: { notFound?: boolean }) {
   }
   return (
     <div role="status" className="p-10 text-center text-sm text-ink/60">
-      Loading this book's cast…
+      Loading this book…
     </div>
   );
 }
@@ -743,7 +769,8 @@ export function ConfirmRoute() {
 
   const dispatch = useAppDispatch();
   const routeStore = useStore<RootState>();
-  const [notFound, setNotFound] = useState(false);
+  const [notFoundFor, setNotFoundFor] = useState<string | null>(null);
+  const notFound = notFoundFor === bookId;
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
@@ -797,13 +824,15 @@ export function ConfirmRoute() {
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
                result can still carry a flagged chapter, decision B). */
-            if (res) {
+            /* Both writes below are guarded by the slices holding THIS book:
+               the gaps replace the chapters slice's map wholesale. */
+            if (res && routeStore.getState().manuscript.bookId === bookId) {
               dispatch(
                 chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
               );
             }
             /* A read that answered "no such book" will never arrive. */
-            if (!res) setNotFound(true);
+            if (!res) setNotFoundFor(bookId);
             /* Hydrate only while the slices hold THIS book: otherwise this roster
                would sit under another book's manuscript and its next edit would be
                PUT into that book. Layout's full read hydrates the cast anyway. */
@@ -945,20 +974,18 @@ function ReadyViewSwitch({
   const changeLogEvents = useAppSelector((s) => s.changeLog.events);
 
   const activeBook = library.books.find((b) => b.bookId === bookId);
-  /* Anchored to the manuscript slice's bookId so cross-book navigation —
-     e.g. analysing Book A → clicking the generation pill to open Book B's
-     Generate view — doesn't render Book A's stale title under
-     "Generating …" until the disk re-hydrate lands. See manuscript-slice
-     bookId tracking + Layout's matching projectTitle/hydration guards. */
+  /* The slices hold ONE book (manuscript-slice bookId tracking): while they
+     still hold another the gate below shows a loading or not-found state, so by
+     the time a view renders `manuscript.title` is this book's. */
   const manuscriptMatchesBook = manuscript.bookId === bookId;
-  const projectTitle =
-    (manuscriptMatchesBook ? manuscript.title : null) || activeBook?.title || null;
+  const notFound = useBookNotFound(bookId, !manuscriptMatchesBook);
+  const projectTitle = manuscript.title || activeBook?.title || null;
 
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
 
   /* The slices hold one book: never show the previous one's rows under this URL. */
-  if (!manuscriptMatchesBook) return <BookNotLoaded />;
+  if (!manuscriptMatchesBook) return <BookNotLoaded notFound={notFound} />;
 
   switch (view) {
     case 'manuscript':
@@ -1107,8 +1134,6 @@ function ListenRoute({ bookId }: { bookId: string }) {
   const coverFraming = useAppSelector(
     (s) => s.library.books.find((b) => b.bookId === bookId)?.coverFraming,
   );
-  const manuscriptBookId = useAppSelector((s) => s.manuscript.bookId);
-  if (manuscriptBookId !== bookId) return <BookNotLoaded />;
   return (
     <ListenView
       bookId={bookId}

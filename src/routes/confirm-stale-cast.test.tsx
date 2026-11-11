@@ -3,10 +3,10 @@
    book; Confirm must show its rows only while the slice names this route's book. */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
@@ -85,10 +85,17 @@ function renderConfirm(sliceBookId: string | null, reply?: unknown) {
   return store;
 }
 
+let navigateTo: (to: string) => void = () => {};
+function NavProbe() {
+  navigateTo = useNavigate();
+  return null;
+}
+
 function renderWith(store: ReturnType<typeof configureStore>) {
   render(
     <Provider store={store}>
       <MemoryRouter initialEntries={['/books/chain-b2/confirm']}>
+        <NavProbe />
         <Routes>
           <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
         </Routes>
@@ -123,5 +130,25 @@ describe("ConfirmRoute — never shows another book's cast (F6)", () => {
     await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 50));
     expect(store.getState().cast.characters.map((c: Character) => c.id)).toEqual(['m']);
+  });
+
+  it("does not carry book A's not-found flag over to book B (Back/Forward on one route instance)", async () => {
+    renderConfirm(null, null);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    getBookStateMock.mockReset();
+    getBookStateMock.mockRejectedValue(new Error('proxy down'));
+    act(() => navigateTo('/books/other-b/confirm'));
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it("does not write another book's chapter gaps while the slices hold a different book", async () => {
+    const store = renderConfirm('legacy-b1', {
+      state: { bookId: 'chain-b2', chapters: [{ id: 1 }] },
+      cast: { characters: [] },
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(store.getState().chapters.analysisGapById).toBeUndefined();
   });
 });
