@@ -8372,6 +8372,8 @@ export async function runMainAnalyzerJob(
       let wroteStateJson = false;
       /* Plan 291 — what the planned persist wrote (set only once cast.json landed). */
       let persisted: PersistOutcome | undefined;
+      /* The job's copy of the cache's ledger as the persist read it (PR #4103 pass 3 P3-1). */
+      let ledgerBeforePersist: RunAddedLedger = {};
       /* #4031 (N2) — the persist's cache op, when it faulted; re-sent once below. */
       let persistUnsentPatch: CachePatch | undefined;
       /* #2196 — resolve the SINGLE verified write target before ANY write.
@@ -8491,7 +8493,8 @@ export async function runMainAnalyzerJob(
                changed is sent (M5). */
             const nextLedger: Record<string, LedgerEntry | null> = { ...out.ledger };
             for (const k of Object.keys(cache.addedRows ?? {})) if (!Object.hasOwn(out.ledger, k)) nextLedger[k] = null;
-            const ledgerPatch = ledgerDelta(cache.addedRows ?? {}, nextLedger);
+            ledgerBeforePersist = cache.addedRows ?? {};
+            const ledgerPatch = ledgerDelta(ledgerBeforePersist, nextLedger);
             cache.addedRows = out.ledger;
             const { parked, unsentPatch } = await applyPlannedPersistOutcome({
               out,
@@ -8689,7 +8692,11 @@ export async function runMainAnalyzerJob(
            still knows those rows as the run's own (no re-mint), and a user delete of
            one sticks. The cache takes follow the persist's reroute of lines a
            deleted plan target held to the narrator (rule 13), applied to the cache
-           on disk inside the op so a merge's rewrite of the takes is not reverted. */
+           on disk inside the op so a merge's rewrite of the takes is not reverted.
+           Only what changed against the job's copy as the persist read it is sent
+           (M5, PR #4103 pass 3 P3-1): an `added-once` entry the run carried unchanged
+           is already on disk, or a route (a merge) deleted it mid-run and it stays
+           deleted; an entry the persist itself added or converted is re-sent. */
         const writtenIds = new Set((persisted?.characters ?? []).map((c) => c.id));
         const addedOnce: Record<string, LedgerEntry> = {};
         for (const [k, e] of Object.entries(persisted?.ledger ?? {})) {
@@ -8700,7 +8707,7 @@ export async function runMainAnalyzerJob(
         await mutateAnalysisCache(manuscriptId, {
           fields: { takesPersisted: true, confirmReached: true },
           clearLedger: true,
-          ledger: addedOnce,
+          ledger: ledgerDelta(ledgerBeforePersist, addedOnce),
           ...rerouteDeletedTakesPatch(persisted),
         });
       }

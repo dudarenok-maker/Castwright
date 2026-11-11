@@ -454,6 +454,43 @@ describe('overlayPlanOntoCast ledger (invariant 6)', () => {
   });
 });
 
+describe('overlayPlanOntoCast: a catch-all bucket settles by its own id (R49, PR #4103 pass 3 P3-1)', () => {
+  const vane: PriorRow = { id: 'lord-vane', name: 'Lord Vane', aliases: ['Unknown male'], lines: 5 };
+  const bucket: Row = { id: 'unknown-male', name: 'Unknown male', lines: 4, scenes: 2 };
+  /** The user merged the bucket into Lord Vane: the history resolves it to him. */
+  const merged = (id: string): string | null => (id === 'unknown-male' ? 'lord-vane' : id === 'lord-vane' ? id : null);
+
+  it.each([
+    ['a cached join of the bucket', planOf(join('unknown-male', 'unknown-male')), {}],
+    ['a run row the ledger knows', planOf(nw('unknown-male')), { 'unknown-male': { state: 'added-once' } }],
+  ] as const)('%s, merged away mid-run, is re-added under its own id, never landed on the survivor', (_label, plan, ledger) => {
+    const r = overlay({ current: [vane], roster: [bucket], plan, ledger: ledger as RunAddedLedger, resolve: merged, mode: 'persist' });
+    expect(r.characters.map((c) => c.id).sort()).toEqual(['lord-vane', 'unknown-male']);
+    expect(r.characters.find((c) => c.id === 'unknown-male')).toMatchObject({ lines: 4, scenes: 2 });
+    expect(r.characters.find((c) => c.id === 'lord-vane')).toEqual(vane);
+    expect(r.deletedTargets).toEqual([]);
+    expect(r.ledger['unknown-male']?.state).toBe('run-owned');
+  });
+
+  it('a run-row bucket the user deleted (no survivor) stays gone (R4)', () => {
+    const r = overlay({
+      current: [vane], roster: [bucket], plan: planOf(nw('unknown-male')),
+      ledger: { 'unknown-male': { state: 'added-once' } }, resolve: (id) => (id === 'lord-vane' ? id : null), mode: 'persist',
+    });
+    expect(r.characters.map((c) => c.id)).toEqual(['lord-vane']);
+    expect(r.deletedTargets).toEqual(['unknown-male']);
+  });
+
+  it('a non-bucket run row merged away still lands on its survivor', () => {
+    const r = overlay({
+      current: [vane], roster: [{ id: 'boris', name: 'Boris', lines: 1 }], plan: planOf(nw('boris')),
+      ledger: { boris: { state: 'added-once' } }, resolve: (id) => (id === 'boris' || id === 'lord-vane' ? 'lord-vane' : null), mode: 'persist',
+    });
+    expect(r.characters.map((c) => c.id)).toEqual(['lord-vane']);
+    expect(r.characters[0]).toMatchObject({ lines: 1, aliases: expect.arrayContaining(['Boris']) });
+  });
+});
+
 describe('retargetPlanForMerge', () => {
   it("item 12: retargetPlanForMerge copies the target's new decision", () => {
     const plan = planOf(nw('s', 's-n1', { suggest: ['q'] }), nw('t', 't-n1', { suggest: ['p'], inheritedDeclines: [{ bookId: 'b9', characterId: 'x' }] }), join('j', 'prior'));

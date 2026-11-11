@@ -3683,6 +3683,115 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     }
   });
 
+  /* ---- PR #4103 pass 3 P3-1: a merge of the live fold bucket WHILE a run is going ---- */
+
+  describe('P3-1: a mid-run merge of the live bucket never sends that run\'s lines, or a later run\'s, to the merge target', () => {
+    const body = `${NEUTRAL}\n\nThe Jogger waved.`;
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const vaneBook = (): HarnessBook =>
+      seed([{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })], undefined, body);
+    /** Lands the merge from the front-matter guard's classifier call: after the dedup's
+        collapse, before the second collapse and the fold, in both jobs. */
+    const mergeFromClassifier = (b: HarnessBook): { status: () => number | undefined; target: () => Row | undefined } => {
+      let merged: request.Response | undefined;
+      let target: Row | undefined;
+      setNonStoryHook(async () => {
+        if (merged) return;
+        merged = await mergeRoute(b, 'unknown-male', 'lord-vane');
+        target = row(b, 'lord-vane');
+      });
+      return { status: () => merged?.status, target: () => target };
+    };
+    /** The merge target as the run leaves it: no alias added, and counts never raised above
+        what the merge gave it (a row the roster does not name is carried with its count by
+        the main job and recounted from the edits by the subset job). */
+    const expectTargetUntouched = (b: HarnessBook, afterMerge: Row, label: string): void => {
+      const now = row(b, 'lord-vane')!;
+      expect(now.aliases, label).toEqual(afterMerge.aliases);
+      expect(Number(now.lines ?? 0), label).toBeLessThanOrEqual(Number(afterMerge.lines ?? 0));
+      expect(Number(now.scenes ?? 0), label).toBeLessThanOrEqual(Number(afterMerge.scenes ?? 0));
+    };
+    const expectUserRecordKept = (b: HarnessBook): void => {
+      expect(history(b).supersededBy).toEqual({ 'unknown-male': 'lord-vane' });
+      expect(history(b).supersededByKind).toEqual({ 'unknown-male': 'user' });
+      expect((history(b) as { displaced?: Record<string, string> }).displaced?.['unknown-male']).toBeUndefined();
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    };
+
+    it('the merged run, a further run and a Start fresh all keep the background lines on the bucket', async () => {
+      const b = vaneBook();
+      /* Boris Vane, one line in the first chapter, is the guard's candidate; he folds too. */
+      const borisP = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+      const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger, borisP], speakerId: 'anna' };
+      const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris', 'the-jogger', 'the-jogger'] : ['anna', 'the-jogger']));
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH, { phase1: script }))).toBe(true);
+      expect(editLines(b)).toEqual({ anna: 3, 'unknown-male': 5 });
+
+      const m = mergeFromClassifier(b);
+      const merged = await go(b, FRESH, { seedCache: false, phase1: script });
+      setNonStoryHook(undefined);
+      expect(m.status()).toBe(200);
+      /* The merge itself gave the character the bucket's names and lines (as on `main`). */
+      const afterMerge = m.target()!;
+      expect(afterMerge.aliases).toEqual(['Unknown male', 'The Jogger', 'Boris Vane']);
+      const expectBucketKept = (events: Array<{ kind: string; code?: unknown }>, label: string): void => {
+        expect(errCode(events), label).toBeUndefined();
+        expect(done(events), label).toBe(true);
+        expect(ids(readCast(b.bookDir)).sort(), label).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+        expect(editLines(b), label).toEqual({ anna: 3, 'unknown-male': 5 });
+        expect(linesById(b.bookDir), label).toMatchObject({ anna: 3, 'unknown-male': 5, narrator: 0 });
+        expectTargetUntouched(b, afterMerge, label);
+        expectUserRecordKept(b);
+      };
+      expectBucketKept(merged, 'run 2 (merge during the run)');
+
+      expectBucketKept(await go(b, FRESH, { seedCache: false, phase1: script }), 'run 3');
+
+      /* Main-only (one line, R18): Start fresh is a main-job request. */
+      if (kind === 'main') {
+        const fresh = await runStartFresh(b, { roster: FRESH.roster, speakerId: two('anna', 'the-jogger') });
+        expect(errCode(fresh)).toBeUndefined();
+        expect(done(fresh)).toBe(true);
+        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+        expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+        expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
+        expectTargetUntouched(b, afterMerge, 'Start fresh');
+        expectUserRecordKept(b);
+      }
+    });
+
+    it('a run that folds nothing into the male bucket leaves the ledger entry the merge deleted deleted', async () => {
+      const b = vaneBook();
+      /* One line each: Boris folds into the male bucket, Greta into the female one. */
+      const borisP = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+      const greta = fr('greta', 'Greta Vane', { role: 'minor' });
+      const FRESH = { roster: [NARR, fr('anna', 'Anna'), borisP, greta], speakerId: 'anna' };
+      const first = phase1Script((ch) => (ch === 1 ? ['anna', 'boris', 'greta'] : ['anna']));
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH, { phase1: first }))).toBe(true);
+      expect(editLines(b)).toMatchObject({ 'unknown-male': 1, 'unknown-female': 1 });
+      expect(entryOf(b, 'unknown-male')).toEqual({ state: 'added-once' });
+
+      /* This run hears Anna and Greta only (Greta, one line in the first chapter, is the guard's
+         candidate): Boris has no line and is dropped, so nothing re-adds the male bucket after
+         the merge removes it. The cached takes go first (plan and ledger kept, the F2 M6 lever)
+         so both jobs attribute afresh rather than replay the first run's bucket line. */
+      await mutateAnalysisCache(b.manuscriptId, { transform: (c) => ({ ...c, chapters: {} }) });
+      const m = mergeFromClassifier(b);
+      const events = await go(b, FRESH, {
+        seedCache: false,
+        phase1: phase1Script((ch) => (ch === 1 ? ['anna', 'greta'] : ['anna'])),
+      });
+      setNonStoryHook(undefined);
+      expect(m.status()).toBe(200);
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir))).not.toContain('unknown-male');
+      expect(editLines(b)['lord-vane']).toBeUndefined();
+      expect(entryOf(b, 'unknown-male')).toBeUndefined();
+      expectUserRecordKept(b);
+    });
+  });
+
   /* ---- F2: a run after a main run deletes nothing by the earlier run's ledger ---- */
 
   const entryOf = (b: HarnessBook, id: string): unknown => readCache(b.manuscriptId)?.addedRows?.[id];
