@@ -189,6 +189,70 @@ describe('withCapacityRetry', () => {
     expect(evictIdleTts).toHaveBeenCalledWith('cuda:0', expect.objectContaining({ sawRepair: false }));
   });
 
+  it('#4079: a render-own Quality synth refused for capacity frees Kokoro once and retries at once', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls < 2 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+    const freeKokoroForRender = vi.fn(async () => true);
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: async () => false, // a render is in flight: the #4066 lever is inert
+      freeKokoroForRender,
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 10_000, // a poll wait would blow the test timeout: the retry must be immediate
+      maxAttempts: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(freeKokoroForRender).toHaveBeenCalledTimes(1);
+    expect(freeKokoroForRender).toHaveBeenCalledWith('cuda:0');
+  });
+
+  it('#4079: the Kokoro exception is one-shot per call and its failure falls through to the normal poll', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls < 3 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+    const freeKokoroForRender = vi.fn(async () => false);
+
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts: async () => false,
+      freeKokoroForRender,
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(freeKokoroForRender).toHaveBeenCalledTimes(1);
+  });
+
+  it('#4079: without the render-synth hook (a design, a preview, any other op) nothing extra is freed', async () => {
+    const evictIdleTts = vi.fn(async () => false);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      return calls < 2 ? noCapacityResponse(6144, 'cuda:0') : new Response('ok', { status: 200 });
+    });
+    const res = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      evictIdleTts,
+      analyzerEvictWouldHelp: async () => false,
+      evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+      pollMs: 0,
+      maxAttempts: 5,
+    });
+    expect(res.status).toBe(200);
+    expect(evictIdleTts).toHaveBeenCalledTimes(1); // and only the #4066 lever ran
+  });
+
   it('#4075: a lever declining while a repair is active is re-asked on later polls, and frees once it ends', async () => {
     /* Behaviour pin on withCapacityRetry's 'declined' handling (the mock lever
        stands in for evictIdleQwenBase): a short repair holds the lever at

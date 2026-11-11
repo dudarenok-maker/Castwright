@@ -149,6 +149,41 @@ export async function keepForRunStart(
   return keep;
 }
 
+export interface FreeKokoroForRenderOpts {
+  modelKey?: TtsModelKey;
+  /** Must be true: the blocked op is a chapter render's own synth call. */
+  isRenderSynth?: boolean;
+  signal?: AbortSignal;
+  /** Injected for tests. Defaults to the sidecar-health leaf gate. */
+  _probeHealth?: () => Promise<SidecarHealthSnapshot | null>;
+  /** Injected for tests. Defaults to the reconcile leaf gate. */
+  _reconcile?: ReconcileResidentQwenTiersFn;
+}
+
+/** #4079 (owner decision, 2026-11-11) — the ONE exception to "a render in
+    flight frees nothing" (#4066 / `evictIdleQwenBase` above): when a render's
+    OWN Quality (1.7B) synth is refused for capacity and Kokoro sits on the
+    GPU, unload Kokoro — never a Qwen tier — and let the caller retry. Kokoro
+    reloads on the next fallback line, which is accepted (same as the run-start
+    drop in `keepForRunStart`). Any other op (a design, a preview, a standard
+    synth, anything not a render's own call) gets `false` and frees nothing, so
+    #4066's rule holds for them. Returns true only when Kokoro was really
+    unloaded. */
+export async function freeKokoroForRenderSynth(opts: FreeKokoroForRenderOpts): Promise<boolean> {
+  if (opts.isRenderSynth !== true || opts.modelKey !== 'qwen3-tts-1.7b') return false;
+  const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
+  if (!health || health.status === 'unreachable') return false;
+  if (!(health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro))) return false;
+  const freedNames: string[] = [];
+  /* keep06 + keep17 true: reconcile touches no Qwen tier; keepKokoro:false drops Kokoro only. */
+  const keep: ResidentTtsKeep = { keep06: true, keep17: true, keepKokoro: false };
+  const ok = opts._reconcile
+    ? await opts._reconcile(keep, opts.signal, freedNames)
+    : await reconcileResidentQwenTiersIfRegistered(keep, opts.signal, freedNames);
+  if (freedNames.length > 0) recordTtsAutoFree(freedNames, 'Quality render');
+  return ok && freedNames.includes('Kokoro');
+}
+
 export interface EvictIdleQwenBaseOpts {
   /** The model key the blocked op is asking for. When it's a Qwen key, its
       own tier is the one KEPT (the elevate-only rule: an op only reclaims

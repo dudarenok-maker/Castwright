@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { evictIdleQwenBase, keepForRunStart } from './evict-idle-tts.js';
+import { evictIdleQwenBase, keepForRunStart, freeKokoroForRenderSynth } from './evict-idle-tts.js';
 import { computeUsedQwenTiers } from '../tts/per-character-engine.js';
 import { getLastTtsAutoFree, resetTtsAutoFreeForTests } from './tts-auto-free-notice.js';
 
@@ -489,5 +489,71 @@ describe('keepForRunStart (#4066 — a Quality chapter render unloads an on-GPU 
       }),
     ).toEqual(keep);
     expect(await keepForRunStart(keep, false, async () => null)).toEqual(keep);
+  });
+});
+
+describe('freeKokoroForRenderSynth (#4079)', () => {
+  const gpuKokoro = async () => ({ kokoroLoaded: true, devices: { kokoro: 'cuda' } });
+
+  it('unloads Kokoro and nothing else for a render-own Quality synth', async () => {
+    const reconcile = vi.fn(async (_k: unknown, _s?: AbortSignal, out?: string[]) => {
+      out?.push('Kokoro');
+      return true;
+    });
+    const freed = await freeKokoroForRenderSynth({
+      modelKey: 'qwen3-tts-1.7b',
+      isRenderSynth: true,
+      _probeHealth: gpuKokoro,
+      _reconcile: reconcile,
+    });
+    expect(freed).toBe(true);
+    /* both Qwen tiers kept: only Kokoro may go */
+    expect(reconcile).toHaveBeenCalledWith({ keep06: true, keep17: true, keepKokoro: false }, undefined, expect.any(Array));
+  });
+
+  it.each([
+    ['not a render synth (a design / preview / other op)', { modelKey: 'qwen3-tts-1.7b' as const, isRenderSynth: false }],
+    ['a standard-tier render synth', { modelKey: 'qwen3-tts-0.6b' as const, isRenderSynth: true }],
+    ['no model key', { isRenderSynth: true }],
+  ])('frees nothing for %s', async (_n, o) => {
+    const reconcile = vi.fn(async () => true);
+    const probe = vi.fn(gpuKokoro);
+    expect(await freeKokoroForRenderSynth({ ...o, _probeHealth: probe, _reconcile: reconcile })).toBe(false);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('leaves a CPU Kokoro, an absent Kokoro and an unreadable probe alone', async () => {
+    const reconcile = vi.fn(async () => true);
+    const base = { modelKey: 'qwen3-tts-1.7b' as const, isRenderSynth: true, _reconcile: reconcile };
+    expect(await freeKokoroForRenderSynth({ ...base, _probeHealth: async () => ({ kokoroLoaded: true, devices: { kokoro: 'cpu' } }) })).toBe(false);
+    expect(await freeKokoroForRenderSynth({ ...base, _probeHealth: async () => ({ kokoroLoaded: false }) })).toBe(false);
+    expect(await freeKokoroForRenderSynth({ ...base, _probeHealth: async () => null })).toBe(false);
+    expect(await freeKokoroForRenderSynth({ ...base, _probeHealth: async () => ({ status: 'unreachable' as const }) })).toBe(false);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('reports false when Kokoro was not actually unloaded', async () => {
+    expect(
+      await freeKokoroForRenderSynth({
+        modelKey: 'qwen3-tts-1.7b',
+        isRenderSynth: true,
+        _probeHealth: gpuKokoro,
+        _reconcile: async () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it('#4066 still holds: the general lever frees nothing while a render is in flight', async () => {
+    const reconcile = vi.fn(async () => true);
+    const freed = await evictIdleQwenBase({
+      modelKey: 'qwen3-tts-1.7b',
+      purpose: 'design',
+      _reconcile: reconcile,
+      _isAnyGenerationActive: () => true,
+      _probeHealth: gpuKokoro,
+    });
+    expect(freed).toBe(false);
+    expect(reconcile).not.toHaveBeenCalled();
   });
 });

@@ -69,6 +69,10 @@ def _wire(monkeypatch, qwen, devices_fn, steps=None):
     monkeypatch.setattr(pc, "reserve_mb", lambda: 500)
     monkeypatch.setattr(pc, "_protected_steps", {}, raising=False)
     monkeypatch.setattr(pc, "_admit_lock", asyncio.Lock())
+    reclaims: list = []
+    monkeypatch.setattr(pc, "reclaim", lambda dk: reclaims.append(dk) or False)
+    monkeypatch.setattr(pc, "_last_reclaim", {})  # the per-device reclaim cooldown is production state
+    monkeypatch.setattr(pc, "_test_reclaims", reclaims, raising=False)
     if steps is not None:
         monkeypatch.setattr(pc, "idle_evict_steps", steps)
     return pc
@@ -271,17 +275,44 @@ def test_credit_size_drives_the_decision(monkeypatch):
 
 
 def test_base17_weights_are_measured_at_load(monkeypatch):
+    """Parameter + buffer bytes of the loaded model, in MB. No torch needed (CI's
+    lean sidecar install has none): `torch` is stubbed in sys.modules."""
+    import types
+
+    class T:
+        def __init__(self, mb):
+            self._n = mb * 1_048_576
+
+        def numel(self):
+            return self._n // 2
+
+        def element_size(self):
+            return 2
+
+    class FakeModel:
+        def parameters(self):
+            return [T(3000), T(700)]
+
+        def buffers(self):
+            return [T(200)]
+
+    loaded = types.SimpleNamespace(model=FakeModel())
     q = _fake_qwen(resident=False)
     q._cold_load_lock = threading.Lock()
     q._device_pref = "cuda:0"
     q._ensure_device_resolved = lambda: None
-    seq = iter([1000, 4900])
-    monkeypatch.setattr(main, "_cuda_allocated_mb", lambda device: next(seq))
-    monkeypatch.setattr(q, "_load_qwen_model", lambda name: object(), raising=False)
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    monkeypatch.setattr(q, "_load_qwen_model", lambda name: loaded, raising=False)
     monkeypatch.setattr(main, "_install_codec_timing", lambda m: None)
     monkeypatch.setattr(main, "_maybe_compile_codec", lambda m, t: None)
     q._ensure_base17_loaded()
     assert q._base17_weights_mb == 3900
+
+
+def test_unreadable_model_measures_zero_and_falls_back_to_the_constant(monkeypatch):
+    assert main._module_weights_mb(object()) == 0
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=0))
+    assert main._own_resident_tier("qwen", "1.7b", {})[1] == main._QWEN_BASE17_WEIGHTS_MB
 
 
 # --- log text -------------------------------------------------------------
@@ -373,4 +404,179 @@ def test_render_lease_route(monkeypatch):
     assert c.post("/render-lease", json={"holder": "srv", "ttl_seconds": 0}).json()["active"] is False
     assert c.post("/render-lease", json={"ttl_seconds": 5}).status_code == 400
     assert c.post("/render-lease", json={"holder": "x", "ttl_seconds": True}).status_code == 400
+    main._render_leases.clear()
+
+
+# --- pass 2: refusal body, ladder target, NaN lease, survivors -------------
+
+
+def _state_probe(state, total=TOTAL, index=0):
+    return lambda: [{"kind": "cuda", "index": index, "label": "g", "totalMb": total, "freeMb": state["free"]}]
+
+
+def test_credited_refusal_reports_what_must_be_free_beside_the_weights(monkeypatch):
+    """S1: base17 resident next to an idle analyzer. Node compares neededMb with
+    the card's RAW free memory (capacity-retry analyzerEvictWouldHelp), so the
+    refusal must say 6144 - W, or the analyzer is never evicted."""
+    analyzer = 3000
+    state = {"free": TOTAL - OTHER_MB - 3950 - analyzer}  # 942
+    qwen = _fake_qwen(True, weights_mb=3700)
+    pc = _wire(monkeypatch, qwen, _state_probe(state), steps=lambda dk, eng: [])
+
+    async def once():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert asyncio.run(once()) == {"noCapacity": {"neededMb": 6144 - 3700, "deviceKey": "cuda:0"}}
+    assert state["free"] + analyzer >= 6144 - 3700, "Node's analyzerEvictWouldHelp would now say yes"
+    state["free"] += analyzer  # ...and once the analyzer is evicted the sidecar admits
+    assert asyncio.run(once()) == {"device": "cuda:0"}
+
+
+def test_admit_reports_the_same_credited_refusal(monkeypatch):
+    state = {"free": 942}
+    qwen = _fake_qwen(True, weights_mb=3700)
+    pc = _wire(monkeypatch, qwen, _state_probe(state), steps=lambda dk, eng: [])
+    out = asyncio.run(pc.admit("qwen", "1.7b", {}, cpu_capable=False, heavy=True))
+    assert out == {"noCapacity": {"neededMb": 6144 - 3700, "deviceKey": "cuda:0"}}
+
+
+def test_two_gpus_refusal_ladder_and_reclaim_stay_on_the_credited_card(monkeypatch):
+    """S2: base17 on the tight cuda:0, a roomy eGPU on cuda:1. The refusal names
+    cuda:0 (not the eGPU), the ladder and the stranded-cache reclaim run against
+    cuda:0, and nothing is run for cuda:1."""
+    devs = [
+        {"kind": "cuda", "index": 0, "label": "laptop", "totalMb": 8192, "freeMb": 900},
+        {"kind": "cuda", "index": 1, "label": "egpu", "totalMb": 12288, "freeMb": 9000},
+    ]
+    seen = []
+
+    def steps(dk, eng):
+        seen.append(dk)
+        return []
+
+    qwen = _fake_qwen(True, weights_mb=3700)
+    pc = _wire(monkeypatch, qwen, lambda: devs, steps=steps)
+
+    async def once():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert asyncio.run(once()) == {"noCapacity": {"neededMb": 6144 - 3700, "deviceKey": "cuda:0"}}
+    assert set(seen) == {"cuda:0"}
+    assert pc._test_reclaims == ["cuda:0"]
+    pc._test_reclaims.clear()
+    pc._last_reclaim.clear()  # the 30 s per-device reclaim cooldown
+    seen.clear()
+    out = asyncio.run(pc.admit("qwen", "1.7b", {}, cpu_capable=False, heavy=True))
+    assert out == {"noCapacity": {"neededMb": 6144 - 3700, "deviceKey": "cuda:0"}}
+    assert set(seen) == {"cuda:0"}
+    assert pc._test_reclaims == ["cuda:0"]
+
+
+def test_a_request_that_fits_with_the_credit_runs_no_evict_step(monkeypatch):
+    """Kills 'credit dropped from the initial try_hold': it fits at once, so a warm
+    design / ASR / SPK / Coqui model must not be evicted for it."""
+    qwen = _fake_qwen()
+    ran = []
+
+    def steps(dk, eng):
+        return [main.EvictStep("other", None, lambda: ran.append("other") or True)]
+
+    pc = _wire(monkeypatch, qwen, _one_card(qwen), steps=steps)
+
+    async def once():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert asyncio.run(once()) == {"device": "cuda:0"}
+    assert ran == []
+
+
+def test_the_ladder_stops_at_the_first_step_that_fits_with_the_credit(monkeypatch):
+    """Kills 'credit dropped from the ladder's _fits': after step 1 frees 2000 MB
+    the request fits ONLY with the credit; a second step must not run."""
+    qwen = _fake_qwen(True, weights_mb=3900)
+    state = {"free": 1000}
+    ran = []
+
+    def s1():
+        ran.append("s1")
+        state["free"] += 2000
+        return True
+
+    def s2():
+        ran.append("s2")
+        return True
+
+    pc = _wire(
+        monkeypatch, qwen, _state_probe(state),
+        steps=lambda dk, eng: [main.EvictStep("s1", None, s1), main.EvictStep("s2", None, s2)],
+    )
+
+    async def once():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert asyncio.run(once()) == {"device": "cuda:0"}
+    assert ran == ["s1"]
+    assert pc._test_reclaims == [], "admitted by the ladder, not by the last-resort reclaim"
+
+
+def test_protection_is_counted_not_boolean_across_overlapping_reservations(monkeypatch):
+    """Two credited 1.7b reservations can overlap on a big card; releasing the
+    first must leave the second protected."""
+    qwen = _fake_qwen(True, weights_mb=3900)
+    state = {"free": 12000}
+    pc = _wire(monkeypatch, qwen, _state_probe(state, total=16384), steps=lambda dk, eng: [])
+
+    async def body():
+        a = pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True)
+        b = pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True)
+        assert await a.__aenter__() == {"device": "cuda:0"}
+        assert await b.__aenter__() == {"device": "cuda:0"}
+        assert pc._protected_steps["qwen.base17"] == 2
+        await a.__aexit__(None, None, None)
+        assert pc._protected_steps["qwen.base17"] == 1, "B is still admitted and must stay protected"
+        await b.__aexit__(None, None, None)
+        assert pc._protected_steps["qwen.base17"] == 0
+
+    asyncio.run(body())
+
+
+def test_protection_registration_cannot_raise_between_hold_and_try(monkeypatch):
+    """The hook is read once, inside the admission lock: a hook that raises on a
+    second call must not leak the ledger hold."""
+    qwen = _fake_qwen()
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+    real = pc.own_resident_tier
+    calls = {"n": 0}
+
+    def once_only(engine, model, cfg):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("second read")
+        return real(engine, model, cfg)
+
+    monkeypatch.setattr(pc, "own_resident_tier", once_only)
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert asyncio.run(body()) == {"device": "cuda:0"}
+    assert pc.ledger.reserved_mb("cuda:0") == 0
+    assert calls["n"] == 1
+
+
+def test_lease_rejects_non_finite_ttl(monkeypatch):
+    """json.loads accepts NaN/Infinity; NaN never expires (`nan <= now` is False)."""
+    from fastapi.testclient import TestClient
+
+    main._render_leases.clear()
+    c = TestClient(main.app)
+    for raw in ("NaN", "Infinity", "-Infinity"):
+        r = c.post("/render-lease", content=f'{{"holder":"x","ttl_seconds":{raw}}}', headers={"content-type": "application/json"})
+        assert r.status_code == 400, raw
+    assert not main._render_lease_active()
     main._render_leases.clear()

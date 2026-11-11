@@ -430,7 +430,13 @@ Two things distinguish the Coqui step from the others:
    reservation keeps every OTHER admission's ladder off that step until it is
    released. The ledger still books the full peak; the resident weights are
    added back only to that request's own fit check, on the card the base is on.
-   Mint, GPU ASR and GPU SPK are not covered (reported on #4079).
+   Protection has a cost: while that reservation is live (a 1.7b request can
+   block in `unload_design()` for up to 150 s before it claims the engine), an
+   admission that `main` would have satisfied by evicting the base can be
+   refused, which matters on cards large enough to hold both. A credited
+   refusal reports `neededMb = peak - weights` on the credited card, so Node's
+   analyzer/endpoint levers compare against that card's raw free memory.
+   Mint, GPU ASR and GPU SPK are not covered (#4102).
 2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
    `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
    registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)

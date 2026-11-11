@@ -1,5 +1,5 @@
-/* #4079 — render lease. While a chapter render (or splice / QA repair) is
-   registered, renew a short lease on the sidecar so its idle watchdog does not
+/* #4079 — render lease. While a running chapter render uses the Quality
+   (1.7B) tier (a Quality run, or any character set to Quality), renew a short lease on the sidecar so its idle watchdog does not
    unload the 1.7B-Base during the render's ASR-QA gaps. The sidecar expires
    the lease by itself (no renewal => gone after LEASE_TTL_S), so a crashed
    server can never pin VRAM.
@@ -8,18 +8,18 @@
    (./active-generation-gate.ts) — never by importing routes/generation.ts,
    which would close an import cycle (see that file's header). Imports
    user-settings the same way ./capacity-probe.ts does. */
-import { isGenerationKnownActive } from './active-generation-gate.js';
+import { isQualityRenderKnownActive } from './active-generation-gate.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 export const LEASE_TTL_S = 90;
 export const LEASE_RENEW_MS = 30_000;
 const HOLDER = 'castwright-server';
 
-/** One renewal tick: post the lease when a render is known to be in flight.
+/** One renewal tick: post the lease when a running render uses the Quality (1.7B) tier.
     Best-effort — an unreachable sidecar is simply not leased. Returns whether
     a lease was posted. */
 export async function renewRenderLeaseOnce(): Promise<boolean> {
-  if (!isGenerationKnownActive()) return false;
+  if (!isQualityRenderKnownActive()) return false;
   try {
     const res = await fetch(`${getResolvedSidecarUrl()}/render-lease`, {
       method: 'POST',
