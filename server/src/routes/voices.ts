@@ -41,7 +41,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
-import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import {
@@ -790,6 +790,8 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   try {
     ensureWorkspace();
     let seriesFilter: { author: string; series: string } | undefined;
+    let gateSeries: { author: string; series: string } | undefined;
+    let onlyBookDir: string | undefined;
     if (scope === 'series') {
       const resolved = await findAuthorSeriesForBookId(bookId!);
       if (!resolved) {
@@ -798,11 +800,22 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
           .json({ error: `Book "${bookId}" not found — can't resolve its series.` });
       }
       seriesFilter = resolved;
+      gateSeries = resolved;
+      /* Review pass 3 (E) -- a design (or Keep) in a book whose cast is not confirmed
+         is not shared with the series (F8), so the drawer's Save that follows names
+         that book alone, exactly as the design jobs do (`seriesShared ? filter :
+         undefined`): a series write would rewrite the confirmed mates' rows (their
+         library slots and engines included). */
+      const named = await peekBook(bookId!);
+      if (named && named.state?.castConfirmed !== true) {
+        seriesFilter = undefined;
+        onlyBookDir = named.bookDir;
+      }
     }
     /* #3713 -- the fan-out matches mates by voice id, so a repaired one is never named: refuse the whole
        write (before any cast.json changes) when the request lacks the current repair epoch. */
-    if (await refuseGatedSeriesFanOut(seriesFilter, req, res)) return;
-    if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter))) {
+    if (await refuseGatedSeriesFanOut(gateSeries, req, res)) return;
+    if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter, undefined, onlyBookDir))) {
       return res.status(409).json({
         error:
           `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
@@ -815,7 +828,7 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
        marker and stop rendering it. Fail loud instead. */
     if (
       parsed !== null &&
-      (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine, undefined, await separatedDesignedUuid(parsed)))
+      (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine, onlyBookDir, await separatedDesignedUuid(parsed)))
     ) {
       return res.status(409).json({
         error:
@@ -824,7 +837,7 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
           `Reassign that character directly instead.`,
       });
     }
-    const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
+    const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter, onlyBookDir);
     if (updated === 0 && skipped.length === 0) {
       const where = seriesFilter
         ? `in series "${seriesFilter.author} / ${seriesFilter.series}"`

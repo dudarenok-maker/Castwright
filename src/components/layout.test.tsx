@@ -59,6 +59,7 @@ const getChapterAudioPreviousMock = vi.fn();
 const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
 const getAnalysisStateMock = vi.fn();
+const linkPriorMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -183,6 +184,8 @@ vi.mock('../lib/api', async (importOriginal) => {
       setCastTier: vi.fn(async () => ({ updated: 0 })),
       /* #3570 — Layout loads the analyzer catalog at boot so endpoint labels resolve. */
       getAnalyzerModels: (...args: unknown[]) => getAnalyzerModelsMock(...args),
+      /* The drawer's manual prior-book link (review pass 3, H). */
+      linkPriorCharacter: (...args: unknown[]) => linkPriorMock(...args),
     },
     AnalysisError: class extends Error {},
     ExportIncompleteError: class extends Error {
@@ -253,10 +256,13 @@ vi.mock('../modals/profile-drawer', async () => {
     ...actual,
     ProfileDrawer: (p: Parameters<typeof actual.ProfileDrawer>[0]) =>
       profileDrawerStub.on ? (
-        <button
-          data-testid="mock-profile-save"
-          onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
-        />
+        <>
+          <button
+            data-testid="mock-profile-save"
+            onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
+          />
+          <button data-testid="mock-profile-link-prior" onClick={() => void p.onLinkPrior?.('eliza', 'B', 'eliza')} />
+        </>
       ) : (
         <actual.ProfileDrawer {...p} />
       ),
@@ -5944,5 +5950,48 @@ describe('Layout — the stale-audio banner and the regenerate modal agree on ex
     const store = await saveVoiceChange([eliza(1, true)]);
     expect(store.getState().ui.staleAudio).toBeNull();
     expect(screen.queryByTestId('stale-audio-banner')).toBeNull();
+  });
+});
+
+describe('Layout -- a manual prior-book link settling after a book switch (review pass 3, H)', () => {
+  beforeEach(() => {
+    profileDrawerStub.on = true;
+    linkPriorMock.mockReset();
+  });
+  afterEach(() => {
+    profileDrawerStub.on = false;
+  });
+
+  const linked = { matchedFrom: { bookId: 'B', characterId: 'eliza', bookTitle: 'Book B', confidence: 1 }, voiceId: 'linked-voice' };
+
+  async function openAndClickLink() {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    act(() => { store.dispatch(uiActions.setOpenProfileId('eliza')); });
+    let settle!: (v: unknown) => void;
+    linkPriorMock.mockReturnValue(new Promise((r) => (settle = r)));
+    fireEvent.click(await screen.findByTestId('mock-profile-link-prior'));
+    await waitFor(() => expect(linkPriorMock).toHaveBeenCalled());
+    return { store, settle };
+  }
+
+  it('mirrors the link into the cast while its book is still the open one', async () => {
+    const { store, settle } = await openAndClickLink();
+    await act(async () => { settle(linked); });
+    expect(store.getState().cast.characters.find((c) => c.id === 'eliza')?.matchedFrom?.bookId).toBe('B');
+  });
+
+  it('does not write it into a different book that was opened meanwhile (its next autosave would save it)', async () => {
+    const { store, settle } = await openAndClickLink();
+    act(() => {
+      store.dispatch(manuscriptActions.uploadComplete({ manuscriptId: 'mns_other', title: 'Other', format: 'plaintext', wordCount: 0, sourceText: '' } as never));
+    });
+    await act(async () => { settle(linked); });
+    const row = store.getState().cast.characters.find((c) => c.id === 'eliza');
+    expect(row?.matchedFrom).toBeUndefined();
+    expect(row?.voiceId).not.toBe('linked-voice');
   });
 });

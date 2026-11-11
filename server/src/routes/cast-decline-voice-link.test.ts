@@ -948,16 +948,55 @@ describe('cast/link-prior of a linked row (review pass 2)', () => {
     expect(two.overrideTtsVoices.qwen.variants.sad.name).toBe('qwen-u_ash__sad');
   });
 
-  it('another book that is not in the chain holds the voice: the row is not on a voice of its own, so the link adopts nothing', async () => {
+  it('owner decision A: a re-point ALWAYS adopts the new target voice, whoever else holds the old one; only the source book is written', async () => {
     book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash') })]);
     book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren') })]);
     book('Book Four', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') })]);
     const four = readFileSync(castFile('Book Four'), 'utf8');
+    const oneWren = rowOf('Book One', 'wren');
     const res = await linkAsh();
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_wren');
-    expect(res.body.voice).toBeUndefined();
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+    expect(res.body.voice.voiceUuid).toBe('u_ash');
     expect(readFileSync(castFile('Book Four'), 'utf8')).toBe(four);
+    expect(rowOf('Book One', 'wren')).toEqual(oneWren);
+  });
+
+  it('Q1: Book Three links straight to Book One/Wren (not via Two); re-pointing Two to Ash still adopts, Three is untouched', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']) }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    book('Book Three', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(three);
+  });
+
+  it('Q2: a legacy re-point adopts although a uuid-less row of an unrelated series holds the same legacy key', async () => {
+    book('Book One', [wren({ ...slot('v_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash') })]);
+    book('Book Two', [wren({ voiceState: 'reused', ...linkTo('Book One'), ...slot('v_wren') })]);
+    const other = join(root, 'books', 'Someone Else', 'Other Series', 'Other Book');
+    mkdirSync(join(other, '.audiobook'), { recursive: true });
+    writeFileSync(join(other, '.audiobook', 'state.json'), JSON.stringify({ bookId: 'other-book', title: 'Other Book', author: 'Someone Else', series: 'Other Series', isStandalone: false, castConfirmed: true, chapters: [] }));
+    writeFileSync(join(other, '.audiobook', 'cast.json'), JSON.stringify({ characters: [wren({ ...slot('v_wren') })] }));
+    const otherBefore = readFileSync(join(other, '.audiobook', 'cast.json'), 'utf8');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+    expect(readFileSync(join(other, '.audiobook', 'cast.json'), 'utf8')).toBe(otherBefore);
+  });
+
+  it('owner decision B / Q4: a re-point moves ONLY the re-pointed row; a same-book sibling still linked to the old character keeps its voice', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']) }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    const hartley = { id: 'wren_h', name: 'Wren Hartley', role: 'supporting', color: 'sky', voiceId: 'v_wren', voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) };
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) }), hartley]);
+    const sibling = rowOf('Book Two', 'wren');
+    const res = await request(app).post(`/api/books/${twoId}/cast/link-prior`).send({ sourceCharacterId: 'wren_h', targetBookId: oneId, targetCharacterId: 'ash' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren_h').voiceUuid).toBe('u_ash');
+    expect(rowOf('Book Two', 'wren')).toEqual(sibling);
+    expect(res.body.voice.movedCharacterIds).toEqual([]);
   });
 
   it('a library-assigned slot is a deliberate pick: a relink to the book it links to keeps it', async () => {
@@ -1010,5 +1049,24 @@ describe('a repeat decline with an unreadable chain member', () => {
     expect(retry.status).toBe(200);
     expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
     expect(readRows('Book Four')[0].voiceUuid).toBe('u_new');
+  });
+
+  it('review pass 3, G / Q3: a stranded Book Three whose state.json is torn (cast.json readable) refuses the repeat decline too', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_new', voiceState: 'generated', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], ...slot('u_new') })]);
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared', ['angry']) })]);
+    writeFamily();
+    const statePath = join(dirOf('Book Three'), '.audiobook', 'state.json');
+    const state = readFileSync(statePath, 'utf8');
+    const twoBefore = readFileSync(castFile('Book Two'), 'utf8');
+    writeFileSync(statePath, '{"bookId":');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe(twoBefore);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_shared');
+    writeFileSync(statePath, state);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
   });
 });

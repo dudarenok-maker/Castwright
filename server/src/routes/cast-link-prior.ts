@@ -273,9 +273,10 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
        still linked; a hand relink to the book it links to moves it onto the target
        character's voice the same way (also when it is re-pointed to another
        character of that book). A library-assigned slot is a deliberate pick and
-       stays. Review pass 2: only that row (and its same-book siblings) changes,
-       and only while no book outside the target's holds its voice: none of the
-       target book's rows, and no follower, is written by this arm. */
+       stays. Review pass 3 (owner decisions A and B): a re-point ALWAYS adopts the
+       new target's voice, whoever else holds the row's old one, and moves ONLY the
+       re-pointed row: no other book, no follower and no same-book sibling is
+       written by this arm (the sibling carry is the decline relink's alone). */
     const linkedToTarget =
       (source as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId === targetBookId &&
       !source.overrideTtsVoices?.qwen?.libraryUuid;
@@ -297,8 +298,8 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     };
     let followers: LinkFollower[] = [];
     /* Decided inside the locks, on a fresh scan that leaves the target book out. */
-    const scan = wantsAdopt ? await scanVoiceHolders(sourceLocated.bookDir, source, voiceHeldBy(source), targetBookId) : undefined;
-    const adopt = wantsAdopt && (declineCleared || !scan?.heldBeyondDeclined);
+    const scan = wantsAdopt && declineCleared ? await scanVoiceHolders(sourceLocated.bookDir, source, voiceHeldBy(source), targetBookId) : undefined;
+    const adopt = wantsAdopt;
     if (adopt && declineCleared && sourceUuid && scan) {
       const key = (fs: LinkFollower[]) => fs.map((f) => `${f.bookId}|${f.characterId}`).sort().join('\n');
       const locked = new Set(books.map((b) => b.bookId));
@@ -325,7 +326,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     /* Review pass 1 — the same-book rows on the row's own voice and link id (the
        rows a decline moved with it, `movedSameBook`) move back with it. */
     const sourceLinkId = source.voiceId ?? source.id;
-    const movedCharacterIds = adopt
+    const movedCharacterIds = adopt && declineCleared
       ? sourceCast.characters
           .filter((c) => c.id !== sourceCharacterId && c.voiceUuid === sourceUuid && (c.voiceId ?? c.id) === sourceLinkId)
           .map((c) => c.id)

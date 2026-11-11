@@ -273,10 +273,6 @@ export interface VoiceScan {
   followers: LinkFollower[];
   /** A row in another readable book that is NOT a follower holds X's voice. */
   heldElsewhere: boolean;
-  /** Review pass 2 — `heldElsewhere` leaving out the books X declines (the decline's
-      `fromBookId` and X's `declinedVoiceFrom`): a hand relink to a book treats the
-      voice that book holds as the link's own, not as another holder. */
-  heldBeyondDeclined?: boolean;
   /** Readable bookIds with a row on X's voice that is NOT a follower. */
   holderBookIds: Set<string>;
   /** Folders of the other books that could not be read (anything could be in them). */
@@ -284,6 +280,10 @@ export interface VoiceScan {
   /** F1 — a book that could not be read may be in X's follower chain: it is in X's
       series (or its series cannot be told), and it is not a book X declines. */
   chainUnreadable?: boolean;
+  /** Review pass 3 (C) — a book that could not be read may hold X's voice: it is in X's
+      series (or its series cannot be told) and its rows, when they read, include one
+      on the voice. An unconfirmed design isolates on this (never refuses). */
+  unreadableMayHold?: boolean;
   /** F1 — rows a decline LEFT BEHIND: the chain that leads down to X among rows
       still on the voice X left (a uuid on X's `declinedVoiceUuids`, or, for a
       legacy decline, X's legacy key). Only for a row that carries the marker. */
@@ -322,11 +322,8 @@ export async function scanVoiceHolders(
   const selfSeries = selfIdentity.series;
   const sameSeries = (s?: { author: string; series: string }): boolean =>
     !!s && !!selfSeries && s.author === selfSeries.author && s.series === selfSeries.series;
-  const chainBookIds = new Set([selfIdentity.bookId, ...followers.map((f) => f.bookId)].filter(Boolean) as string[]);
-  const linksIntoChain = (rows: CastRow[]): boolean =>
-    rows.some((y) => holds(y) && chainBookIds.has((y.matchedFrom as MatchedFrom)?.bookId ?? ''));
-  const chainUnreadable = unreadable.some((b) =>
-    b.known ? !!b.bookId && !declined.has(b.bookId) && sameSeries(b.series) : b.rows ? linksIntoChain(b.rows) : true,
+  const unreadableMayHold = unreadable.some((b) =>
+    b.known ? sameSeries(b.series) : b.rows ? b.rows.some(holds) : true,
   );
   /* F1 — the rows a decline left behind (before this rule, a decline went through
      with a chain member unreadable): linked down to X, on the voice X left. */
@@ -334,21 +331,25 @@ export async function scanVoiceHolders(
   const linkId = character.voiceId ?? character.id;
   const leftBehind: VoiceHolds = (y) =>
     y.voiceUuid ? y.voiceUuid !== character.voiceUuid && leftUuids.includes(y.voiceUuid) : !leftUuids.length && (y.voiceId ?? y.id) === linkId;
+  const chainBookIds = new Set([selfIdentity.bookId, ...followers.map((f) => f.bookId)].filter(Boolean) as string[]);
+  const linksIntoChain = (rows: CastRow[]): boolean =>
+    rows.some((y) => (holds(y) || leftBehind(y)) && chainBookIds.has((y.matchedFrom as MatchedFrom)?.bookId ?? ''));
+  const chainUnreadable = unreadable.some((b) =>
+    b.known ? !!b.bookId && !declined.has(b.bookId) && sameSeries(b.series) : b.rows ? linksIntoChain(b.rows) : true,
+  );
   const stranded =
     character.declinedVoiceFrom?.length && character.voiceUuid ? await chainFollowers(selfDir, character, leftBehind, books, declined) : [];
   const followed = new Set(followers.map((f) => rowKey(f.dir, f.characterId)));
   const holderBookIds = new Set<string>();
   let heldElsewhere = false;
-  let heldBeyondDeclined = false;
   for (const b of books) {
     for (const y of b.rows) {
       if (!holds(y) || followed.has(rowKey(b.dir, y.id))) continue;
       heldElsewhere = true;
-      if (!(b.bookId && declined.has(b.bookId))) heldBeyondDeclined = true;
       if (b.bookId) holderBookIds.add(b.bookId);
     }
   }
-  return { followers, heldElsewhere, heldBeyondDeclined, holderBookIds, unreadableDirs, chainUnreadable, stranded };
+  return { followers, heldElsewhere, holderBookIds, unreadableDirs, chainUnreadable, unreadableMayHold, stranded };
 }
 
 /* PR #4007 pass 11 (owner decision: share a first design) — the bookIds of the

@@ -3093,15 +3093,16 @@ export interface paths {
          *     source with none, and the target's profile fills the source's gaps.
          *
          *     A link to a book the character had declined ("Don't reuse") clears that
-         *     decline. #4095 / review passes 1-2 — when it clears a decline, or links a
+         *     decline. #4095 / review passes 1-3 — when it clears a decline, or links a
          *     character to the book it already links to (the same character, or another
-         *     one of that book) while no book outside the target's holds its voice
-         *     (designed before its book's cast was confirmed), the character moves onto
-         *     the target's voice: its `voiceUuid` (none when the target has none) and its
-         *     qwen slot, variants included, together with the same-book characters on its
-         *     voice. Clearing a decline also moves the characters in other books that
-         *     follow it; the other case writes the character and its same-book siblings
-         *     only, never a follower and never a character of the target book. Not for a
+         *     one of that book; designed before its book's cast was confirmed), the
+         *     character moves onto the target's voice: its `voiceUuid` (none when the
+         *     target has none) and its qwen slot, variants included. Clearing a decline
+         *     also moves the same-book characters on its voice and the characters in other
+         *     books that follow it. A re-point to a character of the book it already links
+         *     to always adopts the new target's voice, whoever else holds the old one, and
+         *     writes that character only: never a follower, a same-book sibling still
+         *     linked to the old character, or a character of the target book. Not for a
          *     locked or tuned character, nor across a cloned voice on either side. If the
          *     followers of a cleared decline changed between the plan and the locked step,
          *     or a book that may hold one cannot be read, the request answers 500 with a

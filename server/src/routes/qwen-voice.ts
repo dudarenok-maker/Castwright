@@ -81,6 +81,7 @@ import {
   namedQwenVoices,
   scanVoiceHolders,
   voiceHeldBy,
+  type VoiceScan,
   mustSeparateOnDecline,
   mustSeparateOnDesign,
   type LinkFollower,
@@ -729,6 +730,18 @@ async function ownBookPlan(
   return { bookIds: [bookId], followers: [], stranded: [] };
 }
 
+/* Review pass 3 (C) — does an unconfirmed design isolate this row? Whenever another
+   book's row holds its key (a follower included), and also when a book that could
+   not be read may hold it (an unreadable holder is not an absent one) unless the row's
+   uuid is already known to be its own (a recorded separation or mint), which keeps a
+   second design from isolating again and dropping the takes the first one made.
+   Never a refusal: the isolation writes only this book. */
+async function mustIsolateUnconfirmed(row: MarkedCharacter, scan: VoiceScan): Promise<boolean> {
+  if (scan.heldElsewhere || scan.followers.length > 0) return true;
+  if (!scan.unreadableMayHold) return false;
+  return !(row.voiceUuid && (await isSeparatedVoice(row.voiceUuid)));
+}
+
 /* Writes one book's cast.json. Each caller builds it INSIDE its own withCastLocks
    callback, so every cast write of a separation sits under the cast locks the
    caller holds (cast-lock.guard.test.ts reads that nesting from the text). */
@@ -839,7 +852,7 @@ export async function separateVoiceLocked(
   const separate = decline
     ? mustSeparateOnDecline(x, scan, decline.fromBookId)
     : unconfirmed
-      ? scan.heldElsewhere || scan.followers.length > 0
+      ? await mustIsolateUnconfirmed(x, scan)
       : mustSeparateOnDesign(x, scan);
 
   const locked = new Set(lockedDirs.map((d) => resolve(d)));
@@ -1054,7 +1067,7 @@ async function isolateUnconfirmedRow(bookDir: string, characterId: string, keepP
   const row = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
   if (!row) return { uuid: undefined, separated: false };
   const scan = await scanVoiceHolders(bookDir, row, voiceHeldBy(row));
-  if (!scan.heldElsewhere && !scan.followers.length) return { uuid: row.voiceUuid ?? undefined, separated: false };
+  if (!(await mustIsolateUnconfirmed(row as MarkedCharacter, scan))) return { uuid: row.voiceUuid ?? undefined, separated: false };
   return separateDeclinedVoiceForDesign(bookDir, characterId, true, keepPreviewId);
 }
 
@@ -1062,19 +1075,39 @@ async function isolateUnconfirmedRow(bookDir: string, characterId: string, keepP
    the row is isolated here, and the preview it staged under the old key goes with it
    to the new one, whose id it returns (the promote then expects that id, not the
    one the design answered). Only for a preview this row staged (anything else
-   promote answers itself). The caller holds the design lock. */
-async function isolateForKeep(bookDir: string, bookId: string, characterId: string, previewVoiceId: string): Promise<string | undefined> {
+   promote answers itself). The caller holds the design lock.
+   Review pass 3: (D) a row with no uuid that nothing isolated is given one here
+   (a book-scoped mint, recorded as separated), because a preview mints none; (F) a
+   body the promote would refuse isolates nothing, and the row's own stale preview id
+   (its key moved since, e.g. an earlier Keep isolated it and then failed) is carried
+   to the key it is on now, so a retry lands. */
+async function isolateForKeep(
+  bookDir: string,
+  bookId: string,
+  characterId: string,
+  body: { previewVoiceId: string; sampleVoiceId: unknown; modelKey: unknown },
+): Promise<string | undefined> {
   if (await bookCastConfirmedOrRetry(bookDir)) return undefined; // the common case reads no cast.json
-  const row = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+  if (typeof body.sampleVoiceId !== 'string' || !body.sampleVoiceId.trim() || !isTtsModelKey(body.modelKey)) return undefined;
+  const readRow = async () => (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+  const row = await readRow();
   if (!row) return undefined;
-  if (previewVoiceId !== previewVoiceIdFor(qwenStorageKey(row, characterId), bookId, characterId)) return undefined;
-  if (!(await exists(qwenVoicePtPath(previewVoiceId)))) return undefined;
-  const step = await isolateUnconfirmedRow(bookDir, characterId, previewVoiceId);
-  if (!step.separated) return undefined;
-  const next = previewVoiceIdFor(`qwen-${step.uuid}`, bookId, characterId);
-  await renameWithRetry(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(next));
-  await renameWithRetry(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(next)).catch(() => {});
-  await renameWithRetry(qwenVoiceWavPath(`${previewVoiceId}__master`), qwenVoiceWavPath(`${next}__master`)).catch(() => {});
+  const staged = body.previewVoiceId;
+  const expected = previewVoiceIdFor(qwenStorageKey(row, characterId), bookId, characterId);
+  if (staged !== expected && !isOwnStalePreview(staged, bookId, characterId)) return undefined;
+  if (!(await exists(qwenVoicePtPath(staged)))) return undefined;
+  await isolateUnconfirmedRow(bookDir, characterId, staged);
+  let after = await readRow();
+  if (after && !after.voiceUuid) {
+    await mintBookVoiceUuid(bookDir, characterId, true);
+    after = await readRow();
+  }
+  if (!after) return undefined;
+  const next = previewVoiceIdFor(qwenStorageKey(after, characterId), bookId, characterId);
+  if (next === staged) return undefined;
+  await renameWithRetry(qwenVoicePtPath(staged), qwenVoicePtPath(next));
+  await renameWithRetry(qwenVoiceSidecarPath(staged), qwenVoiceSidecarPath(next)).catch(() => {});
+  await renameWithRetry(qwenVoiceWavPath(`${staged}__master`), qwenVoiceWavPath(`${next}__master`)).catch(() => {});
   return next;
 }
 
@@ -1199,12 +1232,14 @@ async function ensureCharacterVoiceUuidStep(
   bookDir: string,
   characterId: string,
   seriesFilter?: { author: string; series: string },
+  /** Review pass 3 (C) — a mint in an unconfirmed book is recorded as separated. */
+  unconfirmed?: boolean,
 ): Promise<UuidStep> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return { uuid: undefined, separated: false };
   if (await needsDesignSeparation(bookDir, character)) return separateDeclinedVoiceForDesign(bookDir, characterId);
-  return { uuid: await readOrMintVoiceUuid(bookDir, characterId, character, seriesFilter), separated: false };
+  return { uuid: await readOrMintVoiceUuid(bookDir, characterId, character, seriesFilter, unconfirmed), separated: false };
 }
 
 /* #4072 (owner decision: the second mint adopts the first one's uuid) — the series
@@ -1221,6 +1256,7 @@ async function readOrMintVoiceUuid(
   characterId: string,
   character: CastCharacter,
   seriesFilter?: { author: string; series: string },
+  unconfirmed?: boolean,
 ): Promise<string | undefined> {
   if (character.voiceUuid) return character.voiceUuid;
 
@@ -1246,7 +1282,7 @@ async function readOrMintVoiceUuid(
       if (seriesMints.get(key) === minting) seriesMints.delete(key);
     }
   }
-  return mintBookVoiceUuid(bookDir, characterId);
+  return mintBookVoiceUuid(bookDir, characterId, unconfirmed);
 }
 
 /* #4072 — a series mint's failure after it stamped a book carries the uuid it
@@ -1346,8 +1382,10 @@ async function mintSeriesVoiceUuid(
 }
 
 /* The book-scoped mint: a standalone book, or (F8) a book whose cast is not
-   confirmed. */
-async function mintBookVoiceUuid(bookDir: string, characterId: string): Promise<string | undefined> {
+   confirmed. `recordSeparated` (the latter, review pass 3): the uuid is recorded as
+   separated before a row names it, so a later design of the row is not isolated
+   again (mustIsolateUnconfirmed). */
+async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSeparated?: boolean): Promise<string | undefined> {
   /* Book-scoped — the caller's design lock serialises only against OTHER
      design-lock holders (e.g. another design on this book), not against a
      non-design cast.json writer (e.g. cast-aliases), so the read above is
@@ -1393,9 +1431,11 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string): Promise<
           dirty = true;
         }
       }
+      if (dirty && recordSeparated) await recordSeparatedVoice(uuid);
       try {
         if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
       } catch (e) {
+        if (dirty && recordSeparated) await forgetSeparatedVoice(uuid);
         await removeFiles(copied);
         throw e;
       }
@@ -2176,10 +2216,16 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       /* Review pass 2 — a preview moves nothing (it lands on a `-preview` sibling), so
          it isolates nothing: Cancel must leave the row as it was. Keep isolates. */
       if (!confirmed && !p.preview) await isolateUnconfirmedRow(p.bookDir, p.characterId);
-      const step = p.emotion
-        ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
-        : await ensureCharacterVoiceUuidStep(p.bookDir, p.characterId, shareSeries);
-      const uuid = requireDesignVoiceUuid(p.character, !!p.emotion, step.uuid);
+      /* Review pass 3 (D) -- a preview in an unconfirmed book mints and separates
+         nothing either: it stages under the row's current key, and Keep
+         (isolateForKeep) separates or mints and carries it. */
+      const stagedOnly = !confirmed && !!p.preview;
+      const step: UuidStep = stagedOnly
+        ? { uuid: now.voiceUuid ?? undefined, separated: false }
+        : p.emotion
+          ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
+          : await ensureCharacterVoiceUuidStep(p.bookDir, p.characterId, shareSeries, !confirmed);
+      const uuid = stagedOnly ? step.uuid : requireDesignVoiceUuid(p.character, !!p.emotion, step.uuid);
       /* The uuid step's own move: a separation already moved the watcher, and a
          first mint gives a row that had no uuid its new key. A row that had one and
          now answers another, unannounced, was changed by some other writer; a link
@@ -2752,12 +2798,11 @@ qwenVoiceRouter.post(
     };
     const outcome = await withDesignLock(peeked.bookDir, async () => {
       try {
-        const carried = await isolateForKeep(
-          peeked.bookDir,
-          bookId,
-          characterId,
-          typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '',
-        );
+        const carried = await isolateForKeep(peeked.bookDir, bookId, characterId, {
+          previewVoiceId: typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '',
+          sampleVoiceId: typeof body.sampleVoiceId === 'string' ? body.sampleVoiceId.trim() : '',
+          modelKey: body.modelKey,
+        });
         if (carried) body.previewVoiceId = carried;
       } catch (e) {
         if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
