@@ -281,6 +281,10 @@ describe('POST /:bookId/cast/merge-suggestions/accept', () => {
     };
     expect(olga.aliases).toContain('Оля');
 
+    /* #4031 M7 — the body carries the merged cast, exactly what landed on disk, for
+       the client to mirror (no stale slice save). */
+    expect((res.body as { characters?: unknown }).characters).toEqual(cast.characters);
+
     /* The accepted suggestion is removed. */
     const file = readSuggestionsFile();
     expect(file.suggestions).toHaveLength(0);

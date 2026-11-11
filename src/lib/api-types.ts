@@ -9915,12 +9915,20 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Merge performed and suggestion removed */
+            /**
+             * @description Merge performed and suggestion removed. Carries the merged cast, as
+             *     `POST /cast/merge` does, so the client mirrors the server's survivor
+             *     (aliases, `notLinkedTo` union) instead of saving a stale slice (#4031).
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        characters: components["schemas"]["Character"][];
+                    };
+                };
             };
             /** @description Missing or equal sourceId/targetId */
             400: {

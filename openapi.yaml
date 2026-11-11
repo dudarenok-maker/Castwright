@@ -1893,7 +1893,19 @@ paths:
                   description: The id of the canonical survivor.
       responses:
         '200':
-          description: Merge performed and suggestion removed
+          description: |
+            Merge performed and suggestion removed. Carries the merged cast, as
+            `POST /cast/merge` does, so the client mirrors the server's survivor
+            (aliases, `notLinkedTo` union) instead of saving a stale slice (#4031).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [characters]
+                properties:
+                  characters:
+                    type: array
+                    items: { $ref: '#/components/schemas/Character' }
         '400':
           description: Missing or equal sourceId/targetId
         '404':

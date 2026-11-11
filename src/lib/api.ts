@@ -4516,11 +4516,17 @@ async function mockListMergeSuggestions(_bookId: string): Promise<MergeSuggestio
   return [...mockMergeSuggestions];
 }
 
+/* #4031 M7 — the accept answers the merged cast (openapi); `characters` is optional
+   here only because the mock has no cast to return. */
+export interface AcceptMergeSuggestionResponse {
+  characters?: Character[];
+}
+
 async function realAcceptMergeSuggestion(
   bookId: string,
   sourceId: string,
   targetId: string,
-): Promise<void> {
+): Promise<AcceptMergeSuggestionResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/merge-suggestions/accept`,
     {
@@ -4538,17 +4544,19 @@ async function realAcceptMergeSuggestion(
     }
     throw new Error(detail || `Accept merge-suggestion failed (${res.status}).`);
   }
+  return res.json();
 }
 
 async function mockAcceptMergeSuggestion(
   _bookId: string,
   sourceId: string,
   targetId: string,
-): Promise<void> {
+): Promise<AcceptMergeSuggestionResponse> {
   await wait(60);
   mockMergeSuggestions = mockMergeSuggestions.filter(
     (s) => !(s.sourceId === sourceId && s.targetId === targetId),
   );
+  return {};
 }
 
 async function realDismissMergeSuggestion(

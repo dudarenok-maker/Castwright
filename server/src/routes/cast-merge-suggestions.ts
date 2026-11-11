@@ -126,8 +126,9 @@ castMergeSuggestionsRouter.post(
     let outcome;
     try {
       outcome = await withBookOp(bookId, async ({ bookDir, state }) => {
+        let merged: Awaited<ReturnType<typeof performCastMerge>>;
         try {
-          await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+          merged = await performCastMerge({ bookId, bookDir, state, sourceId, targetId });
         } catch (err) {
           /* #2260 round 4 (C1) — a `LockAcquisitionTimeoutError` out of
          `performCastMerge` is DEFERRED, not aborting (#4031 C3: so is ANY other
@@ -211,7 +212,9 @@ castMergeSuggestionsRouter.post(
         await withCastLock(bookDir, () =>
           removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]),
         );
-        return res.json({});
+        /* #4031 M7 — the merged cast, as `POST /cast/merge` answers it: the client
+           mirrors it (`applyMerge`) rather than saving its own pre-merge slice. */
+        return res.json({ characters: merged.characters });
       });
     } catch (err) {
       if (!isLockAcquisitionTimeout(err)) throw err;

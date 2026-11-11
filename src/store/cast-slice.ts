@@ -11,6 +11,24 @@ type OverrideVoiceSlot = NonNullable<Character['overrideTtsVoices']>[string];
    order). Mirrors the server's union (merge-analysis-cast.ts) so a manually-
    added or reuse-unioned alias isn't dropped when an analyser snapshot or a
    cast-merge response carries a sparser set (srv-13). */
+/* #4031 M7 — the same for `notLinkedTo`: a merge unions the source's declines onto
+   the survivor, so the route's list is a superset the local one must not mask.
+   Entries are deduplicated by value. */
+function unionNotLinked<T>(a?: T[], b?: T[]): T[] | undefined {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const list of [a, b]) {
+    if (!Array.isArray(list)) continue;
+    for (const e of list) {
+      const key = JSON.stringify(e);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(e);
+    }
+  }
+  return out.length ? out : undefined;
+}
+
 function unionAliases(a?: string[], b?: string[]): string[] | undefined {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -507,7 +525,7 @@ export const castSlice = createSlice({
           overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
           ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
           voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
-          notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+          notLinkedTo: unionNotLinked(existing.notLinkedTo, inc.notLinkedTo),
           aliases: unionAliases(existing.aliases, inc.aliases),
         };
       });

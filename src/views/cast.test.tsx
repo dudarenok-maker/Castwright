@@ -67,6 +67,7 @@ vi.mock('../lib/api', () => ({
     acceptMergeSuggestion: vi.fn().mockResolvedValue(undefined),
     getBookBusy: vi.fn().mockResolvedValue([]),
     getBookState: vi.fn().mockResolvedValue(null),
+    putBookState: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -4383,7 +4384,7 @@ describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
     vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
       { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
     ]);
-    vi.mocked(api.acceptMergeSuggestion).mockResolvedValueOnce(undefined);
+    vi.mocked(api.acceptMergeSuggestion).mockResolvedValueOnce({ characters: [narrator] } as never);
     const store = await readOnlyStore([narrator, marrow]);
     mount(store, [narrator, marrow]);
     fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
@@ -4391,5 +4392,63 @@ describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
       expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']),
     );
     expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+
+  /* #4031 M7 — outside a run the accept used to dispatch a persisted `setCharacters` built
+     from the PRE-request roster: a whole-slice cast PUT that lacked the merge's aliases
+     and `notLinkedTo` union (plan 289 refused it as stale). The slice now mirrors the
+     route's merged cast and nothing is saved. */
+  it('outside a run, an accept saves no cast slice and holds the merged target from the route', async () => {
+    vi.mocked(api.getBookBusy).mockResolvedValue([]);
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    const before = { ...narrator, notLinkedTo: [{ bookId: 'b0', characterId: 'x' }] };
+    const merged = {
+      ...narrator,
+      aliases: ['Marrow'],
+      notLinkedTo: [
+        { bookId: 'b0', characterId: 'x' },
+        { bookId: 'b0', characterId: 'y' },
+      ],
+    };
+    vi.mocked(api.acceptMergeSuggestion).mockResolvedValueOnce({ characters: [merged] } as never);
+    const seen: string[] = [];
+    const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const { bookBusySlice } = await import('../store/book-busy-slice');
+    const { analysisSlice } = await import('../store/analysis-slice');
+    const { persistenceMiddleware } = await import('../store/persistence-middleware');
+    const { castGateMiddleware } = await import('../store/cast-gate');
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+      middleware: (gDM) =>
+        gDM()
+          .prepend(() => (next: (a: unknown) => unknown) => (action: unknown) => {
+            seen.push((action as { type: string }).type);
+            return next(action);
+          })
+          .concat(persistenceMiddleware, castGateMiddleware),
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bRo', status: 'complete' }));
+    store.dispatch(manuscriptSlice.actions.resetForBook('bRo'));
+    store.dispatch(castSlice.actions.hydrateCharacters([before, marrow]));
+    mount(store as never, [before, marrow]);
+    fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
+    await waitFor(() =>
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']),
+    );
+    const target = store.getState().cast.characters[0];
+    expect(target.notLinkedTo).toEqual(merged.notLinkedTo);
+    expect(target.aliases).toEqual(['Marrow']);
+    expect(seen).not.toContain('cast/setCharacters');
+    expect(api.putBookState).not.toHaveBeenCalled();
   });
 });

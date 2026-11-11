@@ -1251,12 +1251,13 @@ export function CastView({
 
   /* Tier-2b merge-suggestion handlers. Accept folds the source character
      into the target via the accept route (merge + dismiss in one call),
-     then removes the card and optimistically removes the source from the
-     local roster. Dismiss drops the card without merging. */
+     then removes the card and mirrors the route's merged cast. Dismiss drops
+     the card without merging. */
   async function handleMergeSuggestion(sourceId: string, targetId: string) {
     if (!bookId) return;
+    let merged: Character[] | undefined;
     try {
-      await api.acceptMergeSuggestion(bookId, sourceId, targetId);
+      merged = (await api.acceptMergeSuggestion(bookId, sourceId, targetId))?.characters;
     } catch (err) {
       /* Plan 291 (C3) — a failed accept may have finished its other writes:
          re-read the cast, and keep the card. */
@@ -1274,12 +1275,13 @@ export function CastView({
     setMergeSuggestions((prev) =>
       prev.filter((s) => !(s.sourceId === sourceId && s.targetId === targetId)),
     );
-    /* The accept route already saved the fold: mirror it as route-backed (plan 291). */
+    /* The accept route already saved the fold: mirror its merged cast with the
+       unpersisted `applyMerge`, as the manual merge does (#4031 M7). A persisted
+       `setCharacters` from the pre-request roster sent a stale whole-slice PUT that
+       lacked the merge's aliases and `notLinkedTo` union. Mock mode has no cast to
+       return, so it falls back to dropping the source locally (still unpersisted). */
     dispatch(
-      castActions.setCharacters(
-        characters.filter((c) => c.id !== sourceId),
-        { routeBacked: true },
-      ),
+      castActions.applyMerge({ characters: merged ?? characters.filter((c) => c.id !== sourceId) }),
     );
   }
 
