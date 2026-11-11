@@ -2050,3 +2050,31 @@ describe('castSlice — pruneStaleEmotionVariants (#4040)', () => {
     expect(Object.keys(next.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
   });
 });
+
+describe('castSlice — matchFactors belong to the current link only (A120 F5 review)', () => {
+  const factors = [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'same' }];
+  const linked = () =>
+    baseState([
+      makeChar('m', {
+        voiceState: 'reused',
+        matchedFrom: { bookId: 'b0', characterId: 'x', confidence: 0.9 },
+        matchFactors: factors,
+      }),
+    ]);
+
+  it('a manual link drops the previous candidate\'s factors', () => {
+    const next = castSlice.reducer(
+      linked(),
+      castActions.applyManualMatch({
+        characterId: 'm',
+        matchedFrom: { bookId: 'b1', characterId: 'y', confidence: 1 },
+      }),
+    );
+    expect(next.characters[0].matchFactors).toBeUndefined();
+  });
+
+  it('declining a match drops its factors', () => {
+    const next = castSlice.reducer(linked(), castActions.declineMatch('m'));
+    expect(next.characters[0].matchFactors).toBeUndefined();
+  });
+});

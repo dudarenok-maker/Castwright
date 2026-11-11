@@ -3,7 +3,7 @@
    book; Confirm must show its rows only while the slice names this route's book. */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Routes, Route } from 'react-router';
@@ -22,9 +22,13 @@ import { persistenceMiddleware } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
 import type { Character } from '../lib/types';
 
+const { getBookStateMock } = vi.hoisted(() => ({
+  getBookStateMock: vi.fn(),
+}));
+
 vi.mock('../lib/api', () => ({
   api: {
-    getBookState: () => Promise.reject(new Error('proxy down')),
+    getBookState: (...a: unknown[]) => getBookStateMock(...a),
     putBookState: vi.fn().mockResolvedValue(undefined),
     matchVoices: () => new Promise(() => {}),
   },
@@ -47,7 +51,10 @@ vi.mock('../hooks/use-local-analyzer-guard', () => ({
 
 import { ConfirmRoute } from './index';
 
-function renderConfirm(sliceBookId: string | null) {
+function renderConfirm(sliceBookId: string | null, reply?: unknown) {
+  getBookStateMock.mockReset();
+  if (reply === undefined) getBookStateMock.mockRejectedValue(new Error('proxy down'));
+  else getBookStateMock.mockResolvedValue(reply);
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -66,12 +73,19 @@ function renderConfirm(sliceBookId: string | null) {
     middleware: (gDM) => gDM().concat(persistenceMiddleware),
     preloadedState: {
       cast: {
-        characters: [{ id: 'm', name: 'Maerin from Legacy Book 1', voiceState: 'generated' } as Character],
+        characters: [
+          { id: 'm', name: 'Maerin from Legacy Book 1', voiceState: 'generated' } as Character,
+        ],
         renderedFallbackByCharacter: {},
       },
       manuscript: { ...manuscriptSlice.getInitialState(), bookId: sliceBookId },
     },
   });
+  renderWith(store);
+  return store;
+}
+
+function renderWith(store: ReturnType<typeof configureStore>) {
   render(
     <Provider store={store}>
       <MemoryRouter initialEntries={['/books/chain-b2/confirm']}>
@@ -83,8 +97,8 @@ function renderConfirm(sliceBookId: string | null) {
   );
 }
 
-describe('ConfirmRoute — never shows another book\'s cast (F6)', () => {
-  it('does not render the previous book\'s rows while the slice names a different book', () => {
+describe("ConfirmRoute — never shows another book's cast (F6)", () => {
+  it("does not render the previous book's rows while the slice names a different book", () => {
     renderConfirm('legacy-b1');
     expect(screen.queryByText('Maerin from Legacy Book 1')).toBeNull();
     expect(screen.getByRole('status')).toBeTruthy();
@@ -93,5 +107,21 @@ describe('ConfirmRoute — never shows another book\'s cast (F6)', () => {
   it('renders the rows once the slice names this book', () => {
     renderConfirm('chain-b2');
     expect(screen.getByText('Maerin from Legacy Book 1')).toBeTruthy();
+  });
+
+  it('shows a way back, not "Loading…" forever, when the book answers 404', async () => {
+    renderConfirm(null, null);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /library/i })).toBeTruthy();
+  });
+
+  it("does not hydrate this book's roster while the slices hold another book", async () => {
+    const store = renderConfirm('legacy-b1', {
+      state: { bookId: 'chain-b2', chapters: [] },
+      cast: { characters: [{ id: 'n', name: 'Roster of B2', voiceState: 'generated' }] },
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(store.getState().cast.characters.map((c: Character) => c.id)).toEqual(['m']);
   });
 });

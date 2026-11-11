@@ -21,9 +21,19 @@ describe('api.declineVoiceLink — failure message', () => {
   it("keeps the server's own curated message", async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'Book is busy.' }), { status: 409 })),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ error: 'Book is busy.' }), { status: 409 }),
+        ),
     );
     const err = (await api.declineVoiceLink(args).catch((e: Error) => e)) as Error;
     expect(err.message).toBe('Book is busy.');
+  });
+
+  it('gives the same sentence when the server cannot be reached at all (fetch rejects)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const err = (await api.declineVoiceLink(args).catch((e: Error) => e)) as Error;
+    expect(err.message).toBe('Check the server is running, then try again.');
   });
 });

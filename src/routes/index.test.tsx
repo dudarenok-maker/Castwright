@@ -1987,9 +1987,11 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
        match against the title alone is enough. The await is required
        because GenerationView is React.lazy now (plan 89 C5) — the
        initial paint is the Suspense fallback. */
-    const heading = await screen.findByRole('heading', { level: 1 });
-    expect(heading.textContent).toContain('Mystery Novel');
-    expect(heading.textContent).not.toContain('the Coalfall Commission');
+    /* Ready views are gated on the slices naming the route's book (A120 run 2
+       review): while they still hold Book A the screen shows a loading state,
+       never Book A's title or rows under Book B's URL. */
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.queryByText(/the Coalfall Commission/)).toBeNull();
   });
 });
 

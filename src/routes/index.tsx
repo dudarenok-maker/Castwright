@@ -708,6 +708,33 @@ export function AnalysingRoute() {
   );
 }
 
+/* The cast/chapters/manuscript slices hold ONE book. Until they name the route's
+   book (its read has landed), they still hold the previous one, and a failed read
+   leaves them so; show this instead of that book's rows under this URL (A120 run
+   2, F6). `notFound` is a read that answered "no such book": it will not arrive. */
+function BookNotLoaded({ notFound = false }: { notFound?: boolean }) {
+  const navigate = useNavigate();
+  if (notFound) {
+    return (
+      <div role="alert" className="p-10 text-center text-sm text-ink/70 space-y-3">
+        <p>We couldn't find this book. It may have been renamed or deleted.</p>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="px-4 py-2 rounded-full bg-ink text-white text-sm font-medium min-h-[44px] fine-pointer:min-h-0"
+        >
+          Back to the library
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div role="status" className="p-10 text-center text-sm text-ink/60">
+      Loading this book's cast…
+    </div>
+  );
+}
+
 export function ConfirmRoute() {
   const { bookId = '' } = useParams<{ bookId: string }>();
   const [searchParams] = useSearchParams();
@@ -715,6 +742,8 @@ export function ConfirmRoute() {
   useHydrateStage({ kind: 'confirm', bookId, openProfileId }, [bookId, openProfileId]);
 
   const dispatch = useAppDispatch();
+  const routeStore = useStore<RootState>();
+  const [notFound, setNotFound] = useState(false);
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
@@ -773,7 +802,16 @@ export function ConfirmRoute() {
                 chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
               );
             }
-            if (res?.cast?.characters && res.cast.characters.length > 0) {
+            /* A read that answered "no such book" will never arrive. */
+            if (!res) setNotFound(true);
+            /* Hydrate only while the slices hold THIS book: otherwise this roster
+               would sit under another book's manuscript and its next edit would be
+               PUT into that book. Layout's full read hydrates the cast anyway. */
+            if (
+              res?.cast?.characters &&
+              res.cast.characters.length > 0 &&
+              routeStore.getState().manuscript.bookId === bookId
+            ) {
               if ((dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true) {
                 if (n < 2) attempt(n + 1);
                 return;
@@ -794,18 +832,9 @@ export function ConfirmRoute() {
       life.abort();
       timers.forEach(clearTimeout);
     };
-  }, [bookId, dispatch]);
+  }, [bookId, dispatch, routeStore]);
 
-  /* The cast slice holds ONE book. Until it names this route's book (its read has
-     landed), it still holds the previous one, and a failed read leaves it so; show
-     a loading state rather than that book's rows under this URL (A120 run 2, F6). */
-  if (manuscript.bookId !== bookId) {
-    return (
-      <div role="status" className="p-10 text-center text-sm text-ink/60">
-        Loading this book's cast…
-      </div>
-    );
-  }
+  if (manuscript.bookId !== bookId) return <BookNotLoaded notFound={notFound} />;
 
   return (
     <>
@@ -927,6 +956,9 @@ function ReadyViewSwitch({
 
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
+
+  /* The slices hold one book: never show the previous one's rows under this URL. */
+  if (!manuscriptMatchesBook) return <BookNotLoaded />;
 
   switch (view) {
     case 'manuscript':
@@ -1075,6 +1107,8 @@ function ListenRoute({ bookId }: { bookId: string }) {
   const coverFraming = useAppSelector(
     (s) => s.library.books.find((b) => b.bookId === bookId)?.coverFraming,
   );
+  const manuscriptBookId = useAppSelector((s) => s.manuscript.bookId);
+  if (manuscriptBookId !== bookId) return <BookNotLoaded />;
   return (
     <ListenView
       bookId={bookId}

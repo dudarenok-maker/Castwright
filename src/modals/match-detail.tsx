@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { IconCheckCircle, IconClose } from '../lib/icons';
 import { Avatar, VoiceSwatch, PrimaryButton } from '../components/primitives';
-import { MATCH_FACTORS } from '../data/match-factors';
 import type { Character, Voice } from '../lib/types';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
@@ -15,22 +14,30 @@ interface Props {
   onClose: () => void;
   onConfirm: () => void;
   onDecline: () => void;
+  /* The matched character's name in the matched book, when the series roster
+     resolves it; the voice's own `character` is frozen on whichever book the scan
+     reached first, so it is not used here. */
+  matchedCharacterName?: string;
 }
 
-export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecline }: Props) {
+export function MatchDetailDrawer({
+  character,
+  voice,
+  onClose,
+  onConfirm,
+  onDecline,
+  matchedCharacterName,
+}: Props) {
   const playback = useSamplePlayback();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const [sampleBusy, setSampleBusy] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
   if (!character || !voice) return null;
-  /* The factor breakdown is design-fixture text keyed by demo character ids; the
-     API returns no factors, so real mode omits the section rather than show it
-     (A120 run 2, F5). */
-  const factors =
-    import.meta.env.VITE_USE_MOCKS === 'true'
-      ? MATCH_FACTORS[character.id] || MATCH_FACTORS.narrator
-      : [];
-  const overall = character.matchedFrom?.confidence ?? 0.92;
+  /* Real factors from the voice-match response (cast-slice stores them as
+     matchFactors); mock mode feeds the design fixtures through the same field.
+     A manual link or a decline clears them. */
+  const factors = character.matchFactors ?? [];
+  const overall = character.matchedFrom?.confidence;
   async function playSample() {
     if (!voice || !character) return;
     setSampleError(null);
@@ -81,16 +88,24 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
         </div>
 
         <div className="p-6 space-y-7">
-          <section className="text-center">
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
-              Overall confidence
-            </p>
-            <p className="text-5xl font-bold text-ink tabular-nums leading-none">
-              {Math.round(overall * 100)}
-              <span className="text-2xl text-ink/50">%</span>
-            </p>
-            <p className="mt-2 text-xs text-ink/60">Strong match — voice continuity recommended.</p>
-          </section>
+          {overall != null && (
+            <section className="text-center">
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
+                Overall confidence
+              </p>
+              <p className="text-5xl font-bold text-ink tabular-nums leading-none">
+                {Math.round(overall * 100)}
+                <span className="text-2xl text-ink/50">%</span>
+              </p>
+              <p className="mt-2 text-xs text-ink/60">
+                {overall >= 0.85
+                  ? 'Strong match — voice continuity recommended.'
+                  : overall >= 0.6
+                    ? 'Likely match — listen to the voice before you reuse it.'
+                    : 'Weak match — listen to the voice before you reuse it.'}
+              </p>
+            </section>
+          )}
 
           <section className="grid grid-cols-2 gap-3">
             <div className="p-4 rounded-2xl bg-canvas border border-ink/10 text-center">
@@ -118,7 +133,11 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
                   loading={sampleBusy}
                 />
               </div>
-              <p className="mt-3 font-bold text-ink truncate">{voice.character}</p>
+              {(character.matchedFrom ? matchedCharacterName : voice.character) && (
+                <p className="mt-3 font-bold text-ink truncate">
+                  {character.matchedFrom ? matchedCharacterName : voice.character}
+                </p>
+              )}
               <p className="text-xs text-purple-deep/70 mt-0.5 truncate">
                 {character.matchedFrom?.bookTitle ?? voice.bookTitle}
               </p>

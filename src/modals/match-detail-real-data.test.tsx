@@ -36,25 +36,65 @@ const VOICE = {
   attributes: [],
 } as unknown as Voice;
 
-function renderDrawer() {
+function renderDrawer(character: Character = CHARACTER, name?: string) {
   const store = configureStore({ reducer: { ui: uiSlice.reducer } });
   render(
     <Provider store={store}>
-      <MatchDetailDrawer character={CHARACTER} voice={VOICE} onClose={() => {}} onConfirm={() => {}} onDecline={() => {}} />
+      <MatchDetailDrawer character={character} voice={VOICE} matchedCharacterName={name} onClose={() => {}} onConfirm={() => {}} onDecline={() => {}} />
     </Provider>,
   );
 }
 
-describe('MatchDetailDrawer — real (non-mock) data only', () => {
+const withMatch = (m: Partial<NonNullable<Character['matchedFrom']>>, extra: object = {}) =>
+  ({ ...CHARACTER, ...extra, matchedFrom: { ...CHARACTER.matchedFrom, ...m } }) as Character;
+
+describe('MatchDetailDrawer — real match data only', () => {
   it('names the matched book, not the current one', () => {
     renderDrawer();
     expect(screen.getByText('Chain Book 1')).toBeTruthy();
     expect(screen.queryByText('Chain Book 3')).toBeNull();
   });
 
-  it('shows no canned match factors', () => {
+  it('shows no factors section when the row carries none (no fixture text)', () => {
     renderDrawer();
     expect(screen.queryByText(/Anders Vale/)).toBeNull();
     expect(screen.queryByText('Match factors')).toBeNull();
+  });
+
+  it("renders the row's real matchFactors", () => {
+    renderDrawer(
+      withMatch({}, { matchFactors: [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'Same name' }] }),
+    );
+    expect(screen.getByText('Match factors')).toBeTruthy();
+    expect(screen.getByText('Name match')).toBeTruthy();
+  });
+
+  it("names the matched book's character, or omits the name when it cannot be resolved", () => {
+    renderDrawer(CHARACTER, 'Maerin');
+    expect(screen.getByText('Maerin')).toBeTruthy();
+  });
+
+  it("does not show the current book's voice name when the matched name is unknown", () => {
+    renderDrawer();
+    const card = screen.getByText('From your library').parentElement as HTMLElement;
+    expect(card.textContent).not.toContain('Maerin the reeve');
+  });
+
+  it('words the confidence from its value and invents none when absent', () => {
+    renderDrawer(withMatch({ confidence: 0.35 }));
+    expect(screen.getByText('35')).toBeTruthy();
+    expect(screen.queryByText(/Strong match/)).toBeNull();
+    expect(screen.getByText(/Weak match/)).toBeTruthy();
+  });
+
+  it('shows no confidence block when the link has none', () => {
+    renderDrawer(withMatch({ confidence: undefined }));
+    expect(screen.queryByText('Overall confidence')).toBeNull();
+    expect(screen.queryByText('92')).toBeNull();
+  });
+
+  it('says strong for a high-confidence link', () => {
+    renderDrawer();
+    expect(screen.getByText(/Strong match/)).toBeTruthy();
   });
 });
