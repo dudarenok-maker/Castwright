@@ -6092,8 +6092,8 @@ def _module_weights_mb(loaded: Any) -> int:
 
 
 # #4079 — fallback resident-weights size of the 1.7B-Base, used only when
-# `_ensure_base17_loaded` could not measure the real figure (cpu load, no
-# torch). A plain 1.7b synth whose model is already resident has these weights
+# `_ensure_base17_loaded` could not measure the real figure (the loaded
+# model's `.parameters()` cannot be read). A plain 1.7b synth whose model is already resident has these weights
 # out of the free VRAM the probe reads, so its fit check adds them back (see
 # `PlacementController.own_resident_tier`); otherwise the full cold booking
 # double-counts them and sends the request down the ladder to evict (and then
@@ -6110,7 +6110,7 @@ def _own_resident_tier(
     (`_qwen_resident_device_key`, which sees `_base17` where `_is_resident` does
     not); `weights_mb` is the footprint measured at load, else the fallback.
     Mint (`op == "mint"`) has the same self-evict shape but is NOT covered here
-    (reported separately on #4079); design_voice evicts the base itself."""
+    (reported separately on #4102); design_voice evicts the base itself."""
     none = (None, 0, None)
     if engine != "qwen" or "1.7b" not in (model or "").lower() or (cfg or {}).get("op") in ("mint", "design"):
         return none
@@ -9661,7 +9661,7 @@ def _base17_idle_ttl() -> float:
 
 
 # #4079 — render leases: holder -> monotonic expiry. The server renews one
-# while a chapter render is registered; the 1.7B-Base idle watchdog skips its
+# only while a Quality (1.7B) chapter render is registered; the 1.7B-Base idle watchdog skips its
 # free while any is live. Self-expiring, so a dead server cannot pin VRAM.
 _RENDER_LEASE_MAX_S = 300.0
 _render_leases: dict[str, float] = {}
@@ -9699,8 +9699,8 @@ async def _qwen_design_idle_watchdog() -> None:
                     freed = await asyncio.to_thread(engine.maybe_free_idle_design, ttl)
                     if freed:
                         log.info("Qwen VoiceDesign freed after >%.0fs idle (watchdog).", ttl)
-                    # A live render lease means the server has a chapter render
-                    # registered: its ASR-QA gaps must not cost it the 1.7B-Base.
+                    # A live render lease means the server has a Quality (1.7B)
+                    # chapter render registered: its ASR-QA gaps must not cost it the 1.7B-Base.
                     freed17 = (
                         False if _render_lease_active()
                         else await asyncio.to_thread(engine.maybe_free_idle_base17, base17_ttl)
@@ -12007,7 +12007,7 @@ async def load_model(req: Request) -> JSONResponse:
 
 @app.post("/render-lease")
 async def render_lease(req: Request) -> JSONResponse:
-    """#4079 — the server renews this while a chapter render is registered; the
+    """#4079 — the server renews this only while a Quality (1.7B) chapter render is registered; the
     idle watchdog will not unload the 1.7B-Base while any lease is live. Body:
     `{ holder: str, ttl_seconds: number }`; `ttl_seconds <= 0` releases. A lease
     that is not renewed expires on its own (capped at `_RENDER_LEASE_MAX_S`), so

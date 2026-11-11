@@ -427,7 +427,7 @@ async function main(): Promise<void> {
        process open on their own. */
     startBackupScheduler();
 
-    /* #4079 — renew the sidecar render lease while a render is in flight, so
+    /* #4079 — renew the sidecar render lease only while a Quality (1.7B) render is in flight, so
        its idle watchdog keeps the 1.7B-Base through ASR-QA gaps. Unref'd. */
     startRenderLease();
 

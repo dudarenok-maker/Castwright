@@ -7,7 +7,7 @@ vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
   getResolvedSidecarUrl: () => 'http://sidecar.test',
 }));
 
-import { renewRenderLeaseOnce, LEASE_TTL_S, LEASE_RENEW_MS } from './render-lease.js';
+import { renewRenderLeaseOnce, startRenderLease, LEASE_TTL_S, LEASE_RENEW_MS } from './render-lease.js';
 import { setQualityRenderCounter, setActiveGenerationBooksProvider } from './active-generation-gate.js';
 
 describe('render lease (#4079)', () => {
@@ -52,6 +52,31 @@ describe('render lease (#4079)', () => {
 
   it('renews well inside the TTL so one missed tick does not drop the lease', () => {
     expect(LEASE_RENEW_MS * 2).toBeLessThan(LEASE_TTL_S * 1000);
+  });
+
+  it('startRenderLease renews on every LEASE_RENEW_MS tick while a Quality render is registered', async () => {
+    vi.useFakeTimers();
+    const f = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('fetch', f);
+    setQualityRenderCounter(() => 1);
+    const t = startRenderLease();
+    try {
+      expect(f).not.toHaveBeenCalled(); // nothing posts before the first tick
+      await vi.advanceTimersByTimeAsync(LEASE_RENEW_MS);
+      expect(f).toHaveBeenCalledTimes(1);
+      const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe('http://sidecar.test/render-lease');
+      expect(JSON.parse(init.body as string)).toEqual({ holder: 'castwright-server', ttl_seconds: LEASE_TTL_S });
+      await vi.advanceTimersByTimeAsync(LEASE_RENEW_MS);
+      expect(f).toHaveBeenCalledTimes(2);
+      /* Render over: the next tick posts nothing, and the lease lapses on its own. */
+      setQualityRenderCounter(() => 0);
+      await vi.advanceTimersByTimeAsync(LEASE_RENEW_MS);
+      expect(f).toHaveBeenCalledTimes(2);
+    } finally {
+      clearInterval(t);
+      vi.useRealTimers();
+    }
   });
 
   it('the real render registry feeds the gate: only a Quality job counts, and only while registered', async () => {

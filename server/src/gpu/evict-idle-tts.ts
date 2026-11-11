@@ -178,7 +178,11 @@ export async function freeKokoroForRenderSynth(opts: FreeKokoroForRenderOpts): P
      `gpus[].resident` puts it in the unindexed bucket) and `devices.kokoro` is a family only, so
      this cannot compare Kokoro's card with the refused request's `deviceKey`. On a multi-GPU box it
      may unload a Kokoro that sits on another card. The caller's one-shot latch bounds that to one
-     unload per refused call. */
+     unload per refused call.
+     BOUNDED RACE: the sidecar's `KokoroEngine.unload` does not take the `_VD_KOKORO` arbiter, so this
+     can free Kokoro while another Kokoro line is mid-synth. Unreachable at the defaults (sentence
+     concurrency 1, gen workers 1); reachable with GEN_WORKERS >= 2, another book's render, or a voice
+     sample. The cost is bounded: that line fails once and is retried. */
   console.info("[generation] render's own Quality line refused for capacity: unloading Kokoro (no Qwen tier)");
   const freedNames: string[] = [];
   /* keep06 + keep17 true: reconcile touches no Qwen tier; keepKokoro:false drops Kokoro only. */
