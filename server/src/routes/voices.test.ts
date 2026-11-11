@@ -270,6 +270,24 @@ afterEach(() => {
 });
 
 describe('GET /api/voices — aggregation', () => {
+  it('#F10a: one book with an unreadable cast.json is skipped, the rest of the library is returned', async () => {
+    writeBookOnDisk(workspaceRoot, 'Broken Author', 'Broken Series', 'Broken Book', 'b_broken', [
+      { id: 'ghost', name: 'Ghost', role: 'extra', color: 'amber' },
+    ]);
+    const castPath = join(workspaceRoot, 'books', 'Broken Author', 'Broken Series', 'Broken Book', '.audiobook', 'cast.json');
+    writeFileSync(castPath, '');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app).get('/api/voices');
+      expect(res.status).toBe(200);
+      expect(res.body.voices.find((v: { id: string }) => v.id === 'v_brann')).toBeDefined();
+      expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      rmSync(join(workspaceRoot, 'books', 'Broken Author'), { recursive: true, force: true });
+    }
+  });
+
   it('emits bookSeries alongside bookId so the voice-family-grouped UI can nest by series', async () => {
     const res = await request(app).get('/api/voices');
     expect(res.status).toBe(200);

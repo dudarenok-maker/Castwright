@@ -43,6 +43,7 @@ import { runVoiceDesign } from '../tts/design-voice-core.js';
 import { scanLibraryVoiceUsage, clearLibraryVoiceReferences } from '../workspace/voice-library-usage.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoiceWavPath } from '../workspace/paths.js';
 import { markBaseRedesigned, qwenVoicePtPath } from './qwen-voice.js';
+import { stampKeyVoiceId } from '../workspace/variant-base-rev.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
 import {
   selectTtsProvider,
@@ -396,6 +397,7 @@ voiceLibraryRouter.post('/:voiceUuid/redesign/promote', async (req: Request, res
     } else {
       await rm(qwenVoiceSidecarPath(storageKey), { force: true }).catch(() => {});
     }
+    await stampKeyVoiceId(storageKey).catch(() => {});
     /* #4040 — a promote over an existing base is a redesign: a fresh `rev` makes
        every emotion variant designed against the old base stale, in every book on
        the key (same stamp as qwen-voice.ts's promote-voice). */
@@ -1085,6 +1087,7 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
       await copyFile(qwenVoicePtPath(sourceKey), qwenVoicePtPath(targetKey));
       if (existsSync(qwenVoiceSidecarPath(sourceKey))) {
         await copyFile(qwenVoiceSidecarPath(sourceKey), qwenVoiceSidecarPath(targetKey));
+        await stampKeyVoiceId(targetKey).catch(() => {});
       }
       qwenStatus = { status: 'ready', baseModel: currentQwenBaseModel() };
     } else {

@@ -79,7 +79,7 @@ const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
 const ORIG_PT = Buffer.from('BOOK-ONE-ORIGINAL-PT');
-const ORIG_JSON = Buffer.from('{"voiceId":"qwen-u_shared","instruct":"book one"}');
+const ORIG_JSON = Buffer.from('{"voiceId":"qwen-u_shared","instruct":"book one","language":"english","note":"n7"}');
 const NEW_PT = Buffer.from('REDESIGNED-BY-SIDECAR');
 
 let workspaceRoot: string;
@@ -382,6 +382,22 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).toString()).toBe('LEGACY-BASE'); // the base is not orphaned
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt')).equals(VAR_BYTES)).toBe(true);
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).toString()).toBe('LEGACY-BASE');
+  });
+
+  it('#F10b: a separation copy names its own key in the copied base json', async () => {
+    seedVariant({});
+    const row = { ...readRow('Book Two') };
+    delete row.voiceUuid;
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), Buffer.from('LEGACY-BASE'));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.json'), JSON.stringify({ voiceId: 'qwen-v_wren', instruct: 'x', language: 'english', note: 'n7' }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt'), VAR_BYTES);
+    expect((await design(() => bookTwoId, { emotion: 'angry' })).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    const copy = JSON.parse(readFileSync(join(qwenDir(), `qwen-${fresh}.json`), 'utf8'));
+    expect(copy.voiceId).toBe(`qwen-${fresh}`);
+    expect(copy).toMatchObject({ language: 'english', note: 'n7' });
+    expect(JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_wren.json'), 'utf8')).voiceId).toBe('qwen-v_wren');
   });
 });
 
@@ -829,7 +845,17 @@ describe('#3992 — fork internals', () => {
     const fresh = readRow('Book Two').voiceUuid as string;
     for (const [name, bytes] of Object.entries(family)) {
       const copy = name.replace('u_shared', fresh);
-      expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+      /* the copied json names its own key (#F10b); every other byte is the source's */
+      if (name.endsWith('.json')) {
+        expect(JSON.parse(readFileSync(join(qwenDir(), copy), 'utf8'))).toEqual({
+          voiceId: `qwen-${fresh}`,
+          instruct: 'book one',
+          language: 'english',
+          note: 'n7',
+        });
+      } else {
+        expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+      }
     }
     expect(existsSync(join(qwenDir(), `qwen-${fresh}__angry.pt`))).toBe(false);
     for (const [name, bytes] of Object.entries(family)) {
