@@ -564,14 +564,15 @@ export async function reconcileRejectEdgesOnDisk(
        IDENTITY handler #2260 touched lets a withKeyLock ACQUISITION timeout
        through (`isLockAcquisitionTimeout`, workspace/file-lock.ts); this one
        swallows it along with everything else, and does so on purpose. (#2292
-       later added three more deliberate swallows on the same kind of
-       reasoning — the interim cast.json snapshots, which a final write in the
-       same run clobbers — so this is no longer the ONLY one, as this comment
-       used to say. It is still the only one in the identity path.)
+       later added deliberate swallows on the same kind of reasoning at the
+       interim cast.json snapshots, which a final write in the same run
+       clobbers — since plan 291 that is the one shared `snapshotPlannedRoster`
+       swallow — so this is no longer the ONLY one, as this comment used to
+       say. It is still the only one in the identity path.)
 
-       Round 2 added a rethrow here on the same reasoning it used at the six
-       identity sites — "cast.json is already written and the identity record
-       never updated". That reasoning does not describe THIS site. It was
+       Round 2 added a rethrow here on the same reasoning it used at the
+       identity sites (six then; four identity catches since plan 291) —
+       "cast.json is already written and the identity record never updated". That reasoning does not describe THIS site. It was
        copy-pasted from handlers where the caught error can come out of
        `retireCharacterId` itself; here no identity record is at risk, because
        this call runs LAST in the persist — after every `recordRetirements`
@@ -1062,7 +1063,7 @@ export function mergeRosterChapter(
    kind:'fold' entries in lockstep with the current manuscript-edits.json
    (manual entries are preserved). Co-locate the CALL with the edits write so the
    journal is persisted iff the sentences it describes are. Non-fatal at the call
-   site. */
+   site. Exported for analysis.journal-lock.test.ts only. */
 export async function writeFoldJournal(
   bookDir: string,
   rewrites: Record<string, string>,
@@ -1087,7 +1088,8 @@ export async function writeFoldJournal(
    kind:'dedup' entries in lockstep with the current roster, preserving fold +
    manual entries. Same non-fatal-at-call-site contract. The pre-dedup roster +
    sentences are captured by dedupAndPrepare before the rewrite, so sourceName +
-   affected sentences reflect the state the dedup collapsed. */
+   affected sentences reflect the state the dedup collapsed. Exported for
+   analysis.journal-lock.test.ts only. */
 export async function writeDedupJournal(
   bookDir: string,
   rewrites: Record<string, string>,
@@ -9077,11 +9079,7 @@ export async function runSubsetAnalyzerJob(
     if (!pendingCachePatch) return;
     const p = pendingCachePatch;
     pendingCachePatch = undefined;
-    try {
-      await mutateAnalysisCache(manuscriptId, p);
-    } catch (resendErr) {
-      console.warn('[analysis-subset] re-sending a faulted Phase-0a cache patch failed', resendErr);
-    }
+    await resendCachePatch(manuscriptId, p);
   };
 
   try {
@@ -10337,7 +10335,14 @@ export async function runSubsetAnalyzerJob(
                invariant 6 bars the subset from deleting it stays `run-owned`), and every
                row the subset added that its own result keeps recorded `added-once`. A row the
                subset added that this persist removed (rule 11, its own ledger) loses
-               the entry its snapshot recorded, so a later run may add it again. */
+               the entry its snapshot recorded, so a later run may add it again.
+               Timing differs from the main job on purpose (final review M5): the main job
+               converts only once its state.json has landed, together with `clearLedger`,
+               because until then its run is resumable and the entries are its run state.
+               The subset never clears a ledger (invariant 6), and this patch is the only
+               write of its rows' entries (R35), so it converts here, before state.json. A
+               state.json failure therefore leaves main rows `run-owned` and subset rows
+               `added-once`; both stay protected (a user edit sticks either way). */
             const persistLedger: Record<string, LedgerEntry | null> = {
               ...(out.mainLedger ?? {}),
               ...subsetCompletedAddedOnce(out),

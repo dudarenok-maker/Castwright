@@ -112,12 +112,16 @@ owner: null
    - Every job writer that touches a ledgered row refreshes its fingerprint the same way:
      `materialisePriorAtRunStart`'s stale-link prune and heal, `writePlanSnapshot` and
      `persistPlannedCast`.
-   - The main job persists the ledger in the cache (`addedRows`) and clears it, together with
-     `runAddedPairs`, at a successful persist.
+   - The main job persists the ledger in the cache (`addedRows`). At a successful persist (once
+     state.json has landed) it converts the `run-owned` entry of every row it wrote to
+     `added-once` (R4) and clears the remaining `run-owned` entries, together with
+     `runAddedPairs`.
    - **Cross-job refresh, not promotion.** The subset job keeps its own in-memory ledger for the
-     rows it adds. When it writes a row that has an entry in `cache.addedRows` (a stopped main
-     run's row), it applies the same compare-then-refresh to that entry, through
-     `mutateAnalysisCache`.
+     rows it adds, and also records them in the cache ledger as `run-owned` with `by: 'subset'`
+     (R35a/R35b), so a later run knows them as run rows. At a completed subset persist, the rows
+     its own result keeps become `added-once`. When it writes a row that has an entry in
+     `cache.addedRows` (a stopped main run's row), it applies the same compare-then-refresh to
+     that entry, through `mutateAnalysisCache`.
    - The subset job never deletes by `addedRows`. So its aliases, `notLinkedTo`, stale-link prunes
      and linker stamps on a stopped main run's rows never read as user changes at the resumed main
      persist.
@@ -526,7 +530,7 @@ export interface MatchInput {
   runToken: string; currentBookId?: string;
 }
 /** Rule-11 ledger. `fp` = fingerprint of the job's LAST write of the row; disk ≠ fp before a write → `added-once` (sticky). */
-export type LedgerEntry = { state: 'run-owned'; fp: string } | { state: 'added-once' };
+export type LedgerEntry = { state: 'run-owned'; fp: string; by?: 'subset' } | { state: 'added-once' }; // by: R35b
 export type RunAddedLedger = Record<string, LedgerEntry>;
 export type PlannedRowInfo =
   | { kind: 'join'; priorId: string }

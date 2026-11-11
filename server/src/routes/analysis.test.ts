@@ -7012,6 +7012,8 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         // mechanism keeps the FRESH row's OWN id and only carries the
         // prior's voice FIELDS onto it, so absent this task's remap
         // 'mayrin' would still be the id in idsAfter.
+        // Plan 291 (#4031): the remap and Site 3 were deleted; the plan's T2 join
+        // (Phase 0b) is what adopts the prior 'mairin' id now.
         expect(idsAfter).not.toContain('mayrin');
         expect(idsAfter).toContain('mairin');
 
@@ -7034,6 +7036,7 @@ describe('runSubsetAnalyzerJob — early remap pass, subset path (#2040 Task 11)
         // overlay finds an EXACT id match and never reaches its
         // name-fallback branch. This entry can only have come from this
         // task's own recording.
+        // Plan 291 (#4031): the plan's T2 join records this now, tagged `analyzer`.
         const history = await loadCastIdHistory(bookDir);
         expect(history.supersededBy).toHaveProperty('mayrin', 'mairin');
       } finally {
