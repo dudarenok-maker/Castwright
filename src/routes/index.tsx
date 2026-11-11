@@ -738,12 +738,18 @@ function useBookNotFound(bookId: string, enabled: boolean): boolean {
   return answeredNullFor === bookId;
 }
 
-function BookNotLoaded({ notFound = false }: { notFound?: boolean }) {
+/* `listed`: the library lists this book, so a 404 is not "gone" — the server also
+   404s a "Ready to analyse" or unreadable row, which has no state to open. */
+function BookNotLoaded({ notFound = false, listed = false }: { notFound?: boolean; listed?: boolean }) {
   const navigate = useNavigate();
   if (notFound) {
     return (
       <div role="alert" className="p-10 text-center text-sm text-ink/70 space-y-3">
-        <p>We couldn't find this book. It may have been renamed or deleted.</p>
+        <p>
+          {listed
+            ? "We couldn't open this book."
+            : "We couldn't find this book. It may have been renamed or deleted."}
+        </p>
         <button
           type="button"
           onClick={() => navigate('/')}
@@ -771,6 +777,7 @@ export function ConfirmRoute() {
   const routeStore = useStore<RootState>();
   const [notFoundFor, setNotFoundFor] = useState<string | null>(null);
   const notFound = notFoundFor === bookId;
+  const listed = useAppSelector((s) => s.library.books.some((b) => b.bookId === bookId));
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
@@ -863,7 +870,7 @@ export function ConfirmRoute() {
     };
   }, [bookId, dispatch, routeStore]);
 
-  if (manuscript.bookId !== bookId) return <BookNotLoaded notFound={notFound} />;
+  if (manuscript.bookId !== bookId || notFound) return <BookNotLoaded notFound={notFound} listed={listed} />;
 
   return (
     <>
@@ -985,7 +992,12 @@ function ReadyViewSwitch({
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
 
   /* The slices hold one book: never show the previous one's rows under this URL. */
-  if (!manuscriptMatchesBook) return <BookNotLoaded notFound={notFound} />;
+  /* `notFound` sticks: Layout's own null branch stamps this book's identity on
+     the slices (resetBookSlices), which would otherwise swap the alert for an
+     empty view. The flag is keyed by id, so it dies with the book. */
+  if (!manuscriptMatchesBook || notFound) {
+    return <BookNotLoaded notFound={notFound} listed={activeBook !== undefined} />;
+  }
 
   switch (view) {
     case 'manuscript':

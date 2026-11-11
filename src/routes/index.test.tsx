@@ -914,6 +914,38 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     expect(store.getState().cast.characters).toHaveLength(24);
   });
 
+  it('does not wipe the slices when the user opened ANOTHER book while a manuscript replace was out', async () => {
+    const store = makePopulatedStore();
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'other-y', manuscriptId: 'mns-y', title: 'Book Y' } as any,
+        sentences: null,
+        wordCount: 10,
+        format: 'plaintext',
+      }),
+    );
+    replaceManuscriptMock.mockResolvedValue({ chapterCount: 1 });
+    getLibraryMock.mockResolvedValue({
+      authors: [
+        {
+          name: 'Della Renwick',
+          series: [{ name: 'Standalones', books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })] }],
+        },
+      ],
+    });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    const { showInfo } = renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+      target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+    });
+    const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+    fireEvent.click(confirm[confirm.length - 1]);
+    await waitFor(() => expect(showInfo).toHaveBeenCalled());
+    expect(store.getState().manuscript.bookId).toBe('other-y');
+    expect(store.getState().cast.characters).toHaveLength(24);
+  });
+
   /* #3400 pass 7 — the dialog's exclude toggles (and the front-matter
      auto-suggestions it applies on "Analyse now") are keyed by chapter id,
      which a restructure of that book renumbers. */
