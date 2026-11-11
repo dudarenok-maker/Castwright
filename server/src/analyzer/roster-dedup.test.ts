@@ -595,6 +595,21 @@ describe('dedupeRosterByName — merge refusals (#4031)', () => {
     expect(r.refused).toEqual([{ a: 'a1', b: 'a2', why: 'matched-from-conflict' }]);
   });
 
+  it('T5: a neither-joined refused pair is oriented by line count, whatever the caller order (ruling :63)', () => {
+    const a1 = c({ id: 'a1', name: 'Анна', gender: 'female' });
+    const a2 = c({ id: 'a2', name: 'Анна', gender: 'female' });
+    // a2 speaks more: it is the target, a1 the source, in either roster order.
+    const sentences = [{ characterId: 'a1' }, { characterId: 'a2' }, { characterId: 'a2' }, { characterId: 'a2' }];
+    const constraints = planned({
+      a1: newRow({ matchedFrom: { bookId: 'b1', characterId: 'x' } }),
+      a2: newRow({ matchedFrom: { bookId: 'b2', characterId: 'y' } }),
+    });
+    for (const order of [[a1, a2], [a2, a1]]) {
+      const r = dedupeRosterByName(order as any, sentences as any, { constraints });
+      expect(r.suggestions.map((s) => [s.sourceId, s.targetId])).toEqual([['a1', 'a2']]);
+    }
+  });
+
   it('two new rows with the SAME matchedFrom still merge', () => {
     const chars = [c({ id: 'a1', name: 'Анна', gender: 'female' }), c({ id: 'a2', name: 'Анна', gender: 'female' })];
     const mf = { bookId: 'b1', characterId: 'x' };

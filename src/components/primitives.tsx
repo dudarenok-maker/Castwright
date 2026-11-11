@@ -273,19 +273,8 @@ export function VoiceSwatch({
       ? `Generating sample for ${voice?.character ?? 'voice'}`
       : `Play sample for ${voice?.character ?? 'voice'}`
     : `${voice?.character ?? 'Voice'} voice`;
-  return (
-    <div className="inline-flex flex-col items-start">
-      <button
-        type="button"
-        onClick={() => onSelect?.(voice?.id)}
-        disabled={loading}
-        aria-busy={loading || undefined}
-        aria-label={accessibleLabel}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        className={`relative inline-grid place-items-center transition-transform hover:scale-[1.02] ${loading ? 'cursor-wait' : ''}`}
-        style={{ width: ringSize, height: ringSize }}
-      >
+  const orb = (
+    <>
         <span
           className={`absolute inset-0 rounded-full transition-opacity ring-peach-2 ${selected ? 'opacity-100' : 'opacity-0'}`}
         />
@@ -308,17 +297,47 @@ export function VoiceSwatch({
               strokeDasharray="2 4"
             />
           </svg>
-          <span
-            className={`absolute inset-0 grid place-items-center bg-ink/35 transition-opacity ${overlayVisible ? 'opacity-100' : 'opacity-0'}`}
-          >
-            {loading ? (
-              <IconSpinner className="w-5 h-5 text-white" />
-            ) : (
-              <IconPlay className="w-5 h-5 text-white" />
-            )}
-          </span>
+          {onSelect && (
+            <span
+              className={`absolute inset-0 grid place-items-center bg-ink/35 transition-opacity ${overlayVisible ? 'opacity-100' : 'opacity-0'}`}
+            >
+              {loading ? (
+                <IconSpinner className="w-5 h-5 text-white" />
+              ) : (
+                <IconPlay className="w-5 h-5 text-white" />
+              )}
+            </span>
+          )}
         </span>
-      </button>
+    </>
+  );
+  return (
+    <div className="inline-flex flex-col items-start">
+      {onSelect ? (
+        <button
+          type="button"
+          onClick={() => onSelect(voice?.id)}
+          disabled={loading}
+          aria-busy={loading || undefined}
+          aria-label={accessibleLabel}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          className={`relative inline-grid place-items-center transition-transform hover:scale-[1.02] ${loading ? 'cursor-wait' : ''}`}
+          style={{ width: ringSize, height: ringSize }}
+        >
+          {orb}
+        </button>
+      ) : (
+        /* #4031 (Task 12) — no action: a labelled image, never a focusable no-op button. */
+        <span
+          role="img"
+          aria-label={accessibleLabel}
+          className="relative inline-grid place-items-center"
+          style={{ width: ringSize, height: ringSize }}
+        >
+          {orb}
+        </span>
+      )}
       {showLabel && voice && (
         <div className="mt-2">
           <p className="text-sm font-semibold text-ink leading-tight">{voice.character}</p>

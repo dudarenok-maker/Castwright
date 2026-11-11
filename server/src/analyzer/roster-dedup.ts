@@ -165,9 +165,9 @@ export function dedupeRosterByName(
   };
   const isJoined = (ch: CharacterOutput): boolean => state.get(ch)!.priorId !== null;
   const refuse = (a: CharacterOutput, b: CharacterOutput, why: RefusalReason, reason: string): void => {
-    // A join-vs-new pair points the NEW row (source) at the established one (target).
-    const [x, y] = why === 'join-vs-new' && isJoined(a) ? [b, a] : [a, b];
-    refusals.push({ x: x.id, y: y.id, why, reason });
+    // `orient` (below): the one direction rule, for every refusal reason (T5, ruling :63).
+    const { source, target } = orient(a, b);
+    refusals.push({ x: source.id, y: target.id, why, reason });
   };
 
   // ── First-person phantom detection (needed by the survivor rule) ─────────
@@ -247,6 +247,17 @@ export function dedupeRosterByName(
   /** Attributed lines of a node: its own plus every row folded into it. */
   const linesOf = (ch: CharacterOutput): number =>
     [...state.get(ch)!.members].reduce((n, id) => n + (lines.get(id) ?? 0), 0);
+  /** The one direction rule for every suggestion and refusal: a row that joined a
+      prior character is the TARGET against one that did not (accepting must never
+      fold an established character into a fresh row); otherwise fewer lines is the
+      source, and a tie makes `x` the target. Defined before the first tier: `refuse`
+      calls it. */
+  const orient = (x: CharacterOutput, y: CharacterOutput): { source: CharacterOutput; target: CharacterOutput } => {
+    const xj = isJoined(x);
+    const yj = isJoined(y);
+    const yTarget = xj !== yj ? yj : linesOf(y) > linesOf(x);
+    return yTarget ? { source: x, target: y } : { source: y, target: x };
+  };
 
   // ── Tier-1: exact normalised name, gender-gated, never narrator ──────────
   const byKey = new Map<string, CharacterOutput[]>();
@@ -326,17 +337,6 @@ export function dedupeRosterByName(
     reason,
     origin: 'dedup',
   });
-  /** The one direction rule for every suggestion: a row that joined a prior
-      character is the TARGET against one that did not (accepting must never fold
-      an established character into a fresh row); otherwise fewer lines is the
-      source, and a tie makes `x` the target. */
-  const orient = (x: CharacterOutput, y: CharacterOutput): { source: CharacterOutput; target: CharacterOutput } => {
-    const xj = isJoined(x);
-    const yj = isJoined(y);
-    const yTarget = xj !== yj ? yj : linesOf(y) > linesOf(x);
-    return yTarget ? { source: x, target: y } : { source: y, target: x };
-  };
-
   const aliasKeysOf = (ch: CharacterOutput): Set<string> =>
     new Set((ch.aliases ?? []).map((a) => normaliseNameKey(a)).filter(Boolean));
 

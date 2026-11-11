@@ -73,6 +73,7 @@ export function mintId(
     return `${raw}-n${k}`;
   }
   const base = `${raw}-r${mode.runToken}`;
+  // `-<k>` mimics the analyzer's suffix shape, but only if `<raw>-r<tok>` is taken, which is unreachable (final review T1:15).
   if (!taken.has(base)) return base;
   let k = 1;
   while (taken.has(`${base}-${k}`)) k++;

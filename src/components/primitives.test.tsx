@@ -1,6 +1,25 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { Checkbox } from './primitives';
+import { Checkbox, VoiceSwatch } from './primitives';
+
+/* #4031 final review (Task 12) — a swatch with no action was a focusable button that
+   did nothing (WCAG 4.1.2). Without `onSelect` it renders a labelled image instead. */
+describe('VoiceSwatch', () => {
+  const voice = { id: 'v1', character: 'Wren', gradient: ['#111111', '#222222'] } as never;
+
+  it('without onSelect: no button, a labelled non-interactive image', () => {
+    render(<VoiceSwatch voice={voice} />);
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByRole('img', { name: 'Wren voice' })).not.toHaveAttribute('tabindex');
+  });
+
+  it('with onSelect: a button that plays the sample', () => {
+    const onSelect = vi.fn();
+    render(<VoiceSwatch voice={voice} onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play sample for Wren' }));
+    expect(onSelect).toHaveBeenCalledWith('v1');
+  });
+});
 
 describe('Checkbox', () => {
   it('renders unchecked with no checkmark', () => {

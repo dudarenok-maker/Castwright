@@ -334,7 +334,9 @@ export function logIfDegradedCastIdHistory(
 
 /* Plan 291 rule 10 (#4031): does the book have a prior cast or any merge history
    to match against? Then Phase 1 is held for the plan. A degraded history counts:
-   it cannot be read, so it cannot be ruled out. */
+   it cannot be read, so it cannot be ruled out. `bookDir` is the dir the run start
+   just verified (final review T15), never the job's captured record, which a move
+   can leave naming a stale folder. */
 async function bookHasPriorOrHistory(bookDir: string | undefined, priorRows: number): Promise<boolean> {
   if (!bookDir) return false;
   if (priorRows > 0) return true;
@@ -360,13 +362,15 @@ export const ANALYSIS_CACHE_LEGACY_MESSAGE =
    links are stale) runs before the lock. The cache's `addedRows` (a stopped main
    run's ledger) is refreshed for every row the write touches (rule 11; for the
    subset job this is the cross-job refresh, invariant 6). Returns the healed
-   prior; a book with no folder keeps the prior it was given. */
+   prior; a book with no folder keeps the prior it was given. `verifiedDir`: the
+   identity-verified dir the write went through (T15: the Phase-1 hold reads it). */
 async function materialiseRunStartPrior(a: {
   job: AnalysisJob;
   record: { bookId?: string | null; bookDir?: string | null; title: string };
   cache: AnalysisCache;
   prior: Array<{ id: string } & Record<string, unknown>>;
   log: (phaseId: number, message: string) => void;
+  verifiedDir?: { value?: string };
 }): Promise<Array<{ id: string } & Record<string, unknown>>> {
   const { job, record, cache, log } = a;
   if (!record.bookDir) return a.prior;
@@ -388,6 +392,7 @@ async function materialiseRunStartPrior(a: {
   await withVerifiedBookDir(
     { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job) },
     async (bookDir) => {
+      if (a.verifiedDir) a.verifiedDir.value = bookDir;
       out.m = await materialisePriorAtRunStart({
         bookDir,
         bookId: record.bookId ?? undefined,
@@ -5785,16 +5790,18 @@ export async function runMainAnalyzerJob(
 
     /* ── Run start (plan 291, #4031): materialise the prior (shared with the subset
        job). */
+    const verifiedDir: { value?: string } = {};
     priorCastForMerge = await materialiseRunStartPrior({
       job,
       record: recordRef,
       cache,
       prior: priorCastForMerge,
       log,
+      verifiedDir,
     });
     /* Plan 291 rule 10: a book with a prior cast or any merge history holds Phase 1
        until Phase 0b has applied the plan. */
-    const holdForPlan = await bookHasPriorOrHistory(recordRef.bookDir, priorCastForMerge.length);
+    const holdForPlan = await bookHasPriorOrHistory(verifiedDir.value, priorCastForMerge.length);
     const watermark: PhaseWatermark = createWatermarkForJob({ holdForPlan });
     if (pipelinedPerPhase) {
       console.log(
