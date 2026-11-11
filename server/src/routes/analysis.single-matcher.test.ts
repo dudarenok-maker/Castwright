@@ -2984,6 +2984,30 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(history(b).supersededByKind).toEqual({ x2: 'analyzer' });
   });
 
+  /* Main-only (one line, R18): Start fresh is a main-job request. */
+  if (kind === 'main')
+    it("R50 (PR #4103 pass 1 F2): Start fresh carries a stopped run's ledger - its untouched rows are dropped, a user-edited one stays", async () => {
+      const b = seed([{ ...NARR }, pr('anna', 'Anna')]);
+      const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+      const carl = fr('carl', 'Carl Reyes', { role: 'minor', gender: 'male' });
+      /* Leg one stops after its Phase-0b snapshot: boris and carl are on disk with 0 lines, run-owned. */
+      setPhase1Hook(abortAtFirstPhase1());
+      await go(b, { roster: [NARR, fr('anna', 'Anna'), boris, carl], speakerId: 'anna' });
+      setPhase1Hook(undefined);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris', 'carl', 'narrator']);
+      /* Between the runs the user gives carl a voice. */
+      expect((await routeVoice(app, b.bookId, 'carl')).status).toBe(200);
+      const events = await runStartFresh(b, { roster: [NARR, fr('anna', 'Anna')], speakerId: 'anna' });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'carl', 'narrator']);
+      expect(row(b, 'carl')).toMatchObject({ overrideTtsVoices: { qwen: { name: 'route-voice-carl' } } });
+      expect(editLines(b)).toEqual({ anna: 3 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 3, narrator: 0 });
+      expect(history(b).supersededBy).toEqual({});
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
   it('A12 (rule 7): a dismissal survives a re-analysis, a Start fresh and a later merge of one of the pair into a third character', async () => {
     const b = twoWrens([pr('olga', 'Olga Marsh', { role: 'minor' })]);
     const first = await go(b, ASHBY);

@@ -5825,7 +5825,21 @@ export async function runMainAnalyzerJob(
        start of the run proper (below, after the cache is classified): they are written
        to cast.json under the cast lock by materialisePriorAtRunStart. */
 
+    /* R50 (PR #4103 pass 1 F2) — Start fresh carries the rule-11 ledger (`addedRows`, with
+       its `runAddedPairs`): the rows a stopped run added stay known as that run's own, so the
+       next persist still drops the untouched ones and keeps the ones the user changed. Read
+       from a current cache only (a legacy one holds no ledger); an unreadable cache carries
+       nothing, as before. Everything else in the cache is discarded. */
+    let freshCarry: Pick<AnalysisCache, 'addedRows' | 'runAddedPairs'> = {};
     if (requestedFresh) {
+      try {
+        const before = await loadAnalysisCache(manuscriptId);
+        if (before.version === ANALYSIS_CACHE_VERSION) {
+          freshCarry = { addedRows: before.addedRows, runAddedPairs: before.runAddedPairs };
+        }
+      } catch (err) {
+        console.warn('[analysis] Start fresh could not read the analysis cache; its run ledger is not carried', err);
+      }
       await clearAnalysisCache(manuscriptId);
       /* Match the filesystem to the cleared cache state: the per-sentence edits
          go with the cache, or the library card would briefly show stale lines
@@ -5903,7 +5917,16 @@ export async function runMainAnalyzerJob(
        version it is given, so the in-memory copy must carry it). The first write
        creates the file when this is a new book's first run. */
     cache.version = ANALYSIS_CACHE_VERSION;
-    await mutateAnalysisCache(manuscriptId, { createIfAbsent: true, version: ANALYSIS_CACHE_VERSION });
+    const carriedLedger = freshCarry.addedRows && Object.keys(freshCarry.addedRows).length > 0 ? freshCarry.addedRows : undefined;
+    const carriedPairs = freshCarry.runAddedPairs?.length ? freshCarry.runAddedPairs : undefined;
+    if (carriedLedger) cache.addedRows = { ...carriedLedger };
+    if (carriedPairs) cache.runAddedPairs = [...carriedPairs];
+    await mutateAnalysisCache(manuscriptId, {
+      createIfAbsent: true,
+      version: ANALYSIS_CACHE_VERSION,
+      ...(carriedLedger ? { ledger: carriedLedger } : {}),
+      ...(carriedPairs ? { runAddedPairs: carriedPairs } : {}),
+    });
     /* #3435 M0/M1 — heal word-free records; while stage1 is absent, a failed
        chapter's take is pending. */
     if (applyAnalysisLoadRules(cache, recordRef.chapterHints)) {
