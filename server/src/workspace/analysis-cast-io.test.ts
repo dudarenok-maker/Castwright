@@ -844,7 +844,8 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
 
 describe('I1 (#4031 final review): a mid-run cast.json of the wrong shape is never overwritten', () => {
   const alice = row('alice', 'Alice');
-  const damaged = ['{}', '{"characters":null}', '{"cast":[]}', '[]'];
+  // '' and a truncated file are the realistic torn-write shapes (PR #4103 pass 1 M1).
+  const damaged = ['{}', '{"characters":null}', '{"cast":[]}', '[]', '', '{"characters":[{"id":"al'];
 
   it.each(damaged)('writePlanSnapshot refuses %s and leaves the bytes alone', async (bytes) => {
     writeFileSync(castJsonPath(bookDir), bytes);

@@ -154,9 +154,17 @@ const isNarratorId = (id: string): boolean => NARRATOR_CHARACTER_IDS.includes(id
 /* The mid-run re-read (snapshot and persist). Absent is an empty cast; a file
    that parses but has no `characters` array is shape-corrupt and throws, the same
    refusal as the run start's (`readPriorCastLockFree`) - overlaying onto `[]`
-   would overwrite every user row (#4031 final review I1). */
+   would overwrite every user row (#4031 final review I1). Bytes that do not
+   parse (a zero-byte or torn file) are the same `corrupt`, so the snapshot's
+   early stop and the curated terminal apply to them too (PR #4103 pass 1 M1). */
 async function readCurrentCast(bookDir: string): Promise<Rows> {
-  const cast = await readJson<{ characters?: Rows }>(castJsonPath(bookDir));
+  let cast: { characters?: Rows } | null;
+  try {
+    cast = await readJson<{ characters?: Rows }>(castJsonPath(bookDir));
+  } catch (err) {
+    if (err instanceof SyntaxError) throw new PriorCastUnreadableError('corrupt', { midRun: true });
+    throw err;
+  }
   if (cast === null) return [];
   if (typeof cast !== 'object' || !Array.isArray(cast.characters)) {
     throw new PriorCastUnreadableError('corrupt', { midRun: true });
