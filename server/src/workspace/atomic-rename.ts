@@ -19,7 +19,11 @@ import { rename } from 'node:fs/promises';
    budget proved too small for: many `writeJsonAtomic` calls racing the SAME
    target (Phase 0 + Phase 1 both save `state.json`). 20-way contention on a
    loaded Windows CI runner exhausted the prior ~800ms budget (#915). */
-const RENAME_RETRY_DELAYS_MS = [25, 75, 200, 500, 1000];
+export const RENAME_RETRY_DELAYS_MS = [25, 75, 200, 500, 1000];
+
+/* Longest a `renameWithRetry` can keep retrying: every base delay plus its full
+   jitter (`jitteredDelayMs` adds up to 100%), i.e. twice the base sum. */
+export const RENAME_RETRY_WORST_CASE_MS = RENAME_RETRY_DELAYS_MS.reduce((a, d) => a + 2 * d, 0);
 
 /* Add up to 100% randomised jitter to each backoff so N writers retrying the
    SAME target do not retry in lockstep. Without jitter, concurrent retriers
@@ -34,7 +38,7 @@ export function jitteredDelayMs(baseMs: number, rand: () => number = Math.random
    for cloud-sync mounts; the cost of an extra retry on a transient failure
    is much smaller than the cost of surfacing a misleading hard error to
    the user. */
-const RETRYABLE_CODES: ReadonlySet<string> = new Set([
+export const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   'EPERM',
   'EBUSY',
   'ENOENT',

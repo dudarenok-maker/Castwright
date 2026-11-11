@@ -36,10 +36,14 @@ import {
   writeAnalyzerCapabilityRecord,
 } from './user-settings.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
+import { setMissingWaitMsForTests } from './state-io.js';
 
 let workspaceRoot: string;
 
 beforeEach(() => {
+  /* Planted foreign markers read as live writers; these tests assert what
+     happens after the reader's wait, not the wait itself. */
+  setMissingWaitMsForTests(50);
   workspaceRoot = mkdtempSync(join(tmpdir(), 'user-settings-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 });

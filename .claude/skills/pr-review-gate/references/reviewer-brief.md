@@ -1090,6 +1090,52 @@ recite:
     (here: the in-flight design's key moves only with a separation of the row,
     and anything else discards the render).
 
+86. **An age guard on a file created by a copy, where the copy keeps its
+    source's mtime** — PR #4070 pass 2 (#4037): the startup sweep deleted
+    files older than an hour by `mtimeMs`, and the mint created its temp
+    copies, backups and copied variant families with `copyFile`/`copyFileSync`.
+    On Windows a copy keeps the source's last-write time (measured: a copy of
+    a 3-day-old file reads 4320 minutes old by `mtimeMs` and 0.0 by
+    `birthtimeMs`), so a file made a moment ago read old and the guard that was
+    meant to spare a second server mid-mint would delete it. The test planted its
+    "fresh" file with the current mtime, so it could not see this. Checkable:
+    for every age guard, find how the file it reads was created; if by a copy,
+    ask whether the creator stamps the time itself (`utimes`), and require a
+    test whose source file is old. Fix at the creator, so every reader of the
+    mtime benefits, not in the one reader.
+
+87. **A client mirror of a conditional server step, inferred from a field that
+    carries the after-step value in both outcomes** — PR #4069 (#4067): the
+    decline route separates a row only when it shares its voice, but replies
+    with `voiceUuid` either way, and the client forked its local copy (rename,
+    variant drop) whenever the reply named a uuid, so a decline that moved
+    nothing dropped the row's emotion variants. The design stream repeated the
+    shape: it reads `undefined -> uuid` as a first mint, yet the server's
+    `mustSeparateOnDesign` also separates a no-uuid row carrying a decline
+    marker. Checkable: for every client mirror of a server step that runs only
+    under a condition, find the server's own outcome flag (`separated`) and
+    confirm the mirror keys on it; where the only signal is a value present in
+    both outcomes, list the server's separating conditions and test each one's
+    starting state against the mirror's inference.
+
+88. **A pre-check moved later must land before the side effects it guarded, not
+    onto a check that sits past them** — PR #4077 pass 1 (#4074): the clone
+    gate of a declined row's design ran before the design's uuid step, so it
+    counted a clone on the voice the row was leaving. The first fix deferred it
+    to `applyOverrideToCastFiles`, the write-time check that knows the new uuid.
+    That check runs after `landStagedDesign` has moved the files onto the key,
+    stamped a new base `rev` and given rows a qwen slot, so a refused design was
+    half-saved while the route said "the design was not persisted"; a redesign
+    destroyed the prior base and staled every follower's variants, and the bulk
+    run's freshness skip read the leftover slot as already designed. It is the
+    guard-shaped sibling of 37. Checkable: when a diff moves a refusal later,
+    list every write between the old and new position and what is left on disk
+    when the refusal fires; the refusal belongs after the step that supplies
+    what it needs and before the first of those writes, ideally under the lock
+    the landing already holds. Test by asserting on disk after a refusal: no new
+    file, an existing file's bytes and `rev` unchanged, no slot, no staged
+    leftovers; then a follow-up run that must not read the refusal as done.
+
 89. **A refusal in the first matcher that the fallback matcher does not
     mirror** — PR #4023 passes 1-3 (#3954; the shape plan 291 / #4031
     removed by making `matchFreshToPrior` the only matcher):

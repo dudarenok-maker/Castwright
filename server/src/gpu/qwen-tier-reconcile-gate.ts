@@ -36,15 +36,26 @@
    freed nothing and `capacity-retry.ts` burns a retry attempt on an immediate
    no-op retry instead of polling. */
 
-let provider:
-  | ((keep: { keep06: boolean; keep17: boolean }, signal?: AbortSignal) => Promise<boolean>)
-  | null = null;
+/** What a reconcile keeps resident. `keepKokoro` is optional and an absent
+    value means KEEP (#4066): only the admission lever for a voice design or a
+    Quality op, and the run-start target of a run that loads the 1.7B base while
+    nothing else is live (`keepForRunStart`), ever pass `false`; the post-score re-assert
+    in routes/generation.ts never touches Kokoro. */
+export interface ResidentTtsKeep {
+  keep06: boolean;
+  keep17: boolean;
+  keepKokoro?: boolean;
+}
+
+/* `freedOut`, when given, is pushed the display name of each model whose
+   `/unload` succeeded (#4066), so a caller can say what really went. */
+type ReconcileFn = (keep: ResidentTtsKeep, signal?: AbortSignal, freedOut?: string[]) => Promise<boolean>;
+
+let provider: ReconcileFn | null = null;
 
 /** Registered by tts/ensure-sidecar-loaded.ts at module init with its own
     `reconcileResidentQwenTiers`. */
-export function setReconcileResidentQwenTiersProvider(
-  fn: (keep: { keep06: boolean; keep17: boolean }, signal?: AbortSignal) => Promise<boolean>,
-): void {
+export function setReconcileResidentQwenTiersProvider(fn: ReconcileFn): void {
   provider = fn;
 }
 
@@ -53,9 +64,10 @@ export function setReconcileResidentQwenTiersProvider(
     `false` without doing anything when nothing has registered — fail closed
     (see file header). */
 export async function reconcileResidentQwenTiersIfRegistered(
-  keep: { keep06: boolean; keep17: boolean },
+  keep: ResidentTtsKeep,
   signal?: AbortSignal,
+  freedOut?: string[],
 ): Promise<boolean> {
   if (!provider) return false;
-  return provider(keep, signal);
+  return freedOut ? provider(keep, signal, freedOut) : provider(keep, signal);
 }

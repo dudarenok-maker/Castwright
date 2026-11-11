@@ -5061,6 +5061,8 @@ export interface DeclineVoiceLinkResponse {
   declinedVoiceFrom: string[];
   declinedVoiceUuids: string[];
   voiceUuid: string | null;
+  /** True when the row was moved onto a voice of its own (a fork); false when it already owned its voice. */
+  separated: boolean;
   /** Other rows of the same book that moved onto `voiceUuid` with it. */
   movedCharacterIds: string[];
 }
@@ -5089,7 +5091,7 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
 
 async function mockDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   await wait(80);
-  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] };
+  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] };
 }
 
 /* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task
@@ -6716,7 +6718,7 @@ export interface CastDesignCallbacks {
   onHeartbeat?: (e: { characterId: string }) => void;
   /** A character was designed + persisted; `voiceId` is the bespoke qwen name.
       srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
-  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string; separated?: boolean }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
@@ -6737,7 +6739,15 @@ export interface CastDesignCallbacks {
     failures: Array<{ characterId: string; name: string; error: string }>;
   }) => void;
   /** Catastrophic abort (NOT a per-character failure). */
-  onError?: (e: { code: string; message: string }) => void;
+  onError?: (e: {
+    code: string;
+    message: string;
+    /** A single design's `clone_protected` refusal after its uuid step separated the
+        row: the separation persists, so the event names the row and its new uuid. */
+    characterId?: string;
+    voiceUuid?: string;
+    separated?: boolean;
+  }) => void;
   /** Single-design sub-phase tick (honest progress). */
   onPhase?: (e: { characterId: string; phase: DesignPhase }) => void;
   /** Single re-design finished — preview staged, awaiting A/B compare. */
@@ -6750,6 +6760,9 @@ export interface CastDesignCallbacks {
     /** srv-43: uuid of the character's bespoke voice file — lets the drawer
         resolve the uuid-keyed cache entry before the next cast refetch. */
     voiceUuid?: string;
+    /** #4067 — the design first separated a declined row onto a voice of its own
+        (new uuid, qwen slot renamed, variants dropped); see SingleDesignEvent. */
+    separated?: boolean;
   }) => void;
   /** Single-design (re)subscribe seed — replayed once on reload re-attach so the
       slice can open a single snapshot at the right character + phase. */
@@ -6782,6 +6795,7 @@ interface CastDesignStreamEvent {
   previewUrl?: string;
   persona?: string;
   voiceUuid?: string;
+  separated?: boolean;
   mode?: 'first' | 'redesign';
   url?: string;
   viaFallback?: boolean;
@@ -6862,6 +6876,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId,
             voiceId: e.voiceId,
             voiceUuid: e.voiceUuid,
+            separated: e.separated,
           });
         break;
       case 'preview_ready':
@@ -6877,6 +6892,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             previewUrl: e.previewUrl,
             persona: e.persona ?? '',
             voiceUuid: e.voiceUuid,
+            separated: e.separated,
           });
         break;
       case 'progress':
@@ -6930,7 +6946,13 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
         });
         break;
       case 'error':
-        cb.onError?.({ code: e.code ?? 'unknown', message: e.message ?? 'Cast design failed.' });
+        cb.onError?.({
+          code: e.code ?? 'unknown',
+          message: e.message ?? 'Cast design failed.',
+          characterId: e.characterId,
+          voiceUuid: e.voiceUuid,
+          separated: e.separated,
+        });
         break;
       default:
         break;
@@ -8831,7 +8853,13 @@ export interface GpuQueueState {
   /** Live per-device VRAM reading, same shape the sidecar's /capacity
       reports. */
   devices: GpuQueueDevice[];
+  /** #4066 — the last time a voice design or a Quality op unloaded resident
+      TTS models to free VRAM (server/src/gpu/tts-auto-free-notice.ts), or
+      null. Absent on an older server. */
+  lastTtsAutoFree?: TtsAutoFreeNotice | null;
 }
+
+export type TtsAutoFreeNotice = ApiComponents['schemas']['TtsAutoFreeNotice'];
 
 async function realGetGpuQueueState(): Promise<GpuQueueState> {
   /* Permissive: a 404 / 5xx (older server, partial deploy, hot-reload
@@ -8852,7 +8880,7 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
      the pill's "GPU busy · N waiting ·" prefix can be exercised by
      stubbing the api surface in tests. */
   await wait(20);
-  return { queueDepth: 0, devices: [] };
+  return { queueDepth: 0, devices: [], lastTtsAutoFree: null };
 }
 
 /* Task 16/16.5 (#1230 item 2, #2974) — outcome of the most recent code-43

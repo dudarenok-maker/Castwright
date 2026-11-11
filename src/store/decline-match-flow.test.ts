@@ -48,7 +48,7 @@ function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books'
 
 beforeEach(() => {
   vi.mocked(api.declineVoiceLink).mockReset();
-  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] });
+  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] });
 });
 
 describe('declineMatchFlow (#3992)', () => {
@@ -110,7 +110,7 @@ describe('declineMatchFlow (#3992)', () => {
     const order: string[] = [];
     vi.mocked(api.declineVoiceLink).mockImplementation(async () => {
       order.push(`request saw matchedFrom=${store.getState().cast.characters[0].matchedFrom?.bookId}`);
-      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] };
+      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] };
     });
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
     expect(order).toEqual(['request saw matchedFrom=book-one']);
@@ -124,7 +124,7 @@ describe('declineMatchFlow (#3992)', () => {
     vi.mocked(api.declineVoiceLink).mockImplementation(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] });
+          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] });
         }),
     );
     const pending = (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -147,6 +147,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: null,
+      separated: false,
       movedCharacterIds: [],
     });
     const store = makeStore([matched]);
@@ -174,6 +175,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: 'u_own',
+      separated: true,
       movedCharacterIds: [],
     });
     const store = makeStore([
@@ -194,6 +196,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: 'u_own',
+      separated: true,
       movedCharacterIds: ['wren_b'],
     });
     const onShared = {

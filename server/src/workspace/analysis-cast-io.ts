@@ -35,6 +35,7 @@ import { ABSENT, UNREADABLE, readJsonWithStatus } from './cast-fingerprint.js';
 import { PriorCastUnreadableError } from './prior-cast-error.js';
 import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link.js';
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
+import { dropStaleVariants } from './variant-base-rev.js';
 import {
   loadCastIdHistoryWithStatus,
   toMatchHistory,
@@ -96,7 +97,9 @@ export async function readPriorCastLockFree(bookDir: string): Promise<PriorCastS
   }
   const carry = await readJsonWithStatus<{ characters?: Rows }>(castReuseCarryoverJsonPath(bookDir));
   const fromCarryover = carry.value?.characters;
-  if (fromCarryover) return { rows: fromCarryover, source: 'carryover' };
+  /* #4040 — a reparse carries no emotion variant whose base was redesigned
+     since: the merge would write it back into the fresh cast.json. */
+  if (fromCarryover) return { rows: await dropStaleVariants(fromCarryover), source: 'carryover' };
   return { rows: [], source: 'none' };
 }
 

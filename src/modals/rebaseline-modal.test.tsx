@@ -18,6 +18,7 @@ import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
+import { manuscriptSlice } from '../store/manuscript-slice';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
@@ -124,7 +125,11 @@ const voice = (id: string, characterId: string): Voice =>
 function makeStore(
   characters: Character[],
   voices: Voice[],
-  { openBookId = 'book-1' as string | null, readOnly = false } = {},
+  {
+    openBookId = 'book-1' as string | null,
+    loadedBookId = openBookId,
+    readOnly = false,
+  }: { openBookId?: string | null; loadedBookId?: string | null; readOnly?: boolean } = {},
 ) {
   const baseUi = { ...uiSlice.getInitialState(), rebaselineModalOpen: true };
   const ui =
@@ -151,11 +156,15 @@ function makeStore(
       chapters: chaptersSlice.reducer,
       account: accountSlice.reducer,
       config: configSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
     },
     preloadedState: {
       ui,
       cast: { characters },
       voices: { ...voicesSlice.getInitialState(), voices },
+      /* The book the cast/manuscript slices HOLD — independent of the stage (the
+         global #/voices page loads a book in memory with none on screen). */
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: loadedBookId },
     },
   });
   /* Plan 291 (#4031) - a latched analysis era makes the book's cast read-only. */
@@ -184,6 +193,11 @@ beforeEach(() => {
   generateVoiceStyle.mockClear();
   generateAllVoiceStyles.mockClear();
   setVoiceOverrideLinked.mockClear();
+  setVoiceOverrideLinked.mockImplementation(async (_bookId: string, characterId: string) => ({
+    canonicalVoiceId: `v_${characterId}`,
+    updated: [],
+    failed: [],
+  }));
   getBookState.mockClear();
   getBookState.mockResolvedValue(null);
   getSeriesCast.mockClear();
@@ -404,6 +418,333 @@ describe('RebaselineModal — whole-series aggregation', () => {
       expect(sel).toContain('marlow');
     });
     expect(screen.getByTestId('rebaseline-propose')).not.toBeDisabled();
+  });
+});
+
+describe('RebaselineModal — stale emotion variants (#4040)', () => {
+  it('prunes the variants the server dropped after a base design, on rows sharing the voice key', async () => {
+    /* maerin + marlow have no Qwen voice, so Propose designs them (a non-preview
+       design that lands a fresh base rev). bystander + twin are NOT designed here,
+       but share the redesigned voice key and carry variants minted from the old base. */
+    const withAngry = (c: Character): Character =>
+      ({
+        ...c,
+        ttsEngine: 'qwen',
+        voiceUuid: 'shared',
+        overrideTtsVoices: { qwen: { name: 'qwen-shared', variants: { angry: { name: 'qwen-shared__angry' } } } },
+      }) as Character;
+    /* maerin + marlow (designed here) share the voice key with bystander + twin. */
+    const store = makeStore(
+      [
+        CHARACTERS[0],
+        { ...CHARACTERS[1], voiceUuid: 'shared' } as Character,
+        { ...CHARACTERS[2], voiceUuid: 'shared' } as Character,
+        withAngry(CHARACTERS[3]),
+        withAngry(char('twin', 'Twin', 1)),
+      ],
+      VOICES,
+    );
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({ manuscriptId: 'mns_b1', title: 't', format: 'md', wordCount: 1, sourceText: '' } as never),
+    );
+    /* The server's /state dropped the now-stale variants from both rows. */
+    getBookState.mockResolvedValue({
+      state: { manuscriptId: 'mns_b1' },
+      cast: {
+        characters: ['bystander', 'twin'].map((id) => ({
+          id,
+          overrideTtsVoices: { qwen: { name: 'qwen-shared' } },
+        })),
+      },
+    });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => {
+      for (const id of ['bystander', 'twin']) {
+        const c = store.getState().cast.characters.find((x) => x.id === id);
+        expect(c?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+      }
+    });
+    expect(designQwenVoice).toHaveBeenCalled();
+    expect(store.getState().cast.characters.find((x) => x.id === 'twin')?.overrideTtsVoices?.qwen?.name).toBe(
+      'qwen-shared',
+    );
+  });
+});
+
+describe('RebaselineModal — a series rebaseline of a non-loaded book leaves the loaded cast alone', () => {
+  const run = async (targetBookId: string, openBookId: string) => {
+    /* The target book's cast shares character ids with the loaded book (series
+       books share ids) but carries no persona, so Propose generates one. */
+    getBookState.mockResolvedValue({
+      cast: { characters: [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 90)] },
+    });
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId },
+    );
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId={targetBookId} />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalled());
+    await waitFor(() => expect(store.getState().rebaseline.status).not.toBe('approving'));
+    return store.getState().cast.characters.find((c) => c.id === 'marlow')!;
+  };
+
+  it('does not write the persona or the override into the loaded book (design + approve)', async () => {
+    const marlow = await run('book-2', 'book-1');
+    expect(generateVoiceStyle).toHaveBeenCalledWith('book-2', 'marlow');
+    expect(marlow.voiceStyle).toBeUndefined();
+    expect(marlow.ttsEngine).toBeUndefined();
+    expect(marlow.overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
+  it('still updates the local cast when the rebaselined book IS the loaded one', async () => {
+    const marlow = await run('book-1', 'book-1');
+    expect(marlow.voiceStyle).toBeTruthy();
+    expect(marlow.ttsEngine).toBe('qwen');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+  });
+});
+
+describe('RebaselineModal — the local mirror follows the LOADED book, not the stage', () => {
+  const approve = async (store: ReturnType<typeof makeStore>, targetBookId: string) => {
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId={targetBookId} />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalled());
+    await waitFor(() => expect(store.getState().rebaseline.status).not.toBe('approving'));
+    return store.getState().cast.characters.find((c) => c.id === 'marlow')!;
+  };
+  const targetCast = () =>
+    getBookState.mockResolvedValue({
+      cast: { characters: [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 90)] },
+    });
+
+  it('mirrors into the loaded book when no book is on screen (global #/voices)', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.ttsEngine).toBe('qwen');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    expect(marlow.voiceStyle).toBeTruthy();
+  });
+
+  it('mirrors a linked update that lands in the loaded book when rebaselining another', async () => {
+    targetCast();
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => ({
+      canonicalVoiceId: 'v_unified',
+      updated: [
+        { bookId: 'book-2', bookTitle: 'Book Two', characterId },
+        { bookId: 'book-1', bookTitle: 'Book One', characterId },
+      ],
+      failed: [],
+    }));
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.voiceId).toBe('v_unified');
+    expect(marlow.ttsEngine).toBe('qwen');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    /* The persona is the rebaselined book's own; a linked-in row only gets the voice. */
+    expect(marlow.voiceStyle).toBeUndefined();
+  });
+
+  /* The server writes `{ ...slot, name }` (voice-override-linked.ts), so the slot's
+     variants/libraryUuid/provenance survive; the mirror must not rebuild it as
+     `{ name }` or the next whole-roster PUT deletes the takes on disk. */
+  const SLOT_EXTRAS = {
+    libraryUuid: 'lib-1',
+    provenance: 'designed',
+    variants: { angry: { name: 'qwen-old__angry' } },
+  };
+
+  it('keeps the slot extras on the home row of the loaded book', async () => {
+    targetCast();
+    const store = makeStore(
+      [
+        char('narrator', 'Narrator', 400),
+        {
+          ...char('marlow', 'Marlow', 60),
+          overrideTtsVoices: { qwen: { name: 'qwen-old', ...SLOT_EXTRAS } },
+        } as unknown as Character,
+      ],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    expect(marlow.overrideTtsVoices?.qwen).toMatchObject(SLOT_EXTRAS);
+  });
+
+  it('keeps the slot extras (and other engines) on a linked row of the loaded book', async () => {
+    targetCast();
+    setVoiceOverrideLinked.mockImplementation(async () => ({
+      canonicalVoiceId: 'v_unified',
+      updated: [{ bookId: 'book-1', bookTitle: 'Book One', characterId: 'det-marlow' }],
+      failed: [],
+    }));
+    const store = makeStore(
+      [
+        char('narrator', 'Narrator', 400),
+        {
+          ...char('det-marlow', 'Marlow', 60),
+          overrideTtsVoices: {
+            qwen: { name: 'qwen-old', ...SLOT_EXTRAS },
+            kokoro: { name: 'af_heart' },
+          },
+        } as unknown as Character,
+      ],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    await approve(store, 'book-2');
+    const row = store.getState().cast.characters.find((c) => c.id === 'det-marlow')!;
+    expect(row.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+    expect(row.overrideTtsVoices?.qwen).toMatchObject(SLOT_EXTRAS);
+    expect(row.overrideTtsVoices?.kokoro?.name).toBe('af_heart');
+  });
+
+  /* The loaded book is re-read at each write: a book switch while a server call is
+     in flight must not land the old book's rebaseline on the new book's same-id row
+     (series books share character ids). */
+  const switchToBook3 = (store: ReturnType<typeof makeStore>) => {
+    store.dispatch(manuscriptSlice.actions.resetForBook('book-3'));
+    store.dispatch(castSlice.actions.setCharacters([char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)]));
+  };
+
+  it('mirrors the generated persona into the loaded book at design time when no book is on screen', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-2" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    /* Before Approve: only designOne's own mirror can have set it. */
+    expect(store.getState().cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBe('persona for marlow');
+  });
+
+  it('mirrors onto the live row, so an edit landing during the series write survives', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-2' },
+    );
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => {
+      const live = store.getState().cast.characters.find((c) => c.id === characterId)!;
+      store.dispatch(castSlice.actions.updateCharacter({ ...live, attributes: ['edited-mid-approve'] }));
+      return { canonicalVoiceId: `v_${characterId}`, updated: [], failed: [] };
+    });
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.attributes).toEqual(['edited-mid-approve']);
+    expect(marlow.overrideTtsVoices?.qwen?.name).toBe('qwen-marlow');
+  });
+
+  it('does not write the approve mirror into a different book loaded mid-approve', async () => {
+    targetCast();
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => {
+      switchToBook3(store);
+      return {
+        canonicalVoiceId: 'v_unified',
+        updated: [{ bookId: 'book-1', bookTitle: 'Book One', characterId }],
+        failed: [],
+      };
+    });
+    const marlow = await approve(store, 'book-1');
+    expect(store.getState().manuscript.bookId).toBe('book-3');
+    expect(marlow.voiceId).toBe('voice-marlow');
+    expect(marlow.ttsEngine).toBeUndefined();
+    expect(marlow.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(marlow.voiceStyle).toBeUndefined();
+  });
+
+  it('does not write a generated persona into a different book loaded mid-design', async () => {
+    getBookState.mockResolvedValue({
+      cast: { characters: [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 90)] },
+    });
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    generateVoiceStyle.mockImplementation(async (_b: string, characterId: string) => {
+      switchToBook3(store);
+      return { voiceStyle: `persona for ${characterId}` };
+    });
+    const marlow = await approve(store, 'book-1');
+    expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'marlow');
+    expect(store.getState().manuscript.bookId).toBe('book-3');
+    expect(marlow.voiceStyle).toBeUndefined();
+  });
+
+  it('leaves the loaded book alone when no linked update reaches it', async () => {
+    targetCast();
+    setVoiceOverrideLinked.mockImplementation(async (_b: string, characterId: string) => ({
+      canonicalVoiceId: 'v_unified',
+      updated: [{ bookId: 'book-2', bookTitle: 'Book Two', characterId }],
+      failed: [],
+    }));
+    const store = makeStore(
+      [char('narrator', 'Narrator', 400), char('marlow', 'Marlow', 60)],
+      VOICES,
+      { openBookId: null, loadedBookId: 'book-1' },
+    );
+    const marlow = await approve(store, 'book-2');
+    expect(marlow.voiceId).toBe('voice-marlow');
+    expect(marlow.ttsEngine).toBeUndefined();
+    expect(marlow.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(marlow.voiceStyle).toBeUndefined();
   });
 });
 

@@ -49,6 +49,11 @@ export interface SynthesizeInput {
       unvalidated, client-supplied `language` (routes/voice-sample.ts) must NOT
       set this — see `resolveWireLanguage`. */
   cloned?: boolean;
+  /** #4066 — true only for a chapter render's own synth call (set by
+      `synthesise-chapter`). Samples and previews leave it absent. The capacity
+      give-up message uses it: a render is never told it is blocked by itself,
+      while a sample refused during another book's render is told to wait. */
+  renderSynth?: boolean;
   /** Optional abort signal — providers that can honour it should pass it
       through to their underlying HTTP/SDK call so a mid-call cancellation
       (e.g. server-side per-book mutex aborting a stale generation handler)
@@ -110,6 +115,8 @@ export interface SynthesizeBatchInput {
       items get the sidecar's NEUTRAL_INSTRUCT fill (PR2-Mi1). Default false
       (absent = off, back-compat). */
   liveInstruct?: boolean;
+  /** #4066 — see `SynthesizeInput.renderSynth`. */
+  renderSynth?: boolean;
   signal?: AbortSignal;
 }
 

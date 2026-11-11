@@ -79,7 +79,7 @@ const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
 const ORIG_PT = Buffer.from('BOOK-ONE-ORIGINAL-PT');
-const ORIG_JSON = Buffer.from('{"voiceId":"qwen-u_shared","instruct":"book one"}');
+const ORIG_JSON = Buffer.from('{"voiceId":"qwen-u_shared","instruct":"book one","language":"english","note":"n7"}');
 const NEW_PT = Buffer.from('REDESIGNED-BY-SIDECAR');
 
 let workspaceRoot: string;
@@ -99,6 +99,13 @@ const bookDir = (title: string) => join(workspaceRoot, 'books', AUTHOR, SERIES, 
 const castPath = (title: string) => join(bookDir(title), '.audiobook', 'cast.json');
 const readRow = (title: string): Record<string, unknown> =>
   JSON.parse(readFileSync(castPath(title), 'utf8')).characters[0];
+/* #4040 — the variants every read uses for a row: its slots minus the stale ones
+   (a base redesign marks them stale instead of rewriting cast.json). */
+const currentVariantsOf = async (title: string): Promise<unknown> => {
+  const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+  const [row] = await dropStaleVariants([readRow(title)]);
+  return (row.overrideTtsVoices as { qwen?: { variants?: unknown } } | undefined)?.qwen?.variants;
+};
 
 function writeBook(title: string, position: number, id: string, row: Record<string, unknown>) {
   const dir = bookDir(title);
@@ -375,6 +382,22 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     expect(readFileSync(join(qwenDir(), `qwen-${fresh}.pt`)).toString()).toBe('LEGACY-BASE'); // the base is not orphaned
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt')).equals(VAR_BYTES)).toBe(true);
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).toString()).toBe('LEGACY-BASE');
+  });
+
+  it('#F10b: a separation copy names its own key in the copied base json', async () => {
+    seedVariant({});
+    const row = { ...readRow('Book Two') };
+    delete row.voiceUuid;
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), Buffer.from('LEGACY-BASE'));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.json'), JSON.stringify({ voiceId: 'qwen-v_wren', instruct: 'x', language: 'english', note: 'n7' }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt'), VAR_BYTES);
+    expect((await design(() => bookTwoId, { emotion: 'angry' })).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    const copy = JSON.parse(readFileSync(join(qwenDir(), `qwen-${fresh}.json`), 'utf8'));
+    expect(copy.voiceId).toBe(`qwen-${fresh}`);
+    expect(copy).toMatchObject({ language: 'english', note: 'n7' });
+    expect(JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_wren.json'), 'utf8')).voiceId).toBe('qwen-v_wren');
   });
 });
 
@@ -743,7 +766,7 @@ describe('#3992 — an unreadable cast.json elsewhere does not fail a design or 
       .post(`/api/books/${bookOneId}/cast/wren/promote-voice`)
       .send({ previewVoiceId: previewId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
     expect(res.status).toBe(200);
-    expect((readRow('Book One').overrideTtsVoices as { qwen?: { variants?: unknown } }).qwen?.variants).toBeUndefined();
+    expect(await currentVariantsOf('Book One'), 'the redesigned base kept its variant in use').toBeUndefined();
     expect(readFileSync(join(qwenDir(), 'qwen-u_solo__angry.pt')).equals(bytes)).toBe(true);
   });
 
@@ -822,7 +845,17 @@ describe('#3992 — fork internals', () => {
     const fresh = readRow('Book Two').voiceUuid as string;
     for (const [name, bytes] of Object.entries(family)) {
       const copy = name.replace('u_shared', fresh);
-      expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+      /* the copied json names its own key (#F10b); every other byte is the source's */
+      if (name.endsWith('.json')) {
+        expect(JSON.parse(readFileSync(join(qwenDir(), copy), 'utf8'))).toEqual({
+          voiceId: `qwen-${fresh}`,
+          instruct: 'book one',
+          language: 'english',
+          note: 'n7',
+        });
+      } else {
+        expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+      }
     }
     expect(existsSync(join(qwenDir(), `qwen-${fresh}__angry.pt`))).toBe(false);
     for (const [name, bytes] of Object.entries(family)) {
@@ -903,13 +936,14 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
   const del = () =>
     request(app).delete(`/api/books/${bookTwoId}/cast/wren/emotion-variant/angry`);
 
-  it('Forked promote: Book Two’s variants go, Book One’s variant file is byte-identical', async () => {
+  it('Forked promote: Book Two’s variants go stale, Book One’s stay current and its variant file is byte-identical', async () => {
     seedBoth('u_new');
+    writeFileSync(join(qwenDir(), 'qwen-u_new.pt'), ORIG_PT); // a redesign of Two's own key
     const res = await promote('u_new');
     expect(res.status).toBe(200);
-    expect(slotOf('Book Two')).toBeUndefined();
+    expect(await currentVariantsOf('Book Two')).toBeUndefined();
     expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
-    expect(slotOf('Book One')).toBeDefined();
+    expect(await currentVariantsOf('Book One')).toBeDefined();
   });
 
   it('Forked DELETE: Book One’s file byte-identical, Book Two’s slot gone', async () => {
@@ -920,12 +954,13 @@ describe('#3992 — promote / DELETE keep the earlier book’s variant files', (
     expect(readFileSync(variantFile()).equals(VAR_BYTES)).toBe(true);
   });
 
-  it('Linked promote: Book One still names the shared variant, so its file is kept (#4026)', async () => {
+  it('Linked promote: Book One\'s variant is stale with Book Two\'s (#4040) though its slot stays on disk; the file is not deleted inline (#4026)', async () => {
     seedBoth('u_shared');
     const res = await promote('u_shared');
     expect(res.status).toBe(200);
-    expect(slotOf('Book Two')).toBeUndefined();
-    expect(slotOf('Book One')).toBeDefined();
+    expect(await currentVariantsOf('Book Two')).toBeUndefined();
+    expect(await currentVariantsOf('Book One')).toBeUndefined();
+    expect(slotOf('Book One'), "Book One's cast.json was rewritten").toBeDefined();
     expect(gone()).toBe(false);
   });
 

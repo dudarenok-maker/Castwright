@@ -3860,8 +3860,23 @@ export interface components {
             previewUrl?: string;
             /** @description preview_ready only — the persona text the preview was designed from. */
             persona?: string;
-            /** @description preview_ready / designed only. */
+            /**
+             * @description preview_ready / designed only, and on the `clone_protected` error when
+             *     the design's uuid step separated the row before the landing refused:
+             *     the separation persists, so the event carries the new uuid with
+             *     `separated: true`.
+             */
             voiceUuid?: string;
+            /**
+             * @description preview_ready / designed / error (`clone_protected` only) only. True when
+             *     this design first separated a declined ("Don't reuse") row onto a voice of
+             *     its own, which minted the
+             *     `voiceUuid`, renamed the row's qwen slot to `qwen-<voiceUuid>` and dropped
+             *     its emotion variants. The client mirrors exactly that when true; absent or
+             *     false, a `voiceUuid` the row had none of before is a plain first mint and
+             *     the slot keeps its name (#4067).
+             */
+            separated?: boolean;
             /** @description designed only. */
             voiceId?: string;
             /** @description designed only. */
@@ -5786,7 +5801,12 @@ export interface components {
                      *     each entry is an independently designed voiceId. `name` above
                      *     stays the neutral base. Absent → every emotion falls back to
                      *     the base voice. Variants travel with the base across reuse
-                     *     links (plan 177 Wave 6a).
+                     *     links (plan 177 Wave 6a). #4040 — a variant designed against an
+                     *     earlier base (the base was redesigned since, from any book on the
+                     *     voice) is stale: the book `GET /state` omits it, the cast `PUT
+                     *     /state` drops it, a reparse carryover drops it, and a render uses
+                     *     the base voice for its lines. `GET /series-cast` serves the
+                     *     stored cast and does not filter stale variants.
                      */
                     variants?: {
                         [key: string]: {
@@ -6458,7 +6478,8 @@ export interface components {
                      * @description fs-25 — per-emotion Qwen voice variants (keyed by non-neutral
                      *     `Emotion`); each is an independently designed voiceId. Absent →
                      *     emotions fall back to the base `name`. Travels with the base
-                     *     across reuse links (plan 177 Wave 6a).
+                     *     across reuse links (plan 177 Wave 6a). #4040 — a variant whose base
+                     *     was redesigned since it was designed is stale and is dropped.
                      */
                     variants?: {
                         [key: string]: {
@@ -6856,6 +6877,20 @@ export interface components {
             queueDepth: number;
             /** @description Live per-device VRAM reading at response time. */
             devices: components["schemas"]["GpuQueueDevice"][];
+            /** @description #4066 — the last time a voice design or a Quality (1.7B) op unloaded resident TTS models (the standard Qwen base, an on-GPU Kokoro) to free VRAM, or null. Absent on older servers. The frontend shows the 'unloaded to free VRAM' notice once per new `seq`. */
+            lastTtsAutoFree?: components["schemas"]["TtsAutoFreeNotice"] | null;
+        };
+        TtsAutoFreeNotice: {
+            /** @description Identifies the server process; `seq` restarts at 1 after a restart, so the frontend compares bootId + seq. */
+            bootId: string;
+            /** @description Monotonic per-event counter within one bootId. */
+            seq: number;
+            /** @description Display names of what was unloaded, e.g. ['Qwen 0.6B', 'Kokoro']. */
+            models: string[];
+            /** @enum {string} */
+            purpose: "voice design" | "Quality render";
+            /** Format: date-time */
+            at: string;
         };
         /**
          * @description One finished chapter's own throughput, for the history ring. `rtf` is
@@ -13285,6 +13320,8 @@ export interface operations {
                         declinedVoiceUuids: string[];
                         /** @description The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own). */
                         voiceUuid: string | null;
+                        /** @description True when the row was moved onto a voice of its own (the server renamed its qwen slot and dropped its variants); false when it already owned its voice and nothing moved. The client mirrors the fork only when true. */
+                        separated: boolean;
                         /** @description Other characters in the same book that moved onto the new voiceUuid with it (they shared its voice key). Empty when nothing moved. The client mirrors their new voiceUuid. */
                         movedCharacterIds: string[];
                     };

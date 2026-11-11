@@ -454,6 +454,28 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('#F10b: the landed sidecar json carries the landed voiceId, not the staging key', async () => {
+    /* The real sidecar writes `{ voiceId: <the key it was given>, instruct }` to the
+       private staging key; the landing renames the file, so the field must follow. */
+    fetchMock.mockImplementationOnce(async (_url: unknown, init: { body: string }) => {
+      const sent = JSON.parse(init.body);
+      const dir = join(workspaceRoot, 'voices', 'qwen');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${sent.voiceId}.json`), JSON.stringify({ voiceId: sent.voiceId, instruct: 'a poised, confident teenage girl', rev: 'r7', language: 'english' }));
+      return okSidecarResponse();
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    const landed = JSON.parse(
+      readFileSync(join(workspaceRoot, 'voices', 'qwen', `${res.body.voiceId}.json`), 'utf8'),
+    );
+    expect(landed.voiceId).toBe(res.body.voiceId);
+    expect(landed.instruct).toBe('a poised, confident teenage girl');
+    expect(landed).toMatchObject({ rev: 'r7', language: 'english' });
+  });
+
   it('400s when sampleVoiceId is missing', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
@@ -623,6 +645,69 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     const cast = readCast();
     const maerin = cast.characters.find((c) => c.id === 'maerin') as Record<string, any>;
     expect(maerin.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_maerin__angry' });
+  });
+
+  it('#F4: a variant with no body persona and no voiceStyle falls back to the persona recorded with the base design', async () => {
+    writeQwenSidecar('qwen-nopersona', 'a gruff old sailor');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-nopersona__angry');
+  });
+
+  it('#F4: the base persona is read from the uuid-keyed json, by derived key and by the slot name', async () => {
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    const row = cast.characters.find((c: { id: string }) => c.id === 'nopersona');
+    row.voiceUuid = 'uuidAAA';
+    writeFileSync(castPath, JSON.stringify(cast));
+    writeQwenSidecar('qwen-uuidAAA', 'a gruff old sailor');
+    const derived = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(derived.status).toBe(200);
+    row.overrideTtsVoices = { qwen: { name: 'qwen-uuidAAA' } };
+    writeFileSync(castPath, JSON.stringify(cast));
+    const slotted = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'sad' });
+    expect(slotted.status).toBe(200);
+  });
+
+  it('#F4: a library-assigned slot reads the persona from the slot key, not the row own uuid', async () => {
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    const row = cast.characters.find((c: { id: string }) => c.id === 'nopersona');
+    row.voiceUuid = 'ownUuid';
+    row.overrideTtsVoices = { qwen: { name: 'qwen-lib1', libraryUuid: 'lib1' } };
+    writeFileSync(castPath, JSON.stringify(cast));
+    writeQwenSidecar('qwen-lib1', 'a library voice persona');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(res.status).toBe(200);
+  });
+
+  it('#F4: an unreadable base json answers a retryable 500, not "No persona"', async () => {
+    const dir = join(workspaceRoot, 'voices', 'qwen');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'qwen-nopersona.json'), '{ "instruct": ');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    errSpy.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again/);
+  });
+
+  it('#F4: a variant still 400s when no persona exists anywhere', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/No persona to design from/);
   });
 
   it("fs-59 CJK: EMOTION_INSTRUCT is language-invariant — a 'zh' book gets the same clause as English, no crash", async () => {
@@ -973,6 +1058,42 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_maerin');
   });
 
+  it('#F10b: promote-voice records the real key, not the preview key, in the moved json', async () => {
+    stagedPreviewArtifacts(PREVIEW);
+    writeFileSync(join(qwenDir(), `${PREVIEW}.json`), JSON.stringify({ voiceId: PREVIEW, instruct: 'x', rev: 'r7', language: 'english' }));
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    const landed = JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_maerin.json'), 'utf8'));
+    expect(landed.voiceId).toBe('qwen-v_maerin');
+    expect(landed).toMatchObject({ rev: 'r7', language: 'english' });
+  });
+
+  it('#F10b: a first design lands with the voiceUuid the row ended up on, not the null the sidecar saw', async () => {
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    const row = cast.characters.find((c: { id: string }) => c.id === 'nopersona');
+    row.voiceStyle = 'a gruff old sailor';
+    writeFileSync(castPath, JSON.stringify(cast));
+    fetchMock.mockImplementationOnce(async (_url: unknown, init: { body: string }) => {
+      const sent = JSON.parse(init.body);
+      const dir = join(workspaceRoot, 'voices', 'qwen');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${sent.voiceId}.json`), JSON.stringify({ voiceId: sent.voiceId, voiceUuid: null, instruct: 'x', rev: 'r7', language: 'english' }));
+      return okSidecarResponse();
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    expect(res.body.voiceUuid).toBeTruthy();
+    const landed = JSON.parse(readFileSync(join(workspaceRoot, 'voices', 'qwen', `${res.body.voiceId}.json`), 'utf8'));
+    expect(landed.voiceUuid).toBe(res.body.voiceUuid);
+    expect(landed).toMatchObject({ rev: 'r7', language: 'english', instruct: 'x' });
+    expect(landed.voiceId).toBe(res.body.voiceId);
+  });
+
   it('promote-voice renames the preview’s retained reference clip onto the real key (fix wave, §2.3 consent gap)', async () => {
     stagedPreviewArtifacts(PREVIEW);
     writeFileSync(join(qwenDir(), `${PREVIEW}__master.wav`), 'REF-CLIP');
@@ -997,14 +1118,16 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__master.wav'))).toBe(false);
   });
 
-  it('promote-voice invalidates the redesigned character’s stale emotion variants (slots dropped; files left for the startup sweep)', async () => {
+  it('promote-voice makes the redesigned character’s emotion variants stale (no cast.json write; files left for the startup sweep)', async () => {
     /* A redesign replaces the base embedding, so every variant minted from the
        OLD embedding is now stale. Seed maerin with a live base + two designed
-       variants, stage a new preview, and promote it: every variant slot goes from
-       cast.json, base preserved. #4026 — the variant files stay on disk (another
-       row may still name them); sweepOrphanVariantFiles removes them at the next
-       startup once nothing names them. */
+       variants, stage a new preview, and promote it. #4040 — the promote gives the
+       base a fresh `rev` and writes no cast.json: the slots stay on disk but are
+       stale (dropStaleVariants removes them from every read), base preserved.
+       #4026 — the variant files stay on disk; sweepOrphanVariantFiles removes
+       them at the next startup once nothing names them. */
     stagedPreviewArtifacts(PREVIEW);
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'OLD-BASE'); // a redesign, not a first file
     for (const id of ['qwen-v_maerin__angry', 'qwen-v_maerin__sad']) {
       writeFileSync(join(qwenDir(), `${id}.pt`), 'STALE');
       writeFileSync(join(qwenDir(), `${id}.json`), JSON.stringify({ voiceId: id }));
@@ -1035,11 +1158,16 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
       .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
-    /* Variant map wiped from cast.json (badge clears); base promoted intact. */
+    /* No cast.json write: the slots are still on disk, and stale (the badge
+       clears, since the GET serves the stale-dropped cast); base intact. */
     const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
     const qwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
-    expect(qwen.qwen.variants).toBeUndefined();
+    expect(Object.keys(qwen.qwen.variants as object)).toEqual(['angry', 'sad']);
     expect(qwen.qwen.name).toBe('qwen-v_maerin');
+    const { dropStaleVariants } = await import('../workspace/variant-base-rev.js');
+    const [served] = await dropStaleVariants([maerin]);
+    expect((served.overrideTtsVoices as { qwen: { variants?: unknown } }).qwen.variants).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_maerin.json'), 'utf8')).rev).toEqual(expect.any(String));
     /* #4026 — the variant files are not deleted by the promote. */
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(true);
@@ -1207,7 +1335,11 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
    them on its own, so that test stays green with `withCastLock` replaced by a
    no-op (confirmed: no-op cast lock green; no-op cast lock AND book-op red;
    no-op book-op alone green). The cast-lock proof drives the second writer
-   through `persistEmotionVariant`, which takes the cast lock and no book-op. */
+   through `persistEmotionVariant`, which takes the cast lock and no book-op.
+
+   #4040 — promote-voice no longer writes cast.json (the variants it used to
+   drop are marked stale through the base's `rev`), so there is no teardown
+   write left to race: both tests now pin that none comes back. */
 describe('#1981 — promote-voice races a concurrent cast writer for a different character', () => {
   let vl: typeof import('../workspace/voice-library.js');
   let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
@@ -1246,9 +1378,9 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
       join(qwenDir(), `${PREVIEW}.json`),
       JSON.stringify({ voiceId: PREVIEW, instruct: 'a brand new take' }),
     );
-    /* maerin needs a non-empty `variants` map or promote-voice never takes
-       the cast lock at all (Task 7 brief — the write is guarded on
-       `variants` being non-empty). */
+    /* maerin carries a `variants` map: before #4040 the promote rewrote
+       cast.json to drop it (the teardown write these races pinned); since
+       #4040 the map is left on disk, stale, and nothing is written. */
     const withVariants = characters.map((c) =>
       c.id === 'maerin'
         ? {
@@ -1370,12 +1502,16 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     return { resPromote, second };
   }
 
-  it('#3773 — cast lock alone: promote-voice’s variant teardown and a cast-lock-only writer on a different character both survive', async () => {
+  it('#3773 / #4040 — promote-voice writes no cast.json, so a cast-lock-only writer on a different character survives it', async () => {
     /* The second writer is `persistEmotionVariant` called directly: it takes
        the cast lock and NO book-op, so book-op cannot serialise it against
-       promote-voice (which holds book-op across its whole handler). The
-       only thing standing between the two is `withCastLock` — a no-op cast
-       lock makes this red (#3773). */
+       promote-voice (which holds book-op across its whole handler). Until
+       #4040 the promote rewrote cast.json to drop maerin's variants, and only
+       `withCastLock` kept that write from replaying a stale snapshot over this
+       one (#3773). #4040 marks the variants stale through the base's `rev`
+       instead, so the promote writes no cast.json at all: this pins that no
+       write comes back (a promote that rewrote the file from its held read
+       would lose nopersona's variant without the lock). */
     const { resPromote, second } = await racePromoteVoiceAgainst(
       (bookDir) => persistEmotionVariant(bookDir, 'nopersona', 'angry', 'qwen-nopersona__angry'),
       { requireSecondWriterRead: true },
@@ -1387,10 +1523,10 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const maerin = cast.characters.find((c) => c.id === 'maerin')!;
     const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
     const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
-    /* promote-voice's own mutation survived: variants dropped, base kept. */
-    expect(maerinQwen.qwen.variants).toBeUndefined();
+    /* promote-voice wrote no cast.json: maerin's (now stale) slot is as seeded. */
+    expect(Object.keys(maerinQwen.qwen.variants as object)).toEqual(['angry']);
     expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
-    /* the second writer's own mutation survived too — the lost-update this
+    /* the second writer's own mutation survived — the lost-update this
        test pins. */
     const nopersonaQwen = nopersona.overrideTtsVoices as
       | { qwen?: { variants?: Record<string, { name: string }> } }
@@ -1428,8 +1564,8 @@ describe('#1981 — promote-voice races a concurrent cast writer for a different
     const maerin = cast.characters.find((c) => c.id === 'maerin')!;
     const nopersona = cast.characters.find((c) => c.id === 'nopersona')!;
     const maerinQwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: unknown } };
-    /* promote-voice's own mutation survived: variants dropped, base kept. */
-    expect(maerinQwen.qwen.variants).toBeUndefined();
+    /* promote-voice wrote no cast.json (#4040): maerin's slot is as seeded. */
+    expect(Object.keys(maerinQwen.qwen.variants as object)).toEqual(['angry']);
     expect(maerinQwen.qwen.name).toBe('qwen-v_maerin');
     /* assign's own mutation survived too. */
     const nopersonaQwen = nopersona.overrideTtsVoices as { qwen?: { libraryUuid?: string } } | undefined;

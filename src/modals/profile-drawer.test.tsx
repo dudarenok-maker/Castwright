@@ -10,6 +10,7 @@ import { castSlice, castActions } from '../store/cast-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { librarySlice } from '../store/library-slice';
+import { manuscriptSlice } from '../store/manuscript-slice';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
@@ -71,6 +72,8 @@ const promoteQwenVoice = vi.fn(
       url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
     }),
 );
+/* #4040 — the post-redesign variant refresh re-reads the book. */
+const getBookState = vi.fn((_bookId: string) => Promise.resolve(null as unknown));
 const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?: unknown) =>
   Promise.resolve(),
 );
@@ -113,6 +116,7 @@ vi.mock('../lib/api', () => ({
       fetchDesignedPersona(bookId, characterId),
     promoteQwenVoice: (bookId: string, characterId: string, args?: unknown) =>
       promoteQwenVoice(bookId, characterId, args),
+    getBookState: (bookId: string) => getBookState(bookId),
     discardQwenPreview: (bookId: string, characterId: string, args?: unknown) =>
       discardQwenPreview(bookId, characterId, args),
   },
@@ -135,6 +139,7 @@ function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {
       library: librarySlice.reducer,
       voiceLibrary: voiceLibrarySlice.reducer,
       analysis: analysisSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
     },
     preloadedState: myVoices
       ? { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } }
@@ -1550,7 +1555,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
        at .pt files that no longer exist). Approve must mirror the server
        teardown by clearing them locally. */
     promoteQwenVoice.mockClear();
-    const { store, dispatchSpy } = renderWithBook({
+    const withVariant: Character = {
       ...baseChar,
       ttsEngine: 'qwen',
       voiceId: 'v_hal',
@@ -1559,7 +1564,16 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
         qwen: { name: 'qwen-v_hal', variants: { angry: { name: 'qwen-v_hal__angry' } } },
       },
       voiceStyle: 'a steady adult voice',
+    };
+    const { store, dispatchSpy } = renderWithBook(withVariant);
+    /* Seed the slice — the drawer's character prop alone never reaches redux. */
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters([withVariant]));
     });
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'halloran')?.overrideTtsVoices?.qwen
+        ?.variants?.angry,
+    ).toBeTruthy();
     selectQwen();
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     act(() => {
@@ -1594,7 +1608,79 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     );
     /* …and the variants are actually gone from the slice. */
     const hal = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(hal).toBeTruthy();
     expect(hal?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+
+  it('approving a redesign prunes the stale variants of EVERY row on the same voice key, keeping unsaved edits (#4040)', async () => {
+    /* The server marks variants stale on every row sharing the voice key. The
+       open tab must follow from the book read, not just clear the promoted row. */
+    const angry = { angry: { name: 'qwen-v_hal__angry' } };
+    const row = (id: string, name: string): Character => ({
+      ...baseChar,
+      id,
+      name,
+      ttsEngine: 'qwen',
+      voiceId: 'v_hal',
+      voiceUuid: 'v_hal',
+      overrideTtsVoices: { qwen: { name: 'qwen-v_hal', variants: { ...angry } } },
+      voiceStyle: 'a steady adult voice',
+    });
+    getBookState.mockResolvedValueOnce({
+      state: { manuscriptId: 'mns_book1' },
+      cast: {
+        characters: [
+          { id: 'halloran', overrideTtsVoices: { qwen: { name: 'qwen-v_hal' } } },
+          { id: 'halloran-twin', overrideTtsVoices: { qwen: { name: 'qwen-v_hal' } } },
+        ],
+      },
+    });
+    const { store } = renderWithBook(row('halloran', 'Captain Halloran'));
+    act(() => {
+      store.dispatch(manuscriptSlice.actions.uploadComplete({ manuscriptId: 'mns_book1', title: 't', format: 'md', wordCount: 1, sourceText: '' } as never));
+      store.dispatch(
+        castActions.hydrateCharacters([
+          row('halloran', 'Captain Halloran'),
+          { ...row('halloran-twin', 'Twin'), notes: 'unsaved local edit' } as Character,
+        ]),
+      );
+    });
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('voice-compare-approve'));
+
+    await waitFor(() => {
+      const twin = store.getState().cast.characters.find((c) => c.id === 'halloran-twin');
+      expect(twin?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    });
+    const hal = store.getState().cast.characters.find((c) => c.id === 'halloran');
+    expect(hal?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    const twin = store.getState().cast.characters.find((c) => c.id === 'halloran-twin');
+    expect((twin as unknown as { notes?: string }).notes).toBe('unsaved local edit');
+    expect(twin?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_hal');
+    expect(getBookState).toHaveBeenCalledWith('book-1');
   });
 
   it('persists the freshly-approved voiceUuid on Save (regression: srv-43 uuid was staged in-drawer only, dropped on Save)', async () => {

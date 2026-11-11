@@ -55,6 +55,7 @@ import {
   useCastReadOnly,
 } from '../components/cast-edits-paused-banner';
 import { castDesignActions } from '../store/cast-design-slice';
+import { refreshEmotionVariants } from '../store/emotion-variants-refresh';
 import {
   assignVoice,
   unassignVoice,
@@ -1539,14 +1540,20 @@ export function ProfileDrawer({
                       }),
                     );
                     /* The promoted preview is a fresh base embedding, so any
-                       emotion variants (minted from the OLD one) were just torn
-                       off cast.json + disk by promote-voice. Mirror that in redux
-                       so the save-path spreads don't re-persist the stale slots
-                       and the cast's "Emotion variants" demand re-surfaces them.
-                       No-op on a first design (no variants existed). */
+                       emotion variants (minted from the OLD one) are now stale on
+                       the server (#4040: dropped from the book GET, the cast PUT
+                       and render). Clear this row's immediately so the save-path
+                       spreads don't re-persist the stale slots and the cast's
+                       "Emotion variants" demand re-surfaces them (the instant
+                       half, and the only one a mock backend serves), then prune
+                       every OTHER row on the same voice key from the server's
+                       read (only rows of the loaded book on this voice key, and
+                       only variants present now). No-op on a first design (no
+                       variants existed). */
                     dispatch(
                       castActions.clearCharacterEmotionVariants({ characterId: character.id }),
                     );
+                    if (bookId) void dispatch(refreshEmotionVariants(bookId, character.id));
                     setVoiceCompareInitial(null);
                     /* Resolving the compare ends the single-design lifecycle —
                        clear the slice so the Design pill / ready-to-compare state

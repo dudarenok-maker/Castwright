@@ -40,6 +40,7 @@ import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { dropStaleVariants } from '../workspace/variant-base-rev.js';
 import {
   isLockAcquisitionTimeout,
   itemFailureReason,
@@ -51,9 +52,13 @@ import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import {
   DesignSlotTakenError,
+  SeriesCloneRefusedError,
   VARIANT_EMOTIONS,
   designQwenVoiceForCharacter,
+  hasDeclineMarker,
   persistEmotionVariant,
+  resolveVariantPersona,
+  seriesClonedOnRowsVoice,
 } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
@@ -62,6 +67,7 @@ import {
   hasClonedSlotAmongMatches,
 } from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
+import { isSeparatedVoice } from '../workspace/separated-voices.js';
 import { personaSharesGpu, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import {
   AnalysisAbortedError,
@@ -424,10 +430,14 @@ async function runDesignJob(
   const seriesClonedVoiceIds = seriesFilter
     ? await findClonedVoiceIdsAmongMatches(seriesFilter)
     : null;
-  const clonedOnLinkedBook = (character: CastCharacter): Promise<boolean> | boolean =>
-    seriesClonedVoiceIds
-      ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
-      : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
+  /* #4074 -- a row on a "Don't reuse"-separated uuid counts only the clones on rows of that
+     uuid (seriesClonedOnRowsVoice), which the precomputed per-voiceId set cannot answer. */
+  const clonedOnLinkedBook = async (character: CastCharacter): Promise<boolean> =>
+    character.voiceUuid && (await isSeparatedVoice(character.voiceUuid))
+      ? seriesClonedOnRowsVoice(character, seriesFilter, job.bookDir)
+      : seriesClonedVoiceIds
+        ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
+        : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
 
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
@@ -468,8 +478,20 @@ async function runDesignJob(
          engine (coqui). The owner's decision (GATE 2 review): skip this
          character and report it — refusing the whole sweep would let one
          cloned character block designing the rest; retargeting is the
-         defect itself. */
-      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
+         defect itself.
+         #4074 exception: a row carrying a "Don't reuse" marker
+         (`declinedVoiceFrom`) may be moved onto a new voice uuid by the design
+         itself (after the render), so a clone on the voice it is leaving —
+         the declined book's — is not one this design could retarget. Only its
+         own slots are checked here; the series scan runs in the design's
+         landing (refuseIfSeriesCloned), after the uuid step and before
+         anything is written, scoped to the rows on the new uuid (#4069), and
+         reports through the same `clonedSkips` channel; the write-time check in
+         applyOverrideToCastFiles below stays as the residual-window backstop. */
+      if (
+        characterHasClonedSlot(character) ||
+        (!hasDeclineMarker(character) && (await clonedOnLinkedBook(character)))
+      ) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -513,9 +535,10 @@ async function runDesignJob(
       }
 
       /* Variant — skip when the base is missing (can't make a variant without
-         a base) or the variant is already designed (idempotent). */
+         a base) or the variant is already designed (idempotent). #4040 — a
+         variant whose base was redesigned since is not designed: it is re-minted. */
       const baseName = character.overrideTtsVoices?.qwen?.name;
-      const already = character.overrideTtsVoices?.qwen?.variants?.[emotion];
+      const already = (await dropStaleVariants([character]))[0].overrideTtsVoices?.qwen?.variants?.[emotion];
       if (!baseName || already) {
         job.skipped += 1;
         broadcast(job, { type: 'character_skipped', characterId });
@@ -549,7 +572,17 @@ async function runDesignJob(
          that card inside `withGpuLoad`, the exact plan-108 OOM this pre-pass was built to
          prevent. Skip without retrying — and without a second `character_failed` when the
          pre-pass already recorded one. */
-      let persona = (character.voiceStyle ?? '').trim();
+      let persona: string;
+      try {
+        /* A variant is designed from its base's persona: when the row records none,
+           the one the base design stored (same helper as the single route). */
+        persona = await resolveVariantPersona(character as CastCharacter, characterId, '', emotion);
+      } catch (e) {
+        const message = (e as Error).message || 'Persona unavailable.';
+        job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+        broadcast(job, { type: 'character_failed', characterId, name: character.name ?? characterId, errorReason: message });
+        continue;
+      }
       if (!persona) {
         if (sharesGpu) {
           /* Skip — the pre-pass owns shared-GPU persona-gen; retrying here while VoiceDesign loads
@@ -660,6 +693,7 @@ async function runDesignJob(
             emotion,
             persistSlot: !emotion,
             skipIfSlotted: !emotion,
+            refuseIfSeriesCloned: !emotion && hasDeclineMarker(character),
             signal: job.controller.signal,
           });
 
@@ -733,6 +767,19 @@ async function runDesignJob(
           if (e instanceof DesignSlotTakenError) {
             job.skipped += 1;
             broadcast(job, { type: 'character_skipped', characterId });
+            break;
+          }
+          /* #4074 -- the landing refused the design (a clone on a row of its new uuid)
+             before writing anything: the same skip as the early gate. */
+          if (e instanceof SeriesCloneRefusedError) {
+            job.skipped += 1;
+            job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+            broadcast(job, {
+              type: 'character_skipped',
+              characterId,
+              name: character.name ?? characterId,
+              reason: 'already_cloned',
+            });
             break;
           }
           const message = (e as Error).message || 'Voice design failed.';

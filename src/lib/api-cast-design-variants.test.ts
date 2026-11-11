@@ -91,4 +91,42 @@ describe('readCastDesignStream', () => {
     await readCastDesignStream(res, { onVariantDesigned: (e) => got.push(e) });
     expect(got).toEqual([{ characterId: 'a', emotion: 'angry', voiceId: 'qwen-a__angry' }]);
   });
+
+  /* #4067 — a single design's `designed` / `preview_ready` carry the voiceUuid and
+     whether the server separated the row; the parser must forward both. */
+  it('forwards voiceUuid and separated on designed and preview_ready', async () => {
+    const designed: unknown[] = [];
+    const previews: unknown[] = [];
+    const res = sseResponse([
+      JSON.stringify({ type: 'designed', characterId: 'a', voiceId: 'qwen-u1', voiceUuid: 'u1', separated: true }),
+      JSON.stringify({
+        type: 'preview_ready',
+        characterId: 'a',
+        name: 'Aria',
+        previewVoiceId: 'qwen-u1-preview',
+        previewUrl: '/x.mp3',
+        persona: 'warm',
+        voiceUuid: 'u1',
+        separated: true,
+      }),
+      JSON.stringify({ type: 'idle', done: 1, total: 1, skipped: 0, failures: [] }),
+    ]);
+    const { readCastDesignStream } = await import('./api');
+    await readCastDesignStream(res, {
+      onCharacterDesigned: (e) => designed.push(e),
+      onPreviewReady: (e) => previews.push(e),
+    });
+    expect(designed).toEqual([{ characterId: 'a', voiceId: 'qwen-u1', voiceUuid: 'u1', separated: true }]);
+    expect(previews).toEqual([
+      {
+        characterId: 'a',
+        name: 'Aria',
+        previewVoiceId: 'qwen-u1-preview',
+        previewUrl: '/x.mp3',
+        persona: 'warm',
+        voiceUuid: 'u1',
+        separated: true,
+      },
+    ]);
+  });
 });

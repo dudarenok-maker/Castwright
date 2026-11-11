@@ -21,6 +21,7 @@ Load-bearing invariants pinned here:
 from __future__ import annotations
 
 import os
+import pickle
 import sys
 import threading
 import time
@@ -207,12 +208,25 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
 
     def _save(obj: Any, path: str) -> None:
         _store[str(path)] = obj
+        # #4040 — a picklable object is written for real, so it survives the
+        # temp-file + os.replace persist (the store is keyed by the temp path)
+        # and a copy of the file; anything else is a bare presence marker.
+        try:
+            data = pickle.dumps(obj)
+        except Exception:
+            data = b"\x00"
         with open(path, "wb") as fh:
-            fh.write(b"\x00")  # presence marker for isfile()
+            fh.write(data)  # presence marker for isfile()
 
     def _load(path: str, **kwargs: Any) -> Any:
         fake_torch._last_load_kwargs = kwargs  # type: ignore[attr-defined]
-        return _store.get(str(path), {"_prompt": True})
+        if str(path) in _store:
+            return _store[str(path)]
+        try:
+            with open(path, "rb") as fh:
+                return pickle.loads(fh.read())
+        except Exception:
+            return {"_prompt": True}
 
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
@@ -1980,6 +1994,135 @@ def test_mint_variant_anchors_to_base_and_marks_json(fake_qwen_runtime, monkeypa
     assert meta["voiceUuid"] == "uuid-1"
 
 
+def _content_keyed_torch_load(monkeypatch) -> None:
+    """Make the fake torch.load return a prompt whose `ref_code` is the .pt
+    file's own bytes, so a test can tell WHICH file on disk a prompt came from
+    (the shared fake returns one sentinel for every path)."""
+    def _load(path: str, **_kw: Any) -> Any:
+        with open(path, "rb") as fh:
+            code = fh.read().decode("ascii")
+        return [types.SimpleNamespace(ref_code=code, ref_text="calib")]
+
+    monkeypatch.setattr(sys.modules["torch"], "load", _load)
+
+
+def _replace_on_disk(pt_path: str, content: bytes) -> None:
+    """Swap a new .pt into place the way the Node server lands a staged base
+    redesign (`moveStaged` — a rename over the old file), behind the sidecar's
+    back: nothing evicts the sidecar's in-memory cache."""
+    staging = pt_path + ".staged"
+    with open(staging, "wb") as fh:
+        fh.write(content)
+    os.replace(staging, pt_path)
+
+
+def test_mint_variant_anchors_on_the_base_on_disk_not_a_stale_cache(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#4040 — a base redesign the server lands by renaming a staged .pt over
+    the base (and stamping the base's new `rev`) evicts the sidecar's cached
+    base prompt only afterwards, best-effort. A variant minted in that gap (or
+    after a failed evict) used the OLD cached embedding while the server
+    recorded it against the NEW rev, so it read as current. The anchor must
+    come from the base .pt currently on disk."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    monkeypatch.setattr(main, "_qwen_base17_weights_present", lambda: True)
+    monkeypatch.setattr(eng, "_ensure_base17_loaded", lambda device=None: None)
+    monkeypatch.setattr(
+        eng, "_icl_instruct_synth",
+        lambda items, text, instr, lang: (np.zeros(6000, "float32"), 24000),
+    )
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    base_pt, _ = eng._voice_paths("v1")
+    with open(base_pt, "wb") as fh:
+        fh.write(b"OLD")
+    eng._load_voice_prompt("v1")  # a render warmed the cache with the old base
+
+    _replace_on_disk(base_pt, b"NEW")
+
+    eng._base = _FakeQwenModel("0.6b")
+    eng._base17 = _FakeQwenModel("1.7b")
+    decoded: list[Any] = []
+    monkeypatch.setattr(
+        eng._base17.model.speech_tokenizer, "decode",
+        lambda codes: (decoded.append(codes[0]["audio_codes"]), ([np.zeros(6000, "float32")], 24000))[1],
+    )
+    eng.mint_variant("v1", "v1__angry", "Delivered angrily.", "English", None, None)
+    assert decoded == ["NEW"]
+
+
+def test_cached_voice_prompt_is_reloaded_when_the_pt_changes_on_disk(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """The same staleness on the ordinary render path: a voice whose .pt was
+    replaced on disk without an evict must not keep rendering from the old
+    cached embedding — while an unchanged .pt is still a cache hit."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    pt, _ = eng._voice_paths("v1")
+    with open(pt, "wb") as fh:
+        fh.write(b"OLD")
+    first, _lang, hit = eng._load_voice_prompt("v1")
+    assert first[0].ref_code == "OLD" and hit is False
+    _again, _lang, hit = eng._load_voice_prompt("v1")
+    assert hit is True  # unchanged file: still served from the cache
+
+    _replace_on_disk(pt, b"NEW")  # a rename: a different file
+    renamed, _lang, hit = eng._load_voice_prompt("v1")
+    assert renamed[0].ref_code == "NEW" and hit is False
+
+    with open(pt, "wb") as fh:  # an in-place rewrite of the same file
+        fh.write(b"NEWER")
+    rewritten, _lang, hit = eng._load_voice_prompt("v1")
+    assert rewritten[0].ref_code == "NEWER" and hit is False
+
+
+def test_cached_voice_prompt_is_reloaded_after_a_same_size_in_place_rewrite(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#4040 — an in-place rewrite keeps the file id, and a same-length one
+    keeps the size too, so only the mtime tells it apart: it must reload."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    pt, _ = eng._voice_paths("v1")
+    with open(pt, "wb") as fh:
+        fh.write(b"AAAA")
+    first, _lang, hit = eng._load_voice_prompt("v1")
+    assert first[0].ref_code == "AAAA" and hit is False
+    before = os.stat(pt)
+
+    with open(pt, "r+b") as fh:  # same file, same byte length, new content
+        fh.write(b"BBBB")
+    os.utime(pt, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    after = os.stat(pt)
+    assert (after.st_ino, after.st_size) == (before.st_ino, before.st_size)
+
+    rewritten, _lang, hit = eng._load_voice_prompt("v1")
+    assert rewritten[0].ref_code == "BBBB" and hit is False
+
+
+def test_cached_voice_prompt_for_a_deleted_pt_is_not_served(fake_qwen_runtime, monkeypatch) -> None:
+    """A cached prompt whose .pt is gone from disk fails like an undesigned
+    voice rather than rendering the deleted voice from memory."""
+    eng = fake_qwen_runtime["engine"]
+    vdir = fake_qwen_runtime["dir"]
+    _content_keyed_torch_load(monkeypatch)
+    os.makedirs(vdir, exist_ok=True)
+    pt, _ = eng._voice_paths("v1")
+    with open(pt, "wb") as fh:
+        fh.write(b"OLD")
+    eng._load_voice_prompt("v1")
+    os.remove(pt)
+    with pytest.raises(main.VoiceNotDesignedError):
+        eng._load_voice_prompt("v1")
+
+
 def test_mint_variant_raises_when_base_absent(fake_qwen_runtime) -> None:
     """mint_variant() raises VoiceNotDesignedError when the base .pt is absent."""
     eng = fake_qwen_runtime["engine"]
@@ -2235,6 +2378,160 @@ def test_synth_17b_reuses_disk_cached_prompt_after_restart(
         "the on-disk nadia__1.7b.pt should have been loaded instead of re-derived"
     )
     assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+
+
+def _setup_17b_base_from_disk(eng, monkeypatch, voice_id: str, content: bytes) -> str:
+    """#4040 — design `voice_id`, overwrite its base .pt with `content` (the
+    fake torch.save writes the same marker byte for every voice, so distinct
+    bytes stand in for distinct embeddings), and make the 0.6B prompt carry the
+    base file's bytes as `ref_text` — so each 1.7B derive records, in
+    `_base17.prompt_calls`, which base it was derived from. Returns base_pt."""
+    import types as _types
+
+    eng.design_voice(voice_id, "A calm narrator.", "English", None)
+    base_pt, _json = eng._voice_paths(voice_id)
+    with open(base_pt, "wb") as fh:
+        fh.write(content)
+
+    def _base_from_disk(v):
+        with open(eng._voice_paths(v)[0], "rb") as fh:
+            data = fh.read()
+        return ([_types.SimpleNamespace(ref_code=None, ref_text=data.decode())], "English", False)
+
+    monkeypatch.setattr(eng, "_load_voice_prompt", _base_from_disk)
+    eng._base17 = type(eng._base)("1.7b")
+    return base_pt
+
+
+def _land_redesign(base_pt: str, content: bytes) -> None:
+    """The Node server's moveStaged: a staged .pt renamed over the base, no
+    sidecar evict (it is best-effort and here it never ran)."""
+    staged = base_pt + ".staged"
+    with open(staged, "wb") as fh:
+        fh.write(content)
+    os.replace(staged, base_pt)
+
+
+def test_synth_17b_rederives_from_current_base_after_redesign(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 — a base replaced on disk with no evict must not keep serving the
+    1.7B prompt derived from the OLD base from memory; an unchanged base must
+    keep the cached prompt (no re-derive)."""
+    eng = fake_qwen_runtime["engine"]
+    base_pt = _setup_17b_base_from_disk(eng, monkeypatch, "lena", b"OLD")
+
+    eng.synthesize("1.7b", "lena", "First line.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD"]
+
+    # Control: same base on disk -> in-memory hit, no re-derive.
+    eng.synthesize("1.7b", "lena", "Second line.")
+    assert len(eng._base17.prompt_calls) == 1, "unchanged base must reuse the cached 1.7B prompt"
+
+    _land_redesign(base_pt, b"NEW")
+    eng.synthesize("1.7b", "lena", "Third line.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD", "NEW"], (
+        "the 1.7B prompt must be re-derived from the redesigned base"
+    )
+
+    eng.synthesize("1.7b", "lena", "Fourth line.")
+    assert len(eng._base17.prompt_calls) == 2, "the re-derived prompt must then be reused"
+
+
+def test_synth_17b_unchanged_base_hits_without_rehash_or_reload(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 — the 1.7B in-memory hit is decided by the base's file sig alone:
+    with the base unchanged, repeated renders must neither re-hash the base nor
+    torch.load the `__1.7b.pt` — after a derive, and after a disk load (the
+    post-restart path). Without the recorded sig every Quality render pays both."""
+    eng = fake_qwen_runtime["engine"]
+    _setup_17b_base_from_disk(eng, monkeypatch, "iris", b"OLD")
+    pt_17b, _json = eng._voice_paths("iris__1.7b")
+
+    hashes: list[str] = []
+    real_sha = main._file_sha256
+    monkeypatch.setattr(main, "_file_sha256", lambda p: (hashes.append(p), real_sha(p))[1])
+    loads: list[str] = []
+    torch_module = sys.modules["torch"]
+    real_load = torch_module.load
+    monkeypatch.setattr(
+        torch_module, "load", lambda p, **kw: (loads.append(str(p)), real_load(p, **kw))[1]
+    )
+
+    eng.synthesize("1.7b", "iris", "First line.")  # derive
+    hashes.clear()
+    loads.clear()
+    eng.synthesize("1.7b", "iris", "Second line.")
+    eng.synthesize("1.7b", "iris", "Third line.")
+    assert hashes == [] and pt_17b not in loads, "a hit after a derive must not re-hash or reload"
+
+    eng._prompt_cache.clear()  # simulated restart: in-memory state gone, disk kept
+    eng._prompt17_base.clear()
+    eng.synthesize("1.7b", "iris", "After restart.")  # disk load
+    assert loads.count(pt_17b) == 1
+    hashes.clear()
+    loads.clear()
+    eng.synthesize("1.7b", "iris", "Again.")
+    eng.synthesize("1.7b", "iris", "And again.")
+    assert hashes == [] and pt_17b not in loads, "a hit after a disk load must not re-hash or reload"
+    assert len(eng._base17.prompt_calls) == 1
+
+
+def test_synth_17b_stale_disk_prompt_not_reused_after_restart(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 — a `__1.7b.pt` derived from the OLD base that survived on disk
+    (the evict failed) must be re-derived after a restart, not loaded."""
+    eng = fake_qwen_runtime["engine"]
+    base_pt = _setup_17b_base_from_disk(eng, monkeypatch, "mira", b"OLD")
+    eng.synthesize("1.7b", "mira", "First line.")
+    pt_17b, _json = eng._voice_paths("mira__1.7b")
+    assert os.path.isfile(pt_17b)
+
+    _land_redesign(base_pt, b"NEW")
+    eng._prompt_cache.clear()  # simulated restart: in-memory state gone, disk kept
+
+    eng.synthesize("1.7b", "mira", "After restart.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD", "NEW"], (
+        "a stale on-disk 1.7B prompt must not be reused after the base changed"
+    )
+
+
+def test_synth_17b_copied_matching_pair_is_not_rederived(fake_qwen_runtime, monkeypatch) -> None:
+    """#4040 control — the series mint COPIES the base family (base .pt and its
+    `__1.7b.pt`) to a new key. The copy has a new file id and path, but the
+    same base content, so its derived prompt is still current: no re-derive."""
+    import shutil
+
+    eng = fake_qwen_runtime["engine"]
+    _setup_17b_base_from_disk(eng, monkeypatch, "olga", b"OLD")
+    eng.synthesize("1.7b", "olga", "First line.")
+    assert len(eng._base17.prompt_calls) == 1
+
+    torch_module = sys.modules["torch"]
+    src_base, src_json = eng._voice_paths("olga")
+    dst_base, dst_json = eng._voice_paths("olga-copy")
+    shutil.copyfile(src_base, dst_base)
+    shutil.copyfile(src_json, dst_json)
+    src_17b, _ = eng._voice_paths("olga__1.7b")
+    dst_17b, _ = eng._voice_paths("olga-copy__1.7b")
+    torch_module.save(torch_module.load(src_17b), dst_17b)  # copyFile, via the fake store
+
+    eng.synthesize("1.7b", "olga-copy", "Copied line.")
+    assert len(eng._base17.prompt_calls) == 1, "a copied matching pair must reuse its 1.7B prompt"
+
+
+def test_synth_17b_legacy_disk_prompt_without_base_record_is_rederived(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """#4040 — a `__1.7b.pt` written before the base was recorded alongside it
+    cannot be proven current, so it is re-derived once (then reused)."""
+    eng = fake_qwen_runtime["engine"]
+    _setup_17b_base_from_disk(eng, monkeypatch, "nora", b"OLD")
+    pt_17b, _json = eng._voice_paths("nora__1.7b")
+    with open(pt_17b, "wb") as fh:  # a bare prompt, the pre-#4040 file shape
+        pickle.dump([{"legacy": True}], fh)
+
+    eng.synthesize("1.7b", "nora", "A line.")
+    assert [c[1] for c in eng._base17.prompt_calls] == ["OLD"]
+    eng._prompt_cache.clear()
+    eng.synthesize("1.7b", "nora", "After restart.")
+    assert len(eng._base17.prompt_calls) == 1
 
 
 def _seed_stale_17b_disk_cache(eng, vdir: str, voice_id: str) -> str:

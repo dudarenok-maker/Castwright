@@ -468,6 +468,39 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
   });
 
+  /* #4066 — a QA repair re-synthesises on the GPU but never enters
+     generation's inFlightByBook, so the route's own `registerSplice` is the
+     only thing that makes the VRAM-eviction gate see it. Hold the mocked synth
+     open mid-job and read the gate. Mutation: replacing the route's
+     registerSplice call with a no-op leaves the gate false mid-job. */
+  it('#4066 — the gate reads active while a repair is mid-synth, and inactive after', async () => {
+    const gate = await import('../gpu/active-generation-gate.js');
+    let started!: () => void;
+    const startedP = new Promise<void>((r) => (started = r));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => {
+      started();
+      await held;
+      return { pcm: tone(0.5, 12000), sampleRate: SR };
+    });
+
+    const { bookId: id } = await scaffoldVerdictBook('Gate Story');
+    expect(gate.isAnyGenerationActive()).toBe(false);
+
+    const inflight = request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' })
+      .then((r) => r);
+    await startedP;
+    expect(gate.isAnyGenerationActive()).toBe(true);
+    release();
+    const res = await inflight;
+    expect(res.text).toContain('qa_repair_complete');
+    expect(gate.isAnyGenerationActive()).toBe(false);
+  });
+
   /* #3362 pass-6 (🟡1) — the repair loop targets segment 1 only (castor's
      silent line); segment 0 (amy) is never flagged. finalize must receive
      EXACTLY [1] as resynthesizedIndices — not every segment, not none.

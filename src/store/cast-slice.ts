@@ -163,6 +163,17 @@ export interface CastDeclineMeta {
   routeBacked?: boolean;
 }
 
+/* #4067 — the client half of the server's `withForkedUuid` (qwen-voice.ts): the
+   row takes the new uuid, loses its qwen `variants`, and its qwen slot name
+   follows to `qwen-<uuid>` unless a `libraryUuid` keys it. Runs on an Immer draft. */
+function forkRow(c: Character, voiceUuid: string): void {
+  c.voiceUuid = voiceUuid;
+  const qwen = c.overrideTtsVoices?.qwen;
+  if (!qwen) return;
+  delete qwen.variants;
+  if (qwen.name && !qwen.libraryUuid) qwen.name = `qwen-${voiceUuid}`;
+}
+
 /* Empty initial state — the fixture seed (`initialCharacters` from
    ../data/characters) used to live here so the demo had something to show,
    but that meant a real book's Cast view briefly displayed fixture
@@ -373,13 +384,38 @@ export const castSlice = createSlice({
       const { characterId, voiceUuid } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
-      /* #3992 — a CHANGED uuid is a fork: the server dropped the row's qwen
-         `variants` with it (their `<uuid>__<emotion>` files belong to the old
-         uuid), so the autosave spreads must not write the stale slots back. */
-      if (c.voiceUuid && c.voiceUuid !== voiceUuid && c.overrideTtsVoices?.qwen?.variants) {
-        delete c.overrideTtsVoices.qwen.variants;
+      /* #3992 — a CHANGED uuid is a fork (the design-time separation of a
+         declined row): the server dropped the row's qwen `variants` with it
+         (their `<uuid>__<emotion>` files belong to the old uuid) and renamed its
+         slot, so the autosave spreads must not write either back (#4067). A first
+         mint (no uuid before) is not a fork by this test: the server keeps the
+         legacy name. A row with no uuid that the design DID separate is not
+         visible here; the design stream says so (`separated`) and dispatches
+         forkCharacterVoiceUuid instead. */
+      if (c.voiceUuid && c.voiceUuid !== voiceUuid) {
+        forkRow(c, voiceUuid);
+        return;
       }
       c.voiceUuid = voiceUuid;
+    },
+    /* #4067 — mirror of the server's `withForkedUuid`
+       (server/src/routes/qwen-voice.ts), which the decline route and a design's
+       separation of a declined row both apply: a row moved onto a voice of its own
+       takes the new uuid, loses its qwen `variants` whether or not it had a uuid
+       before (a legacy row has none, so setCharacterVoiceUuid's changed-uuid test
+       misses it), and its qwen slot name follows to `qwen-<uuid>`, the key the
+       base family was copied to. A slot with a `libraryUuid` is keyed by that, so
+       its name stays. Local-only, no persist rule. Dispatched by the decline flow
+       and by the design stream when the server reports `separated`; a plain first
+       mint goes through setCharacterVoiceUuid, which keeps the legacy name. */
+    forkCharacterVoiceUuid: (
+      s,
+      a: PayloadAction<{ characterId: string; voiceUuid: string }>,
+    ) => {
+      const { characterId, voiceUuid } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      forkRow(c, voiceUuid);
     },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
        badge + count update live (the DELETE route already removed it from
@@ -398,15 +434,40 @@ export const castSlice = createSlice({
       if (Object.keys(variants).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
     },
     /* Redesign invalidation — clear ALL of a character's designed Qwen emotion
-       variants from redux when a redesign is approved. The promote-voice route
-       already tore them off cast.json + disk (they were minted from the base
-       embedding the redesign replaces); this mirrors that so the save-path
+       variants from redux when a redesign is approved. They were minted from the
+       base embedding the redesign replaces, so the server now treats them as
+       stale (#4040); this drops them locally at once so the save-path
        spreads don't re-persist the stale slots and the cast's "Emotion variants"
        demand re-surfaces them live. Local-only, mirroring
        removeCharacterEmotionVariant. No-op for an unknown character / no variants. */
     clearCharacterEmotionVariants: (s, a: PayloadAction<{ characterId: string }>) => {
       const c = s.characters.find((x) => x.id === a.payload.characterId);
       if (c?.overrideTtsVoices?.qwen?.variants) delete c.overrideTtsVoices.qwen.variants;
+    },
+    /* #4040 — a base redesign makes every emotion variant minted from the OLD
+       base stale on the server (dropped from the book GET, the cast PUT and
+       render) on EVERY row sharing the voice key, not just the redesigned one.
+       Reconcile the open tab with a fresh read: for each named row, of the
+       `emotions` the caller saw in the store at dispatch time, drop those the
+       payload's `variants` no longer carries. Prune-only and variants-only, so
+       unsaved edits to other cast fields survive, a row the read does not name
+       is untouched, and a variant that arrived after dispatch is never in
+       `emotions`, so it survives. Not a persisted action: the server already
+       holds this state. */
+    pruneStaleEmotionVariants: (
+      s,
+      a: PayloadAction<Array<{ id: string; emotions: string[]; variants?: Record<string, unknown> }>>,
+    ) => {
+      for (const fresh of a.payload) {
+        const c = s.characters.find((x) => x.id === fresh.id);
+        const local = c?.overrideTtsVoices?.qwen?.variants;
+        if (!local) continue;
+        const keep = fresh.variants ?? {};
+        for (const emotion of fresh.emotions) {
+          if (!(emotion in keep)) delete local[emotion as keyof typeof local];
+        }
+        if (Object.keys(local).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
+      }
     },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by

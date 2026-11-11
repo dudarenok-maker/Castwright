@@ -11,6 +11,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { ApiError } from '@google/genai';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure, analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+import { NoCapacityError } from '../tts/tts-errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
   AnalyzerCapabilityRejectedError,
@@ -132,6 +133,18 @@ describe('classifyFailure', () => {
     expect(out.fatal).toBe(true);
     expect(out.userMessage).toMatch(/memory|vram/i);
     expect(out.remediation.length).toBeGreaterThan(0);
+  });
+
+  it('classifies a NoCapacityError as vram-spill, fatal, whatever its blocker text says (#4066)', () => {
+    /* The blocker remedies are user-facing copy and no longer carry the "VRAM"
+       token the regex used to ride on; the typed name must be what matches. */
+    const err = new NoCapacityError('qwen', 6_144, 'cuda:0', [
+      { model: 'Kokoro', remedy: 'Press "Stop Kokoro" in the "Voice engines loaded" row under the top bar.' },
+    ]);
+    expect(err.message).not.toMatch(/VRAM|out of memory/i);
+    const out = classifyFailure(err, 'qwen');
+    expect(out.code).toBe('vram-spill');
+    expect(out.fatal).toBe(true);
   });
 
   it('classifies a host OOM kill (exit 137 / "killed") as oom, fatal', () => {
