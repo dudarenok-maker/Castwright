@@ -3009,6 +3009,66 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
 
+  /* PR #4103 pass 2 P2-3 (a): the stopped leg runs through either job; Start fresh is the main job's. */
+  describe('P2-3 (a): Start fresh after a stopped run folds an untouched one-off the next run hears again', () => {
+    const body = `${NEUTRAL}\n\nThe Jogger waved.`;
+    /* "The Jogger" is a descriptor name: a clean run folds his lines into the male bucket. */
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') };
+    const stoppedRun = async (b: HarnessBook): Promise<void> => {
+      setPhase1Hook(abortAtFirstPhase1());
+      await go(b, FRESH);
+      setPhase1Hook(undefined);
+      expect(ids(readCast(b.bookDir))).toContain('the-jogger');
+      expect((readCache(b.manuscriptId)?.addedRows?.['the-jogger'] as { state?: string } | undefined)?.state).toBe('run-owned');
+    };
+
+    it('an untouched run row lands in the bucket, as on a clean run', async () => {
+      const control = seed([{ ...NARR }, pr('anna', 'Anna')], undefined, body);
+      expect(done(await run(control.manuscriptId, control.bookDir, 'main', FRESH))).toBe(true);
+      expect(ids(readCast(control.bookDir)).sort()).toEqual(['anna', 'narrator', 'unknown-male']);
+
+      const b = seed([{ ...NARR }, pr('anna', 'Anna')], undefined, body);
+      await stoppedRun(b);
+      const events = await runStartFresh(b, FRESH);
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(ids(readCast(control.bookDir)).sort());
+      expect(editLines(b)).toEqual(editLines(control));
+      expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
+      expect(readCache(b.manuscriptId)?.addedRows?.['the-jogger']).toBeUndefined();
+      expect(history(b).supersededBy).toEqual({});
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+    const rename = (b: HarnessBook): Promise<void> =>
+      withCastLock(b.bookDir, async () => {
+        const p = castJsonPath(b.bookDir);
+        const cast = JSON.parse(readFileSync(p, 'utf8')) as { characters: Row[] };
+        writeFileSync(p, JSON.stringify({ characters: cast.characters.map((c) => (c.id === 'the-jogger' ? { ...c, name: 'Jim the Jogger' } : c)) }));
+      });
+    /* Between the runs (the Start fresh snapshot sees it), or during the Start fresh run's
+       Phase 1 (after its snapshot: only the fold's own fingerprint check sees it). */
+    for (const when of ['between the runs', 'during the Start fresh run'] as const) {
+      it(`a run row the user renamed ${when} stays its own, with its lines`, async () => {
+        const b = seed([{ ...NARR }, pr('anna', 'Anna')], undefined, body);
+        await stoppedRun(b);
+        if (when === 'between the runs') await rename(b);
+        else midRun('phase1', () => rename(b));
+        const events = await runStartFresh(b, FRESH);
+        expect(errCode(events)).toBeUndefined();
+        expect(done(events)).toBe(true);
+        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator', 'the-jogger']);
+        expect(row(b, 'the-jogger')).toMatchObject({ name: 'Jim the Jogger' });
+        expect(editLines(b)).toEqual({ anna: 5, 'the-jogger': 4 });
+        expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'the-jogger': 4, narrator: 0 });
+        expect(readCache(b.manuscriptId)?.addedRows?.['the-jogger']).toEqual({ state: 'added-once' });
+        expect(history(b).supersededBy).toEqual({});
+      });
+    }
+  });
+
   it('A12 (rule 7): a dismissal survives a re-analysis, a Start fresh and a later merge of one of the pair into a third character', async () => {
     const b = twoWrens([pr('olga', 'Olga Marsh', { role: 'minor' })]);
     const first = await go(b, ASHBY);

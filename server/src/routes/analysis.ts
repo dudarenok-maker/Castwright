@@ -154,7 +154,14 @@ import type {
   SupersededKind,
 } from '../store/reanalysis-types.js';
 import { buildReservedIds, extendPlan, matchFreshToPrior } from '../store/match-fresh-to-prior.js';
-import { applyMatchPlan, planConstraintsFor, remapSentenceIds, rerouteDeletedTargets, retargetPlanForMerge } from '../store/plan-overlay.js';
+import {
+  applyMatchPlan,
+  planConstraintsFor,
+  remapSentenceIds,
+  rerouteDeletedTargets,
+  retargetPlanForMerge,
+  userOwnedFingerprint,
+} from '../store/plan-overlay.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadStoredSuggestions, pairKey } from '../store/cast-merge-suggestions.js';
 import { unionNotLinkedTo } from '../store/cast-name-match.js';
@@ -2601,6 +2608,39 @@ async function collapseMidRunMerges(a: {
 /** The plan's joined prior ids: never folded (R29). */
 function planProtectIdsOf(plan: MatchPlan): Set<string> {
   return new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'join' ? [d.priorId] : [])));
+}
+
+/** PR #4103 pass 2 P2-3 — the main job's fold protect set without the rows a run added that
+    the user never touched: a `run-owned` ledger entry whose fingerprint still matches the row
+    on disk. A Start fresh joins such a row by id (it is live), but it is not the user's: it
+    folds as a fresh `new` row would, and the persist drops it by rule 11. Rows the user
+    edited (fingerprint changed), `added-once` rows and every prior row stay protected. Main
+    job only: the subset job never deletes by the cache's ledger (invariant 6), so a run row
+    folded away there would stay on disk with no lines. An unreadable cast protects all. */
+async function withoutUntouchedRunRows(
+  protectIds: ReadonlySet<string> | undefined,
+  ledger: RunAddedLedger | undefined,
+  bookDir: string | undefined,
+): Promise<ReadonlySet<string> | undefined> {
+  if (!protectIds || !bookDir) return protectIds;
+  const owned = Object.entries(ledger ?? {}).flatMap(([id, e]) =>
+    e.state === 'run-owned' && protectIds.has(id) ? [[id, e.fp] as const] : [],
+  );
+  if (owned.length === 0) return protectIds;
+  let rows: Array<{ id: string } & Record<string, unknown>>;
+  try {
+    rows = (await readPriorCastLockFree(bookDir)).rows as typeof rows;
+  } catch {
+    return protectIds;
+  }
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const untouched = new Set(
+    owned.flatMap(([id, fp]) => {
+      const r = byId.get(id);
+      return r && userOwnedFingerprint(r) === fp ? [id] : [];
+    }),
+  );
+  return untouched.size === 0 ? protectIds : new Set([...protectIds].filter((id) => !untouched.has(id)));
 }
 
 /** R34: the ids a plan added (its `new` rows); the in-memory plan still names them after a
@@ -8157,11 +8197,12 @@ export async function runMainAnalyzerJob(
       planProtectIds = collapsedAgain.protectIds;
     }
     /* Plan 291 (R29) - the fold runs on plan-applied ids and never folds a row the plan
-       joined to a prior row (`planProtectIds`, as the live-view fold does). */
+       joined to a prior row (`planProtectIds`, as the live-view fold does), except a run's
+       own untouched row (PR #4103 pass 2 P2-3). */
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
       language: bookLanguage,
-      protectIds: planProtectIds,
+      protectIds: await withoutUntouchedRunRows(planProtectIds, cache.addedRows, liveBookDir(job) ?? undefined),
     });
     /* Fill each folded survivor's tone from its attributes where the analyzer
        left it blank (axes default to a neutral 50). */
