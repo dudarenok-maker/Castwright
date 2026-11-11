@@ -43,7 +43,8 @@ function plan(
     openSuggestions: o.openSuggestions ?? [],
     reservedIds,
     runToken: o.runToken ?? 'tok1',
-    currentBookId: o.currentBookId ?? 'book-1',
+    // An explicit `currentBookId: undefined` reaches the matcher (a legacy book with no id).
+    currentBookId: 'currentBookId' in o ? o.currentBookId : 'book-1',
   };
   return matchFreshToPrior(input);
 }
@@ -143,6 +144,21 @@ describe('matchFreshToPrior', () => {
     expect(fresh_(pl.decisions['x']).inheritedDeclines).toEqual([
       { bookId: 'book-0', characterId: 'z1' },
       { bookId: 'book-0', characterId: 'z2' },
+    ]);
+  });
+
+  it('A7, no currentBookId: no tagged decline can be shown same-book, so every one is inherited', () => {
+    const pl = plan(
+      [f('x', 'Anna')],
+      [
+        p('a1', 'Anna Kay', { notLinkedTo: [{ bookId: 'book-0', characterId: 'z1' }, { bookId: 'book-1', characterId: 'a2' }] }),
+        p('a2', 'Anna Lee', { notLinkedTo: ['a1', { characterId: 'a1' }] }),
+      ],
+      { currentBookId: undefined },
+    );
+    expect(fresh_(pl.decisions['x']).inheritedDeclines).toEqual([
+      { bookId: 'book-0', characterId: 'z1' },
+      { bookId: 'book-1', characterId: 'a2' },
     ]);
   });
 

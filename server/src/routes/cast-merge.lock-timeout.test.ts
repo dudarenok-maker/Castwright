@@ -331,6 +331,22 @@ describe('performCastMerge — lock timeout vs disk fault (#2260 C2)', () => {
     /* Identical disk outcome to the timeout case above. */
     expectMergeFullyApplied();
   });
+
+  it('the FIRST parked error wins when the history write and the cache op both fail (#4031 final review)', async () => {
+    const historyErr = Object.assign(new Error('EPERM: history'), { code: 'EPERM' });
+    const cacheErr = Object.assign(new Error('EBUSY: cache'), { code: 'EBUSY' });
+    retire.toThrow = historyErr;
+    cacheLoad.toThrow = cacheErr;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { didCastMergeApply } = await import('./cast-merge.js');
+      await expect(runMerge()).rejects.toBe(historyErr);
+      expect(didCastMergeApply(historyErr)).toBe(true);
+    } finally {
+      cacheLoad.toThrow = null;
+    }
+  });
 });
 
 /* #2260 round 4 (C1) — `performCastMerge` has TWO production callers, and the

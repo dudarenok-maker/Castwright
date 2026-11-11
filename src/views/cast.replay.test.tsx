@@ -86,7 +86,7 @@ const library: Voice[] = [
   },
 ];
 
-function replayedStore() {
+function replayedStore(running = true) {
   const store = configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -106,6 +106,7 @@ function replayedStore() {
   store.dispatch(uiActions.openBook({ id: BOOK, status: 'voices_pending' }));
   resetBookSlices(store.dispatch, BOOK);
   store.dispatch(castActions.hydrateCharacters(PRIOR_CAST));
+  if (!running) return store;
   store.dispatch(
     analysisActions.setActiveStream({
       bookId: BOOK,
@@ -122,7 +123,45 @@ function replayedStore() {
   return store;
 }
 
+function renderCast(store: ReturnType<typeof replayedStore>, onSave = vi.fn(), onRename = vi.fn()) {
+  const characters = store.getState().cast.characters;
+  const wren = characters.find((c) => c.id === 'w2')!;
+  return render(
+    <Provider store={store}>
+      <CastView
+        characters={characters}
+        setCharacters={() => {}}
+        library={library}
+        title="Replay"
+        onOpenProfile={() => {}}
+        onShowMatchDetail={() => {}}
+        driftEvents={[]}
+        onShowDrift={() => {}}
+        onContinueToManuscript={() => {}}
+      />
+      <ProfileDrawer
+        character={wren}
+        bookId={BOOK}
+        voice={undefined}
+        onClose={() => {}}
+        onSave={onSave}
+        onLock={() => {}}
+        onRename={onRename}
+      />
+    </Provider>,
+  );
+}
+
 describe('replay (during run) - component', () => {
+  it('negative control: the same cast with no running analysis renders the controls enabled and no banner', () => {
+    renderCast(replayedStore(false));
+    expect(screen.queryAllByTestId('cast-edits-paused-banner')).toHaveLength(0);
+    const assigns = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ });
+    for (const a of assigns) expect(a).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: /^Save changes$/ })).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: 'Rename character' })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
   it("component: with the replayed store, the Cast view's Save, rename and voice-assign controls render aria-disabled and the banner is present", () => {
     const store = replayedStore();
     const characters = store.getState().cast.characters;
@@ -130,40 +169,17 @@ describe('replay (during run) - component', () => {
     expect(wren.name).toBe('Wren');
     const onSave = vi.fn();
     const onRename = vi.fn();
-    render(
-      <Provider store={store}>
-        <CastView
-          characters={characters}
-          setCharacters={() => {}}
-          library={library}
-          title="Replay"
-          onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}
-          driftEvents={[]}
-          onShowDrift={() => {}}
-          onContinueToManuscript={() => {}}
-        />
-        <ProfileDrawer
-          character={wren}
-          bookId={BOOK}
-          voice={undefined}
-          onClose={() => {}}
-          onSave={onSave}
-          onLock={() => {}}
-          onRename={onRename}
-        />
-      </Provider>,
-    );
+    renderCast(store, onSave, onRename);
 
     /* the visible banner, on the Cast view and on the drawer */
     const banners = screen.getAllByTestId('cast-edits-paused-banner');
     expect(banners.length).toBeGreaterThanOrEqual(2);
     for (const b of banners) expect(b).toHaveTextContent('Re-analysis running — cast edits are paused');
 
-    /* voice-assign */
-    const assign = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ })[0];
-    expect(assign).toHaveAttribute('aria-disabled', 'true');
-    fireEvent.click(assign);
+    /* voice-assign: every pill, not just the first */
+    const assigns = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ });
+    for (const a of assigns) expect(a).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(assigns[0]);
     expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
 
     /* Save and rename */

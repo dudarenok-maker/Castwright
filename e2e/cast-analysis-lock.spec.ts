@@ -240,7 +240,8 @@ test('while a re-analysis runs the cast is read-only and nothing is saved; when 
       putsBeforeRun,
       { timeout: 1500 },
     ),
-  ).rejects.toThrow();
+    // Only the wait's own timeout proves no second PUT came; any other error must fail.
+  ).rejects.toThrow(/Timeout/);
 
   /* Every cast PUT since the run began carried every row of the re-read roster,
      and none carries the refused edit. */

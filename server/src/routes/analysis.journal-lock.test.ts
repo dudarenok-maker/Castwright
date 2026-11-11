@@ -78,9 +78,10 @@ describe('#4031 analysis journal writes hold the cast lock', () => {
 
       const journalWrite = write(dir);
       journalWrite.catch(() => {});
-      /* Locked, the write cannot start until the append ends, so there is no positive
-         signal to wait on; give it a few macrotasks to land if nothing stops it. */
-      await new Promise((r) => setTimeout(r, 100));
+      /* Locked, the write cannot start until the append ends. Unlocked (the mutant), it
+         finishes on its own: race that positive signal against a generous ceiling, so a
+         slow unlocked write is still caught and a correct one costs at most the ceiling. */
+      await Promise.race([journalWrite, new Promise((r) => setTimeout(r, 1000))]);
       manual.release();
       await manual.done;
       await journalWrite;

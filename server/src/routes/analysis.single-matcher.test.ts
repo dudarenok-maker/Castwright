@@ -3,18 +3,20 @@
    harness smoke test and a self-test per harness helper; the acceptance tests
    (Tasks 15-27) are added on top of `__test-helpers__/analysis-job-harness.ts`.
    The mock blocks below are the ones the harness header requires. */
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /* Before any import binds BOOKS_ROOT: the harness books live in this workspace. */
-vi.hoisted(() => {
+const WORKSPACE = vi.hoisted(() => {
   const fs = process.getBuiltinModule('node:fs');
   const os = process.getBuiltinModule('node:os');
   const path = process.getBuiltinModule('node:path');
   process.env.WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'audiobook-4031-ws-'));
+  return process.env.WORKSPACE_DIR;
 });
+afterAll(() => rmSync(WORKSPACE, { recursive: true, force: true }));
 
 import {
   BODY,
@@ -533,7 +535,9 @@ describe('#4031 main job: run start and cache classification', () => {
         (acc, s) => ({ ...acc, [s.characterId]: (acc[s.characterId] ?? 0) + 1 }),
         {},
       );
-    rollSpy.isPlanned = () => readCache(b.manuscriptId)?.matchPlan !== undefined;
+    /* Sampled on the re-mint (the second patch), not on the plan's presence (the first):
+       a roll that lands between the two patches carries no re-mint to follow yet. */
+    rollSpy.isPlanned = reminted;
     rollSpy.after = (planned) => {
       if (planned) postPlanRolls.push(countLines());
     };
@@ -1109,6 +1113,10 @@ describe('#4031 main job: resume', () => {
       if (chapterId === 1) return;
       if (!stopped) {
         stopped = true;
+        /* Chapter 1's cast must be cached before the abort (bounded wait): the tests
+           assume a resume replays it, and same-tick ordering is not a guarantee. */
+        const ch1Cached = (): boolean => (readCache(job.manuscriptId)?.chapterCast?.[1]?.length ?? 0) > 0;
+        for (let i = 0; i < 100 && !ch1Cached(); i++) await new Promise((r) => setTimeout(r, 20));
         job.controller.abort();
       }
       const e = new Error('aborted');

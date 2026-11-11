@@ -9,18 +9,20 @@
    has fully run and nothing has been written since, so the disk is exactly what
    that block left. The completed-run case covers the other half, the prior the
    merge sees. The mock blocks are the ones the harness header requires. */
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
 
-vi.hoisted(() => {
+const WORKSPACE = vi.hoisted(() => {
   const fs = process.getBuiltinModule('node:fs');
   const os = process.getBuiltinModule('node:os');
   const path = process.getBuiltinModule('node:path');
   process.env.WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'audiobook-4031-fresh-ws-'));
+  return process.env.WORKSPACE_DIR;
 });
+afterAll(() => rmSync(WORKSPACE, { recursive: true, force: true }));
 
 import {
   FRESH_ID,

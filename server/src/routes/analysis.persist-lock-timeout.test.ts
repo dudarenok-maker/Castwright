@@ -891,6 +891,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     60_000,
   );
 
+  const PRIOR_PROVENANCE = { engine: 'gemini', model: 'previous-run-model', at: '2020-01-01T00:00:00.000Z', scope: 'book' };
   it(
     'a persist cast-lock timeout on a book marked sentencesPredateChapters keeps the marker and stamps no provenance',
     async () => {
@@ -903,16 +904,20 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
         onSetup: ({ bookDir }) => {
           const statePath = join(bookDir, '.audiobook', 'state.json');
           const state = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
-          writeFileSync(statePath, JSON.stringify({ ...state, sentencesPredateChapters: true }));
+          writeFileSync(
+            statePath,
+            JSON.stringify({ ...state, sentencesPredateChapters: true, analysisProvenance: PRIOR_PROVENANCE }),
+          );
         },
       });
       try {
         expect(plannedPersist.thrown).toBe(1);
         /* The state.json write did run (chapters rebuilt)... */
         expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
-        /* ...without the marker clear or the provenance stamp. */
+        /* ...without the marker clear or the provenance stamp: the PREVIOUS run's
+           provenance still describes disk, so it survives untouched. */
         expect((run.state as { sentencesPredateChapters?: boolean }).sentencesPredateChapters).toBe(true);
-        expect(run.state.analysisProvenance).toBeUndefined();
+        expect(run.state.analysisProvenance).toEqual(PRIOR_PROVENANCE);
         expect(run.events[run.events.length - 1]?.kind).toBe('error');
       } finally {
         await run.cleanup();
