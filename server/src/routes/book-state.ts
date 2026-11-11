@@ -1749,7 +1749,8 @@ async function applyReparse(
       // A parseable file whose `characters` is not an array (#4031: the corrupt-cast
       // refusal sends users here) is shape-corrupt: no rows to carry, like no cast.
       const reuseRows = (Array.isArray(existingCast?.characters) ? existingCast.characters : [])
-        .filter((c) => typeof c.id === 'string')
+        // A hand-edited row can be null or a scalar: skip it, never throw on it.
+        .filter((c) => typeof c?.id === 'string')
         .map((c) => {
           const row: Record<string, unknown> = { id: c.id, name: c.name };
           if (c.aliases !== undefined) row.aliases = c.aliases;

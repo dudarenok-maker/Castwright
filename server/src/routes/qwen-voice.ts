@@ -1445,6 +1445,10 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       return { ...rendered, ...(await landStagedDesign(p, voiceId, calibrationText, watcher)) };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
+      /* The sidecar cached the staged render's prompt under this one-off id; a failed
+         design never lands it, so drop it too (bounded, best-effort, like the landing's
+         evict) or every failed design grows the cache (#4031 final review). */
+      await evictSidecarVoices([voiceId]);
       if (e instanceof SidecarDesignError && e.status === 0) scheduleLateStagingSweep(voiceId, stagedAudition);
       throw e;
     } finally {

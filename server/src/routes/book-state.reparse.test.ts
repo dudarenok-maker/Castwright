@@ -444,6 +444,16 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     },
   );
 
+  it('a cast.json with non-object rows re-parses and carries only the real rows (#4031 final review)', async () => {
+    writeFileSync(castPath(), JSON.stringify({ characters: [null, 5, 'x', { id: 'keep', name: 'Keep' }] }));
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    const carried = JSON.parse(readFileSync(carryoverPath(), 'utf8')) as { characters: Array<{ id: string }> };
+    expect(carried.characters.map((c) => c.id)).toEqual(['keep']);
+  });
+
   it('persists titleSynthesized on the made-up leading chapter only (#3628)', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),

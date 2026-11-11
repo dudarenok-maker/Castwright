@@ -453,6 +453,18 @@ describe('#3992 — a row that vanishes mid-fork fails the request, it never fal
     expect(strays()).toEqual([]);
   });
 
+  it('a failed design evicts its staged render from the sidecar cache (#4031 final review)', async () => {
+    seedChain();
+    vanish();
+    const res = await design('Book Two');
+    expect(res.status).toBe(404);
+    const evicted = fetchMock.mock.calls
+      .filter(([u]) => String(u).endsWith('/qwen/evict-voice'))
+      .map(([, init]) => JSON.parse((init as { body: string }).body).voiceId);
+    expect(requestedVoiceIds.length).toBeGreaterThan(0);
+    for (const staged of requestedVoiceIds) expect(evicted).toContain(staged);
+  });
+
   it('emotion variant: 404 and nothing written under the earlier book’s name', async () => {
     seedChain();
     writeFileSync(join(qwenDir(), 'qwen-u_shared__angry.pt'), Buffer.from('ONE-ANGRY'));
