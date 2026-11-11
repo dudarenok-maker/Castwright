@@ -14,19 +14,24 @@ import { SidecarTtsProvider } from './sidecar.js';
 import { NoCapacityError } from './tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
 import { setActiveGenerationBooksProvider, setInFlightSpliceCounter } from '../gpu/active-generation-gate.js';
-import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
+import { evictIdleQwenBase, freeKokoroForRenderSynth } from '../gpu/evict-idle-tts.js';
 
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
   return { ...actual, fetch: vi.fn() };
 });
-vi.mock('../gpu/evict-idle-tts.js', () => ({ evictIdleQwenBase: vi.fn(async () => false) }));
+vi.mock('../gpu/evict-idle-tts.js', () => ({
+  evictIdleQwenBase: vi.fn(async () => false),
+  freeKokoroForRenderSynth: vi.fn(async () => false),
+}));
 const mockFetch = vi.mocked(undiciFetch);
 const mockEvictIdle = vi.mocked(evictIdleQwenBase);
+const mockFreeKokoro = vi.mocked(freeKokoroForRenderSynth);
 
 afterEach(() => {
   mockFetch.mockReset();
   mockEvictIdle.mockClear();
+  mockFreeKokoro.mockClear();
   setProbeSidecarHealthProvider(null);
   setActiveGenerationBooksProvider(() => []);
   setInFlightSpliceCounter(() => 0);
@@ -105,6 +110,17 @@ describe('SidecarTtsProvider → withCapacityRetry wiring (#4066)', () => {
       }),
     );
     expect(msg).not.toMatch(/in use by the chapter render/);
+  });
+
+  it("#4079: only a render's own synth gets the free-Kokoro exception, carrying the op model key", async () => {
+    mockFetch.mockImplementation((async () => noCapacity('cuda:0')) as unknown as typeof undiciFetch);
+    await messageOf(() => makeProvider().synthesize(INPUT));
+    expect(mockFreeKokoro).not.toHaveBeenCalled(); // a preview / design / sample frees nothing extra
+    await messageOf(() => makeProvider().synthesize({ ...INPUT, modelKey: 'qwen3-tts-1.7b', renderSynth: true }));
+    expect(mockFreeKokoro).toHaveBeenCalledTimes(1);
+    expect(mockFreeKokoro).toHaveBeenCalledWith(
+      expect.objectContaining({ modelKey: 'qwen3-tts-1.7b', isRenderSynth: true }),
+    );
   });
 
   it('forwards the denied device and the op model key to the idle-TTS lever', async () => {
