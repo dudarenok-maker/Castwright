@@ -111,7 +111,16 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
 const planSnapshot = vi.hoisted(() => ({ toThrow: null as unknown, thrown: 0 }));
 /* Plan 291 (Task 20): the main job's AUTHORITATIVE cast.json write is the planned persist,
    `persistPlannedCast` (it takes the cast lock itself), so the #2295 fixtures aim at it. */
-const plannedPersist = vi.hoisted(() => ({ toThrow: null as unknown, calls: 0, thrown: 0 }));
+const plannedPersist = vi.hoisted(() => ({
+  toThrow: null as unknown,
+  calls: 0,
+  thrown: 0,
+  /* #4031 R48 — runs the REAL persist, then fails the way an edits write does after
+     cast.json landed (the outcome rides on the error, `PersistOutcomeError`). */
+  editsFault: null as Error | null,
+  /* #4031 I1 — awaited just before the REAL persist runs (e.g. to damage cast.json). */
+  before: null as null | (() => void),
+}));
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
   return {
@@ -128,6 +137,14 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
       if (plannedPersist.toThrow) {
         plannedPersist.thrown += 1;
         return Promise.reject(plannedPersist.toThrow);
+      }
+      plannedPersist.before?.();
+      const editsFault = plannedPersist.editsFault;
+      if (editsFault) {
+        return actual.persistPlannedCast(...a).then((out) => {
+          plannedPersist.thrown += 1;
+          throw Object.assign(editsFault, { persistOutcome: out });
+        });
       }
       return actual.persistPlannedCast(...a);
     },
@@ -269,9 +286,22 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
-const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR, FS_FAILURE_REQUEST_ERROR } = await import(
   '../workspace/file-lock.js'
 );
+const { PERSIST_FAILED_MESSAGE_PREFIX } = await import('./failure-taxonomy.js');
+const { PRIOR_CAST_CORRUPT_MESSAGE } = await import('../workspace/prior-cast-error.js');
+
+/* #4031 R48 — an authoritative persist write that failed for a reason other than a
+   lock timeout ends the job in `error` with a curated, path-free sentence. */
+function expectCuratedPersistTerminal(
+  terminal: { kind?: string; code?: string; message?: string } | undefined,
+  leaked: string[],
+): void {
+  expect(terminal?.kind).toBe('error');
+  expect(terminal?.message).toBe(`${PERSIST_FAILED_MESSAGE_PREFIX} ${FS_FAILURE_REQUEST_ERROR}`);
+  for (const s of leaked) expect(terminal?.message).not.toContain(s);
+}
 
 /* #2260 FINAL ROUND (B2) — the bar every terminal `error` event in this file
  * now has to clear, in one place.
@@ -892,10 +922,12 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   );
 
   it(
-    'an EPERM-shaped disk fault on the SAME write still ends the job with a result',
+    'an EPERM-shaped disk fault on the SAME write fails the job after state.json is written (R48)',
     async () => {
-      /* Plan 291 (Task 20): aimed at the planned persist (was `writeChecked`). A throw with
-         no `persistOutcome` wrote nothing; it goes to `catch (persistErr)` as before. */
+      /* #4031 R48 (supersedes the Task 20 "ends with a result" pin): the planned persist
+         is AUTHORITATIVE, so a disk fault there reaches the job's terminal outcome like a
+         lock timeout does - parked, state.json still lands (no provenance stamp), then
+         the deferred rethrow ends the job with a curated, path-free error. */
       plannedPersist.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
@@ -905,20 +937,65 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
       try {
         expect(plannedPersist.calls).toBe(1);
         expect(plannedPersist.thrown).toBe(1);
-
-        /* Identical disk outcome to a write that never landed — the discrimination is
-           about the TERMINAL, not about what got written. */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.analysisProvenance).toBeUndefined();
 
-        /* The half that reddens if the fix is over-applied into "park
-           everything the outer handler sees". A disk fault on cast.json has
-           always been best-effort here and stays that way. */
         const terminal = run.events[run.events.length - 1];
-        expect(terminal?.kind).toBe('result');
-        expect(run.events.some((e) => e.kind === 'error')).toBe(false);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(terminal, ['cast.json', 'EPERM']);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
+    '%s: an edits-write failure after cast.json landed fails the job after state.json is written (R48)',
+    async (kind) => {
+      plannedPersist.editsFault = Object.assign(new Error("EBUSY: resource busy or locked, write 'C:\\secret\\manuscript-edits.json'"), {
+        code: 'EBUSY',
+        syscall: 'write',
+        path: 'C:\\secret\\manuscript-edits.json',
+      });
+      const run = await runJob(`edits-fault-${kind}`, kind);
+      try {
+        expect(plannedPersist.thrown).toBe(1);
+        /* cast.json landed (real counts); the outcome was still recorded... */
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
+        /* ...state.json still lands, without the provenance stamp (the edits did not)... */
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.analysisProvenance).toBeUndefined();
+        /* ...and the job ends in a curated error, not a result. */
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(run.events[run.events.length - 1], ['secret', 'manuscript-edits', 'EBUSY']);
+      } finally {
+        plannedPersist.editsFault = null;
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
+    '%s: a cast.json damaged to `{}` mid-run is refused at the persist, not overwritten (I1)',
+    async (kind) => {
+      let castPath = '';
+      plannedPersist.before = () => writeFileSync(castPath, '{}');
+      const run = await runJob(`corrupt-mid-run-${kind}`, kind, {
+        onSetup: (c) => (castPath = join(c.bookDir, '.audiobook', 'cast.json')),
+      });
+      try {
+        expect(readFileSync(castPath, 'utf8')).toBe('{}');
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(terminal?.code).toBe('cast-unreadable');
+        expect(terminal?.message).toBe(PRIOR_CAST_CORRUPT_MESSAGE);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+      } finally {
+        plannedPersist.before = null;
         await run.cleanup();
       }
     },
@@ -987,7 +1064,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   );
 
   it(
-    'the subset job mirrors the other direction too: EPERM on its final write ends with a result',
+    'the subset job mirrors it: EPERM on its final write fails the job after state.json is written (R48)',
     async () => {
       plannedPersist.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
@@ -998,13 +1075,14 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
       try {
         expect(plannedPersist.calls).toBe(1);
         expect(plannedPersist.thrown).toBe(1);
-        /* A throw with no `persistOutcome` wrote nothing; it goes to `catch (persistErr)`. */
+        /* A throw with no `persistOutcome` wrote nothing; it is parked (#4031 R48). */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.analysisProvenance).toBeUndefined();
 
         const terminal = run.events[run.events.length - 1];
-        expect(terminal?.kind).toBe('result');
-        expect(run.events.some((e) => e.kind === 'error')).toBe(false);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(terminal, ['cast.json', 'EPERM']);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
         await run.cleanup();
@@ -1270,7 +1348,9 @@ describe.each(['main', 'subset'] as const)(
       }
     }, 60_000);
 
-    it('an EPERM-shaped disk fault at the same step is still swallowed (the job ends with a result)', async () => {
+    it('an EPERM-shaped disk fault at the same step fails the job with a curated error (R48)', async () => {
+      /* #4031 R48 (supersedes "still swallowed"): state.json is the AUTHORITATIVE
+         terminal record, so a disk fault there is not reported as success. */
       stateStep.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'state.json'"),
         { code: 'EPERM' },
@@ -1279,7 +1359,8 @@ describe.each(['main', 'subset'] as const)(
       try {
         expect(stateStep.calls).toBeGreaterThan(0);
         const terminal = run.events[run.events.length - 1];
-        expect(terminal?.kind).toBe('result');
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(terminal, ['state.json', 'EPERM']);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
         await run.cleanup();

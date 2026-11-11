@@ -1505,3 +1505,35 @@ describe('classifyAnalysisFailure - an unusable prior cast (#4031)', () => {
     }
   });
 });
+
+describe('classifyAnalysisFailure - an authoritative persist write failed (#4031 R48)', () => {
+  it('a fixed, path-free sentence; a full disk never promises a retry; no detail', async () => {
+    const { AnalysisPersistError, PERSIST_FAILED_MESSAGE_PREFIX } = await import('./failure-taxonomy.js');
+    const { FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const SECRET_PATH = 'C:\\Users\\x\\books\\A\\.audiobook\\cast.json';
+    const fsErr = (code: string) =>
+      Object.assign(new Error(`${code}: failed, rename '${SECRET_PATH}'`), {
+        code,
+        syscall: 'rename',
+        path: SECRET_PATH,
+      });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const busy = classifyAnalysisFailure(new AnalysisPersistError(fsErr('EBUSY')), 'gemini');
+      const full = classifyAnalysisFailure(new AnalysisPersistError(fsErr('ENOSPC')), 'gemini');
+      const other = classifyAnalysisFailure(new AnalysisPersistError(new Error(`boom at ${SECRET_PATH}`)), 'gemini');
+      expect(busy.userMessage).toBe(`${PERSIST_FAILED_MESSAGE_PREFIX} ${FS_FAILURE_REQUEST_ERROR}`);
+      expect(full.userMessage).toBe(`${PERSIST_FAILED_MESSAGE_PREFIX} ${FS_PERMANENT_FAILURE_REQUEST_ERROR}`);
+      expect(other.userMessage).toBe(`${PERSIST_FAILED_MESSAGE_PREFIX} ${FS_FAILURE_REQUEST_ERROR}`);
+      expect(full.remediation).not.toMatch(/wait/i);
+      expect(full.remediation).toMatch(/disk space/i);
+      expect(busy.remediation).toMatch(/run the analysis again/i);
+      for (const r of [busy, full, other]) {
+        expect(r.detail).toBeUndefined();
+        expect(`${r.userMessage} ${r.remediation}`).not.toMatch(/\\|cast\.json|\.audiobook|Users/);
+      }
+    } finally {
+      err.mockRestore();
+    }
+  });
+});

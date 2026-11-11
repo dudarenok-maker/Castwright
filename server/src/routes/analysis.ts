@@ -202,7 +202,9 @@ import {
   type DroppedQuotesBatch,
 } from '../store/dropped-quotes.js';
 import { configValue } from '../config/resolver.js';
+import { PriorCastUnreadableError } from '../workspace/prior-cast-error.js';
 import {
+  AnalysisPersistError,
   classifyAnalysisFailure,
   tryParseApiError,
   FAILURE_REMEDIATIONS,
@@ -1666,7 +1668,9 @@ function plannedPersistArgs(a: {
      records the retirements and the cache patch, then hands the error to
      `catch (persistErr)` (server-side only: an fs error names an absolute path). A
      drift-refused persist wrote no cast.json, so its edits failure is just rethrown;
-   - any other throw wrote nothing and is rethrown. */
+   - any other throw wrote nothing and is rethrown.
+   #4031 R48 — the caller parks every one of these (`parkPersistFailure`) rather than
+   letting `catch (persistErr)` report success over an unwritten book. */
 async function runPlannedPersist(
   args: Parameters<typeof persistPlannedCast>[0],
 ): Promise<{ outcome?: PersistOutcome; editsWriteErr?: unknown; lockTimeout?: unknown }> {
@@ -1678,6 +1682,17 @@ async function runPlannedPersist(
     if (carried && !args.driftRefused) return { outcome: carried, editsWriteErr: castErr };
     throw castErr;
   }
+}
+
+/* #4031 R48 — an AUTHORITATIVE persist write failed (the planned cast.json persist, its
+   edits write, the terminal state.json record). The raw error is logged here, server-side
+   only; what is returned is what the job parks and rethrows after its remaining writes
+   (the deferred rethrow): a refused damaged cast.json as it is (its message is curated
+   already), anything else wrapped in `AnalysisPersistError`, whose message is fixed and
+   path-free. A lock timeout never comes here: it has its own slot (`persistLockTimeout`). */
+function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknown {
+  console.error(`${tag} failed to persist .audiobook/* for`, writeDir, err);
+  return err instanceof PriorCastUnreadableError ? err : new AnalysisPersistError(err);
 }
 
 /* Plan 291 (#4031) — what a landed planned persist owes, shared by both jobs, in order:
@@ -8108,6 +8123,9 @@ export async function runMainAnalyzerJob(
          what decides; which HANDLER caught it is not (see the wrap on
          `persistPlannedCast` below). */
       let persistLockTimeout: unknown;
+      /* #4031 R48 — an authoritative write's non-lock failure (`parkPersistFailure`),
+         rethrown after the remaining writes, like `persistLockTimeout`. */
+      let persistWriteError: unknown;
       let staleBookDirError: unknown;
       /* #3435 (plan 287 M17/S14) — set only once THIS block's state.json write
          has landed. The `try` completing is not enough: on attribution_drift
@@ -8179,9 +8197,9 @@ export async function runMainAnalyzerJob(
            (state.json) still run before the deferred rethrow below (#2260 C1, #2295).
            An edits-write failure AFTER cast.json landed carries the computed outcome
            (`PersistOutcomeError`): the retirements and the cache patch still run
-           from it, then the error goes to `catch (persistErr)`, which logs it
-           server-side only (an fs error names an absolute path). Any other throw
-           wrote nothing and goes straight there. */
+           from it. #4031 R48 — that failure and any other throw (which wrote nothing)
+           are parked in `persistWriteError` the same way: state.json still lands,
+           without the provenance stamp, then the job ends in a curated error. */
         const persistArgs = plannedPersistArgs({
           writeDir,
           bookId: record.bookId ?? undefined,
@@ -8217,7 +8235,13 @@ export async function runMainAnalyzerJob(
              delete every same-book reject edge. The verdict must be captured
              here, first, and carried down. */
           const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(writeDir);
-          const { outcome, editsWriteErr, lockTimeout } = await runPlannedPersist(persistArgs(false));
+          let planned: Awaited<ReturnType<typeof runPlannedPersist>> = {};
+          try {
+            planned = await runPlannedPersist(persistArgs(false));
+          } catch (castErr) {
+            persistWriteError = parkPersistFailure('[analysis]', writeDir, castErr);
+          }
+          const { outcome, editsWriteErr, lockTimeout } = planned;
           if (lockTimeout !== undefined) persistLockTimeout = lockTimeout;
           if (outcome) {
             const out = outcome;
@@ -8246,11 +8270,13 @@ export async function runMainAnalyzerJob(
             persistUnsentPatch = unsentPatch;
           }
           /* The edits write failed after cast.json landed (see above): everything the
-             outcome owed is recorded; the error goes to `catch (persistErr)`. */
-          if (editsWriteErr !== undefined) throw editsWriteErr;
-          /* Past here an outcome means cast.json and manuscript-edits.json both landed;
-             no outcome means a parked cast-lock timeout wrote nothing. */
-          const editsLanded = outcome !== undefined;
+             outcome owed is recorded; the error is parked (R48) and state.json still runs. */
+          if (editsWriteErr !== undefined) {
+            persistWriteError = parkPersistFailure('[analysis]', writeDir, editsWriteErr);
+          }
+          /* `editsLanded`: cast.json and manuscript-edits.json both landed. False after a
+             parked cast-lock timeout or a parked write failure. */
+          const editsLanded = outcome !== undefined && editsWriteErr === undefined;
           /* #2196 review (🟡 TOCTOU) — re-verify the write target immediately
              before the terminal authoritative state.json record. A book-folder
              move landing mid-persist (after the block-top resolve) leaves
@@ -8366,8 +8392,12 @@ export async function runMainAnalyzerJob(
               underBookLock: () => assertWriteTargetStable(job, writeDir),
             });
           } catch (stateWriteErr) {
-            if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
-            throw stateWriteErr;
+            if (isLockAcquisitionTimeout(stateWriteErr) || stateWriteErr instanceof BookDirUnresolvedError) {
+              if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
+              throw stateWriteErr;
+            }
+            /* #4031 R48 — the terminal record did not land: parked, not swallowed. */
+            persistWriteError ??= parkPersistFailure('[analysis]', writeDir, stateWriteErr);
           }
         }
       } catch (persistErr) {
@@ -8383,7 +8413,10 @@ export async function runMainAnalyzerJob(
           staleBookDirError = persistErr;
         } else {
           console.error('[analysis] failed to persist .audiobook/* for', writeDir, persistErr);
-          // Non-fatal — the analysis result still streams back to the client.
+          /* Non-fatal — only a best-effort step lands here, or the drift-refused
+             edits write (that run ends in `attribution_drift` regardless): every other
+             AUTHORITATIVE write's failure is parked (`persistLockTimeout` /
+             `persistWriteError`, #4031 R48). */
         }
       }
       /* #2260 round 3 (C1) — the deferred rethrow. OUTSIDE the try/catch
@@ -8400,6 +8433,7 @@ export async function runMainAnalyzerJob(
          re-sent once (its decisions, re-mints and ledger have no other writer). */
       if (persistUnsentPatch) await resendCachePatch(manuscriptId, persistUnsentPatch);
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
+      if (persistWriteError !== undefined) throw persistWriteError;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. */
       if (staleBookDirError !== undefined) throw staleBookDirError;
@@ -10199,6 +10233,8 @@ export async function runSubsetAnalyzerJob(
          #2295 — and for why the slot has two producers (the identity block,
          and the authoritative cast.json write above it). */
       let persistLockTimeout: unknown;
+      /* #4031 R48 — mirrors the main job's `persistWriteError`. */
+      let persistWriteError: unknown;
       let staleBookDirError: unknown;
       /* #3435 (plan 287 M17/S14) — set only once THIS block's state.json write
          has landed. The `try` completing is not enough: on attribution_drift
@@ -10257,7 +10293,7 @@ export async function runSubsetAnalyzerJob(
            Failure handling is the main job's: a cast-lock timeout wrote nothing and is
            parked (state.json still runs, then the deferred rethrow); an edits-write
            failure after cast.json landed carries its outcome, which is recorded before
-           the error goes to `catch (persistErr)`, server-side only. */
+           the error is parked in `persistWriteError` with any other throw (R48). */
         const persistArgs = plannedPersistArgs({
           writeDir,
           bookId: record.bookId ?? undefined,
@@ -10283,7 +10319,13 @@ export async function runSubsetAnalyzerJob(
              same-named capture: the id-history verdict is decided BEFORE any step
              below rewrites cast-id-history.json. */
           const { status: historyStatusBeforePersist } = await loadCastIdHistoryWithStatus(writeDir);
-          const { outcome, editsWriteErr, lockTimeout } = await runPlannedPersist(persistArgs(false));
+          let planned: Awaited<ReturnType<typeof runPlannedPersist>> = {};
+          try {
+            planned = await runPlannedPersist(persistArgs(false));
+          } catch (castErr) {
+            persistWriteError = parkPersistFailure('[analysis-subset]', writeDir, castErr);
+          }
+          const { outcome, editsWriteErr, lockTimeout } = planned;
           if (lockTimeout !== undefined) persistLockTimeout = lockTimeout;
           if (outcome) {
             const out = outcome;
@@ -10325,11 +10367,13 @@ export async function runSubsetAnalyzerJob(
             persistUnsentPatch = unsentPatch;
           }
           /* The edits write failed after cast.json landed: everything the outcome owed
-             is recorded; the error goes to `catch (persistErr)`. */
-          if (editsWriteErr !== undefined) throw editsWriteErr;
-          /* Past here an outcome means cast.json and manuscript-edits.json both landed;
-             no outcome means a parked cast-lock timeout wrote nothing. */
-          const editsLanded = outcome !== undefined;
+             is recorded; the error is parked (R48) and state.json still runs. */
+          if (editsWriteErr !== undefined) {
+            persistWriteError = parkPersistFailure('[analysis-subset]', writeDir, editsWriteErr);
+          }
+          /* `editsLanded`: cast.json and manuscript-edits.json both landed. False after a
+             parked cast-lock timeout or a parked write failure. */
+          const editsLanded = outcome !== undefined && editsWriteErr === undefined;
           persisted = outcome;
           /* #2196 review (🟡 TOCTOU) — mirror the main persist's re-verify of the
              write target immediately before the terminal state.json record. */
@@ -10418,8 +10462,12 @@ export async function runSubsetAnalyzerJob(
               underBookLock: () => assertWriteTargetStable(job, writeDir),
             });
           } catch (stateWriteErr) {
-            if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
-            throw stateWriteErr;
+            if (isLockAcquisitionTimeout(stateWriteErr) || stateWriteErr instanceof BookDirUnresolvedError) {
+              if (isLockAcquisitionTimeout(stateWriteErr)) persistLockTimeout = stateWriteErr;
+              throw stateWriteErr;
+            }
+            /* #4031 R48 — the terminal record did not land: parked, not swallowed. */
+            persistWriteError ??= parkPersistFailure('[analysis-subset]', writeDir, stateWriteErr);
           }
         }
       } catch (persistErr) {
@@ -10443,6 +10491,7 @@ export async function runSubsetAnalyzerJob(
          re-sent once (its decisions, re-mints and ledger have no other writer). */
       if (persistUnsentPatch) await resendCachePatch(manuscriptId, persistUnsentPatch);
       if (persistLockTimeout !== undefined) throw persistLockTimeout;
+      if (persistWriteError !== undefined) throw persistWriteError;
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. Mirrors main. */
       if (staleBookDirError !== undefined) throw staleBookDirError;

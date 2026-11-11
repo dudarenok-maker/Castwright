@@ -9857,12 +9857,13 @@ describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
       expect(r.after.confirmReached).toBeUndefined();
     }, 60_000);
 
-    it('still false after a persist block that swallowed the state.json error', async () => {
+    it('still false after a persist block whose state.json write failed', async () => {
       const book = makeBook('flags-swallowed', one);
       await saveAnalysisCache(book.manuscriptId, { version: 2, stage1: stage1For(one), chapterCast: { 1: roster() }, chapters: {} });
       (globalThis as Record<string, unknown>).__analysis_test_state_write_throws = true;
       const r = await run(book);
-      expect(endings(r.events)).toEqual(['result']);
+      /* #4031 R48 — the failed terminal record ends the job in an error (was `result`). */
+      expect(endings(r.events)).toEqual(['error:unknown']);
       expect(r.after.takesPersisted).toBe(false);
       expect(r.after.confirmReached).toBeUndefined();
     }, 60_000);
