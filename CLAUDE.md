@@ -729,7 +729,7 @@ Design rationale:
   `cast-design`'s job) whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-four call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-five call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -738,14 +738,18 @@ Design rationale:
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
   `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
-  `cast-merge`, `voice-match`),
+  `cast-merge`, `voice-match`, `failure-taxonomy` (the persist-failure
+  sentence of `AnalysisPersistError`)),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the
   merge-accept route's outer catch and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since
   plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  `detail` blob (that blob renders in the UI's collapsible), and which also
+  curates an `AnalysisPersistError` (an authoritative persist write that failed
+  for a non-lock reason, parked and rethrown by both jobs, #4031) to a fixed
+  prefix plus the `requestFailureMessageFs` sentence, again with no `detail`. A separate,
   lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
   leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
   so the seams above still recognise it. The raw error goes
