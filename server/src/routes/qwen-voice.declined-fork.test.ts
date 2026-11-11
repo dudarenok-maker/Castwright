@@ -383,6 +383,20 @@ describe('#3992 — emotion variants stay off the earlier book', () => {
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt')).equals(VAR_BYTES)).toBe(true);
     expect(readFileSync(join(qwenDir(), 'qwen-v_wren.pt')).toString()).toBe('LEGACY-BASE');
   });
+
+  it('#F10b: a separation copy names its own key in the copied base json', async () => {
+    seedVariant({});
+    const row = { ...readRow('Book Two') };
+    delete row.voiceUuid;
+    writeFileSync(castPath('Book Two'), JSON.stringify({ characters: [row] }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.pt'), Buffer.from('LEGACY-BASE'));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.json'), JSON.stringify({ voiceId: 'qwen-v_wren', instruct: 'x' }));
+    writeFileSync(join(qwenDir(), 'qwen-v_wren__angry.pt'), VAR_BYTES);
+    expect((await design(() => bookTwoId, { emotion: 'angry' })).status).toBe(200);
+    const fresh = readRow('Book Two').voiceUuid as string;
+    expect(JSON.parse(readFileSync(join(qwenDir(), `qwen-${fresh}.json`), 'utf8')).voiceId).toBe(`qwen-${fresh}`);
+    expect(JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_wren.json'), 'utf8')).voiceId).toBe('qwen-v_wren');
+  });
 });
 
 /* Review pass 1, finding 1 — render never reads the stored variant name:
@@ -829,7 +843,15 @@ describe('#3992 — fork internals', () => {
     const fresh = readRow('Book Two').voiceUuid as string;
     for (const [name, bytes] of Object.entries(family)) {
       const copy = name.replace('u_shared', fresh);
-      expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+      /* the copied json names its own key (#F10b); every other byte is the source's */
+      if (name.endsWith('.json')) {
+        expect(JSON.parse(readFileSync(join(qwenDir(), copy), 'utf8'))).toEqual({
+          voiceId: `qwen-${fresh}`,
+          instruct: 'book one',
+        });
+      } else {
+        expect(readFileSync(join(qwenDir(), copy)).equals(bytes)).toBe(true);
+      }
     }
     expect(existsSync(join(qwenDir(), `qwen-${fresh}__angry.pt`))).toBe(false);
     for (const [name, bytes] of Object.entries(family)) {

@@ -653,6 +653,38 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
     expect(res.body.voiceId).toBe('qwen-nopersona__angry');
   });
 
+  it('#F4: the base persona is read from the uuid-keyed json, by derived key and by the slot name', async () => {
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    const row = cast.characters.find((c: { id: string }) => c.id === 'nopersona');
+    row.voiceUuid = 'uuidAAA';
+    writeFileSync(castPath, JSON.stringify(cast));
+    writeQwenSidecar('qwen-uuidAAA', 'a gruff old sailor');
+    const derived = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(derived.status).toBe(200);
+    row.overrideTtsVoices = { qwen: { name: 'qwen-uuidAAA' } };
+    writeFileSync(castPath, JSON.stringify(cast));
+    const slotted = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'sad' });
+    expect(slotted.status).toBe(200);
+  });
+
+  it('#F4: an unreadable base json answers a retryable 500, not "No persona"', async () => {
+    const dir = join(workspaceRoot, 'voices', 'qwen');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'qwen-nopersona.json'), '{ "instruct": ');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    errSpy.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again/);
+  });
+
   it('#F4: a variant still 400s when no persona exists anywhere', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
@@ -1007,6 +1039,39 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     const evictCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/qwen/evict-voice'));
     expect(evictCall).toBeTruthy();
     expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_maerin');
+  });
+
+  it('#F10b: promote-voice records the real key, not the preview key, in the moved json', async () => {
+    stagedPreviewArtifacts(PREVIEW);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    const landed = JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_maerin.json'), 'utf8'));
+    expect(landed.voiceId).toBe('qwen-v_maerin');
+  });
+
+  it('#F10b: a first design lands with the voiceUuid the row ended up on, not the null the sidecar saw', async () => {
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    const row = cast.characters.find((c: { id: string }) => c.id === 'nopersona');
+    row.voiceStyle = 'a gruff old sailor';
+    writeFileSync(castPath, JSON.stringify(cast));
+    fetchMock.mockImplementationOnce(async (_url: unknown, init: { body: string }) => {
+      const sent = JSON.parse(init.body);
+      const dir = join(workspaceRoot, 'voices', 'qwen');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${sent.voiceId}.json`), JSON.stringify({ voiceId: sent.voiceId, voiceUuid: null, instruct: 'x' }));
+      return okSidecarResponse();
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    expect(res.body.voiceUuid).toBeTruthy();
+    const landed = JSON.parse(readFileSync(join(workspaceRoot, 'voices', 'qwen', `${res.body.voiceId}.json`), 'utf8'));
+    expect(landed.voiceUuid).toBe(res.body.voiceUuid);
+    expect(landed.voiceId).toBe(res.body.voiceId);
   });
 
   it('promote-voice renames the preview’s retained reference clip onto the real key (fix wave, §2.3 consent gap)', async () => {

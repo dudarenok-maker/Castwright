@@ -4108,6 +4108,26 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     );
   });
 
+  it('#F10b: redesign/promote records the live key, not the preview key, in the promoted json', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
+    const { writeFileSync: wf } = await import('node:fs');
+    mkdirSync(join(dir, 'voices', 'qwen'), { recursive: true });
+    await vl.writeEntry(
+      makeEntry({
+        voiceUuid: 'promo-id',
+        provenance: 'designed',
+        persona: 'p',
+        engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      }),
+    );
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-id'), 'LIVE');
+    wf(qwenVoice.qwenVoicePtPath('qwen-promo-id-preview'), 'PREVIEW');
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-id-preview'), JSON.stringify({ voiceId: 'qwen-promo-id-preview', instruct: 'new' }));
+    const res = await request(app).post('/api/voice-library/promo-id/redesign/promote').send({});
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(paths.qwenVoiceSidecarPath('qwen-promo-id'), 'utf8')).voiceId).toBe('qwen-promo-id');
+  });
+
   it('redesign/promote never leaves the live .pt or .json absent mid-swap (#4040)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(okSidecarResponse());
     const { writeFileSync: wf } = await import('node:fs');
@@ -4428,6 +4448,21 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
 
     const onDisk = await vl.readEntry(entry.voiceUuid);
     expect(onDisk?.engines.qwen?.status).toBe('ready');
+  });
+
+  it('#F10b: the promoted copy names its own key in its json voiceId', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-char-v'), 'PT');
+    writeFileSync(paths.qwenVoiceSidecarPath('qwen-char-v'), JSON.stringify({ voiceId: 'qwen-char-v', instruct: 'x' }));
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-v', [
+      { id: 'char-v', name: 'V', voiceUuid: 'char-v', voiceStyle: 'x' },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-v', characterId: 'char-v', name: 'V' });
+    expect(res.status).toBe(201);
+    const key = `qwen-${res.body.voiceUuid}`;
+    expect(JSON.parse(readFileSync(paths.qwenVoiceSidecarPath(key), 'utf8')).voiceId).toBe(key);
   });
 
   it('never modifies the origin character or cast.json (byte-identical before/after)', async () => {
