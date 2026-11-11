@@ -160,6 +160,21 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   };
 });
 
+/* Passthrough; a test may make the next `updateStateAtDir` throw (`failNext`, one-shot). */
+const stateSpy = vi.hoisted(() => ({ failNext: undefined as undefined | Error }));
+vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-state-update.js')>();
+  return {
+    ...actual,
+    updateStateAtDir: async (...a: Parameters<typeof actual.updateStateAtDir>) => {
+      const err = stateSpy.failNext;
+      stateSpy.failNext = undefined;
+      if (err) throw err;
+      return actual.updateStateAtDir(...a);
+    },
+  };
+});
+
 const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
   detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
   setLastKnownAnalyzerDeviceMock: vi.fn(),
@@ -3007,6 +3022,33 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(linesById(b.bookDir)).toMatchObject({ anna: 3, narrator: 0 });
       expect(history(b).supersededBy).toEqual({});
       expect(readSuggestions(b.bookDir)).toEqual([]);
+    });
+
+  /* Main-only (one line, R18): Start fresh is a main-job request. */
+  if (kind === 'main')
+    it('P2-3 (b): a Start fresh that throws after clearing the cache keeps the carried ledger, and the next one still drops the row', async () => {
+      const b = seed([{ ...NARR }, pr('anna', 'Anna')]);
+      const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+      setPhase1Hook(abortAtFirstPhase1());
+      await go(b, { roster: [NARR, fr('anna', 'Anna'), boris], speakerId: 'anna' });
+      setPhase1Hook(undefined);
+      const entry = readCache(b.manuscriptId)?.addedRows?.boris;
+      expect((entry as { state?: string } | undefined)?.state).toBe('run-owned');
+      /* A fault after the clear: the un-confirm's state.json write (a lock timeout, say). */
+      stateSpy.failNext = new Error('EBUSY: resource busy or locked (simulated state.json fault)');
+      try {
+        const failed = await runStartFresh(b, { roster: [NARR, fr('anna', 'Anna')], speakerId: 'anna' });
+        expect(failed.some((e) => e.kind === 'error')).toBe(true);
+      } finally {
+        stateSpy.failNext = undefined;
+      }
+      expect(readCache(b.manuscriptId)?.addedRows?.boris).toEqual(entry);
+      /* The retried Start fresh still knows boris as the stopped run's own and drops him. */
+      const events = await runStartFresh(b, { roster: [NARR, fr('anna', 'Anna')], speakerId: 'anna' });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator']);
+      expect(editLines(b)).toEqual({ anna: 3 });
     });
 
   /* PR #4103 pass 2 P2-3 (a): the stopped leg runs through either job; Start fresh is the main job's. */
