@@ -175,6 +175,7 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === a.payload);
       if (c) {
         c.matchedFrom = undefined;
+        c.matchFactors = undefined;
         /* Declining a link never drops a lock/tune the user set (#3842). */
         if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
       }
@@ -659,6 +660,8 @@ export const castSlice = createSlice({
       if (!c) return;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
         c.matchedFrom = matchedFrom;
+        /* the factors belonged to the previous candidate */
+        c.matchFactors = undefined;
         c.voiceId = voiceId ?? c.voiceId;
         c.voiceState = 'reused';
       }
