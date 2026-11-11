@@ -3093,16 +3093,19 @@ export interface paths {
          *     source with none, and the target's profile fills the source's gaps.
          *
          *     A link to a book the character had declined ("Don't reuse") clears that
-         *     decline. #4095 / review pass 1 — when it clears a decline, or links a
-         *     character to the book it already links to while it plays a voice of its own
+         *     decline. #4095 / review passes 1-2 — when it clears a decline, or links a
+         *     character to the book it already links to (the same character, or another
+         *     one of that book) while no book outside the target's holds its voice
          *     (designed before its book's cast was confirmed), the character moves onto
          *     the target's voice: its `voiceUuid` (none when the target has none) and its
          *     qwen slot, variants included, together with the same-book characters on its
-         *     voice and the characters in other books that follow it. Not for a locked or
-         *     tuned character, nor across a cloned voice on either side. If the
-         *     followers changed between the plan and the locked step, or a book that may
-         *     hold one cannot be read, the request answers 500 with a retry sentence and
-         *     writes nothing.
+         *     voice. Clearing a decline also moves the characters in other books that
+         *     follow it; the other case writes the character and its same-book siblings
+         *     only, never a follower and never a character of the target book. Not for a
+         *     locked or tuned character, nor across a cloned voice on either side. If the
+         *     followers of a cleared decline changed between the plan and the locked step,
+         *     or a book that may hold one cannot be read, the request answers 500 with a
+         *     retry sentence and writes nothing.
          */
         post: operations["linkPriorCharacter"];
         delete?: never;

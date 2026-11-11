@@ -273,6 +273,10 @@ export interface VoiceScan {
   followers: LinkFollower[];
   /** A row in another readable book that is NOT a follower holds X's voice. */
   heldElsewhere: boolean;
+  /** Review pass 2 — `heldElsewhere` leaving out the books X declines (the decline's
+      `fromBookId` and X's `declinedVoiceFrom`): a hand relink to a book treats the
+      voice that book holds as the link's own, not as another holder. */
+  heldBeyondDeclined?: boolean;
   /** Readable bookIds with a row on X's voice that is NOT a follower. */
   holderBookIds: Set<string>;
   /** Folders of the other books that could not be read (anything could be in them). */
@@ -335,14 +339,16 @@ export async function scanVoiceHolders(
   const followed = new Set(followers.map((f) => rowKey(f.dir, f.characterId)));
   const holderBookIds = new Set<string>();
   let heldElsewhere = false;
+  let heldBeyondDeclined = false;
   for (const b of books) {
     for (const y of b.rows) {
       if (!holds(y) || followed.has(rowKey(b.dir, y.id))) continue;
       heldElsewhere = true;
+      if (!(b.bookId && declined.has(b.bookId))) heldBeyondDeclined = true;
       if (b.bookId) holderBookIds.add(b.bookId);
     }
   }
-  return { followers, heldElsewhere, holderBookIds, unreadableDirs, chainUnreadable, stranded };
+  return { followers, heldElsewhere, heldBeyondDeclined, holderBookIds, unreadableDirs, chainUnreadable, stranded };
 }
 
 /* PR #4007 pass 11 (owner decision: share a first design) — the bookIds of the

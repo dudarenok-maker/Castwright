@@ -461,3 +461,190 @@ describe('#4072 — two concurrent base mints of one legacy series link end on o
     expect(row('Book Three').voiceUuid).not.toBe(shared);
   });
 });
+
+/* Review pass 2, blocker — the isolation of an unconfirmed row moves ONLY the
+   designing book's rows. A later book that follows it (a confirmed Book Three
+   linked to the unconfirmed Book Two) was carried onto the new uuid with it,
+   losing its variant takes and playing a design nobody confirmed. */
+describe('F8 (review pass 2) — isolating an unconfirmed row writes no other book', () => {
+  const oneUuidFiles = () => ({
+    base: readFileSync(pt('qwen-u1')),
+    angry: readFileSync(pt('qwen-u1__angry')),
+  });
+  /* Book One confirmed on u1 (with an angry take); Book Two re-analysed (unconfirmed)
+     and re-stamped onto u1 by the linker; Book Three confirmed and linked to Two. */
+  function seedFollowed() {
+    seedUuidDesigned();
+    const s = { overrideTtsVoices: { qwen: { name: 'qwen-u1', variants: { angry: { name: 'qwen-u1__angry' } } } } };
+    writeBook('Book Two', [{ ...legacy, voiceUuid: 'u1', voiceState: 'reused', ...linkTo('Book One'), ...s }], false);
+    writeBook('Book Three', [{ ...legacy, voiceUuid: 'u1', voiceState: 'reused', ...linkTo('Book Two'), ...s }], true);
+  }
+  const bytes = (t: Title) => readFileSync(castPath(t), 'utf8');
+
+  it('a BASE design: Book Two moves onto its own uuid; Book Three cast.json, the key and its takes are byte-identical', async () => {
+    seedFollowed();
+    const before = { one: bytes('Book One'), three: bytes('Book Three'), files: oneUuidFiles() };
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const own = row('Book Two').voiceUuid as string;
+    expect(own).not.toBe('u1');
+    expect(res.body.voiceId).toBe(`qwen-${own}`);
+    expect(bytes('Book Three')).toBe(before.three);
+    expect(bytes('Book One')).toBe(before.one);
+    expect(row('Book Three').voiceUuid).toBe('u1');
+    expect(oneUuidFiles()).toEqual(before.files);
+    expect(existsSync(pt(`qwen-${own}`))).toBe(true);
+    /* An isolation records no "Don't reuse" marker (the declined uuid is for a decline). */
+    expect(row('Book Two').declinedVoiceUuids).toBeUndefined();
+    expect(row('Book Two').declinedVoiceFrom).toBeUndefined();
+  });
+
+  it('a VARIANT design: lands on Book Two own key and records its own slot; Book Three is untouched', async () => {
+    seedFollowed();
+    const before = { three: bytes('Book Three'), files: oneUuidFiles() };
+    const res = await design('Book Two', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const own = row('Book Two').voiceUuid as string;
+    expect(own).not.toBe('u1');
+    expect(res.body.voiceId).toBe(`qwen-${own}__angry`);
+    /* The take is recorded in the unconfirmed book itself (the series walk skips an
+       unconfirmed book, so a series-scoped write would lose it). */
+    expect(row('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${own}__angry`);
+    expect(bytes('Book Three')).toBe(before.three);
+    expect(oneUuidFiles()).toEqual(before.files);
+  });
+
+  it('only followers hold the key (no earlier book does): the row still moves off it and the follower is untouched', async () => {
+    seedFollowed();
+    writeBook('Book One', [{ id: 'other', name: 'Other', role: 'supporting', color: 'sky' }]);
+    const three = bytes('Book Three');
+    const files = oneUuidFiles();
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(row('Book Two').voiceUuid).not.toBe('u1');
+    expect(bytes('Book Three')).toBe(three);
+    expect(oneUuidFiles()).toEqual(files);
+  });
+
+  const seedLegacyFollowed = () => {
+    reset();
+    writeFileSync(pt('qwen-v_wren'), LEGACY_PT);
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.json'), '{"instruct":"book one"}');
+    const s = { overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } };
+    writeBook('Book One', [{ ...legacy, ...s }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One'), ...s }], false);
+    writeBook('Book Three', [{ ...legacy, ...linkTo('Book Two'), ...s }], true);
+  };
+
+  it('register step 17 shape (legacy key): Book Three cast.json is not rewritten and its row stays on the legacy key', async () => {
+    seedLegacyFollowed();
+    const three = bytes('Book Three');
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(row('Book Two').voiceUuid).toBeTruthy();
+    expect(bytes('Book Three')).toBe(three);
+    expect(row('Book Three').voiceUuid).toBeUndefined();
+    expect(readFileSync(pt('qwen-v_wren')).equals(LEGACY_PT)).toBe(true);
+  });
+
+  it('legacy key VARIANT: the shared legacy take and Book Three are untouched', async () => {
+    seedLegacyFollowed();
+    const LEGACY_ANGRY = Buffer.from('BOOK-ONE-LEGACY-ANGRY');
+    writeFileSync(pt('qwen-v_wren__angry'), LEGACY_ANGRY);
+    const three = bytes('Book Three');
+    const res = await design('Book Two', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt('qwen-v_wren__angry')).equals(LEGACY_ANGRY)).toBe(true);
+    expect(bytes('Book Three')).toBe(three);
+    expect(row('Book Two').voiceUuid).toBeTruthy();
+  });
+
+  it('P7: a never-linked character base design is not refused because an unrelated book cast.json is torn', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Three', [{ ...legacy, voiceId: 'v_mira' }], false);
+    writeBook('Book Four', [{ id: 'zed', name: 'Zed', role: 'supporting', color: 'sky' }]);
+    writeFileSync(castPath('Book Four'), '{"characters":[');
+    const res = await design('Book Three');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(row('Book Three').voiceUuid).toBeTruthy();
+  });
+
+  it('P7b: the row IS held elsewhere and an unrelated same-series book is torn: it still moves onto its own uuid', async () => {
+    seedUuidDesigned();
+    writeBook('Book Four', [{ id: 'zed', name: 'Zed', role: 'supporting', color: 'sky' }]);
+    writeFileSync(castPath('Book Four'), '{"characters":[');
+    const res = await design('Book Three');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(row('Book Three').voiceUuid).not.toBe('u1');
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+  });
+
+  it('a book-op held on another book does not stall an unconfirmed design (it locks and writes only its own book)', async () => {
+    /* Book Three already has a uuid of its own, never designed; Book One has a legacy
+       row on the same voiceId (a book a first design would share with, if it shared). */
+    seedNeverDesigned(false);
+    const three = JSON.parse(readFileSync(castPath('Book Three'), 'utf8'));
+    three.characters[0].voiceUuid = 'u3';
+    writeFileSync(castPath('Book Three'), JSON.stringify(three));
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    const holder = withBookOp(ids['Book One'], async () => {
+      entered();
+      await held;
+    });
+    await inside;
+    try {
+      const res = await Promise.race([
+        design('Book Three'),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('the design waited on another book')), 3000)),
+      ]);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    } finally {
+      release();
+      await holder;
+    }
+  });
+});
+
+/* Review pass 2 — a preview alone changes nothing; the isolation happens when the
+   design is kept. */
+describe('F8 (review pass 2) — Design & compare isolates only when kept', () => {
+  it('a preview then Cancel leaves the row on the series uuid with its variants', async () => {
+    seedUuidDesigned();
+    const three = readFileSync(castPath('Book Three'), 'utf8');
+    const prev = await design('Book Three', { preview: true });
+    expect(prev.status, JSON.stringify(prev.body)).toBe(200);
+    expect(row('Book Three').voiceUuid).toBe('u1');
+    expect(row('Book Three').overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u1__angry');
+    const cancel = await request(app)
+      .post(`/api/books/${ids['Book Three']}/cast/wren/discard-voice`)
+      .send({ previewVoiceId: prev.body.voiceId, sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+    expect(cancel.status).toBe(200);
+    expect(readFileSync(castPath('Book Three'), 'utf8')).toBe(three);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+  });
+
+  it('a preview then Keep moves the row onto its own uuid carrying the previewed design; the series voice is unchanged', async () => {
+    seedUuidDesigned();
+    const prev = await design('Book Three', { preview: true });
+    expect(prev.status, JSON.stringify(prev.body)).toBe(200);
+    const previewed = readFileSync(pt(prev.body.voiceId));
+    const one = readFileSync(castPath('Book One'), 'utf8');
+    const two = readFileSync(castPath('Book Two'), 'utf8');
+    const keep = await promote('Book Three', prev.body.voiceId);
+    expect(keep.status, JSON.stringify(keep.body)).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).not.toBe('u1');
+    expect(keep.body.voiceId).toBe(`qwen-${own}`);
+    expect(readFileSync(pt(`qwen-${own}`)).equals(previewed)).toBe(true);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(pt('qwen-u1__angry')).equals(BOOK_ONE_ANGRY)).toBe(true);
+    expect(row('Book Three').overrideTtsVoices.qwen.variants).toBeUndefined();
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(one);
+    expect(readFileSync(castPath('Book Two'), 'utf8')).toBe(two);
+  });
+});

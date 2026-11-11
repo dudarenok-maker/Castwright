@@ -40,7 +40,7 @@ import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
-import { holdsUuid, RetryableForkError, scanVoiceHolders, type LinkFollower } from '../workspace/voice-uuid-fork.js';
+import { holdsUuid, RetryableForkError, scanVoiceHolders, voiceHeldBy, type LinkFollower } from '../workspace/voice-uuid-fork.js';
 
 export const castLinkPriorRouter = Router();
 
@@ -270,13 +270,16 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     const sourceUuid = source.voiceUuid ?? undefined;
     /* Owner decision (review pass 1, (b)): nothing is restamped at Confirm, so a
        row designed before its book's cast was confirmed keeps its own voice while
-       still linked; a hand relink to the book it links to moves it onto that
-       book's voice the same way. A library-assigned slot is a deliberate pick and
-       stays. */
+       still linked; a hand relink to the book it links to moves it onto the target
+       character's voice the same way (also when it is re-pointed to another
+       character of that book). A library-assigned slot is a deliberate pick and
+       stays. Review pass 2: only that row (and its same-book siblings) changes,
+       and only while no book outside the target's holds its voice: none of the
+       target book's rows, and no follower, is written by this arm. */
     const linkedToTarget =
       (source as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId === targetBookId &&
       !source.overrideTtsVoices?.qwen?.libraryUuid;
-    const adopt =
+    const wantsAdopt =
       (declineCleared || linkedToTarget) &&
       !keepSourceVoice &&
       !sourceIsCloned &&
@@ -293,8 +296,10 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
       return next;
     };
     let followers: LinkFollower[] = [];
-    if (adopt && sourceUuid) {
-      const scan = await scanVoiceHolders(sourceLocated.bookDir, source, holdsUuid(sourceUuid));
+    /* Decided inside the locks, on a fresh scan that leaves the target book out. */
+    const scan = wantsAdopt ? await scanVoiceHolders(sourceLocated.bookDir, source, voiceHeldBy(source), targetBookId) : undefined;
+    const adopt = wantsAdopt && (declineCleared || !scan?.heldBeyondDeclined);
+    if (adopt && declineCleared && sourceUuid && scan) {
       const key = (fs: LinkFollower[]) => fs.map((f) => `${f.bookId}|${f.characterId}`).sort().join('\n');
       const locked = new Set(books.map((b) => b.bookId));
       /* A follower set other than the planned one is not what the locks were taken
@@ -447,9 +452,8 @@ async function planRelinkFollowers(
       | (PersistedCharacter & { declinedVoiceFrom?: string[]; declinedVoiceUuids?: string[] })
       | undefined;
     if (!source?.voiceUuid) return [];
-    const linked = (source as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId === targetBookId;
-    if (!linked && !source.declinedVoiceFrom?.includes(targetBookId) && !source.declinedVoiceUuids?.length) return [];
-    return (await scanVoiceHolders(peeked.bookDir, source, holdsUuid(source.voiceUuid))).followers;
+    if (!source.declinedVoiceFrom?.includes(targetBookId) && !source.declinedVoiceUuids?.length) return [];
+    return (await scanVoiceHolders(peeked.bookDir, source, holdsUuid(source.voiceUuid), targetBookId)).followers;
   } catch {
     return [];
   }

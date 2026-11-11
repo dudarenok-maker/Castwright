@@ -892,3 +892,123 @@ describe('cast/link-prior clears the marker for the book it links to', () => {
     expect(readRows('Book Two')[0].overrideTtsVoices.qwen.name).toBe('qwen-u_two');
   });
 });
+
+/* Review pass 2 — a hand relink of a row that is merely LINKED to the target book
+   (no decline) changes that row (and its same-book siblings) only: no other book's
+   row, the target book's own rows included. */
+describe('cast/link-prior of a linked row (review pass 2)', () => {
+  const linkTo2 = (t: Title, characterId: string) => ({ matchedFrom: { bookId: ids[t], characterId, bookTitle: t, confidence: 1 } });
+  const ash = (extra: Record<string, unknown> = {}) => ({ id: 'ash', name: 'Ash', role: 'supporting', color: 'sky', voiceId: 'v_ash', ...extra });
+  const linkAsh = () =>
+    request(app).post(`/api/books/${twoId}/cast/link-prior`).send({ sourceCharacterId: 'wren', targetBookId: oneId, targetCharacterId: 'ash' });
+  const linkWren = () =>
+    request(app).post(`/api/books/${twoId}/cast/link-prior`).send({ sourceCharacterId: 'wren', targetBookId: oneId, targetCharacterId: 'wren' });
+  const rowOf = (t: Title, id: string) => readRows(t).find((r) => r.id === id)!;
+
+  it('P1: a Confirm back-edge (Book One Wren links to Two) does not make Book One own Wren follow Two onto Ash voice', async () => {
+    book('Book One', [
+      wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']), ...linkTo2('Book Two', 'wren') }),
+      ash({ voiceUuid: 'u_ash', ...slot('u_ash') }),
+    ]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    const oneWren = rowOf('Book One', 'wren');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book One', 'wren')).toEqual(oneWren); // its angry slot included
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+  });
+
+  it('P2 and the re-point: Two moves onto Ash voice and slot; Book Three (linked to Two) and Book One rows are untouched', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']) }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    book('Book Three', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book Two'), ...slot('u_wren', ['angry']) })]);
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    const oneWren = rowOf('Book One', 'wren');
+    const oneAsh = rowOf('Book One', 'ash');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(three);
+    expect(rowOf('Book One', 'wren')).toEqual(oneWren);
+    expect(rowOf('Book One', 'ash').voiceUuid).toBe(oneAsh.voiceUuid);
+    expect(rowOf('Book One', 'ash').overrideTtsVoices).toEqual(oneAsh.overrideTtsVoices);
+    const two = rowOf('Book Two', 'wren');
+    expect(two.voiceUuid).toBe('u_ash');
+    expect(two.overrideTtsVoices.qwen).toEqual(oneAsh.overrideTtsVoices.qwen);
+    expect(res.body.matchedFrom.characterId).toBe('ash');
+    expect(res.body.voice.voiceUuid).toBe('u_ash');
+  });
+
+  it('a row that designed its own voice and is re-pointed to another character of the book adopts that character voice', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_own', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_own', ['angry']) })]);
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const two = rowOf('Book Two', 'wren');
+    expect(two.voiceUuid).toBe('u_ash');
+    expect(two.overrideTtsVoices.qwen.variants.sad.name).toBe('qwen-u_ash__sad');
+  });
+
+  it('another book that is not in the chain holds the voice: the row is not on a voice of its own, so the link adopts nothing', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash') })]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') })]);
+    const four = readFileSync(castFile('Book Four'), 'utf8');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_wren');
+    expect(res.body.voice).toBeUndefined();
+    expect(readFileSync(castFile('Book Four'), 'utf8')).toBe(four);
+  });
+
+  it('a library-assigned slot is a deliberate pick: a relink to the book it links to keeps it', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_one', ...slot('u_one') })]);
+    const lib = { overrideTtsVoices: { qwen: { name: 'qwen-lib_1', libraryUuid: 'lib_1' } } };
+    book('Book Two', [wren({ voiceUuid: 'u_two', voiceState: 'reused', ...linkTo('Book One'), ...lib })]);
+    const res = await linkWren();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_two');
+    expect(rowOf('Book Two', 'wren').overrideTtsVoices).toEqual(lib.overrideTtsVoices);
+    expect(res.body.voice).toBeUndefined();
+  });
+
+  it('a relink that clears a decline refuses while a book of the chain cannot be read, and writes nothing', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    book('Book Four', []);
+    writeFileSync(castFile('Book Four'), '{"characters":[');
+    const oneBefore = readFileSync(castFile('Book One'), 'utf8');
+    const twoBefore = readFileSync(castFile('Book Two'), 'utf8');
+    const threeBefore = readFileSync(castFile('Book Three'), 'utf8');
+    const res = await linkWren();
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book One'), 'utf8')).toBe(oneBefore);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe(twoBefore);
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(threeBefore);
+  });
+});
+
+/* Review pass 2 — P4: a repeat "Don't reuse" refuses while a book of the chain it
+   would carry cannot be read. */
+describe('a repeat decline with an unreadable chain member', () => {
+  it('Book Four (two links down, left behind) unreadable: "try again.", and Book Three is not carried alone', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_new', voiceState: 'generated', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], ...slot('u_new') })]);
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared', ['angry']) })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three'), ...slot('u_shared', ['angry']) })]);
+    writeFamily();
+    const four = readFileSync(castFile('Book Four'), 'utf8');
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    writeFileSync(castFile('Book Four'), '{"characters":[');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(three);
+    writeFileSync(castFile('Book Four'), four);
+    const retry = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(retry.status).toBe(200);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
+    expect(readRows('Book Four')[0].voiceUuid).toBe('u_new');
+  });
+});
