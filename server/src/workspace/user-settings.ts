@@ -1088,8 +1088,8 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
          one not yet swept counts only if it can explain the absence, below.)
      I3  A crash mid-write that THIS PROCESS CAN ATTRIBUTE is recovered from
          backup at most once, then main is rewritten. Attributable means a live
-         marker (a write may be between its renames now: serve the backup,
-         write nothing), a marker this process kept after its own failed write,
+         marker (a write may be between its renames now: the read waits for it, bounded; a rename-in that lands
+         meanwhile is served from main, else it serves the backup and writes nothing), a marker this process kept after its own failed write,
          or a dead marker NEWER than this process's last sighting of a present
          main (`mainSeenAt`). A stranded recovery whose markers are all dead
          writes the recovered settings back to main and drops the markers; one
@@ -1246,7 +1246,8 @@ async function performUserSettingsRead(): Promise<UserSettings> {
         /* I3: every marker is dead (no live writer can rename-in over us), so
            write the recovered settings back to main - the recovery happens
            once - and that write sweeps the dead markers. A live marker is a
-           sibling mid-write: serve the backup, write nothing under it. Main
+           sibling mid-write: the read already waited for it (bounded), so serve
+           the backup, write nothing under it. Main
            reappearing, or a write of ours completing, while the backup was read
            means a writer finished: never write the backup over it (I1). */
         if (
