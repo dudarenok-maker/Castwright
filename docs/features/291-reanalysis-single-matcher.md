@@ -391,10 +391,15 @@ snapshot.
     history, name or surname; otherwise it is a `new` row under its bucket id. An existing
     `unknown-* -> X` user entry (a user merge of an old bucket) is the user's record: ignored for
     matching and not displaced when the bucket comes back live. Merging a bucket into a character
-    stays allowed (a per-book reassignment); it no longer leaks into later runs.
+    stays allowed (a per-book reassignment); it no longer leaks into later runs. The merge route
+    deletes a bucket source's cached plan decisions instead of re-targeting them, and the persist
+    counts a bucket row as covered only by a decision that outputs its own id (PR #4103 pass 2 P2-1).
 21. **R50 — Start fresh carries the run ledger** (PR #4103 pass 1 F2). `addedRows` and
     `runAddedPairs` survive the cache clear, so the rows a stopped run added stay droppable by the
-    next run (rule 11). Everything else Start fresh discards is still discarded.
+    next run (rule 11). Everything else Start fresh discards is still discarded. The carry is
+    written straight after the clear, before any step that can throw, and the main job's fold
+    does not protect a joined row whose entry is `run-owned` with an unchanged fingerprint, so a
+    one-off the next run hears again folds as a fresh row would (PR #4103 pass 2 P2-3).
 
 ---
 
