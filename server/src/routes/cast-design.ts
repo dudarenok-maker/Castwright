@@ -56,6 +56,7 @@ import {
   designQwenVoiceForCharacter,
   hasDeclineMarker,
   persistEmotionVariant,
+  resolveVariantPersona,
   seriesClonedOnRowsVoice,
 } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
@@ -570,7 +571,17 @@ async function runDesignJob(
          that card inside `withGpuLoad`, the exact plan-108 OOM this pre-pass was built to
          prevent. Skip without retrying — and without a second `character_failed` when the
          pre-pass already recorded one. */
-      let persona = (character.voiceStyle ?? '').trim();
+      let persona: string;
+      try {
+        /* A variant is designed from its base's persona: when the row records none,
+           the one the base design stored (same helper as the single route). */
+        persona = await resolveVariantPersona(character as CastCharacter, characterId, '', emotion);
+      } catch (e) {
+        const message = (e as Error).message || 'Persona unavailable.';
+        job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+        broadcast(job, { type: 'character_failed', characterId, name: character.name ?? characterId, errorReason: message });
+        continue;
+      }
       if (!persona) {
         if (sharesGpu) {
           /* Skip — the pre-pass owns shared-GPU persona-gen; retrying here while VoiceDesign loads
