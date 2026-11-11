@@ -385,6 +385,16 @@ snapshot.
     write, so a row the run added stays fold-droppable. On the normal path the dismiss route's own
     edge write changes the fingerprint and the row is kept (`added-once`). Rare; known consequence
     of the heal refreshing the ledger (carry 4), accepted (Tasks 26/27).
+20. **R49 — a fold bucket settles by its own id only** (PR #4103 pass 1 O1; overturns the earlier ruling, R45 in the run ledger, that let a bucket
+    name-match a same-named character). A fresh
+    `unknown-male` / `unknown-female` row joins only a live prior row with its own id, never by
+    history, name or surname; otherwise it is a `new` row under its bucket id. An existing
+    `unknown-* -> X` user entry (a user merge of an old bucket) is the user's record: ignored for
+    matching and not displaced when the bucket comes back live. Merging a bucket into a character
+    stays allowed (a per-book reassignment); it no longer leaks into later runs.
+21. **R50 — Start fresh carries the run ledger** (PR #4103 pass 1 F2). `addedRows` and
+    `runAddedPairs` survive the cache clear, so the rows a stopped run added stay droppable by the
+    next run (rule 11). Everything else Start fresh discards is still discarded.
 
 ---
 
@@ -1769,7 +1779,7 @@ chapter splitting, and the fe-11 class (tabs that missed the run). `remapCjkHono
 
 Shipped date and merge SHA: (filled in on merge, when this plan moves to `archive/`).
 
-- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4) are
+- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50) are
   recorded under *Spec conflicts found* above; the spec's acceptance 14, 20 and 24 and its
   "New UI" non-goal are amended to match.
 - On-box acceptance owed: one Group B row (B109) in `docs/testing/onbox-acceptance-register.md`
