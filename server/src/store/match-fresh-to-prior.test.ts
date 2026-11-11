@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { matchFreshToPrior, extendPlan, buildReservedIds, mintId } from './match-fresh-to-prior.js';
+import { applyMatchPlan } from './plan-overlay.js';
 import type {
   FreshRow,
   MatchDecision,
@@ -402,6 +403,66 @@ describe('matchFreshToPrior', () => {
     );
     expect(fresh_(pl.decisions['x']).suggest).toEqual([]);
     expect(fresh_(pl.decisions['y']).suggest).toEqual([]);
+  });
+
+  describe('R49: a fresh catch-all row joins only its own live id (PR #4103 pass 1 O1)', () => {
+    const vane = p('lord-vane', 'Lord Vane', { voiceState: 'locked' });
+    const merged = hist({ supersededBy: { 'unknown-male': 'lord-vane' }, supersededByKind: { 'unknown-male': 'user' } });
+
+    it('a user merge of the bucket into a character is not followed: the bucket stays its own new row', () => {
+      const pl = plan([f('unknown-male', 'Unknown male')], [p('narrator', 'Narrator'), vane], { history: merged });
+      expect(pl.decisions['unknown-male']).toEqual({
+        kind: 'new',
+        rawId: 'unknown-male',
+        id: 'unknown-male',
+        minted: false,
+        suggest: [],
+        inheritedDeclines: [],
+      });
+    });
+
+    it('extendPlan (the persist path): the same, and the character gains no "Unknown male" alias', () => {
+      const prior = [p('narrator', 'Narrator'), vane];
+      const first = plan([f('narrator', 'Narrator')], prior, { history: merged });
+      const reservedIds = buildReservedIds({ prior, history: merged, plan: first });
+      const ext = extendPlan(first, {
+        fresh: [f('unknown-male', 'Unknown male')],
+        prior,
+        history: merged,
+        openSuggestions: [],
+        reservedIds,
+        runToken: 'two',
+        currentBookId: 'book-1',
+      });
+      expect(fresh_(ext.decisions['unknown-male'])).toMatchObject({ id: 'unknown-male', minted: false });
+      const applied = applyMatchPlan(
+        [{ id: 'unknown-male', name: 'Unknown male' }],
+        { ...ext, decisions: { 'unknown-male': ext.decisions['unknown-male'] } },
+        prior,
+      );
+      expect(applied.idMap).toEqual({});
+      expect(applied.characters).toEqual([{ id: 'unknown-male', name: 'Unknown male' }]);
+    });
+
+    it('a live bucket row with its own id still joins by id', () => {
+      const pl = plan([f('unknown-female', 'Unknown female')], [p('unknown-female', 'Unknown female'), vane]);
+      expect(join(pl.decisions['unknown-female'])).toMatchObject({ priorId: 'unknown-female', tier: 'id' });
+    });
+
+    it('never by name or surname: "Unknown male" vs a prior "Unknown", or a same-named character', () => {
+      const pl = plan(
+        [f('unknown-male', 'Unknown male'), f('unknown-female', 'Unknown female')],
+        [p('unknown', 'Unknown'), p('stranger', 'Unknown female')],
+      );
+      expect(fresh_(pl.decisions['unknown-male'])).toMatchObject({ id: 'unknown-male', suggest: [] });
+      expect(fresh_(pl.decisions['unknown-female'])).toMatchObject({ id: 'unknown-female', suggest: [] });
+    });
+
+    it('a real fresh row still never joins a prior bucket by name or surname', () => {
+      const pl = plan([f('x', 'Unknown male'), f('y', 'Unknown')], [p('unknown-male', 'Unknown male')]);
+      expect(fresh_(pl.decisions['x']).suggest).toEqual([]);
+      expect(fresh_(pl.decisions['y']).suggest).toEqual([]);
+    });
   });
 
   it('two trailing tokens apart never matches', () => {

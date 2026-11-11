@@ -1771,7 +1771,14 @@ async function applyPlannedPersistOutcome(a: {
        lose to it (no tie, no warning). Drop it here, last, so it can't survive past the
        same write cycle that reintroduced the live row. The dropped entries are reported
        so a future banner can flag their segments as needs-your-decision (§4.6, Wave 3). */
-    const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(writeDir, liveIds);
+    /* R49 (PR #4103 pass 1 O1): a live fold bucket does not reclaim its id from a user
+       merge of an old bucket. The matcher ignores that entry (the bucket joins only its
+       own live id), and exact-id-first resolution keeps it inert; it is the user's
+       record, so it is never moved to `displaced`. */
+    const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
+      writeDir,
+      liveIds.filter((id) => id !== MALE_BUCKET_ID && id !== FEMALE_BUCKET_ID),
+    );
     /* #2040 Task 14 review item 2a — operator-visible. The dropped pairs are also
        persisted (item 2b, cast-id-history.ts's `displaced`), so this line is a
        heads-up, not the only record. */

@@ -6,6 +6,7 @@
    Settlement per fresh row (spec "Settlement"):
      T1 by id (live prior id, or a user/heal supersededBy entry to a live
      survivor), T2 exact display name, T3 surname-tolerant display name.
+     The narrator and the catch-all buckets settle by their own id only (R49).
      The highest tier with any candidate decides: one candidate joins, several
      make a `new` row with suggestions (the open-question row excepted), none
      make a plain `new` row. Aliases are never matched. */
@@ -205,6 +206,16 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
       if (target) joinTo(r.id, target.id, target.id === r.id ? 'id' : 'narrator');
       else if (resolveHistory(r.id)) joinTo(r.id, resolveHistory(r.id) as string, 'history');
       else keepAsNew(r.id); // the narrator keeps its id through Phase 1, never minted
+      continue;
+    }
+
+    // R49: a catch-all bucket is a shared slot, not a person. It joins only the
+    // live prior row with its own id; never by history or name, so a user merge
+    // of an old bucket into a character never pulls later folded lines onto it.
+    // That history entry is the user's record and stays, ignored here.
+    if (isCatchAllId(r.id)) {
+      if (priorById.has(r.id)) joinTo(r.id, r.id, 'id');
+      else keepAsNew(r.id);
       continue;
     }
 

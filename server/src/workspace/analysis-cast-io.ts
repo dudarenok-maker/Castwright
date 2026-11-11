@@ -538,9 +538,14 @@ export async function persistPlannedCast(a: {
       );
     }
 
-    // Sentence ids -> the ids the cast now holds.
+    // Sentence ids -> the ids the cast now holds. A row this write adds is live after
+    // it, so its lines stay on it: a stale history key on its id (a user merge of an
+    // old fold bucket, R49) never moves them (PR #4103 pass 1 O1).
+    const currentIds = new Set(current.map((r) => r.id));
+    const addedNow = new Set(ov.characters.map((c) => c.id).filter((id) => !currentIds.has(id)));
     const toFinal: Record<string, string> = {};
     for (const id of new Set(sentences.map((s) => s.characterId))) {
+      if (addedNow.has(id)) continue;
       const d = isNarratorId(id) ? plan.decisions[id] : undefined;
       const target = d?.kind === 'join' ? resolve(d.priorId) : resolve(id);
       if (target && target !== id) toFinal[id] = target;

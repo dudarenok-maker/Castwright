@@ -2266,6 +2266,37 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
+  it('R49 (PR #4103 pass 1 O1): a user merge of the fold bucket into a character does not pull later folded lines onto it', async () => {
+    const b = mkBook(
+      [{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })],
+      { 'unknown-male': 'lord-vane' },
+      `${NEUTRAL}\n\nThe Jogger waved.`,
+    );
+    books.push(b);
+    /* "The Jogger" is a descriptor name: the fold puts his lines in the male bucket. */
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const events = await go(b, { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') });
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+    expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
+    const vane = readCast(b.bookDir).find((c) => c.id === 'lord-vane')!;
+    expect(vane.aliases ?? []).not.toContain('Unknown male');
+    expect(vane.lines ?? 0).toBe(0);
+    /* The user's merge record is kept: ignored for matching, never displaced. */
+    expect(history(b).supersededBy['unknown-male']).toBe('lord-vane');
+    expect(history(b).displaced?.['unknown-male']).toBeUndefined();
+    expect(readSuggestions(b.bookDir)).toEqual([]);
+    /* A second analysis joins the now-live bucket by id: no minted twin, nothing moves. */
+    await clearAnalysisCache(b.manuscriptId);
+    expect(done(await go(b, { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') }))).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+    expect(history(b).supersededBy['unknown-male']).toBe('lord-vane');
+    expect(history(b).displaced?.['unknown-male']).toBeUndefined();
+  });
+
   it('A1 (0-line variant): a joined row that gets no lines stays a joined row: this run\'s 0 counts and the analyzer alias', async () => {
     const voice = { qwen: { name: 'wren-voice' } };
     const b = seed([
