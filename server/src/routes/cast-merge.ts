@@ -381,14 +381,26 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        last write, so the fields this merge just changed make it read as a user
        edit at the next persist (sticky `added-once`), which is correct.
        `chapterCast` and the raw `stage1` roster are not touched (header). A
-       cache that does not exist is left absent (the op returns null). */
+       cache that does not exist is left absent (the op returns null).
+       A fold bucket source is the exception (R49, PR #4103 pass 2 P2-1): it
+       settles by its own id only, so its decisions are deleted, never
+       re-targeted, and the next persist re-plans it as its own row. A
+       re-targeted `join` would leave the bucket's raw key decided for another
+       id and the persist with an undecided roster row. */
+    const sourceIsBucket = sourceId === MALE_BUCKET_ID || sourceId === FEMALE_BUCKET_ID;
     let cacheTouched = false;
     try {
       const cacheResult = await mutateAnalysisCache(state.manuscriptId, {
         remapCharacterIds: { [sourceId]: targetId },
         ledger: { [sourceId]: null },
-        transform: (c) =>
-          c.matchPlan ? { ...c, matchPlan: retargetPlanForMerge(c.matchPlan, sourceId, targetId) } : c,
+        transform: (c) => {
+          if (!c.matchPlan) return c;
+          if (!sourceIsBucket) return { ...c, matchPlan: retargetPlanForMerge(c.matchPlan, sourceId, targetId) };
+          const decisions = Object.fromEntries(
+            Object.entries(c.matchPlan.decisions).filter(([, d]) => (d.kind === 'join' ? d.priorId : d.id) !== sourceId),
+          );
+          return { ...c, matchPlan: { ...c.matchPlan, decisions } };
+        },
       });
       cacheTouched = cacheResult !== null;
     } catch (cacheErr) {

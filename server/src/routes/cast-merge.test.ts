@@ -1262,6 +1262,33 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
     expect(readCacheFile().matchPlan!.decisions['raw-t']).toEqual(targetDecision);
   });
 
+  it("PR #4103 pass 2 P2-1: merging a fold bucket deletes the bucket's plan decisions instead of re-targeting them", async () => {
+    const tgt = `p21-tgt-${uniq()}`;
+    /* A bucket from an earlier test on this shared book is cleared first. */
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters = cast.characters.filter((c) => c.id !== 'unknown-male');
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    seedRows([row('unknown-male', { name: 'Unknown male' }), row(tgt)]);
+    const other = { kind: 'join', rawId: 'raw-o', priorId: tgt, tier: 'id' };
+    seedCache({
+      chapters: {},
+      matchPlan: {
+        version: 1,
+        runToken: 't1',
+        decisions: {
+          'unknown-male': { kind: 'new', rawId: 'unknown-male', id: 'unknown-male', minted: false, suggest: [], inheritedDeclines: [] },
+          'raw-o': other,
+        },
+      },
+    });
+
+    expect((await merge('unknown-male', tgt)).status).toBe(200);
+
+    /* R49: the bucket settles by its own id only, so the next persist re-plans it; a
+       re-targeted `join -> tgt` would leave its raw key covered and undecided. */
+    expect(readCacheFile().matchPlan!.decisions).toEqual({ 'raw-o': other });
+  });
+
   async function notSamePersonNaming(...ids: string[]): Promise<unknown[]> {
     const { loadCastIdHistory } = await import('../store/cast-id-history.js');
     const h = await loadCastIdHistory(bookDir);

@@ -3523,6 +3523,42 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       });
   });
 
+  /* ---- PR #4103 pass 2 P2-1: a merge of a fold bucket never poisons the cached plan ---- */
+
+  it('P2-1: after the user merges the fold bucket into a character, re-analyses on the cached plan complete and keep the bucket its own', async () => {
+    const b = seed(
+      [{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })],
+      undefined,
+      `${NEUTRAL}\n\nThe Jogger waved.`,
+    );
+    /* "The Jogger" is a descriptor name: the fold puts his lines in the male bucket. */
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') };
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+    expect((await mergeRoute(b, 'unknown-male', 'lord-vane')).status).toBe(200);
+    expect(editLines(b)).toEqual({ anna: 5, 'lord-vane': 4 });
+    /* The merge itself gave the character the bucket's names; the runs below add none. */
+    const mergedAliases = row(b, 'lord-vane')!.aliases;
+    expect(mergedAliases).toEqual(['Unknown male', 'The Jogger']);
+    /* Two re-analyses on the real cache (no clearing): a subset Retry, or a non-fresh main run. */
+    for (const pass of [1, 2]) {
+      const events = await go(b, FRESH, { seedCache: false });
+      expect(errCode(events), `pass ${pass}`).toBeUndefined();
+      expect(done(events), `pass ${pass}`).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+      expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
+      /* The character gains no line (none in the edits above) and no alias from this run. */
+      expect(row(b, 'lord-vane')!.aliases).toEqual(mergedAliases);
+      /* The user's record is kept, ignored for matching, never displaced. */
+      expect(history(b).supersededBy).toEqual({ 'unknown-male': 'lord-vane' });
+      expect(history(b).supersededByKind).toEqual({ 'unknown-male': 'user' });
+      expect((history(b) as { displaced?: Record<string, string> }).displaced?.['unknown-male']).toBeUndefined();
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    }
+  });
+
   /* ---- F2: a run after a main run deletes nothing by the earlier run's ledger ---- */
 
   const entryOf = (b: HarnessBook, id: string): unknown => readCache(b.manuscriptId)?.addedRows?.[id];

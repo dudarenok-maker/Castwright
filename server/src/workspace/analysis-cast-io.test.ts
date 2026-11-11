@@ -499,6 +499,23 @@ describe('persistPlannedCast', () => {
     expect(out.plan.decisions['unknown-male']).toMatchObject({ kind: 'new', id: 'unknown-male' });
   });
 
+  it("PR #4103 pass 2 P2-1: a bucket row whose raw key a merge re-targeted is re-planned under its own id", async () => {
+    writeCast([row('alice', 'Alice'), row('lord-vane', 'Lord Vane')]);
+    writeHistory({ supersededBy: { 'unknown-male': 'lord-vane' }, supersededByKind: { 'unknown-male': 'user' } });
+    const out = await persistPlannedCast(
+      persistArgs({
+        /* What a merge route's re-target left in a cache (before the route stopped doing it). */
+        plan: planOf(join('alice', 'alice'), join('unknown-male', 'lord-vane', 'merge')),
+        roster: roster(row('alice', 'Alice'), row('unknown-male', 'Unknown male')),
+        sentences: sentences('alice', 'unknown-male', 'unknown-male'),
+      }),
+    );
+    expect(ids(readCast()).sort()).toEqual(['alice', 'lord-vane', 'unknown-male']);
+    expect(out.plan.decisions['unknown-male']).toMatchObject({ kind: 'new', id: 'unknown-male' });
+    expect(out.sentences.map((s) => s.characterId)).toEqual(['alice', 'unknown-male', 'unknown-male']);
+    expect(readCast().find((c) => c.id === 'lord-vane')!.aliases ?? []).toEqual([]);
+  });
+
   it('item 11: a bucket id joins a prior bucket row and keeps its name', async () => {
     writeCast([row('unknown-male', 'Minor men'), row('alice', 'Alice')]);
     await persistPlannedCast(

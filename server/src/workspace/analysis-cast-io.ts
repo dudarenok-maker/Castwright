@@ -26,6 +26,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
+import { FEMALE_BUCKET_ID, MALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
@@ -479,12 +480,25 @@ export async function persistPlannedCast(a: {
       history,
     });
     const covered = new Set<string>();
+    const outputs = new Set<string>();
     for (const [raw, d] of Object.entries(re.plan.decisions)) {
       covered.add(raw);
-      covered.add(d.kind === 'join' ? d.priorId : d.id);
+      outputs.add(d.kind === 'join' ? d.priorId : d.id);
     }
-    const uncovered = re.roster.filter((c) => !covered.has(c.id));
+    for (const id of outputs) covered.add(id);
+    // R49 (PR #4103 pass 2 P2-1): a fold bucket is covered only by a decision that outputs
+    // its own id. Its raw key decided for another id (a merge's re-target in an older
+    // cache) is stale, and `extendPlan` re-plans it under its own id.
+    const uncovered = re.roster.filter((c) =>
+      c.id === MALE_BUCKET_ID || c.id === FEMALE_BUCKET_ID ? !outputs.has(c.id) : !covered.has(c.id),
+    );
+    const uncoveredIds = new Set(uncovered.map((c) => c.id));
     let plan = re.plan;
+    if ([...uncoveredIds].some((id) => Object.hasOwn(plan.decisions, id))) {
+      const decisions = { ...plan.decisions };
+      for (const id of uncoveredIds) delete decisions[id];
+      plan = { ...plan, decisions };
+    }
     if (uncovered.length > 0) {
       let openSuggestions: StoredSuggestion[] = [];
       try {
@@ -512,10 +526,10 @@ export async function persistPlannedCast(a: {
        wrong: a joined row's id is a PRIOR id that can also be the raw key of a
        different `new` decision, which would collapse the two rows. */
     const addedDecisions = Object.fromEntries(
-      Object.entries(plan.decisions).filter(([raw]) => !Object.hasOwn(re.plan.decisions, raw)),
+      Object.entries(plan.decisions).filter(([raw]) => uncoveredIds.has(raw)),
     );
     const applied = applyMatchPlan(uncovered, { ...plan, decisions: addedDecisions }, current);
-    const finalRoster = [...re.roster.filter((c) => covered.has(c.id)), ...applied.characters];
+    const finalRoster = [...re.roster.filter((c) => !uncoveredIds.has(c.id)), ...applied.characters];
     const idMap: Record<string, string> = { ...re.idMap, ...applied.idMap };
     let sentences = remapSentenceIds(remapSentenceIds(a.sentences, re.idMap), applied.idMap);
 
