@@ -459,7 +459,9 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
        private staging key; the landing renames the file, so the field must follow. */
     fetchMock.mockImplementationOnce(async (_url: unknown, init: { body: string }) => {
       const sent = JSON.parse(init.body);
-      writeQwenSidecar(sent.voiceId, 'a poised, confident teenage girl');
+      const dir = join(workspaceRoot, 'voices', 'qwen');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${sent.voiceId}.json`), JSON.stringify({ voiceId: sent.voiceId, instruct: 'a poised, confident teenage girl', rev: 'r7', language: 'english' }));
       return okSidecarResponse();
     });
     const res = await request(app)
@@ -471,6 +473,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     );
     expect(landed.voiceId).toBe(res.body.voiceId);
     expect(landed.instruct).toBe('a poised, confident teenage girl');
+    expect(landed).toMatchObject({ rev: 'r7', language: 'english' });
   });
 
   it('400s when sampleVoiceId is missing', async () => {
@@ -670,6 +673,20 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
       .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
       .send({ ...designBody, emotion: 'sad' });
     expect(slotted.status).toBe(200);
+  });
+
+  it('#F4: a library-assigned slot reads the persona from the slot key, not the row own uuid', async () => {
+    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json');
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    const row = cast.characters.find((c: { id: string }) => c.id === 'nopersona');
+    row.voiceUuid = 'ownUuid';
+    row.overrideTtsVoices = { qwen: { name: 'qwen-lib1', libraryUuid: 'lib1' } };
+    writeFileSync(castPath, JSON.stringify(cast));
+    writeQwenSidecar('qwen-lib1', 'a library voice persona');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+    expect(res.status).toBe(200);
   });
 
   it('#F4: an unreadable base json answers a retryable 500, not "No persona"', async () => {
@@ -1043,12 +1060,14 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
 
   it('#F10b: promote-voice records the real key, not the preview key, in the moved json', async () => {
     stagedPreviewArtifacts(PREVIEW);
+    writeFileSync(join(qwenDir(), `${PREVIEW}.json`), JSON.stringify({ voiceId: PREVIEW, instruct: 'x', rev: 'r7', language: 'english' }));
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
       .send({ previewVoiceId: PREVIEW, sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
     expect(res.status).toBe(200);
     const landed = JSON.parse(readFileSync(join(qwenDir(), 'qwen-v_maerin.json'), 'utf8'));
     expect(landed.voiceId).toBe('qwen-v_maerin');
+    expect(landed).toMatchObject({ rev: 'r7', language: 'english' });
   });
 
   it('#F10b: a first design lands with the voiceUuid the row ended up on, not the null the sidecar saw', async () => {
@@ -1061,7 +1080,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
       const sent = JSON.parse(init.body);
       const dir = join(workspaceRoot, 'voices', 'qwen');
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, `${sent.voiceId}.json`), JSON.stringify({ voiceId: sent.voiceId, voiceUuid: null, instruct: 'x' }));
+      writeFileSync(join(dir, `${sent.voiceId}.json`), JSON.stringify({ voiceId: sent.voiceId, voiceUuid: null, instruct: 'x', rev: 'r7', language: 'english' }));
       return okSidecarResponse();
     });
     const res = await request(app)
@@ -1071,6 +1090,7 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(res.body.voiceUuid).toBeTruthy();
     const landed = JSON.parse(readFileSync(join(workspaceRoot, 'voices', 'qwen', `${res.body.voiceId}.json`), 'utf8'));
     expect(landed.voiceUuid).toBe(res.body.voiceUuid);
+    expect(landed).toMatchObject({ rev: 'r7', language: 'english', instruct: 'x' });
     expect(landed.voiceId).toBe(res.body.voiceId);
   });
 

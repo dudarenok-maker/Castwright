@@ -2006,6 +2006,7 @@ describe('cast-design persona pre-pass', () => {
     expect(events.filter((e) => e.type === 'character_failed' && e.characterId === 'quill')).toHaveLength(0);
     expect(genSpy).not.toHaveBeenCalled(); // no lazy persona-gen on the shared card
     expect(designSpy).toHaveBeenCalledTimes(2); // quill (base json persona) and marlow
+    expect(designSpy.mock.calls.find(([p]) => p.characterId === 'quill')?.[0].persona).toBe('a dry archivist');
 
     const idle = events.find((e) => e.type === 'idle');
     expect(idle?.failures).toHaveLength(1);
@@ -2013,6 +2014,42 @@ describe('cast-design persona pre-pass', () => {
     // Every character is accounted for: done + skipped + failed === total === characters.
     expect((idle?.done ?? 0) + (idle?.skipped ?? 0) + (idle?.failures?.length ?? 0)).toBe(3);
     expect(idle?.total).toBe(3);
+
+    writeBookOnDisk(characters);
+  });
+
+  it('a torn base json fails only that variant task; the rest of the run still designs and ends idle', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-v_marlow__angry', url: '/v/m.mp3' });
+    mkdirSync(join(workspaceRoot, 'voices', 'qwen'), { recursive: true });
+    writeFileSync(join(workspaceRoot, 'voices', 'qwen', 'qwen-v_torn.json'), '{ "instruct": ');
+    const torn = { id: 'torn', name: 'Torn', role: 'supporting', color: 'sky', voiceId: 'v_torn', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_torn' } } };
+    const marlow = { id: 'marlow', name: 'Marlow', role: 'supporting', color: 'sky', voiceId: 'v_marlow', voiceStyle: 'a quick-witted young man', overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } } };
+    writeBookOnDisk([...characters, torn, marlow]);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [
+          { characterId: 'torn', emotions: ['angry'] },
+          { characterId: 'marlow', emotions: ['angry'] },
+        ],
+      });
+    errSpy.mockRestore();
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'character_failed')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'character_failed')?.characterId).toBe('torn');
+    expect(designSpy).toHaveBeenCalledTimes(1);
+    expect(events.some((e) => e.type === 'idle')).toBe(true);
 
     writeBookOnDisk(characters);
   });

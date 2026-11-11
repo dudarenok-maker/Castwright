@@ -4122,10 +4122,12 @@ describe('POST /api/voice-library/design + redesign/promote/discard (Task 9)', (
     );
     wf(qwenVoice.qwenVoicePtPath('qwen-promo-id'), 'LIVE');
     wf(qwenVoice.qwenVoicePtPath('qwen-promo-id-preview'), 'PREVIEW');
-    wf(paths.qwenVoiceSidecarPath('qwen-promo-id-preview'), JSON.stringify({ voiceId: 'qwen-promo-id-preview', instruct: 'new' }));
+    wf(paths.qwenVoiceSidecarPath('qwen-promo-id-preview'), JSON.stringify({ voiceId: 'qwen-promo-id-preview', instruct: 'new', language: 'english', note: 'n7' }));
     const res = await request(app).post('/api/voice-library/promo-id/redesign/promote').send({});
     expect(res.status).toBe(200);
-    expect(JSON.parse(readFileSync(paths.qwenVoiceSidecarPath('qwen-promo-id'), 'utf8')).voiceId).toBe('qwen-promo-id');
+    const live = JSON.parse(readFileSync(paths.qwenVoiceSidecarPath('qwen-promo-id'), 'utf8'));
+    expect(live.voiceId).toBe('qwen-promo-id');
+    expect(live).toMatchObject({ language: 'english', note: 'n7' });
   });
 
   it('redesign/promote never leaves the live .pt or .json absent mid-swap (#4040)', async () => {
@@ -4453,7 +4455,7 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
   it('#F10b: the promoted copy names its own key in its json voiceId', async () => {
     mkdirSync(paths.qwenVoicesDir(), { recursive: true });
     writeFileSync(qwenVoice.qwenVoicePtPath('qwen-char-v'), 'PT');
-    writeFileSync(paths.qwenVoiceSidecarPath('qwen-char-v'), JSON.stringify({ voiceId: 'qwen-char-v', instruct: 'x' }));
+    writeFileSync(paths.qwenVoiceSidecarPath('qwen-char-v'), JSON.stringify({ voiceId: 'qwen-char-v', instruct: 'x', rev: 'r7', language: 'english' }));
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-v', [
       { id: 'char-v', name: 'V', voiceUuid: 'char-v', voiceStyle: 'x' },
     ]);
@@ -4462,7 +4464,9 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
       .send({ bookId: 'book-promo-v', characterId: 'char-v', name: 'V' });
     expect(res.status).toBe(201);
     const key = `qwen-${res.body.voiceUuid}`;
-    expect(JSON.parse(readFileSync(paths.qwenVoiceSidecarPath(key), 'utf8')).voiceId).toBe(key);
+    const copy = JSON.parse(readFileSync(paths.qwenVoiceSidecarPath(key), 'utf8'));
+    expect(copy.voiceId).toBe(key);
+    expect(copy).toMatchObject({ rev: 'r7', language: 'english' });
   });
 
   it('never modifies the origin character or cast.json (byte-identical before/after)', async () => {
