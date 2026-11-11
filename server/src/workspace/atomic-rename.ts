@@ -21,6 +21,10 @@ import { rename } from 'node:fs/promises';
    loaded Windows CI runner exhausted the prior ~800ms budget (#915). */
 export const RENAME_RETRY_DELAYS_MS = [25, 75, 200, 500, 1000];
 
+/* Longest a `renameWithRetry` can keep retrying: every base delay plus its full
+   jitter (`jitteredDelayMs` adds up to 100%), i.e. twice the base sum. */
+export const RENAME_RETRY_WORST_CASE_MS = RENAME_RETRY_DELAYS_MS.reduce((a, d) => a + 2 * d, 0);
+
 /* Add up to 100% randomised jitter to each backoff so N writers retrying the
    SAME target do not retry in lockstep. Without jitter, concurrent retriers
    wake on the identical schedule and re-collide on the rename every round
