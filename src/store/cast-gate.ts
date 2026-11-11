@@ -213,8 +213,9 @@ export const castGateMiddleware: Middleware = (store) => {
     const gated = selectCastReadOnly(s, open);
     const rose = gated && !(last.bookId === open && last.gated);
     last = { bookId: open, gated };
-    /* B3 — flush, never withhold. */
-    if (rose) store.dispatch(flushBookPersistence(open));
+    /* B3 — flush, never withhold: a save kept after its transport retries goes too, and
+       the server answers it (PR #4103 pass 1 C1). */
+    if (rose) store.dispatch(flushBookPersistence(open, { sendKeptCast: true }));
     /* R30 — release work runs whenever no live stream feeds the book. */
     if (gated && !streamLive(store.dispatch, open)) {
       const kinds = s.bookBusy?.busyByBook?.[open];

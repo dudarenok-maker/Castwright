@@ -396,7 +396,15 @@ const staleMessage = (title: string) =>
   `Your changes to "${title}" weren't saved: the book was changed elsewhere since you made them.`;
 
 const FLUSH_BOOK = 'persistence/flushBook';
-export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
+/* PR #4103 pass 1 C1 (B3) — `sendKeptCast`: the cast gate's rise flush also sends a cast
+   save kept after its transport retries ran out, and lets the server answer it (it lands
+   before the job registers, or meets the job's 409). Every other flush of a read-only
+   cast drops a kept save (`dropKeptCast`). */
+export const flushBookPersistence = (bookId: string, opts?: { sendKeptCast?: boolean }) => ({
+  type: FLUSH_BOOK,
+  payload: bookId,
+  ...(opts?.sendKeptCast ? { meta: { sendKeptCast: true } } : {}),
+});
 
 /* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
    that book's slices are re-read in full (Layout's full hydrate, with
@@ -534,7 +542,8 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* Plan 291 (#4031, round 1) — a cast save kept after transport failures
      never lands once the book's cast is read-only: the run's rows win, and
      the re-read after the run replaces the screen. It is dropped with the
-     read-only toast. */
+     read-only toast - except by the gate's rise flush (`sendKeptCast`, C1), which
+     sends it while it can still land before the job, or meet its 409. */
   const dropKeptCast = (bookId: string): boolean => {
     const key = flushKey(bookId, 'cast');
     if (!selectCastReadOnly(store.getState() as PersistableRootState, bookId)) return false;
@@ -543,19 +552,19 @@ export const persistenceMiddleware: Middleware = (store) => {
     return true;
   };
   /* C7 — send the book's kept saves (idle keys), in slice order. */
-  const pumpKept = (bookId: string) => {
+  const pumpKept = (bookId: string, sendKeptCast = false) => {
     for (const slice of LEARNED_SLICES) {
       const key = flushKey(bookId, slice);
       if (!outbox.get(key)?.size || timers.has(key) || flights.has(key)) continue;
-      if (slice === 'cast' && dropKeptCast(bookId)) continue;
+      if (slice === 'cast' && !sendKeptCast && dropKeptCast(bookId)) continue;
       pump(bookId, slice);
     }
   };
   /* Send every queued write for `bookId` now instead of at the end of its
      debounce, kept saves first. A running flight carries what is queued on its
      next attempt or its follow-up. */
-  const flushBookNow = (bookId: string) => {
-    pumpKept(bookId);
+  const flushBookNow = (bookId: string, sendKeptCast = false) => {
+    pumpKept(bookId, sendKeptCast);
     for (const slice of LEARNED_SLICES) {
       const key = flushKey(bookId, slice);
       const timer = timers.get(key);
@@ -875,7 +884,7 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
-      flushBookNow(target);
+      flushBookNow(target, (a as { meta?: { sendKeptCast?: boolean } }).meta?.sendKeptCast === true);
       const waits = LEARNED_SLICES.flatMap((slice) => flights.get(flushKey(target, slice)) ?? []);
       return waits.length > 0
         ? Promise.all(waits).then(

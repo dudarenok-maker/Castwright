@@ -2847,7 +2847,8 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     ['given up while the gate was up', true],
   ])('a kept cast save never lands after the run — %s', async (_name, gateDuringRetries) => {
     /* Round 1 Minor 1 (ruling) — the run's rows win: a kept cast unit is
-       dropped with the read-only toast, never re-sent by a later flush. */
+       dropped with the read-only toast, never re-sent by a later flush. The
+       gate's rise flush is the one exception (C1). */
     putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
     const state: Record<string, unknown> = baseState();
     const store = makeStore(state);
@@ -2863,7 +2864,9 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     expect(putBookState).toHaveBeenCalledTimes(4);
     putBookState.mockReset();
     putBookState.mockResolvedValue(undefined);
-    /* The gate-up flush, then the job ends and the re-hydrate flushes. */
+    /* A flush while read-only (any flush but the gate's rise flush, which sends a kept
+       unit and lets the server answer: PR #4103 pass 1 C1, cast-gate.test.ts "B3 kept"),
+       then the job ends and the re-hydrate flushes. */
     gate(true);
     mw(flushBookPersistence('book-1'));
     await advance(1000);

@@ -427,6 +427,51 @@ describe('gate-up flushes, never withholds (B3)', () => {
     expect(disk.log.filter((p) => p.slice === 'cast').map((p) => p.outcome)).toEqual(['ok']);
   });
 
+  /* PR #4103 pass 1 C1 — a save kept after its transport retries ran out (#3421) is sent by
+     the gate-rise flush too, not dropped: it lands before the job registers, or meets it. */
+  const keepUnit = async (store: Store) => {
+    disk.failNext(4, (_id, req) => req.slice === 'cast');
+    store.dispatch(castActions.setCharacters([char('wren'), char('lark')]));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(disk.log.filter((p) => p.slice === 'cast').map((p) => p.outcome)).toEqual(['503', '503', '503', '503']);
+  };
+  const readOnlyToasts = (store: Store) =>
+    store.getState().notifications.toasts.filter((t: { dedupeKey?: string }) => t.dedupeKey === 'cast-read-only');
+
+  it('B3 kept (C1): a kept unit is sent by the gate-rise flush and lands; no "wasn\'t saved" toast', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    await keepUnit(store);
+    store.dispatch(analysisActions.setActiveStream(snap('A')));
+    await settle();
+    disk.refuseNext('book_busy', (_id, req) => req.slice === 'cast');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(disk.log.filter((p) => p.slice === 'cast').map((p) => p.outcome)).toEqual(['503', '503', '503', '503', 'ok']);
+    expect(disk.books.get('A')!.cast).toEqual({ characters: [char('wren'), char('lark')] });
+    expect(readOnlyToasts(store)).toHaveLength(0);
+  });
+
+  it('B3 kept 409 (C1): a kept unit that meets the job takes the busy path — sent once, refused, toasted, era latched', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    await keepUnit(store);
+    disk.refuseNext('book_busy', (_id, req) => req.slice === 'cast');
+    busy = { A: ['analysis'] };
+    store.dispatch(analysisActions.setActiveStream(snap('A')));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(disk.log.filter((p) => p.slice === 'cast').map((p) => p.outcome)).toEqual(['503', '503', '503', '503', 'refused']);
+    expect(disk.books.get('A')!.cast).toEqual({ characters: [char('wren')] });
+    /* The existing busy toast (the server's sentence until the busy cache lists the analysis). */
+    const busyToasts = store
+      .getState()
+      .notifications.toasts.filter((t: { dedupeKey?: string }) => t.dedupeKey === 'cast-read-only' || t.dedupeKey === 'cast-persist-busy:A');
+    expect(busyToasts).toHaveLength(1);
+    expect(era(store, 'A')).toBeDefined();
+  });
+
   it("B3 409: a unit that meets the job gets the 409 — toast, era latched, and the run's added rows survive the re-hydrate", async () => {
     disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
     const store = makeStore();
