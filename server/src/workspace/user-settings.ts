@@ -1088,8 +1088,8 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
          one not yet swept counts only if it can explain the absence, below.)
      I3  A crash mid-write that THIS PROCESS CAN ATTRIBUTE is recovered from
          backup at most once, then main is rewritten. Attributable means a live
-         marker (a write may be between its renames now: the read waits for it,
-         bounded, then serves the backup and writes nothing), a marker this process kept after its own failed write,
+         marker (a write may be between its renames now: the read waits for it, bounded; a rename-in that lands
+         meanwhile is served from main, else it serves the backup and writes nothing), a marker this process kept after its own failed write,
          or a dead marker NEWER than this process's last sighting of a present
          main (`mainSeenAt`). A stranded recovery whose markers are all dead
          writes the recovered settings back to main and drops the markers; one

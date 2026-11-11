@@ -494,6 +494,33 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     warn.mockRestore();
   });
 
+  /* The timed-out memory is per MARKER, not per file: a later write to the same
+     file (a new marker) must still be waited for. */
+  it('a later live write to the same file is still waited for after an earlier marker timed out', async () => {
+    setMissingWaitMsForTests(300);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    await rm(target);
+    await writeFile(`${target}.writing-999999-1`, ''); // stranded, stays on disk (younger than 30 s)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 1 });
+    await writeFile(target, JSON.stringify({ v: 2 })); // healed
+    const m2 = `${target}.writing-999999-2`;
+    await writeFile(m2, '');
+    await rm(`${target}.bak.1`, { force: true });
+    await actual.rename(target, `${target}.bak.1`);
+    await writeFile(`${target}.tmp-y`, JSON.stringify({ v: 3 }));
+    setTimeout(() => {
+      void actual.rename(`${target}.tmp-y`, target).then(() => actual.unlink(m2));
+    }, 80);
+    warn.mockClear();
+    expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 3 });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('was missing'));
+    warn.mockRestore();
+  });
+
   it('a stale foreign marker does not make the reader wait', async () => {
     const target = join(workdir, 'state.json');
     await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
