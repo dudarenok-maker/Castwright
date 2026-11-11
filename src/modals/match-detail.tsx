@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { IconCheckCircle, IconClose } from '../lib/icons';
 import { Avatar, VoiceSwatch, PrimaryButton } from '../components/primitives';
-import { MATCH_FACTORS } from '../data/match-factors';
+import { SYNC_AUTO_THRESHOLD } from '../views/confirm-cast';
 import type { Character, Voice } from '../lib/types';
 import { useAppSelector } from '../store';
 import { pausedControlProps, useCastReadOnly } from '../components/cast-edits-paused-banner';
@@ -16,9 +16,20 @@ interface Props {
   onClose: () => void;
   onConfirm: () => void;
   onDecline: () => void;
+  /* The matched character's name in the matched book, when the series roster
+     resolves it; the voice's own `character` is frozen on whichever book the scan
+     reached first, so it is not used here. */
+  matchedCharacterName?: string;
 }
 
-export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecline }: Props) {
+export function MatchDetailDrawer({
+  character,
+  voice,
+  onClose,
+  onConfirm,
+  onDecline,
+  matchedCharacterName,
+}: Props) {
   const playback = useSamplePlayback();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   /* Plan 291 (#4031) — decline writes the cast slice, so it waits for a re-analysis. */
@@ -26,8 +37,11 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
   const [sampleBusy, setSampleBusy] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
   if (!character || !voice) return null;
-  const factors = MATCH_FACTORS[character.id] || MATCH_FACTORS.narrator;
-  const overall = character.matchedFrom?.confidence ?? 0.92;
+  /* Real factors from the voice-match response (cast-slice stores them as
+     matchFactors); mock mode feeds the design fixtures through the same field.
+     A manual link or a decline clears them. */
+  const factors = character.matchFactors ?? [];
+  const overall = character.matchedFrom?.confidence;
   async function playSample() {
     if (!voice || !character) return;
     setSampleError(null);
@@ -78,16 +92,22 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
         </div>
 
         <div className="p-6 space-y-7">
-          <section className="text-center">
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
-              Overall confidence
-            </p>
-            <p className="text-5xl font-bold text-ink tabular-nums leading-none">
-              {Math.round(overall * 100)}
-              <span className="text-2xl text-ink/50">%</span>
-            </p>
-            <p className="mt-2 text-xs text-ink/60">Strong match — voice continuity recommended.</p>
-          </section>
+          {overall != null && (
+            <section className="text-center">
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
+                Overall confidence
+              </p>
+              <p className="text-5xl font-bold text-ink tabular-nums leading-none">
+                {Math.round(overall * 100)}
+                <span className="text-2xl text-ink/50">%</span>
+              </p>
+              <p className="mt-2 text-xs text-ink/60">
+                {overall >= SYNC_AUTO_THRESHOLD
+                  ? 'Strong match — voice continuity recommended.'
+                  : 'Lower-confidence match — listen to the voice before you reuse it.'}
+              </p>
+            </section>
+          )}
 
           <section className="grid grid-cols-2 gap-3">
             <div className="p-4 rounded-2xl bg-canvas border border-ink/10 text-center">
@@ -115,38 +135,46 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
                   loading={sampleBusy}
                 />
               </div>
-              <p className="mt-3 font-bold text-ink truncate">{voice.character}</p>
-              <p className="text-xs text-purple-deep/70 mt-0.5 truncate">{voice.bookTitle}</p>
+              {(character.matchedFrom ? matchedCharacterName : voice.character) && (
+                <p className="mt-3 font-bold text-ink truncate">
+                  {character.matchedFrom ? matchedCharacterName : voice.character}
+                </p>
+              )}
+              <p className="text-xs text-purple-deep/70 mt-0.5 truncate">
+                {character.matchedFrom?.bookTitle ?? voice.bookTitle}
+              </p>
               {sampleError && (
                 <p className="mt-2 text-[11px] text-red-600/90 font-medium">⚠ {sampleError}</p>
               )}
             </div>
           </section>
 
-          <section>
-            <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
-              Match factors
-            </p>
-            <div className="space-y-3">
-              {factors.map((f) => (
-                <div key={f.id} className="p-3 rounded-2xl bg-canvas border border-ink/5">
-                  <div className="flex items-center justify-between mb-2 gap-3">
-                    <span className="text-sm font-semibold text-ink">{f.label}</span>
-                    <span className="text-xs font-bold text-ink tabular-nums">
-                      {Math.round(f.score * 100)}%
-                    </span>
+          {factors.length > 0 && (
+            <section>
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
+                Match factors
+              </p>
+              <div className="space-y-3">
+                {factors.map((f) => (
+                  <div key={f.id} className="p-3 rounded-2xl bg-canvas border border-ink/5">
+                    <div className="flex items-center justify-between mb-2 gap-3">
+                      <span className="text-sm font-semibold text-ink">{f.label}</span>
+                      <span className="text-xs font-bold text-ink tabular-nums">
+                        {Math.round(f.score * 100)}%
+                      </span>
+                    </div>
+                    <div className="h-1 rounded-full bg-ink/6 overflow-hidden mb-2">
+                      <div
+                        className="h-full rounded-full bg-gradient-progress"
+                        style={{ width: `${f.score * 100}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-ink/60 leading-relaxed">{f.detail}</p>
                   </div>
-                  <div className="h-1 rounded-full bg-ink/6 overflow-hidden mb-2">
-                    <div
-                      className="h-full rounded-full bg-gradient-progress"
-                      style={{ width: `${f.score * 100}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-ink/60 leading-relaxed">{f.detail}</p>
-                </div>
-              ))}
-            </div>
-          </section>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section>
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">

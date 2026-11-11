@@ -3265,3 +3265,35 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     }
   });
 });
+
+describe('ProfileDrawer — conflict reset drops the whole link (A120 review F)', () => {
+  it('clears matchFactors along with matchedFrom and voiceId when the edit conflicts with the voice', () => {
+    const onSave = vi.fn();
+    const character: Character = {
+      ...baseChar,
+      id: 'maerin',
+      name: 'Maerin',
+      gender: 'female',
+      voiceId: 'v_male',
+      matchedFrom: { bookId: 'b0', characterId: 'x', confidence: 0.9 },
+      matchFactors: [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'same' }],
+    };
+    const voice = {
+      id: 'v_male',
+      character: 'X',
+      bookTitle: 'B',
+      bookId: 'b0',
+      attributes: ['Male'],
+      gradient: ['#3C194F', '#0F0E0D'],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: { provider: 'kokoro', name: 'af', description: 'x' },
+    } as unknown as Voice;
+    renderDrawer(character, { voice, onSave });
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    const next = onSave.mock.calls[0][0] as Character;
+    expect(next.matchedFrom).toBeUndefined();
+    expect(next.voiceId).toBeUndefined();
+    expect(next.matchFactors).toBeUndefined();
+  });
+});

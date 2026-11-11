@@ -2251,6 +2251,7 @@ export function ProfileDrawer({
               if (hasConflict) {
                 next.voiceId = undefined;
                 next.matchedFrom = undefined;
+                next.matchFactors = undefined;
               }
               /* Series-scoped override write — fire-and-forget; the redux
                  character carries the same value so the UI is correct even

@@ -102,6 +102,7 @@ function makeStore(preloadCharacters: Character[]) {
     middleware: (gDM) => gDM().concat(persistenceMiddleware),
     preloadedState: {
       cast: { characters: preloadCharacters, renderedFallbackByCharacter: {} },
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: BOOK_ID },
     },
   });
 }

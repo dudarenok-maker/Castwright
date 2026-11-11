@@ -5067,6 +5067,8 @@ export interface DeclineVoiceLinkResponse {
   movedCharacterIds: string[];
 }
 
+const DECLINE_UNREACHABLE = 'Check the server is running, then try again.';
+
 async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   const { bookId, characterId, fromBookId } = args;
   const res = await fetch(
@@ -5076,7 +5078,10 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fromBookId }),
     },
-  );
+  ).catch(() => {
+    /* server unreachable: fetch's own text ("Failed to fetch") is not a sentence */
+    throw new Error(DECLINE_UNREACHABLE);
+  });
   if (!res.ok) {
     let detail = '';
     try {
@@ -5084,7 +5089,7 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Don't-reuse failed (${res.status}).`);
+    throw new Error(detail || DECLINE_UNREACHABLE);
   }
   return res.json();
 }

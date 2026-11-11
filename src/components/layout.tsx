@@ -2442,6 +2442,13 @@ export function Layout() {
         <MatchDetailDrawer
           character={matchCharacter}
           voice={matchVoice}
+          matchedCharacterName={
+            priorRoster.find(
+              (e) =>
+                e.bookId === matchCharacter?.matchedFrom?.bookId &&
+                e.id === matchCharacter?.matchedFrom?.characterId,
+            )?.name
+          }
           onClose={() => dispatch(uiActions.setMatchDetailFor(null))}
           onConfirm={() => dispatch(uiActions.setMatchDetailFor(null))}
           onDecline={() => {
