@@ -59,6 +59,7 @@ vi.mock('./book-lock.js', async (importOriginal) => {
 import {
   materialisePriorAtRunStart,
   persistPlannedCast,
+  PriorCastUnreadableError,
   readPriorCastLockFree,
   writePlanSnapshot,
 } from './analysis-cast-io.js';
@@ -838,5 +839,56 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('I1 (#4031 final review): a mid-run cast.json of the wrong shape is never overwritten', () => {
+  const alice = row('alice', 'Alice');
+  const damaged = ['{}', '{"characters":null}', '{"cast":[]}', '[]'];
+
+  it.each(damaged)('writePlanSnapshot refuses %s and leaves the bytes alone', async (bytes) => {
+    writeFileSync(castJsonPath(bookDir), bytes);
+    const err = await writePlanSnapshot({
+      bookDir,
+      bookId: BOOK_ID,
+      roster: roster(alice),
+      plan: planOf(fresh('alice')),
+      ledger: {},
+      runSuggestions: [],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PriorCastUnreadableError);
+    expect((err as PriorCastUnreadableError).reason).toBe('corrupt');
+    expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(bytes);
+  });
+
+  it.each(damaged)('persistPlannedCast refuses %s and leaves the bytes alone', async (bytes) => {
+    writeFileSync(castJsonPath(bookDir), bytes);
+    const err = await persistPlannedCast({
+      bookDir,
+      bookId: BOOK_ID,
+      plan: planOf(fresh('alice')),
+      roster: roster(alice),
+      sentences: sentences('alice'),
+      ledger: {},
+      runSuggestions: [],
+      runAddedPairs: [],
+      driftRefused: false,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PriorCastUnreadableError);
+    expect((err as PriorCastUnreadableError).reason).toBe('corrupt');
+    expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(bytes);
+  });
+
+  it('an absent cast.json is still an empty cast (control)', async () => {
+    const out = await writePlanSnapshot({
+      bookDir,
+      bookId: BOOK_ID,
+      roster: roster(alice),
+      plan: planOf(fresh('alice')),
+      ledger: {},
+      runSuggestions: [],
+    });
+    expect(ids(readCast())).toEqual(['alice']);
+    expect(out.ledger.alice?.state).toBe('run-owned');
   });
 });

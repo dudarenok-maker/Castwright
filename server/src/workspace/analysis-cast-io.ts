@@ -148,9 +148,17 @@ export function sameBookDeclinePredicate(
 
 const isNarratorId = (id: string): boolean => NARRATOR_CHARACTER_IDS.includes(id);
 
+/* The mid-run re-read (snapshot and persist). Absent is an empty cast; a file
+   that parses but has no `characters` array is shape-corrupt and throws, the same
+   refusal as the run start's (`readPriorCastLockFree`) - overlaying onto `[]`
+   would overwrite every user row (#4031 final review I1). */
 async function readCurrentCast(bookDir: string): Promise<Rows> {
   const cast = await readJson<{ characters?: Rows }>(castJsonPath(bookDir));
-  return Array.isArray(cast?.characters) ? cast.characters : [];
+  if (cast === null) return [];
+  if (typeof cast !== 'object' || !Array.isArray(cast.characters)) {
+    throw new PriorCastUnreadableError('corrupt');
+  }
+  return cast.characters;
 }
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
