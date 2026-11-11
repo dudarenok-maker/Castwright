@@ -557,3 +557,23 @@ describe('freeKokoroForRenderSynth (#4079)', () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 });
+
+describe('freeKokoroForRenderSynth — visibility and one-shot (#4079)', () => {
+  it('logs that the render freed Kokoro for its own line (no Qwen tier)', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      await freeKokoroForRenderSynth({
+        modelKey: 'qwen3-tts-1.7b',
+        isRenderSynth: true,
+        _probeHealth: async () => ({ kokoroLoaded: true, devices: { kokoro: 'cuda' } }),
+        _reconcile: async (_k, _s, out) => {
+          out?.push('Kokoro');
+          return true;
+        },
+      });
+      expect(info.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/render's own Quality line refused.*unloading Kokoro/);
+    } finally {
+      info.mockRestore();
+    }
+  });
+});

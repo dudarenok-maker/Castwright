@@ -1437,3 +1437,25 @@ describe('parseNoCapacity', () => {
     expect(await parseNoCapacity(r)).toBeNull();
   });
 });
+
+describe('withCapacityRetry — Kokoro exception on a card other than Kokoro (#4079)', () => {
+  it('a refusal on any card asks the hook once and never loops, even when it unloads nothing', async () => {
+    const freeKokoroForRender = vi.fn(async () => false);
+    const doPost = vi.fn(async () => noCapacityResponse(2444, 'cuda:1'));
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        evictIdleTts: async () => false,
+        freeKokoroForRender,
+        analyzerEvictWouldHelp: async () => false,
+        evictEndpoints: async () => ({ attempted: 0, unloaded: 0 }),
+        describeBlockers: async () => [],
+        pollMs: 0,
+        maxAttempts: 4,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+    expect(freeKokoroForRender).toHaveBeenCalledTimes(1);
+    expect(freeKokoroForRender).toHaveBeenCalledWith('cuda:1');
+    expect(doPost).toHaveBeenCalledTimes(4);
+  });
+});

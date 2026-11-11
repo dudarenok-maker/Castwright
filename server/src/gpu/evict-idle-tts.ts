@@ -174,6 +174,12 @@ export async function freeKokoroForRenderSynth(opts: FreeKokoroForRenderOpts): P
   const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
   if (!health || health.status === 'unreachable') return false;
   if (!(health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro))) return false;
+  /* KNOWN LIMIT: no source names Kokoro's CARD. Its ORT session reports no index (the sidecar's
+     `gpus[].resident` puts it in the unindexed bucket) and `devices.kokoro` is a family only, so
+     this cannot compare Kokoro's card with the refused request's `deviceKey`. On a multi-GPU box it
+     may unload a Kokoro that sits on another card. The caller's one-shot latch bounds that to one
+     unload per refused call. */
+  console.info("[generation] render's own Quality line refused for capacity: unloading Kokoro (no Qwen tier)");
   const freedNames: string[] = [];
   /* keep06 + keep17 true: reconcile touches no Qwen tier; keepKokoro:false drops Kokoro only. */
   const keep: ResidentTtsKeep = { keep06: true, keep17: true, keepKokoro: false };
