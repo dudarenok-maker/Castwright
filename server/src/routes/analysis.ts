@@ -1729,20 +1729,30 @@ function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknow
 /** The persist's decisions as a cache-op transform, so they are merged against the FILE's
     plan inside the op (PR #4103 pass 1 O2): a merge that landed after the job loaded its
     plan re-targeted the file's decision to `tier: 'merge'`, and the persist's copy never
-    overwrites that. A decision the file already holds is not re-written. */
+    overwrites that. A decision the file already holds is not re-written. The `new`
+    decisions of the run rows the persist dropped (`droppedIds`, fold-dropped and untouched)
+    go with their rows (PR #4103 pass 1 F3): left in the plan, a later subset's Phase-0a
+    snapshot would read the row as decided and write it back with 0 lines. */
 export function persistDecisionsTransform(
   decisions: Readonly<Record<string, MatchDecision>>,
+  droppedIds: ReadonlyArray<string> = [],
 ): (c: AnalysisCache) => AnalysisCache {
+  const dropped = new Set(droppedIds);
+  const isDropped = (d: MatchDecision | undefined): boolean => d?.kind === 'new' && dropped.has(d.id);
   return (c) => {
     if (!c.matchPlan) return c;
     const onFile = c.matchPlan.decisions;
     const changed = Object.entries(decisions).filter(([k, d]) => {
       const f = onFile[k];
       if (f?.kind === 'join' && f.tier === 'merge') return false;
+      if (isDropped(d)) return false;
       return JSON.stringify(f) !== JSON.stringify(d);
     });
-    if (changed.length === 0) return c;
-    return { ...c, matchPlan: { ...c.matchPlan, decisions: { ...onFile, ...Object.fromEntries(changed) } } };
+    const gone = Object.keys(onFile).filter((k) => isDropped(onFile[k]));
+    if (changed.length === 0 && gone.length === 0) return c;
+    const next = { ...onFile, ...Object.fromEntries(changed) };
+    for (const k of gone) delete next[k];
+    return { ...c, matchPlan: { ...c.matchPlan, decisions: next } };
   };
 }
 
@@ -1758,7 +1768,7 @@ async function applyPlannedPersistOutcome(a: {
   log: (phaseId: number, message: string) => void;
 }): Promise<{ parked: unknown; unsentPatch?: CachePatch }> {
   const { out, cache, writeDir, retirementBookId, log } = a;
-  const withDecisions = persistDecisionsTransform(out.plan.decisions);
+  const withDecisions = persistDecisionsTransform(out.plan.decisions, out.droppedRunAdded);
   const idMap = Object.fromEntries(Object.entries(out.idMap).filter(([k, v]) => k !== v));
   if (cache.matchPlan) Object.assign(cache, withDecisions(cache));
   /* #4031 (I2) — cast.json and the edits have landed: a cache fault here (ENOSPC, EPERM, a
@@ -9556,9 +9566,12 @@ export async function runSubsetAnalyzerJob(
            seconds between Phase 0a success and the route returning. */
         if (wasFailed) send({ kind: 'chapter-resolved', chapterId: ch.id });
         /* Plan 291 (#4031) — the Phase-0a snapshot writes only rows the CACHED
-           plan already decides (spec: Phase-0a snapshots add no rows): a row the
-           plan has not settled keeps its raw analyzer id, which must never reach
-           disk. The first such write starts the subset's own ledger. No cached
+           plan already decides: a row the plan has not settled keeps its raw
+           analyzer id, which must never reach disk. A decided row that is not on
+           disk is added with 0 lines unless its ledger entry says the user deleted
+           it (R4); a run row a completed persist fold-dropped is not decided any
+           more, because the persist drops its decision with it (PR #4103 pass 1
+           F3). The first such write starts the subset's own ledger. No cached
            plan (flow (b), or an unplanned cache) - the live view only. Skipped on
            abort: a paused retry shouldn't keep writing cast.json out from under
            the user. */

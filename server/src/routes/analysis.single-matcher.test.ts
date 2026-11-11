@@ -1724,6 +1724,14 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       expect(out.matchPlan.decisions.anna).toMatchObject({ kind: 'join', priorId: 'anna' });
       expect(out.matchPlan.decisions.kai).toMatchObject({ kind: 'new' });
     });
+    it("F3: a dropped run row's new decision goes with it, on file and in the persist's copy", () => {
+      const keep = { kind: 'new', rawId: 'kai', id: 'kai', minted: false, suggest: [], inheritedDeclines: [] };
+      const boris = { kind: 'new', rawId: 'boris', id: 'boris', minted: false, suggest: [], inheritedDeclines: [] };
+      const out = persistDecisionsTransform({ boris, kai: keep } as never, ['boris'])(plan({ boris, kai: keep })) as {
+        matchPlan: { decisions: Record<string, unknown> };
+      };
+      expect(Object.keys(out.matchPlan.decisions)).toEqual(['kai']);
+    });
     it('a cache with no plan is left alone', () => {
       const c = { version: ANALYSIS_CACHE_VERSION, chapters: {} } as never;
       expect(persistDecisionsTransform({})(c)).toBe(c);
@@ -3134,6 +3142,31 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(history(b).supersededBy).toEqual({});
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });
+
+    /* Subset-only (one line, R18): the first run is a main run; the subset Retry after it is the subject. */
+    if (kind === 'subset')
+      it('F3 (PR #4103 pass 1): a subset Retry stopped in Phase 0a does not re-add a row the main persist fold-dropped', async () => {
+        const b = annaBook();
+        expect(done(await run(b.manuscriptId, b.bookDir, 'main', BORIS_RUN))).toBe(true);
+        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator']);
+        expect(readCache(b.manuscriptId)!.matchPlan?.decisions.boris).toBeUndefined();
+        /* Stopped at chapter 3's Phase-0 call: with two chapters in parallel, an earlier
+           chapter's Phase-0a snapshot has run, and the subset never reaches its finalise
+           (whose own new rows are the confirmed R42 case, not this one). */
+        setPhase0Hook(async (ch) => {
+          if (ch !== 3) return;
+          getLastJob()?.controller.abort();
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          throw e;
+        });
+        await runSubsetRetry(b, BORIS_RUN);
+        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator']);
+        expect(editLines(b)).toEqual({ anna: 3 });
+        expect(linesById(b.bookDir)).toMatchObject({ anna: 3, narrator: 0 });
+        expect(history(b).supersededBy).toEqual({});
+        expect(readSuggestions(b.bookDir)).toEqual([]);
+      });
   });
 
   /* ---- Rule 13 and degraded history ---- */
@@ -3845,7 +3878,9 @@ describe('#4031 subset job: classification, run start, Phase 0a and finalise (Ta
     const b = seed(PRIORS(), undefined, BODY18);
     expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
     const kept = readCache(b.manuscriptId)!.matchPlan!;
-    expect(Object.keys(kept.decisions)).toEqual(expect.arrayContaining(['narrator', 'the-jogger', FRESH_ID]));
+    expect(Object.keys(kept.decisions)).toEqual(expect.arrayContaining(['narrator', FRESH_ID]));
+    /* The Jogger folded into the bucket and his run row was dropped: his decision went with it (F3). */
+    expect(kept.decisions['the-jogger']).toBeUndefined();
     expect(kept.decisions.boris).toBeUndefined();
     const historyAfterMain = history(b).supersededBy;
     /* The Retry's roster has a row the cached plan does not cover. */
