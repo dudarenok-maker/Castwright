@@ -8,7 +8,8 @@
    (the previous state is in `.bak.1`), and for a moment during EVERY rotating
    write main is absent too. A plain read (`readJson`, `existsSync`) in that
    window sees no file, so every reader of a rotated file must recover:
-   `readJsonWithRecovery` with `recoverMissing` serves the backup. For
+   `readJsonWithRecovery` with `recoverMissing` waits out a LIVE write (see the
+   marker below), else serves the backup. For
    state.json that is `readStateJsonWithRecovery` (state-migrate.ts), and
    `state-json-read.guard.test.ts` fails the build on a plain state.json read.
    The rotating write also drops a `<file>.writing-<pid>-<n>` marker BEFORE the
@@ -35,7 +36,7 @@ import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync, readdirSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
-import { renameWithRetry } from './atomic-rename.js';
+import { renameWithRetry, RENAME_RETRY_WORST_CASE_MS } from './atomic-rename.js';
 
 /* Monotonic in-process counter so two `writeJsonAtomic` calls that arrive
    in the same millisecond (same `Date.now()`, same `process.pid`) don't
@@ -75,6 +76,38 @@ function listWriteMarkers(path: string): string[] {
 /** Markers older than this cannot belong to a live write: a rotation is at most
  *  four `renameWithRetry` calls (~3.6 s each at worst), so 30 s is a wide margin. */
 const STALE_MARKER_MS = 30_000;
+
+/** How long a recovering reader waits for a live write to rename main back in
+ *  (`readJsonWithRecovery`), polling every MISSING_POLL_MS: `renameWithRetry`'s
+ *  worst case (every delay at full jitter) plus a margin. */
+export const MISSING_WAIT_MS = RENAME_RETRY_WORST_CASE_MS + 500;
+const MISSING_POLL_MS = 8;
+let missingWaitMs = MISSING_WAIT_MS;
+/** Tests only: shorten (or, with `null`, restore) the wait, and forget which
+ *  markers have already timed out. */
+export function setMissingWaitMsForTests(ms: number | null): void {
+  missingWaitMs = ms ?? MISSING_WAIT_MS;
+  timedOutMarkers.clear();
+}
+
+/** Foreign markers a reader already waited a full bound on (full path). A
+ *  writer killed inside the gap leaves one that reads as live for 30 s; waiting
+ *  again on every read of that file would stall each one, so each costs one wait. */
+const timedOutMarkers = new Set<string>();
+
+/** Whether a live marker beside `path` that no reader has timed out on exists. */
+function hasUnwaitedLiveMarker(path: string): boolean {
+  return liveMarkerPaths(path).some((m) => !timedOutMarkers.has(m));
+}
+
+function liveMarkerPaths(path: string): string[] {
+  const out: string[] = [];
+  for (const name of listWriteMarkers(path)) {
+    const { full, state } = markerState(path, name);
+    if (state === 'live') out.push(full);
+  }
+  return out;
+}
 
 /** Markers this process created for writes that are still running. */
 const liveMarkers = new Set<string>();
@@ -206,8 +239,10 @@ export async function readJson<T>(path: string): Promise<T | null> {
  *  `recoverMissing` (state.json always - nothing deletes it on purpose, so an
  *  absent main with a parseable `.bak.N` is a stranded book; user-settings.json
  *  only once `writeMarkersExplainAbsence` says a write died, since deleting that file
- *  is how a user resets it), in which case the newest parseable backup is
- *  returned with a warning, and `null` only when there is none. When the main file is corrupt AND every
+ *  is how a user resets it), in which case, unless a LIVE write-in-flight marker explains the
+ *  absence (the reader then waits, bounded by `MISSING_WAIT_MS`, for the
+ *  rename-in, and reads main once more before giving up), the newest parseable
+ *  backup is returned with a warning, and `null` only when there is none. When the main file is corrupt AND every
  *  backup is corrupt / missing, the original parse error is re-thrown
  *  so the caller surfaces the same diagnostic it would have seen from
  *  `readJson` directly.
@@ -230,14 +265,44 @@ export async function readJsonWithRecovery<T>(
     raw = await readFile(path, 'utf8');
   } catch (readErr) {
     if (isEnoent(readErr)) {
-      if (opts.recoverMissing) {
+      if (!opts.recoverMissing) {
+        /* #3700 — vanished between the check and the read: "missing", like the
+           check above, not a corrupt file to recover from a backup. */
+        return null;
+      }
+      /* A LIVE write-in-flight marker means main is absent only between a
+         rotating write's two renames: wait for the rename-in rather than serve
+         the pre-write .bak.1 with a false "was missing" warning. Bounded by
+         `renameWithRetry`'s budget; no live marker (stranded, stale, or a
+         deliberate delete) falls straight through to the backup. */
+      const deadline = Date.now() + missingWaitMs;
+      let landed: string | undefined;
+      while (landed === undefined && Date.now() < deadline && hasUnwaitedLiveMarker(path)) {
+        await new Promise((r) => setTimeout(r, MISSING_POLL_MS));
+        try {
+          landed = await readFile(path, 'utf8');
+        } catch (retryErr) {
+          if (!isEnoent(retryErr)) throw retryErr;
+        }
+      }
+      if (landed === undefined) {
+        /* Marker first, main second: a writer in ANOTHER process can finish its
+           rename-in and drop its marker between our ENOENT and the marker check,
+           which then reads as "no live marker". Main is back in that case. */
+        try {
+          landed = await readFile(path, 'utf8');
+        } catch (lastErr) {
+          if (!isEnoent(lastErr)) throw lastErr;
+        }
+      }
+      if (landed === undefined) {
+        if (Date.now() >= deadline) for (const m of liveMarkerPaths(path)) timedOutMarkers.add(m);
         return (await readNewestBackup<T>(path, opts.keep, 'was missing')) ?? null;
       }
-      /* #3700 — vanished between the check and the read: "missing", like the
-         check above, not a corrupt file to recover from a backup. */
-      return null;
+      raw = landed;
+    } else {
+      throw readErr;
     }
-    throw readErr;
   }
   try {
     /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
@@ -425,9 +490,11 @@ async function rotateBackups(path: string, keep: number): Promise<boolean> {
      never absent, but the tmp -> main rename then REPLACES a file, and on
      Windows that fails with EPERM while any reader holds main open (Node's own
      readers included); the retry budget then runs out and the write throws.
-     Renaming main away is not blocked by an open handle. The cost is a
-     sub-millisecond absent window, which the write-in-flight marker and
-     `recoverMissing` cover (see the header). */
+     Renaming main away is not blocked by an open handle. The cost is an
+     absent window (normally sub-millisecond, but `renameWithRetry` stretches it
+     to ~3.6 s at worst under contention), which the write-in-flight marker and
+     `recoverMissing` cover: a recovering reader waits on the live marker
+     (see `readJsonWithRecovery`). */
   await renameWithRetry(path, `${path}.bak.1`);
   return true;
 }
