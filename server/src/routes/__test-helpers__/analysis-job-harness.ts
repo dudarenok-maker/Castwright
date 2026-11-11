@@ -149,6 +149,27 @@ export function phase1(speakerId: string | string[] | ((chapterId: number) => st
   };
 }
 
+/** A Phase-1 analyzer that gives each chapter exactly the speakers `script` lists, one
+    line each, in order: a speaker below the minor-cast fold's line count is spelled out
+    (PR #4103 pass 1 O2 - `phase1` hands every multi-speaker id enough lines to clear it). */
+export function phase1Script(script: (chapterId: number) => string[]): Analyzer {
+  return {
+    ...phase1([]),
+    runStage2Chapter: (async (_m: string, chapterId: number) => {
+      await phase1Hook?.(chapterId);
+      return {
+        sentences: script(chapterId).map((characterId, k) => ({
+          id: chapterId * 100 + k + 1,
+          chapterId,
+          characterId,
+          confidence: 0.9,
+          text: 'Are you sure this will work',
+        })),
+      };
+    }) as unknown as Analyzer['runStage2Chapter'],
+  };
+}
+
 export const sel = (analyzer: Analyzer, model: string): AnalyzerSelection => ({
   analyzer,
   engine: 'gemini',

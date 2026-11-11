@@ -38,6 +38,7 @@ import {
   mkJob,
   phase0,
   phase1,
+  phase1Script,
   putCast,
   readCache,
   readJson,
@@ -72,6 +73,7 @@ import {
   dedupAndPrepare,
   linkSeriesReuseOnNewRows,
   otherRunsLedger,
+  persistDecisionsTransform,
   resolveCurrentIds,
   subsetCompletedAddedOnce,
   runMainAnalyzerJob,
@@ -1705,6 +1707,29 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     });
   });
 
+  describe('persistDecisionsTransform (PR #4103 pass 1 O2 c)', () => {
+    const plan = (decisions: Record<string, unknown>) =>
+      ({ version: ANALYSIS_CACHE_VERSION, chapters: {}, matchPlan: { version: 1, runToken: 't', decisions } }) as never;
+    it("never overwrites the file's merge decision; adds and changes the others against the file", () => {
+      const onFile = plan({
+        boris: { kind: 'join', rawId: 'boris', priorId: 'olga', tier: 'merge' },
+        anna: { kind: 'join', rawId: 'anna', priorId: 'anna', tier: 'id' },
+      });
+      const out = persistDecisionsTransform({
+        boris: { kind: 'new', rawId: 'boris', id: 'boris', minted: false, suggest: [], inheritedDeclines: [] },
+        anna: { kind: 'join', rawId: 'anna', priorId: 'anna', tier: 'id' },
+        kai: { kind: 'new', rawId: 'kai', id: 'kai', minted: false, suggest: [], inheritedDeclines: [] },
+      })(onFile) as { matchPlan: { decisions: Record<string, { kind: string; priorId?: string; tier?: string }> } };
+      expect(out.matchPlan.decisions.boris).toMatchObject({ kind: 'join', priorId: 'olga', tier: 'merge' });
+      expect(out.matchPlan.decisions.anna).toMatchObject({ kind: 'join', priorId: 'anna' });
+      expect(out.matchPlan.decisions.kai).toMatchObject({ kind: 'new' });
+    });
+    it('a cache with no plan is left alone', () => {
+      const c = { version: ANALYSIS_CACHE_VERSION, chapters: {} } as never;
+      expect(persistDecisionsTransform({})(c)).toBe(c);
+    });
+  });
+
   describe('resolveCurrentIds', () => {
     const mkDir = (cast: Row[], supersededBy: Record<string, string>): string => {
       const dir = seed([]).bookDir;
@@ -1776,6 +1801,13 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
         expect((await resolveCurrentIds(dir, {}, take('x'), ids('x'), own, ids('x')))[0].characterId).toBe('y');
         /* without the added set it is left alone */
         expect((await resolveCurrentIds(dir, {}, take('x'), ids(), own))[0].characterId).toBe('x');
+      });
+      it("R49: the run's own fold bucket never follows a user merge of an old bucket", async () => {
+        const dir = mkDir([{ id: 'lord-vane' }], { 'unknown-male': 'lord-vane' });
+        const bucket = { 'unknown-male': { kind: 'new', rawId: 'unknown-male', id: 'unknown-male' } };
+        expect(
+          (await resolveCurrentIds(dir, {}, take('unknown-male'), ids(), bucket, ids('unknown-male')))[0].characterId,
+        ).toBe('unknown-male');
       });
     });
   });
@@ -3347,6 +3379,91 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(linesById(b.bookDir).olga).toBe(3);
     expect(history(b).supersededBy).toEqual({ boris: 'olga' });
     expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  /* ---- PR #4103 pass 1 O2: a mid-run merge of a row the run added, below the fold's line count ---- */
+
+  describe('O2: a mid-run merge of a below-minLines run-added row is honoured by the dedup and the fold', () => {
+    const boris = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+    const borisVane = fr('boris-vane', 'Boris Vane', { role: 'minor', gender: 'male' });
+    const olgaBook = (): HarnessBook => seed([{ ...NARR }, pr('anna', 'Anna'), pr('olga', 'Olga', { role: 'minor' })]);
+    /** Merge boris into olga once Phase 1 starts (after the Phase-0b snapshot wrote boris). */
+    const mergeBorisIntoOlga = (b: HarnessBook) => midRun('phase1', () => mergeRoute(b, 'boris', 'olga'));
+    /** After the run: boris is gone for good, the merge is the cache's decision and the user's record. */
+    const expectMergeHonoured = (b: HarnessBook): void => {
+      expect(readCache(b.manuscriptId)!.matchPlan?.decisions.boris).toMatchObject({ kind: 'join', priorId: 'olga', tier: 'merge' });
+      expect(readCache(b.manuscriptId)!.addedRows?.boris).toBeUndefined();
+      expect(history(b).supersededBy).toEqual({ boris: 'olga' });
+      expect(history(b).supersededByKind).toEqual({ boris: 'user' });
+      expect((history(b) as { displaced?: Record<string, string> }).displaced?.boris).toBeUndefined();
+      expect(readSuggestions(b.bookDir)).toEqual([]);
+    };
+
+    it('O2: the one line lands on the survivor, not in a bucket; a second run does not re-add the row', async () => {
+      const b = olgaBook();
+      const FRESH = {
+        roster: [NARR, fr('anna', 'Anna'), boris],
+        speakerId: 'anna',
+      };
+      const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris'] : ['anna']));
+      const m = mergeBorisIntoOlga(b);
+      const events = await go(b, FRESH, { phase1: script });
+      expect(((await m.result()) as request.Response).status).toBe(200);
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator', 'olga']);
+      expect(row(b, 'olga')).toMatchObject({ name: 'Olga', aliases: expect.arrayContaining(['Boris Vane']) });
+      expect(editLines(b)).toEqual({ anna: 3, olga: 1 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, narrator: 0 });
+      expectMergeHonoured(b);
+
+      setPhase1Hook(undefined);
+      /* The cached plan now joins boris to olga, so the Phase-1 prompt names olga: the
+         analyzer speaks the plan-applied id, as in A1. */
+      const again = await go(b, FRESH, {
+        phase1: phase1Script((ch) => (ch === 1 ? ['anna', 'olga'] : ['anna'])),
+        seedCache: false,
+      });
+      expect(errCode(again)).toBeUndefined();
+      expect(done(again)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator', 'olga']);
+      expect(editLines(b)).toEqual({ anna: 3, olga: 1 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, narrator: 0 });
+      expectMergeHonoured(b);
+    });
+
+    it('O2 (same-name sibling): the merged row\'s line goes to the survivor, not to the other "Boris Vane"', async () => {
+      const b = olgaBook();
+      const FRESH = { roster: [NARR, fr('anna', 'Anna'), boris, borisVane], speakerId: 'anna' };
+      const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris', 'boris-vane'] : ['anna', 'boris-vane']));
+      const m = mergeBorisIntoOlga(b);
+      const events = await go(b, FRESH, { phase1: script });
+      expect(((await m.result()) as request.Response).status).toBe(200);
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris-vane', 'narrator', 'olga']);
+      expect(editLines(b)).toEqual({ anna: 3, olga: 1, 'boris-vane': 3 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, 'boris-vane': 3, narrator: 0 });
+      expectMergeHonoured(b);
+    });
+
+    /* Subset-only (one line, R14): the main job reaches its plan save with a reused plan only on
+       a resume whose Phase 0 is cached, so no analyzer seam runs between its cache load and the save. */
+    if (kind === 'subset')
+      it("O2 (b): a merge during the subset's Phase 0a is not undone by its plan save, though the run stops before its persist", async () => {
+        const b = olgaBook();
+        const FRESH = { roster: [NARR, fr('anna', 'Anna'), boris], speakerId: 'anna' };
+        const both = phase1Script(() => ['anna', 'boris']);
+        expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH, { phase1: both }))).toBe(true);
+        expect(readCache(b.manuscriptId)!.matchPlan?.decisions.boris).toMatchObject({ kind: 'new', id: 'boris' });
+        const m = midRun('phase0', () => mergeRoute(b, 'boris', 'olga'));
+        setPhase1Hook(abortAtFirstPhase1());
+        await runSubsetRetry(b, FRESH, { phase1: both });
+        expect(((await m.result()) as request.Response).status).toBe(200);
+        expect(readCache(b.manuscriptId)!.matchPlan?.decisions.boris).toMatchObject({ kind: 'join', priorId: 'olga', tier: 'merge' });
+        expect(ids(readCast(b.bookDir))).not.toContain('boris');
+        expect(history(b).supersededBy).toEqual({ boris: 'olga' });
+      });
   });
 
   /* ---- F2: a run after a main run deletes nothing by the earlier run's ledger ---- */

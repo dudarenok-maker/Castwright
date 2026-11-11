@@ -636,8 +636,10 @@ describe('runMainAnalyzerJob persist block — degraded cast-id-history.json (#2
           historyReadCount += 1;
           /* Task 19: a chapter's cache save and roll read the history to resolve ids
              (`resolveCurrentIds`); the last chapter's read follows its Phase-1 call, so it
-             is not the persist's capture. */
-          const fromChapterSave = (new Error().stack ?? '').includes('resolveCurrentIds');
+             is not the persist's capture. Nor is the stitch's mid-run-merge collapse (PR #4103
+             pass 1 O2), which reads it once before the dedup. */
+          const stack = new Error().stack ?? '';
+          const fromChapterSave = stack.includes('resolveCurrentIds') || stack.includes('collapseMidRunMerges');
           if (stage2Calls >= chapterHints.length && !blipped && !fromChapterSave) {
             blipped = true;
             // The one-shot blip — a transient EBUSY/EPERM, not a damaged

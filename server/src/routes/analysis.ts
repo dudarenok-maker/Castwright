@@ -146,6 +146,7 @@ import {
 import type {
   DedupConstraints,
   LedgerEntry,
+  MatchDecision,
   MatchPlan,
   PriorRow,
   RunAddedLedger,
@@ -153,7 +154,7 @@ import type {
   SupersededKind,
 } from '../store/reanalysis-types.js';
 import { buildReservedIds, extendPlan, matchFreshToPrior } from '../store/match-fresh-to-prior.js';
-import { applyMatchPlan, planConstraintsFor, remapSentenceIds, rerouteDeletedTargets } from '../store/plan-overlay.js';
+import { applyMatchPlan, planConstraintsFor, remapSentenceIds, rerouteDeletedTargets, retargetPlanForMerge } from '../store/plan-overlay.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadStoredSuggestions, pairKey } from '../store/cast-merge-suggestions.js';
 import { unionNotLinkedTo } from '../store/cast-name-match.js';
@@ -1586,10 +1587,13 @@ async function planRunCastIdentity(a: {
   }
 
   cache.matchPlan = plan;
+  /* Only the decisions this call added (PR #4103 pass 1 O2): a reused decision is already
+     in the cache, where a merge made since the job loaded it may have re-targeted it
+     (`retargetPlanForMerge`); re-sending the in-memory copy would undo that. */
   await mutateAnalysisCache(job.manuscriptId, {
     stage1: cache.stage1,
     matchPlan: { version: plan.version, runToken: plan.runToken },
-    decisions: plan.decisions,
+    decisions: Object.fromEntries(Object.entries(plan.decisions).filter(([raw]) => !decidedBefore.has(raw))),
   });
 
   let idMap: Record<string, string> = {};
@@ -1622,7 +1626,7 @@ async function planRunCastIdentity(a: {
   return {
     characters,
     constraints: planConstraintsFor({ roster: characters, plan, prior, history, currentBookId }),
-    protectIds: new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'join' ? [d.priorId] : []))),
+    protectIds: planProtectIdsOf(plan),
     idMap,
     ownLedger: ledgers.kind === 'subset' ? ledgers.own : {},
     ownAddedPairs: ledgers.kind === 'subset' ? ledgers.ownPairs : [],
@@ -1722,6 +1726,26 @@ function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknow
    writes (#2260 round 2/3 - thrown from here it would skip state.json and land in
    `catch (persistErr)`, which reports success); anything else is logged. A faulted cache
    op is returned as `unsentPatch` (see step 1's comment). */
+/** The persist's decisions as a cache-op transform, so they are merged against the FILE's
+    plan inside the op (PR #4103 pass 1 O2): a merge that landed after the job loaded its
+    plan re-targeted the file's decision to `tier: 'merge'`, and the persist's copy never
+    overwrites that. A decision the file already holds is not re-written. */
+export function persistDecisionsTransform(
+  decisions: Readonly<Record<string, MatchDecision>>,
+): (c: AnalysisCache) => AnalysisCache {
+  return (c) => {
+    if (!c.matchPlan) return c;
+    const onFile = c.matchPlan.decisions;
+    const changed = Object.entries(decisions).filter(([k, d]) => {
+      const f = onFile[k];
+      if (f?.kind === 'join' && f.tier === 'merge') return false;
+      return JSON.stringify(f) !== JSON.stringify(d);
+    });
+    if (changed.length === 0) return c;
+    return { ...c, matchPlan: { ...c.matchPlan, decisions: { ...onFile, ...Object.fromEntries(changed) } } };
+  };
+}
+
 async function applyPlannedPersistOutcome(a: {
   out: PersistOutcome;
   cache: AnalysisCache;
@@ -1734,12 +1758,9 @@ async function applyPlannedPersistOutcome(a: {
   log: (phaseId: number, message: string) => void;
 }): Promise<{ parked: unknown; unsentPatch?: CachePatch }> {
   const { out, cache, writeDir, retirementBookId, log } = a;
-  const known = cache.matchPlan?.decisions ?? {};
-  const decisions = Object.fromEntries(
-    Object.entries(out.plan.decisions).filter(([k, d]) => JSON.stringify(known[k]) !== JSON.stringify(d)),
-  );
+  const withDecisions = persistDecisionsTransform(out.plan.decisions);
   const idMap = Object.fromEntries(Object.entries(out.idMap).filter(([k, v]) => k !== v));
-  if (cache.matchPlan) cache.matchPlan = { ...cache.matchPlan, decisions: { ...cache.matchPlan.decisions, ...decisions } };
+  if (cache.matchPlan) Object.assign(cache, withDecisions(cache));
   /* #4031 (I2) — cast.json and the edits have landed: a cache fault here (ENOSPC, EPERM, a
      rename whose retries ran out) is logged and the persist carries on, as
      `patchCacheInFailureCatch` does, so the retirements and the caller's state.json still
@@ -1750,7 +1771,7 @@ async function applyPlannedPersistOutcome(a: {
      row), and the row is no longer known as the run's own (rule 11). */
   const patch: CachePatch = {
     ledger: a.ledgerPatch,
-    ...(cache.matchPlan && Object.keys(decisions).length > 0 ? { decisions } : {}),
+    ...(cache.matchPlan ? { transform: withDecisions } : {}),
     ...(Object.keys(idMap).length > 0 ? { remapCharacterIds: idMap } : {}),
   };
   let unsentPatch: CachePatch | undefined;
@@ -2461,6 +2482,21 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
 ): Promise<S[]> {
   const reminted = remapSentenceIds(sentences, remint);
   if (!bookDir) return reminted;
+  const { idMap } = await mergedAwayIds(bookDir, reminted.map((s) => s.characterId), priorIds, decisions, addedIds);
+  return remapSentenceIds(reminted, idMap);
+}
+
+/* `resolveCurrentIds`' gate, for any set of ids: which of them a user merged away mid-run,
+   and onto which live survivor (with the survivor's on-disk row). A catch-all bucket never
+   follows its history (R49): a user merge of an old bucket is not a merge of this run's
+   bucket. Throws on a degraded history. */
+async function mergedAwayIds(
+  bookDir: string,
+  ids: Iterable<string>,
+  priorIds: ReadonlySet<string>,
+  decisions: Readonly<Record<string, { kind: string; priorId?: string; id?: string }>> | undefined,
+  addedIds: ReadonlySet<string>,
+): Promise<{ idMap: Record<string, string>; survivors: Map<string, { id: string; name?: unknown }> }> {
   const read = await loadCastIdHistoryWithStatus(bookDir);
   /* An unreadable history is "could not be determined", never "nothing merged": fail
      rather than write ids a merge has retired. */
@@ -2468,7 +2504,9 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
   const cast = (await readJson<{ characters?: Array<{ id: string }> }>(castJsonPath(bookDir)))?.characters ?? [];
   const resolver = buildCastResolver(cast, read.history);
   const idMap: Record<string, string> = {};
-  for (const { characterId } of reminted) {
+  const survivors = new Map<string, { id: string; name?: unknown }>();
+  for (const characterId of new Set(ids)) {
+    if (characterId === MALE_BUCKET_ID || characterId === FEMALE_BUCKET_ID) continue;
     /* A resume reads the stopped leg's snapshot rows as prior, so a run-added id can be a prior id too. */
     const runAdded = addedIds.has(characterId);
     if (!priorIds.has(characterId) && !runAdded) continue;
@@ -2484,8 +2522,75 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
     const ownNew = runAdded && decision?.kind === 'new' && decision.id === characterId;
     if (decision && !joined && !intoNew && !ownNew) continue;
     idMap[characterId] = hit.character.id;
+    survivors.set(hit.character.id, hit.character as { id: string; name?: unknown });
   }
-  return remapSentenceIds(reminted, idMap);
+  return { idMap, survivors };
+}
+
+/* PR #4103 pass 1 O2 — the in-memory roster and takes, collapsed through the merges a user
+   made mid-run, BEFORE the dedup and the fold: otherwise a merged-away row the run added
+   (below the fold's line count, or sharing a name with another row) is folded into a
+   bucket or deduped into a sibling, and the survivor gets none of its lines. Same gate as
+   `resolveCurrentIds`. A merged-away row becomes its survivor: dropped when the survivor
+   has its own roster row, otherwise re-keyed to it under the survivor's on-disk name and
+   with no aliases of its own (the merge route already aliased the survivor on disk, which
+   the persist keeps, and the dedup must not read the merged name as the survivor's own,
+   which would pair it with a same-named sibling). The in-memory plan follows the merge
+   (`retargetPlanForMerge`, as the merge route did to the cache's), so the persist, the
+   dedup constraints and the fold's protected ids all see it. `null` when nothing was
+   merged away (or there is no plan or book dir). */
+async function collapseMidRunMerges(a: {
+  bookDir: string | undefined;
+  roster: CharacterOutput[];
+  sentences: SentenceOutput[];
+  prior: PriorRow[];
+  plan: MatchPlan | undefined;
+  currentBookId: string | undefined;
+}): Promise<{
+  roster: CharacterOutput[];
+  sentences: SentenceOutput[];
+  plan: MatchPlan;
+  constraints: DedupConstraints;
+  protectIds: ReadonlySet<string>;
+} | null> {
+  if (!a.bookDir || !a.plan) return null;
+  const ids = [...a.roster.map((c) => c.id), ...a.sentences.map((s) => s.characterId)];
+  let found: Awaited<ReturnType<typeof mergedAwayIds>>;
+  try {
+    found = await mergedAwayIds(a.bookDir, ids, new Set(a.prior.map((r) => r.id)), a.plan.decisions, planAddedIds(a.plan));
+  } catch (err) {
+    /* A degraded history: the persist fails closed on it (rule 9); nothing is collapsed here. */
+    console.warn('[analysis] mid-run merges not applied before the fold - the merge history could not be read', err);
+    return null;
+  }
+  const { idMap, survivors } = found;
+  if (Object.keys(idMap).length === 0) return null;
+  let plan = a.plan;
+  for (const [from, to] of Object.entries(idMap)) plan = retargetPlanForMerge(plan, from, to);
+  const roster: CharacterOutput[] = [];
+  for (const c of a.roster) {
+    const to = idMap[c.id];
+    if (!to) {
+      roster.push(c);
+      continue;
+    }
+    if (a.roster.some((r) => r.id === to) || roster.some((r) => r.id === to)) continue;
+    const name = survivors.get(to)?.name;
+    roster.push({ ...c, id: to, name: typeof name === 'string' ? name : c.name, aliases: [] });
+  }
+  const history = toMatchHistory(await loadCastIdHistoryWithStatus(a.bookDir));
+  return {
+    roster,
+    sentences: remapSentenceIds(a.sentences, idMap),
+    plan,
+    constraints: planConstraintsFor({ roster, plan, prior: a.prior, history, currentBookId: a.currentBookId }),
+    protectIds: planProtectIdsOf(plan),
+  };
+}
+
+/** The plan's joined prior ids: never folded (R29). */
+function planProtectIdsOf(plan: MatchPlan): Set<string> {
+  return new Set(Object.values(plan.decisions).flatMap((d) => (d.kind === 'join' ? [d.priorId] : [])));
 }
 
 /** R34: the ids a plan added (its `new` rows); the in-memory plan still names them after a
@@ -7858,6 +7963,22 @@ export async function runMainAnalyzerJob(
       /* R8: a take recorded (or replayed from the cache) before a Phase-0b re-mint. */
       if (arr) allSentences.push(...remapSentenceIds(arr, remintIdMap));
     }
+    /* PR #4103 pass 1 O2 — a user's mid-run merges, before the dedup and the fold see the roster. */
+    const collapsed = await collapseMidRunMerges({
+      bookDir: liveBookDir(job) ?? undefined,
+      roster: stage1.characters,
+      sentences: allSentences,
+      prior: priorCastForMerge as PriorRow[],
+      plan: cache.matchPlan,
+      currentBookId: recordRef.bookId ?? undefined,
+    });
+    if (collapsed) {
+      stage1.characters = collapsed.roster;
+      allSentences.splice(0, allSentences.length, ...collapsed.sentences);
+      cache.matchPlan = collapsed.plan;
+      planConstraints = collapsed.constraints;
+      planProtectIds = collapsed.protectIds;
+    }
 
     /* Final manuscript-edits.json write is deferred until after the fold
        pass below so on-disk sentences match the folded cast (bucket ids
@@ -10060,6 +10181,22 @@ export async function runSubsetAnalyzerJob(
       if (h.excluded || pendingIds.has(h.id)) continue;
       const arr = cachedChapters[h.id];
       if (arr) allSentences.push(...arr);
+    }
+    /* PR #4103 pass 1 O2 — a user's mid-run merges, before the dedup and the fold (as the main job). */
+    const collapsed = await collapseMidRunMerges({
+      bookDir: liveBookDir(job) ?? undefined,
+      roster: stage1.characters,
+      sentences: allSentences,
+      prior: priorCastForMerge as PriorRow[],
+      plan: cache.matchPlan,
+      currentBookId: record.bookId ?? undefined,
+    });
+    if (collapsed) {
+      stage1.characters = collapsed.roster;
+      allSentences.splice(0, allSentences.length, ...collapsed.sentences);
+      cache.matchPlan = collapsed.plan;
+      planConstraints = collapsed.constraints;
+      planProtectIds = collapsed.protectIds;
     }
 
     /* Recover narrator-stranded tagged-speaker lines before the fold (see the
