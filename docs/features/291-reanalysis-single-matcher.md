@@ -1598,7 +1598,11 @@ Each test asserts cast.json, per-character line counts, history and suggestions.
 - **Narrowed reads-prior rule:** any other file that imports or calls `readPriorCastForMerge`,
   `readPriorCastLockFree` or `materialisePriorAtRunStart` and contains a comparator fails.
 - **Reverse check:** passes on today's tree minus the deleted matchers.
-- **Blind spots** are stated in the guard's header.
+- **Blind spots** are stated in the guard's header. The largest (PR #4103 pass 1 G1): rule 1 counts
+  comparators only in the listed files and the reads-prior rule only in files that import or call a
+  prior reader, so a comparator in a new file, or in a non-importing file its caller feeds the prior
+  rows to, passes. What is mechanically enforced is the listed sites' counts, not the absence of
+  a second matcher anywhere.
 
 - [ ] **Step 1:** guard (red).
 - [ ] **Step 2:** delete; replace tests; typecheck both.

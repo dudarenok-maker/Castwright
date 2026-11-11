@@ -28,6 +28,14 @@
    (`test-utils/guard-scan.ts`, #3685).
 
    BLIND SPOTS (stated, not hidden):
+     - SCOPE OF THE TWO RULES (the likeliest placement, PR #4103 pass 1 G1).
+       Rule 1 counts comparators only in the seven listed files, and rule 2
+       only in a file that itself imports or calls one of the three prior
+       readers. A comparator in a NEW file, or in an existing unlisted file
+       its caller feeds the prior rows to (a helper `analysis.ts` calls with
+       `priorCastForMerge`; `workspace/series-reuse-link.ts`, which already
+       holds comparators and receives the jobs' rows), passes green. The guard
+       pins the known matcher sites; it does not prove there is no other.
      - A DYNAMIC IMPORT (`await import('...')`) of a reader or a comparator
        module is not an `import` the scan keys on; the call it feeds is still
        seen if it names the symbol, but `const m = await import(...); m[k]()`

@@ -1152,7 +1152,10 @@ recite:
     not the first matcher's return value. Use a fixture without the field that
     masks the defect (P3-2's `voiceId` carried the voice across the id
     change). A second place that compares a fresh row with a prior one is
-    itself the finding (`single-matcher.guard.test.ts` pins this).
+    itself the finding. `single-matcher.guard.test.ts` catches one only in
+    its seven listed files, or in a file that itself reads the prior through
+    the jobs' three readers; a comparator in a new file, or in one its caller
+    feeds the prior rows to, passes it, so look for that by reading.
 
 ### Keeping the catalogue current
 
