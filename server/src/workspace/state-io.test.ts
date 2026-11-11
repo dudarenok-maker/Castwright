@@ -14,6 +14,7 @@ import { join } from 'node:path';
    intercept is a module-scoped swap so each test can install its own
    failure pattern via setRenameImpl(). */
 let renameImpl: ((src: string, dest: string) => Promise<void>) | null = null;
+let readFileHook: ((path: string, run: () => Promise<unknown>) => Promise<unknown>) | null = null;
 /* tmp files written with flush: true (fsync'd) — see the fsync test below. */
 const syncedTmp: string[] = [];
 const reopenedTmp: string[] = [];
@@ -22,6 +23,10 @@ vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
     ...actual,
+    readFile: ((...args: Parameters<typeof actual.readFile>) => {
+      const run = () => actual.readFile(...args) as Promise<unknown>;
+      return readFileHook ? readFileHook(String(args[0]), run) : run();
+    }) as typeof actual.readFile,
     /* Default: pass-through. Tests override via setRenameImpl(). */
     rename: (src: string, dest: string): Promise<void> => (renameImpl ?? actual.rename)(src, dest),
     /* The write goes through ONE handle: `writeFile` with `flush: true` fsyncs
@@ -47,8 +52,15 @@ function setRenameImpl(fn: ((src: string, dest: string) => Promise<void>) | null
 }
 
 /* Import AFTER vi.mock so state-io.ts picks up the mocked rename. */
-const { writeJsonAtomic, readJson, readJsonWithRecovery, hasWriteInFlightMarker } = await import('./state-io.js');
-const { jitteredDelayMs } = await import('./atomic-rename.js');
+const {
+  writeJsonAtomic,
+  readJson,
+  readJsonWithRecovery,
+  hasWriteInFlightMarker,
+  MISSING_WAIT_MS,
+  setMissingWaitMsForTests,
+} = await import('./state-io.js');
+const { jitteredDelayMs, RENAME_RETRY_DELAYS_MS } = await import('./atomic-rename.js');
 
 let workdir: string;
 
@@ -58,6 +70,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   setRenameImpl(null);
+  readFileHook = null;
+  setMissingWaitMsForTests(null);
+  vi.useRealTimers();
   await rm(workdir, { recursive: true, force: true });
 });
 
@@ -382,6 +397,100 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 1 });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('was missing'));
+    warn.mockRestore();
+  });
+
+  /* A writer in ANOTHER process can finish (rename-in, marker removed) between
+     the reader's ENOENT and its marker check. Main is back then: serve it. */
+  it('a writer finishing between the ENOENT and the marker check is not read as a strand', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const marker = `${target}.writing-999999-1`;
+    await actual.rename(target, `${target}.bak.1`);
+    await writeFile(`${target}.tmp-x`, JSON.stringify({ v: 3 }));
+    await writeFile(marker, '');
+    let hooked = false;
+    readFileHook = async (p, run) => {
+      if (p !== target || hooked) return run();
+      hooked = true;
+      try {
+        return await run();
+      } finally {
+        await actual.rename(`${target}.tmp-x`, target);
+        await actual.unlink(marker);
+      }
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await readJsonWithRecovery(target, { keep: 3, recoverMissing: true })).toEqual({ v: 3 });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('was missing'));
+    warn.mockRestore();
+  });
+
+  it("the wait bound covers renameWithRetry's worst case, and a rename-in near it is waited out", async () => {
+    const worst = RENAME_RETRY_DELAYS_MS.reduce((a, d) => a + 2 * d, 0);
+    expect(MISSING_WAIT_MS).toBeGreaterThan(worst);
+    expect(MISSING_WAIT_MS).toBe(worst + 500);
+
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const marker = `${target}.writing-999999-1`;
+    await actual.rename(target, `${target}.bak.1`);
+    await writeFile(`${target}.tmp-x`, JSON.stringify({ v: 3 }));
+    await writeFile(marker, '');
+    const realSetTimeout = globalThis.setTimeout;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let result: unknown;
+    let done = false;
+    void readJsonWithRecovery(target, { keep: 3, recoverMissing: true }).then((v) => {
+      result = v;
+      done = true;
+    });
+    /* Real fs I/O completes on real time: give it a real millisecond per step. */
+    const settle = () => new Promise<void>((r) => realSetTimeout(r, 1));
+    for (let t = 0; t < worst - 100 && !done; t += 8) {
+      await vi.advanceTimersByTimeAsync(8);
+      await settle();
+    }
+    expect(done).toBe(false);
+    await actual.rename(`${target}.tmp-x`, target);
+    await actual.unlink(marker);
+    for (let i = 0; i < 50 && !done; i += 1) {
+      await vi.advanceTimersByTimeAsync(8);
+      await settle();
+    }
+    expect(result).toEqual({ v: 3 });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('was missing'));
+    warn.mockRestore();
+  });
+
+  it('a foreign marker that already timed out costs one wait, not one per read', async () => {
+    setMissingWaitMsForTests(150);
+    const targets: string[] = [];
+    for (const n of [1, 2, 3]) {
+      const dir = join(workdir, `book${n}`);
+      await mkdir(dir, { recursive: true });
+      const target = join(dir, 'state.json');
+      await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+      await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+      await rm(target);
+      await writeFile(`${target}.writing-999999-1`, '');
+      targets.push(target);
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const walk = async (): Promise<number> => {
+      const t0 = Date.now();
+      for (const t of targets) {
+        expect(await readJsonWithRecovery(t, { keep: 3, recoverMissing: true })).toEqual({ v: 1 });
+      }
+      return Date.now() - t0;
+    };
+    expect(await walk()).toBeGreaterThanOrEqual(3 * 140);
+    expect(await walk()).toBeLessThan(100);
     warn.mockRestore();
   });
 
