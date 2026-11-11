@@ -53,6 +53,7 @@ import {
   runJob,
   runSubsetRetry,
   sel,
+  setNonStoryHook,
   setPhase0Hook,
   setPhase1Hook,
   setPipelined,
@@ -3501,6 +3502,27 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris-vane', 'narrator', 'olga']);
       expect(editLines(b)).toEqual({ anna: 3, olga: 1, 'boris-vane': 3 });
       expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, 'boris-vane': 3, narrator: 0 });
+      expectMergeHonoured(b);
+    });
+
+    it('P2-2 (PR #4103 pass 2): a merge landing after the first collapse, before the fold, is honoured', async () => {
+      const b = olgaBook();
+      const FRESH = { roster: [NARR, fr('anna', 'Anna'), boris], speakerId: 'anna' };
+      const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris'] : ['anna']));
+      /* The front-matter guard's classifier call sits after the dedup's collapse and before
+         the fold in both jobs (boris, 1 line in the first chapter, is its candidate). */
+      let merged: request.Response | undefined;
+      setNonStoryHook(async () => {
+        merged ??= await mergeRoute(b, 'boris', 'olga');
+      });
+      const events = await go(b, FRESH, { phase1: script });
+      expect(merged?.status).toBe(200);
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator', 'olga']);
+      expect(row(b, 'olga')).toMatchObject({ name: 'Olga', aliases: expect.arrayContaining(['Boris Vane']) });
+      expect(editLines(b)).toEqual({ anna: 3, olga: 1 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, narrator: 0 });
       expectMergeHonoured(b);
     });
 

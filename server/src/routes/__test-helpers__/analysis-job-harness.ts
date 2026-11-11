@@ -100,12 +100,30 @@ export const setPhase1Hook = (h: typeof phase1Hook): void => {
   phase1Hook = h;
 };
 
+/* Runs inside the non-story classifier call, which both jobs make from the front-matter
+   guard after their mid-run merge collapse and before the fold (PR #4103 pass 2 P2-2). Set,
+   the Phase-0 analyzer gains `runNonStoryClassification` (answering "story", so nothing is
+   stripped); unset, it has none, as before. Set it before the run starts. */
+let nonStoryHook: (() => void | Promise<void>) | undefined;
+export const setNonStoryHook = (h: typeof nonStoryHook): void => {
+  nonStoryHook = h;
+};
+
 /** The job `run` last started (an abort hook reaches the controller through it). */
 let lastJob: AnalysisJob | undefined;
 export const getLastJob = (): AnalysisJob | undefined => lastJob;
 
 export function phase0(rosterRows: CharacterOutput[]): Analyzer {
+  const hook = nonStoryHook;
   return {
+    ...(hook
+      ? {
+          runNonStoryClassification: (async () => {
+            await hook();
+            return { nonStory: false };
+          }) as unknown as Analyzer['runNonStoryClassification'],
+        }
+      : {}),
     runStage1: () => Promise.reject(new Error('not used')),
     async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
       await phase0Hook?.(chapterId);
@@ -209,6 +227,7 @@ export function resetHarness(): void {
   delete g[PIPELINED_GLOBAL];
   phase0Hook = undefined;
   phase1Hook = undefined;
+  nonStoryHook = undefined;
   lastJob = undefined;
 }
 

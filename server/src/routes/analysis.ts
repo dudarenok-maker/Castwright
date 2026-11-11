@@ -8140,6 +8140,22 @@ export async function runMainAnalyzerJob(
     }
     stage1.characters = guarded.characters;
     recovered.sentences = guarded.sentences;
+    /* PR #4103 pass 2 P2-2 — again, right before the fold: a merge that landed after the
+       collapse above (the Phase-2 sleep, the settings read, the classifier) is honoured too. */
+    const collapsedAgain = await collapseMidRunMerges({
+      bookDir: liveBookDir(job) ?? undefined,
+      roster: stage1.characters,
+      sentences: recovered.sentences,
+      prior: priorCastForMerge as PriorRow[],
+      plan: cache.matchPlan,
+      currentBookId: recordRef.bookId ?? undefined,
+    });
+    if (collapsedAgain) {
+      stage1.characters = collapsedAgain.roster;
+      recovered.sentences = collapsedAgain.sentences;
+      cache.matchPlan = collapsedAgain.plan;
+      planProtectIds = collapsedAgain.protectIds;
+    }
     /* Plan 291 (R29) - the fold runs on plan-applied ids and never folds a row the plan
        joined to a prior row (`planProtectIds`, as the live-view fold does). */
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
@@ -10300,6 +10316,21 @@ export async function runSubsetAnalyzerJob(
     }
     stage1.characters = guarded.characters;
     recovered.sentences = guarded.sentences;
+    /* PR #4103 pass 2 P2-2 — again, right before the fold (as the main job). */
+    const collapsedAgain = await collapseMidRunMerges({
+      bookDir: liveBookDir(job) ?? undefined,
+      roster: stage1.characters,
+      sentences: recovered.sentences,
+      prior: priorCastForMerge as PriorRow[],
+      plan: cache.matchPlan,
+      currentBookId: record.bookId ?? undefined,
+    });
+    if (collapsedAgain) {
+      stage1.characters = collapsedAgain.roster;
+      recovered.sentences = collapsedAgain.sentences;
+      cache.matchPlan = collapsedAgain.plan;
+      planProtectIds = collapsedAgain.protectIds;
+    }
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions.
        Plan 291 (R29) - on plan-applied ids, never folding a row the plan joined to a
