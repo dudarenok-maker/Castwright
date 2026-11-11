@@ -8042,22 +8042,6 @@ export async function runMainAnalyzerJob(
       /* R8: a take recorded (or replayed from the cache) before a Phase-0b re-mint. */
       if (arr) allSentences.push(...remapSentenceIds(arr, remintIdMap));
     }
-    /* PR #4103 pass 1 O2 — a user's mid-run merges, before the dedup and the fold see the roster. */
-    const collapsed = await collapseMidRunMerges({
-      bookDir: liveBookDir(job) ?? undefined,
-      roster: stage1.characters,
-      sentences: allSentences,
-      prior: priorCastForMerge as PriorRow[],
-      plan: cache.matchPlan,
-      currentBookId: recordRef.bookId ?? undefined,
-    });
-    if (collapsed) {
-      stage1.characters = collapsed.roster;
-      allSentences.splice(0, allSentences.length, ...collapsed.sentences);
-      cache.matchPlan = collapsed.plan;
-      planConstraints = collapsed.constraints;
-      planProtectIds = collapsed.protectIds;
-    }
 
     /* Final manuscript-edits.json write is deferred until after the fold
        pass below so on-disk sentences match the folded cast (bucket ids
@@ -8118,6 +8102,24 @@ export async function runMainAnalyzerJob(
        account view (`minorCastMinLines`); see
        server/src/analyzer/fold-minor-cast.ts for the trigger contract. */
     const userSettings = await readUserSettings();
+    /* PR #4103 pass 1 O2 — a user's mid-run merges, before the dedup and the fold see the
+       roster. After the Phase-2 sleep and the settings read (pass 3 P3-2), so no await of
+       the job's own lies between this collapse and the dedup. */
+    const collapsed = await collapseMidRunMerges({
+      bookDir: liveBookDir(job) ?? undefined,
+      roster: stage1.characters,
+      sentences: allSentences,
+      prior: priorCastForMerge as PriorRow[],
+      plan: cache.matchPlan,
+      currentBookId: recordRef.bookId ?? undefined,
+    });
+    if (collapsed) {
+      stage1.characters = collapsed.roster;
+      allSentences.splice(0, allSentences.length, ...collapsed.sentences);
+      cache.matchPlan = collapsed.plan;
+      planConstraints = collapsed.constraints;
+      planProtectIds = collapsed.protectIds;
+    }
     /* Recover dialogue lines stage-2 left on the narrator (a prose-tagged
        speaker who is in the roster but got 0 attributed lines) BEFORE the fold
        counts lines, so the fold doesn't drop them as 0-line. */

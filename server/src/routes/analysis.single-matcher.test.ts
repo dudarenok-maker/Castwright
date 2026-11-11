@@ -160,6 +160,19 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   };
 });
 
+/* Passthrough; a test may run something inside each `readUserSettings` call, before it reads. */
+const settingsSpy = vi.hoisted(() => ({ before: undefined as undefined | (() => Promise<void>) }));
+vi.mock('../workspace/user-settings.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/user-settings.js')>();
+  return {
+    ...actual,
+    readUserSettings: async (...a: Parameters<typeof actual.readUserSettings>) => {
+      await settingsSpy.before?.();
+      return actual.readUserSettings(...a);
+    },
+  };
+});
+
 /* Passthrough; a test may make the next `updateStateAtDir` throw (`failNext`, one-shot). */
 const stateSpy = vi.hoisted(() => ({ failNext: undefined as undefined | Error }));
 vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
@@ -3606,6 +3619,34 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, 'boris-vane': 3, narrator: 0 });
       expectMergeHonoured(b);
     });
+
+    /* Main-only (one line, R18): only the main job awaits (its Phase-2 sleep and settings read) between Phase 1 and its dedup. */
+    if (kind === 'main')
+      it('P3-2 (PR #4103 pass 3): a merge landing in the settings read before the dedup still reaches the survivor, not the sibling', async () => {
+        const b = olgaBook();
+        const FRESH = { roster: [NARR, fr('anna', 'Anna'), boris, borisVane], speakerId: 'anna' };
+        const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris', 'boris-vane'] : ['anna', 'boris-vane']));
+        /* The job's settings read after the Phase-2 sleep: the first one once Phase 2 is under way. */
+        let job: { replay: { lastPhase: { phaseId?: number } | null } } | undefined;
+        let merged: request.Response | undefined;
+        settingsSpy.before = async () => {
+          if (merged || job?.replay.lastPhase?.phaseId !== 2) return;
+          merged = await mergeRoute(b, 'boris', 'olga');
+        };
+        let events: Awaited<ReturnType<typeof go>>;
+        try {
+          events = await go(b, FRESH, { phase1: script, onJob: (j) => (job = j as unknown as typeof job) });
+        } finally {
+          settingsSpy.before = undefined;
+        }
+        expect(merged?.status).toBe(200);
+        expect(errCode(events)).toBeUndefined();
+        expect(done(events)).toBe(true);
+        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris-vane', 'narrator', 'olga']);
+        expect(editLines(b)).toEqual({ anna: 3, olga: 1, 'boris-vane': 3 });
+        expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, 'boris-vane': 3, narrator: 0 });
+        expectMergeHonoured(b);
+      });
 
     it('P2-2 (PR #4103 pass 2): a merge landing after the first collapse, before the fold, is honoured', async () => {
       const b = olgaBook();
