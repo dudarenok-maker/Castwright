@@ -419,11 +419,18 @@ when an op is VRAM-starved. Coqui is *one step of it* (`:5063`), calling
 idle evict: it is one entry in a generic ladder that every engine has a step
 in.
 
-Two Coqui-specific qualifications distinguish the Coqui step from the others:
+Two things distinguish the Coqui step from the others:
 
 1. **Self-admission skip.** The step is omitted entirely when the admitting
-   op is itself Coqui (`server/tts-sidecar/main.py:5053`, `if engine !=
+   op is itself Coqui (`server/tts-sidecar/main.py`, `if engine !=
    "coqui"`) — evicting would unload the model that op is about to reload.
+   `qwen.base17` has its own version of this (#4079): a plain `1.7b` synth
+   while the 1.7B-Base is resident skips the `qwen.base17` step
+   (`_own_resident_tier`, `PlacementController.own_resident_tier`), and the
+   reservation keeps every OTHER admission's ladder off that step until it is
+   released. The ledger still books the full peak; the resident weights are
+   added back only to that request's own fit check, on the card the base is on.
+   Mint, GPU ASR and GPU SPK are not covered (reported on #4079).
 2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
    `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
    registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)

@@ -1,6 +1,9 @@
 """#4079 — the 1.7B-Base tier must not be evicted by the admission of the very
-request that is about to use it (A122 Finding 1 / A120 F9), and an admission
-evict must not be logged as the idle watchdog."""
+request that is about to use it (A122 Finding 1 / A120 F9), the ledger must keep
+booking the FULL peak, and an admission evict must not be logged as the idle
+watchdog. Most tests drive the REAL `_own_resident_tier` + `_idle_evict_steps`
+through `PlacementController.reservation` with a fake resident QwenEngine, so
+they go red on `main` because base17 is evicted, not because an API is missing."""
 from __future__ import annotations
 
 import asyncio
@@ -9,109 +12,279 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
     sys.path.insert(0, str(SIDECAR_ROOT))
 
 import main  # noqa: E402
 
-
-def dev(free):
-    return {"kind": "cuda", "index": 0, "label": "g", "totalMb": 8192, "freeMb": free}
-
-
-def controller(free, evicted, own):
-    """8 GB card; the 1.7B request books 6144 cold. `free` is what is left with
-    the 1.7B-Base resident."""
-    state = {"free": free}
-
-    def free_base17():
-        evicted.append("qwen.base17")
-        state["free"] += 3400
-        return True
-
-    fp = type("F", (), {"peak_mb": lambda *_: 6144, "record": lambda *_: None})()
-    return main.PlacementController(
-        probe=lambda: [dev(state["free"])],
-        footprints=fp,
-        ledger=main.ReservationLedger(),
-        reserve_mb=lambda: 500,
-        idle_evict_steps=lambda dk, eng: [main.EvictStep("qwen.base17", None, free_base17)],
-        is_resident=lambda e: "cuda:0",
-        own_resident_tier=lambda e, m, c: own,
-    )
+TOTAL = 8192
+BASE17_MB = 3900  # measured on-box (A122 tts.err.log: vram_reserved 3951/4048 with base17 resident)
+OTHER_MB = 300  # CUDA context etc.
 
 
-def test_resident_own_tier_is_credited_and_not_evicted():
-    evicted: list[str] = []
-
-    async def body():
-        pc = controller(4600, evicted, ("qwen.base17", 3400))
-        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as admission:
-            assert admission["device"] == "cuda:0"
-
-    asyncio.run(body())
-    assert evicted == []
-
-
-def test_cold_request_still_evicts_when_the_tier_is_not_resident():
-    """Control: with no own-tier credit the same numbers DO need the evict, so
-    the test above cannot pass by the ladder simply not running."""
-    evicted: list[str] = []
-
-    async def body():
-        pc = controller(4600, evicted, (None, 0))
-        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as admission:
-            assert admission["device"] == "cuda:0"
-
-    asyncio.run(body())
-    assert evicted == ["qwen.base17"]
-
-
-def test_protected_tier_is_never_evicted_even_when_nothing_fits():
-    evicted: list[str] = []
-
-    async def body():
-        pc = controller(500, evicted, ("qwen.base17", 3400))
-        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as admission:
-            assert "noCapacity" in admission
-
-    asyncio.run(body())
-    assert evicted == []
-
-
-def test_admit_also_skips_the_protected_tier():
-    evicted: list[str] = []
-
-    async def body():
-        pc = controller(4600, evicted, ("qwen.base17", 3400))
-        return await pc.admit("qwen", "1.7b", {}, cpu_capable=False, heavy=True)
-
-    assert asyncio.run(body()) == {"device": "cuda:0"}
-    assert evicted == []
-
-
-def _fake_qwen(resident=True):
+def _fake_qwen(resident=True, weights_mb=0, device="cuda:0"):
     q = object.__new__(main.QwenEngine)
+    q._base = None
     q._base17 = object() if resident else None
+    q._design = None
     q._base17_last_used = 0.0
     q._base17_in_flight = main.InFlightCounter()
+    q._design_in_flight = main.InFlightCounter()
     q._synth_lock = threading.Lock()
-    q._device = "cuda:0"
+    q._device = device
+    q._base17_weights_mb = weights_mb
     return q
 
 
+class FP:
+    """Footprints at the seeds (cold 1.7b = 6144), no learning."""
+
+    def __init__(self, peaks=None):
+        self.peaks = peaks or {"qwen.1.7b": 6144, "qwen": 3072, "coqui": 3584}
+
+    def peak_mb(self, engine, model, cfg=None, resident=False):
+        return self.peaks.get(main.FootprintTable._key(engine, model, cfg, resident), 0)
+
+    def record(self, *a, **k):
+        pass
+
+
+def _wire(monkeypatch, qwen, devices_fn, steps=None):
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+    monkeypatch.delitem(main.ENGINES, "coqui", raising=False)
+    monkeypatch.setattr(main, "_reclaim_host_and_vram", lambda: None)
+    monkeypatch.setattr(main, "SPK", object())
+    monkeypatch.setattr(main, "ASR", object())
+    # The PRODUCTION controller (real own_resident_tier hook, real ladder, real
+    # _is_resident, which is blind to _base17); only the probe/footprints/ledger
+    # are swapped. This is what makes the tests red on `main` by eviction, and
+    # what catches the hook being unwired from `_placement`.
+    pc = main._placement
+    monkeypatch.setattr(pc, "probe", devices_fn)
+    monkeypatch.setattr(pc, "footprints", FP())
+    monkeypatch.setattr(pc, "ledger", main.ReservationLedger())
+    monkeypatch.setattr(pc, "reserve_mb", lambda: 500)
+    monkeypatch.setattr(pc, "_protected_steps", {}, raising=False)
+    monkeypatch.setattr(pc, "_admit_lock", asyncio.Lock())
+    if steps is not None:
+        monkeypatch.setattr(pc, "idle_evict_steps", steps)
+    return pc
+
+
+def _one_card(qwen, extra_free=0):
+    def probe():
+        used = OTHER_MB + (BASE17_MB if qwen._base17 is not None else 0)
+        return [{"kind": "cuda", "index": 0, "label": "g", "totalMb": TOTAL, "freeMb": TOTAL - used + extra_free}]
+
+    return probe
+
+
+# --- the headline: real wiring, real ladder -------------------------------
+
+
+def test_resident_1_7b_synth_is_admitted_without_evicting_base17(monkeypatch):
+    """F9: back-to-back 1.7b synth on 8 GB. On main this evicts base17 (the
+    cold 6144 booking does not fit next to the resident 3900)."""
+    qwen = _fake_qwen()
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm, pc.ledger.reserved_mb("cuda:0")
+
+    adm, booked = asyncio.run(body())
+    assert adm == {"device": "cuda:0"}
+    assert qwen._base17 is not None, "admission evicted the tier the request is about to use"
+    assert booked == 6144, "the ledger must book the FULL peak"
+
+
+def test_cold_1_7b_synth_with_nothing_resident_still_admits_normally(monkeypatch):
+    qwen = _fake_qwen(resident=False)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert asyncio.run(body()) == {"device": "cuda:0"}
+
+
+def test_protected_tier_is_not_evicted_even_when_nothing_fits(monkeypatch):
+    qwen = _fake_qwen()
+    # Another process holds most of the card: even with the credit it cannot fit.
+    pc = _wire(monkeypatch, qwen, _one_card(qwen, extra_free=-3000))
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    assert "noCapacity" in asyncio.run(body())
+    assert qwen._base17 is not None
+
+
+def test_admit_skips_the_protected_tier_without_relying_on_the_credit(monkeypatch):
+    """Kills the 'protect removed from admit()' mutant: a probe that only fits
+    AFTER base17 is gone, so only a (wrongly) run evict step could admit."""
+    qwen = _fake_qwen()
+    ran = []
+
+    def steps(dk, eng):
+        def run():
+            ran.append("qwen.base17")
+            return True
+
+        return [main.EvictStep("qwen.base17", None, run)]
+
+    def probe():  # fits only if base17 is evicted AND not credited: too tight for the credit
+        return [{"kind": "cuda", "index": 0, "label": "g", "totalMb": TOTAL, "freeMb": 100}]
+
+    pc = _wire(monkeypatch, qwen, probe, steps=steps)
+    out = asyncio.run(pc.admit("qwen", "1.7b", {}, cpu_capable=False, heavy=True))
+    assert "noCapacity" in out
+    assert ran == [], "admit() ran the protected evict step"
+
+
+# --- 🟠1 (a)/(b)/(c): the ledger ------------------------------------------
+
+
+def test_a_second_op_is_not_admitted_into_vram_the_first_booked(monkeypatch):
+    """(a) On the credited-booking design B (3072) was admitted next to A's
+    2744 hold: 5816 booked against 3992 free."""
+    qwen = _fake_qwen()
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+    out = {}
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as a:
+            out["a"] = a
+            async with pc.reservation("qwen", "0.6b", {}, cpu_capable=False, heavy=True) as b:
+                out["b"] = b
+
+    asyncio.run(body())
+    assert out["a"] == {"device": "cuda:0"}
+    assert "noCapacity" in out["b"]
+
+
+def test_another_admissions_ladder_cannot_evict_base17_under_the_hold(monkeypatch):
+    """(b) A holds its booking but has not claimed _base17_in_flight; a Coqui
+    admission's ladder used to run the real qwen.base17 step."""
+    qwen = _fake_qwen()
+    # Roomy enough for Coqui to be admitted only after evicting something.
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+    out = {}
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True):
+            async with pc.reservation("coqui", None, {}, cpu_capable=False, heavy=True) as b:
+                out["b"] = b
+                out["during"] = qwen._base17
+        out["protected_after"] = dict(pc._protected_steps)
+
+    asyncio.run(body())
+    assert out["during"] is not None
+    assert "noCapacity" in out["b"]
+    assert out["protected_after"].get("qwen.base17", 0) == 0, "protection must be released with the hold"
+
+
+def test_protection_is_released_when_the_body_raises(monkeypatch):
+    qwen = _fake_qwen()
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+
+    async def body():
+        with pytest.raises(RuntimeError):
+            async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True):
+                raise RuntimeError("boom")
+
+    asyncio.run(body())
+    assert pc._protected_steps.get("qwen.base17", 0) == 0
+
+
+def test_the_credit_lands_only_on_the_card_base17_is_on(monkeypatch):
+    """(c) cuda:0 (base17 resident) cannot fit; cuda:1 (eGPU) has room. The
+    forward runs on cuda:0 regardless, so the request must not be 'placed' on
+    cuda:1 against a booking that never covers cuda:0."""
+    qwen = _fake_qwen()
+    devs = [
+        {"kind": "cuda", "index": 0, "label": "laptop", "totalMb": 8192, "freeMb": 3992},
+        {"kind": "cuda", "index": 1, "label": "egpu", "totalMb": 12288, "freeMb": 9000},
+    ]
+    pc = _wire(monkeypatch, qwen, lambda: devs, steps=lambda dk, eng: [])
+    out = {}
+
+    async def body():
+        assert main._is_resident("qwen") is None
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as a:
+            out["a"] = a
+            out["held"] = (pc.ledger.reserved_mb("cuda:0"), pc.ledger.reserved_mb("cuda:1"))
+
+    asyncio.run(body())
+    assert out["a"] == {"device": "cuda:0"}
+    assert out["held"] == (6144, 0)
+
+
+# --- the resolver ---------------------------------------------------------
+
+
 def test_own_resident_tier_resolver(monkeypatch):
-    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True))
-    assert main._own_resident_tier("qwen", "1.7b", {}) == ("qwen.base17", main._QWEN_BASE17_WEIGHTS_MB)
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=3900))
+    assert main._own_resident_tier("qwen", "1.7b", {}) == ("qwen.base17", 3900, "cuda:0")
     assert main._own_resident_tier("qwen", "1.7b", None)[0] == "qwen.base17"
-    assert main._own_resident_tier("qwen", "0.6b", {}) == (None, 0)
-    assert main._own_resident_tier("qwen", None, {}) == (None, 0)
-    assert main._own_resident_tier("qwen", "1.7b", {"op": "design"}) == (None, 0)
-    assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == (None, 0)
-    assert main._own_resident_tier("coqui", "1.7b", {}) == (None, 0)
+    assert main._own_resident_tier("qwen", "0.6b", {}) == (None, 0, None)
+    assert main._own_resident_tier("qwen", None, {}) == (None, 0, None)
+    assert main._own_resident_tier("qwen", "1.7b", {"op": "design"}) == (None, 0, None)
+    assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == (None, 0, None)
+    assert main._own_resident_tier("coqui", "1.7b", {}) == (None, 0, None)
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(False))
-    assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0)
+    assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0, None)
+    only06 = _fake_qwen(False)
+    only06._base = object()  # Qwen is on a card, but the 1.7B-Base is not loaded
+    monkeypatch.setitem(main.ENGINES, "qwen", only06)
+    assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0, None)
+
+
+def test_credit_size_is_the_measured_footprint_and_never_zero(monkeypatch):
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=3900))
+    assert main._own_resident_tier("qwen", "1.7b", {})[1] == 3900
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=0))
+    assert main._own_resident_tier("qwen", "1.7b", {})[1] == main._QWEN_BASE17_WEIGHTS_MB > 0
+
+
+def test_credit_size_drives_the_decision(monkeypatch):
+    """A measured footprint larger than the constant must admit what the
+    constant would refuse (and vice versa), proving the number is used."""
+    free_with_resident = 2400  # + 3900 credit = 6300 >= 6144 + cushion 409? 6300 < 6553: tight
+    for weights, expect_ok in ((3900 + 500, True), (3400 - 1000, False)):
+        qwen = _fake_qwen(True, weights_mb=weights)
+        monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+        pc = _wire(monkeypatch, qwen, lambda: [
+            {"kind": "cuda", "index": 0, "label": "g", "totalMb": TOTAL, "freeMb": free_with_resident}
+        ])
+
+        async def body():
+            async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+                return adm
+
+        assert ("noCapacity" not in asyncio.run(body())) is expect_ok
+
+
+def test_base17_weights_are_measured_at_load(monkeypatch):
+    q = _fake_qwen(resident=False)
+    q._cold_load_lock = threading.Lock()
+    q._device_pref = "cuda:0"
+    q._ensure_device_resolved = lambda: None
+    seq = iter([1000, 4900])
+    monkeypatch.setattr(main, "_cuda_allocated_mb", lambda device: next(seq))
+    monkeypatch.setattr(q, "_load_qwen_model", lambda name: object(), raising=False)
+    monkeypatch.setattr(main, "_install_codec_timing", lambda m: None)
+    monkeypatch.setattr(main, "_maybe_compile_codec", lambda m, t: None)
+    q._ensure_base17_loaded()
+    assert q._base17_weights_mb == 3900
+
+
+# --- log text -------------------------------------------------------------
 
 
 def test_admission_evict_log_does_not_say_idle_watchdog(monkeypatch, caplog):
@@ -133,3 +306,71 @@ def test_watchdog_evict_log_still_says_idle_watchdog(monkeypatch, caplog):
     with caplog.at_level(logging.INFO):
         assert qwen.maybe_free_idle_base17(0.0) is True
     assert "1.7B-Base unloaded (idle watchdog)" in " ".join(r.getMessage() for r in caplog.records)
+
+
+# --- the render lease -----------------------------------------------------
+
+
+def _run_one_watchdog_tick(monkeypatch, qwen):
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+    monkeypatch.setattr(main, "_reclaim_host_and_vram", lambda: None)
+    monkeypatch.setenv("QWEN_BASE17_IDLE_TTL", "5")
+    calls = {"n": 0}
+
+    async def fake_sleep(_):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(main.asyncio, "sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(main._qwen_design_idle_watchdog())
+
+
+def test_idle_watchdog_frees_base17_without_a_lease(monkeypatch):
+    main._render_leases.clear()
+    qwen = _fake_qwen(True)
+    qwen.maybe_free_idle_design = lambda ttl: False
+    _run_one_watchdog_tick(monkeypatch, qwen)
+    assert qwen._base17 is None
+
+
+def test_idle_watchdog_keeps_base17_while_a_render_lease_is_live(monkeypatch):
+    main._render_leases.clear()
+    main._render_lease_set("castwright-server", 60)
+    try:
+        qwen = _fake_qwen(True)
+        qwen.maybe_free_idle_design = lambda ttl: False
+        _run_one_watchdog_tick(monkeypatch, qwen)
+        assert qwen._base17 is not None
+    finally:
+        main._render_leases.clear()
+
+
+def test_a_lease_expires_on_its_own_and_is_capped(monkeypatch):
+    main._render_leases.clear()
+    t = {"now": 1000.0}
+    monkeypatch.setattr(main.time, "monotonic", lambda: t["now"])
+    main._render_lease_set("srv", 10)
+    assert main._render_lease_active()
+    t["now"] += 11
+    assert not main._render_lease_active(), "a crashed server must not pin VRAM"
+    main._render_lease_set("srv", 10_000)
+    t["now"] += main._RENDER_LEASE_MAX_S + 1
+    assert not main._render_lease_active(), "ttl is capped"
+    main._render_lease_set("srv", 30)
+    main._render_lease_set("srv", 0)
+    assert not main._render_lease_active(), "ttl<=0 releases"
+
+
+def test_render_lease_route(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    main._render_leases.clear()
+    c = TestClient(main.app)
+    r = c.post("/render-lease", json={"holder": "srv", "ttl_seconds": 60})
+    assert r.status_code == 200 and r.json()["active"] is True
+    assert c.post("/render-lease", json={"holder": "srv", "ttl_seconds": 0}).json()["active"] is False
+    assert c.post("/render-lease", json={"ttl_seconds": 5}).status_code == 400
+    assert c.post("/render-lease", json={"holder": "x", "ttl_seconds": True}).status_code == 400
+    main._render_leases.clear()

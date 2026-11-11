@@ -4865,15 +4865,23 @@ class PlacementController:
         idle_evict_steps: Optional[Callable[[str, str], list["EvictStep"]]] = None,
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
         reclaim: Optional[Callable[[str], bool]] = None,
-        own_resident_tier: Optional[Callable[[str, Optional[str], Optional[dict]], tuple[Optional[str], int]]] = None,
+        own_resident_tier: Optional[Callable[[str, Optional[str], Optional[dict]], tuple[Optional[str], int, Optional[str]]]] = None,
     ) -> None:
         self.probe = probe
-        # #4079 — `(evict_step_name, weights_mb)` for the request's OWN tier when
-        # it is already resident, else `(None, 0)`. The step is never run on the
-        # request's behalf (it would unload the model the request is about to
-        # use), and `weights_mb` is credited off the booking (the resident
-        # weights are already out of the free VRAM the probe reads).
-        self.own_resident_tier = own_resident_tier if own_resident_tier is not None else (lambda engine, model, cfg: (None, 0))
+        # #4079 — `(evict_step_name, weights_mb, card)` for the request's OWN tier
+        # when it is already resident, else `(None, 0, None)`. The step is never
+        # run on the request's behalf (it would unload the model the request is
+        # about to use). `weights_mb` is added to `card`'s FREE memory for THIS
+        # request's fit check only, and the request is restricted to `card`: the
+        # resident weights are already out of the free VRAM the probe reads, so
+        # the cold peak double-counts them. The ledger still books the FULL
+        # peak, so every other admission sees `total - peak` and a reload stays
+        # covered.
+        self.own_resident_tier = own_resident_tier if own_resident_tier is not None else (lambda engine, model, cfg: (None, 0, None))
+        # Evict-step names a live reservation needs resident (name -> holders),
+        # so another admission's ladder cannot run them between this
+        # reservation's hold and the op's own in-flight claim.
+        self._protected_steps: dict[str, int] = {}
         self.footprints = footprints if footprints is not None else FootprintTable()
         self.ledger = ledger if ledger is not None else ReservationLedger()
         # `reserve_mb` is the GPU_RESERVE_MB CAP/ceiling, not a flat reserve —
@@ -4920,6 +4928,17 @@ class PlacementController:
         if resident_or_pinned is not None:
             return [c for c in gpus if c[0] == resident_or_pinned]
         return gpus
+
+    @staticmethod
+    def _credit_candidates(
+        candidates: list[tuple[str, int, int]], card: Optional[str], credit_mb: int
+    ) -> list[tuple[str, int, int]]:
+        """#4079 — the own-tier fit view: the resident weights added to `card`'s
+        free memory (callers already restrict candidates to `card` through the
+        placement constraint). Identity when there is no credit."""
+        if card is None or credit_mb <= 0:
+            return candidates
+        return [(k, free + credit_mb if k == card else free, total) for k, free, total in candidates]
 
     def _worst_device_key(self, devices: list[dict]) -> Optional[str]:
         """The GPU device with the MOST headroom (closest to fitting) — the one
@@ -4978,9 +4997,9 @@ class PlacementController:
         same methods so the event loop and /health stay live.
         """
         for step in self.idle_evict_steps(device_key, engine):
-            if protect is not None and step.name == protect:
-                # #4079 — the request's own resident tier: evicting it would
-                # unload the model this very op is about to use.
+            if step.name == protect or self._protected_steps.get(step.name, 0) > 0:
+                # #4079 — a resident tier an admitted op (or this request) is
+                # about to use: evicting it would unload the model it needs.
                 continue
             # Re-read on every iteration, not once before the loop: nothing
             # here awaits today (every `reservation()` call site enters this
@@ -5103,12 +5122,11 @@ class PlacementController:
         # engine's `neededMb`).
         resident = self.is_resident(engine)
         peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
-        protect, credit_mb = self.own_resident_tier(engine, model, cfg)
-        peak = max(peak - credit_mb, 0)
-        constraint = resident if resident is not None else pinned
+        protect, credit_mb, credit_card = self.own_resident_tier(engine, model, cfg)
+        constraint = credit_card if credit_card is not None else (resident if resident is not None else pinned)
         reserve_cap = self.reserve_mb()
         devices = self.probe()
-        candidates = self._gpu_candidates(devices, constraint)
+        candidates = self._credit_candidates(self._gpu_candidates(devices, constraint), credit_card, credit_mb)
 
         key = None
         if preferred is not None and constraint is None:
@@ -5127,13 +5145,14 @@ class PlacementController:
             def _fits():
                 probed = self.probe()
                 return self.ledger.best_fit(
-                    self._gpu_candidates(probed, constraint), peak, reserve_cap
+                    self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, credit_mb),
+                    peak, reserve_cap,
                 )
 
             key = await self._evict_until(worst, engine, _fits, protect)
             if key is not None:
                 return {"device": key}
-            worst =self._worst_device_key(self.probe())
+            worst = self._worst_device_key(self.probe())
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
@@ -5148,7 +5167,8 @@ class PlacementController:
         if device_key is not None:
             await self._reclaim_stranded_cache(device_key)
             key = self.ledger.best_fit(
-                self._gpu_candidates(self.probe(), constraint), peak, reserve_cap
+                self._credit_candidates(self._gpu_candidates(self.probe(), constraint), credit_card, credit_mb),
+                peak, reserve_cap,
             )
             if key is not None:
                 return {"device": key}
@@ -5399,12 +5419,11 @@ class PlacementController:
         # needs an incremental forward-only reservation, not the cold-load peak
         # unconditionally booked before this.
         peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
-        protect, credit_mb = self.own_resident_tier(engine, model, cfg)
-        peak = max(peak - credit_mb, 0)
-        constraint = resident if resident is not None else pinned
+        protect, credit_mb, credit_card = self.own_resident_tier(engine, model, cfg)
+        constraint = credit_card if credit_card is not None else (resident if resident is not None else pinned)
         reserve_cap = self.reserve_mb()
         devices = self.probe()
-        candidates = self._gpu_candidates(devices, constraint)
+        candidates = self._credit_candidates(self._gpu_candidates(devices, constraint), credit_card, credit_mb)
 
         # #3061 review C3 — `preferred` is an ADVISORY placement preference
         # (today: the X-Device-Hint header on /xtts/clone-voice). One extra
@@ -5457,7 +5476,8 @@ class PlacementController:
                 def _fits():
                     probed = self.probe()
                     return self.ledger.try_hold(
-                        self._gpu_candidates(probed, constraint), peak, reserve_cap, engine
+                        self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, credit_mb),
+                        peak, reserve_cap, engine,
                     )
 
                 held = await self._evict_until(worst, engine, _fits, protect)
@@ -5471,14 +5491,17 @@ class PlacementController:
                 # reclaim + one re-probe + one re-`try_hold`, only here on the
                 # failure path, so a stranded pool can never by itself cause
                 # a refusal.
-                reclaim_key = resident if resident is not None else (
-                    pinned if pinned is not None else self._worst_device_key(devices)
+                reclaim_key = credit_card if credit_card is not None else (
+                    resident if resident is not None else (
+                        pinned if pinned is not None else self._worst_device_key(devices)
+                    )
                 )
                 if reclaim_key is not None:
                     await self._reclaim_stranded_cache(reclaim_key)
                     devices = self.probe()
                     held = self.ledger.try_hold(
-                        self._gpu_candidates(devices, constraint), peak, reserve_cap, engine
+                        self._credit_candidates(self._gpu_candidates(devices, constraint), credit_card, credit_mb),
+                        peak, reserve_cap, engine,
                     )
 
         mem_before_mb: Optional[int] = None
@@ -5576,13 +5599,24 @@ class PlacementController:
         production (uvicorn owns one loop for the process lifetime), but a
         real hazard for tests, which must therefore each drive this
         `PlacementController` under exactly one `asyncio.run()`."""
+        protected_step: Optional[str] = None
         async with self._admit_lock:
             admission, held, resident, mem_before_mb, foreign_before, warm_before_mb = await self._resolve_admission(
                 engine, model, cfg, cpu_capable, heavy, pinned, preferred
             )
+            if held is not None:
+                # #4079 — from the hold until release, no OTHER admission's
+                # ladder may evict the tier this op was admitted against (the
+                # op only claims the engine's in-flight guard once its worker
+                # thread starts, after a possible long wait).
+                protected_step = self.own_resident_tier(engine, model, cfg)[0]
+                if protected_step is not None:
+                    self._protected_steps[protected_step] = self._protected_steps.get(protected_step, 0) + 1
         try:
             yield admission
         finally:
+            if protected_step is not None:
+                self._protected_steps[protected_step] -= 1
             if held is not None:
                 device_key = held[0]
                 # #2094 review — ASR-specific free-memory-DELTA measurement,
@@ -6034,25 +6068,52 @@ def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
     return steps
 
 
-# #4079 — resident weights of the 1.7B-Base (see `maybe_free_idle_base17`'s
-# "~3.4 GB"). A plain 1.7b synth whose model is already resident books its cold
-# peak MINUS this: those weights are already out of the free VRAM the probe
-# reads, so the full cold booking double-counted them and sent the request down
-# the ladder to evict (and then reload) the very model it was about to use.
+def _cuda_allocated_mb(device: Optional[str]) -> Optional[int]:
+    """`torch.cuda.memory_allocated` on `device` in MB, or None when `device`
+    is not a CUDA/ROCm card or torch cannot answer (#4079, the 1.7B-Base
+    weights measurement). Never raises."""
+    fam, idx = _parse_device(device)
+    if fam not in ("cuda", "rocm"):
+        return None
+    try:
+        import torch  # type: ignore
+
+        return int(torch.cuda.memory_allocated(idx if idx is not None else 0) // 1_048_576)
+    except Exception:
+        return None
+
+
+# #4079 — fallback resident-weights size of the 1.7B-Base, used only when
+# `_ensure_base17_loaded` could not measure the real figure (cpu load, no
+# torch). A plain 1.7b synth whose model is already resident has these weights
+# out of the free VRAM the probe reads, so its fit check adds them back (see
+# `PlacementController.own_resident_tier`); otherwise the full cold booking
+# double-counts them and sends the request down the ladder to evict (and then
+# reload) the very model it was about to use.
 _QWEN_BASE17_WEIGHTS_MB = 3400
 
 
-def _own_resident_tier(engine: str, model: Optional[str], cfg: Optional[dict]) -> tuple[Optional[str], int]:
-    """PlacementController.own_resident_tier: `("qwen.base17", weights_mb)` for a
-    plain (not mint / design) 1.7b Qwen synth while the 1.7B-Base is resident,
-    else `(None, 0)`. Mint co-loads its own base and design_voice evicts the
-    base itself, so only the synth hot path is protected."""
+def _own_resident_tier(
+    engine: str, model: Optional[str], cfg: Optional[dict]
+) -> tuple[Optional[str], int, Optional[str]]:
+    """PlacementController.own_resident_tier: `("qwen.base17", weights_mb, card)`
+    for a plain (not mint / design) 1.7b Qwen synth while the 1.7B-Base is
+    resident, else `(None, 0, None)`. `card` is the device Qwen is on
+    (`_qwen_resident_device_key`, which sees `_base17` where `_is_resident` does
+    not); `weights_mb` is the footprint measured at load, else the fallback.
+    Mint (`op == "mint"`) has the same self-evict shape but is NOT covered here
+    (reported separately on #4079); design_voice evicts the base itself."""
+    none = (None, 0, None)
     if engine != "qwen" or "1.7b" not in (model or "").lower() or (cfg or {}).get("op") in ("mint", "design"):
-        return (None, 0)
+        return none
     qwen = ENGINES.get("qwen")
-    if isinstance(qwen, QwenEngine) and qwen._base17 is not None:
-        return ("qwen.base17", _QWEN_BASE17_WEIGHTS_MB)
-    return (None, 0)
+    if not isinstance(qwen, QwenEngine) or qwen._base17 is None:
+        return none
+    card = _qwen_resident_device_key(qwen)
+    if card is None:
+        return none
+    weights = getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB
+    return ("qwen.base17", weights, card)
 
 
 # Module-level admission instance /synthesize reserves against when the flag
@@ -6617,6 +6678,9 @@ class QwenEngine(Engine):
         # Thread-safe (#1917) — see `InFlightCounter`.
         self._base17_last_used: float = 0.0
         self._base17_in_flight = InFlightCounter()
+        # #4079 — torch.cuda.memory_allocated delta across the last 1.7B-Base
+        # load (MB); 0 = not measured. Read by `_own_resident_tier`.
+        self._base17_weights_mb: int = 0
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -6916,7 +6980,12 @@ class QwenEngine(Engine):
                     "Loading Qwen 1.7B-Base model=%s on %s …",
                     self.BASE17_MODEL, self._device,
                 )
+                alloc_before = _cuda_allocated_mb(self._device)
                 self._base17 = self._load_qwen_model(self.BASE17_MODEL)
+                alloc_after = _cuda_allocated_mb(self._device)
+                self._base17_weights_mb = (
+                    max(0, alloc_after - alloc_before) if alloc_before is not None and alloc_after is not None else 0
+                )
                 _install_codec_timing(self._base17)
                 import torch
                 _maybe_compile_codec(self._base17, torch)
@@ -9587,6 +9656,27 @@ def _base17_idle_ttl() -> float:
     return ttl if ttl >= 5.0 else _DESIGN_IDLE_TTL_DEFAULT
 
 
+# #4079 — render leases: holder -> monotonic expiry. The server renews one
+# while a chapter render is registered; the 1.7B-Base idle watchdog skips its
+# free while any is live. Self-expiring, so a dead server cannot pin VRAM.
+_RENDER_LEASE_MAX_S = 300.0
+_render_leases: dict[str, float] = {}
+
+
+def _render_lease_set(holder: str, ttl_seconds: float) -> None:
+    if ttl_seconds <= 0:
+        _render_leases.pop(holder, None)
+        return
+    _render_leases[holder] = time.monotonic() + min(ttl_seconds, _RENDER_LEASE_MAX_S)
+
+
+def _render_lease_active() -> bool:
+    now = time.monotonic()
+    for holder in [h for h, exp in _render_leases.items() if exp <= now]:
+        _render_leases.pop(holder, None)
+    return bool(_render_leases)
+
+
 async def _qwen_design_idle_watchdog() -> None:
     """Periodically free each Qwen engine's transient heavy models once they have
     idled past their TTL — the VoiceDesign 1.7B (~4–5 GB, after a cast-review
@@ -9605,7 +9695,12 @@ async def _qwen_design_idle_watchdog() -> None:
                     freed = await asyncio.to_thread(engine.maybe_free_idle_design, ttl)
                     if freed:
                         log.info("Qwen VoiceDesign freed after >%.0fs idle (watchdog).", ttl)
-                    freed17 = await asyncio.to_thread(engine.maybe_free_idle_base17, base17_ttl)
+                    # A live render lease means the server has a chapter render
+                    # registered: its ASR-QA gaps must not cost it the 1.7B-Base.
+                    freed17 = (
+                        False if _render_lease_active()
+                        else await asyncio.to_thread(engine.maybe_free_idle_base17, base17_ttl)
+                    )
                     if freed17:
                         log.info("Qwen 1.7B-Base freed after >%.0fs idle (watchdog).", base17_ttl)
         except asyncio.CancelledError:
@@ -11906,6 +12001,27 @@ async def load_model(req: Request) -> JSONResponse:
     return JSONResponse({"status": "ready" if coqui._tts is not None else "idle"})
 
 
+@app.post("/render-lease")
+async def render_lease(req: Request) -> JSONResponse:
+    """#4079 — the server renews this while a chapter render is registered; the
+    idle watchdog will not unload the 1.7B-Base while any lease is live. Body:
+    `{ holder: str, ttl_seconds: number }`; `ttl_seconds <= 0` releases. A lease
+    that is not renewed expires on its own (capped at `_RENDER_LEASE_MAX_S`), so
+    a crashed server cannot pin VRAM."""
+    try:
+        body = await _read_json_body(req)
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    holder = body.get("holder")
+    ttl = body.get("ttl_seconds")
+    if not isinstance(holder, str) or not holder or isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        return JSONResponse({"error": "holder (string) and ttl_seconds (number) required"}, status_code=400)
+    _render_lease_set(holder, float(ttl))
+    return JSONResponse({"status": "ok", "active": _render_lease_active()})
+
+
 @app.post("/unload")
 async def unload_model(req: Request) -> JSONResponse:
     """Drop a TTS engine's loaded model and free GPU memory. Idempotent —
@@ -12752,8 +12868,11 @@ async def synthesize(req: Request) -> Response:
         # ON, opt-out with =0): when on, hold a peak-VRAM reservation across the forward so a
         # concurrent op can't double-book the same headroom, and refuse with a
         # `noCapacity` 503 up front rather than let the forward OOM. This ALSO
-        # covers any lazy cold-load inside engine.synthesize, since the peak is
-        # held before the call starts. Off (the default): unchanged behaviour.
+        # covers any lazy cold-load inside engine.synthesize, since the full
+        # peak is held before the call starts (#4079: a resident 1.7B-Base only
+        # changes this request's own fit check, never the booking, and the
+        # reservation keeps other admissions from evicting that base until
+        # release). Off (the default): unchanged behaviour.
         if _capacity_admission_enabled():
             cap = _ENGINE_CAPACITY_PROFILE.get(engine_id, {"cpu_capable": False, "heavy": True})
             async with _placement.reservation(

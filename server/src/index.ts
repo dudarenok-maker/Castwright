@@ -53,6 +53,7 @@ import { initDeviceTotalVram, getDeviceTotalVramMb } from './gpu/device-total.js
 import { rotateStatsIfDeviceChanged } from './gpu/telemetry-fingerprint.js';
 import { initVramStats } from './analyzer/model-vram-stats.js';
 import { startBackupScheduler, stopBackupScheduler } from './workspace/auto-backup.js';
+import { startRenderLease } from './gpu/render-lease.js';
 import {
   readUserSettings,
   writeUpgradeMeta,
@@ -425,6 +426,10 @@ async function main(): Promise<void> {
        disabled in user-settings). Timers are unref()'d so they never hold the
        process open on their own. */
     startBackupScheduler();
+
+    /* #4079 — renew the sidecar render lease while a render is in flight, so
+       its idle watchdog keeps the 1.7B-Base through ASR-QA gaps. Unref'd. */
+    startRenderLease();
 
     /* ops (castwright-local-hostnames) — server-owned castwright.local mDNS
        responder, start:lan only. NODE_ENV, not lanHttps, is the discriminator:
