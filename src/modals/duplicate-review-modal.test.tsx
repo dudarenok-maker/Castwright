@@ -14,6 +14,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { castSlice } from '../store/cast-slice';
+import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import {
@@ -362,5 +363,33 @@ describe('DuplicateReviewModal — cancel', () => {
     expect(linkSpy).not.toHaveBeenCalled();
     expect(notLinkedSpy).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — read-only cast: the link path ends in
+   applyManualMatch on the open book (link-prior writes only the source book's
+   cast; the current book's matchedFrom arrives through the mirror's PUT), so it
+   is disabled; "Different on purpose" saves through its own route. */
+describe('DuplicateReviewModal — read-only cast (plan 291)', () => {
+  it('disables the link while read-only and keeps "Different on purpose" live', () => {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, notifications: notificationsSlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'ns', status: 'cast_pending' }));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'ns' }));
+    const pair = buildPair();
+    render(
+      <Provider store={store}>
+        <DuplicateReviewModal open pair={pair} onClose={vi.fn()} />
+      </Provider>,
+    );
+    const link = screen.getByRole('button', { name: /Same character — link them/i });
+    expect(link).toHaveAttribute('aria-disabled', 'true');
+    expect(link.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(link);
+    expect(linkSpy).not.toHaveBeenCalled();
+    const variant = screen.getByRole('button', { name: /Different on purpose/i });
+    expect(variant).not.toHaveAttribute('aria-disabled');
+    expect(variant).toBeEnabled();
   });
 });

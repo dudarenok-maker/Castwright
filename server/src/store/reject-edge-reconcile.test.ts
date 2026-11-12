@@ -301,4 +301,48 @@ describe('reconcileRejectEdges', () => {
     expect(out.next[0]).not.toBe(cast[0]);
     expect(out.next[1]).toBe(cast[1]); // untouched rows pass through by reference
   });
+
+  /* #4031 — a dismissal's "not the same person" record backs the edge it
+     wrote on BOTH rows. Without that backing pass 1 deletes both edges at the
+     next persist and the pair is free to be re-suggested or re-joined. */
+  it('[A12a] a dismissal survives reject-edge reconcile', () => {
+    const cast = [
+      row('olya', [{ bookId: BOOK, characterId: 'olga' }]),
+      row('olga', [{ bookId: BOOK, characterId: 'olya' }]),
+    ];
+    const out = reconcileRejectEdges(
+      BOOK,
+      cast,
+      history({ notSamePerson: [{ a: 'olga', b: 'olya', at: '2026-11-08T00:00:00.000Z' }] }),
+    );
+
+    expect(out.removes).toEqual([]);
+    expect(out.adds).toEqual([]);
+    expect(out.next[0].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'olga' }]);
+    expect(out.next[1].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'olya' }]);
+  });
+
+  it('a record backs only its own pair', () => {
+    const cast = [
+      row('olya', [
+        { bookId: BOOK, characterId: 'olga' },
+        { bookId: BOOK, characterId: 'marlo' },
+      ]),
+      row('olga'),
+      row('marlo'),
+    ];
+    const out = reconcileRejectEdges(
+      BOOK,
+      cast,
+      history({ notSamePerson: [{ a: 'olga', b: 'olya', at: '2026-11-08T00:00:00.000Z' }] }),
+    );
+
+    // the unrelated olya/marlo edge has no backing and goes
+    expect(out.removes).toEqual([{ characterId: 'olya', orphanedId: 'marlo' }]);
+    expect(out.next[0].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'olga' }]);
+    // pass 2 restores the record's own pair on the row that lost it, and nothing else
+    expect(out.adds).toEqual([{ characterId: 'olga', orphanedId: 'olya' }]);
+    expect(out.next[1].notLinkedTo).toEqual([{ bookId: BOOK, characterId: 'olya' }]);
+    expect(out.next[2].notLinkedTo).toBeUndefined();
+  });
 });

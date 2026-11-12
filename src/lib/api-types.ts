@@ -1211,8 +1211,13 @@ export interface paths {
         put?: never;
         /**
          * Dismiss a merge suggestion
-         * @description Removes the matching `(sourceId, targetId)` pair from the suggestions
-         *     file. No-op when the pair is already absent. Does NOT perform any merge.
+         * @description A durable "not the same person" decision. Records the pair (undirected)
+         *     in the book's cast-id-history, writes a `notLinkedTo` edge on each of
+         *     the two characters that exists, and removes the matching
+         *     `(sourceId, targetId)` pair from the suggestions file, so a later
+         *     re-analysis never re-suggests or joins it. When the history file cannot
+         *     be read the record is skipped (the edges and the removal still apply).
+         *     Does NOT perform any merge.
          */
         post: operations["dismissCastMergeSuggestion"];
         delete?: never;
@@ -1234,8 +1239,10 @@ export interface paths {
          * Accept a merge suggestion (merge + dismiss)
          * @description Performs the cast merge (`sourceId` folded into `targetId`, where
          *     `targetId` is the canonical survivor), then drops the suggestion so it
-         *     never resurfaces. Equivalent to calling `POST /cast/merge` followed by
-         *     `POST /cast/merge-suggestions/dismiss`.
+         *     never resurfaces. Equivalent to calling `POST /cast/merge`, then removing
+         *     the pair from the suggestions file. Unlike
+         *     `POST /cast/merge-suggestions/dismiss`, it records no "not the same
+         *     person" decision.
          */
         post: operations["acceptCastMergeSuggestion"];
         delete?: never;
@@ -5166,13 +5173,12 @@ export interface components {
             kind: "warning";
             /**
              * @description Stable machine-readable warning code. Today only
-             *     `cast_merge_base_stale` — emitted when another route wrote
-             *     `cast.json` between two of this run's own merge-base writes, so the
-             *     analysis result was merged onto an older cast and that write may
-             *     have been overwritten. Replayed once per code on reconnect.
+             *     `analyzer-reasoning-overflow-nonstory` — emitted when front-matter
+             *     detection fell back for the whole run because the model's reasoning
+             *     overflowed. Replayed once per code on reconnect.
              * @enum {string}
              */
-            code: "cast_merge_base_stale";
+            code: "analyzer-reasoning-overflow-nonstory";
             /** @description Human-readable advisory text. */
             message: string;
         };
@@ -5220,12 +5226,16 @@ export interface components {
          *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
          *     `design_in_progress`, `bad_request`, `chapter_excluded`,
          *     `main_analysis_running`, `subset_analysis_running`,
-         *     `chapters_restructuring`) carry `code`
+         *     `chapters_restructuring`, `analysis_cache_legacy`) carry `code`
          *     and `message` only — `main_analysis_running` also carries
          *     `draining` (#3435: the late refusal check, after the stream opened).
          *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
          *     the chapters it ran are done, but the book still needs a main
          *     resume to attribute the rest; nothing was persisted as final.
+         *     `analysis_cache_legacy` (#4031, `/analysis/chapters` only): the
+         *     book's saved analysis progress predates the current cache version,
+         *     so a chapter re-analysis stops before writing anything; a full
+         *     analysis rebuilds it.
          */
         AnalyseErrorEvent: {
             /** @enum {string} */
@@ -6558,7 +6568,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "analyzer-timeout" | "analyzer-reasoning-overflow" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset" | "analyzer-request-rejected" | "analyzer-invalid-output" | "analyzer-endpoint-missing";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "analyzer-timeout" | "analyzer-reasoning-overflow" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "cast-unreadable" | "language-unset" | "analyzer-request-rejected" | "analyzer-invalid-output" | "analyzer-endpoint-missing";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -6682,7 +6692,7 @@ export interface components {
             excludeFromSynthesis?: boolean;
             /** @description #1679 — read-only editorial flag: true on the first sentence after a word-free scene break (* * *, <hr>) in the source. Display-only; never spoken, never affects attribution. */
             sceneBreakBefore?: boolean;
-            /** @description #1984 D18 — the characterId this sentence carried before a post-stage-2 step DEMOTED it (never written by the model). Written by every known demotion site: reconcileSentenceCharacterIds, applyNarratorDefault, the dialogue-structure engine's correction pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared by steps that re-assign rather than demote (escalation, tagged-line recovery). NOT written by the id-remap/merge paths — dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, remapFreshToPriorIds, performCastMerge — which also overwrite characterId (to another character's id, not narrator); whether a re-assignment should also carry a prior is an open design question, #2331. */
+            /** @description #1984 D18 — the characterId this sentence carried before a post-stage-2 step DEMOTED it (never written by the model). Written by every known demotion site: reconcileSentenceCharacterIds, applyNarratorDefault, the dialogue-structure engine's correction pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared by steps that re-assign rather than demote (escalation, tagged-line recovery). NOT written by the id-remap/merge paths — dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, the plan overlay (applyMatchPlan), performCastMerge — which also overwrite characterId (to another character's id, not narrator); whether a re-assignment should also carry a prior is an open design question, #2331. */
             priorCharacterId?: string;
         };
         /**
@@ -9931,7 +9941,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Suggestion removed (or was already absent) */
+            /** @description Dismissal recorded and suggestion removed (or was already absent) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9947,6 +9957,13 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The dismissal could not be written; the body carries a curated sentence with no filesystem path */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9974,12 +9991,20 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Merge performed and suggestion removed */
+            /**
+             * @description Merge performed and suggestion removed. Carries the merged cast, as
+             *     `POST /cast/merge` does, so the client mirrors the server's survivor
+             *     (aliases, `notLinkedTo` union) instead of saving a stale slice (#4031).
+             */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        characters: components["schemas"]["Character"][];
+                    };
+                };
             };
             /** @description Missing or equal sourceId/targetId */
             400: {
@@ -9995,7 +10020,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast yet */
+            /**
+             * @description Book has no cast yet; or `{ error, code: book_busy }` while an analysis
+             *     job is registered for the book (R55, #4031): a merge waits until the
+             *     analysis finishes. Nothing was written.
+             */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12992,6 +13021,11 @@ export interface operations {
              *     book), or `book_folder_in_use` (the folder is open in another
              *     program; close it and retry). No body ever carries a path.
              *
+             *     #4031 — a whole-slice `cast` write is refused with
+             *     `{ error, code: book_busy }` while an analysis job is registered
+             *     for the book: the cast is read-only until the run ends. The check
+             *     runs before any read or write, so nothing is persisted. Re-read the book from disk once the run has finished.
+             *
              *     Plan 289: `stale_revision` — the request carried a `baseRevision`
              *     and a field the write would change has moved on disk since that
              *     base. Nothing was written; re-read the book. A request without
@@ -13506,7 +13540,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast on disk yet */
+            /** @description Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13561,7 +13595,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast on disk yet */
+            /** @description Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13616,7 +13650,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast on disk yet */
+            /** @description Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;

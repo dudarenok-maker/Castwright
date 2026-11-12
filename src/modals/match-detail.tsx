@@ -4,6 +4,7 @@ import { Avatar, VoiceSwatch, PrimaryButton } from '../components/primitives';
 import { SYNC_AUTO_THRESHOLD } from '../views/confirm-cast';
 import type { Character, Voice } from '../lib/types';
 import { useAppSelector } from '../store';
+import { pausedControlProps, useCastReadOnly } from '../components/cast-edits-paused-banner';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
@@ -31,6 +32,8 @@ export function MatchDetailDrawer({
 }: Props) {
   const playback = useSamplePlayback();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  /* Plan 291 (#4031) — decline writes the cast slice, so it waits for a re-analysis. */
+  const readOnly = useCastReadOnly();
   const [sampleBusy, setSampleBusy] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
   if (!character || !voice) return null;
@@ -192,8 +195,12 @@ export function MatchDetailDrawer({
 
         <div className="sticky bottom-0 bg-white border-t border-ink/10 px-6 py-4 flex items-center gap-3">
           <button
-            onClick={onDecline}
-            className="px-4 py-2 text-sm font-medium text-ink/70 hover:text-ink"
+            onClick={() => {
+              if (readOnly) return;
+              onDecline();
+            }}
+            {...pausedControlProps(readOnly)}
+            className={`px-4 py-2 text-sm font-medium text-ink/70 hover:text-ink ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             Don't reuse
           </button>

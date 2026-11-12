@@ -1,12 +1,13 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-11-12
 owner: null
 ---
 
 # 291 — Re-analysis: one authoritative cast matcher (#4031)
 
-> Status: draft. Implementation plan; no code has landed. Revised 2026-11-08 after three
+> Status: stable (shipped 2026-11-12, PR #4103). Implemented on `fix/server-4031-single-matcher` (Tasks 1–29); on-box
+> acceptance owed (register row B109, see Ship notes). Revised 2026-11-08 after three
 > assumption-checker rounds, an owner-authorised focused review of the client save path, and the
 > owner's and coordinator's rulings recorded below.
 >
@@ -111,12 +112,16 @@ owner: null
    - Every job writer that touches a ledgered row refreshes its fingerprint the same way:
      `materialisePriorAtRunStart`'s stale-link prune and heal, `writePlanSnapshot` and
      `persistPlannedCast`.
-   - The main job persists the ledger in the cache (`addedRows`) and clears it, together with
-     `runAddedPairs`, at a successful persist.
+   - The main job persists the ledger in the cache (`addedRows`). At a successful persist (once
+     state.json has landed) it converts the `run-owned` entry of every row it wrote to
+     `added-once` (R4) and clears the remaining `run-owned` entries, together with
+     `runAddedPairs`.
    - **Cross-job refresh, not promotion.** The subset job keeps its own in-memory ledger for the
-     rows it adds. When it writes a row that has an entry in `cache.addedRows` (a stopped main
-     run's row), it applies the same compare-then-refresh to that entry, through
-     `mutateAnalysisCache`.
+     rows it adds, and also records them in the cache ledger as `run-owned` with `by: 'subset'`
+     (R35a/R35b), so a later run knows them as run rows. At a completed subset persist, the rows
+     its own result keeps become `added-once`. When it writes a row that has an entry in
+     `cache.addedRows` (a stopped main run's row), it applies the same compare-then-refresh to
+     that entry, through `mutateAnalysisCache`.
    - The subset job never deletes by `addedRows`. So its aliases, `notLinkedTo`, stale-link prunes
      and linker stamps on a stopped main run's rows never read as user changes at the resumed main
      persist.
@@ -273,7 +278,7 @@ snapshot.
   `routes/index.tsx:824`, `voices.tsx:856` and `duplicate-review-modal.tsx:135`.
 - **6 — a 409 latches the era**, and the re-hydrate is single-flight per book. *Reason:* a 409 is
   proof of a running analysis the client had not seen.
-- **8 — the era also latches when the gate sees an analysis by any route**, including another
+- **8b — the era also latches when the gate sees an analysis by any route**, including another
   tab's broadcast (`broadcast-middleware.ts:316-337`, `:402-410`). The fe-11 limitation narrows to
   a tab that never saw the run. *Reason:* an analysis can reach the gate without any preview apply.
 - **10 — the rule-11 fingerprint is the job's own last write.**
@@ -291,8 +296,9 @@ snapshot.
   - The mock analysis emits `onCastUpdate`, and the mock busy is keyed by the mock book
     (`api.ts:1662-1751`, `:1672`, `:1737`, `:2524-2526`), with no second run on subscribe.
   - Task 20 records the end-of-run fixture.
-- **12 — ConfirmRoute's read (`routes/index.tsx:751-797`) is the busy-gated re-hydrate.** Layout's
-  Confirm override is dropped. *Reason:* one owner for Confirm's read.
+- **12 — ConfirmRoute's read (`routes/index.tsx:751-797`) is the busy-gated re-hydrate.**
+  ~~Layout's Confirm override is dropped.~~ *Struck at Task 29: no such override exists in
+  Layout (Task 12 found nothing to drop).* *Reason:* one owner for Confirm's read.
 - **13 — the voice-match once-guard arms only when the match runs.** Between Tasks 11 and 12 the
   catch-all absorbs its save. *Reason:* each task stays green.
 - **The 409 reuses the existing `book_busy` + `busySentence` shape** (`book-state.ts:1113-1115`,
@@ -343,8 +349,138 @@ snapshot.
 7. **On resume,** the linker re-runs on `new` rows only.
 8. **`cast_merge_base_stale`** loses its producer; Task 28 removes it.
 9. **Rule 13's only remaining trigger** is a merge whose history write failed, which C3 makes a
-   failed request. With the cast locked mid-run, no user delete exists. Rule 13 is therefore
-   defensive; its A20 tests use `failNextRetirement` and assert the merge request reported failure.
+   failed request. With the cast locked mid-run, no user delete exists, and since R55 a merge
+   during a registered run is refused with 409 `book_busy`, so the trigger needs a run that runs
+   unregistered. Rule 13 is therefore defensive; its A20 tests use `failNextRetirement` and assert
+   the merge request reported failure. Spec acceptance 20 is amended to match (rulings R13, R55).
+10. **R11 — drift-refused suggestions.** The plan wins (ruling Q3). Suggestions written transiently
+    at the Phase-0b snapshot are removed when a run is drift-refused, so the run leaves none behind.
+    Spec acceptance 24 is amended.
+11. **R12 — New UI.** The plan wins (owner ruling, 2026-11-08): a paused-edits banner, disabled edit
+    controls and a 409 `book_busy` on the whole-slice cast PUT. The spec's "New UI" non-goal is
+    amended.
+12. **Struck: "Layout's Confirm override is dropped"** (Task 12, ruling 12 and its Task 12 line).
+    No such override exists in Layout; ConfirmRoute is the only Confirm read.
+13. **R22 — three "item 8" labels.** The focused-review ruling about another tab's broadcast is now
+    `8b` (and Task 11's "external snapshot" test group is `Item 8b`); Task 11's re-hydrate-on-failed-merge
+    item is `8a`; a bare `item 8` is only Task 19's cache-fields item.
+14. **R42 / R35a / R35b — "Resumed = uninterrupted".** Holds for both jobs, including a subset
+    resuming a subset, because a subset tags the rows it mints in the ledger (`by: 'subset'`,
+    R35b). One documented exception, invariant 6 (a subset deletes nothing by ledger): a stopped
+    attempt's fold-dropped rows survive a resumed SUBSET until the next main run removes them.
+    Spec acceptance 14 is amended.
+15. **R38 — stopped main run, then a completed subset Retry.** A fold-taken row the stopped main run
+    added survives the subset Retry until the next main persist removes it. Accepted; the cost is
+    a 0-line row visible in the Cast view in between.
+16. **R43 — the series linker runs only on `new` rows.** A character declined ("Don't reuse") before
+    #3992 whose series link was dropped is a JOINED row, and re-analysis no longer re-links it
+    (plan-overlay A7b). Strictly safer; the user re-links by hand.
+17. **R46 — declined voices follow the candidates.** A `new` row inherits its candidates'
+    `declinedVoiceFrom` / `declinedVoiceUuids` at the linker, so a re-minted row for the same
+    person cannot be linked to a voice its candidate declined.
+18. **R47 — the default narrator name re-localises.** A joined narrator whose prior name is a
+    default (`isDefaultNarratorName`) takes the fresh, language-localised name on re-analysis; any
+    other name stays.
+19. **M4 — a restored dismissal counts as the run's write.** A user dismissal whose `notLinkedTo`
+    edge the reject-edge heal restores (the user's two writes came apart) counts as the run's own
+    write, so a row the run added stays fold-droppable. On the normal path the dismiss route's own
+    edge write changes the fingerprint and the row is kept (`added-once`). Rare; known consequence
+    of the heal refreshing the ledger (carry 4), accepted (Tasks 26/27).
+20. **R49 — a fold bucket settles by its own id only** (PR #4103 pass 1 O1; overturns the earlier ruling, R45 in the run ledger, that let a bucket
+    name-match a same-named character). A fresh
+    `unknown-male` / `unknown-female` row joins only a live prior row with its own id, never by
+    history, name or surname; otherwise it is a `new` row under its bucket id. Merging a bucket
+    into a character stays allowed, and is a one-shot per-book reassignment (R53, item 22): the
+    bucket's lines move to the character in this book, the merge's history entry is render-only
+    (R56, item 25), and later re-analyses put their background lines on a fresh bucket. An
+    `unknown-* -> X` entry is never followed, and is displaced when the bucket comes back live. *Superseded for buckets
+    by R53:* pass 1's "ignored for matching, not displaced". The merge route deletes a bucket
+    source's cached plan decisions instead of re-targeting them, and the persist counts a bucket
+    row as covered only by a decision that outputs its own id (PR #4103 pass 2 P2-1). A merge
+    that lands while a run is going is, for that run, a delete of the bucket: its background
+    lines go to the narrator (rule 13). Since R55 (item 24) the server refuses that merge with
+    409 `book_busy` while the run is registered, so this is reachable only for an unregistered
+    run and is kept as defence in depth. The next run adds a fresh bucket, because neither the
+    merge's ledger delete nor its decision delete is written back (pass 3 P3-1, R54).
+    *Superseded by R53:* pass 3's overlay branches that re-added a merged-away bucket through
+    the history record.
+21. **R50 — Start fresh carries the run ledger** (PR #4103 pass 1 F2). `addedRows` and
+    `runAddedPairs` survive the cache clear, so the rows a stopped run added stay droppable by the
+    next run (rule 11). Everything else Start fresh discards is still discarded. The carry is
+    written straight after the clear, before any step that can throw, and the main job's fold
+    does not protect a joined row whose entry is `run-owned` with an unchanged fingerprint, so a
+    one-off the next run hears again folds as a fresh row would (PR #4103 pass 2 P2-3).
+22. **R53 — a catch-all bucket merge is one-shot** (owner, 2026-11-12, PR #4103 pass 4). This
+    was chosen because R49's "keep the entry but ignore it" produced a new bug in every review
+    pass.
+    - `POST /cast/merge` with an `unknown-male` / `unknown-female` source moves the bucket's lines
+      and drops its cached decisions and ledger entry.
+    - It writes no `supersededBy` entry and no other retirement. The bucket id is a shared slot,
+      not a persisted character identity, so #2040's retirement rule does not apply.
+      *Superseded by R56 (item 25):* the merge retires the bucket again, render-only.
+    - Legacy `unknown-* -> X` entries are never followed by the matcher, the plan, the persist
+      overlay, the mid-run collapse or `retireCharacterId`'s target dereference. The one rule
+      that enforces this is `followableHistory` in `cast-id-history.ts`.
+    - The persist's reclaim displaces a legacy entry once the bucket is live, as on `main`.
+    - Consequences: a later downgrade into the bucket lands on the bucket (P4-2), and a deleted
+      re-added bucket stays gone (R4, M-b).
+    - `buildCastResolver`'s render and attribution callers are unchanged.
+23. **R54 — the persist never re-adds a plan decision a route deleted mid-run** (controller,
+    PR #4103 pass 4). `persistDecisionsTransform` takes the job's own copy of the plan as its
+    base. A decision the persist left unchanged, and which the file no longer holds, stays
+    deleted. It shares one principle with P4-1: a ledger write always sends the entry of a row
+    its persist wrote, and takes the delta only for entries the run merely carried.
+    - The principle: a write never takes its delta against a base that an earlier write already
+      moved.
+24. **R55 — a cast-identity write is refused while an analysis runs** (owner, 2026-11-12, PR #4103
+    pass 5). While an analysis job is registered for the book (`runBookJob`, the signal the cast
+    PUT's 409 uses), every route whose write changes the roster's id set or writes merge /
+    `supersededBy` history answers 409 `book_busy`.
+    - Refused: `POST /cast/merge` (a downgrade included), `merge-suggestions/accept`,
+      `link-orphan-match`, `reject-orphan-match` (POST and DELETE), `unlink-alias`,
+      `cast/create` and `add-from-roster`. A character delete is a whole-slice cast PUT, already
+      refused.
+    - Live: voice design and assign, Voices compare, decline-voice-link, dismiss-suggestion,
+      `add-alias`, `repoint-alias`, `not-linked-to`, `link-prior`, voice style, the tier pin and
+      the series patch. None changes the id set or the identity history.
+    - The check (`castIdentityBusyRefusal`, `book-state.ts`) sits inside each write's own
+      book-op span, so a job cannot register between the check and the write.
+    - The client takes the refused cast PUT's path for a merge or accept 409
+      (`handleCastIdentityBusy`, `cast-gate.ts`): the read-only toast, the era latched, a
+      re-read once the run is over.
+    - Consequences: P5-1 (A1 and A2) and the #4098 cast-side windows are unreachable through any
+      route for a registered job. `collapseMidRunMerges`, R54 and P4-1 stay as defence in depth.
+      Acceptance 13 and 23 are amended.
+25. **R56 — a bucket merge records `supersededBy` again; matching still ignores it** (owner,
+    2026-11-12, PR #4103 pass 5). This reverses R53's "no record" half only.
+    - `POST /cast/merge` with a catch-all source calls `retireCharacterId` again, as on `main`.
+      `buildCastResolver` resolves the bucket's rendered segments, and those of a row downgraded
+      into it earlier (the retirement repoints that row's entry), to the merge target.
+    - `followableHistory()` keeps the entry inert for matching, planning and retirement, and the
+      reclaim displaces it when the bucket returns.
+    - R53's other halves stand: the plan decisions and the ledger entry are dropped, and the
+      merge is one-shot for later runs.
+26. **R57 — the UI disables every R55-refused control while the cast is read-only** (controller,
+    2026-11-12, PR #4103 pass 5b). Pass 5 left the controls offered; only the server's 409
+    stopped them.
+    - While `selectCastReadOnly` holds, these are `aria-disabled` with the paused tooltip
+      (`pausedControlProps`) and their handlers send nothing: the drawer's in-book Merge and both
+      downgrades; the alias-unlink dialog's "its own character" choice (`unlink-alias`; its
+      "move to", a repoint, stays live); the Cast view's suggestion accept and the orphan link,
+      reject and undo; the Voices merge (gated on the merged book); the Manuscript "Add
+      character" button and the reassign picker's prior-book rows (add-from-roster).
+    - Unchanged: dismiss-suggestion, link-prior (already disabled by item 4), add-alias,
+      repoint, voice design and Don't reuse.
+    - Every refused route's 409 now takes `handleCastIdentityBusy` (a stale tab or a second
+      device): the six client calls throw with the body's `code`.
+    - Not covered: the Script Review "create new character" confirm stays offered mid-run (its
+      409 takes the read-only path), and the Manuscript view shows no paused banner.
+    - *Amended by PR #4103 pass 6.* P6-1: for a book the stage does not name (the Voices merge
+      on `#/voices`), the gate keys only on a running snapshot (`selectCastIdentityPaused`),
+      since nothing releases that book's era or re-polls its busy cache; and
+      `handleCastIdentityBusy` latches the era only for the stage's book. P6-2: an
+      Add-character form already open when the cast turns read-only pauses its create submit
+      and keeps its input; the create handler has no read-only early return.
 
 ---
 
@@ -490,7 +626,7 @@ export interface MatchInput {
   runToken: string; currentBookId?: string;
 }
 /** Rule-11 ledger. `fp` = fingerprint of the job's LAST write of the row; disk ≠ fp before a write → `added-once` (sticky). */
-export type LedgerEntry = { state: 'run-owned'; fp: string } | { state: 'added-once' };
+export type LedgerEntry = { state: 'run-owned'; fp: string; by?: 'subset' } | { state: 'added-once' }; // by: R35b
 export type RunAddedLedger = Record<string, LedgerEntry>;
 export type PlannedRowInfo =
   | { kind: 'join'; priorId: string }
@@ -1048,7 +1184,7 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
       sentence;
     - latches the era;
     - starts the single-flight re-hydrate.
-- **Item 8.** `layout.tsx:2777-2779`, `voices.tsx:1005` and the accept caller re-hydrate when a
+- **Item 8a.** `layout.tsx:2777-2779`, `voices.tsx:1005` and the accept caller re-hydrate when a
   merge fails.
 - **Tests:**
   `npm test -- src/store/cast-slice.test.ts src/store/book-busy-slice.test.ts src/store/cast-gate.test.ts src/store/persistence-middleware.test.ts src/store/broadcast-middleware.test.ts src/components/layout.test.tsx src/views/voices.test.tsx`.
@@ -1063,7 +1199,7 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
     - `pause, subset cancel, stream_no_result, aborted, reload mid-run and a stale paused snapshot each release only once busy has no 'analysis'`
     - `the busy poll is single-flight per book and backs off`
     - `an analysis apply after the re-hydrate was issued moves the epoch; the re-hydrate re-runs`
-  - *Item 8 (external snapshot):*
+  - *Item 8b (external snapshot):*
     - `another tab's applyExternalAnalysisSnapshot latches the open book's era`
   - *B3 (gate-up flush):*
     - `B3 lands: a unit queued just before the gate flushes and lands before the job registers`
@@ -1106,6 +1242,12 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
 - **Add character** (`cast-create`);
 - **rebaseline** (`rebaseline-modal.tsx:427-452`).
 
+*Amended by R55 (item 24) and R57 (item 26):* the server refuses the cast-identity ones (merge,
+suggestion accept, link-orphan, reject-orphan, unlink-alias, Add character, and add-from-roster)
+with 409 `book_busy` while the run is registered, and since R57 they are disabled while
+read-only too; a 409 that still arrives takes the read-only toast path
+(`handleCastIdentityBusy`).
+
 **Item 4 — link-prior is disabled while read-only** (link-prior, and
 `duplicate-review-modal.tsx:135`).
 - *Reason:* `cast-link-prior.ts:251-291` writes only the source book's cast. The current book's
@@ -1123,7 +1265,8 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
 
 Each disabled control carries `aria-disabled` and a tooltip.
 
-**Confirm (item 12).** Layout's Confirm override is dropped. ConfirmRoute's read
+**Confirm (item 12).** ~~Layout's Confirm override is dropped.~~ (Struck at Task 29: Layout has
+no Confirm override; there was nothing to drop.) ConfirmRoute's read
 (`routes/index.tsx:751-797`) becomes the busy-gated re-hydrate when the gate is up.
 
 **Voice-match once-guard (item 13).** The Confirm voice-match (`layout.tsx:1366-1392`;
@@ -1557,7 +1700,11 @@ Each test asserts cast.json, per-character line counts, history and suggestions.
 - **Narrowed reads-prior rule:** any other file that imports or calls `readPriorCastForMerge`,
   `readPriorCastLockFree` or `materialisePriorAtRunStart` and contains a comparator fails.
 - **Reverse check:** passes on today's tree minus the deleted matchers.
-- **Blind spots** are stated in the guard's header.
+- **Blind spots** are stated in the guard's header. The largest (PR #4103 pass 1 G1): rule 1 counts
+  comparators only in the listed files and the reads-prior rule only in files that import or call a
+  prior reader, so a comparator in a new file, or in a non-importing file its caller feeds the prior
+  rows to, passes. What is mechanically enforced is the listed sites' counts, not the absence of
+  a second matcher anywhere.
 
 - [ ] **Step 1:** guard (red).
 - [ ] **Step 2:** delete; replace tests; typecheck both.
@@ -1662,7 +1809,7 @@ Each test asserts cast.json, per-character line counts, history and suggestions.
 | Rule 12 | 1, 2 | `untagged reads as user`, `A21` |
 | Rule 13 | 7, 23 | `A20`, `item 3`, `Review Focus 4` |
 | Owner: delete never trips drift | 23 | `Review Focus 4` |
-| Owner: lock until reloaded (+ B1–B3) | 10, 11, 12, 17, 21 | PUT 409 `book_busy` ×2 + audit; `B1` ×3 (per-book era, no leak A→B); `B2` ×4 (running-only snapshot leg, every exit releases via busy, single-flight backoff, epoch re-run); `item 8` other tab; `B3 lands` / `B3 409`; catch-all toast; 409 handler; UI banner/disabled/ConfirmRoute/voice-match once-guard/a11y; replays (during run ×3 incl. component; end of run; `replay (stop)` mutation target); Playwright with mock call log |
+| Owner: lock until reloaded (+ B1–B3) | 10, 11, 12, 17, 21 | PUT 409 `book_busy` ×2 + audit; `B1` ×3 (per-book era, no leak A→B); `B2` ×4 (running-only snapshot leg, every exit releases via busy, single-flight backoff, epoch re-run); `item 8b` other tab; `B3 lands` / `B3 409`; catch-all toast; 409 handler; UI banner/disabled/ConfirmRoute/voice-match once-guard/a11y; replays (during run ×3 incl. component; end of run; `replay (stop)` mutation target); Playwright with mock call log |
 | Cache lifecycle | 6, 15, 18, 24 | `classifyAnalysisCache`; `item 9`; `F1` ×2; `Q2` ×2; `item 20`; `subset flow (b)` |
 
 ### PR #4023 tests and where they land
@@ -1677,7 +1824,7 @@ Each test asserts cast.json, per-character line counts, history and suggestions.
 | merge-analysis-cast finding 3/7, N4; N1, P3-2/N2; P4-2 | Task 1 `A2`, `A7`, `A4/N2` (N2 overturned), `A5` |
 | remap R1–R17, N1a/b, N2 | Task 1 (R4, R7, R17 overturned) |
 | series-reuse-link S1–S3 | Task 16 `A7c`, Task 22 `A1` |
-| reviewer-brief entry 77 | Task 29 |
+| reviewer-brief entry 89 (77 was taken on main) | Task 29 |
 
 ## Test plan
 
@@ -1722,13 +1869,32 @@ chapter splitting, and the fe-11 class (tabs that missed the run). `remapCjkHono
 
 ## Ship notes
 
-(Filled in on merge.)
+Shipped 2026-11-12 via PR #4103 (branch `fix/server-4031-single-matcher`, head `8382303c` before
+this archive commit); the PR link is the durable pointer to the merge.
+
+- Owner rulings after review changed the design in four places: R53 made a catch-all bucket merge
+  one-shot, R55 made the server refuse cast-identity writes (merge, accept, orphan link and
+  reject, unlink-alias, Add character, add-from-roster) with 409 `book_busy` while an analysis
+  runs, R56 reversed R53's "no record" half so a bucket merge records `supersededBy` again
+  (matching still ignores it), and R57 had the UI disable every R55-refused control while the
+  cast is read-only. See rulings 22 to 26 above.
+
+- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50, R53, R54,
+  R55, R56) are recorded under *Spec conflicts found* above; the spec's acceptance 13, 14, 20,
+  23 and 24 and its "New UI" non-goal are amended to match.
+- On-box acceptance owed: one Group B row (B109) in `docs/testing/onbox-acceptance-register.md`
+  (run sheet `docs/testing/cast-id-drift-onbox-acceptance.md`).
+- Rollback: not data-safe on its own (see *Architectural impact*): revert, then Start fresh (old
+  code) on books analysed under v2, or delete their analysis cache.
+- Docs chores done in Task 29: plan 278 invariant 9, `archive/281` backing line, `CLAUDE.md`
+  recounts, reviewer-brief entry 89, release notes.
+- PR #4023 (`fix/server-3954-keep-prior-id-on-name-join`) was already closed, unmerged.
 
 ---
 
 ## Handover brief (copy to #4031)
 
-**Plan:** `docs/features/291-reanalysis-single-matcher.md`.
+**Plan:** `docs/features/archive/291-reanalysis-single-matcher.md`.
 **Spec:** `docs/superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md` (Rules 1–13,
 Acceptance 1–25).
 
@@ -1748,7 +1914,9 @@ Acceptance 1–25).
   - The server refuses the whole-slice cast PUT with 409 `book_busy` (the existing shape). The
     client toasts, latches the era, and re-hydrates.
   - Edit controls are disabled behind a banner (UX only); route-backed controls stay live;
-    link-prior is disabled.
+    link-prior is disabled. Since R55 the server refuses the cast-identity routes (merge,
+    accept, orphan link and reject, unlink-alias, Add character, add-from-roster) with 409
+    `book_busy` while the run is registered, and since R57 their controls are disabled too.
   - Rule 11 compares disk against the job's own **last** write before each write, then refreshes
     the fingerprint. The main job's ledger is cached; the subset job keeps its own and refreshes
     `addedRows` entries for the rows it writes.

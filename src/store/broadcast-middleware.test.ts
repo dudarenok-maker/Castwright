@@ -32,7 +32,7 @@
       widens it. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, type Middleware } from '@reduxjs/toolkit';
 import {
   createBroadcastMiddleware,
   BROADCAST_CHANNEL_NAME,
@@ -749,5 +749,154 @@ describe('broadcast-middleware sync:substage', () => {
     inbound({ kind: 'sync:substage', instanceId: 'other', stream: 'prosody', bookId: 'b1', mode: 'clear' });
     expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
     expect(store.getState().prosody.activeStreams.b2).toEqual({ progress: 2, label: 'y' });
+  });
+});
+
+describe('broadcastMiddleware — another tab\'s analysis reaches the cast gate (plan 291, #4031)', () => {
+  it("another tab's applyExternalAnalysisSnapshot latches the open book's era", async () => {
+    vi.useFakeTimers();
+    const { api } = await import('../lib/api');
+    const busy = vi.spyOn(api, 'getBookBusy').mockResolvedValue(['analysis']);
+    const { castSlice } = await import('./cast-slice');
+    const { bookBusySlice } = await import('./book-busy-slice');
+    const { uiSlice, uiActions } = await import('./ui-slice');
+    const { manuscriptSlice } = await import('./manuscript-slice');
+    const { castGateMiddleware, selectCastReadOnly } = await import('./cast-gate');
+    const mock = makeMockChannel();
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        analysis: analysisSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+      middleware: (gd) =>
+        gd({ serializableCheck: false }).concat(
+          createBroadcastMiddleware({ channel: mock.channel, instanceId: 'self-tab-id' }),
+          castGateMiddleware,
+        ),
+    });
+    store.dispatch(uiActions.openBook({ id: 'book-X', status: 'voices_pending' }));
+    try {
+      /* Another book's snapshot latches nothing here. */
+      mock.channel.simulateInbound({
+        kind: 'sync:analysis',
+        instanceId: 'other-tab',
+        bookId: 'book-Y',
+        mode: 'full',
+        snapshot: { ...analysisSnap, bookId: 'book-Y', manuscriptId: 'm-Y' },
+      });
+      expect(store.getState().cast.analysisEra).toEqual({});
+      /* The open book's — even one already paused — latches its era. */
+      mock.channel.simulateInbound({
+        kind: 'sync:analysis',
+        instanceId: 'other-tab',
+        bookId: 'book-X',
+        mode: 'full',
+        snapshot: { ...analysisSnap, state: 'paused' },
+      });
+      expect(store.getState().cast.analysisEra?.['book-X']).toBeDefined();
+      expect(selectCastReadOnly(store.getState(), 'book-X')).toBe(true);
+      /* The other tab's clear does not release it: only a busy-gated re-read does. */
+      mock.channel.simulateInbound({ kind: 'sync:analysis', instanceId: 'other-tab', bookId: null, mode: 'clear', snapshot: null });
+      expect(selectCastReadOnly(store.getState(), 'book-X')).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(busy).toHaveBeenCalledWith('book-X');
+    } finally {
+      /* The gate's poll keeps backing off while the book stays gated. */
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      busy.mockRestore();
+    }
+  });
+});
+
+describe('broadcastMiddleware — a mirrored run and the cast gate (plan 291, R30)', () => {
+  async function gateStore(busyKinds: string[]) {
+    vi.useFakeTimers();
+    const { api } = await import('../lib/api');
+    const busy = vi.spyOn(api, 'getBookBusy').mockResolvedValue(busyKinds as never);
+    const { castSlice } = await import('./cast-slice');
+    const { bookBusySlice } = await import('./book-busy-slice');
+    const { uiSlice, uiActions } = await import('./ui-slice');
+    const { manuscriptSlice } = await import('./manuscript-slice');
+    const { castGateMiddleware } = await import('./cast-gate');
+    const mock = makeMockChannel();
+    const latches: unknown[] = [];
+    const spy: Middleware = () => (next) => (action) => {
+      if ((action as { type?: string }).type === 'cast/latchAnalysisEra') latches.push(action);
+      return next(action);
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        analysis: analysisSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+      middleware: (gd) =>
+        gd({ serializableCheck: false }).concat(
+          spy,
+          createBroadcastMiddleware({ channel: mock.channel, instanceId: 'self-tab-id' }),
+          castGateMiddleware,
+        ),
+    });
+    store.dispatch(uiActions.openBook({ id: 'book-X', status: 'voices_pending' }));
+    const done = () => {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      busy.mockRestore();
+    };
+    return { store, mock, busy, latches, done };
+  }
+
+  it('N external ticks → at most one latch and no poll storm', async () => {
+    const { mock, busy, latches, done } = await gateStore(['analysis']);
+    try {
+      mock.channel.simulateInbound({
+        kind: 'sync:analysis',
+        instanceId: 'other-tab',
+        bookId: 'book-X',
+        mode: 'full',
+        snapshot: { ...analysisSnap, serverConfirmed: true },
+      });
+      for (let i = 1; i <= 20; i++) {
+        mock.channel.simulateInbound({
+          kind: 'sync:analysis',
+          instanceId: 'other-tab',
+          bookId: 'book-X',
+          mode: 'diff',
+          diff: { phaseProgress: i / 20, lastTickAt: 1000 + i },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      /* One latch for the run's arrival, one for the busy reply listing it. */
+      expect(latches.length).toBeLessThanOrEqual(2);
+      expect(busy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      done();
+    }
+  });
+
+  it("a non-owning tab's local halt is not broadcast", async () => {
+    const { store, mock, done } = await gateStore([]);
+    try {
+      mock.channel.simulateInbound({
+        kind: 'sync:analysis',
+        instanceId: 'other-tab',
+        bookId: 'book-X',
+        mode: 'full',
+        snapshot: { ...analysisSnap, serverConfirmed: true },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(store.getState().analysis.activeStream?.state).toBe('halted');
+      expect(mock.sent).toHaveLength(0);
+    } finally {
+      done();
+    }
   });
 });

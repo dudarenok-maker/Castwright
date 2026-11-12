@@ -832,6 +832,7 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
           /* The subset-final state write is only reached when stage 1 already
              exists, so seed it. */
           await saveAnalysisCache(seed.manuscriptId, {
+            version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
             chapters: {},
             stage1: {
               characters: [

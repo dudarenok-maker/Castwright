@@ -27,6 +27,7 @@ import { PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
 import { castActions } from '../store/cast-slice';
+import { CAST_EDITS_PAUSED_TOOLTIP, useCastReadOnly } from '../components/cast-edits-paused-banner';
 import { notificationsActions } from '../store/notifications-slice';
 import { pickMergeSurvivor } from '../lib/voice-character-link';
 import type { Character, Voice } from '../lib/types';
@@ -82,6 +83,7 @@ export function DuplicateReviewModal({
   hydrationError = null,
 }: DuplicateReviewModalProps) {
   const dispatch = useAppDispatch();
+  const readOnly = useCastReadOnly();
   const [busy, setBusy] = useState<'link' | 'variant' | null>(null);
   const [error, setError] = useState<string | null>(null);
   /* Which side survives a "link" action. Default = the side
@@ -115,6 +117,9 @@ export function DuplicateReviewModal({
   const winner = survivor === 'a' ? sideA : sideB;
   const loser = survivor === 'a' ? sideB : sideA;
   const canLink = !!sideA.character && !!sideB.character;
+  /* Plan 291 (#4031) — link-prior writes only the source book's cast; the open
+     book's matchedFrom arrives through the cast slice's PUT, so the link waits
+     for a re-analysis. "Different on purpose" saves through its own route. */
   const linkDisabled = !canLink || loading || busy !== null;
   const variantDisabled = !canLink || loading || busy !== null;
 
@@ -291,7 +296,16 @@ export function DuplicateReviewModal({
             >
               {busy === 'variant' ? 'Saving…' : 'Different on purpose'}
             </button>
-            <PrimaryButton variant="dark" onClick={handleLink} disabled={linkDisabled}>
+            <PrimaryButton
+              variant="dark"
+              onClick={() => {
+                if (readOnly) return;
+                void handleLink();
+              }}
+              disabled={linkDisabled}
+              softDisabled={readOnly}
+              title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}
+            >
               {busy === 'link'
                 ? 'Linking…'
                 : loading

@@ -510,3 +510,30 @@ describe('CloneReadinessGateModal', () => {
     });
   });
 });
+
+/* Plan 291 (#4031), Task 12 — read-only cast: "Cast on <engine>" writes the cast
+   slice and is disabled; the voice-library actions save through their own
+   routes and stay live. */
+describe('CloneReadinessGateModal — read-only cast (plan 291)', () => {
+  it('disables "Cast on <engine>" while read-only and keeps the library actions live', () => {
+    mockVerdicts = [
+      verdict({ characterId: 'c1', reason: 'wrong-engine', engine: 'kokoro', castOnEngine: 'coqui' }),
+      verdict({ characterId: 'c2', reason: 'derive-failed', engine: 'coqui' }),
+    ];
+    const store = makeStore({ characters: [char({ id: 'c1' }), char({ id: 'c2' })] });
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    render(
+      <Provider store={store}>
+        <CloneReadinessGateModal />
+      </Provider>,
+    );
+    const cast = screen.getByRole('button', { name: 'Cast on Coqui' });
+    expect(cast).toHaveAttribute('aria-disabled', 'true');
+    expect(cast).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(cast);
+    expect(store.getState().cast.characters[0].ttsEngine).toBeUndefined();
+    const retry = screen.getByRole('button', { name: 'Retry derive' });
+    expect(retry).not.toHaveAttribute('aria-disabled');
+    expect(retry).not.toBeDisabled();
+  });
+});

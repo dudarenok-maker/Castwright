@@ -8,7 +8,7 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A22](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A23](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and A34 (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21),
+> Register rows: [`onbox-acceptance-register.md` A22](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A23](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), A34 (#2584/#2570 wrong-direction retirement fix, §10 below), and [B109](onbox-acceptance-register.md) (plan 291 re-analysis, §12 below, owed) — **B3 is discharged (2026-08-21),
 A45 (2026-08-11), and A34 (2026-09-09, repair-and-retest chain #2903/#2435);
 none of the three is in the register any more, and §7, §9 and §10 below are
 their records. Do not follow B3, A45 or A34 to whatever now sits at those
@@ -1127,3 +1127,76 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
    row's roster join to its OWN chapter's snapshot …".
 
    Result: n/a (automated)
+
+---
+
+## 12. Plan 291 (#4031) — re-analysis only adds to the cast; the cast is read-only until it reloads
+
+Register row: [B109](onbox-acceptance-register.md) (Group B). Plan:
+[`docs/features/archive/291-reanalysis-single-matcher.md`](../features/archive/291-reanalysis-single-matcher.md)
+("Manual acceptance walkthrough"). Spec:
+[`docs/superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md`](../superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md).
+
+**Needs:** a real local Ollama analyzer (real backend, `npm run dev`), per-phase
+models for pass 2, the Qwen TTS sidecar with VoiceDesign weights (step 1 designs
+a voice mid-run), and a real voiced book with a merged pair, a dismissed merge
+suggestion and a locked character a re-analysis would join by name. Before each
+pass copy `.audiobook/cast.json`, `.audiobook/cast-id-history.json` and
+`.audiobook/cast-merge-suggestions.json` aside.
+
+SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
+
+Run the whole sheet twice: **pass 1** with the sequential analyzer, **pass 2**
+with per-phase models set (the pipelined path).
+
+1. **Banner and disabled controls during the run.** Start a re-analysis. The
+   Cast, Voices and Confirm views show "Re-analysis running — cast edits are
+   paused"; rename, drawer Save and voice assign are disabled; the link-prior and
+   duplicate-review controls are disabled. Mid-run, design a voice for a
+   different character through the voice route (profile drawer, Design voice):
+   it works (it is a cast write that stays live, with a dismissal). The drawer's
+   merge and downgrade are disabled with the paused tooltip (plan 291 R57). Then
+   try a merge from a second device, or a tab opened before the run: it is
+   refused with the "Re-analysis running — that change wasn't saved" toast and
+   changes nothing on disk (plan 291 R55).
+
+   Result (pass 1): _______________________________________________________
+   Result (pass 2): _______________________________________________________
+
+2. **Editable after the reload.** When the run ends the banner clears only after
+   the cast reloads. Rename a character: exactly one cast PUT goes out carrying
+   every row.
+
+   Result (pass 1): _______________________________________________________
+   Result (pass 2): _______________________________________________________
+
+3. **Only additions.** Diff the three files against the copies. Only additions
+   plus the route-given voice and the rename: no character lost, renamed,
+   merged or split; the locked character is fully intact (voice, name, aliases,
+   links); new `cast-id-history` entries are tagged `analyzer`; `displaced` did
+   not grow; the run raised no `attribution_drift`.
+
+   Result (pass 1): _______________________________________________________
+   Result (pass 2): _______________________________________________________
+
+4. **Ambiguous names and the dismissed suggestion.** A name the analyzer returns
+   that is ambiguous gives a new row and a suggestion (not a guess). The
+   dismissed suggestion does not return. If the book cannot be made to show an
+   ambiguous name, record "not run" for the first half.
+
+   Result (pass 1): _______________________________________________________
+   Result (pass 2): _______________________________________________________
+
+5. **Stop and resume.** Pause a second run partway. Edits stay paused until the
+   cast reloads and no character is lost. Resume it: the final cast matches a
+   straight run's.
+
+   Result (pass 1): _______________________________________________________
+   Result (pass 2): _______________________________________________________
+
+6. **Start fresh.** Start fresh keeps the cast, merges, dismissals and series
+   links (it discards only the analysis cache and per-sentence edits). Steps 1-5
+   still hold.
+
+   Result (pass 1): _______________________________________________________
+   Result (pass 2): _______________________________________________________

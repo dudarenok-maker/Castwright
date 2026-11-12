@@ -743,7 +743,7 @@ row this register still carries. Keep the table even when it is empty.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 9 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 17 |
@@ -752,13 +752,29 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**78 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**79 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-12 (#4054), 77 → 78.** Row **A123** (the sidecar exits when the server dies and logs the server's exit code: `taskkill /F`, `Stop-Process`, console Ctrl+C) added. Group A 43 → 44. `next-id` bumped A123 → A124 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
+> amended (plan 291 R57): the drawer's merge and downgrade are disabled mid-run, so the
+> refused-merge observation now comes from a second device or a tab opened before the run. No
+> row added or removed; `next-id` unchanged. Merged with `main`'s row **A123** (#4054): the
+> two rows' counts add, 77 → 79.
+>
+> **Previous change: 2026-11-12 (#4054), 77 → 78.** Row **A123** (the sidecar exits when the server dies and logs the server's exit code: `taskkill /F`, `Stop-Process`, console Ctrl+C) added. Group A 43 → 44. `next-id` bumped A123 → A124 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-12 (#4031, PR #4103 pass 5), owed count unchanged.** Row **B109**
+> amended (plan 291 R55): a merge or an accepted suggested merge is refused while the run is
+> going, so the row now observes that refusal; designing a voice stays the live mid-run write.
+> No row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-12 (#4079, PR #4093), owed count unchanged.** Row **A122** gets a run flag for the 1.7B-tier lifecycle fix (chapter 2 completes at Quality, the lease defers the 1.7B-Base idle watchdog, a Standard render takes none); the refused-own-line Kokoro free was not observed. The row stays owed; no row added or removed; `next-id` unchanged.
+>
+> **Previous change: 2026-11-11 (#4031, plan 291), 77 → 78.** Row **B109** (re-analysis only adds
+> to a real voiced cast, the cast is read-only with a banner until it reloads, Start fresh keeps
+> every decision, a stop and resume match a straight run) added. Group B 9 → 10. `next-id`
+> bumped B109 → B110 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-11 (#4066, #4037, #4075, PR #4076), owed count unchanged.** Rows **A120** and **A122** run on the box and recorded in new flags (A122 on 2026-11-10 through the HTTP API, A120 run 2 on 2026-11-10 through the browser and the API); both rows stay owed. A122 bullet 7 is amended to state the accepted early-eviction residual (#4075), and A120 steps 6, 13 and 17 are reworded to match what the run showed. No row added or removed; `next-id` unchanged.
 >
@@ -6611,7 +6627,7 @@ The automated tests stub the process-handle wait and pin the exit-code wording, 
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B109 -->
+<!-- next-id: B110 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6778,6 +6794,19 @@ The id-drift case, a locked character whose id changes between analyses, was fix
 The similarly-named-character case ("Brann" and "Brann Weir") is not a bullet here: roster dedup collapses that shape on a real run, and where a distinct survivor remains the linker may legitimately link it to Book One, which would read as a failure on correct code. It is pinned by the `series-reuse-link.test.ts` and `merge-analysis-cast.test.ts` fixtures instead.
 
 *Needs:* a real local Ollama analyzer and a real two-book series. *Criteria:* this row plus PR #3934's body; there is no per-feature run sheet. Clears when all three observations (A twice, B once) are recorded against a real series; if no analysis can be made to fail, B is recorded as not run and A's two stand.
+
+### B109 · Re-analysis only adds to a real voiced cast, and the cast is read-only until it reloads ([#4031](https://github.com/dudarenok-maker/Castwright/issues/4031), plan [291](../features/archive/291-reanalysis-single-matcher.md)) · **a real local Ollama analyzer and the Qwen TTS sidecar (VoiceDesign); a real voiced book with a merge, a dismissed suggestion and a locked name-joined character**
+
+Plan 291 replaced four fresh-to-prior matchers with one (`matchFreshToPrior`) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy `.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json` first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). **Mid-run, design a voice for another character through the voice route** (profile drawer, Design voice), because that is a cast write that stays live (a dismissal and Voices compare stay live too). Merging characters and accepting a suggested merge are refused while the run is going (plan 291 R55). Observe:
+- the Cast, Voices and Confirm views show "Re-analysis running — cast edits are paused", and rename, drawer Save and voice assign are disabled while designing a voice still works; the banner clears and the controls come back only after the cast reloads;
+- the drawer's merge and downgrade are disabled mid-run (paused tooltip), and a merge tried from a second device or a tab opened before the run is refused with the "Re-analysis running — that change wasn't saved" toast and changes nothing on disk;
+- the diff of the three files holds only additions plus the route-given voice: no character is lost, renamed, merged or split, and the locked character is fully intact (voice, name, aliases, links);
+- new `cast-id-history` entries are tagged `analyzer`, `displaced` does not grow, and the run raises no `attribution_drift`;
+- a name the analyzer returns that is ambiguous gives a new row plus a suggestion, and the dismissed suggestion does not come back;
+- Start fresh keeps everything above (cast, merges, dismissals) and only discards the cache and per-sentence edits;
+- stop a second run partway and resume it: the result matches a straight run, and edits stay paused until the cast reloads.
+
+Run sheet: [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §12 (the per-step `Result:` lines). *Needs:* a real local Ollama analyzer (and per-phase models for the second pass), the Qwen TTS sidecar with VoiceDesign weights for the mid-run design, and a real voiced book with the three conditions above. *Criteria:* plan 291 "Manual acceptance walkthrough". Clears when every observation is recorded for both passes; if the book cannot be made to show an ambiguous name, record that step as not run.
 
 ---
 

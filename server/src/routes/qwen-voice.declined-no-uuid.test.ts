@@ -4,13 +4,13 @@
    that only sees `undefined -> uuid` cannot tell that from a plain first mint (which
    keeps the legacy name), so the single-design events say so: `separated: true`.
 
-   Reachability, stated narrowly: the real seedReuseGuardsFromPriorCast (the #3965
-   union for an id-drifted speaker whose name two prior rows share) does leave
-   markers on a row with no uuid (the first case below). It builds ONLY the markers:
-   the qwen slot, its `angry` variant and `voiceId` are written onto the fixture row
-   by hand, and no merged code path is shown to produce that slot beside the markers
-   (the series linker, series-reuse-link.ts, is the plausible one, unverified). The
-   slot is what makes `separated` change the client's result. */
+   Reachability, stated narrowly: seedReuseGuardsFromPriorCast (the #3965 union for
+   an id-drifted speaker whose name two prior rows share) left markers on a row with
+   no uuid, and such rows persist in cast.json written before plan 291 (#4031)
+   deleted it. The fixture row is written by hand (the first case below), and no
+   current code path is shown to produce the qwen slot beside the markers (the
+   series linker, series-reuse-link.ts, is the plausible one, unverified). The slot
+   is what makes `separated` change the client's result. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
@@ -95,28 +95,24 @@ function writeBook(title: string, position: number, id: string, row: Record<stri
   writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [row] }));
 }
 
-/* Book Two's row as the merge leaves it: markers unioned from two same-name prior
-   rows, nothing else copied (no voiceUuid), the fresh row's own legacy-name slot. */
+/* Book Two's row: the decline markers, no voiceUuid, and a legacy-name slot. Plan 291
+   (#4031) deleted seedReuseGuardsFromPriorCast, whose #3965 union built these
+   markers before, so the row is written out literally: the markers that union left
+   (`declinedVoiceFrom` from both same-name prior rows, `declinedVoiceUuids` from
+   the one that had it), nothing else copied. */
 async function declinedRowWithNoUuid(): Promise<Record<string, unknown>> {
-  const { seedReuseGuardsFromPriorCast } = await import('../store/merge-analysis-cast.js');
-  const prior = [
-    { id: 'wren-a', name: 'Wren', declinedVoiceFrom: [bookOneId], declinedVoiceUuids: ['u_shared'] },
-    { id: 'wren-b', name: 'Wren', declinedVoiceFrom: [bookOneId] },
-  ];
-  const fresh: Record<string, unknown>[] = [
-    {
-      id: 'wren',
-      name: 'Wren',
-      role: 'supporting',
-      color: 'sky',
-      voiceId: 'v_wren',
-      voiceStyle: 'a bright voice',
-      evidence: [{ quote: '"Hello there."' }],
-      overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } },
-    },
-  ];
-  seedReuseGuardsFromPriorCast(prior as never, fresh as never);
-  return fresh[0];
+  return {
+    id: 'wren',
+    name: 'Wren',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'v_wren',
+    voiceStyle: 'a bright voice',
+    evidence: [{ quote: '"Hello there."' }],
+    overrideTtsVoices: { qwen: { name: 'qwen-v_wren', variants: { angry: { name: 'qwen-v_wren__angry' } } } },
+    declinedVoiceFrom: [bookOneId],
+    declinedVoiceUuids: ['u_shared'],
+  };
 }
 
 beforeAll(async () => {

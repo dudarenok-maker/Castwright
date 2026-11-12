@@ -1136,6 +1136,43 @@ recite:
     file, an existing file's bytes and `rev` unchanged, no slot, no staged
     leftovers; then a follow-up run that must not read the refusal as done.
 
+89. **A refusal in the first matcher that the fallback matcher does not
+    mirror** — PR #4023 passes 1-3 (#3954; the shape plan 291 / #4031
+    removed by making `matchFreshToPrior` the only matcher):
+    `remapFreshToPriorIds`, the first matcher, refuses a join, and
+    `mergeCore`'s name fallback then makes the same join anyway. Three times:
+    F3 (the tolerant twin-decline), P3-1 (a degraded history read skipped the
+    remap while mergeCore kept the fresh id) and P3-2 (N2's "neither join"
+    refusal for a row another fresh id's history adopts). Each time a unit
+    test at the first matcher passed while the end-to-end outcome was the join
+    it refused. Checkable: for every refusal (`continue` / `return undefined`)
+    a change adds to a matcher with a fallback downstream, find the
+    fallback's own gate for the same pair and prove it refuses too, with a
+    test through the real jobs asserting the end state (cast ids, history),
+    not the first matcher's return value. Use a fixture without the field that
+    masks the defect (P3-2's `voiceId` carried the voice across the id
+    change). A second place that compares a fresh row with a prior one is
+    itself the finding. `single-matcher.guard.test.ts` catches one only in
+    its seven listed files, or in a file that itself reads the prior through
+    the jobs' three readers; a comparator in a new file, or in one its caller
+    feeds the prior rows to, passes it, so look for that by reading.
+
+90. **A send-only-what-changed delta taken against a base that the same job's
+    earlier write already moved** — PR #4103 pass 4 (P4-1, #4031): the main
+    job's terminal ledger write sent `ledgerDelta(ledgerBeforePersist,
+    addedOnce)`. The persist itself had just written the bucket's entry as
+    `run-owned`, so the terminal `added-once` equalled the job's pre-persist
+    copy and was never sent, while `clearLedger` in the same op deleted the
+    `run-owned` entry: the row lost its R4 mark and the next run re-minted its
+    decision. Its twin is a send-everything write that re-adds what a route
+    deleted mid-run (R54: the persist wrote back a bucket decision the merge
+    route had deleted). Checkable: for every delta or full write, name its
+    base and list every write to the same file since that base was taken,
+    including the job's own and the routes it races; an entry this write
+    produced is always sent, and one it only carried is sent only if changed.
+    Test with an entry whose new value equals the stale base after an earlier
+    write moved the file, then assert on the file, not the job's copy.
+
 91. **A "matches some past version" test that ignores order, so a revert to an
     older value reads as "behind"** — PR #4106 pass 1 (#4105): a live page whose
     row body equalled any older `origin/main` version of it was exempted as

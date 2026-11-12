@@ -1831,8 +1831,13 @@ paths:
       summary: Dismiss a merge suggestion
       operationId: dismissCastMergeSuggestion
       description: |
-        Removes the matching `(sourceId, targetId)` pair from the suggestions
-        file. No-op when the pair is already absent. Does NOT perform any merge.
+        A durable "not the same person" decision. Records the pair (undirected)
+        in the book's cast-id-history, writes a `notLinkedTo` edge on each of
+        the two characters that exists, and removes the matching
+        `(sourceId, targetId)` pair from the suggestions file, so a later
+        re-analysis never re-suggests or joins it. When the history file cannot
+        be read the record is skipped (the edges and the removal still apply).
+        Does NOT perform any merge.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -1851,11 +1856,13 @@ paths:
                   description: The id of the canonical survivor.
       responses:
         '200':
-          description: Suggestion removed (or was already absent)
+          description: Dismissal recorded and suggestion removed (or was already absent)
         '400':
           description: sourceId or targetId missing
         '404':
           description: Book not found
+        '500':
+          description: The dismissal could not be written; the body carries a curated sentence with no filesystem path
 
   /api/books/{bookId}/cast/merge-suggestions/accept:
     post:
@@ -1864,8 +1871,10 @@ paths:
       description: |
         Performs the cast merge (`sourceId` folded into `targetId`, where
         `targetId` is the canonical survivor), then drops the suggestion so it
-        never resurfaces. Equivalent to calling `POST /cast/merge` followed by
-        `POST /cast/merge-suggestions/dismiss`.
+        never resurfaces. Equivalent to calling `POST /cast/merge`, then removing
+        the pair from the suggestions file. Unlike
+        `POST /cast/merge-suggestions/dismiss`, it records no "not the same
+        person" decision.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -1884,13 +1893,28 @@ paths:
                   description: The id of the canonical survivor.
       responses:
         '200':
-          description: Merge performed and suggestion removed
+          description: |
+            Merge performed and suggestion removed. Carries the merged cast, as
+            `POST /cast/merge` does, so the client mirrors the server's survivor
+            (aliases, `notLinkedTo` union) instead of saving a stale slice (#4031).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [characters]
+                properties:
+                  characters:
+                    type: array
+                    items: { $ref: '#/components/schemas/Character' }
         '400':
           description: Missing or equal sourceId/targetId
         '404':
           description: Book or character not found
         '409':
-          description: Book has no cast yet
+          description: |
+            Book has no cast yet; or `{ error, code: book_busy }` while an analysis
+            job is registered for the book (R55, #4031): a merge waits until the
+            analysis finishes. Nothing was written.
 
   /api/books/{bookId}/cast/tier:
     post:
@@ -4485,6 +4509,11 @@ paths:
             book), or `book_folder_in_use` (the folder is open in another
             program; close it and retry). No body ever carries a path.
 
+            #4031 — a whole-slice `cast` write is refused with
+            `{ error, code: book_busy }` while an analysis job is registered
+            for the book: the cast is read-only until the run ends. The check
+            runs before any read or write, so nothing is persisted. Re-read the book from disk once the run has finished.
+
             Plan 289: `stale_revision` — the request carried a `baseRevision`
             and a field the write would change has moved on disk since that
             base. Nothing was written; re-read the book. A request without
@@ -4970,7 +4999,7 @@ paths:
         '500':
           description: Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
     delete:
       summary: Undo a rejected orphaned-id reconciliation (#2092/#2089)
       operationId: undoRejectOrphanMatch
@@ -5007,7 +5036,7 @@ paths:
         '500':
           description: Failed to restore the forgotten alias entry, or to durably remove the rejection — retry
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
 
   /api/books/{bookId}/cast/{characterId}/link-orphan-match:
     post:
@@ -5054,7 +5083,7 @@ paths:
         '500':
           description: Failed to durably record the alias — retry, the write is idempotent
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
 
   /api/books/{bookId}/annotate-emotion:
     post:
@@ -7409,11 +7438,10 @@ components:
           type: string
           description: |
             Stable machine-readable warning code. Today only
-            `cast_merge_base_stale` — emitted when another route wrote
-            `cast.json` between two of this run's own merge-base writes, so the
-            analysis result was merged onto an older cast and that write may
-            have been overwritten. Replayed once per code on reconnect.
-          enum: [cast_merge_base_stale]
+            `analyzer-reasoning-overflow-nonstory` — emitted when front-matter
+            detection fell back for the whole run because the model's reasoning
+            overflowed. Replayed once per code on reconnect.
+          enum: [analyzer-reasoning-overflow-nonstory]
         message:
           type: string
           description: Human-readable advisory text.
@@ -7471,12 +7499,16 @@ components:
         `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
         `design_in_progress`, `bad_request`, `chapter_excluded`,
         `main_analysis_running`, `subset_analysis_running`,
-        `chapters_restructuring`) carry `code`
+        `chapters_restructuring`, `analysis_cache_legacy`) carry `code`
         and `message` only — `main_analysis_running` also carries
         `draining` (#3435: the late refusal check, after the stream opened).
         `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
         the chapters it ran are done, but the book still needs a main
         resume to attribute the rest; nothing was persisted as final.
+        `analysis_cache_legacy` (#4031, `/analysis/chapters` only): the
+        book's saved analysis progress predates the current cache version,
+        so a chapter re-analysis stops before writing anything; a full
+        analysis rebuilds it.
       required: [kind, code, message]
       properties:
         kind: { type: string, enum: [error] }
@@ -9256,6 +9288,7 @@ components:
         - voice-not-designed
         - cloned-voice-broken
         - lock-contention
+        - cast-unreadable
         - language-unset
         - analyzer-request-rejected
         - analyzer-invalid-output
@@ -9432,8 +9465,8 @@ components:
             pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared
             by steps that re-assign rather than demote (escalation,
             tagged-line recovery). NOT written by the id-remap/merge paths —
-            dedupAndPrepare, foldMinorCast, remapCjkHonorificIds,
-            remapFreshToPriorIds, performCastMerge — which also overwrite
+            dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, the plan
+            overlay (applyMatchPlan), performCastMerge — which also overwrite
             characterId (to another character's id, not narrator); whether a
             re-assignment should also carry a prior is an open design
             question, #2331.

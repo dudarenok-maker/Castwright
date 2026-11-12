@@ -44,7 +44,7 @@ import type {
   Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import type { Response } from '../http.js';
 
@@ -54,7 +54,8 @@ import type { Response } from '../http.js';
    `toThrow` fires from `dropSupersededIdsReclaimedByLiveCast` — a step INSIDE
    the persist's `catch (historyErr)`, i.e. one of the eight sites that fail
    loud (six identity handlers plus, since #2295, the two authoritative
-   `writeChecked` calls the last two describes below drive).
+   cast.json writes - `writeChecked` before plan 291, `persistPlannedCast`
+   now - the last two describes below drive).
 
    `reconcileThrow` fires from inside `reconcileRejectEdgesOnDisk` — the one
    IDENTITY-path site that does not (round 4, owner decision; #2292 added
@@ -102,77 +103,82 @@ vi.mock('../store/cast-id-history.js', async (importOriginal) => {
 /* #2295 / #2292 — a seam on the cast.json WRITES themselves, so a fixture can
    aim a throw at one write SITE rather than at a handler. That distinction is
    the whole of #2295: the persist's `catch (persistErr)` covers the
-   authoritative `writeChecked` AND the best-effort journals, so "which handler
-   caught it" cannot decide the outcome and "which write timed out" must.
-
-   `createCastMergeBase` is WRAPPED, not replaced — every call still performs
-   the real locked write unless `selects` picks it — so a fixture that aims at
-   the final write still gets the real interim writes on disk before it, which
-   is what makes the on-disk assertions able to tell the sites apart.
-
-   `value`/`enabled` are re-exposed as getters on purpose: they are getters on
-   the real object (mutable run state, see cast-merge-base.ts's header), and a
-   spread would freeze them at their first read. */
-interface CastWritePayload {
-  characters: Array<{ id: string; lines?: number }>;
-}
-const castWrite = vi.hoisted(() => ({
+   authoritative write (`writeChecked` before plan 291, `persistPlannedCast`
+   now) AND the best-effort journals, so "which handler
+   caught it" cannot decide the outcome and "which write timed out" must. */
+/* Plan 291: the Phase-0b snapshot is `writePlanSnapshot` (the main job's Phase 0a writes
+   nothing), so the swallow tests aim a throw at it instead of at a `writeChecked` ordinal. */
+const planSnapshot = vi.hoisted(() => ({ toThrow: null as unknown, thrown: 0 }));
+/* Plan 291 (Task 20): the main job's AUTHORITATIVE cast.json write is the planned persist,
+   `persistPlannedCast` (it takes the cast lock itself), so the #2295 fixtures aim at it. */
+const plannedPersist = vi.hoisted(() => ({
   toThrow: null as unknown,
-  selects: null as null | ((payload: { characters: Array<{ id: string; lines?: number }> }, index: number) => boolean),
-  calls: [] as Array<{ index: number; ids: string[]; lines: Array<number | undefined> }>,
+  calls: 0,
   thrown: 0,
+  /* #4031 R48 — runs the REAL persist, then fails the way an edits write does after
+     cast.json landed (the outcome rides on the error, `PersistOutcomeError`). */
+  editsFault: null as Error | null,
+  /* #4031 I1 — awaited just before the REAL persist runs (e.g. to damage cast.json). */
+  before: null as null | (() => void),
 }));
-
-vi.mock('../workspace/cast-merge-base.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../workspace/cast-merge-base.js')>();
+vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
   return {
     ...actual,
-    createCastMergeBase: (resolveBookDir: () => string, captured: string | null) => {
-      const base = actual.createCastMergeBase(resolveBookDir, captured);
-      return {
-        get value() {
-          return base.value;
-        },
-        get enabled() {
-          return base.enabled;
-        },
-        markDeleted: () => base.markDeleted(),
-        noteExternalWrite: (payload: unknown) => base.noteExternalWrite(payload),
-        writeChecked: async (payload: unknown, onConflict: Parameters<typeof base.writeChecked>[1]) => {
-          const p = payload as CastWritePayload;
-          const index = castWrite.calls.length;
-          castWrite.calls.push({
-            index,
-            ids: p.characters.map((c) => c.id),
-            lines: p.characters.map((c) => c.lines),
-          });
-          if (castWrite.toThrow && castWrite.selects?.(p, index)) {
-            castWrite.thrown += 1;
-            throw castWrite.toThrow;
-          }
-          return base.writeChecked(payload, onConflict);
-        },
-      };
+    writePlanSnapshot: (...a: Parameters<typeof actual.writePlanSnapshot>) => {
+      if (planSnapshot.toThrow) {
+        planSnapshot.thrown += 1;
+        return Promise.reject(planSnapshot.toThrow);
+      }
+      return actual.writePlanSnapshot(...a);
+    },
+    persistPlannedCast: (...a: Parameters<typeof actual.persistPlannedCast>) => {
+      plannedPersist.calls += 1;
+      if (plannedPersist.toThrow) {
+        plannedPersist.thrown += 1;
+        return Promise.reject(plannedPersist.toThrow);
+      }
+      plannedPersist.before?.();
+      const editsFault = plannedPersist.editsFault;
+      if (editsFault) {
+        return actual.persistPlannedCast(...a).then((out) => {
+          plannedPersist.thrown += 1;
+          throw Object.assign(editsFault, { persistOutcome: out });
+        });
+      }
+      return actual.persistPlannedCast(...a);
     },
   };
 });
 
 /* The journal seam for the other half of #2295's discrimination: a lock
-   timeout out of `writeSuggestions` must STILL be swallowed, because that
-   write is lineage rather than identity. Aimed at `writeSuggestions` (rather
+   timeout out of `reconcileSuggestionsLocked` must STILL be swallowed, because
+   that write is lineage rather than identity. Aimed at `reconcileSuggestionsLocked` (rather
    than `writeFoldJournal`/`writeDedupJournal`, which live in analysis.ts
    itself and so cannot be mocked) — it sits under the same
    `catch (dedupErr)`. */
-const suggestionsWrite = vi.hoisted(() => ({ toThrow: null as unknown, calls: 0 }));
+const suggestionsWrite = vi.hoisted(() => ({
+  toThrow: null as unknown,
+  /* Plan 291: the Phase-0b snapshot reconciles the plan's suggestions through this
+     same seam before the persist does, so a fixture aims its throw at one call by
+     ordinal (`null` = every call) and asserts the total count. */
+  throwAt: null as number | null,
+  calls: 0,
+  thrown: 0,
+}));
 
 vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/cast-merge-suggestions.js')>();
   return {
     ...actual,
-    writeSuggestions: async (...args: Parameters<typeof actual.writeSuggestions>) => {
+    reconcileSuggestionsLocked: async (...args: Parameters<typeof actual.reconcileSuggestionsLocked>) => {
+      const index = suggestionsWrite.calls;
       suggestionsWrite.calls += 1;
-      if (suggestionsWrite.toThrow) throw suggestionsWrite.toThrow;
-      return actual.writeSuggestions(...args);
+      if (suggestionsWrite.toThrow && (suggestionsWrite.throwAt === null || suggestionsWrite.throwAt === index)) {
+        suggestionsWrite.thrown += 1;
+        throw suggestionsWrite.toThrow;
+      }
+      return actual.reconcileSuggestionsLocked(...args);
     },
   };
 });
@@ -280,9 +286,22 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
-const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR, FS_FAILURE_REQUEST_ERROR } = await import(
   '../workspace/file-lock.js'
 );
+const { PERSIST_FAILED_MESSAGE_PREFIX } = await import('./failure-taxonomy.js');
+const { PRIOR_CAST_CORRUPT_MID_RUN_MESSAGE } = await import('../workspace/prior-cast-error.js');
+
+/* #4031 R48 — an authoritative persist write that failed for a reason other than a
+   lock timeout ends the job in `error` with a curated, path-free sentence. */
+function expectCuratedPersistTerminal(
+  terminal: { kind?: string; code?: string; message?: string } | undefined,
+  leaked: string[],
+): void {
+  expect(terminal?.kind).toBe('error');
+  expect(terminal?.message).toBe(`${PERSIST_FAILED_MESSAGE_PREFIX} ${FS_FAILURE_REQUEST_ERROR}`);
+  for (const s of leaked) expect(terminal?.message).not.toContain(s);
+}
 
 /* #2260 FINAL ROUND (B2) — the bar every terminal `error` event in this file
  * now has to clear, in one place.
@@ -493,6 +512,7 @@ async function runJob(
      jobs' persist blocks are exercised against the same book. */
   if (kind === 'subset') {
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       stage1: { characters: stage1Roster(), chapters: chapterHints.map((c) => ({ id: c.id, title: c.title })) },
       chapters: {},
     });
@@ -532,12 +552,14 @@ async function runJob(
   if (!recordRef) throw new Error('stub manuscript not found');
 
   /* Per-RUN counters, reset here rather than in an `afterEach` so a fixture's
-     own assertions (`castWrite.thrown`, `castWrite.calls.length`) describe THIS
+     own assertions (`plannedPersist.thrown`, `planSnapshot.thrown`) describe THIS
      job and not everything the file has run so far. Those counts are what stop
-     a mis-aimed `selects` from passing vacuously. */
-  castWrite.calls.length = 0;
-  castWrite.thrown = 0;
+     a mis-aimed seam from passing vacuously. */
+  planSnapshot.thrown = 0;
+  plannedPersist.calls = 0;
+  plannedPersist.thrown = 0;
   suggestionsWrite.calls = 0;
+  suggestionsWrite.thrown = 0;
 
   /* Neither job EVER rejects — each owns its own top-level catch, which is the
      whole point: the terminal event, not a thrown error, is what the user
@@ -803,8 +825,8 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
 /* #2295 — the persist block's OUTER `catch (persistErr)`, one level up from
  * everything above.
  *
- * `castBase.writeChecked` — the AUTHORITATIVE cast.json write — takes
- * `cast:<bookDir>` itself (workspace/cast-merge-base.ts:85), so a concurrent
+ * `castBase.writeChecked` — the AUTHORITATIVE cast.json write before plan 291 — took
+ * `cast:<bookDir>` itself (the deleted workspace/cast-merge-base.ts), so a concurrent
  * `performCastMerge` holding that key made it throw a
  * `LockAcquisitionTimeoutError`. Nothing between there and `catch (persistErr)`
  * discriminated the class, so the job skipped cast.json AND state.json and
@@ -812,61 +834,52 @@ describe('runSubsetAnalyzerJob persist block — the same two directions (#2260 
  * found one level above where it looked.
  *
  * The fix discriminates on WHICH WRITE timed out, not on which handler caught
- * it — which is why these fixtures aim at write SITES through the
- * `createCastMergeBase` seam rather than at the handler. The journal fixture
+ * it — which is why these fixtures aim at write SITES (now the
+ * `persistPlannedCast` seam) rather than at the handler. The journal fixture
  * below is the other half and the reason the handler cannot be the
- * discriminator: `writeFoldJournal` / `writeDedupJournal` / `writeSuggestions`
+ * discriminator: `writeFoldJournal` / `writeDedupJournal` / `reconcileSuggestionsLocked`
  * report to the very same `catch (persistErr)` (via their own inner handlers)
  * and must keep being swallowed.
  *
- * WRITE ORDER, verified by instrumenting this seam against a real run rather
- * than read off the source: the main job performs FIVE `writeChecked` calls —
- * three per-chapter interim, one stage-1, then the authoritative final — and
- * the subset job performs FOUR (three interim, then final). Only the final
- * write carries real sentence counts, so `lines > 0` selects it in both jobs;
- * every fixture also asserts the total call count, so a future change to that
- * sequence reddens here instead of silently re-aiming a `selects`.
+ * WRITE ORDER: the snapshots are `writePlanSnapshot` and the authoritative write
+ * is `persistPlannedCast` (plan 291), both with their own seams above - the main
+ * job's since Task 20, the subset's since Task 25. The old merge base and its
+ * `writeChecked` were deleted in Task 28.
  */
 describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
-  /** Selects the final write: the only one carrying real sentence counts. */
-  const selectsFinalWrite = (p: { characters: Array<{ lines?: number }> }) =>
-    p.characters.some((c) => (c.lines ?? 0) > 0);
-
   afterEach(() => {
-    castWrite.toThrow = null;
-    castWrite.selects = null;
+    plannedPersist.toThrow = null;
     suggestionsWrite.toThrow = null;
+    suggestionsWrite.throwAt = null;
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
   });
 
+  /* Plan 291 (Task 20) — replaces "a lock timeout on the final write ends the job with an
+     ERROR, not a result" (that write was the main job's `castBase.writeChecked`, which the
+     planned persist replaced). The persist's cast lock timed out, so nothing it owns was
+     written; the timeout is parked, the remaining write (state.json) still lands, and only
+     then does the deferred rethrow fail the job (carry 6, CLAUDE.md's deferred rethrow). */
   it(
-    'a lock timeout on the final write ends the job with an ERROR, not a result',
+    'a persist cast-lock timeout fails the job after state.json is written',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/authoritative', 10_000);
-      castWrite.selects = selectsFinalWrite;
+      plannedPersist.toThrow = new LockAcquisitionTimeoutError('cast:/w/authoritative', 10_000);
 
       const run = await runJob('final-timeout');
       try {
-        /* The seam actually fired, once, at the write the fixture aimed at —
-           without this the whole test could pass on a `selects` that never
-           matched anything. */
-        expect(castWrite.calls).toHaveLength(5);
-        expect(castWrite.thrown).toBe(1);
+        /* The seam fired, once. */
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
 
-        /* THE HARM IS REAL, and asserted rather than assumed: the
-           authoritative write did not land (cast.json still holds the
-           placeholder roster the interim writes left, lines 0) and state.json
-           still holds the previous run's seed. */
+        /* cast.json still holds the Phase-0b snapshot's placeholder (lines 0)... */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
+        /* ...and state.json WAS written before the job failed. */
         expect(run.state.chapters.map((c) => c.title)).toEqual([
-          STALE_CHAPTER_TITLE,
-          STALE_CHAPTER_TITLE,
-          STALE_CHAPTER_TITLE,
+          'Chapter One',
+          'Chapter Two',
+          'Chapter Three',
         ]);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
 
-        /* ...and THAT is now reported as a failure. This is the assertion the
-           bug reddens: before the fix the terminal was `result`. */
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
         expect(run.events.some((e) => e.kind === 'result')).toBe(false);
@@ -878,33 +891,143 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     60_000,
   );
 
+  const PRIOR_PROVENANCE = { engine: 'gemini', model: 'previous-run-model', at: '2020-01-01T00:00:00.000Z', scope: 'book' };
   it(
-    'an EPERM-shaped disk fault on the SAME write still ends the job with a result',
+    'a persist cast-lock timeout on a book marked sentencesPredateChapters keeps the marker and stamps no provenance',
     async () => {
-      castWrite.toThrow = Object.assign(
+      /* The timed-out persist wrote no manuscript-edits.json, so the saved sentences still
+         predate the chapters: the state.json write that still runs must not clear the
+         marker, nor claim this run's provenance. */
+      plannedPersist.toThrow = new LockAcquisitionTimeoutError('cast:/w/marker', 10_000);
+
+      const run = await runJob('final-timeout-marker', 'main', {
+        onSetup: ({ bookDir }) => {
+          const statePath = join(bookDir, '.audiobook', 'state.json');
+          const state = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, unknown>;
+          writeFileSync(
+            statePath,
+            JSON.stringify({ ...state, sentencesPredateChapters: true, analysisProvenance: PRIOR_PROVENANCE }),
+          );
+        },
+      });
+      try {
+        expect(plannedPersist.thrown).toBe(1);
+        /* The state.json write did run (chapters rebuilt)... */
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        /* ...without the marker clear or the provenance stamp: the PREVIOUS run's
+           provenance still describes disk, so it survives untouched. */
+        expect((run.state as { sentencesPredateChapters?: boolean }).sentencesPredateChapters).toBe(true);
+        expect(run.state.analysisProvenance).toEqual(PRIOR_PROVENANCE);
+        expect(run.events[run.events.length - 1]?.kind).toBe('error');
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'an EPERM-shaped disk fault on the SAME write fails the job after state.json is written (R48)',
+    async () => {
+      /* #4031 R48 (supersedes the Task 20 "ends with a result" pin): the planned persist
+         is AUTHORITATIVE, so a disk fault there reaches the job's terminal outcome like a
+         lock timeout does - parked, state.json still lands (no provenance stamp), then
+         the deferred rethrow ends the job with a curated, path-free error. */
+      plannedPersist.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = selectsFinalWrite;
 
       const run = await runJob('final-eperm');
       try {
-        expect(castWrite.calls).toHaveLength(5);
-        expect(castWrite.thrown).toBe(1);
-
-        /* Identical disk outcome to the timeout case — the discrimination is
-           about the TERMINAL, not about what got written. */
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.analysisProvenance).toBeUndefined();
 
-        /* The half that reddens if the fix is over-applied into "park
-           everything the outer handler sees". A disk fault on cast.json has
-           always been best-effort here and stays that way. */
         const terminal = run.events[run.events.length - 1];
-        expect(terminal?.kind).toBe('result');
-        expect(run.events.some((e) => e.kind === 'error')).toBe(false);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(terminal, ['cast.json', 'EPERM']);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
+    '%s: an edits-write failure after cast.json landed fails the job after state.json is written (R48)',
+    async (kind) => {
+      plannedPersist.editsFault = Object.assign(new Error("EBUSY: resource busy or locked, write 'C:\\secret\\manuscript-edits.json'"), {
+        code: 'EBUSY',
+        syscall: 'write',
+        path: 'C:\\secret\\manuscript-edits.json',
+      });
+      const run = await runJob(`edits-fault-${kind}`, kind);
+      try {
+        expect(plannedPersist.thrown).toBe(1);
+        /* cast.json landed (real counts); the outcome was still recorded... */
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
+        /* ...state.json still lands, without the provenance stamp (the edits did not)... */
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.analysisProvenance).toBeUndefined();
+        /* ...and the job ends in a curated error, not a result. */
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(run.events[run.events.length - 1], ['secret', 'manuscript-edits', 'EBUSY']);
+      } finally {
+        plannedPersist.editsFault = null;
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
+    '%s: a damaged cast.json found at a plan snapshot ends the run there, before the persist (R2-M3)',
+    async (kind) => {
+      const { PriorCastUnreadableError } = await import('../workspace/prior-cast-error.js');
+      planSnapshot.toThrow = new PriorCastUnreadableError('corrupt', { midRun: true });
+      /* The harness reads cast.json back; no snapshot lands here, so seed one. */
+      const run = await runJob(`corrupt-at-snapshot-${kind}`, kind, {
+        onSetup: (c) => writeFileSync(join(c.bookDir, '.audiobook', 'cast.json'), '{"characters":[]}'),
+      });
+      try {
+        expect(planSnapshot.thrown).toBeGreaterThan(0);
+        expect(plannedPersist.calls).toBe(0);
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(terminal?.code).toBe('cast-unreadable');
+        expect(terminal?.message).toBe(PRIOR_CAST_CORRUPT_MID_RUN_MESSAGE);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+      } finally {
+        planSnapshot.toThrow = null;
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.each(['main', 'subset'] as const)(
+    '%s: a cast.json damaged to `{}` mid-run is refused at the persist, not overwritten (I1)',
+    async (kind) => {
+      let castPath = '';
+      plannedPersist.before = () => writeFileSync(castPath, '{}');
+      const run = await runJob(`corrupt-mid-run-${kind}`, kind, {
+        onSetup: (c) => (castPath = join(c.bookDir, '.audiobook', 'cast.json')),
+      });
+      try {
+        expect(readFileSync(castPath, 'utf8')).toBe('{}');
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(terminal?.code).toBe('cast-unreadable');
+        /* Mid-run, "stopped before changing anything" would be untrue (R2-M2). */
+        expect(terminal?.message).toBe(PRIOR_CAST_CORRUPT_MID_RUN_MESSAGE);
+        expect(terminal?.message).not.toMatch(/before changing anything/);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+      } finally {
+        plannedPersist.before = null;
         await run.cleanup();
       }
     },
@@ -915,13 +1038,16 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
     'a lock timeout on the SUGGESTIONS write under the same handler is STILL swallowed',
     async () => {
       /* The reason the discrimination cannot be "the outer handler saw a
-         timeout": `writeSuggestions` reports into the same
-         `catch (persistErr)` chain, and it is lineage, not identity. */
+         timeout": `reconcileSuggestionsLocked` reports into the same
+         persist, and it is lineage, not identity. Plan 291 (Task 20): the persist's call
+         is inside `persistPlannedCast`, whose own advisory handler logs it. */
       suggestionsWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/journal', 10_000);
+      suggestionsWrite.throwAt = 1; // the persist's call; 0 is the Phase-0b snapshot's
 
       const run = await runJob('journal-timeout');
       try {
-        expect(suggestionsWrite.calls).toBe(1); // it really ran
+        expect(suggestionsWrite.calls).toBe(2); // the snapshot's and the persist's
+        expect(suggestionsWrite.thrown).toBe(1); // it really ran, and threw
 
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('result');
@@ -931,28 +1057,32 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
            write landed with real counts and state.json was rewritten. */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
         expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
-        expect(
-          run.warnings.some((w) => w.includes('failed to write dedup journal/suggestions')),
-        ).toBe(true);
+        expect(run.warnings.some((w) => w.includes('failed to write merge suggestions'))).toBe(true);
       } finally {
         await run.cleanup();
       }
     },
     60_000,
   );
-
+  /* Plan 291 (Task 25) — the subset's authoritative write is the planned persist too (it
+     was `castBase.writeChecked`), so these aim at the same seam as the main job's above.
+     A cast-lock timeout parks: state.json still lands (no provenance stamp), then the
+     deferred rethrow fails the job (Task 25 carry 10). */
   it(
-    'the subset job mirrors it: a lock timeout on its final write ends with an ERROR',
+    'the subset job mirrors it: a persist cast-lock timeout fails the job after state.json is written',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-authoritative', 10_000);
-      castWrite.selects = selectsFinalWrite;
+      plannedPersist.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-authoritative', 10_000);
 
       const run = await runJob('subset-final-timeout', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(4);
-        expect(castWrite.thrown).toBe(1);
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
+        /* cast.json still holds the finalise snapshot's placeholder (lines 0)... */
         expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
-        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+        /* ...and state.json WAS written before the job failed, without the provenance stamp. */
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.updatedAt).not.toBe(STALE_UPDATED_AT);
+        expect(run.state.analysisProvenance).toBeUndefined();
 
         const terminal = run.events[run.events.length - 1];
         expect(terminal?.kind).toBe('error');
@@ -966,22 +1096,25 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
   );
 
   it(
-    'the subset job mirrors the other direction too: EPERM on its final write ends with a result',
+    'the subset job mirrors it: EPERM on its final write fails the job after state.json is written (R48)',
     async () => {
-      castWrite.toThrow = Object.assign(
+      plannedPersist.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = selectsFinalWrite;
 
       const run = await runJob('subset-final-eperm', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(4);
-        expect(castWrite.thrown).toBe(1);
+        expect(plannedPersist.calls).toBe(1);
+        expect(plannedPersist.thrown).toBe(1);
+        /* A throw with no `persistOutcome` wrote nothing; it is parked (#4031 R48). */
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(0);
+        expect(run.state.chapters.map((c) => c.title)).toEqual(['Chapter One', 'Chapter Two', 'Chapter Three']);
+        expect(run.state.analysisProvenance).toBeUndefined();
 
         const terminal = run.events[run.events.length - 1];
-        expect(terminal?.kind).toBe('result');
-        expect(run.events.some((e) => e.kind === 'error')).toBe(false);
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(terminal, ['cast.json', 'EPERM']);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
         await run.cleanup();
@@ -1009,8 +1142,7 @@ describe('persist block — the AUTHORITATIVE cast.json write (#2295)', () => {
  */
 describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)', () => {
   afterEach(() => {
-    castWrite.toThrow = null;
-    castWrite.selects = null;
+    planSnapshot.toThrow = null;
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
   });
 
@@ -1030,18 +1162,18 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
   }
 
   it(
-    'a lock timeout on the per-chapter interim write is swallowed and the run completes',
+    'a lock timeout on the Phase-0b snapshot is swallowed and the run completes',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/interim', 10_000);
-      castWrite.selects = (_p, index) => index === 0; // the first per-chapter snapshot
+      /* Replaces the main job's per-chapter interim and stage-1 timeout tests: plan 291
+         removed those writes (Phase 0a writes no cast.json) and made the Phase-0b
+         snapshot, `writePlanSnapshot`, the one pre-final write. */
+      planSnapshot.toThrow = new LockAcquisitionTimeoutError('cast:/w/phase0b', 10_000);
 
-      const run = await runJob('interim-timeout');
+      const run = await runJob('phase0b-timeout');
       try {
-        expect(castWrite.calls).toHaveLength(5);
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        // Swallowed is not unnoticed.
-        expect(run.warnings.some((w) => w.includes('interim cast.json write failed'))).toBe(true);
+        expect(run.warnings.some((w) => w.includes('Phase-0b cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }
@@ -1050,19 +1182,18 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
   );
 
   it(
-    'an EPERM-shaped disk fault on the same interim write behaves identically',
+    'an EPERM-shaped disk fault on the Phase-0b snapshot behaves identically',
     async () => {
-      castWrite.toThrow = Object.assign(
+      planSnapshot.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = (_p, index) => index === 0;
 
-      const run = await runJob('interim-eperm');
+      const run = await runJob('phase0b-eperm');
       try {
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        expect(run.warnings.some((w) => w.includes('interim cast.json write failed'))).toBe(true);
+        expect(run.warnings.some((w) => w.includes('Phase-0b cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }
@@ -1070,63 +1201,19 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
     60_000,
   );
 
+  /* Plan 291 (Task 24): these replace the subset job's per-chapter interim-write tests. Its
+     Phase 0a writes nothing on an unplanned cache, so its one pre-final write is the
+     finalise's plan snapshot (`writePlanSnapshot`), which keeps the same swallow. */
   it(
-    'a lock timeout on the stage-1 snapshot write is swallowed and the run completes',
+    'the subset job finalise snapshot swallows a lock timeout too',
     async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/stage1', 10_000);
-      /* Index 3 in the main job: after the three per-chapter snapshots, before
-         the final write — see this file's write-order note. The call-count
-         assertion below is what stops this ordinal drifting silently. */
-      castWrite.selects = (_p, index) => index === 3;
-
-      const run = await runJob('stage1-timeout');
-      try {
-        expect(castWrite.calls).toHaveLength(5);
-        expect(castWrite.thrown).toBe(1);
-        expectRunCompletedWhole(run);
-        expect(run.warnings.some((w) => w.includes('stage1 cast.json write failed'))).toBe(true);
-      } finally {
-        await run.cleanup();
-      }
-    },
-    60_000,
-  );
-
-  it(
-    'an EPERM-shaped disk fault on the stage-1 write behaves identically',
-    async () => {
-      castWrite.toThrow = Object.assign(
-        new Error("EPERM: operation not permitted, rename 'cast.json'"),
-        { code: 'EPERM' },
-      );
-      castWrite.selects = (_p, index) => index === 3;
-
-      const run = await runJob('stage1-eperm');
-      try {
-        expect(castWrite.thrown).toBe(1);
-        expectRunCompletedWhole(run);
-        expect(run.warnings.some((w) => w.includes('stage1 cast.json write failed'))).toBe(true);
-      } finally {
-        await run.cleanup();
-      }
-    },
-    60_000,
-  );
-
-  it(
-    'the subset job interim write swallows a lock timeout too',
-    async () => {
-      castWrite.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-interim', 10_000);
-      castWrite.selects = (_p, index) => index === 0;
+      planSnapshot.toThrow = new LockAcquisitionTimeoutError('cast:/w/subset-finalise', 10_000);
 
       const run = await runJob('subset-interim-timeout', 'subset');
       try {
-        expect(castWrite.calls).toHaveLength(4);
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        expect(
-          run.warnings.some((w) => w.includes('[analysis-subset] interim cast.json write failed')),
-        ).toBe(true);
+        expect(run.warnings.some((w) => w.includes('subset finalise cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }
@@ -1135,21 +1222,18 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
   );
 
   it(
-    'the subset job interim write behaves identically on an EPERM',
+    'the subset job finalise snapshot behaves identically on an EPERM',
     async () => {
-      castWrite.toThrow = Object.assign(
+      planSnapshot.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'cast.json'"),
         { code: 'EPERM' },
       );
-      castWrite.selects = (_p, index) => index === 0;
 
       const run = await runJob('subset-interim-eperm', 'subset');
       try {
-        expect(castWrite.thrown).toBe(1);
+        expect(planSnapshot.thrown).toBe(1);
         expectRunCompletedWhole(run);
-        expect(
-          run.warnings.some((w) => w.includes('[analysis-subset] interim cast.json write failed')),
-        ).toBe(true);
+        expect(run.warnings.some((w) => w.includes('subset finalise cast.json snapshot failed'))).toBe(true);
       } finally {
         await run.cleanup();
       }
@@ -1296,7 +1380,25 @@ describe.each(['main', 'subset'] as const)(
       }
     }, 60_000);
 
-    it('an EPERM-shaped disk fault at the same step is still swallowed (the job ends with a result)', async () => {
+    it('a parked write error does not mask a stale book dir at the state.json step: the run halts (R2-M4)', async () => {
+      const { BookDirUnresolvedError } = await import('../workspace/book-dir-guard.js');
+      plannedPersist.toThrow = Object.assign(new Error('EPERM: cast.json'), { code: 'EPERM' });
+      stateStep.toThrow = new BookDirUnresolvedError();
+      const run = await runJob(`${kind}-parked-then-stale`, kind);
+      try {
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(terminal?.code).toBe('STALE_BOOK_DIR');
+      } finally {
+        plannedPersist.toThrow = null;
+        stateStep.toThrow = null;
+        await run.cleanup();
+      }
+    }, 60_000);
+
+    it('an EPERM-shaped disk fault at the same step fails the job with a curated error (R48)', async () => {
+      /* #4031 R48 (supersedes "still swallowed"): state.json is the AUTHORITATIVE
+         terminal record, so a disk fault there is not reported as success. */
       stateStep.toThrow = Object.assign(
         new Error("EPERM: operation not permitted, rename 'state.json'"),
         { code: 'EPERM' },
@@ -1305,7 +1407,8 @@ describe.each(['main', 'subset'] as const)(
       try {
         expect(stateStep.calls).toBeGreaterThan(0);
         const terminal = run.events[run.events.length - 1];
-        expect(terminal?.kind).toBe('result');
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedPersistTerminal(terminal, ['state.json', 'EPERM']);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
         await run.cleanup();

@@ -24,7 +24,11 @@ import request from 'supertest';
    test in this file sees the real implementations. */
 vi.mock('../workspace/state-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/state-io.js')>();
-  return { ...actual, readJson: vi.fn(actual.readJson) };
+  return {
+    ...actual,
+    readJson: vi.fn(actual.readJson),
+    writeJsonAtomic: vi.fn(actual.writeJsonAtomic),
+  };
 });
 vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
@@ -170,9 +174,11 @@ beforeAll(async () => {
     }),
   );
 
+  const { castMergeSuggestionsRouter } = await import('./cast-merge-suggestions.js');
   app = express();
   app.use(express.json());
   app.use('/api/books', castMergeRouter);
+  app.use('/api/books', castMergeSuggestionsRouter);
 });
 
 afterAll(() => {
@@ -285,12 +291,14 @@ describe('cast-merge router', () => {
     expect(merged.lines).toBe(5);
     expect(merged.scenes).toBe(3);
 
-    /* Analysis cache stage1 + per-chapter sentences both updated. */
+    /* #4031 — per-chapter takes are remapped; the RAW stage1 roster is no
+       longer edited (the cached plan is what a resume applies; replaces the old
+       "stage1 loses the source" assertion). */
     const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as {
       stage1: { characters: Array<{ id: string }> };
       chapters: Record<string, Array<{ characterId: string }>>;
     };
-    expect(cache.stage1.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'marlow']);
+    expect(cache.stage1.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'wren', 'marlow']);
     /* No surviving 'wren' attribution anywhere in the per-chapter cache. */
     for (const arr of Object.values(cache.chapters)) {
       for (const s of arr) {
@@ -394,26 +402,22 @@ describe('cast-merge router', () => {
     expect(survivor.notLinkedTo ?? []).toEqual([]);
   });
 
-  it('a throwing history write never fails the merge or leaves cast.json and the analysis cache disagreeing (#2040 Wave 2 final review, finding 4)', async () => {
-    /* `performCastMerge`'s retirement call sat between the cast.json write
-       and the analysis-cache reconciliation with no try/catch — unlike all
-       six analysis-path sites, which have been wrapped since Task 8 fix round
-       1. An EPERM/ENOSPC/AV-lock on cast-id-history.json therefore rejected
-       the whole call with cast.json ALREADY missing the source id while the
-       cache still held it — exactly the state the code's own comment below
-       that call says must not happen ("leaving the source in here would
-       reintroduce the duplicate as soon as the user clicks resume") — plus a
-       500 on a half-applied merge.
+  it('C3: a merge whose history write fails with EPERM finishes every write, then answers a curated 500', async () => {
+    /* REPLACES "a throwing history write never fails the merge or leaves
+       cast.json and the analysis cache disagreeing" (#2040 Wave 2 final review,
+       finding 4), which pinned the opposite outcome: a 200 with a swallowed
+       warn. A swallowed retirement reported success on a merge whose id
+       history was never recorded — #4031 rule 13 / C3 flips it. The half the
+       old test existed for is KEPT and is still the load-bearing assertion:
+       the failure is parked, so everything after the retirement (the cache
+       reconciliation, the journal) still runs and cast.json and the cache
+       agree; only then does the request fail, loud, with a curated body that
+       leaks no path.
 
-       The history is a lookup side-table and is never authoritative for
-       identity (spec §4.1: "losing the file degrades to today's behaviour…
-       at worst it stops helping"), so a failure to write it must cost the
-       entry, not the merge.
-
-       No mocking: cast-id-history.json's PATH is occupied by a directory, so
-       writeJsonAtomic's rename onto it throws for real. Same technique as
-       analysis.test.ts's sibling "a throwing history write never blocks the
-       authoritative cast.json persist". */
+       The fault is a REAL write error (EPERM on the history file's write), via
+       the passthrough `writeJsonAtomic` mock — not an unreadable history
+       (that is the degraded case, which is skipped and answers success; see
+       the next test). */
     const { castIdHistoryPath } = await import('../store/cast-id-history.js');
     const historyPath = castIdHistoryPath(bookDir);
 
@@ -454,30 +458,46 @@ describe('cast-merge router', () => {
     ];
     writeFileSync(cachePath, JSON.stringify(cacheBefore));
 
-    rmSync(historyPath, { recursive: true, force: true });
-    mkdirSync(historyPath, { recursive: true });
+    const { writeJsonAtomic } = await import('../workspace/state-io.js');
+    const real = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    vi.mocked(writeJsonAtomic).mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith('cast-id-history.json')) {
+        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${path}'`), {
+          code: 'EPERM',
+          syscall: 'rename',
+          path,
+        });
+      }
+      return real.writeJsonAtomic(path, ...rest);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const res = await request(app)
         .post(`/api/books/${bookId}/cast/merge`)
         .set('Content-Type', 'application/json')
         .send({ sourceId, targetId });
 
-      // Not a 500 on a half-applied merge.
-      expect(res.status).toBe(200);
+      // Loud: the request fails, with a curated body that names no path.
+      expect(res.status).toBe(500);
+      expect(res.type).toBe('application/json');
+      expect(res.body.error).not.toContain(historyPath);
+      expect(res.body.error).not.toContain('cast-id-history');
+      expect(res.body.error).not.toContain(workspaceRoot);
 
       const castAfter = readDisk<{ characters: Array<{ id: string }> }>('cast.json');
       expect(castAfter.characters.map((c) => c.id)).not.toContain(sourceId);
 
-      /* The specific invariant the unwrapped call could break: everything
-         AFTER the retirement still ran, so the cache agrees with cast.json.
-         An id-only check on cast.json would pass even with the throw
+      /* The specific invariant a throw at the retirement site would break:
+         everything AFTER the retirement still ran, so the cache agrees with
+         cast.json. An id-only check on cast.json would pass even with the throw
          propagating (that write precedes the retirement), which is why the
          assertions that matter are these. */
       const cacheAfter = JSON.parse(readFileSync(cachePath, 'utf8')) as {
         stage1: { characters: Array<{ id: string }> };
         chapters: Record<string, Array<{ characterId: string }>>;
       };
-      expect(cacheAfter.stage1.characters.map((c) => c.id)).not.toContain(sourceId);
       for (const arr of Object.values(cacheAfter.chapters)) {
         for (const s of arr) expect(s.characterId).not.toBe(sourceId);
       }
@@ -486,8 +506,47 @@ describe('cast-merge router', () => {
       const journal = readDisk<{ entries: Array<{ sourceId: string }> }>('cast-merges.json');
       expect(journal.entries.some((e) => e.sourceId === sourceId)).toBe(true);
     } finally {
-      rmSync(historyPath, { recursive: true, force: true });
+      vi.mocked(writeJsonAtomic).mockImplementation(real.writeJsonAtomic);
+      errSpy.mockRestore();
     }
+  });
+
+  it('degraded history is not a merge failure: the retirement is skipped and the merge answers 200', async () => {
+    /* #4031 ruling: an UNREADABLE cast-id-history.json (CastIdHistoryUnreadableError)
+       is skipped and logged server-side — matching "Retirements are skipped and
+       logged" and the dismiss route — and the merge succeeds. Only a real write
+       error is parked (the C3 test above). The history path is occupied by a
+       directory, so the read fails for real. */
+    const { castIdHistoryPath, loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const historyPath = castIdHistoryPath(bookDir);
+    const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceId = `degr-src-${unique}`;
+    const targetId = `degr-tgt-${unique}`;
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(
+      { id: sourceId, name: 'Degr Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+      { id: targetId, name: 'Degr Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    rmSync(historyPath, { recursive: true, force: true });
+    mkdirSync(historyPath, { recursive: true });
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/merge`)
+        .set('Content-Type', 'application/json')
+        .send({ sourceId, targetId });
+      expect(res.status).toBe(200);
+      const castAfter = readDisk<{ characters: Array<{ id: string }> }>('cast.json');
+      expect(castAfter.characters.map((c) => c.id)).not.toContain(sourceId);
+      const journal = readDisk<{ entries: Array<{ sourceId: string }> }>('cast-merges.json');
+      expect(journal.entries.some((e) => e.sourceId === sourceId)).toBe(true);
+    } finally {
+      rmSync(historyPath, { recursive: true, force: true });
+      warnSpy.mockRestore();
+    }
+    /* No retirement was recorded: the history is a fresh, empty one. */
+    expect((await loadCastIdHistory(bookDir)).supersededBy ?? {}).not.toHaveProperty(sourceId);
   });
 
   it('cast-merge round trip keeps phase', async () => {
@@ -716,14 +775,14 @@ describe('cast-merge downgrade to bucket', () => {
     expect(edits.sentences.find((s) => s.id === 2)!.characterId).toBe('unknown-female');
     expect(edits.sentences.find((s) => s.id === 3)!.characterId).toBe('garrow');
 
-    /* Analysis cache stage1 also gained the bucket. */
+    /* #4031 — the raw stage1 roster is no longer edited (it neither gains the
+       bucket nor loses 'rescuer'); the cached takes are re-attributed. Replaces
+       the old "stage1 also gained the bucket" assertion. */
     const cache = JSON.parse(readFileSync(dCachePath, 'utf8')) as {
       stage1: { characters: Array<{ id: string }> };
       chapters: Record<string, Array<{ characterId: string }>>;
     };
-    const cacheIds = cache.stage1.characters.map((c) => c.id);
-    expect(cacheIds).toContain('unknown-female');
-    expect(cacheIds).not.toContain('rescuer');
+    expect(cache.stage1.characters.map((c) => c.id)).toEqual(['rescuer', 'garrow']);
     for (const arr of Object.values(cache.chapters)) {
       for (const s of arr) expect(s.characterId).not.toBe('rescuer');
     }
@@ -1042,5 +1101,399 @@ describe('#1981 — two /cast/merge calls for one book overlap', () => {
     const b2 = cast.characters.find((c) => c.id === 'b2')!;
     expect(a2.aliases).toContain('A One');
     expect(b2.aliases).toContain('B One');
+  });
+});
+
+/* #4031 Task 13 — manual merge and accept under the single matcher: declines
+   are unioned, the cached plan is re-targeted inside the cache op, and a
+   dismissal record dies with the merge that collapses its pair. Each test
+   seeds its own uniquely-named pair onto the shared book. */
+describe('cast-merge — single matcher (#4031 Task 13)', () => {
+  const uniq = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  function row(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { id, name: `Row ${id}`, role: 'minor', color: 'halloran', lines: 1, scenes: 1, ...extra };
+  }
+
+  function seedRows(rows: Array<Record<string, unknown>>): void {
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(...rows);
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+  }
+
+  function castRow(id: string): Record<string, unknown> | undefined {
+    return readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json').characters.find(
+      (c) => c.id === id,
+    );
+  }
+
+  function seedCache(cache: Record<string, unknown>): void {
+    writeFileSync(cachePath, JSON.stringify({ version: 2, updatedAt: new Date().toISOString(), ...cache }));
+  }
+
+  function readCacheFile(): {
+    stage1?: { characters: Array<{ id: string }> };
+    matchPlan?: { decisions: Record<string, Record<string, unknown>> };
+    addedRows?: Record<string, unknown>;
+    chapters: Record<string, Array<{ characterId: string }>>;
+  } {
+    return JSON.parse(readFileSync(cachePath, 'utf8'));
+  }
+
+  function merge(sourceId: string, targetId: string) {
+    return request(app)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId, targetId });
+  }
+
+  it("a merge unions the source's declines but never a same-book one naming either row", async () => {
+    const u = uniq();
+    const src = `dec-src-${u}`;
+    const tgt = `dec-tgt-${u}`;
+    seedRows([
+      row(src, {
+        notLinkedTo: [
+          { bookId: 'series-book-1', characterId: 'zed' },
+          { bookId, characterId: tgt },
+          { bookId, characterId: 'third-row' },
+        ],
+      }),
+      row(tgt, {
+        notLinkedTo: [
+          { bookId: 'series-book-1', characterId: 'yan' },
+          { bookId, characterId: src },
+        ],
+      }),
+    ]);
+
+    const res = await merge(src, tgt);
+    expect(res.status).toBe(200);
+
+    expect(castRow(tgt)!.notLinkedTo).toEqual([
+      { bookId: 'series-book-1', characterId: 'yan' },
+      { bookId: 'series-book-1', characterId: 'zed' },
+      { bookId, characterId: 'third-row' },
+    ]);
+  });
+
+  it('item 13: a cross-book entry whose characterId equals targetId survives', async () => {
+    const u = uniq();
+    const src = `x13-src-${u}`;
+    const tgt = `x13-tgt-${u}`;
+    seedRows([
+      row(src, { notLinkedTo: [{ bookId: 'series-book-2', characterId: tgt }] }),
+      row(tgt),
+    ]);
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    expect(castRow(tgt)!.notLinkedTo).toEqual([{ bookId: 'series-book-2', characterId: tgt }]);
+  });
+
+  it("A23b: a merge re-targets the cached plan and chapters and drops the source's ledger entry", async () => {
+    const u = uniq();
+    const src = `a23-src-${u}`;
+    const tgt = `a23-tgt-${u}`;
+    seedRows([row(src), row(tgt)]);
+    seedCache({
+      stage1: { characters: [{ id: 'raw-a' }, { id: 'raw-b' }], chapters: [{ id: 1, title: 'One' }] },
+      chapters: { 1: [{ id: 91, chapterId: 1, characterId: src, text: 'a' }] },
+      matchPlan: {
+        version: 1,
+        runToken: 't1',
+        decisions: {
+          'raw-a': { kind: 'join', rawId: 'raw-a', priorId: src, tier: 'id' },
+          'raw-b': { kind: 'join', rawId: 'raw-b', priorId: tgt, tier: 'id' },
+        },
+      },
+      addedRows: {
+        [src]: { state: 'run-owned', fp: 'fp-source' },
+        [tgt]: { state: 'run-owned', fp: 'fp-target' },
+      },
+    });
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    const cache = readCacheFile();
+    expect(cache.matchPlan!.decisions['raw-a']).toEqual({
+      kind: 'join',
+      rawId: 'raw-a',
+      priorId: tgt,
+      tier: 'merge',
+    });
+    expect(cache.matchPlan!.decisions['raw-b']).toMatchObject({ priorId: tgt, tier: 'id' });
+    expect(cache.chapters['1'][0].characterId).toBe(tgt);
+    /* The source's entry is dropped; the target keeps ITS OWN fingerprint. */
+    expect(cache.addedRows).toEqual({ [tgt]: { state: 'run-owned', fp: 'fp-target' } });
+    /* The raw roster is not edited. */
+    expect(cache.stage1!.characters.map((c) => c.id)).toEqual(['raw-a', 'raw-b']);
+  });
+
+  it("item 12: merging a new row into another new row copies the target's decision", async () => {
+    const u = uniq();
+    const src = `i12-src-${u}`;
+    const tgt = `i12-tgt-${u}`;
+    seedRows([row(src), row(tgt)]);
+    const targetDecision = {
+      kind: 'new',
+      rawId: 'raw-t',
+      id: tgt,
+      minted: true,
+      suggest: ['cand-1'],
+      inheritedDeclines: [{ bookId: 'series-book-1', characterId: 'zed' }],
+    };
+    seedCache({
+      stage1: { characters: [{ id: 'raw-s' }, { id: 'raw-t' }] },
+      chapters: {},
+      matchPlan: {
+        version: 1,
+        runToken: 't1',
+        decisions: {
+          'raw-s': { kind: 'new', rawId: 'raw-s', id: src, minted: true, suggest: [], inheritedDeclines: [] },
+          'raw-t': targetDecision,
+        },
+      },
+    });
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    expect(readCacheFile().matchPlan!.decisions['raw-s']).toEqual({ ...targetDecision, rawId: 'raw-s' });
+    expect(readCacheFile().matchPlan!.decisions['raw-t']).toEqual(targetDecision);
+  });
+
+  it("PR #4103 pass 2 P2-1: merging a fold bucket deletes the bucket's plan decisions instead of re-targeting them", async () => {
+    const tgt = `p21-tgt-${uniq()}`;
+    /* A bucket from an earlier test on this shared book is cleared first. */
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters = cast.characters.filter((c) => c.id !== 'unknown-male');
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    seedRows([row('unknown-male', { name: 'Unknown male' }), row(tgt)]);
+    const other = { kind: 'join', rawId: 'raw-o', priorId: tgt, tier: 'id' };
+    seedCache({
+      chapters: {},
+      matchPlan: {
+        version: 1,
+        runToken: 't1',
+        decisions: {
+          'unknown-male': { kind: 'new', rawId: 'unknown-male', id: 'unknown-male', minted: false, suggest: [], inheritedDeclines: [] },
+          'raw-o': other,
+        },
+      },
+    });
+
+    expect((await merge('unknown-male', tgt)).status).toBe(200);
+
+    /* R49: the bucket settles by its own id only, so the next persist re-plans it; a
+       re-targeted `join -> tgt` would leave its raw key covered and undecided. */
+    expect(readCacheFile().matchPlan!.decisions).toEqual({ 'raw-o': other });
+  });
+
+  it('R53 / R56 (PR #4103 passes 4-5): a merge of a fold bucket moves its lines and leaves a render-only record, as main did', async () => {
+    const u = uniq();
+    const tgt = `r53-tgt-${u}`;
+    const down = `r53-down-${u}`;
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters = cast.characters.filter((c) => c.id !== 'unknown-male');
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    seedRows([row(down), row('unknown-male', { name: 'Unknown male' }), row(tgt)]);
+    /* An earlier "Downgrade to a background voice" of another character. */
+    expect((await merge(down, 'unknown-male')).status).toBe(200);
+    seedCache({ chapters: {}, addedRows: { 'unknown-male': { state: 'added-once' }, [tgt]: { state: 'added-once' } } });
+
+    expect((await merge('unknown-male', tgt)).status).toBe(200);
+
+    expect(castRow('unknown-male')).toBeUndefined();
+    const { loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const h = await loadCastIdHistory(bookDir);
+    /* R56: the bucket is retired onto the target and the downgrade's entry is repointed with
+       it, so both ids' rendered lines resolve to the target. Matching never follows the
+       bucket key (`followableHistory`, pinned in cast-id-history.test.ts). */
+    expect(h.supersededBy['unknown-male']).toBe(tgt);
+    expect(h.supersededBy[down]).toBe(tgt);
+    /* The bucket's ledger entry goes; the target's stays. */
+    expect(readCacheFile().addedRows).toEqual({ [tgt]: { state: 'added-once' } });
+  });
+
+  async function notSamePersonNaming(...ids: string[]): Promise<unknown[]> {
+    const { loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const h = await loadCastIdHistory(bookDir);
+    return (h.notSamePerson ?? []).filter((r) => ids.includes(r.a) || ids.includes(r.b));
+  }
+
+  it('F9: dismiss then merge the pair removes the record and both edges', async () => {
+    const u = uniq();
+    const src = `f9-src-${u}`;
+    const tgt = `f9-tgt-${u}`;
+    seedRows([row(src), row(tgt)]);
+    const dismissed = await request(app)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: src, targetId: tgt });
+    expect(dismissed.status).toBe(200);
+    expect(await notSamePersonNaming(src, tgt)).toHaveLength(1);
+    expect(castRow(tgt)!.notLinkedTo).toEqual([{ bookId, characterId: src }]);
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    expect(await notSamePersonNaming(src, tgt)).toEqual([]);
+    expect(castRow(src)).toBeUndefined();
+    expect(castRow(tgt)!.notLinkedTo ?? []).toEqual([]);
+  });
+
+  function seedSuggestions(pairs: Array<[string, string]>): void {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-merge-suggestions.json'),
+      JSON.stringify({ suggestions: pairs.map(([a, b]) => ({ sourceId: a, targetId: b, reason: 'same?' })) }),
+    );
+  }
+
+  function storedSuggestionPairs(): string[] {
+    return readDisk<{ suggestions: Array<{ sourceId: string; targetId: string }> }>(
+      'cast-merge-suggestions.json',
+    ).suggestions.map((s) => `${s.sourceId}>${s.targetId}`);
+  }
+
+  it('A12d: both routes drop a dismissed pair\'s record, edges and suggestion', async () => {
+    /* (1) accept route. */
+    const u = uniq();
+    const src = `a12d-src-${u}`;
+    const tgt = `a12d-tgt-${u}`;
+    seedRows([row(src), row(tgt)]);
+    await request(app)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: src, targetId: tgt });
+    expect(await notSamePersonNaming(src, tgt)).toHaveLength(1);
+    /* A later run can re-raise the pair only by writing the file directly. */
+    seedSuggestions([[src, tgt]]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/accept`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: src, targetId: tgt });
+    expect(res.status).toBe(200);
+    expect(await notSamePersonNaming(src, tgt)).toEqual([]);
+    expect(castRow(tgt)!.notLinkedTo ?? []).toEqual([]);
+    expect(storedSuggestionPairs()).toEqual([]);
+
+    /* (2) manual merge route. */
+    const src2 = `a12d-src2-${u}`;
+    const tgt2 = `a12d-tgt2-${u}`;
+    seedRows([row(src2), row(tgt2)]);
+    await request(app)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: src2, targetId: tgt2 });
+    seedSuggestions([[src2, tgt2]]);
+
+    expect((await merge(src2, tgt2)).status).toBe(200);
+    expect(await notSamePersonNaming(src2, tgt2)).toEqual([]);
+    expect(castRow(tgt2)!.notLinkedTo ?? []).toEqual([]);
+    expect(storedSuggestionPairs()).toEqual([]);
+  });
+
+  it("R32: a manual merge removes its own pair's suggestion and keeps the others", async () => {
+    const u = uniq();
+    const src = `r32-src-${u}`;
+    const tgt = `r32-tgt-${u}`;
+    const other = `r32-other-${u}`;
+    const other2 = `r32-other2-${u}`;
+    seedRows([row(src), row(tgt), row(other), row(other2)]);
+    seedSuggestions([
+      [src, tgt],
+      [other, other2],
+    ]);
+
+    expect((await merge(tgt, src)).status).toBe(200); // opposite direction: the pair is unordered
+
+    expect(storedSuggestionPairs()).toEqual([`${other}>${other2}`]);
+  });
+
+  it('R32: the pair removal survives an EPERM history write error (parked, finished, then 500)', async () => {
+    const u = uniq();
+    const src = `r32e-src-${u}`;
+    const tgt = `r32e-tgt-${u}`;
+    seedRows([row(src), row(tgt)]);
+    seedSuggestions([[src, tgt]]);
+    const { writeJsonAtomic } = await import('../workspace/state-io.js');
+    const real = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    vi.mocked(writeJsonAtomic).mockImplementation(async (path, ...rest) => {
+      if (String(path).endsWith('cast-id-history.json')) {
+        throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      }
+      return real.writeJsonAtomic(path, ...rest);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await merge(src, tgt)).status).toBe(500);
+    } finally {
+      vi.mocked(writeJsonAtomic).mockImplementation(real.writeJsonAtomic);
+      errSpy.mockRestore();
+    }
+    expect(castRow(src)).toBeUndefined();
+    expect(storedSuggestionPairs()).toEqual([]);
+  });
+
+  /* A superseded target: tgt was retired into the live row R, so retiring
+     src into tgt resolves to R and a (src, R) dismissal record collapses to
+     (R, R). R is NOT one of the two merging rows, so only the
+     dropped-record edge clear can remove R's edge naming src. */
+  async function seedSupersededTargetFixture(u: string, withRejectedPair: boolean) {
+    const src = `sup-src-${u}`;
+    const tgt = `sup-tgt-${u}`;
+    const live = `sup-live-${u}`;
+    const bystander = `sup-by-${u}`;
+    seedRows([
+      row(src),
+      row(tgt),
+      row(live, { notLinkedTo: [{ bookId, characterId: src }] }),
+      row(bystander, { notLinkedTo: [{ bookId, characterId: live }] }),
+    ]);
+    const history = await import('../store/cast-id-history.js');
+    await history.recordNotSamePerson(bookDir, src, live);
+    if (withRejectedPair) await history.rejectOrphanedPair(bookDir, live, src);
+    await history.retireCharacterId(bookDir, tgt, live);
+    return { src, tgt, live, bystander };
+  }
+
+  it('a dropped dismissal record clears the edge on the row it collapsed into (superseded target)', async () => {
+    const { src, tgt, live } = await seedSupersededTargetFixture(uniq(), false);
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    expect(await notSamePersonNaming(src, live)).toEqual([]);
+    expect(castRow(live)!.notLinkedTo ?? []).toEqual([]);
+  });
+
+  it('both dropped-edge clears run: a self-loop rejection AND a dismissal record in one merge', async () => {
+    const { src, tgt, live, bystander } = await seedSupersededTargetFixture(uniq(), true);
+
+    expect((await merge(src, tgt)).status).toBe(200);
+
+    /* the rejectedPairs self-loop's edge (naming `live`) on the bystander... */
+    expect(castRow(bystander)!.notLinkedTo ?? []).toEqual([]);
+    /* ...and the dismissal record's edge on `live`. A short-circuiting `||`
+       skips the second clear whenever the first changed something. */
+    expect(castRow(live)!.notLinkedTo ?? []).toEqual([]);
+  });
+
+  it('GET merge-suggestions returns only pairs whose two ids are both live rows', async () => {
+    const u = uniq();
+    const a = `get-a-${u}`;
+    const b = `get-b-${u}`;
+    seedRows([row(a), row(b)]);
+    seedSuggestions([
+      [a, b],
+      [a, `get-deleted-${u}`],
+    ]);
+
+    const res = await request(app).get(`/api/books/${bookId}/cast/merge-suggestions`);
+    expect(res.status).toBe(200);
+    expect(res.body.suggestions.map((s: { sourceId: string; targetId: string }) => `${s.sourceId}>${s.targetId}`)).toEqual([
+      `${a}>${b}`,
+    ]);
   });
 });

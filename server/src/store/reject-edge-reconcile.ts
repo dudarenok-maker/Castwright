@@ -34,9 +34,12 @@
    always-writing history step owes the same.
 
    BACKING. An edge is legitimate when the decision it encodes is recorded
-   durably somewhere. Two places count:
+   durably somewhere. Three places count:
      - a `rejectedPairs` entry with `from === edge.characterId`;
-     - the LEGACY id-wide `rejected` list containing `edge.characterId`.
+     - the LEGACY id-wide `rejected` list containing `edge.characterId`;
+     - a `notSamePerson` record (#4031, a suggestion's dismissal) naming the
+       carrying row and `edge.characterId` as its two sides — row-scoped, so a
+       record backs only its own pair.
    The second is not optional. Books rejected between aa6616d8 and f6074ca8
    recorded the decision there, and `buildCastResolver` still honours it
    (cast-resolve.ts:108 builds `rejectedSet` from it, :164 consults it).
@@ -100,6 +103,12 @@ export function reconcileRejectEdges<T extends CastRow>(
   const pairs = history.rejectedPairs ?? [];
   const legacyRejected = new Set(history.rejected ?? []);
   const backedFroms = new Set(pairs.map((p) => p.from));
+  /* #4031 — a dismissal's `notSamePerson` record backs the edge on BOTH of its
+     rows, and ONLY for its own pair: the row is named on one side of the
+     record and the edge on the other. */
+  const records = history.notSamePerson ?? [];
+  const recordBacks = (rowId: string, other: string): boolean =>
+    records.some((r) => (r.a === rowId && r.b === other) || (r.b === rowId && r.a === other));
 
   const adds: RejectEdge[] = [];
   const removes: RejectEdge[] = [];
@@ -111,6 +120,7 @@ export function reconcileRejectEdges<T extends CastRow>(
     const kept = existing.filter((e) => {
       if (e.bookId !== bookId) return true; // cross-book: never ours to judge
       if (backedFroms.has(e.characterId) || legacyRejected.has(e.characterId)) return true;
+      if (recordBacks(c.id, e.characterId)) return true;
       removes.push({ characterId: c.id, orphanedId: e.characterId });
       return false;
     });
@@ -127,6 +137,20 @@ export function reconcileRejectEdges<T extends CastRow>(
     if (existing.some((e) => e.bookId === bookId && e.characterId === p.from)) continue;
     next[idx] = { ...row, notLinkedTo: [...existing, { bookId, characterId: p.from }] } as T;
     adds.push({ characterId: p.to, orphanedId: p.from });
+  }
+
+  /* Pass 2b (#4031) — write back each record's own pair on whichever of its
+     two rows lost the edge. */
+  for (const r of records) {
+    for (const [rowId, other] of [[r.a, r.b], [r.b, r.a]] as const) {
+      const idx = byId.get(rowId);
+      if (idx === undefined) continue; // not a live row — nothing to carry the edge
+      const row = next[idx];
+      const existing = row.notLinkedTo ?? [];
+      if (existing.some((e) => e.bookId === bookId && e.characterId === other)) continue;
+      next[idx] = { ...row, notLinkedTo: [...existing, { bookId, characterId: other }] } as T;
+      adds.push({ characterId: rowId, orphanedId: other });
+    }
   }
 
   return { adds, removes, next };

@@ -7,6 +7,7 @@ import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { castSlice, castActions } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { librarySlice } from '../store/library-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
@@ -137,6 +138,7 @@ function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {
       castDesign: castDesignSlice.reducer,
       library: librarySlice.reducer,
       voiceLibrary: voiceLibrarySlice.reducer,
+      analysis: analysisSlice.reducer,
       manuscript: manuscriptSlice.reducer,
     },
     preloadedState: myVoices
@@ -178,6 +180,7 @@ function renderDrawer(
     onReassignLines?: (characterId: string) => void;
     myVoices?: VoiceLibraryEntry[];
     onSave?: (next: Character, meta: { hadConflict: boolean }) => void;
+    onLock?: (character: Character) => void;
   } = {},
 ) {
   const store = makeStore({
@@ -196,7 +199,7 @@ function renderDrawer(
           voice={extra.voice}
           onClose={() => {}}
           onSave={extra.onSave ?? (() => {})}
-          onLock={() => {}}
+          onLock={extra.onLock ?? (() => {})}
           mergeCandidates={extra.mergeCandidates}
           mergeCandidatesPrior={extra.mergeCandidatesPrior}
           onMerge={extra.onMerge}
@@ -1223,6 +1226,14 @@ describe('ProfileDrawer alias chip editing', () => {
     expect(screen.getByRole('button', { name: 'Unlink Jurek' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Unlink Garrow' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Unlink Shopkeeper' })).toBeTruthy();
+  });
+
+  it('gives the Unlink X button a 44px touch target that collapses on fine pointers', () => {
+    renderDrawer(charWithAliases, { onUnlinkAlias: vi.fn().mockResolvedValue(undefined) });
+    const cls = screen.getByRole('button', { name: 'Unlink Sior' }).className.split(/\s+/);
+    for (const c of ['min-h-[44px]', 'min-w-[44px]', 'fine-pointer:min-h-0', 'fine-pointer:min-w-0']) {
+      expect(cls).toContain(c);
+    }
   });
 
   it('omits the X button when onUnlinkAlias is not provided (read-only fallback)', () => {
@@ -3112,6 +3123,201 @@ describe('ProfileDrawer design guard (#3084 W4)', () => {
       expect(generateVoiceStyle).not.toHaveBeenCalled();
       expect(haltActiveGeneration).not.toHaveBeenCalled();
     });
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — read-only cast: the drawer shows the paused-edits
+   banner and disables what writes the cast slice (Save, rename, tone, lock,
+   link-prior) and, since R57, the cast-identity routes the server refuses
+   mid-run (merge, downgrade, an alias split); add alias, repoint and the
+   library assign save through their own routes and stay live. UX only: the
+   persistence middleware's catch-all is the guard. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  const hart: Character = {
+    id: 'hart',
+    name: 'Hartwell Vale',
+    role: 'character',
+    color: 'eliza',
+    lines: 271,
+    scenes: 9,
+    aliases: ['Hart'],
+  };
+  const sibling: Character = { ...baseChar, id: 'wren-sparrow', name: 'Wren Sparrow' };
+  const prior: PriorMergeCandidate = {
+    id: 'marlow',
+    name: 'Marlow',
+    bookId: 'the Hollow Tide_1',
+    bookTitle: 'The Hollow Tide',
+  };
+
+  function pause(store: ReturnType<typeof makeStore>) {
+    act(() => {
+      store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'bPaused' }));
+      /* a run is live: the banner shows */
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    });
+  }
+
+  it('Drawer: the banner is a status region while read-only and absent otherwise', () => {
+    const { store } = renderDrawer(hart);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+    pause(store);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    /* announced by the one app-level region in Layout, not by a surface */
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('every listed client-slice control is disabled; every listed route control stays enabled', async () => {
+    const onSave = vi.fn();
+    const onRename = vi.fn();
+    const onLock = vi.fn();
+    const onLinkPrior = vi.fn();
+    const onMerge = vi.fn().mockResolvedValue(undefined);
+    const onAddAlias = vi.fn().mockResolvedValue(undefined);
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    const onReassignLines = vi.fn();
+    const { store } = renderDrawer(hart, {
+      onSave,
+      onRename,
+      onLock,
+      onLinkPrior,
+      onMerge,
+      onAddAlias,
+      onUnlinkAlias,
+      onReassignLines,
+      mergeCandidates: [sibling],
+      mergeCandidatesPrior: [prior],
+    });
+    pause(store);
+    /* aria-disabled on the control; the tooltip on it, or on the wrapper of a
+       natively disabled one (a disabled button takes no pointer events). */
+    const disabled = (el: HTMLElement) => {
+      expect(el).toHaveAttribute('aria-disabled', 'true');
+      expect(el.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    };
+    const live = (el: HTMLElement) => {
+      expect(el).not.toHaveAttribute('aria-disabled', 'true');
+      expect(el).not.toBeDisabled();
+    };
+
+    /* Save */
+    const save = screen.getByRole('button', { name: /^Save changes$/ });
+    disabled(save);
+    fireEvent.click(save);
+    expect(onSave).not.toHaveBeenCalled();
+    /* rename (header) and the alias "make primary" star */
+    const rename = screen.getByRole('button', { name: 'Rename character' });
+    disabled(rename);
+    fireEvent.click(rename);
+    expect(screen.queryByRole('textbox', { name: 'Character name' })).toBeNull();
+    const makePrimary = screen.getByRole('button', { name: 'Make Hart the primary name' });
+    disabled(makePrimary);
+    /* M6: touch targets on the gated controls */
+    for (const el of [rename, makePrimary]) expect(el.className).toContain('min-h-[44px]');
+    fireEvent.click(makePrimary);
+    expect(onRename).not.toHaveBeenCalled();
+    /* tone */
+    const sliders = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'));
+    expect(sliders).toHaveLength(4);
+    for (const s of sliders) {
+      /* focusable, so the tooltip is reachable; the explanation is also described */
+      expect(s).not.toBeDisabled();
+      disabled(s);
+      expect(s).toHaveAttribute('aria-describedby');
+      expect(document.getElementById(s.getAttribute('aria-describedby')!)).toHaveTextContent(/paused/i);
+    }
+    /* Save is focusable too (aria-disabled, tooltip on the button itself) */
+    expect(save).not.toBeDisabled();
+    expect(save).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    /* lock voice */
+    const lock = screen.getByRole('button', { name: /^Lock$/ });
+    disabled(lock);
+    fireEvent.click(lock);
+    expect(onLock).not.toHaveBeenCalled();
+
+    /* link-prior: the merge picker's "Link" is disabled, an in-book "Merge" stays live */
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Marlow.*The Hollow Tide/i }));
+    const link = screen.getByRole('button', { name: /^Link$/ });
+    disabled(link);
+    fireEvent.click(link);
+    expect(onLinkPrior).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
+    /* R57 (PR #4103 pass 5b) — the server refuses a merge mid-run (R55): an in-book
+       "Merge" and both downgrades (a merge into a bucket) are disabled too. */
+    const merge = screen.getByRole('button', { name: /^Merge$/ });
+    disabled(merge);
+    fireEvent.click(merge);
+    for (const name of ['Downgrade to Unknown male', 'Downgrade to Unknown female']) {
+      const downgrade = screen.getByRole('button', { name });
+      disabled(downgrade);
+      fireEvent.click(downgrade);
+    }
+    await Promise.resolve();
+    expect(onMerge).not.toHaveBeenCalled();
+
+    /* route-backed and live: add alias, reassign lines, and the chip's dialog, whose
+       "move to" (repoint) stays live while "its own character" (unlink-alias) is refused */
+    live(screen.getByRole('button', { name: 'Add alias' }));
+    live(screen.getByRole('button', { name: /Reassign lines/ }));
+    const unlink = screen.getByRole('button', { name: 'Unlink Hart' });
+    live(unlink);
+    fireEvent.click(unlink);
+    const split = screen.getByRole('radio', { name: /its own character/ });
+    disabled(split);
+    expect(split).not.toBeChecked();
+    const move = screen.getByRole('radio', { name: /Move «Hart» to/ });
+    live(move);
+    expect(move).toBeChecked();
+    fireEvent.click(split);
+    expect(split).not.toBeChecked();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Move Hart to' }), { target: { value: 'wren-sparrow' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(onUnlinkAlias).toHaveBeenCalledWith('hart', 'Hart', { mode: 'move', targetCharacterId: 'wren-sparrow' }),
+    );
+  });
+
+  it('R57: merge, downgrade and the split-alias choice are live when the cast is editable', async () => {
+    const onMerge = vi.fn().mockResolvedValue(undefined);
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(hart, { onMerge, onUnlinkAlias, mergeCandidates: [sibling] });
+    const downgrade = screen.getByRole('button', { name: 'Downgrade to Unknown male' });
+    expect(downgrade).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(downgrade);
+    await waitFor(() => expect(onMerge).toHaveBeenCalledWith('hart', 'unknown-male'));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
+    const merge = screen.getByRole('button', { name: /^Merge$/ });
+    expect(merge).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(merge);
+    await waitFor(() => expect(onMerge).toHaveBeenCalledWith('hart', 'wren-sparrow'));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Hart' }));
+    const split = screen.getByRole('radio', { name: /its own character/ });
+    expect(split).not.toHaveAttribute('aria-disabled');
+    expect(split).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(onUnlinkAlias).toHaveBeenCalledWith('hart', 'Hart', { mode: 'split' }));
+  });
+
+  it('the same drawer controls are live when the cast is editable', () => {
+    const onSave = vi.fn();
+    const onLock = vi.fn();
+    renderDrawer(hart, { onSave, onLock, onRename: vi.fn() });
+    const save = screen.getByRole('button', { name: /^Save changes$/ });
+    expect(save).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(save);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /^Lock$/ }));
+    expect(onLock).toHaveBeenCalledTimes(1);
+    for (const s of Array.from(document.querySelectorAll<HTMLInputElement>('input[type="range"]'))) {
+      expect(s).not.toBeDisabled();
+    }
   });
 });
 

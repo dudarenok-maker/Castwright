@@ -345,7 +345,7 @@ Re-verified against decision 3:
 ### Scope rules
 
 - **One level only.** Lock at the route handler, the `runBookJob` call, or a walker's per-book step. Never
-  inside a shared helper: `applyReparse`, `withVerifiedBookDir`, the cast-merge-base resolvers, or
+  inside a shared helper: `applyReparse`, `withVerifiedBookDir`, the cast-merge-base resolvers (deleted by plan 291), or
   `finalizeChapterAudioWrite`.
 - **No resolve before the lock.** Nothing calls `findBookByBookId` before `withBookOp`/`runBookJob`, except
   `peekBook` in the two-span routes above.

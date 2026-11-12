@@ -454,13 +454,13 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     });
   });
 
-  it('delivers it on the subset route too, and ignores warning codes the view owns', () => {
+  it('delivers it on the subset route too, and ignores any other warning code (the view owns them)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] }));
     store.dispatch(
       analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
     );
-    lastCall().onWarning?.({ code: 'cast_merge_base_stale', message: 'x' });
+    lastCall().onWarning?.({ code: 'some-other-warning', message: 'x' });
     expect(store.getState().notifications.toasts).toHaveLength(0);
     lastCall().onWarning?.(NONSTORY);
     expect(store.getState().notifications.toasts).toHaveLength(1);
@@ -1599,5 +1599,22 @@ describe('analysisStreamMiddleware - #3967 the refusal re-read failing keeps a l
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('analysisStreamMiddleware — liveness query (plan 291, R30)', () => {
+  it('answers true only while its handle is open for the manuscript the book snapshot names', async () => {
+    const { isAnalysisStreamLive } = await import('./analysis-slice');
+    const store = buildStore();
+    const live = (bookId: string) => store.dispatch(isAnalysisStreamLive(bookId)) as unknown;
+    expect(live('b1')).toBe(false);
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    /* No handle before the first tick. */
+    expect(live('b1')).toBe(false);
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    expect(live('b1')).toBe(true);
+    expect(live('b2')).toBe(false);
+    store.dispatch(analysisActions.setHalted({ manuscriptId: 'm1', code: 'aborted', message: 'x' }));
+    expect(live('b1')).toBe(false);
   });
 });

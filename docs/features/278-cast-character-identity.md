@@ -8,7 +8,7 @@ owner: null
 
 > Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A22, A30; the former B3 discharged 2026-08-21)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
-> `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
+> `server/src/store/match-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
 > `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-link-orphan.ts`,
 > `server/src/routes/cast-create.ts`,
 > `src/views/cast.tsx`, `src/store/cast-slice.ts`, `scripts/repair-cast-id-drift.mjs`
@@ -159,7 +159,8 @@ pair's own Undo), so the round trip is lossless even though it is not symmetric.
    now the only field production writes), a normalised id
    (`via: 'normalised-id'`, gated the same way), a normalised history hit
    (`via: 'normalised-history'`, likewise). Name matching happens only at
-   merge/repair time (`server/src/store/remap-fresh-to-prior.ts`, and the
+   merge/repair time (`server/src/store/match-fresh-to-prior.ts` since plan
+   291 — the one fresh-to-prior matcher — and the
    Tier A/B matcher inside `scripts/repair-cast-id-drift.mjs`) — never inside
    the resolver itself.
 4. **A tie never guesses.** If two cast rows (or two history entries) share a
@@ -233,18 +234,21 @@ pair's own Undo), so the round trip is lossless even though it is not symmetric.
    resolution for both (review round 1) — the same normalised taken-set
    (built from `existingIds` **and** `historyKeys`) covers it.
 9. **An interim `cast.json` write never removes an id from the persisted
-   roster** (srv-87, #2086). The three interim ("Cast so far") writes — two
-   inside `runMainAnalyzerJob` and one inside `runSubsetAnalyzerJob`
-   (`analysis.ts`, all three the `overlayInterimCastForLiveView` calls in
-   those two functions — cited by symbol, not line: a line citation here was
-   already stale twice over, F2, #2163) — go through
-   `overlayInterimCastForLiveView` (`server/src/store/merge-analysis-cast.ts`),
-   which has no id-drift name-fallback and produces no `retirements` — there is
-   nothing in its return type for a caller to discard. Only the two
-   authoritative end-of-run writes (the `mergeAnalysisResultWithExistingCast`
-   call in `runMainAnalyzerJob` and the one in
-   `runSubsetAnalyzerJob`) apply identity merges and
-   call `retireCharacterId`. Before this fix, a mid-run death — **or a
+   roster** (srv-87, #2086). **Since plan 291 (#4031) this holds by
+   construction rather than by a separate interim overlay:** the interim
+   ("Cast so far") writes are the plan snapshots (`writePlanSnapshot`,
+   `server/src/workspace/analysis-cast-io.ts`, called through
+   `snapshotPlannedRoster` in `analysis.ts` — cited by symbol, not line: a
+   line citation here was already stale twice over, F2, #2163). They overlay
+   the match plan onto the cast re-read under the cast lock, so every prior
+   row survives (plan 291 rule 1), they record no identity change, and the
+   main job's Phase-0a pass writes nothing. Only the terminal `persistPlannedCast`
+   write in `runMainAnalyzerJob` and in `runSubsetAnalyzerJob` applies the
+   plan's joins and hands back the `retirements` for the caller to record
+   with `retireCharacterId` once the cast lock is released. The old
+   `overlayInterimCastForLiveView` / `mergeAnalysisResultWithExistingCast`
+   pair (and the id-drift name-fallback they carried) is gone. Before this
+   fix, a mid-run death — **or a
    completed run whose `phase1DriftExceeded` gate skipped the authoritative
    write** (`runMainAnalyzerJob`'s `attributionDriftExceeded` call, checked
    at its two `phase1DriftExceeded` use sites later in the same function;
@@ -412,10 +416,10 @@ down, each a deliberate controller ruling made during implementation:
   reparse (`applyReparse`, which `rm`s `cast.json`) both leave
   `cast-id-history.json` intact, with **no production code change** — the test
   that pins the whole rationale for moving history off the `Character` record.
-- `server/src/store/remap-fresh-to-prior.test.ts` — the early remap on both the
-  main and subset analyzer paths: keeps the prior id, refuses an ambiguous name
-  match, honours a `notLinkedTo` edge, composes correctly with the same run's own
-  dedup rewrites (the §11 Q2 regression).
+- `server/src/store/match-fresh-to-prior.test.ts` (plan 291; it replaced
+  `remap-fresh-to-prior.test.ts`) — the fresh-to-prior match: keeps the prior
+  id, refuses an ambiguous name match, honours a `notLinkedTo` edge, and its
+  "the deleted remap suite, restated" describe maps the old cases one by one.
 - `server/src/tts/synthesise-chapter.orphan-alias.test.ts` — an orphaned id
   resolves through an alias at the real render path; the `:1519` clone
   pre-pass regression guard; a genuine miss still stamps the #2023 orphan fallback.

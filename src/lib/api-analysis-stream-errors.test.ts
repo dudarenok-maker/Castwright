@@ -6,7 +6,7 @@
  * measured that reverting api.ts wholesale left 5008/5008 green — every
  * middleware test builds its own error, so nothing checked what api.ts
  * actually throws. These drive the real readers over a stubbed `fetch` (the
- * harness api-cast-merge-base-warning.test.ts already uses).
+ * same fetch + ReadableStream SSE harness as api-analysis-run-engine.test.ts).
  *
  * Mutation per case: revert the named throw site to `throw new Error(...)`
  * → `toBeInstanceOf(AnalysisError)` reddens. */

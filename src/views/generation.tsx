@@ -829,7 +829,7 @@ export function GenerationView({
           );
         },
         onCastUpdate: ({ characters }) => {
-          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters));
+          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters, { fromAnalysis: true, bookId }));
         },
         onThrottle: ({ model: throttleModel, waitMs, reason }) => {
           patchSubset(chapterId, {
@@ -850,7 +850,7 @@ export function GenerationView({
          chapter's sentences never reached manuscript.sentences and
          audio generation had nothing to synthesise. */
       if (isOpenBook()) {
-        dispatch(castActions.mergeCharacters(res.characters ?? []));
+        dispatch(castActions.mergeCharacters(res.characters ?? [], { fromAnalysis: true, bookId }));
         dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
         dispatch(manuscriptActions.hydrateFromAnalysis(res));
         /* #3435 — the chapter's analysis finished, unless the run flagged it. */
@@ -1171,7 +1171,7 @@ export function GenerationView({
           );
         },
         onCastUpdate: ({ characters }) => {
-          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters));
+          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters, { fromAnalysis: true, bookId }));
         },
         onThrottle: ({ model: throttleModel, waitMs, reason }) => {
           patchSubset(chapterId, {
@@ -1187,7 +1187,7 @@ export function GenerationView({
         },
       });
       if (isOpenBook()) {
-        dispatch(castActions.mergeCharacters(res.characters ?? []));
+        dispatch(castActions.mergeCharacters(res.characters ?? [], { fromAnalysis: true, bookId }));
         dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
         dispatch(manuscriptActions.hydrateFromAnalysis(res));
         /* #3435 — the chapter's analysis finished, unless the run flagged it. */
@@ -1252,9 +1252,11 @@ export function GenerationView({
       /* #3435 — the chapter's analysis did not finish. A shrink is not a gap:
          its row offers "Accept smaller cast" instead. A `cast_incomplete` is a
          gap only when the target's own cast failed (M3): otherwise Phase 1
-         never ran and the chapter's existing take is untouched. */
+         never ran and the chapter's existing take is untouched. #4031 (A22) - an
+         `analysis_cache_legacy` refusal wrote nothing, so it is never a gap. */
       const castIncomplete = e instanceof AnalysisError && e.code === 'cast_incomplete';
-      if (!shrink && (!castIncomplete || targetFailed) && isOpenBook()) {
+      const legacyCache = e instanceof AnalysisError && e.code === 'analysis_cache_legacy';
+      if (!shrink && !legacyCache && (!castIncomplete || targetFailed) && isOpenBook()) {
         dispatch(chaptersActions.setAnalysisGap({ chapterId, message: castIncomplete ? targetFailedMessage : message }));
       }
       patchSubset(chapterId, { error: message, shrink });

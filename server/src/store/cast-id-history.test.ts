@@ -18,6 +18,9 @@ import {
   undoRejectedPairs,
   CastIdHistoryUnreadableError,
   stampRecordedAtSeqIfAbsent,
+  recordNotSamePerson,
+  toMatchHistory,
+  followableHistory,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -1556,5 +1559,212 @@ describe('#2128 — the one-shot stamp', () => {
     // The operator's broken file is still there to fix, not silently
     // replaced with an empty history.
     expect(readFileSync(castIdHistoryPath(dir), 'utf8')).toBe('{invalid json');
+  });
+});
+
+describe('#4031 — history provenance (supersededByKind)', () => {
+  it('retireCharacterId records the kind it is given', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin', 'analyzer');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ mayrin: 'mairin' });
+    expect(h.supersededByKind).toEqual({ mayrin: 'analyzer' });
+  });
+
+  it('the default kind is user', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin');
+    expect((await loadCastIdHistory(dir)).supersededByKind).toEqual({ mayrin: 'user' });
+  });
+
+  it('an untagged entry reads as user', async () => {
+    writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+    const m = toMatchHistory(await loadCastIdHistoryWithStatus(dir));
+    expect(m.status).toBe('ok');
+    expect(m.supersededByKind).toEqual({ mayrin: 'user' });
+  });
+
+  it('a dropped supersededBy key drops its kind', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin', 'analyzer');
+    await dropSupersededTargetsNoLongerLive(dir, []);
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({});
+    expect(h.supersededByKind ?? {}).toEqual({});
+  });
+
+  it('forget then restore keeps the kind', async () => {
+    await retireCharacterId(dir, 'mayrin', 'mairin', 'analyzer');
+    await rejectOrphanedPair(dir, 'mayrin', 'mairin', 'mairin');
+    await forgetSupersededId(dir, 'mayrin', 'mairin');
+    const forgotten = await loadCastIdHistory(dir);
+    expect(forgotten.supersededByKind ?? {}).toEqual({});
+    expect(forgotten.rejectedPairs).toEqual([
+      { from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin', forgotSupersededKind: 'analyzer' },
+    ]);
+    await undoRejectedPairs(dir, forgotten.rejectedPairs!, ['mairin']);
+    const restored = await loadCastIdHistory(dir);
+    expect(restored.supersededBy).toEqual({ mayrin: 'mairin' });
+    expect(restored.supersededByKind).toEqual({ mayrin: 'analyzer' });
+  });
+
+  it('every analysis.ts retirement call passes a kind', () => {
+    const src = readFileSync(join(__dirname, '..', 'routes', 'analysis.ts'), 'utf8');
+    const calls: string[] = [];
+    const re = /await recordRetirements\(/g;
+    while (re.exec(src)) {
+      let depth = 1;
+      let i = re.lastIndex;
+      for (; i < src.length && depth > 0; i++) {
+        if (src[i] === '(') depth++;
+        else if (src[i] === ')') depth--;
+      }
+      calls.push(src.slice(re.lastIndex, i - 1));
+    }
+    // Plan 291: both jobs' run-start heal is one shared call (Task 24), and both jobs'
+    // planned persists record their join retirements through one shared call
+    // (`applyPlannedPersistOutcome`, Task 25; the old merges recorded four each) - hence 2.
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of calls) expect(c.trim()).toMatch(/,\s*'(heal|analyzer)',?$/);
+  });
+});
+
+describe('#4031 — the not-same-person record (notSamePerson)', () => {
+  it('recordNotSamePerson stores one undirected record', async () => {
+    await recordNotSamePerson(dir, 'wren-2', 'wren');
+    await recordNotSamePerson(dir, 'wren', 'wren-2');
+    const h = await loadCastIdHistory(dir);
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'wren', b: 'wren-2' });
+    expect(typeof h.notSamePerson![0].at).toBe('string');
+  });
+
+  it('A12c: merging one of a dismissed pair into a third repoints the record', async () => {
+    await recordNotSamePerson(dir, 'x', 'y');
+    const r = await retireCharacterId(dir, 'x', 'z', 'user');
+    expect(r.droppedNotSamePerson).toEqual([]);
+    const h = await loadCastIdHistory(dir);
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'y', b: 'z' });
+  });
+
+  it('merging a dismissed pair into each other drops and reports the record', async () => {
+    await recordNotSamePerson(dir, 'x', 'y');
+    const r = await retireCharacterId(dir, 'x', 'y', 'user');
+    expect(r.droppedNotSamePerson).toHaveLength(1);
+    expect(r.droppedNotSamePerson[0]).toMatchObject({ a: 'x', b: 'y' });
+    expect((await loadCastIdHistory(dir)).notSamePerson ?? []).toEqual([]);
+  });
+});
+
+describe('#4031 — notSamePerson repoint seams', () => {
+  it('re-retiring an already-recorded entry still repoints a record naming it', async () => {
+    await retireCharacterId(dir, 'x', 'z', 'user');
+    await recordNotSamePerson(dir, 'x', 'y');
+    await retireCharacterId(dir, 'x', 'z', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'y', b: 'z' });
+  });
+
+  it('the reversal branch repoints a record naming the retiring id', async () => {
+    await retireCharacterId(dir, 'b', 'a', 'user');
+    await recordNotSamePerson(dir, 'a', 'y');
+    await retireCharacterId(dir, 'a', 'b', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy).toEqual({ a: 'b' });
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'b', b: 'y' });
+  });
+
+  it('two records that collapse to one after repointing are deduped', async () => {
+    await recordNotSamePerson(dir, 'x', 'y');
+    await recordNotSamePerson(dir, 'y', 'z');
+    await retireCharacterId(dir, 'x', 'z', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.notSamePerson).toHaveLength(1);
+    expect(h.notSamePerson![0]).toMatchObject({ a: 'y', b: 'z' });
+  });
+
+  it('an Undo with a hand-corrupted forgotSupersededKind restores as user rather than degrading the file', async () => {
+    writeTestHistoryFile(
+      JSON.stringify({
+        schema: 1,
+        supersededBy: {},
+        rejectedPairs: [{ from: 'mayrin', to: 'mairin', forgotSupersededTo: 'mairin', forgotSupersededKind: 'bogus' }],
+      }),
+    );
+    const loaded = await loadCastIdHistory(dir);
+    await undoRejectedPairs(dir, loaded.rejectedPairs!, ['mairin']);
+    const read = await loadCastIdHistoryWithStatus(dir);
+    expect(read.status).toBe('ok');
+    expect(read.history.supersededBy).toEqual({ mayrin: 'mairin' });
+    expect(read.history.supersededByKind).toEqual({ mayrin: 'user' });
+  });
+});
+
+describe('#4031 — history shape', () => {
+  it('F10: a malformed notSamePerson or supersededByKind degrades the whole file', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const bad of [
+        { notSamePerson: 'nope' },
+        { notSamePerson: [{ a: 'x' }] },
+        { supersededByKind: ['user'] },
+        { supersededByKind: { mayrin: 'bogus' } },
+      ]) {
+        writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' }, ...bad }));
+        expect((await loadCastIdHistoryWithStatus(dir)).status).toBe('degraded');
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('toMatchHistory of a degraded read is empty with status degraded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      writeTestHistoryFile(JSON.stringify({ schema: 1, supersededBy: { a: 'b' }, notSamePerson: 7 }));
+      expect(toMatchHistory(await loadCastIdHistoryWithStatus(dir))).toEqual({
+        status: 'degraded',
+        supersededBy: {},
+        supersededByKind: {},
+        displaced: {},
+        notSamePerson: [],
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('R53 (PR #4103 pass 4): a catch-all bucket key is never followed', () => {
+  /* What `main` (or this branch's earlier commits) wrote for a merge of the bucket. */
+  const legacy = {
+    schema: 1,
+    supersededBy: { 'unknown-male': 'lord-vane', 'unknown-female': 'olga', mayrin: 'mairin', anna: 'unknown-male' },
+    supersededByKind: { 'unknown-male': 'user', 'unknown-female': 'user', mayrin: 'user', anna: 'user' },
+  };
+
+  it('followableHistory drops only the catch-all keys; an entry INTO a bucket is kept', () => {
+    expect(followableHistory(legacy)).toEqual({
+      ...legacy,
+      supersededBy: { mayrin: 'mairin', anna: 'unknown-male' },
+    });
+    /* The input is not mutated. */
+    expect(legacy.supersededBy['unknown-male']).toBe('lord-vane');
+  });
+
+  it('toMatchHistory never offers the matcher a catch-all key', async () => {
+    writeTestHistoryFile(JSON.stringify(legacy));
+    const m = toMatchHistory(await loadCastIdHistoryWithStatus(dir));
+    expect(m.supersededBy).toEqual({ mayrin: 'mairin', anna: 'unknown-male' });
+    expect(m.supersededByKind).toEqual({ mayrin: 'user', anna: 'user' });
+  });
+
+  it('P4-2: a downgrade into a bucket that has a legacy user entry records the bucket, never that entry\'s target', async () => {
+    writeTestHistoryFile(JSON.stringify(legacy));
+    await retireCharacterId(dir, 'boris', 'unknown-male', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy.boris).toBe('unknown-male');
+    /* The legacy entry itself is left for the persist's reclaim to displace. */
+    expect(h.supersededBy['unknown-male']).toBe('lord-vane');
   });
 });

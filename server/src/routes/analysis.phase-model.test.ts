@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { buildNonStoryClassifier, combineAnalysisEngines, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
@@ -1224,6 +1224,7 @@ describe('the main and subset jobs wire the sticky-fallback fixes (#3084 wave 3d
      (without it, it ends at resume_required after Phase 0). */
   async function seedCachedStage1(manuscriptId: string): Promise<void> {
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       chapters: {},
       stage1: {
         characters: [
@@ -1431,6 +1432,7 @@ describe('a tagless Ollama fallback target is Ollama (#3084 wave 3d review pass 
   }
   async function seedCachedStage1(manuscriptId: string): Promise<void> {
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       chapters: {},
       stage1: {
         characters: [
@@ -1614,6 +1616,7 @@ describe('job.engine at every relabel and record site (#3084 wave 3d review pass
 
   async function seedCachedStage1(manuscriptId: string): Promise<void> {
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       chapters: {},
       stage1: {
         characters: [

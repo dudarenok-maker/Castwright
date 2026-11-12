@@ -304,9 +304,9 @@ export interface AnalyseOpts {
       prior books" pill so the user sees the context being applied.
       `names` is the first three for display; `count` is the total. */
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
-  /** #2015 — a non-fatal advisory from the server (today only
-      `cast_merge_base_stale`). Both the full-book and the subset stream emit
-      it; the subset route carries two of the five merge-base write sites. */
+  /** A non-fatal advisory from the server (today only the non-story
+      reasoning-overflow fallback, `analyzer-reasoning-overflow-nonstory`).
+      Both the full-book and the subset stream can emit it. */
   onWarning?: (warning: { code: string; message: string }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. */
@@ -1409,10 +1409,22 @@ export async function mockGetBookState(
     : withRevisions;
 }
 
+/* e2e seam (plan 291, #4031): every mock PUT, in order, exposed on
+   `window.__castwrightMockCalls` so a spec can assert what was (and was not)
+   written. Mock mode only: nothing else reaches `mockPutBookState`. */
+const e2eCallLog: Array<{ name: 'putBookState'; bookId: string; req: PutStateRequest }> = [];
+/* Recorded only under the e2e (and unit-test) mode, so `dev:mock` and the
+   marketing capture never accumulate it. */
+const RECORD_MOCK_CALLS = import.meta.env.MODE === 'e2e' || import.meta.env.MODE === 'test';
+
 export async function mockPutBookState(
   bookId: string,
   req: PutStateRequest,
 ): Promise<PutStateResponse> {
+  if (RECORD_MOCK_CALLS) {
+    e2eCallLog.push({ name: 'putBookState', bookId, req: JSON.parse(JSON.stringify(req)) });
+    (globalThis as unknown as { __castwrightMockCalls?: typeof e2eCallLog }).__castwrightMockCalls = e2eCallLog;
+  }
   await wait(20);
   const prev = MOCK_BOOK_STATES.get(bookId) ?? emptyBookStateResponse(bookId);
   const next = applyMockSliceWrite(prev, req);
@@ -1643,18 +1655,59 @@ async function mockUploadManuscript({
   };
 }
 
-export async function mockAnalyseManuscript(
+/* Plan 291 (#4031) — the books whose mock analysis run is in flight, and the
+   run itself keyed by manuscript. `mockGetBookBusy` answers `['analysis']` for
+   a book in the set; a second `mockAnalyseManuscript` for a manuscript whose run
+   is live attaches to it (the real server's subscribe path) and never starts a
+   second run. */
+const MOCK_RUNNING_ANALYSIS = new Set<{ bookId: string }>();
+const MOCK_ANALYSIS_RUNS = new Map<
+  string,
+  { subs: Set<AnalyseOpts>; promise: Promise<AnalyseResponse> }
+>();
+
+export function mockAnalyseManuscript(
   manuscriptId: string,
-  { onPhase, onHeartbeat }: AnalyseOpts = {},
+  opts: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
+  const live = MOCK_ANALYSIS_RUNS.get(manuscriptId);
+  if (live) {
+    live.subs.add(opts);
+    return live.promise;
+  }
+  /* The demo capture freezes every call on its pose; nothing to attach to. */
+  if (DEMO_CAPTURE) return runMockAnalysis(manuscriptId, new Set([opts]));
+  const subs = new Set<AnalyseOpts>([opts]);
+  /* Cleared by this run's own token, so an older run ending never clears a
+     newer run's registration of the same book. */
+  const token = { bookId: ANALYSIS_NORTHERN_STAR.bookId };
+  MOCK_RUNNING_ANALYSIS.add(token);
+  const promise = runMockAnalysis(manuscriptId, subs).finally(() => {
+    MOCK_ANALYSIS_RUNS.delete(manuscriptId);
+    MOCK_RUNNING_ANALYSIS.delete(token);
+  });
+  MOCK_ANALYSIS_RUNS.set(manuscriptId, { subs, promise });
+  return promise;
+}
+
+async function runMockAnalysis(
+  manuscriptId: string,
+  subs: Set<AnalyseOpts>,
+): Promise<AnalyseResponse> {
+  const each = (fn: (o: AnalyseOpts) => void) => subs.forEach(fn);
   if (DEMO_CAPTURE) {
     const p = HOLLOW_TIDE_POSED.analysing;
-    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live });
+    each((o) => o.onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live }));
     // Freeze on the analysing screen: never resolve, never advance.
     return new Promise<never>(() => {});
   }
   const res = ANALYSIS_NORTHERN_STAR;
   let heartbeatEmitted = false;
+  /* Roster frames: Phase 0 grows the cast in thirds (a third at 40% progress, two
+     thirds at 70%, the whole roster when the phase ends), as the real stream's
+     `cast-update` does, so the client's live-roster path runs end to end. */
+  const rosterFrames = [0.4, 0.7, 1];
+  let rosterEmitted = 0;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
     await new Promise<void>((resolve) => {
@@ -1700,13 +1753,23 @@ export async function mockAnalyseManuscript(
              HeartbeatRow speed pulse alongside the sentence headline. */
           if (!heartbeatEmitted) {
             heartbeatEmitted = true;
-            onHeartbeat?.({
-              phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
-              elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
-            });
+            each((o) =>
+              o.onHeartbeat?.({
+                phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
+                elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
+              }),
+            );
           }
         }
-        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live });
+        each((o) => o.onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live }));
+        if (ph.id === 0) {
+          while (rosterEmitted < rosterFrames.length && progress >= rosterFrames[rosterEmitted]) {
+            const n = Math.ceil(res.characters.length * rosterFrames[rosterEmitted]);
+            const characters = res.characters.slice(0, n);
+            each((o) => o.onCastUpdate?.({ characters }));
+            rosterEmitted += 1;
+          }
+        }
         if (progress >= 1) {
           clearInterval(t);
           resolve();
@@ -1714,6 +1777,12 @@ export async function mockAnalyseManuscript(
       }, 60);
     });
   }
+  /* e2e seam: a spec holds the finished run open (busy still `['analysis']`)
+     by setting `window.__castwrightMockAnalysisHold` to a promise before it
+     starts the analysis, then resolves that promise when it wants the run to
+     end. Undefined in normal dev/prod. */
+  await (globalThis as unknown as { __castwrightMockAnalysisHold?: Promise<void> })
+    .__castwrightMockAnalysisHold;
   /* The real server mints the manuscript id once at confirm and writes it to
      state.json, so the analysed book's state always reports the id the
      client holds. The mock resolves every upload to the one fixture book,
@@ -2505,8 +2574,8 @@ async function realGetBookBusy(bookId: string): Promise<BookBusyKinds> {
   return ((await res.json()) as { kinds: BookBusyKinds }).kinds;
 }
 
-async function mockGetBookBusy(_bookId: string): Promise<BookBusyKinds> {
-  return [];
+export async function mockGetBookBusy(bookId: string): Promise<BookBusyKinds> {
+  return [...MOCK_RUNNING_ANALYSIS].some((r) => r.bookId === bookId) ? ['analysis'] : [];
 }
 
 /* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR
@@ -4387,12 +4456,16 @@ async function realMergeCharacters({
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Character merge failed (${res.status}).`);
+    /* R55 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Character merge failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -4431,11 +4504,17 @@ async function mockListMergeSuggestions(_bookId: string): Promise<MergeSuggestio
   return [...mockMergeSuggestions];
 }
 
+/* #4031 M7 — the accept answers the merged cast (openapi); `characters` is optional
+   here only because the mock has no cast to return. */
+export interface AcceptMergeSuggestionResponse {
+  characters?: Character[];
+}
+
 async function realAcceptMergeSuggestion(
   bookId: string,
   sourceId: string,
   targetId: string,
-): Promise<void> {
+): Promise<AcceptMergeSuggestionResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/merge-suggestions/accept`,
     {
@@ -4446,24 +4525,30 @@ async function realAcceptMergeSuggestion(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Accept merge-suggestion failed (${res.status}).`);
+    /* R55 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Accept merge-suggestion failed (${res.status}).`), { code });
   }
+  return res.json();
 }
 
 async function mockAcceptMergeSuggestion(
   _bookId: string,
   sourceId: string,
   targetId: string,
-): Promise<void> {
+): Promise<AcceptMergeSuggestionResponse> {
   await wait(60);
   mockMergeSuggestions = mockMergeSuggestions.filter(
     (s) => !(s.sourceId === sourceId && s.targetId === targetId),
   );
+  return {};
 }
 
 async function realDismissMergeSuggestion(
@@ -4556,12 +4641,16 @@ async function realUnlinkAlias({
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Unlink alias failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Unlink alias failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5052,12 +5141,16 @@ async function realRejectOrphanMatch(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Reject match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Reject match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5161,12 +5254,16 @@ async function realUndoRejectOrphanMatch(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Undo reject match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Undo reject match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5262,12 +5359,16 @@ async function realLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrpha
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Link match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Link match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5298,12 +5399,16 @@ async function realAddFromSeriesRoster(
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Add-from-roster failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Add-from-roster failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5352,12 +5457,16 @@ async function realCreateCharacter(
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Create character failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Create character failed (${res.status}).`), { code });
   }
   return res.json();
 }

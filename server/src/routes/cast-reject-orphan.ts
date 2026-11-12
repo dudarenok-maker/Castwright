@@ -240,6 +240,7 @@ import {
 import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castRejectOrphanRouter = Router();
 
@@ -345,10 +346,10 @@ castRejectOrphanRouter.post(
     }
     /* Fix round 2 review finding 4 — mirrors cast-not-linked-to.ts's self-pair
        400. Without this, characterId === orphanedId would write a self
-       notLinkedTo edge that remapFreshToPriorIds' notLinkedToId would later
-       honour and use to refuse a legitimate future by-name remap of this
+       notLinkedTo edge that notLinkedToId would later
+       honour and use to refuse a legitimate future by-name join of this
        character onto itself (a no-op that can never fire correctly, since a
-       row is never remapped onto its own id) — a dead, misleading edge with
+       row never joins its own id) — a dead, misleading edge with
        no benefit. */
     if (characterId === orphanedId) {
       return res.status(400).json({ error: 'characterId and orphanedId must differ (self-pair).' });
@@ -364,6 +365,9 @@ castRejectOrphanRouter.post(
        for the ride inside this span, mirroring cast-merge.ts's
        retireCharacterId precedent. */
     withCastLock(bookDir, async () => {
+      /* R55 — a history write: refused while an analysis runs, inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return res.status(409).json(busy);
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -568,6 +572,9 @@ castRejectOrphanRouter.delete(
        POST above, so it takes the same per-book lock. It was written before
        withCastLock existed and the guard test is what surfaced it. */
     withCastLock(bookDir, async () => {
+      /* R55 — a history write: refused while an analysis runs, inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return res.status(409).json(busy);
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({

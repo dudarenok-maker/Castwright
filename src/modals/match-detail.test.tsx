@@ -16,6 +16,7 @@ import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MatchDetailDrawer } from './match-detail';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
 
@@ -113,5 +114,39 @@ describe("MatchDetailDrawer audition resolves the character's own engine (#1839 
     expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.modelKey).toBe(
       'qwen3-tts-0.6b',
     );
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — read-only cast: "Don't reuse" (decline match)
+   writes the cast slice and is disabled. */
+describe('MatchDetailDrawer — read-only cast (plan 291)', () => {
+  it('disables "Don\'t reuse" while read-only and calls onDecline when editable', () => {
+    const decline = vi.fn();
+    const mount = (readOnly: boolean) => {
+      const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+      store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+      if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+      return render(
+        <Provider store={store}>
+          <MatchDetailDrawer
+            character={TEST_CHARACTER}
+            voice={TEST_VOICE}
+            onClose={() => {}}
+            onConfirm={() => {}}
+            onDecline={decline}
+          />
+        </Provider>,
+      );
+    };
+    const paused = mount(true);
+    const btn = screen.getByRole('button', { name: "Don't reuse" });
+    expect(btn).toHaveAttribute('aria-disabled', 'true');
+    expect(btn).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(btn);
+    expect(decline).not.toHaveBeenCalled();
+    paused.unmount();
+    mount(false);
+    fireEvent.click(screen.getByRole('button', { name: "Don't reuse" }));
+    expect(decline).toHaveBeenCalledTimes(1);
   });
 });

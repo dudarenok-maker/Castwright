@@ -10,15 +10,15 @@
    looked like they pinned something while a different path produced the same
    observable result; a filter with no driving test would be the twelfth.
 
-   So this file SIMULATES a future 1(a)-shaped regression: `remapFreshToPriorIds`
-   is mocked to return precisely the rewrite the real guard now refuses — the
-   reviewer's Brann fixture, where 'brann' is still held by a live prior row —
-   and asserts the recording boundary refuses it anyway. That is what "defence
-   in depth" has to mean operationally: the second layer holds when the first
-   one is removed.
+   So this file SIMULATES a future 1(a)-shaped regression: the retirement producer
+   (plan 291: `persistPlannedCast`) is mocked to return precisely the retirement
+   the real guard refuses — the reviewer's Brann fixture, where 'brann' is still
+   held by a live prior row — and asserts the recording boundary refuses it
+   anyway. That is what "defence in depth" has to mean operationally: the second
+   layer holds when the first one is removed.
 
    Kept in its own file because the mock is module-scoped: analysis.test.ts's
-   remap suites need the real implementation. */
+   persist suites need the real implementation. */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
@@ -78,34 +78,21 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
 
 /* THE injection. Stands in for a regression that reopens finding 1(a): emit
    `brann -> brann-weir` even though a different, live prior row still holds
-   'brann'. Only fires for this file's fixture (a fresh row with id 'brann');
-   anything else delegates to the real implementation, so the mock can't
-   accidentally become the thing under test. */
-vi.mock('../store/remap-fresh-to-prior.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../store/remap-fresh-to-prior.js')>();
+   'brann'. Plan 291 (#4031): the retirement producer is now the planned persist
+   (`persistPlannedCast` returns the plan's join retirements for the caller to
+   record after the cast lock), and `remapFreshToPriorIds` is deleted, so the
+   bogus retirement is appended to the persist's outcome. The real
+   persist still runs and writes, so the mock can't become the thing under test. */
+vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
   return {
     ...actual,
-    remapFreshToPriorIds: <C extends { id: string }, S extends { characterId: string }>(
-      fresh: C[],
-      sentences: S[],
-      priorCast: ReadonlyArray<{ id: string } & Record<string, unknown>>,
-      priorRewrites?: Readonly<Record<string, string>>,
-      currentBookId?: string,
-    ) => {
-      if (!fresh.some((f) => f.id === 'brann')) {
-        return actual.remapFreshToPriorIds(fresh, sentences, priorCast, priorRewrites, currentBookId);
-      }
-      return {
-        characters: fresh.map((c) => (c.id === 'brann' ? { ...c, id: 'brann-weir' } : c)),
-        sentences: sentences.map((s) =>
-          s.characterId === 'brann' ? { ...s, characterId: 'brann-weir' } : s,
-        ),
-        rewrites: { brann: 'brann-weir' },
-      };
+    persistPlannedCast: async (...a: Parameters<typeof actual.persistPlannedCast>) => {
+      const out = await actual.persistPlannedCast(...a);
+      return { ...out, retirements: [...out.retirements, { from: 'brann', to: 'brann-weir' }] };
     },
   };
 });
-
 const CHAPTER_BODY = '“Are you sure this will work,” Brann asked.\n\nOlga nodded and looked away.';
 
 function stage1Roster(): CharacterOutput[] {
@@ -272,19 +259,17 @@ describe('runMainAnalyzerJob — the recording boundary refuses a retirement nam
         { requestedFresh: false, allowStage1Shrink: true, requestedModel: undefined },
       );
 
-      /* The injected rewrite DID take effect on the roster — proof the mock
-         actually ran and the filter was handed a real bogus retirement,
-         rather than this test passing because nothing happened at all. The
-         fresh row is persisted under 'brann-weir', and the prior 'brann' row
-         is carried forward (voiced), so 'brann' is live in the very roster
-         `recordRetirements` filters against. */
+      /* The persist really ran: the plan made the fresh "Brann Weir" row (raw id
+         'brann', which a different live row holds) a new row, 'brann-n1', holding
+         its own lines, and both prior rows are carried forward (rule 1), so 'brann'
+         is live in the very roster `recordRetirements` filters against. */
       const castAfter = JSON.parse(
         readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'),
       ) as { characters: Array<{ id: string; name: string; lines?: number }> };
       const idsAfter = castAfter.characters.map((c) => c.id);
       expect(idsAfter).toContain('brann');
       expect(idsAfter).toContain('brann-weir');
-      expect(castAfter.characters.find((c) => c.id === 'brann-weir')?.lines).toBe(3);
+      expect(castAfter.characters.find((c) => c.id === 'brann-n1')?.lines).toBe(3);
 
       const history = await loadCastIdHistory(bookDir);
       // The property: the bogus retirement never reached retireCharacterId,

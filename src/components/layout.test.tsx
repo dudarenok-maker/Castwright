@@ -38,6 +38,8 @@ import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
 import { persistenceMiddleware, flushBookPersistence, dropRetainedSaves } from '../store/persistence-middleware';
+import { bookBusySlice } from '../store/book-busy-slice';
+import { castGateMiddleware } from '../store/cast-gate';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
@@ -59,6 +61,9 @@ const getChapterAudioPreviousMock = vi.fn();
 const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
 const getAnalysisStateMock = vi.fn();
+const mergeCharactersMock = vi.fn();
+const unlinkAliasMock = vi.fn();
+const getBookBusyMock = vi.fn(async (..._a: unknown[]): Promise<string[]> => []);
 const linkPriorMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
@@ -184,6 +189,11 @@ vi.mock('../lib/api', async (importOriginal) => {
       setCastTier: vi.fn(async () => ({ updated: 0 })),
       /* #3570 — Layout loads the analyzer catalog at boot so endpoint labels resolve. */
       getAnalyzerModels: (...args: unknown[]) => getAnalyzerModelsMock(...args),
+      /* Plan 291 — the profile drawer's merge, and the busy check a failed
+         merge's re-read waits on. */
+      mergeCharacters: (...args: unknown[]) => mergeCharactersMock(...args),
+      unlinkAlias: (...args: unknown[]) => unlinkAliasMock(...args),
+      getBookBusy: (...args: unknown[]) => getBookBusyMock(...args),
       /* The drawer's manual prior-book link (review pass 3, H). */
       linkPriorCharacter: (...args: unknown[]) => linkPriorMock(...args),
     },
@@ -261,7 +271,15 @@ vi.mock('../modals/profile-drawer', async () => {
             data-testid="mock-profile-save"
             onClick={() => p.onSave({ ...p.character, voiceId: 'changed-voice' }, { hadConflict: false })}
           />
+          <button
+            data-testid="mock-profile-merge"
+            onClick={() => void p.onMerge?.(p.character.id, 'other').catch(() => {})}
+          />
           <button data-testid="mock-profile-link-prior" onClick={() => void p.onLinkPrior?.('eliza', 'B', 'eliza')} />
+          <button
+            data-testid="mock-profile-unlink"
+            onClick={() => void p.onUnlinkAlias?.(p.character.id, 'Liza', { mode: 'split' }).catch(() => {})}
+          />
         </>
       ) : (
         <actual.ProfileDrawer {...p} />
@@ -326,6 +344,8 @@ function makeStore(extraMiddleware: Middleware[] = []) {
       scriptReview: scriptReviewSlice.reducer,
       config: configSlice.reducer,
       splice: spliceSlice.reducer,
+      /* Plan 291 — the cast gate's busy cache. */
+      bookBusy: bookBusySlice.reducer,
     },
   });
 }
@@ -2001,6 +2021,71 @@ describe('Layout — tier-modal 1.7B eligibility converges on the shared voice-r
       'undesigned',
       'qwen3-tts-1.7b',
     );
+  });
+
+  it('plan 291 I1: a pin made while the cast is read-only mirrors the route result without a "wasn\'t saved" toast', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      qwenBase17WeightsPresent: true,
+    });
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: false,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: mixedCast },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    });
+    vi.mocked(api.getVoices).mockResolvedValue({ voices: libraryVoices, dropped: [] } as never);
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+
+    const store = makeStore([persistenceMiddleware]);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'b1' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => {
+      expect(store.getState().cast.characters.map((c) => c.id)).toContain('undesigned');
+      expect(store.getState().voices.voices.map((v) => v.id)).toContain('vid-linh');
+    });
+    act(() => {
+      store.dispatch(uiActions.openStartGenPrompt());
+    });
+    fireEvent.click(await screen.findByTestId('start-gen-tier-qwen3-tts-1.7b'));
+    fireEvent.click(screen.getByRole('button', { name: /Start generating/i }));
+    await waitFor(() => expect(vi.mocked(api.setCastTier)).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        store.getState().cast.characters.filter((c) => c.ttsModelKey === 'qwen3-tts-1.7b').length,
+      ).toBe(2),
+    );
+    expect(
+      store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+    ).toEqual([]);
   });
 });
 
@@ -5950,6 +6035,372 @@ describe('Layout — the stale-audio banner and the regenerate modal agree on ex
     const store = await saveVoiceChange([eliza(1, true)]);
     expect(store.getState().ui.staleAudio).toBeNull();
     expect(screen.queryByTestId('stale-audio-banner')).toBeNull();
+  });
+});
+
+describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291, #4031)', () => {
+  beforeEach(() => {
+    profileDrawerStub.on = true;
+  });
+  afterEach(() => {
+    profileDrawerStub.on = false;
+  });
+
+  it('a rejected merge or accept re-hydrates the cast', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    const reads = getBookStateMock.mock.calls.length;
+    /* The merge finished its writes and then failed the request (C3). */
+    const onDisk = [
+      { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' },
+      { id: 'kestrel', name: 'Kestrel', role: '', color: 'peach' },
+    ];
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null, { cast: { characters: onDisk } }));
+    mergeCharactersMock.mockRejectedValueOnce(new Error('retirement failed'));
+    act(() => {
+      store.dispatch(uiActions.setOpenProfileId('eliza'));
+    });
+    fireEvent.click(await screen.findByTestId('mock-profile-merge'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']));
+    expect(mergeCharactersMock).toHaveBeenCalledWith({ bookId: 'A', sourceId: 'eliza', targetId: 'other' });
+    expect(getBookStateMock.mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  /* R55 (PR #4103 pass 5) — the server refuses a merge while an analysis runs (one started
+     from another device, or seen by a stale tab). It takes the refused cast PUT's path: the
+     read-only toast, the era latched so the cast reads as read-only, and no crash. */
+  it('a merge answered 409 book_busy shows the read-only toast and latches the cast read-only', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    getBookBusyMock.mockImplementation(async () => ['analysis']);
+    try {
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      const before = store.getState().cast.characters.map((c) => c.id);
+      mergeCharactersMock.mockRejectedValueOnce(
+        Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }),
+      );
+      act(() => {
+        store.dispatch(uiActions.setOpenProfileId('eliza'));
+      });
+      fireEvent.click(await screen.findByTestId('mock-profile-merge'));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.some((t) => t.dedupeKey === 'cast-read-only')).toBe(true),
+      );
+      expect(store.getState().cast.analysisEra?.A).toBeDefined();
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(before);
+    } finally {
+      getBookBusyMock.mockImplementation(async () => []);
+    }
+  });
+
+  /* R57 (PR #4103 pass 5b) — an unlink-alias split (a new character) is refused the same way. */
+  it('an unlink-alias answered 409 book_busy shows the read-only toast and latches the cast read-only', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    getBookBusyMock.mockImplementation(async () => ['analysis']);
+    try {
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      const before = store.getState().cast.characters;
+      unlinkAliasMock.mockRejectedValueOnce(
+        Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }),
+      );
+      act(() => {
+        store.dispatch(uiActions.setOpenProfileId('eliza'));
+      });
+      fireEvent.click(await screen.findByTestId('mock-profile-unlink'));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.some((t) => t.dedupeKey === 'cast-read-only')).toBe(true),
+      );
+      expect(unlinkAliasMock).toHaveBeenCalledWith({ bookId: 'A', sourceCharacterId: 'eliza', aliasName: 'Liza' });
+      expect(store.getState().cast.analysisEra?.A).toBeDefined();
+      expect(store.getState().cast.characters).toEqual(before);
+    } finally {
+      getBookBusyMock.mockImplementation(async () => []);
+    }
+  });
+});
+
+describe('Layout — a full read issued before the gate cleared never lands stale (plan 291, #4031 rounds 2-3)', () => {
+  const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' };
+  const kestrel = { id: 'kestrel', name: 'Kestrel', role: '', color: 'peach' };
+  const yuri = { id: 'yuri', name: 'Yuri', role: '', color: 'peach' };
+  const line = (text: string, characterId: string) => ({ id: 1, chapterId: 1, characterId, text });
+  type Disk = Record<string, { cast: unknown[]; sentences: unknown[] }>;
+  let disk: Disk;
+  let busyKinds: string[];
+  /* A held read answers with what `answer` gives when it is issued. */
+  let holds: Array<{ id: string; answer?: (id: string) => unknown }>;
+  const held: Array<{ id: string; release: () => void }> = [];
+  const read = (id: string) =>
+    bookStateFor(id, null, {
+      cast: { characters: disk[id].cast },
+      manuscriptEdits: { sentences: disk[id].sentences },
+    });
+  beforeEach(() => {
+    held.length = 0;
+    holds = [];
+    busyKinds = [];
+    getBookStateMock.mockImplementation(async (id: string) => {
+      const h = holds.findIndex((x) => x.id === id);
+      if (h < 0) return read(id);
+      const [{ answer }] = holds.splice(h, 1);
+      const pre = answer ? answer(id) : read(id);
+      await new Promise<void>((release) => held.push({ id, release }));
+      return pre;
+    });
+    getBookBusyMock.mockImplementation(async () => busyKinds);
+    putBookStateMock.mockReset();
+    putBookStateMock.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    getBookBusyMock.mockImplementation(async () => []);
+  });
+  const castPuts = (from: number, bookId: string) =>
+    putBookStateMock.mock.calls
+      .slice(from)
+      .filter(([id, req]) => id === bookId && (req as { slice: string }).slice === 'cast')
+      .map(([, req]) => ((req as { patch: { characters: Array<{ id: string }> } }).patch.characters ?? []).map((c) => c.id));
+  const texts = (store: ReturnType<typeof makeStore>) => store.getState().manuscript.sentences.map((x) => x.text);
+
+  it("the stale full read keeps the gate's roster in the slice, and no PUT carries the stale roster", async () => {
+    disk = { A: { cast: [eliza], sentences: [line('v0', 'eliza')] } };
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'A');
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+    await waitFor(() => expect(texts(store)).toEqual(['v0']));
+    const seenTexts: string[][] = [];
+    store.subscribe(() => seenTexts.push(texts(store)));
+
+    /* A re-analysis of A is under way. */
+    busyKinds = ['analysis'];
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    });
+    /* Layout re-reads A (a stale refusal, say) while the run still holds it:
+       the read answers with the pre-persist cast and attributions, and is
+       held. */
+    const before = getBookStateMock.mock.calls.length;
+    holds.push({
+      id: 'A',
+      answer: (id) =>
+        bookStateFor(id, null, { cast: { characters: [eliza] }, manuscriptEdits: { sentences: [line('v-stale', 'eliza')] } }),
+    });
+    act(() => {
+      store.dispatch(bookMetaActions.markNeedsFullRead({ bookId: 'A' }));
+    });
+    await waitFor(() => expect(held).toHaveLength(1));
+
+    /* The run persists its rows and its attributions, then ends; the gate
+       reads and clears. */
+    disk.A = { cast: [eliza, kestrel], sentences: [line('v1', 'kestrel')] };
+    busyKinds = [];
+    await waitFor(() => expect(store.getState().cast.analysisEra?.A).toBeUndefined(), { timeout: 10_000 });
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+    expect(getBookStateMock.mock.calls.length).toBe(before + 2);
+
+    /* The held, stale full read lands now: it is overtaken, so Layout reads
+       again — once — instead of hydrating any of it. */
+    const putsBefore = putBookStateMock.mock.calls.length;
+    await act(async () => {
+      held[0].release();
+    });
+    await waitFor(() => expect(texts(store)).toEqual(['v1']));
+    await waitFor(() => expect(store.getState().bookMeta.needsFullRead?.A ?? 0).toBe(0));
+    expect(getBookStateMock.mock.calls.length).toBe(before + 3);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']);
+    for (const t of seenTexts) expect(t).not.toContain('v-stale');
+
+    /* The next whole-slice saves carry the run's rows and attributions. */
+    act(() => {
+      store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' }));
+      store.dispatch(manuscriptActions.setSentenceCharacter({ chapterId: 1, sentenceId: 1, characterId: 'eliza' }));
+    });
+    const puts = () => putBookStateMock.mock.calls.slice(putsBefore);
+    await waitFor(() => expect(puts().map(([, req]) => (req as { slice: string }).slice)).toEqual(expect.arrayContaining(['cast', 'manuscript'])));
+    for (const ids of castPuts(putsBefore, 'A')) expect(ids).toEqual(['eliza', 'kestrel']);
+    for (const [, req] of puts()) {
+      const r = req as { slice: string; patch: { sentences?: Array<{ text: string }> } };
+      if (r.slice === 'manuscript') expect(r.patch.sentences?.map((x) => x.text)).toEqual(['v1']);
+    }
+  }, 20_000);
+
+  it("X -> Y -> X inside the gate's read: no cast PUT for X carries Y's roster", async () => {
+    disk = {
+      X: { cast: [eliza], sentences: [line('x0', 'eliza')] },
+      Y: { cast: [yuri], sentences: [line('y0', 'yuri')] },
+    };
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'X');
+    renderLayoutAt(store, 'X');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('X'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+
+    /* X's run ends; the gate's own read of X is held. */
+    busyKinds = ['analysis'];
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'X' }));
+    });
+    disk.X = { cast: [eliza, kestrel], sentences: [line('x1', 'kestrel')] };
+    holds.push({ id: 'X' });
+    busyKinds = [];
+    await waitFor(() => expect(held.map((h) => h.id)).toEqual(['X']), { timeout: 10_000 });
+
+    /* Y, then back to X: Layout's read of X goes out before the gate's
+       read lands and clears, and answers the pre-persist book. */
+    openAt(store, 'Y');
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('Y'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['yuri']));
+    holds.push({
+      id: 'X',
+      answer: (id) =>
+        bookStateFor(id, null, { cast: { characters: [eliza] }, manuscriptEdits: { sentences: [line('x0', 'eliza')] } }),
+    });
+    openAt(store, 'X');
+    await waitFor(() => expect(held.map((h) => h.id)).toEqual(['X', 'X']));
+
+    /* The gate's read lands with the slices holding Y: it hydrates nothing
+       and clears X's era. Then Layout's overtaken read of X lands. */
+    const putsBefore = putBookStateMock.mock.calls.length;
+    await act(async () => {
+      held[0].release();
+    });
+    await waitFor(() => expect(store.getState().cast.analysisEra?.X).toBeUndefined());
+    await act(async () => {
+      held[1].release();
+    });
+    await waitFor(() => expect(store.getState().manuscript.bookId).toBe('X'));
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza', 'kestrel']));
+
+    act(() => {
+      store.dispatch(castActions.renameCharacter({ characterId: 'eliza', name: 'Eliza Vane' }));
+    });
+    await waitFor(() => expect(castPuts(putsBefore, 'X').length).toBeGreaterThan(0));
+    for (const ids of castPuts(putsBefore, 'X')) expect(ids).not.toContain('yuri');
+  }, 20_000);
+});
+
+describe("Layout — Confirm's voice-match waits for an editable cast (plan 291, #4031 Task 12, item 13)", () => {
+  /* The match's result is a persisted action (applyVoiceMatches). While the
+     cast is read-only the match is skipped and its once-guard stays unspent, so
+     it runs once after the gate's re-hydrate. */
+  const eliza = { id: 'eliza', name: 'Eliza', role: '', color: 'narrator' };
+  let busyKinds: string[];
+  beforeEach(() => {
+    busyKinds = ['analysis'];
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    getBookBusyMock.mockImplementation(async () => busyKinds);
+    putBookStateMock.mockReset();
+    putBookStateMock.mockResolvedValue(undefined);
+  });
+  afterEach(async () => {
+    getBookBusyMock.mockImplementation(async () => []);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+  const matchFor = (voiceId: string) => ({
+    matches: [
+      {
+        characterId: 'eliza',
+        candidates: [{ voiceId, fromBookId: 'Z', fromCharacterId: 'z', fromBookTitle: 'Zed', score: 0.9, factors: [] }],
+      },
+    ],
+  });
+
+  it('item 13: the Confirm voice-match skips while read-only, does not arm its once-guard, and runs once after the re-hydrate', async () => {
+    matchVoicesMock.mockReset();
+    matchVoicesMock.mockResolvedValue(matchFor('v-after'));
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'A');
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    });
+    renderLayoutAt(store, 'A');
+    /* The slices hold A's cast, yet the run is on: no match. */
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(matchVoicesMock).not.toHaveBeenCalled();
+
+    /* The run ends: the gate re-reads the cast and releases it. */
+    busyKinds = [];
+    await waitFor(() => expect(store.getState().cast.analysisEra?.A).toBeUndefined(), { timeout: 10_000 });
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+    expect(matchVoicesMock).toHaveBeenCalledWith({
+      bookId: 'A',
+      characters: [expect.objectContaining({ id: eliza.id })],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(matchVoicesMock).toHaveBeenCalledTimes(1);
+  }, 20_000);
+
+  it('item 13 (Task-11 state): a voice-match while read-only produces no PUT and one toast', async () => {
+    /* A match that was already answering when the gate came up. */
+    const store = makeStore([persistenceMiddleware, castGateMiddleware]);
+    openAt(store, 'A');
+    act(() => {
+      store.dispatch(
+        manuscriptSlice.actions.hydrateFromBookState({
+          state: { bookId: 'A', manuscriptId: 'mA', title: 'Book A' } as never,
+          sentences: null,
+        }),
+      );
+      store.dispatch(castActions.hydrateCharacters([eliza as never]));
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    });
+    act(() => {
+      store.dispatch(castActions.applyVoiceMatches(matchFor('v-late') as never));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(putBookStateMock.mock.calls.filter(([, req]) => (req as { slice: string }).slice === 'cast')).toEqual([]);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+    expect(store.getState().notifications.toasts[0].message).toMatch(/Re-analysis running/);
+  });
+});
+
+describe('Layout — one app-level status region for the paused-edits banner (plan 291, #4031)', () => {
+  const MESSAGE = 'Re-analysis running — cast edits are paused';
+  const running = {
+    bookId: 'A',
+    manuscriptId: 'mns_A',
+    phaseId: 0,
+    phaseLabel: 'x',
+    phaseProgress: 0,
+    remainingMs: null,
+    lastTickAt: 0,
+    state: 'running' as const,
+  };
+  const regions = () => screen.getAllByRole('status').filter((el) => el.className.includes('sr-only'));
+  const announcing = () => regions().filter((el) => el.textContent === MESSAGE);
+
+  it('exactly one status region announces the message, with the drawer open over Cast, and it survives the toggle', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    const store = makeStore();
+    openAt(store, 'A');
+    act(() => {
+      store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(running as never));
+      store.dispatch(uiActions.setOpenProfileId('eliza'));
+    });
+    renderLayoutAt(store, 'A');
+    await waitFor(() => expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']));
+    /* the drawer is open over the view, and holds no region of its own */
+    await waitFor(() => expect(document.querySelector('[data-tour-id="profile-drawer"]')).not.toBeNull());
+    expect(document.querySelector('[data-tour-id="profile-drawer"] [role="status"]')).toBeNull();
+    expect(announcing()).toHaveLength(1);
+    const region = announcing()[0];
+
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+    });
+    expect(announcing()).toHaveLength(0);
+    expect(regions().filter((el) => el === region)).toHaveLength(1);
+    expect(region).toBeEmptyDOMElement();
   });
 });
 

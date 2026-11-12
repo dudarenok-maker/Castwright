@@ -3,14 +3,17 @@
    a bookId (the production shape; the store-level tests pass currentBookId by
    hand and so cannot see a route that forgets to thread it).
 
-   The seed copies a locked prior row's cross-book `notLinkedTo` edge onto its
-   id-drifted twin. A gate that ignores `bookId` then reads that edge as a
-   decline between the two group members, so an interrupted run's two-row prior
-   never heals. Same-book edges (cast-reject-orphan writes them) must still
-   block at every gate. Each of the six `currentBookId` arguments at the
-   analysis.ts call sites (remapFreshToPriorIds, mergeAnalysisResultWithExistingCast
-   and dedupePriorCastByName, main and subset) is pinned by a case that goes
-   red when that one argument alone is removed. */
+   A locked prior row and its id-drifted twin can both carry a cross-book
+   `notLinkedTo` edge (before plan 291 the seed copied it onto the twin). A gate
+   that ignores `bookId` then reads that edge as a decline between the two group
+   members, so an interrupted run's two-row prior never heals. Same-book edges
+   (cast-reject-orphan writes them) must still block at every gate. Before plan
+   291 these were six `currentBookId` arguments at analysis.ts call sites (the
+   deleted remapFreshToPriorIds and mergeAnalysisResultWithExistingCast, and
+   dedupePriorCastByName, main and subset). Plan 291 (#4031): both jobs now
+   thread `currentBookId` through `planRunCastIdentity` (into `matchFreshToPrior`
+   and `planConstraintsFor`) and the persist's heal (`dedupePriorCastByName` in
+   `persistPlannedCast`); the cases below drive both jobs through them. */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,7 +25,7 @@ import {
 } from './analysis.js';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
 import type { CharacterOutput, Stage1ChapterOutput } from '../handoff/schemas.js';
-import { clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript } from '../store/manuscripts.js';
 
 const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
@@ -213,6 +216,7 @@ async function run(
     /* Pre-seed cache.stage1 so the subset route takes the book-already-analysed
        branch (stage1Existed), the only one that reaches the subset persist. */
     await saveAnalysisCache(manuscriptId, {
+      version: ANALYSIS_CACHE_VERSION, // #4031: an unversioned cache is legacy, which the subset job refuses
       chapters: {},
       stage1: {
         characters: roster,
@@ -338,11 +342,13 @@ describe('#3965 same-book join gates, through the real analysis jobs', () => {
         speaker: 'old-tom-2',
         onCall: abortAtFirstPhase1(),
       }).catch(() => {});
-      expect(
-        named(bookDir, 'Old Tom')
-          .map((r) => r.id)
-          .sort(),
-      ).toEqual(['old-tom', 'old-tom-2']);
+      /* Plan 291 (#4031): Phase 0b joins the drifted `old-tom-2` onto `old-tom`
+         before its snapshot, so the stopped run has only extended the cast - no
+         raw-id twin on disk (it used to hold the interim write's `old-tom-2`). */
+      const stopped = named(bookDir, 'Old Tom');
+      expect(stopped.map((r) => r.id)).toEqual(['old-tom']);
+      expect(stopped[0].voiceId).toBe('v_tom');
+      expect(stopped[0].voiceState).toBe('locked');
 
       await run(manuscriptId, bookDir, tomRoster, { speaker: 'old-tom-2' });
       const rows = named(bookDir, 'Old Tom');

@@ -147,6 +147,7 @@ import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { normaliseIdKey } from '../util/character-id.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castLinkOrphanRouter = Router();
 
@@ -249,6 +250,10 @@ castLinkOrphanRouter.post(
        edge-cleanup writes below (each under its own cast lock) hit the folder
        resolved here, even when a rename is queued behind this request. */
     const outcome = await withBookOp(bookId, async ({ bookDir }) => {
+
+    /* R55 — a history write: refused while an analysis runs, inside this book-op span. */
+    const busy = castIdentityBusyRefusal(bookId);
+    if (busy) return res.status(409).json(busy);
 
     /* Decision 3 — plain, unlocked read: this read only validates that
        `characterId` is a live character (404 otherwise) and is never paired

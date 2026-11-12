@@ -1,37 +1,18 @@
-/* Preserve designed-voice links across a re-analysis (bug #518, srv-13).
+/* The run-start prior-cast heal (`dedupePriorCastByName`) and the voice-field
+   list the cast PUT preserves (`PRESERVED_VOICE_FIELDS`).
 
-   The analysis pipeline builds a FRESH roster from the analyzer output — which
-   carries attribution data (lines, scenes, evidence, attributes, tone) but NO
-   voice fields — and overwrites cast.json. On an already-voiced book that
-   silently strips every character's designed voice. This helper overlays the
-   existing cast's voice-design fields onto the fresh roster, matched by id, so
-   re-attribution refreshes the analyzer-owned data while the user's designed /
-   reused voices survive.
+   Plan 291 (#4031) deleted this module's old fresh<->prior overlay
+   (`mergeAnalysisResultWithExistingCast` & co): `matchFreshToPrior`
+   (`match-fresh-to-prior.ts`) is the only fresh<->prior identity matcher, and
+   `single-matcher.guard.test.ts` keeps it so. What is left collapses
+   same-normalised-name rows INSIDE the prior cast; it never compares a fresh
+   row to a prior one. */
 
-   Only fields the analyzer never produces are carried forward; everything the
-   re-analysis legitimately recomputes (name, role, attributes, evidence, tone,
-   lines, scenes, colour) comes from the fresh roster. A field is carried
-   forward only when the EXISTING character actually has it — so a fresh
-   reuse-link stamped this run (linkSeriesReuseAtAnalysis) on a previously
-   voiceless character is left intact.
-
-   srv-13 hardening:
-     - `notLinkedTo` (the user's "these two are NOT the same person" decision)
-       is carried forward like a voice field — the analyzer never emits it.
-     - `aliases` are UNIONED (old ∪ fresh) rather than replaced, so a manual
-       alias or a Facet-A-unioned alias isn't dropped when the analyzer
-       re-derives a sparser set.
-     - characters the fresh roster OMITTED but that carry voice/reuse fields are
-       re-added (carry-forward), so a transient analyzer miss can't permanently
-       lose a designed/reused voice. User deletes/merges already remove the id
-       from cast.json, so only analyzer-dropped characters get rescued. */
-
-import { normaliseForMatch } from '../util/text-match.js';
 import { normaliseNameKey } from '../util/safe-id.js';
-import { declinesVoice } from './declined-voice.js';
-import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { notLinkedToId } from './not-linked-to-scope.js';
+import { declinesLinkOf, unionNotLinkedTo } from './cast-name-match.js';
+import type { NotSamePersonRecord, StoredSuggestion } from './reanalysis-types.js';
 
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
@@ -57,43 +38,6 @@ type CastRecord = { id: string } & Record<string, unknown>;
 export interface Retirement {
   from: string;
   to: string;
-}
-
-/** Reuse-continuity fields — a voice matched/linked from ANOTHER book or the
-    library, plus the "not the same person" guard. A `fresh: true` ("Start
-    fresh") re-analysis re-derives these from scratch, except a locked or tuned
-    row's pinned `voiceId` (see `dropReuseContinuityKeepDesignedVoice`). The
-    bespoke DESIGNED-voice fields (`overrideTtsVoices` / `voiceUuid` / `ttsEngine` / `voiceStyle`) are
-    deliberately NOT here — a fresh run must never discard them (the 2026-07-14
-    Coalfall voice-strip incident: `fresh` set the merge's prior to `[]` and so
-    overwrote cast.json voiceless). */
-const REUSE_CONTINUITY_FIELDS = ['voiceId', 'matchedFrom', 'notLinkedTo'] as const;
-/* #3992: `declinedVoiceFrom` is deliberately NOT in this list. "Don't reuse" is a
-   durable record of a user decision, not a re-derivable link, so Start fresh keeps
-   it (the linker would otherwise re-link the declined book on the next run). */
-
-/** Strip reuse continuity from a prior cast while KEEPING each character's
-    bespoke designed voice — the transform applied to the prior cast before a
-    `fresh: true` re-analysis overlays it. Reuse-derived `voiceState: 'reused'` is
-    cleared too (the fresh run re-derives lifecycle state); a bespoke 'tuned' /
-    'locked' pin is kept. #3920 (owner decision 2026-10-31): a locked or tuned
-    row also keeps its `voiceId` — Start fresh clears its series link
-    (`matchedFrom` / `notLinkedTo`) but never the voice the user pinned, which
-    the pinned overlay in the merge would otherwise delete with no linker
-    re-stamp to replace it. Returns a new array; the input is not mutated. */
-export function dropReuseContinuityKeepDesignedVoice<T extends CastRecord>(
-  cast: ReadonlyArray<T>,
-): T[] {
-  return cast.map((c) => {
-    const next: CastRecord = { ...c };
-    const pinned = next.voiceState === 'locked' || next.voiceState === 'tuned';
-    for (const field of REUSE_CONTINUITY_FIELDS) {
-      if (field === 'voiceId' && pinned) continue;
-      delete next[field];
-    }
-    if (next.voiceState === 'reused') delete next.voiceState;
-    return next as T;
-  });
 }
 
 /** A character carries continuity worth rescuing when it has a non-generated
@@ -144,582 +88,6 @@ export function voicedSurvivorsDropped(
     .map((c) => ({ id: c.id, name: typeof c.name === 'string' ? c.name : undefined }));
 }
 
-/** Overlay the existing cast's voice-design fields onto the freshly-analysed
-    roster (matched by `id`, with a same-name fallback for analyzer id drift),
-    union aliases, and re-add voiced characters the fresh roster dropped.
-    Returns a new array plus the id retirements the name-fallback performed
-    (a dropped-by-id existing row matched to a differently-id'd fresh row);
-    inputs are not mutated.
-
-    Delegates to `mergeCore` with the name-fallback ON — this entry point is
-    for the two AUTHORITATIVE end-of-run writes, where the fresh roster is
-    the whole book and a dropped prior row really is gone. `currentBookId`
-    (optional) is the id of the book being analysed; it scopes the
-    `notLinkedTo` gate (see `notLinkedToId`). See
-    `overlayInterimCastForLiveView` below for the partial-roster counterpart. */
-export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
-  existing: ReadonlyArray<CastRecord>,
-  fresh: T[],
-  currentBookId?: string,
-): { characters: T[]; retirements: Retirement[] } {
-  return mergeCore(existing, fresh, true, currentBookId);
-}
-
-/** The interim ("Cast so far") overlay used by the three mid-run `cast.json`
-    writes — two inside `analysis.ts`'s `runMainAnalyzerJob` and one inside
-    `runSubsetAnalyzerJob` (cited by symbol, not line: this comment's own
-    line citations were 110 lines stale, F3, #2163). Same as
-    `mergeAnalysisResultWithExistingCast` MINUS the id-drift name-fallback: an
-    interim roster is partial by construction (`buildInterimCast` only folds
-    chapters already analysed), so a prior character who simply hasn't been
-    reached yet looks identical to one the analyzer actually dropped — the
-    fallback cannot tell them apart and, at an interim write, has repeatedly
-    turned that ambiguity into a durably swapped character id with no history
-    record (srv-87, #2086). Returns the roster ONLY: there is no
-    `retirements` in the return type, so no caller can discard it — the
-    defect this closes is structural, not a discipline reminder. */
-export function overlayInterimCastForLiveView<T extends { id: string }>(
-  existing: ReadonlyArray<CastRecord>,
-  fresh: T[],
-): T[] {
-  return mergeCore(existing, fresh, false).characters;
-}
-
-/** Surname-tolerant name comparison for the name-fallback (#2536). Two
-    normalised names match when identical (unchanged exact behaviour) OR one is
-    a strict token-superset of the other by exactly one TRAILING token — same
-    leading token(s), the longer side carrying exactly one extra trailing token.
-    That is the shape of a character gaining or losing a surname token between
-    analyzer runs ("бранн уир" vs "бранн"): `normaliseForMatch` already
-    lowercase/whitespace-collapses, so `split(' ')` yields the token sequence.
-
-    Deliberately token-count-only, never general edit-distance/similarity: a
-    similarity measure could weld two genuinely different characters whose names
-    merely resemble each other, and token-count + strict-leading-prefix keeps
-    that from happening (#2536 decision — surname-aware, not fuzzy). */
-function surnameTolerantMatch(a: string, b: string): boolean {
-  if (a === b) return true;
-  const ta = a.split(' ');
-  const tb = b.split(' ');
-  const shorter = ta.length < tb.length ? ta : tb;
-  const longer = ta.length < tb.length ? tb : ta;
-  if (longer.length !== shorter.length + 1) return false;
-  for (let i = 0; i < shorter.length; i++) {
-    if (shorter[i] !== longer[i]) return false;
-  }
-  return true;
-}
-
-/** Shared core for both entry points above. `nameFallback` gates the id-drift
-    same-name match (`:401-437`-shaped block below) — when false, `old` is only
-    ever resolved by exact id, `claimedByName` stays empty, and the
-    carry-forward loop at the end unconditionally rescues every voiced prior
-    row instead of treating any of them as already claimed. `currentBookId`
-    (optional) scopes both `notLinkedTo` gates by book; see `notLinkedToId`. */
-function mergeCore<T extends { id: string }>(
-  existing: ReadonlyArray<CastRecord>,
-  fresh: T[],
-  nameFallback: boolean,
-  currentBookId?: string,
-): { characters: T[]; retirements: Retirement[] } {
-  if (!existing.length) return { characters: fresh, retirements: [] };
-  const retirements: Retirement[] = [];
-  const byId = new Map(existing.map((c) => [c.id, c]));
-  const freshIds = new Set(fresh.map((f) => f.id));
-  const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
-    typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
-
-  /* Name-fallback for analyzer id drift. The analyzer is non-deterministic about
-     a character's id across runs (it relabelled the dragon `coalfall` →
-     `coalfall-dragon` between two analyses of the same book). The id-keyed
-     overlay then misses: a voiced dropped row would come back voiceless AND
-     be re-added below as a 0-line orphan — a visible duplicate — while an
-     UNVOICED dropped row would simply vanish with no retirement recorded, so
-     a re-analysis could never resolve its history back to the live row
-     (#2040 Task 12, RC1 — spec §9/§4.4, "the riskiest single change in the
-     design"). Match a dropped existing character to a same-name fresh
-     character so any voice fields it carries ride onto the freshly-detected
-     row (which carries the lines + the more descriptive, library-unique id)
-     and the id is retired either way.
-
-     The precondition that the dropped row be voiced/reused is gone — every
-     dropped row is a candidate now, not just voiced ones — so a selection
-     rule decides which dropped row wins a shared name, PER normalised name,
-     among the rows the fresh roster dropped:
-       - exactly one voiced/reused -> that one is the candidate (today's
-         behaviour, unchanged even when unvoiced siblings share the name —
-         this is what stops the widening from stranding a designed voice as
-         a 0-line duplicate, spec §9's named hazard);
-       - else exactly one row total -> that one is the candidate (the
-         widening's actual benefit: an unvoiced character can now be matched
-         too);
-       - otherwise -> ambiguous, no match, left to the id-only path (too
-         risky to guess).
-     A normalised name shared by more than one fresh row is, separately,
-     always left to the id-only path regardless of the above. */
-  const freshNameCounts = new Map<string, number>();
-  for (const f of fresh) {
-    const key = nameOf(f as T & Record<string, unknown>);
-    if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
-  }
-  const droppedByName = new Map<string, CastRecord[]>();
-  for (const old of existing) {
-    // Never a name-fallback candidate: the reserved narrator id has its own
-    // identity mechanism (applyNarratorIdentity), not the generic name match.
-    // dedupePriorCastByName's isNarrator exclusion (this file, :659) is the
-    // same call for the same reason. Narrator rows were excluded here only
-    // incidentally before this task's widening — applyNarratorIdentity seeds
-    // voiceStyle/persona but never voiceUuid/voiceState, and isVoicedOrReused
-    // doesn't test voiceStyle, so the old isVoicedOrReused precondition kept
-    // them out as a side effect. Widening past that precondition newly
-    // admits them (via the lone-unvoiced-row branch below), so this explicit
-    // exclusion is now load-bearing (#2040 Task 12 follow-up, L1): without
-    // it, a fresh roster with no narrator row this run but a REAL character
-    // whose name collides with the prior narrator's localized default name
-    // would weld the narrator's voice fields onto that character and
-    // durably retire the reserved 'narrator' id onto it.
-    if (freshIds.has(old.id) || NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
-    const key = nameOf(old);
-    if (!key) continue;
-    const list = droppedByName.get(key);
-    if (list) list.push(old);
-    else droppedByName.set(key, [old]);
-  }
-  // No separate "ambiguous names" set: an ambiguous key is simply left OUT of
-  // dropMatchCandidateByName below (neither branch calls .set() for it), so
-  // .get(key) at the call site already returns undefined for it — a second
-  // set tracking the same fact would be redundant by construction, not just
-  // in practice (verified: #2040 Task 12 follow-up).
-  const dropMatchCandidateByName = new Map<string, CastRecord>();
-  for (const [key, rows] of droppedByName) {
-    const voiced = rows.filter(isVoicedOrReused);
-    if (voiced.length === 1) {
-      dropMatchCandidateByName.set(key, voiced[0]);
-    } else if (voiced.length === 0 && rows.length === 1) {
-      dropMatchCandidateByName.set(key, rows[0]);
-    }
-  }
-
-  /* Surname-tolerant extension of the SAME selection rule (#2536). A character
-     that gained or lost a trailing surname token between runs (prior "Бранн" →
-     fresh "Бранн Уир") drops off every EXACT key above, so `nameOf` would never
-     match it and the fresh row would mint a near-duplicate id instead of
-     resolving to its existing roster row. Run the same voice/reuse selection
-     rule again over the dropped rows that surname-tolerantly match each
-     still-unresolved fresh name. This widens only HOW a candidate key is found,
-     never the selection rule once candidates are found, and never the fresh-
-     ambiguity guard (a normalised name shared by >1 fresh row stays on the
-     id-only path). An exact match is preferred: a fresh name that already
-     resolves via dropMatchCandidateByName is skipped here entirely. An
-     ambiguous tolerant key is left OUT of the map (same as the exact path), so
-     it still routes to the id-only path rather than being guessed. */
-  const tolerantCandidateByName = new Map<string, CastRecord>();
-  for (const [key, count] of freshNameCounts) {
-    if (count !== 1) continue; // shared by >1 fresh row → id-only path, unchanged
-    if (dropMatchCandidateByName.has(key)) continue; // exact match preferred
-    const matches: CastRecord[] = [];
-    for (const rows of droppedByName.values()) {
-      for (const old of rows) {
-        if (surnameTolerantMatch(key, nameOf(old))) matches.push(old);
-      }
-    }
-    const voiced = matches.filter(isVoicedOrReused);
-    if (voiced.length === 1) {
-      tolerantCandidateByName.set(key, voiced[0]);
-    } else if (voiced.length === 0 && matches.length === 1) {
-      tolerantCandidateByName.set(key, matches[0]);
-    }
-  }
-
-  // Claim-once guard (#2536 review finding): a dropped row scanned against
-  // every unresolved fresh key can otherwise win MORE THAN ONE key — e.g. one
-  // dropped "Мэйрин" row tolerant-matching both "Мэйрин Уир" and "Мэйрин
-  // Коул" — which would push two retirements FROM the same id and silently
-  // lose the first one (retireCharacterId's supersededBy write is last-wins).
-  // A row claimed by more than one tolerant key is too risky to guess between —
-  // same philosophy as the ambiguous-candidate branches above, just at row
-  // granularity instead of key granularity. Drop the tolerant entries (fall
-  // through to id-only path); dropMatchCandidateByName entries are never removed.
-  // A second instance of the same bug: a dropped row can be BOTH the exact-match
-  // candidate for one fresh key AND the tolerant-match candidate for another
-  // (e.g. prior "Brann" / fresh "Brann" exact + fresh "Brann Weir" tolerant).
-  // Count each dropped row's id only when it would actually be CONSUMED at the
-  // call site (the four gates inside the `if (nameFallback && !old) { ... }`
-  // block checking freshNameCounts, NARRATOR_CHARACTER_IDS, and isBlockedByNotLinked).
-  // A candidate-map presence without actual consumption is a "phantom claim" that inflates counts and causes false-
-  // positive refusals: e.g. a dropped row's id is in a map under a key whose
-  // fresh row already matches by id (gate 1 below fails), or whose fresh row
-  // shares the name with >1 fresh row (gate 2), or whose pair is blocked by
-  // notLinkedTo (gate 4) — none of these would ever call the name-fallback,
-  // yet the prior raw-presence count included them. Only count pairs where all
-  // four gates at the call site would succeed: (1) fresh row has no prior by-id
-  // match, (2) fresh name count is exactly 1, (3) fresh id is not narrator,
-  // (4) neither notLinkedTo gate blocks the pair.
-  const freshByKey = new Map<string, { id: string }>();
-  for (const f of fresh) {
-    const k = nameOf(f as T & Record<string, unknown>);
-    if (k && !freshByKey.has(k)) freshByKey.set(k, f as unknown as { id: string });
-  }
-  const isBlockedByNotLinked = (cand: CastRecord, f: { id: string }): boolean =>
-    notLinkedToId(cand, f.id, currentBookId) ||
-    notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) ||
-    declinesLinkOf(f as unknown as CastRecord, cand);
-  const consumable = (key: string, cand: CastRecord): boolean => {
-    // Mirror the exact four gates from the call site (not-already-id-matched,
-    // name-count-exactly-one, not-narrator, not-notLinkedTo-blocked).
-    if (freshNameCounts.get(key) !== 1) return false; // gate 2: must be exactly 1
-    const f = freshByKey.get(key);
-    if (!f) return false; // gate 2: must exist
-    if (byId.get(f.id)) return false; // gate 1: no prior by-id match
-    if (NARRATOR_CHARACTER_IDS.includes(f.id)) return false; // gate 3: not narrator
-    if (isBlockedByNotLinked(cand, f)) return false; // gate 4: no notLinkedTo block
-    return true;
-  };
-  const tolerantCandidateCount = new Map<string, number>();
-  for (const [key, cand] of dropMatchCandidateByName) {
-    if (consumable(key, cand)) {
-      tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
-    }
-  }
-  for (const [key, cand] of tolerantCandidateByName) {
-    if (consumable(key, cand)) {
-      tolerantCandidateCount.set(cand.id, (tolerantCandidateCount.get(cand.id) ?? 0) + 1);
-    }
-  }
-  const keysToDelete: string[] = [];
-  for (const [key, cand] of tolerantCandidateByName) {
-    if ((tolerantCandidateCount.get(cand.id) ?? 0) > 1) {
-      keysToDelete.push(key);
-    }
-  }
-  for (const key of keysToDelete) {
-    tolerantCandidateByName.delete(key);
-  }
-
-  const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
-
-  const overlaid = fresh.map((f) => {
-    let old = byId.get(f.id);
-    if (nameFallback && !old) {
-      const key = nameOf(f as T & Record<string, unknown>);
-      // A fresh narrator-id row never adopts a name-fallback candidate
-      // either. Unlike the droppedByName exclusion above, this direction
-      // PRE-DATES Task 12 — a voiced real character already satisfied the
-      // pre-Task-12 isVoicedOrReused precondition, so nothing ever excluded
-      // narrator here; the widening did not create this exposure. Closed
-      // here anyway (fix-now bar: adjacent to, and the exact mirror of, the
-      // exclusion just landed) because a real character matched onto the
-      // reserved narrator id would retire the REAL character's id to
-      // 'narrator' — every frozen segment that character ever rendered
-      // would then resolve to the narrator, precisely #2040's original bug.
-      // Safe to exclude unconditionally: the narrator id is code-seeded
-      // (NARRATOR_CHARACTER_IDS), never analyzer-minted, so there is no
-      // legitimate id-drift case here for the fallback to rescue, and
-      // :445-455 already carries the narrator name forward on its own path.
-      if (key && freshNameCounts.get(key) === 1 && !NARRATOR_CHARACTER_IDS.includes(f.id)) {
-        const cand =
-          dropMatchCandidateByName.get(key) ?? tolerantCandidateByName.get(key);
-        // A notLinkedTo edge between this specific pair is the user's
-        // explicit "not the same person" decision — widening the candidate
-        // set past isVoicedOrReused must not let the fallback silently
-        // override it. A blocked match falls through to the id-only path
-        // exactly like an ambiguous one: refusing is always safe, matching
-        // wrongly is not (#2040 spec §9 — the match now also retires the id,
-        // durably, via retireCharacterId).
-        if (
-          cand &&
-          !notLinkedToId(cand, f.id, currentBookId) &&
-          !notLinkedToId(f as unknown as Record<string, unknown>, cand.id, currentBookId) &&
-          !declinesLinkOf(f as unknown as CastRecord, cand)
-        ) {
-          old = cand;
-          claimedByName.add(cand.id);
-          retirements.push({ from: cand.id, to: f.id });
-        }
-      }
-    }
-    if (!old) return f;
-    const merged = { ...(f as Record<string, unknown>) };
-    // #3920: the merge must apply the #3842 owner rule — no voice match,
-    // automatic or manual, replaces a voice the user locked or tuned. A
-    // locked or tuned character WITH AN ASSIGNED VOICE (a voiceId) keeps it
-    // whole; one with no voiceId still keys its voice on its id, so a name
-    // join that changes the id changes the voice (pre-existing, tracked in
-    // #3954). The assigned voice is therefore taken whole from the prior row:
-    // every PRESERVED_VOICE_FIELDS key the prior row has is copied and every
-    // key it lacks is deleted, so nothing the series linker stamped onto the
-    // fresh row (matchedFrom, overrideTtsVoices, voiceUuid, ttsEngine,
-    // voiceStyle, voiceId) survives a join to it — under the id, exact-name
-    // or surname-tolerant join alike. This covers the voice fields only:
-    // aliases are unioned just below regardless of pinning, so the linker's
-    // Book One aliases still reach a pinned row whose link was dropped. That
-    // is out of scope here and unchanged.
-    // A prior row that already carries its own series link (matchedFrom) is
-    // taken whole the same way: the seed bridges matchedFrom through the
-    // strict candidate set, so when roster dedup moves the join onto a row
-    // the seed refused, the linker has stamped THAT row with a link to a
-    // different Book One character — and an unpinned overlay copies only the
-    // keys the prior row has, so that foreign link's designed-voice fields
-    // would graft onto the prior row's own link.
-    // #3992: a fresh link to a book the prior row DECLINED ("Don't reuse") is
-    // never grafted on. The linker and the seed already honour the marker, so
-    // this is the backstop for a join they did not see (roster dedup moved it);
-    // the prior row's own voice is then taken whole, exactly like a pinned row.
-    const freshMatchedBookId = (f as { matchedFrom?: { bookId?: string } | null }).matchedFrom?.bookId;
-    const declinedFreshLink =
-      typeof freshMatchedBookId === 'string' &&
-      declinesVoice(old, {
-        bookId: freshMatchedBookId,
-        voiceUuid: (f as { voiceUuid?: string | null }).voiceUuid,
-      });
-    const takesVoiceWhole =
-      old.voiceState === 'locked' ||
-      old.voiceState === 'tuned' ||
-      old.matchedFrom !== undefined ||
-      declinedFreshLink;
-    for (const key of PRESERVED_VOICE_FIELDS) {
-      if (old[key] !== undefined) merged[key] = old[key];
-      else if (takesVoiceWhole) delete merged[key];
-    }
-    const aliases = unionAliases(old.aliases, (f as Record<string, unknown>).aliases);
-    if (aliases) merged.aliases = aliases;
-    // Narrator name is a code-seeded default/override, not model-derived. The
-    // merge recomputes name from the fresh roster for real characters, but for
-    // the narrator that would drop a user RENAME. Carry forward a non-default
-    // prior name; a default prior name lets the fresh (re-localized) name win.
-    if (
-      NARRATOR_CHARACTER_IDS.includes(f.id) &&
-      typeof old.name === 'string' &&
-      !isDefaultNarratorName(old.name)
-    ) {
-      merged.name = old.name;
-    }
-    return merged as T;
-  });
-
-  /* Carry forward voiced/reused characters the fresh roster omitted — UNLESS
-     their designed voice already rode onto a same-name fresh row above (id
-     drift), which would otherwise re-add them as a 0-line duplicate. */
-  for (const old of existing) {
-    if (freshIds.has(old.id) || claimedByName.has(old.id)) continue;
-    if (isVoicedOrReused(old)) overlaid.push(old as unknown as T);
-  }
-  return { characters: overlaid, retirements };
-}
-
-/** Strength order for voiceState collision resolution. Higher = stronger. */
-const VOICE_STATE_RANK: Record<string, number> = {
-  locked: 3,
-  tuned: 2,
-  reused: 1,
-  generated: 0,
-};
-
-function voiceStateRank(state: unknown): number {
-  return typeof state === 'string' ? (VOICE_STATE_RANK[state] ?? -1) : -1;
-}
-
-/** Remap each prior cast row's `id` through `rewrites` (dedup canonical-id
-    table). When two rows collide on the same canonical id, keep the one with
-    the strongest `voiceState` (locked > tuned > reused > generated, undefined
-    weakest); tie-break by more lines if available, else first encountered.
-    Returns a new array of remapped rows, a list of dropped rows (original id
-    + voiceState) for caller logging, and the id retirements this remap
-    performed — one per row whose id actually changed, whether it won or lost
-    a collision (a collision loser whose own id already equalled the
-    canonical id needs no retirement: that id string stays live, just under
-    the winner's data). Inputs are not mutated. */
-export function applyRewriteToPriorCast<T extends CastRecord>(
-  priorCast: ReadonlyArray<T>,
-  rewrites: Record<string, string>,
-): {
-  priorCast: T[];
-  droppedVoices: Array<{ id: string; voiceState?: string }>;
-  retirements: Retirement[];
-} {
-  // Map from canonical id → { row (with remapped id), originalId }
-  const winners = new Map<string, { row: T; originalId: string }>();
-  const droppedVoices: Array<{ id: string; voiceState?: string }> = [];
-  const retirements: Retirement[] = [];
-
-  for (const row of priorCast) {
-    const originalId = row.id;
-    const canonicalId = rewrites[originalId] ?? originalId;
-    if (canonicalId !== originalId) {
-      retirements.push({ from: originalId, to: canonicalId });
-    }
-    const remapped: T = canonicalId === originalId ? row : { ...row, id: canonicalId };
-    const existing = winners.get(canonicalId);
-    if (!existing) {
-      winners.set(canonicalId, { row: remapped, originalId });
-      continue;
-    }
-    // Collision — compare strengths
-    const incomingRank = voiceStateRank(row.voiceState);
-    const existingRank = voiceStateRank(existing.row.voiceState);
-    let droppedOriginalId: string;
-    let droppedVoiceState: unknown;
-    if (incomingRank > existingRank) {
-      droppedOriginalId = existing.originalId;
-      droppedVoiceState = existing.row.voiceState;
-      winners.set(canonicalId, { row: remapped, originalId });
-    } else if (incomingRank === existingRank) {
-      // tie-break: more lines wins, else first (existing) wins
-      const incomingLines = typeof row.lines === 'number' ? row.lines : -1;
-      const existingLines = typeof existing.row.lines === 'number' ? existing.row.lines : -1;
-      if (incomingLines > existingLines) {
-        droppedOriginalId = existing.originalId;
-        droppedVoiceState = existing.row.voiceState;
-        winners.set(canonicalId, { row: remapped, originalId });
-      } else {
-        droppedOriginalId = originalId;
-        droppedVoiceState = row.voiceState;
-        // existing stays in winners
-      }
-    } else {
-      droppedOriginalId = originalId;
-      droppedVoiceState = row.voiceState;
-      // existing stays in winners
-    }
-    droppedVoices.push({
-      id: droppedOriginalId,
-      ...(droppedVoiceState !== undefined ? { voiceState: droppedVoiceState as string } : {}),
-    });
-  }
-
-  return {
-    priorCast: Array.from(winners.values()).map((w) => w.row),
-    droppedVoices,
-    retirements,
-  };
-}
-
-/** Seed the Facet-A guard fields (`notLinkedTo`, `matchedFrom`) from the prior
-    cast onto the fresh roster IN PLACE, by id, before linkSeriesReuseAtAnalysis
-    runs. Without this the link pass scores against an empty `notLinkedTo` and
-    can re-link a pair the user explicitly separated; pre-seeding `matchedFrom`
-    also makes the pass's `if (c.matchedFrom) continue` skip already-linked rows.
-    Only fills fields the fresh row lacks (the analyzer never emits either).
-    #3920 (A2): the two guards take different name-fallback candidate sets.
-    `matchedFrom` (a spurious copy lands a wrong link) uses the same candidate
-    set as mergeCore's exact-name fallback — dropped (no fresh row claims the
-    prior by id), non-narrator rows only. `notLinkedTo` (a spurious copy only
-    prevents a link, which fails safe) uses every NON-narrator prior row, dropped
-    or not: on the main job this runs on the stage-1 roster BEFORE roster dedup,
-    and dedup can later move the join onto a row the strict set refused, which
-    must still carry the separation. Narrator-id rows (NARRATOR_CHARACTER_IDS)
-    never go through the name bridge, in either direction, for either guard: the
-    narrator id flips between analyses (`char-narrator` <-> `narrator`) and its
-    display name is user-editable, so a fresh narrator row takes `notLinkedTo`
-    from the UNIQUE prior narrator-id row by id class, whatever either is named
-    (two or more prior narrator-id rows are ambiguous: nothing is bridged). */
-export function seedReuseGuardsFromPriorCast<
-  T extends {
-    id: string;
-    notLinkedTo?: unknown;
-    matchedFrom?: unknown;
-    declinedVoiceFrom?: unknown;
-    declinedVoiceUuids?: unknown;
-  },
->(existing: ReadonlyArray<CastRecord>, fresh: T[]): void {
-  if (!existing.length) return;
-  const byId = new Map(existing.map((c) => [c.id, c]));
-
-  /* Name-fallback for dedup id remap (srv-44): on re-analysis the dedup pass
-     collapses a legacy prior id onto a canonical survivor, so the prior cast's
-     guard row no longer matches the survivor by id. Bridge a SINGLE same-name
-     prior row to a SINGLE same-name fresh row, mirroring the ambiguity-guarded
-     fallback in mergeAnalysisResultWithExistingCast. Guard against guessing: a
-     normalised name shared by >1 prior OR >1 fresh row falls back to id-only
-     (except `notLinkedTo` when several fresh rows share the name: the decline
-     union below seeds each of them, #4032).
-     #3920 (A2): `matchedFrom` is bridged only from dropped prior rows;
-     `notLinkedTo` from any prior row; narrator-id rows are in neither (see the
-     doc comment above). */
-  const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
-    typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
-  const freshNameCounts = new Map<string, number>();
-  for (const f of fresh) {
-    const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-    if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
-  }
-  const freshIds = new Set(fresh.map((f) => f.id));
-  const bridgeable = (strict: boolean) => {
-    const byName = new Map<string, CastRecord>();
-    const ambiguous = new Set<string>();
-    for (const old of existing) {
-      if (NARRATOR_CHARACTER_IDS.includes(old.id)) continue;
-      if (strict && freshIds.has(old.id)) continue;
-      const key = nameOf(old);
-      if (!key) continue;
-      if (byName.has(key)) ambiguous.add(key);
-      else byName.set(key, old);
-    }
-    return { byName, ambiguous };
-  };
-  const priorNarrators = existing.filter((c) => NARRATOR_CHARACTER_IDS.includes(c.id));
-  const uniquePriorNarrator = priorNarrators.length === 1 ? priorNarrators[0] : undefined;
-  const strictBridge = bridgeable(true);
-  const looseBridge = bridgeable(false);
-  const bridged = (
-    f: T,
-    bridge: { byName: Map<string, CastRecord>; ambiguous: Set<string> },
-  ): CastRecord | undefined => {
-    const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-    if (!key || bridge.ambiguous.has(key) || freshNameCounts.get(key) !== 1) return undefined;
-    return bridge.byName.get(key);
-  };
-
-  for (const f of fresh) {
-    const byIdRow = byId.get(f.id);
-    // #3920 (A2): a fresh narrator row never takes a matchedFrom name-fallback
-    // candidate, mirroring mergeCore's fresh-side narrator exclusion. Its
-    // notLinkedTo comes from the unique prior narrator-id row (by id class),
-    // never by name.
-    const isNarrator = NARRATOR_CHARACTER_IDS.includes(f.id);
-    const nlFrom = byIdRow ?? (isNarrator ? uniquePriorNarrator : bridged(f, looseBridge));
-    const mfFrom = byIdRow ?? (isNarrator ? undefined : bridged(f, strictBridge));
-    if (f.notLinkedTo === undefined && nlFrom?.notLinkedTo !== undefined)
-      f.notLinkedTo = nlFrom.notLinkedTo as T['notLinkedTo'];
-    // #3992: "Don't reuse" fails safe like notLinkedTo (a spurious copy only
-    // prevents a link), so it takes the same loose candidate set.
-    if (f.declinedVoiceFrom === undefined && nlFrom?.declinedVoiceFrom !== undefined)
-      f.declinedVoiceFrom = nlFrom.declinedVoiceFrom as T['declinedVoiceFrom'];
-    if (f.declinedVoiceUuids === undefined && nlFrom?.declinedVoiceUuids !== undefined)
-      f.declinedVoiceUuids = nlFrom.declinedVoiceUuids as T['declinedVoiceUuids'];
-    // #3965: two or more same-name prior rows make the loose bridge ambiguous, so
-    // a fresh row with no by-id prior (an id-drifted speaker) would get no
-    // decline at all, and the merge's name fallback could then hand it a link a
-    // twin declined. Union every same-name prior row's declines onto it: a
-    // spurious copy can only block a link, never land a wrong one (a wrong decline
-    // can block a link the user wanted, #3965's existing trade). That holds for each
-    // of several same-name fresh rows too (one speaker held under two roster
-    // ids, #4032), so the union does not wait for a unique fresh name. #3992: the
-    // decline markers ("not this voice") ride the same union.
-    if (!byIdRow && !isNarrator) {
-      const key = nameOf(f as { name?: unknown } & Record<string, unknown>);
-      if (key && looseBridge.ambiguous.has(key)) {
-        let union: unknown[] | undefined;
-        let fromUnion: string[] | undefined;
-        let uuidUnion: string[] | undefined;
-        for (const old of existing) {
-          if (NARRATOR_CHARACTER_IDS.includes(old.id) || nameOf(old) !== key) continue;
-          if (Array.isArray(old.notLinkedTo)) union = unionNotLinkedTo(union, old.notLinkedTo);
-          fromUnion = unionStrings(fromUnion, old.declinedVoiceFrom);
-          uuidUnion = unionStrings(uuidUnion, old.declinedVoiceUuids);
-        }
-        if (f.notLinkedTo === undefined && union?.length) f.notLinkedTo = union as T['notLinkedTo'];
-        if (f.declinedVoiceFrom === undefined && fromUnion?.length)
-          f.declinedVoiceFrom = fromUnion as T['declinedVoiceFrom'];
-        if (f.declinedVoiceUuids === undefined && uuidUnion?.length)
-          f.declinedVoiceUuids = uuidUnion as T['declinedVoiceUuids'];
-      }
-    }
-    if (f.matchedFrom === undefined && mfFrom?.matchedFrom !== undefined)
-      f.matchedFrom = mfFrom.matchedFrom as T['matchedFrom'];
-  }
-}
-
 /** True when a row carries a concrete bespoke designed voice (not merely a
     reuse link). Used so the same-name collapse never drops a designed voice in
     favour of a reuse-linked sibling (2026-07-14 Coalfall voice-strip class). */
@@ -764,40 +132,6 @@ function groupHasNotLinkedEdge(
   return false;
 }
 
-/** True when `c` declined, in its notLinkedTo, the series link `other` carries
-    in matchedFrom. That decline is cross-book, so the id-keyed check above
-    cannot see it; but a collapse keeps one row and would hand the declined link
-    to the survivor, for the next run's linker to land (#3965). Matched on the
-    link's own (bookId, characterId); a bare string matches by characterId. */
-function declinesLinkOf(c: CastRecord, other: CastRecord): boolean {
-  const mf = other.matchedFrom as { bookId?: unknown; characterId?: unknown } | undefined;
-  if (!mf || typeof mf.characterId !== 'string' || !Array.isArray(c.notLinkedTo)) return false;
-  return (c.notLinkedTo as unknown[]).some((entry) => {
-    if (typeof entry === 'string') return entry === mf.characterId;
-    if (!entry || typeof entry !== 'object') return false;
-    const e = entry as { bookId?: unknown; characterId?: unknown };
-    return e.characterId === mf.characterId && (e.bookId === undefined || e.bookId === mf.bookId);
-  });
-}
-
-/** `a` plus the entries of `b` it lacks, deduped by (bookId, characterId); a
-    bare-string entry dedupes by its value. Never mutates either input. */
-function unionNotLinkedTo(a: unknown[] | undefined, b: unknown[]): unknown[] {
-  const keyOf = (e: unknown): string =>
-    e && typeof e === 'object'
-      ? JSON.stringify([(e as { bookId?: unknown }).bookId, (e as { characterId?: unknown }).characterId])
-      : `s:${String(e)}`;
-  const out = [...(a ?? [])];
-  const seen = new Set(out.map(keyOf));
-  for (const e of b) {
-    const k = keyOf(e);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(e);
-  }
-  return out;
-}
-
 /** `a` plus the strings of `b` it lacks (a decline-marker list); non-array `b`
     contributes nothing. Never mutates either input. */
 function unionStrings(a: string[] | undefined, b: unknown): string[] | undefined {
@@ -805,6 +139,31 @@ function unionStrings(a: string[] | undefined, b: unknown): string[] | undefined
   const out = [...(a ?? [])];
   for (const e of b) if (typeof e === 'string' && !out.includes(e)) out.push(e);
   return out;
+}
+
+/** What the run-start heal must leave alone (#4031 A11): rows with an open
+    merge suggestion, member pairs the user dismissed (`a < b`, as
+    `recordNotSamePerson` stores them) and rows the run itself added. A degraded
+    history read supplies no dismissals — it is "undetermined", so the heal runs
+    on the other two refusals rather than refusing every group. */
+export interface DedupeHealOpts {
+  openSuggestions: ReadonlyArray<StoredSuggestion>;
+  notSamePerson: ReadonlyArray<NotSamePersonRecord>;
+  skipIds: ReadonlySet<string>;
+  /** The suggestions could not be read: no group may be healed this run. */
+  healDisabled?: boolean;
+}
+const NO_HEAL_OPTS: DedupeHealOpts = { openSuggestions: [], notSamePerson: [], skipIds: new Set() };
+
+/** True when two members of the group share a dismissal record (the set holds
+    both orders of every record). */
+function groupHasDismissal(group: ReadonlyArray<CastRecord>, dismissed: ReadonlySet<string>): boolean {
+  for (const x of group) {
+    for (const y of group) {
+      if (x !== y && dismissed.has(`${x.id}\u0000${y.id}`)) return true;
+    }
+  }
+  return false;
 }
 
 /** Collapse same-normalised-name rows in a prior cast to one survivor each so
@@ -818,12 +177,14 @@ function unionStrings(a: string[] | undefined, b: unknown): string[] | undefined
 export function dedupePriorCastByName<T extends CastRecord>(
   priorCast: ReadonlyArray<T>,
   currentBookId: string | undefined,
+  opts: DedupeHealOpts = NO_HEAL_OPTS,
 ): {
   cast: T[];
   dropped: Array<{ id: string; name?: string; voiceState?: string }>;
   retirements: Retirement[];
 } {
-  if (priorCast.length < 2) return { cast: [...priorCast], dropped: [], retirements: [] };
+  if (priorCast.length < 2 || opts.healDisabled)
+    return { cast: [...priorCast], dropped: [], retirements: [] };
 
   const nameKeyOf = (c: CastRecord): string =>
     typeof c.name === 'string' ? normaliseNameKey(c.name) : '';
@@ -843,8 +204,26 @@ export function dedupePriorCastByName<T extends CastRecord>(
   const survivorByKey = new Map<string, T>();
   const collapsedKeys = new Set<string>();
 
+  // #4031 A11 — an open question about a row (to ANY other row, not only a
+  // fellow group member) or a run-ledger row is not the heal's to settle.
+  const suggested = new Set<string>();
+  for (const s of opts.openSuggestions) {
+    for (const id of [s.sourceId, s.targetId, s.a, s.b]) suggested.add(id);
+  }
+  // Either order: the store writes `a < b`, but a hand-edited or older record
+  // must not silently stop protecting its pair.
+  const dismissed = new Set(
+    opts.notSamePerson.flatMap((r) => [`${r.a}\u0000${r.b}`, `${r.b}\u0000${r.a}`]),
+  );
+
   for (const [key, group] of groups) {
-    if (group.length < 2 || groupHasNotLinkedEdge(group, currentBookId)) continue;
+    if (
+      group.length < 2 ||
+      groupHasNotLinkedEdge(group, currentBookId) ||
+      group.some((c) => suggested.has(c.id) || opts.skipIds.has(c.id)) ||
+      groupHasDismissal(group, dismissed)
+    )
+      continue;
     collapsedKeys.add(key);
 
     let best = group[0];

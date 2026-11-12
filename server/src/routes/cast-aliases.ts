@@ -28,6 +28,7 @@ import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges } from '../store/cast-merges.js';
 import { slug } from '../workspace/paths.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castAliasesRouter = Router();
 
@@ -106,6 +107,10 @@ castAliasesRouter.post(
        alias list) is derived from `cast`, so wrapping only the write would
        leave those decisions racing a concurrent writer on the same book. */
     withCastLock(bookDir, async () => {
+      /* R55 — the unlinked alias becomes a new row, which changes the id set: refused while
+         an analysis runs, inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return res.status(409).json(busy);
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({

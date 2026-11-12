@@ -138,6 +138,17 @@ vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   return {
     /* #3435 — the run's "Resuming — N of M" count reads `hasCurrentTake`. */
     hasCurrentTake: actual.hasCurrentTake,
+    /* plan 291: the run classifies the cache and makes its first (version-2) write
+       through the mutate seam. */
+    ANALYSIS_CACHE_VERSION: actual.ANALYSIS_CACHE_VERSION,
+    classifyAnalysisCache: actual.classifyAnalysisCache,
+    mutateAnalysisCache: async (id: string, patch: { createIfAbsent?: true; version?: number }) => {
+      const existing = mem.get(id) as Record<string, unknown> | undefined;
+      if (!existing && !patch.createIfAbsent) return null;
+      const next = { chapters: {}, ...existing, ...(patch.version !== undefined ? { version: patch.version } : {}) };
+      mem.set(id, next);
+      return next;
+    },
     loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
     saveAnalysisCache: async (id: string, cache: unknown) => {
       mem.set(id, cache);

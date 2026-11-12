@@ -3,7 +3,7 @@
    something different from the current redux state. The Layout component
    owns the reverse direction (Redux→URL sync). */
 
-import { useEffect, useMemo, useState, lazy, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, type ReactNode } from 'react';
 import {
   createHashRouter,
   Navigate,
@@ -27,7 +27,14 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
-import { beginFullRead, castWrittenSince, dropRetainedSaves, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  beginFullRead,
+  castEraClearedSince,
+  castWrittenSince,
+  dropRetainedSaves,
+  flushBookPersistence,
+} from '../store/persistence-middleware';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -691,7 +698,7 @@ export function AnalysingRoute() {
            never read this one. Skipped, the slices keep the other book's id
            and the layout reads this one from disk on the way to Confirm. */
         if (selectIsOpenBook(reduxStore.getState(), payload)) {
-          dispatch(castActions.hydrateFromAnalysis(payload));
+          dispatch(castActions.hydrateFromAnalysis(payload, { bookId: payload.bookId }));
           /* hydrateFromAnalysis atomically pins the chapters slice to
              payload.bookId via its currentBookId reducer field, so the
              cross-book tick guard in applyGenerationTick has a truthful
@@ -781,6 +788,10 @@ export function ConfirmRoute() {
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
+  /* Plan 291 (#4031), item 12 — the book's cast gate, and the book whose entry
+     read has run (so a gate that rises and drops again reads nothing twice). */
+  const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
+  const entryReadDone = useRef<string | null>(null);
   /* Re-analyse fires a fresh local-analyzer pass; guard it the same way
      book imports do so it can't evict TTS mid-chapter. Gemini/Gemma
      engines pass through unguarded. */
@@ -810,9 +821,24 @@ export function ConfirmRoute() {
      #3967 — each attempt is bounded (15 s, growing on later attempts), an
      expired read is retried on the hydrate's schedule until it lands, and it
      is aborted when the route is left, so re-entering Confirm never piles up
-     open reads. */
+     open reads.
+     Plan 291 (#4031), item 12 — Confirm shares the cast gate. While the book's
+     cast is read-only (an analysis era is latched, which every analysis apply
+     does) this effect issues the busy-gated re-hydrate instead of reading. The
+     read below is owed for the visit (analysis gaps, designed voices) and runs
+     exactly once, whenever the gate drops while the route is mounted: at once
+     if it was never up, otherwise after the gate's own re-hydrate released it
+     (which may be long after: a live stream, or busy still listing the run,
+     keeps the gate up). A read cut short by the gate rising again is owed
+     again. A read the gate's clear has overtaken (castEraClearedSince)
+     hydrates nothing: like one a cast save overtook, it reads again. */
   useEffect(() => {
     if (!bookId) return;
+    if (entryReadDone.current === bookId) return;
+    if (castReadOnly) {
+      void dispatch(rehydrateCastAfterAnalysis(bookId));
+      return;
+    }
     let cancelled = false;
     const life = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -828,6 +854,9 @@ export function ConfirmRoute() {
           const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
           return readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers).then((res) => {
             if (cancelled) return;
+            const done = () => {
+              entryReadDone.current = bookId;
+            };
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
                result can still carry a flagged chapter, decision B). */
@@ -848,14 +877,19 @@ export function ConfirmRoute() {
               res.cast.characters.length > 0 &&
               routeStore.getState().manuscript.bookId === bookId
             ) {
-              if ((dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true) {
+              if (
+                (dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true ||
+                (dispatch(castEraClearedSince(bookId, readSeq) as never) as unknown) === true
+              ) {
                 if (n < 2) attempt(n + 1);
+                else done();
                 return;
               }
               /* hydrate, not an edit: setCharacters is persisted and would echo
                  this disk snapshot straight back as a cast.json PUT (#3376). */
               dispatch(castActions.hydrateCharacters(res.cast.characters));
             }
+            done();
           });
         })
         .catch(() => {
@@ -868,7 +902,7 @@ export function ConfirmRoute() {
       life.abort();
       timers.forEach(clearTimeout);
     };
-  }, [bookId, dispatch, routeStore]);
+  }, [bookId, dispatch, castReadOnly, routeStore]);
 
   if (manuscript.bookId !== bookId || notFound) return <BookNotLoaded notFound={notFound} listed={listed} />;
 
@@ -897,7 +931,7 @@ export function ConfirmRoute() {
             targetCharacterId,
           });
           if (res?.source) {
-            dispatch(castActions.updateCharacter(res.source));
+            dispatch(castActions.updateCharacter(res.source, { routeBacked: true }));
           }
         }}
         onConfirm={() => {
@@ -1026,11 +1060,14 @@ function ReadyViewSwitch({
               dispatch(castActions.addCharacter(res.character));
               return res.character.id;
             } catch (err) {
-              pushToast({
-                kind: 'error',
-                message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
-                dedupeKey: 'add-from-roster',
-              });
+              /* R57 — refused while an analysis runs (R55): the read-only path. */
+              if (!dispatch(handleCastIdentityBusy(bookId, err))) {
+                pushToast({
+                  kind: 'error',
+                  message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
+                  dedupeKey: 'add-from-roster',
+                });
+              }
               throw err;
             }
           }}

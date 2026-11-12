@@ -26,9 +26,15 @@ import { accountSlice, fetchAccountSettings } from '../store/account-slice';
 import { librarySlice } from '../store/library-slice';
 import { tourSlice } from '../store/tour-slice';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
+import { castDesignSlice } from '../store/cast-design-slice';
+import { voicesSlice } from '../store/voices-slice';
+import { voiceLibrarySlice } from '../store/voice-library-slice';
+import { VoiceLibraryPanel } from '../components/voice-library-panel';
+import { ProfileDrawer } from '../modals/profile-drawer';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { exportsSlice } from '../store/exports-slice';
-import { analysisSlice } from '../store/analysis-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { configSlice } from '../store/config-slice';
 
@@ -420,6 +426,88 @@ describe('a11y — advanced configuration view', () => {
     // Verify the analyzer GPU-split warning is actually present before scanning
     // — this confirms the mock override worked and the warning block renders.
     await screen.findByText(/Model split across GPUs/);
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — the paused-edits banner and the controls it
+   disables (aria-disabled + tooltip) pass axe. */
+describe('a11y: the banner and disabled controls pass axe', () => {
+  function pausedStore() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    return store;
+  }
+
+  it('the Confirm view with the banner has no axe violations', async () => {
+    const { container } = render(
+      <Provider store={pausedStore()}>
+        <ConfirmCastView
+          characters={characters}
+          library={library}
+          title="the Coalfall Commission"
+          onOpenProfile={vi.fn()}
+          onConfirm={vi.fn()}
+          onReanalyse={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(screen.getByTestId('cast-edits-paused-banner')).toHaveTextContent('Re-analysis running — cast edits are paused');
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+  });
+
+  it('the voice library panel with its Assign pills disabled has no axe violations', async () => {
+    const { container } = render(
+      <Provider store={pausedStore()}>
+        <VoiceLibraryPanel
+          library={[{ ...library[0], source: 'current' }]}
+          draggingVoiceId={null}
+          setDraggingVoiceId={vi.fn()}
+          characters={characters}
+          onTapAssign={vi.fn()}
+          assigningVoiceId={null}
+          assignDisabled
+        />
+      </Provider>,
+    );
+    const pill = screen.getByRole('button', { name: /^Assign Marlow to a character$/ });
+    expect(pill).toHaveAttribute('aria-disabled', 'true');
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+    expect(pill.closest('[draggable]')).toHaveAttribute('draggable', 'false');
+  });
+
+  it('the profile drawer with Save, rename, tone and lock disabled has no axe violations', async () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        voices: voicesSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        library: librarySlice.reducer,
+        voiceLibrary: voiceLibrarySlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    const { container } = render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={characters[1]}
+          voice={library[0]}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          onLock={vi.fn()}
+          onRename={vi.fn()}
+        />
+      </Provider>,
+    );
+    expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });

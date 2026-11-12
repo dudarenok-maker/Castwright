@@ -1,0 +1,80 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "Narrator",
+      "role": "narrator",
+      "color": "narrator",
+      "attributes": [
+        "formal",
+        "observational",
+        "measured",
+        "rhythmic"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "voiceStyle": "A middle-aged voice, neutral in gender, with a medium pitch and steady, mid-paced delivery; the timbre is rich, grounded, and resonant, carrying a measured, folkloric warmth suitable for audiobook narration.",
+      "gender": "neutral",
+      "ageRange": "adult",
+      "aliases": [],
+      "lines": 0,
+      "scenes": 0
+    },
+    {
+      "id": "w2",
+      "name": "Wren",
+      "voiceState": "locked",
+      "role": "lead",
+      "color": "#111111",
+      "evidence": [
+        {
+          "quote": "Wren asked"
+        }
+      ],
+      "gender": "female",
+      "aliases": [
+        "Wren Ashby"
+      ],
+      "lines": 4,
+      "scenes": 3,
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 50
+      }
+    },
+    {
+      "id": "olga",
+      "name": "Olga",
+      "role": "minor",
+      "color": "#444444",
+      "voiceState": "generated"
+    },
+    {
+      "id": "boris",
+      "name": "Boris Vane",
+      "role": "minor",
+      "color": "eliza",
+      "gender": "male",
+      "evidence": [
+        {
+          "quote": "Wren asked"
+        }
+      ],
+      "lines": 5,
+      "scenes": 3,
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 50
+      },
+      "aliases": []
+    }
+  ]
+}

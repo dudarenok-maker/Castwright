@@ -281,7 +281,7 @@ describe('resolveBookLanguageForBookId + reuse consumer veto (#2246)', () => {
     expect(characters[0].matchedFrom?.bookId).toBe('della-renwick__reg-series__reg-one');
   });
 
-  it('pruneStaleReuseLinks vetoes: a null-language current book drops its stale links', async () => {
+  it('the stale-link prune vetoes: a null-language current book drops its stale links', async () => {
     /* Reg Unset carries a reused voice whose `matchedFrom` points at Reg One.
        Null language on the current side ⇒ "cannot prove same language" ⇒ the
        link is pruned (not preserved as a same-language match). */
@@ -303,7 +303,11 @@ describe('resolveBookLanguageForBookId + reuse consumer veto (#2246)', () => {
         },
       },
     ];
-    const dropped = await link.pruneStaleReuseLinks('della-renwick__reg-series__reg-unset', characters);
+    /* Plan 291: the prune's two halves (`pruneStaleReuseLinks` composed them; Task 24 removed it). */
+    const dropped = link.applyStaleLinkPrune(
+      characters,
+      await link.staleReuseLinkKeys('della-renwick__reg-series__reg-unset', characters),
+    );
     expect(dropped).toBe(1);
     expect(characters[0].matchedFrom).toBeUndefined();
   });

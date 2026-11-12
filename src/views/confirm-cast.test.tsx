@@ -6,8 +6,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
+import { bookBusySlice, bookBusyActions } from '../store/book-busy-slice';
 import { ConfirmCastView } from './confirm-cast';
 import type { Character, Voice } from '../lib/types';
 
@@ -713,5 +716,95 @@ describe('ConfirmCastView — virtualisation threshold (plan 93)', () => {
   it('switches to the virtualised container at or above the threshold', () => {
     renderWithCount(60);
     expect(screen.getByTestId('confirm-cast-virtual-container')).toBeInTheDocument();
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — read-only cast: Confirm shows the paused-edits
+   banner. Its decision tiles are local view state and its Confirm button saves
+   nothing to the cast, so none is disabled here. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  const run = { bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never;
+  function renderPaused(readOnly: boolean) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'cast_pending' }));
+    if (readOnly) {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+      /* a run is live: the banner shows */
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(run));
+    }
+    const view = render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={[marlow, wren]}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    return { store, view };
+  }
+
+  it('Confirm: the banner is a status region while read-only and absent otherwise', () => {
+    renderPaused(true);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    /* announced by the one app-level region in Layout, not by a surface */
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('Confirm: no banner when the cast is editable', () => {
+    renderPaused(false);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('M1: analysing -> Confirm with busy [] shows no banner', () => {
+    const { store } = renderPaused(true);
+    expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
+    /* The run ends: the snapshot clears and busy answers []. The era stays
+       latched until the gate re-hydrates, but no run is live. */
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+      store.dispatch(bookBusyActions.setBusy({ bookId: 'bPaused', kinds: [] }));
+    });
+    expect(store.getState().cast.analysisEra?.bPaused).toBeDefined();
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('a hidden banner contributes no child to its stack', () => {
+    const { store } = renderPaused(true);
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(null));
+      store.dispatch(bookBusyActions.setBusy({ bookId: 'bPaused', kinds: [] }));
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+    /* the space-y stack that held the banner is left with no children at all */
+    expect(document.querySelector('.mb-4.space-y-2')).toBeEmptyDOMElement();
+  });
+
+  it('a paused run still counts as live: the banner shows', () => {
+    const { store } = renderPaused(true);
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ ...(run as object), state: 'paused' } as never));
+    });
+    expect(screen.getByTestId('cast-edits-paused-banner')).toBeInTheDocument();
+  });
+
+  it('a halted run is not live: no banner', () => {
+    const { store } = renderPaused(true);
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ ...(run as object), state: 'halted' } as never));
+      store.dispatch(bookBusyActions.setBusy({ bookId: 'bPaused', kinds: [] }));
+    });
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
   });
 });

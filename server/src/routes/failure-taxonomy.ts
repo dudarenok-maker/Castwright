@@ -60,7 +60,38 @@ import {
 } from '../analyzer/reasoning.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
-import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import {
+  FS_FAILURE_REQUEST_ERROR,
+  FS_PERMANENT_FAILURE_REQUEST_ERROR,
+  isLockAcquisitionTimeout,
+  LOCK_CONTENTION_REQUEST_ERROR,
+  requestFailureMessageFs,
+} from '../workspace/file-lock.js';
+import {
+  PriorCastUnreadableError,
+  PRIOR_CAST_CORRUPT_MID_RUN_REMEDIATION,
+  PRIOR_CAST_CORRUPT_REMEDIATION,
+  PRIOR_CAST_UNREADABLE_REMEDIATION,
+} from '../workspace/prior-cast-error.js';
+
+/* #4031 R48 — an AUTHORITATIVE analysis persist write (the planned cast.json persist,
+   its manuscript-edits write, the terminal state.json record) failed for a reason other
+   than a lock timeout. The jobs park the raw error wrapped in this, finish their
+   remaining writes, then rethrow it so the run ends in `error` rather than streaming a
+   result over an unwritten book. The message is fixed and path-free (an fs error's own
+   message names the absolute path it failed on, and this reaches SSE subscribers on the
+   LAN); the raw error goes to the server log at the park site. */
+export const PERSIST_FAILED_MESSAGE_PREFIX = 'The analysis finished, but its results could not be saved.';
+
+export class AnalysisPersistError extends Error {
+  readonly permanent: boolean;
+  constructor(cause: unknown) {
+    const sentence = requestFailureMessageFs(cause, FS_FAILURE_REQUEST_ERROR);
+    super(`${PERSIST_FAILED_MESSAGE_PREFIX} ${sentence}`, { cause });
+    this.name = 'AnalysisPersistError';
+    this.permanent = sentence === FS_PERMANENT_FAILURE_REQUEST_ERROR;
+  }
+}
 
 export type FailureCode =
   | 'vram-spill'
@@ -88,6 +119,7 @@ export type FailureCode =
   | 'voice-not-designed'
   | 'cloned-voice-broken'
   | 'lock-contention'
+  | 'cast-unreadable'
   | 'language-unset'
   | 'auth'
   | 'unknown';
@@ -1072,6 +1104,33 @@ export function classifyAnalysisFailure(
      above the signature scan, #3625.) */
   if (isLockAcquisitionTimeout(err)) {
     return withCopy('lock-contention', LOCK_CONTENTION_REQUEST_ERROR);
+  }
+  /* #4031 - run start refused because the existing cast.json is unreadable (transient)
+     or corrupt (a retry can never fix it). The error's message is a fixed, path-free
+     sentence, so it is safe as `userMessage`; NO `detail` (the raw cause stays in the
+     server log). Remediation is run-level, picked by reason. */
+  if (err instanceof PriorCastUnreadableError) {
+    return withCopy(
+      'cast-unreadable',
+      err.message,
+      undefined,
+      err.midRun
+        ? PRIOR_CAST_CORRUPT_MID_RUN_REMEDIATION
+        : err.reason === 'corrupt'
+          ? PRIOR_CAST_CORRUPT_REMEDIATION
+          : PRIOR_CAST_UNREADABLE_REMEDIATION,
+    );
+  }
+  /* #4031 R48 — fixed, path-free message; NO `detail` (the raw cause is in the log). */
+  if (err instanceof AnalysisPersistError) {
+    return withCopy(
+      'unknown',
+      err.message,
+      undefined,
+      err.permanent
+        ? 'Free up disk space or fix the workspace folder permissions, then run the analysis again.'
+        : 'Wait a few seconds, then run the analysis again.',
+    );
   }
   if (err instanceof AnalyzerTruncatedError) {
     return withCopy(

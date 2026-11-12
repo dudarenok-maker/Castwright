@@ -26,7 +26,7 @@
    override (writing through to each cast.json). */
 
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import {
@@ -921,7 +921,7 @@ function parseOverrideField(
 export async function forEachMatchingCastCharacter(
   voiceId: string,
   seriesFilter: { author: string; series: string } | undefined,
-  mutate: (character: CastCharacter) => CastCharacter,
+  mutate: (character: CastCharacter, bookDir: string) => CastCharacter,
   /* fs-61 — when `seriesFilter` is absent, restrict the write to exactly this
      book's directory instead of the whole workspace. Every standalone book
      resolves to the same synthetic (author: X, series: "Standalones") pair,
@@ -962,7 +962,7 @@ export async function forEachMatchingCastCharacter(
         const original = cast.characters[i];
         const id = original.voiceId ?? original.id;
         if (id !== voiceId) continue;
-        const next = mutate(original);
+        const next = mutate(original, onlyBookDir);
         cast.characters[i] = next;
         dirty = true;
         /* A `mutate` that deliberately declines a character (a clone-consent
@@ -1014,7 +1014,7 @@ export async function forEachMatchingCastCharacter(
               const original = cast.characters[i];
               const id = original.voiceId ?? original.id;
               if (id !== voiceId) continue;
-              const next = mutate(original);
+              const next = mutate(original, dir);
               cast.characters[i] = next;
               dirty = true;
               /* See the onlyBookDir branch above — a declined (same-reference)
@@ -1088,7 +1088,16 @@ export async function applyOverrideToCastFiles(
      workspace sharing the same bare character id. Only the genuinely-global
      PUT /:voiceId/override 'workspace' scope should omit both. */
   onlyBookDir?: string,
-): Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> {
+  /* #4031 -- the bulk design job's own row: a qwen slot already on it (picked
+     while the render ran) that is not the just-landed name is kept, decided here
+     under the book's lock. Siblings keep the series propagation. */
+  keepOwnSlot?: { bookDir: string; characterId: string },
+): Promise<{
+  updated: number;
+  skipped: Array<{ bookDir: string; characterId: string; reason: string }>;
+  keptOwnSlot?: true;
+}> {
+  let keptOwnSlot = false;
   const otherThanEngine = override === null ? undefined : override.engine;
   /* Which sentinel a caller gets right: forEachMatchingCastCharacter's own
      branch at voices.ts:809 only honours `onlyBookDir` when `seriesFilter`
@@ -1136,7 +1145,18 @@ export async function applyOverrideToCastFiles(
   const updated = await forEachMatchingCastCharacter(
     voiceId,
     seriesFilter,
-    (original) => {
+    (original, dir) => {
+      if (
+        keepOwnSlot &&
+        override?.engine === 'qwen' &&
+        original.id === keepOwnSlot.characterId &&
+        resolve(dir) === resolve(keepOwnSlot.bookDir) &&
+        original.overrideTtsVoices?.qwen?.name &&
+        original.overrideTtsVoices.qwen.name !== override.name
+      ) {
+        keptOwnSlot = true;
+        return original;
+      }
       /* Residual-window backstop: the walk still takes nonzero time after
          the fresh scan above passed. Immune to unrelated intermediate
          writes because it re-checks the FRESH per-book read
@@ -1230,7 +1250,7 @@ export async function applyOverrideToCastFiles(
      this anyway so a future invocation refreshes /speakers cleanly if the
      sidecar was bounced in between. Cheap and side-effect free. */
   if (updated > 0) invalidateBaseVoiceCache();
-  return { updated, skipped };
+  return { updated, skipped, ...(keptOwnSlot ? { keptOwnSlot: true as const } : {}) };
 }
 
 /* Set or clear the per-character Qwen quality tier (ttsModelKey) across every

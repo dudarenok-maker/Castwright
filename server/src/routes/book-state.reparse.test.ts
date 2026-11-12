@@ -482,6 +482,32 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     expect(existsSync(carryoverPath())).toBe(false);
   });
 
+  it.each(['{"characters":{}}', '{"characters":"x"}', '{"other":1}'])(
+    'a cast.json whose characters is not an array (%s) re-parses like the no-cast case (#4031)',
+    async (body) => {
+      const original = JSON.stringify({ characters: [{ id: 'old', voiceState: 'reused' }] });
+      writeFileSync(carryoverPath(), original);
+      writeFileSync(castPath(), body);
+
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
+      expect(res.status).toBe(200);
+
+      // The no-cast case keeps the carryover since #4039.
+      expect(readFileSync(carryoverPath(), 'utf8')).toBe(original);
+      expect(existsSync(castPath())).toBe(false);
+    },
+  );
+
+  it('a cast.json with non-object rows re-parses and carries only the real rows (#4031 final review)', async () => {
+    writeFileSync(castPath(), JSON.stringify({ characters: [null, 5, 'x', { id: 'keep', name: 'Keep' }] }));
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    const carried = JSON.parse(readFileSync(carryoverPath(), 'utf8')) as { characters: Array<{ id: string }> };
+    expect(carried.characters.map((c) => c.id)).toEqual(['keep']);
+  });
+
   it('persists titleSynthesized on the made-up leading chapter only (#3628)', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),

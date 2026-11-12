@@ -20,7 +20,7 @@ describe('help categories', () => {
     expect(IDS.size).toBe(HELP_CATEGORIES.length);
     expect(HELP_CATEGORIES.every((c) => c.label.length > 0)).toBe(true);
   });
-  it('has exactly 54 items (28 failures + 26 topics)', () => {
-    expect(HELP_FAILURE_ENTRIES.length + HELP_TOPICS.length).toBe(54);
+  it('has exactly 55 items (29 failures + 26 topics)', () => {
+    expect(HELP_FAILURE_ENTRIES.length + HELP_TOPICS.length).toBe(55);
   });
 });

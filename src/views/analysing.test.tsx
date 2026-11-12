@@ -12,6 +12,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { AnalysingView } from './analysing';
+import { castGateMiddleware } from '../store/cast-gate';
 import { WIKI_BASE } from '../lib/wiki-links';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
@@ -62,6 +63,8 @@ vi.mock('../lib/api', async () => {
       },
       /* Subset retry — captures the chapter ids + opts and exposes a
          manual resolver so tests can simulate a successful retry. */
+      /* Plan 291 — the cast gate's busy check, when a test wires the gate. */
+      getBookBusy: () => new Promise(() => {}),
       runAnalysisForChapters: (_id: string, chapterIds: number[], opts?: AnalyseOpts) => {
         capturedSubsetCall = { chapterIds, opts };
         return new Promise<AnalyseResponse>((resolve, reject) => {
@@ -2457,6 +2460,23 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'stage1_shrink_refused' });
     });
 
+    /* #4031 (A22) - a Retry on a book whose saved analysis predates the current cache
+       version stops before writing anything; the user must read why and what to do. */
+    it('the analysing view shows the analysis_cache_legacy message', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await idleRetry();
+      const message =
+        "This book's saved analysis is from an older version of Castwright, so its chapters can't be re-analysed one at a time. Run the full analysis again to rebuild it.";
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'analysis_cache_legacy'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+    });
+
     /* #3435 - a Retry whose Phase 1 fails with a non-overflow analyzer error. The
        server sends chapter-failed (the Phase-1 catch records it), then the
        terminal `error`. The row must stay with its message, not be dropped as the
@@ -2701,7 +2721,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       uploadedAt: new Date(0).toISOString(),
       sourceText: '',
     });
-    async function mountAfterMainFailure(castConfirmed: boolean, { withManuscript = false } = {}) {
+    async function mountAfterMainFailure(castConfirmed: boolean, { withManuscript = false, withGate = false } = {}) {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const base = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
       bookState = { ...base, state: { ...base.state, castConfirmed } };
@@ -2722,6 +2742,7 @@ describe('AnalysingView — failed-chapter retry', () => {
           notifications: notificationsSlice.reducer,
           ...(withManuscript ? { manuscript: manuscriptSlice.reducer } : {}),
         },
+        middleware: (gd) => gd().concat(...(withGate ? [castGateMiddleware] : [])),
       });
       /* The view only renders on its book's analysing stage. */
       store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
@@ -2862,6 +2883,32 @@ describe('AnalysingView — failed-chapter retry', () => {
        cast-update), and the cast slice holds whichever book is open. */
     const villain = { id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' as const };
     const hero = { id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'magenta' as const };
+    it.each([
+      ['main run', () => capturedOpts!.onCastUpdate!],
+      ['Retry', () => capturedSubsetCall!.opts!.onCastUpdate!],
+    ])("another tab's run never retargets this tab's own %s roster (R5)", async (_name, handler) => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true, withGate: true });
+      /* Tab 2's run of another book is mirrored into this tab's snapshot. */
+      store.dispatch(
+        analysisActions.applyExternalAnalysisSnapshot({
+          bookId: 'b9',
+          manuscriptId: 'm9',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: 1,
+          state: 'running',
+        }),
+      );
+      act(() => {
+        handler()({ characters: [villain] as Character[] });
+      });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['a-villain']);
+      expect(store.getState().cast.analysisEra?.b1).toBeDefined();
+      expect(store.getState().cast.analysisEra?.b9).toBeUndefined();
+    });
+
     it('a Retry cast update after another book opened never writes into that book\'s cast', async () => {
       const { store } = await mountAfterMainFailure(false, { withManuscript: true });
       cleanup();
@@ -3238,9 +3285,10 @@ describe('AnalysingView — failed-chapter retry', () => {
   });
 });
 
-/* Mid-run recovery surface. With incremental cast.json writes landing on
-   every Phase 0a chapter (see server/src/routes/analysis.ts buildInterimCast
-   call site), the layout's getBookState hydration now pre-populates the
+/* Mid-run recovery surface. With interim cast.json writes landing mid-run
+   (the Phase 0b plan snapshot, see server/src/routes/analysis.ts
+   snapshotPlannedRoster; before plan 291 they landed on every Phase 0a
+   chapter), the layout's getBookState hydration now pre-populates the
    cast slice on book open — so a re-opened book mid-run shows the cast
    that was found so far without waiting for the SSE to replay. The
    analysing view's contract is "render whatever is in the cast slice on
@@ -3719,39 +3767,32 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
   });
 });
 
-describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
-  it('surfaces a cast_merge_base_stale advisory as a deduped warn toast from the main route', async () => {
+/* Plan 291 Task 28 fix round 1 (M1): the view owns every warning code the
+   middleware does not (analysis-warning-toast.ts). The merge-base advisory these
+   cases pinned is deleted; they are retargeted to the one code the server emits
+   today, so both `onWarning` wirings (main and subset) stay pinned. */
+describe('AnalysingView — analysis warning toast', () => {
+  const CODE = 'analyzer-reasoning-overflow-nonstory';
+
+  it('surfaces a warning as a deduped warn toast from the main route', async () => {
     const { store } = await renderViewWaitingForAnalysis();
 
     await act(async () => {
-      capturedOpts?.onWarning?.({
-        code: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
-      capturedOpts?.onWarning?.({
-        code: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
+      capturedOpts?.onWarning?.({ code: CODE, message: 'Front-matter detection fell back.' });
+      capturedOpts?.onWarning?.({ code: CODE, message: 'Front-matter detection fell back.' });
     });
 
     await waitFor(() => {
       const toasts = store.getState().notifications.toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0]).toMatchObject({
-        kind: 'warn',
-        dedupeKey: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
+      expect(toasts[0]).toMatchObject({ kind: 'warn', dedupeKey: CODE, message: 'Front-matter detection fell back.' });
     });
   });
 
   it('forwards onWarning through the subset (runAnalysisForChapters) route too — the second consumer', async () => {
-    /* Regression for the "second reader is a silent-drop trap" note in
-       #2015: two of the five server-side merge-base write sites are on
-       the subset route, and the `handle` chain ignores unknown kinds,
-       so a missed `onWarning` wire-up here drops the advisory with no
-       error anywhere. Drives the same retry-chapter path the existing
-       subset tests use, then fires the captured onWarning directly. */
+    /* The `handle` chain ignores unknown kinds, so a missed `onWarning` wire-up
+       on the subset route drops the warning with no error anywhere. Drives the
+       retry-chapter path, then fires the captured onWarning directly. */
     getBookStateImpl = () =>
       Promise.resolve({
         state: {
@@ -3809,20 +3850,13 @@ describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
 
     expect(capturedSubsetCall).toBeDefined();
     await act(async () => {
-      capturedSubsetCall!.opts?.onWarning?.({
-        code: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
+      capturedSubsetCall!.opts?.onWarning?.({ code: CODE, message: 'Front-matter detection fell back.' });
     });
 
     await waitFor(() => {
       const toasts = store.getState().notifications.toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0]).toMatchObject({
-        kind: 'warn',
-        dedupeKey: 'cast_merge_base_stale',
-        message: 'Another change landed.',
-      });
+      expect(toasts[0]).toMatchObject({ kind: 'warn', dedupeKey: CODE, message: 'Front-matter detection fell back.' });
     });
   });
 });

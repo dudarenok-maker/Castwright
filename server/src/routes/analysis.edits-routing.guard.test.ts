@@ -46,8 +46,19 @@ describe('analysis.ts manuscript-edits.json writers stay ordered (#3427)', () =>
     expect(unorderedEditsSites(SRC)).toEqual([]);
   });
 
-  it('there are the three known sites (two terminal writes + the fresh-run rm)', () => {
-    expect([...SRC.matchAll(SITE_RE)].length).toBe(3);
+  // Plan 291: both jobs' terminal writes moved into the planned persist
+  // (workspace/analysis-cast-io.ts, pinned below; the main job's in Task 20, the
+  // subset's in Task 25), so analysis.ts keeps only the fresh-run rm.
+  it('there is the one known site (the fresh-run rm)', () => {
+    const sites = [...SRC.matchAll(SITE_RE)];
+    expect(sites.length).toBe(1);
+    expect(SRC.slice(SRC.lastIndexOf('\n', sites[0].index ?? 0) + 1, (sites[0].index ?? 0)).trim()).toBe('const editsPath =');
+  });
+
+  it("the planned persist's manuscript-edits.json write (workspace/analysis-cast-io.ts) is on the ordered queue", () => {
+    const io = readFileSync(join(__dirname, '..', 'workspace', 'analysis-cast-io.ts'), 'utf8');
+    expect([...io.matchAll(SITE_RE)].length).toBe(1);
+    expect(unorderedEditsSites(io)).toEqual([]);
   });
 
   it('the classifier rejects a plain write and a bare rm (probe)', () => {

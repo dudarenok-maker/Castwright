@@ -51,6 +51,8 @@ import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-
 import { ScriptReviewDiff } from '../components/script-review-diff';
 import { ReassignLinesModal } from '../modals/reassign-lines';
 import { api } from '../lib/api';
+import { pausedControlProps, useCastReadOnly } from '../components/cast-edits-paused-banner';
+import { handleCastIdentityBusy } from '../store/cast-gate';
 import { selectVisibleReview, unresolvedCountForChapters, scriptReviewActions } from '../store/script-review-slice';
 import { selectAnalysisBusyForBook } from '../store/analysis-substage-selectors';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
@@ -139,9 +141,15 @@ export function ManuscriptView({
   onOpenProfile,
   onStartGenerating,
   priorRoster,
-  onAddFromSeriesRoster,
+  onAddFromSeriesRoster: onAddFromSeriesRosterProp,
 }: Props) {
   const dispatch = useAppDispatch();
+  /* R57 (PR #4103 pass 5b) — the server refuses a cast create and an add-from-roster
+     while an analysis runs (R55): while the cast is read-only "Add character" is
+     disabled and the reassign picker's prior-book rows are (a picker with no add
+     handler disables them). */
+  const castReadOnly = useCastReadOnly();
+  const onAddFromSeriesRoster = castReadOnly ? undefined : onAddFromSeriesRosterProp;
   /* #3400 pass 7 — every sentence edit below is refused by the restructure
      guard while the book restructures. The affordances disable (with a reason)
      and each handler re-checks the live flag BEFORE its side writes (the
@@ -803,11 +811,15 @@ export function ManuscriptView({
      guard below — hooks cannot be called conditionally (Rules of Hooks). */
   const handleCreateCharacter = useCallback(
     async (fields: { name: string; gender?: string; ageRange?: string }) => {
+      /* P6-2 — no read-only early return: a resolve reads as success and closes the form. A
+         create the server refuses mid-run takes the 409 path below (the form stays open). */
       if (!bookId) return;
       try {
         const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
         dispatch(castActions.addCharacter(result.character));
       } catch (err) {
+        /* R57 — refused while an analysis runs (R55): the read-only path (the form stays open). */
+        if (dispatch(handleCastIdentityBusy(bookId, err))) throw err;
         dispatch(
           notificationsActions.pushToast({
             kind: 'error',
@@ -897,6 +909,7 @@ export function ManuscriptView({
       onOpenProfile={onOpenProfile}
       bookId={bookId}
       onCreateCharacter={handleCreateCharacter}
+      createDisabled={castReadOnly}
     />
   );
 
@@ -1520,6 +1533,8 @@ interface SidebarPanelsProps {
   onOpenProfile?: (id: string) => void;
   bookId: string | null;
   onCreateCharacter: (fields: { name: string; gender?: string; ageRange?: string }) => void | Promise<void>;
+  /** R57 — the cast is read-only: the server refuses a create mid-run (R55). */
+  createDisabled: boolean;
 }
 
 function SidebarPanels({
@@ -1538,6 +1553,7 @@ function SidebarPanels({
   onOpenProfile,
   bookId: _bookId,
   onCreateCharacter,
+  createDisabled,
 }: SidebarPanelsProps) {
   const [addingChar, setAddingChar] = useState(false);
   return (
@@ -1710,8 +1726,11 @@ function SidebarPanels({
             })}
           </ul>
           <button
-            onClick={() => setAddingChar(true)}
-            className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors"
+            onClick={() => {
+              if (!createDisabled) setAddingChar(true);
+            }}
+            {...pausedControlProps(createDisabled)}
+            className={`mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 min-h-11 rounded-xl border border-dashed border-ink/20 text-sm text-ink/60 hover:border-peach hover:text-peach transition-colors ${createDisabled ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             <IconPlus className="w-4 h-4" /> Add character
           </button>
@@ -1729,6 +1748,7 @@ function SidebarPanels({
                 }}
                 onReattributeExisting={() => setAddingChar(false)}
                 onCancel={() => setAddingChar(false)}
+                createPaused={createDisabled}
               />
             </div>
           )}

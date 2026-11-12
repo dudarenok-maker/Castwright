@@ -649,11 +649,14 @@ Design rationale:
   means "look at the holder first, then the rules". **WHICH WRITE the timeout
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
-  cover an authoritative write and a best-effort one at once). TWELVE sites fail
-  loud *by rethrowing into their job's or request's terminal outcome*: the six
-  best-effort `catch` blocks around identity writes, plus the two
-  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
-  each wrapped at its own call rather than at the enclosing
+  cover an authoritative write and a best-effort one at once). NINE sites fail
+  loud *by rethrowing into their job's or request's terminal outcome*: the four
+  `catch` blocks around identity writes (three best-effort; `cast-merge.ts`'s
+  parks every write error since plan 291; plan 291 folded the
+  main-job and subset-job pairs in `analysis.ts` into two shared ones, the
+  run-start heal and the persist's retirements), plus the ONE
+  AUTHORITATIVE `persistPlannedCast` call (`runPlannedPersist`, shared by both
+  analysis persist blocks), wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
   journals, which are lineage and must stay best-effort — plus four
   `state.json` sites under the `state-json` leaf lock (#3625): finalize's duration/model/render stamp
@@ -666,12 +669,13 @@ Design rationale:
   write from ever being the silent kind. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. TWELVE handlers swallow it
+  `cast.json` and `state.json` never written at all. TEN handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
-  re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
-  subset), which a final write in the same run clobbers, so a timeout there
+  re-heals; the one plan-snapshot handler (`snapshotPlannedRoster`, shared by
+  both jobs; plan 291 retired the three interim cast.json write handlers it
+  replaces), which the same run's persist re-applies, so a timeout there
   diverges nothing (#2292); `applyReview`
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
@@ -692,7 +696,7 @@ Design rationale:
   uuids still serve the response and re-mint next time; `scan.ts`'s two lazy
   migrations (uuid mint and segments backfill), which the next scan repeats;
   and the cover background-fetch hook (`cover/store.ts`), which must never fail
-  an import. A THIRTEENTH site fails loud in a
+  an import. A TENTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
@@ -719,12 +723,13 @@ Design rationale:
   too; ENOSPC / EACCES / EROFS get a sentence that does not promise a retry)
   and is what the whole-request handlers in `book-state`,
   `chapters-restructure`, `cover`, `voice-library`, `voices`, `import`,
-  `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link` and
+  `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link`,
+  `cast-merge` and `cast-merge-suggestions` (its dismiss and accept) and
   `voice-match` (and `voice-style`'s single generate and the per-item reason in
   `cast-design`'s job) whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-one call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-five call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -732,14 +737,19 @@ Design rationale:
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
-  `cast-decline-voice-link`, `voice-match`),
-  alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
-  merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
+  `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
+  `cast-merge`, `voice-match`, `failure-taxonomy` (the persist-failure
+  sentence of `AnalysisPersistError`)),
+  alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the
+  merge-accept route's outer catch and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since
   plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  `detail` blob (that blob renders in the UI's collapsible), and which also
+  curates an `AnalysisPersistError` (an authoritative persist write that failed
+  for a non-lock reason, parked and rethrown by both jobs, #4031) to a fixed
+  prefix plus the `requestFailureMessageFs` sentence, again with no `detail`. A separate,
   lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
   leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
   so the seams above still recognise it. The raw error goes
@@ -759,13 +769,14 @@ Design rationale:
   deferred rethrow binds the CALLER too**: by the time it escapes, the work is
   applied, so a caller with follow-up writes of its own must finish them before
   letting it surface (`cast-merge-suggestions.ts`'s accept route and its
-  `dismissSuggestion`) — otherwise the skipped write just moves up one frame.
+  `removeSuggestionPairsLocked` follow-up) — otherwise the skipped write just moves up one frame.
   `server/src/workspace/cast-lock.guard.test.ts`
-  fails the build on a new unlocked site. Two allowlisted exceptions, each
-  keyed on file **and** count so a further unlocked write in either still
-  fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and
+  fails the build on a new unlocked site. One allowlisted exception, keyed on
+  file **and** count so a further unlocked write in it still fails:
   `voice-override-linked.ts`'s one write, which **is** locked but through a
-  helper the deliberately-syntactic scan cannot follow. The guard is
+  helper the deliberately-syntactic scan cannot follow (`analysis.ts`'s five
+  merge-base writes are gone: every analysis-job cast.json write sits inside
+  `withCastLock`, the plan writes in `workspace/analysis-cast-io.ts`, plan 291). The guard is
   call-graph-blind by design — a new *unlocked* caller of an already-locked
   helper adds no occurrence text and passes; its header lists that and the
   other blind spots.
@@ -775,7 +786,10 @@ Design rationale:
   records the old id before the new one takes over; any path that joins on a
   `characterId` from manuscript attribution or a frozen render resolves it
   through `buildCastResolver` (`server/src/store/cast-resolve.ts`) rather than
-  a raw `.get()`. Don't add a second id matcher or a second id-history field.
+  a raw `.get()`. Don't add a second id matcher or a second id-history field. A
+  catch-all bucket's history entry (a merge of `unknown-male` / `unknown-female`) is
+  render-only: `followableHistory()` keeps it out of every matching, planning and
+  retirement read.
 
 ## Testing discipline (REQUIRED for every change)
 

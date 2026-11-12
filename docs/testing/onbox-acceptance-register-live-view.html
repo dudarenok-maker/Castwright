@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="117" data-publish-id="2fecf6c4a15f"></div>
+  <div hidden data-published-as="118" data-publish-id="691e66eac974"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">78</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">79</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -210,7 +210,7 @@
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->44<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->9<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->17<!-- END GENERATED:glance:E --></td></tr>
@@ -927,7 +927,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">9 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">10 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -1053,6 +1053,22 @@
         <p>The id-drift case, a locked character whose id changes between analyses, was fixed by <a href="https://github.com/dudarenok-maker/Castwright/issues/3965">#3965</a>, so a duplicate default-voice row of that shape now is a failure of this row.</p>
         <p>The similarly-named-character case (&#8220;Brann&#8221; and &#8220;Brann Weir&#8221;) is not a bullet here: roster dedup collapses that shape on a real run, and where a distinct survivor remains the linker may legitimately link it to Book One, which would read as a failure on correct code. It is pinned by the <code>series-reuse-link.test.ts</code> and <code>merge-analysis-cast.test.ts</code> fixtures instead.</p>
         <p class="src">a real local Ollama analyzer and a real two-book series &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3920">#3920</a> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3934">#3934</a> &#183; no per-feature run sheet</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B109</span><span class="iname">Re-analysis only adds to a real voiced cast, and the cast is read-only until it reloads</span><span class="risk">a real local Ollama analyzer and the Qwen TTS sidecar (VoiceDesign); a real voiced book with a merge, a dismissed suggestion and a locked name-joined character</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Plan 291 replaced four fresh-to-prior matchers with one (<code>matchFreshToPrior</code>) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy <code>.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json</code> first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). <b>Mid-run, design a voice for another character through the voice route</b> (profile drawer, Design voice), because that is a cast write that stays live (a dismissal and Voices compare stay live too). Merging characters and accepting a suggested merge are refused while the run is going (plan 291 R55). Observe:</p>
+        <ul>
+        <li>The Cast, Voices and Confirm views show &#8220;Re-analysis running &#8212; cast edits are paused&#8221;, and rename, drawer Save and voice assign are disabled while designing a voice still works; the banner clears and the controls come back only after the cast reloads.</li>
+        <li>The drawer&#8217;s merge and downgrade are disabled mid-run (paused tooltip), and a merge tried from a second device or a tab opened before the run is refused with the &#8220;Re-analysis running &#8212; that change wasn&#8217;t saved&#8221; toast and changes nothing on disk.</li>
+        <li>The diff of the three files holds only additions plus the route-given voice: no character is lost, renamed, merged or split, and the locked character is fully intact (voice, name, aliases, links).</li>
+        <li>New <code>cast-id-history</code> entries are tagged <code>analyzer</code>, <code>displaced</code> does not grow, and the run raises no <code>attribution_drift</code>.</li>
+        <li>A name the analyzer returns that is ambiguous gives a new row plus a suggestion, and the dismissed suggestion does not come back.</li>
+        <li>Start fresh keeps everything above (cast, merges, dismissals) and only discards the cache and per-sentence edits.</li>
+        <li>Stop a second run partway and resume it: the result matches a straight run, and edits stay paused until the cast reloads.</li>
+        </ul>
+        <p class="src">a real local Ollama analyzer (and per-phase models for the second pass), the Qwen TTS sidecar with VoiceDesign weights for the mid-run design, and a real voiced book with the three conditions above &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4031">#4031</a>, plan 291 &#183; run sheet <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> &#167;12</p>
       </div>
     </details>
   </section>

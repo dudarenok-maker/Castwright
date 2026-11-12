@@ -13,6 +13,7 @@ import { Provider } from 'react-redux';
 import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import type { OrphanedCharacterFallback } from '../store/cast-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { voicesSlice } from '../store/voices-slice';
@@ -60,6 +61,13 @@ vi.mock('../lib/api', () => ({
       resolution: 'history',
       resolvedCharacterId: 'marrow',
     }),
+    /* Plan 291 — the merge-suggestion accept, and the re-read a failed one
+       runs once busy is clear. */
+    listMergeSuggestions: vi.fn().mockResolvedValue([]),
+    acceptMergeSuggestion: vi.fn().mockResolvedValue(undefined),
+    getBookBusy: vi.fn().mockResolvedValue([]),
+    getBookState: vi.fn().mockResolvedValue(null),
+    putBookState: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -4080,5 +4088,501 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
     );
     /* badge gone after reset */
     expect(screen.queryByTestId('tier-badge-qwenA')).toBeNull();
+  });
+});
+
+describe('CastView — a rejected merge-suggestion accept re-reads the cast (plan 291, #4031)', () => {
+  it('a rejected merge or accept re-hydrates the cast', async () => {
+    const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    vi.mocked(api.acceptMergeSuggestion).mockRejectedValueOnce(new Error('retirement failed'));
+    const onDisk: Character[] = [narrator];
+    vi.mocked(api.getBookState).mockResolvedValueOnce({ state: {}, cast: { characters: onDisk } } as never);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b_current', status: 'voices_pending' }));
+    store.dispatch(manuscriptSlice.actions.resetForBook('b_current'));
+    store.dispatch(castSlice.actions.hydrateCharacters([narrator, marrow]));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
+    await waitFor(() => expect(store.getState().cast.characters).toEqual(onDisk));
+    expect(api.getBookState).toHaveBeenCalledWith('b_current');
+    /* Round 1 Minor 6 — the failure is not silent. */
+    expect(store.getState().notifications.toasts).toEqual([
+      expect.objectContaining({ kind: 'error', message: expect.stringMatching(/couldn.t merge/i) }),
+    ]);
+    err.mockRestore();
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — while the book's cast is read-only (an analysis
+   era is latched) Cast shows the paused-edits banner and disables the controls
+   that write the cast slice; the controls that save through their own routes
+   stay live. UX only: the persistence middleware's catch-all is the guard. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  const qwenWren: Character = {
+    id: 'wren',
+    name: 'Wren',
+    role: 'Scout',
+    color: 'rival',
+    lines: 4,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    voiceId: 'vid-wren',
+  };
+
+  function renderPaused(readOnly: boolean, setCharacters = vi.fn()) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bPaused', status: 'complete' }));
+    if (readOnly) {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+      /* a run is live: the banner shows */
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'bPaused', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    }
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, marrow, qwenWren]}
+          setCharacters={setCharacters}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    return { store, setCharacters };
+  }
+
+  it('Cast: the banner is a status region while read-only and absent otherwise', () => {
+    renderPaused(true);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    /* announced by the one app-level region in Layout, not by a surface */
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('Cast: no banner when the cast is editable', () => {
+    renderPaused(false);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('every listed client-slice control is disabled; every listed route control stays enabled', () => {
+    const { setCharacters } = renderPaused(true);
+    /* voice assign: the Assign pill is aria-disabled with a tooltip and starts no assignment */
+    const pill = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ })[0];
+    expect(pill).toHaveAttribute('aria-disabled', 'true');
+    expect(pill).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(pill);
+    expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
+    /* drag-assign: the card is not draggable and a drop writes nothing */
+    const libraryCard = screen
+      .getAllByText('Narrator')
+      .map((el) => el.closest('div[draggable]'))
+      .find((n): n is HTMLElement => !!n)!;
+    expect(libraryCard).toHaveAttribute('draggable', 'false');
+    const marrowRow = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragStart(libraryCard, { dataTransfer: { effectAllowed: 'copy', setData: () => {} } });
+      fireEvent.dragOver(marrowRow);
+      fireEvent.drop(marrowRow);
+    });
+    expect(setCharacters).not.toHaveBeenCalled();
+    /* the compare modal: Compare is aria-disabled with a tooltip and opens nothing */
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    fireEvent.click(checkboxIn(rowFor('Mr. Marrow')));
+    const compare = screen.getByRole('button', { name: /^Compare$/ });
+    expect(compare).toHaveAttribute('aria-disabled', 'true');
+    expect(compare).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(compare);
+    expect(screen.queryByText('Compare cast members')).toBeNull();
+    /* route-backed: the tier pin saves through setCastTier and stays live */
+    for (const id of ['pin-higher-quality', 'reset-tier']) {
+      expect(screen.getByTestId(id)).not.toHaveAttribute('aria-disabled');
+      expect(screen.getByTestId(id)).not.toBeDisabled();
+    }
+  });
+
+  const dragCard = () =>
+    screen
+      .getAllByText('Narrator')
+      .map((el) => el.closest('div[draggable]'))
+      .find((n): n is HTMLElement => !!n)!;
+  const drag = { dataTransfer: { effectAllowed: 'copy', setData: () => {} } };
+
+  it('M4 control: a drop on an editable cast reaches handleDrop and writes', () => {
+    const { setCharacters } = renderPaused(false);
+    act(() => {
+      fireEvent.dragStart(dragCard(), drag);
+    });
+    const row = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragOver(row);
+      fireEvent.drop(row);
+    });
+    expect(setCharacters).toHaveBeenCalledTimes(1);
+  });
+
+  it("M4: a drag started while editable and dropped after the gate rose writes nothing (handleDrop's own guard)", () => {
+    const { setCharacters, store } = renderPaused(false);
+    act(() => {
+      fireEvent.dragStart(dragCard(), drag);
+    });
+    act(() => {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bPaused' }));
+    });
+    const row = rowFor('Mr. Marrow');
+    act(() => {
+      fireEvent.dragOver(row);
+      fireEvent.drop(row);
+    });
+    expect(setCharacters).not.toHaveBeenCalled();
+  });
+
+  it('the same controls are live when the cast is editable', () => {
+    renderPaused(false);
+    const pill = screen.getAllByRole('button', { name: /^Assign Narrator to a character$/ })[0];
+    expect(pill).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(pill);
+    expect(screen.getByTestId('tap-assign-banner')).toBeInTheDocument();
+  });
+});
+
+/* Plan 291 (#4031), Task 12 fix round 1, I1 - the controls that save through
+   their own route mirror the route's result into the cast slice. While the cast
+   is read-only that mirror must raise no "that change wasn't saved" toast (the
+   route did save), and the slice must still reflect the route's result. The
+   real persistence and gate middleware are in the store; the gate is held up by
+   a busy reply that lists the analysis. */
+describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
+  const READ_ONLY_TOAST = /Re-analysis running/;
+  const qwenWren: Character = {
+    id: 'wren',
+    name: 'Wren',
+    role: 'Scout',
+    color: 'rival',
+    lines: 4,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+    voiceId: 'vid-wren',
+  };
+
+  async function readOnlyStore(chars: Character[]) {
+    const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const { bookBusySlice } = await import('../store/book-busy-slice');
+    const { analysisSlice } = await import('../store/analysis-slice');
+    const { persistenceMiddleware } = await import('../store/persistence-middleware');
+    const { castGateMiddleware } = await import('../store/cast-gate');
+    vi.mocked(api.getBookBusy).mockResolvedValue(['analysis']);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+      middleware: (gDM) => gDM().concat(persistenceMiddleware, castGateMiddleware),
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bRo', status: 'complete' }));
+    store.dispatch(manuscriptSlice.actions.resetForBook('bRo'));
+    store.dispatch(castSlice.actions.hydrateCharacters(chars));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bRo' }));
+    return store;
+  }
+  function mount(store: Awaited<ReturnType<typeof readOnlyStore>>, chars: Character[]) {
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={chars}
+          setCharacters={(next) => {
+            /* the parent's setter (routes/index.tsx), which dispatches the slice action */
+            const value = typeof next === 'function' ? next(store.getState().cast.characters) : next;
+            store.dispatch(castSlice.actions.setCharacters(value));
+          }}
+          library={[]}
+          title="Tier Test"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+  }
+  const toasts = (store: Awaited<ReturnType<typeof readOnlyStore>>) =>
+    store.getState().notifications.toasts.map((t) => t.message);
+  afterEach(() => {
+    vi.mocked(api.getBookBusy).mockResolvedValue([]);
+  });
+
+  it('the tier pin mirrors the route result without a toast', async () => {
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+    const store = await readOnlyStore([qwenWren]);
+    mount(store, [qwenWren]);
+    fireEvent.click(screen.getByTestId('pin-higher-quality'));
+    fireEvent.click(screen.getByRole('button', { name: /Pin to all cast/i }));
+    await waitFor(() =>
+      expect(store.getState().cast.characters[0].ttsModelKey).toBe('qwen3-tts-1.7b'),
+    );
+    expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+
+  it('the tier reset mirrors the route result without a toast', async () => {
+    vi.mocked(api.setCastTier).mockResolvedValue({ updated: 1 });
+    const pinned = { ...qwenWren, ttsModelKey: 'qwen3-tts-1.7b' as const };
+    const store = await readOnlyStore([pinned]);
+    mount(store, [pinned]);
+    fireEvent.click(screen.getByTestId('reset-tier'));
+    fireEvent.click(screen.getByRole('button', { name: /Reset to 0\.6B/i }));
+    await waitFor(() => expect(store.getState().cast.characters[0].ttsModelKey).toBeNull());
+    expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+
+  /* R57 (PR #4103 pass 5b) — the accept is no route-backed mirror mid-run any more: the
+     server refuses it (R55), so the card's Merge is disabled and a click sends nothing. */
+  it('a merge-suggestion accept is disabled and sends nothing while read-only', async () => {
+    vi.mocked(api.acceptMergeSuggestion).mockClear();
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    const store = await readOnlyStore([narrator, marrow]);
+    mount(store, [narrator, marrow]);
+    const accept = await screen.findByTestId('merge-suggestion-merge');
+    expect(accept).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(accept);
+    await Promise.resolve();
+    expect(api.acceptMergeSuggestion).not.toHaveBeenCalled();
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator', 'marrow']);
+    expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
+  });
+
+  /* #4031 M7 — outside a run the accept used to dispatch a persisted `setCharacters` built
+     from the PRE-request roster: a whole-slice cast PUT that lacked the merge's aliases
+     and `notLinkedTo` union (plan 289 refused it as stale). The slice now mirrors the
+     route's merged cast and nothing is saved. */
+  it('outside a run, an accept saves no cast slice and holds the merged target from the route', async () => {
+    vi.mocked(api.getBookBusy).mockResolvedValue([]);
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    const before = { ...narrator, notLinkedTo: [{ bookId: 'b0', characterId: 'x' }] };
+    const merged = {
+      ...narrator,
+      aliases: ['Marrow'],
+      notLinkedTo: [
+        { bookId: 'b0', characterId: 'x' },
+        { bookId: 'b0', characterId: 'y' },
+      ],
+    };
+    vi.mocked(api.acceptMergeSuggestion).mockResolvedValueOnce({ characters: [merged] } as never);
+    const seen: string[] = [];
+    const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const { bookBusySlice } = await import('../store/book-busy-slice');
+    const { analysisSlice } = await import('../store/analysis-slice');
+    const { persistenceMiddleware } = await import('../store/persistence-middleware');
+    const { castGateMiddleware } = await import('../store/cast-gate');
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+        analysis: analysisSlice.reducer,
+      },
+      middleware: (gDM) =>
+        gDM()
+          .prepend(() => (next: (a: unknown) => unknown) => (action: unknown) => {
+            seen.push((action as { type: string }).type);
+            return next(action);
+          })
+          .concat(persistenceMiddleware, castGateMiddleware),
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'bRo', status: 'complete' }));
+    store.dispatch(manuscriptSlice.actions.resetForBook('bRo'));
+    store.dispatch(castSlice.actions.hydrateCharacters([before, marrow]));
+    mount(store as never, [before, marrow]);
+    fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
+    await waitFor(() =>
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']),
+    );
+    const target = store.getState().cast.characters[0];
+    expect(target.notLinkedTo).toEqual(merged.notLinkedTo);
+    expect(target.aliases).toEqual(['Marrow']);
+    expect(seen).not.toContain('cast/setCharacters');
+    expect(api.putBookState).not.toHaveBeenCalled();
+  });
+});
+
+/* R57 (PR #4103 pass 5b) — the server refuses every cast-identity route while an analysis
+   runs (R55). While the cast is read-only the Cast view disables the merge-suggestion accept
+   and the orphan link / reject / undo, with the paused tooltip, and a click calls nothing;
+   dismiss stays live. A 409 `book_busy` from one of those routes (a stale tab, a second
+   device) takes the read-only path, not the generic error toast. */
+describe('R57: the cast-identity controls of the Cast view while read-only', () => {
+  const BOOK = 'b_r57';
+  function renderIdentity(readOnly: boolean) {
+    for (const fn of [api.acceptMergeSuggestion, api.rejectOrphanMatch, api.linkOrphanMatch, api.undoRejectOrphanMatch])
+      vi.mocked(fn).mockClear();
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        analysis: analysisSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: BOOK, view: 'cast' } as never },
+        cast: {
+          ...castSlice.getInitialState(),
+          characters: [narrator, marrow],
+          orphanedCharacterFallbacks: {
+            mayrin: {
+              resolution: 'alias' as const,
+              resolvedCharacterId: 'marrow',
+              segments: 6,
+              rejectedAgainst: ['narrator'],
+              audioCurrent: 'true' as const,
+            },
+            coalfall: { resolution: 'unresolved' as const, segments: 67, audioCurrent: 'false' as const },
+          },
+        },
+      },
+    });
+    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: BOOK }));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+  /** The needs-decision row (coalfall, Marrow picked) and the auto-reconciled row
+      (mayrin, expanded), with each identity control. */
+  function controls() {
+    const decision = within(screen.getByTestId('orphaned-needs-decision')).getByText(/coalfall/).closest('li')!;
+    fireEvent.change(within(decision).getByRole('combobox'), { target: { value: 'marrow' } });
+    fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+    const reconciled = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
+    return {
+      reject: within(decision).getByRole('button', { name: 'Not the same character' }),
+      link: within(decision).getByRole('button', { name: /link to this character/i }),
+      rejectReconciled: within(reconciled).getByRole('button', { name: 'Not the same character' }),
+      undo: within(reconciled).getByRole('button', { name: /^Undo "not Narrator"/ }),
+    };
+  }
+  const paused = (el: HTMLElement) => {
+    expect(el).toHaveAttribute('aria-disabled', 'true');
+    expect(el).toHaveAttribute('title', expect.stringMatching(/paused/i));
+  };
+
+  it('read-only: accept, link, reject and undo are disabled and call nothing; dismiss stays live', async () => {
+    renderIdentity(true);
+    const accept = await screen.findByTestId('merge-suggestion-merge');
+    paused(accept);
+    fireEvent.click(accept);
+    expect(screen.getByTestId('merge-suggestion-dismiss')).not.toHaveAttribute('aria-disabled');
+    const c = controls();
+    for (const el of [c.reject, c.link, c.rejectReconciled, c.undo]) {
+      paused(el);
+      fireEvent.click(el);
+    }
+    await Promise.resolve();
+    expect(api.acceptMergeSuggestion).not.toHaveBeenCalled();
+    expect(api.rejectOrphanMatch).not.toHaveBeenCalled();
+    expect(api.linkOrphanMatch).not.toHaveBeenCalled();
+    expect(api.undoRejectOrphanMatch).not.toHaveBeenCalled();
+  });
+
+  it('editable: the same controls are enabled', async () => {
+    renderIdentity(false);
+    expect(await screen.findByTestId('merge-suggestion-merge')).not.toHaveAttribute('aria-disabled');
+    const c = controls();
+    for (const el of [c.reject, c.link, c.rejectReconciled, c.undo]) {
+      expect(el).not.toHaveAttribute('aria-disabled');
+      expect(el).not.toBeDisabled();
+    }
+    fireEvent.click(c.link);
+    await waitFor(() => expect(api.linkOrphanMatch).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    ['link', 'linkOrphanMatch'],
+    ['reject', 'rejectOrphanMatch'],
+    ['undo', 'undoRejectOrphanMatch'],
+  ] as const)('a %s answered 409 book_busy takes the read-only path', async (control, fn) => {
+    vi.mocked(api.getBookBusy).mockResolvedValue(['analysis']);
+    try {
+      const store = renderIdentity(false);
+      await screen.findByTestId('merge-suggestion-merge');
+      vi.mocked(api[fn]).mockRejectedValueOnce(
+        Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }),
+      );
+      fireEvent.click(controls()[control]);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('cast-read-only'),
+      );
+      expect(store.getState().notifications.toasts.filter((t) => t.kind === 'error' && t.dedupeKey !== 'cast-read-only')).toEqual([]);
+      expect(store.getState().cast.analysisEra?.[BOOK]).toBeDefined();
+    } finally {
+      vi.mocked(api.getBookBusy).mockResolvedValue([]);
+    }
   });
 });

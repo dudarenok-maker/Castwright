@@ -95,3 +95,34 @@ describe('gender and ageRange selects', () => {
     expect(ageSelect.value).toBe('adult');
   });
 });
+
+/* P6-2 (PR #4103 pass 6) — the cast turned read-only while the form was open. */
+describe('createPaused', () => {
+  it('pauses the create submit: aria-disabled with the paused tooltip, and a click sends nothing', () => {
+    const onSubmit = vi.fn();
+    render(<CreateCharacterForm initial={{ name: 'Ferra' }} rosterByName={new Map()} onSubmit={onSubmit} onCancel={() => {}} createPaused />);
+    const submit = screen.getByTestId('create-character-submit');
+    expect(submit).toHaveAttribute('aria-disabled', 'true');
+    expect(submit).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(submit);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('leaves "Reattribute to an existing character" live (it writes no cast row)', () => {
+    const onReattributeExisting = vi.fn();
+    render(
+      <CreateCharacterForm
+        initial={{ name: 'Wren' }}
+        rosterByName={new Map([['wren', { id: 'wren', name: 'Wren' }]])}
+        onSubmit={() => {}}
+        onReattributeExisting={onReattributeExisting}
+        onCancel={() => {}}
+        createPaused
+      />,
+    );
+    const submit = screen.getByTestId('create-character-submit');
+    expect(submit).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(submit);
+    expect(onReattributeExisting).toHaveBeenCalledWith('wren');
+  });
+});

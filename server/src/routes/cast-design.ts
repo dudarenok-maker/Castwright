@@ -51,6 +51,7 @@ import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import {
+  DesignSlotTakenError,
   SeriesCloneRefusedError,
   VARIANT_EMOTIONS,
   designQwenVoiceForCharacter,
@@ -696,6 +697,7 @@ async function runDesignJob(
             language,
             emotion,
             persistSlot: !emotion,
+            skipIfSlotted: !emotion,
             refuseIfSeriesCloned: !emotion && hasDeclineMarker(character),
             signal: job.controller.signal,
           });
@@ -708,12 +710,20 @@ async function runDesignJob(
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
             /* F8 — not shared by the core (an unconfirmed book): this book only. */
-            const { updated, skipped } = await applyOverrideToCastFiles(
+            const { updated, skipped, keptOwnSlot } = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
               seriesShared ? seriesFilter : undefined,
               job.bookDir,
+              { bookDir: job.bookDir, characterId },
             );
+            /* #4031 -- a voice picked after the landing released its lock: the
+               override declined this row under the book's lock. */
+            if (keptOwnSlot) {
+              job.skipped += 1;
+              broadcast(job, { type: 'character_skipped', characterId });
+              break;
+            }
             /* Series-wide veto, mirroring the variant branch's own clone-skip
                reporting below: a cloned slot exists somewhere in the scope,
                caught fresh at write time (residual window after the upfront
@@ -759,6 +769,13 @@ async function runDesignJob(
           }
           break;
         } catch (e) {
+          /* #4031 -- a voice picked while the render ran, caught under the lock at the
+             landing: the same freshness skip as above, not a failure. */
+          if (e instanceof DesignSlotTakenError) {
+            job.skipped += 1;
+            broadcast(job, { type: 'character_skipped', characterId });
+            break;
+          }
           /* #4074 -- the landing refused the design (a clone on a row of its new uuid)
              before writing anything: the same skip as the early gate. */
           if (e instanceof SeriesCloneRefusedError) {

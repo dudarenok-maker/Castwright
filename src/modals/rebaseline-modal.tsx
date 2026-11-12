@@ -478,7 +478,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
                    so the next whole-roster PUT does not delete the takes on disk. */
                 qwen: { ...(cur.overrideTtsVoices?.qwen ?? {}), name: p.proposedVoiceId },
               },
-            }),
+            }, { routeBacked: true }),
           );
         }
         dispatch(rebaselineActions.proposalApplied({ characterId: p.characterId }));

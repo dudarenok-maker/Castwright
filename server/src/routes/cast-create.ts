@@ -28,6 +28,7 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 import { safeId } from '../util/safe-id.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { normaliseIdKey } from '../util/character-id.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castCreateRouter = Router();
 
@@ -59,6 +60,9 @@ castCreateRouter.post('/:bookId/cast/create', async (req: Request, res: Response
   /* #1981 — the read is inside the lock; the minted id and the whole
      `nextCharacters` build are decisions derived from it. */
   withCastLock(located.bookDir, async () => {
+    /* R55 — a new row changes the id set: refused while an analysis runs, inside this book-op span. */
+    const busy = castIdentityBusyRefusal(bookId);
+    if (busy) return res.status(409).json(busy);
     const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
     if (!cast?.characters) {
       return res.status(409).json({ error: 'Book has no cast.json yet. Confirm cast before adding.' });
