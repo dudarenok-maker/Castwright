@@ -18,6 +18,7 @@ import {
   probeListening,
   probeSidecarHealth,
   adoptCommittedCeilingMb,
+  rearmSidecarParent,
 } from './spawn-sidecar.js';
 import { readRestartBreadcrumb, type RestartBreadcrumbDevice } from './restart-breadcrumb.js';
 
@@ -391,6 +392,8 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
          (#3043 B1 — draining a sidecar we did not start is an ownership
          action, and there is no respawn behind it). */
       onAdoptExisting: (info) => onAdopt(info, base.autoStart),
+      /* #4054 — adopting a healthy owned sidecar re-arms its parent watch on us. */
+      rearmFn: rearmSidecarParent,
       /* D2 (#2037) — lets spawnSidecar's not-ours warning tell "our own
          just-exited child, still tearing down" from "a genuinely foreign
          listener" (one extra findPidFn call, log-only). */

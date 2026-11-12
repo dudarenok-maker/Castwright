@@ -17,7 +17,12 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSidecar, sidecarCeilingMismatch, findListenerPid } from './spawn-sidecar.js';
+import {
+  spawnSidecar,
+  sidecarCeilingMismatch,
+  findListenerPid,
+  rearmSidecarParent,
+} from './spawn-sidecar.js';
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -1775,5 +1780,74 @@ describe('findListenerPid — bounded with a deadline', () => {
     await expect(promise).resolves.toBeNull();
     expect(onDeadlineExpiry).toHaveBeenCalledTimes(1);
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* #4054 — "log, wait, then exit": a server that adopts a healthy sidecar tells it
+   so (POST /parent), which cancels the sidecar's pending grace exit. */
+describe('adopting a sidecar re-arms its parent watch (#4054)', () => {
+  const healthy = async () => ({
+    reachable: true,
+    looksLikeSidecar: true,
+    protocolVersion: 1,
+    committedMb: 9000,
+    recyclePending: false,
+  });
+  const base = () => ({
+    modelKey: 'kokoro-v1' as const,
+    repoRoot: process.cwd(),
+    port: 9000,
+    host: '127.0.0.1',
+    probeFn: vi.fn().mockResolvedValue(true),
+    healthProbeFn: vi.fn(healthy),
+    log: vi.fn(),
+    warn: vi.fn(),
+  });
+
+  it('calls rearmFn with host and port when it honours a healthy sidecar it owns', async () => {
+    const rearmFn = vi.fn(async () => {});
+    const onAdoptExisting = vi.fn();
+    await spawnSidecar({ ...base(), autoStart: true, rearmFn, onAdoptExisting });
+    expect(rearmFn).toHaveBeenCalledWith('127.0.0.1', 9000);
+    expect(onAdoptExisting).toHaveBeenCalled();
+  });
+
+  it('does not re-arm when auto-start is off (this server does not own the sidecar)', async () => {
+    const rearmFn = vi.fn(async () => {});
+    await spawnSidecar({ ...base(), autoStart: false, rearmFn });
+    expect(rearmFn).not.toHaveBeenCalled();
+  });
+
+  it('a rejecting rearmFn never fails the adoption', async () => {
+    const rearmFn = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const b = base();
+    await expect(spawnSidecar({ ...b, autoStart: true, rearmFn })).resolves.toBeNull();
+    expect(b.warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
+  });
+});
+
+describe('rearmSidecarParent (#4054)', () => {
+  it('POSTs this process pid and start time to /parent on the sidecar', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ armed: true }), { status: 200 }));
+    const out = await rearmSidecarParent('127.0.0.1', 9000, fetchImpl as unknown as typeof fetch);
+    expect(out).toEqual({ armed: true });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:9000/parent');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      pid: process.pid,
+      startMs: Math.round(performance.timeOrigin),
+    });
+  });
+
+  it('reports armed:false for a sidecar without the route (404) or a transport error, never throws', async () => {
+    const notFound = vi.fn(async () => new Response('', { status: 404 }));
+    expect(await rearmSidecarParent('h', 1, notFound as unknown as typeof fetch)).toEqual({ armed: false });
+    const down = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    });
+    expect(await rearmSidecarParent('h', 1, down as unknown as typeof fetch)).toEqual({ armed: false });
   });
 });

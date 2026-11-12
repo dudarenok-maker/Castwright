@@ -33,9 +33,17 @@ foreach ($name in $names) {
     $pidPath = Join-Path $runDir "$name.pid"
     if (-not (Test-Path $pidPath)) { continue }
     $raw = (Get-Content $pidPath -Raw -ErrorAction SilentlyContinue).Trim()
-    Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
     $procId = 0
-    if (-not [int]::TryParse($raw, [ref]$procId)) { continue }
+    $parsed = [int]::TryParse($raw, [ref]$procId)
+    # Judge identity BEFORE the file goes (#4054): a stale pid file's number may
+    # now belong to an unrelated process; never taskkill /T /F that.
+    $owner = if ($parsed) { Test-PidFileOwnsProcess -ProcessId $procId -PidFilePath $pidPath } else { 'unknown' }
+    Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
+    if (-not $parsed) { continue }
+    if ($owner -eq 'reused') {
+        Write-Status "[SKIP] $name pid=$procId was started after its pid file was written (pid reused by another process); not killing it"
+        continue
+    }
     # taskkill /T /F, judged by LIVENESS not by taskkill's exit code (E104:
     # /T exits 128 on a tree that is in fact gone) — see
     # Stop-ProcessTreeByLiveness in lib\log-utils.psm1.

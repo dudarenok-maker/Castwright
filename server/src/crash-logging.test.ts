@@ -251,6 +251,24 @@ describe('installExitLogging (#4054)', () => {
   });
 });
 
+describe('installExitLogging timestamp (#4054)', () => {
+  it('stamps the line in local time with the standard logger format', () => {
+    const target = new EventEmitter();
+    const write = vi.fn();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 12, 14, 5, 9, 7)); // local 2026-11-12 14:05:09.007
+    try {
+      installExitLogging({ target, write });
+      target.emit('exit', 1);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(String(write.mock.calls[0][0])).toMatch(
+      /^2026-11-12 14:05:09\.007 \[server\] process exit — exit code 1\n$/,
+    );
+  });
+});
+
 describe('installShutdownSignals (#4054)', () => {
   it('registers SIGINT, SIGTERM, SIGBREAK and SIGHUP', () => {
     const target = new EventEmitter();
@@ -279,7 +297,9 @@ describe('installShutdownSignals (#4054)', () => {
 describe('index.ts wiring (#4054)', () => {
   it('installs the exit line at boot and routes signals through installShutdownSignals', () => {
     const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/^installExitLogging\(\);$/m);
-    expect(src).toContain('installShutdownSignals(shutdown)');
+    // Strip comments first: a commented-out call must not satisfy the pin.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    expect(code).toMatch(/^installExitLogging\(\);$/m);
+    expect(code).toMatch(/^[ \t]*installShutdownSignals\(shutdown\);$/m);
   });
 });

@@ -31,11 +31,15 @@
  * so a stale process holding the port no longer takes the whole server down.
  *
  * console.* is already timestamp-patched (logger.installTimestamps), so the
- * messages here inherit the standard `YYYY-MM-DD HH:mm:ss.SSS [server]` stamp.
+ * console.* messages here inherit the standard `YYYY-MM-DD HH:mm:ss.SSS` local
+ * stamp. The one exception is the exit line (#4054, installExitLogging): it is a
+ * sync fd write that bypasses console, so it stamps itself with the same
+ * `formatTimestamp`.
  */
 
 import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { formatTimestamp } from './logger.js';
 
 export type CrashKind = 'uncaughtException' | 'unhandledRejection';
 
@@ -193,7 +197,7 @@ export function installExitLogging(hooks: ExitLoggingHooks = {}): void {
   const target = hooks.target ?? process;
   target.on('exit', (code: number) => {
     try {
-      write(`${new Date().toISOString()} [server] process exit — exit code ${code}\n`);
+      write(`${formatTimestamp(new Date())} [server] process exit — exit code ${code}\n`);
     } catch {
       /* stderr already closed; nothing left to tell */
     }
@@ -205,9 +209,10 @@ export interface ShutdownSignalHooks {
   target?: NodeJS.EventEmitter;
 }
 
-/** Route SIGINT/SIGTERM and — new in #4054 — SIGBREAK (Windows Ctrl+Break /
- *  console close) and SIGHUP (terminal hang-up) through the graceful shutdown.
- *  Unhandled, either of the last two terminates node with no line at all. */
+/** Route SIGINT/SIGTERM and — new in #4054 — SIGBREAK (Windows Ctrl+Break) and
+ *  SIGHUP (terminal hang-up; node on Windows delivers a console-window close as
+ *  SIGHUP, not SIGBREAK) through the graceful shutdown. Unhandled, either of the
+ *  last two terminates node with no line at all. */
 export function installShutdownSignals(
   shutdown: (signal: NodeJS.Signals) => void,
   hooks: ShutdownSignalHooks = {},
