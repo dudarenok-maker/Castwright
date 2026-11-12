@@ -1765,6 +1765,21 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
       const c = { version: ANALYSIS_CACHE_VERSION, chapters: {} } as never;
       expect(persistDecisionsTransform({})(c)).toBe(c);
     });
+    it('R54: a decision the run left unchanged and a route deleted from the file stays deleted; an added or changed one is sent', () => {
+      const bucket = { kind: 'join', rawId: 'unknown-male', priorId: 'unknown-male', tier: 'id' };
+      const anna = { kind: 'join', rawId: 'anna', priorId: 'anna', tier: 'id' };
+      const kai = { kind: 'new', rawId: 'kai', id: 'kai', minted: false, suggest: [], inheritedDeclines: [] };
+      const kaiMinted = { ...kai, id: 'kai-n1', minted: true };
+      const base = { 'unknown-male': bucket, anna, kai } as never;
+      /* The merge deleted the bucket's decision and, here, kai's; anna's is still on file. */
+      const out = persistDecisionsTransform(
+        { 'unknown-male': bucket, anna, kai: kaiMinted, zed: { ...kai, rawId: 'zed', id: 'zed' } } as never,
+        [],
+        base,
+      )(plan({ anna })) as { matchPlan: { decisions: Record<string, unknown> } };
+      expect(Object.keys(out.matchPlan.decisions).sort()).toEqual(['anna', 'kai', 'zed']);
+      expect(out.matchPlan.decisions.kai).toEqual(kaiMinted);
+    });
   });
 
   describe('resolveCurrentIds', () => {
@@ -3873,6 +3888,48 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
         const fresh = await runStartFresh(b, { roster: FRESH.roster, speakerId: two('anna', 'the-jogger') });
         expectFreshBucket(fresh, { anna: 5, 'unknown-male': 4 }, 'Start fresh');
       }
+    });
+
+    /* M-a (pass 4): a bucket that was live when its run planned it is decided `join
+       unknown-male`, and a re-run on that cached plan overlays the join. With a legacy
+       `unknown-male -> lord-vane` entry on disk and the bucket merged mid-run, the overlay's
+       resolver must not follow the entry (`followableHistory`): the run's lines never land on
+       Lord Vane. */
+    it('M-a: a live legacy-era bucket merged mid-run: the join is not followed through the legacy entry, which is displaced once the bucket returns', async () => {
+      const b = seed(
+        [
+          { ...NARR },
+          pr('anna', 'Anna'),
+          pr('lord-vane', 'Lord Vane', { voiceState: 'locked', aliases: ['Unknown male'] }),
+          pr('unknown-male', 'Unknown male', { role: 'minor', gender: 'male' }),
+        ],
+        undefined,
+        body,
+      );
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH, { phase1: script }))).toBe(true);
+      expect(readCache(b.manuscriptId)?.matchPlan?.decisions['unknown-male']).toMatchObject({ kind: 'join', priorId: 'unknown-male' });
+      /* The entry as this release's earlier commits kept it beside the live bucket (R49). */
+      writeHistory(b, { supersededBy: { 'unknown-male': 'lord-vane' }, supersededByKind: { 'unknown-male': 'user' } });
+      const m = mergeFromClassifier(b);
+      const merged = await go(b, FRESH, { seedCache: false, phase1: script });
+      setNonStoryHook(undefined);
+      expect(m.status()).toBe(200);
+      const afterMerge = m.target()!;
+      expect(errCode(merged)).toBeUndefined();
+      expect(done(merged)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator']);
+      expect(editLines(b)).toEqual({ anna: 3, narrator: 5 });
+      expectTargetUntouched(b, afterMerge, 'run 2');
+      /* The bucket is not live, so nothing reclaims the legacy entry yet. */
+      expect(history(b).supersededBy).toEqual({ 'unknown-male': 'lord-vane' });
+
+      const again = await go(b, FRESH, { seedCache: false, phase1: script });
+      expect(errCode(again)).toBeUndefined();
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+      expect(editLines(b)).toEqual({ anna: 3, 'unknown-male': 5 });
+      expectTargetUntouched(b, afterMerge, 'run 3');
+      expect(history(b).supersededBy).not.toHaveProperty('unknown-male');
+      expect((history(b) as { displaced?: Record<string, string> }).displaced?.['unknown-male']).toBe('lord-vane');
     });
 
     it('a run that folds nothing into the male bucket leaves the ledger entry the merge deleted deleted', async () => {

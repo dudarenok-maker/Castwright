@@ -1740,10 +1740,16 @@ function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknow
     overwrites that. A decision the file already holds is not re-written. The `new`
     decisions of the run rows the persist dropped (`droppedIds`, fold-dropped and untouched)
     go with their rows (PR #4103 pass 1 F3): left in the plan, a later subset's Phase-0a
-    snapshot would read the row as decided and write it back with 0 lines. */
+    snapshot would read the row as decided and write it back with 0 lines.
+    R54 (PR #4103 pass 4): `base` is the job's own copy of the plan, the one it started
+    from and last saved. A decision the persist left as `base` holds it, and which the file
+    no longer holds, was deleted by a route during the run (a fold-bucket merge, P2-1 (a))
+    and stays deleted: re-adding it would make every later run on the cache re-apply it.
+    A decision this persist added or changed is still sent. */
 export function persistDecisionsTransform(
   decisions: Readonly<Record<string, MatchDecision>>,
   droppedIds: ReadonlyArray<string> = [],
+  base?: Readonly<Record<string, MatchDecision>>,
 ): (c: AnalysisCache) => AnalysisCache {
   const dropped = new Set(droppedIds);
   const isDropped = (d: MatchDecision | undefined): boolean => d?.kind === 'new' && dropped.has(d.id);
@@ -1754,6 +1760,7 @@ export function persistDecisionsTransform(
       const f = onFile[k];
       if (f?.kind === 'join' && f.tier === 'merge') return false;
       if (isDropped(d)) return false;
+      if (f === undefined && base && Object.hasOwn(base, k) && JSON.stringify(base[k]) === JSON.stringify(d)) return false;
       return JSON.stringify(f) !== JSON.stringify(d);
     });
     const gone = Object.keys(onFile).filter((k) => isDropped(onFile[k]));
@@ -1776,7 +1783,7 @@ async function applyPlannedPersistOutcome(a: {
   log: (phaseId: number, message: string) => void;
 }): Promise<{ parked: unknown; unsentPatch?: CachePatch }> {
   const { out, cache, writeDir, retirementBookId, log } = a;
-  const withDecisions = persistDecisionsTransform(out.plan.decisions, out.droppedRunAdded);
+  const withDecisions = persistDecisionsTransform(out.plan.decisions, out.droppedRunAdded, cache.matchPlan?.decisions);
   const idMap = Object.fromEntries(Object.entries(out.idMap).filter(([k, v]) => k !== v));
   if (cache.matchPlan) Object.assign(cache, withDecisions(cache));
   /* #4031 (I2) — cast.json and the edits have landed: a cache fault here (ENOSPC, EPERM, a
