@@ -1136,7 +1136,7 @@ recite:
     file, an existing file's bytes and `rev` unchanged, no slot, no staged
     leftovers; then a follow-up run that must not read the refusal as done.
 
-89. **A "matches some past version" test that ignores order, so a revert to an
+91. **A "matches some past version" test that ignores order, so a revert to an
     older value reads as "behind"** — PR #4106 pass 1 (#4105): a live page whose
     row body equalled any older `origin/main` version of it was exempted as
     "merely behind main". The history is ordered, though, and a body main went
@@ -1151,6 +1151,8 @@ recite:
     question is really about a divergence point (behind, stale, already
     merged), compute it from the point (`merge-base`) rather than from a
     membership test over the history.
+    (Numbered 91: open PR #4103 holds 89 and 90; renumber on merge if the order
+    changes.)
 
 ### Keeping the catalogue current
 

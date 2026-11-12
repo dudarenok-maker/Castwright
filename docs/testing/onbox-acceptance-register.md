@@ -217,11 +217,14 @@ comparison, see the edge list above). The merge step that closes this, run
    drift, and the drift line names that commit (a version unreadable only for
    OTHER rows does not count; a deleted file is "row absent", not unreadable).
    The mirror image fails, decided from the merge base: when this branch has
-   not merged `origin/main`, any row whose tracked body is not main's and
-   whose body at `git merge-base HEAD origin/main` differs from main's
-   current one is refused, whatever the live page carries
-   (`branch-behind-main`, with the reason; a merge base that cannot be found
-   or read fails closed). The no-flag run also rejects a tracked live view
+   not merged the current `origin/main`, any tracked row that differs from
+   the live page and is not main's, and that main has since changed, added
+   after the base, or removed (a discharge) relative to
+   `git merge-base HEAD origin/main`, is refused unless the live page
+   already carries your tracked body (`branch-behind-main`, with the reason;
+   a row absent at the base and absent on main, your own new row, is never
+   refused; a merge base that cannot be found or read, as in a shallow
+   clone, fails closed). The no-flag run also rejects a tracked live view
    whose row markup the drift check cannot read. Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that

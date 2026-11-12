@@ -2195,9 +2195,49 @@ export function checkLiveView(
     }
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
-      if (publishedBody === undefined) continue;
       const trackedHash = hashRowContent(trackedBody);
-      const publishedHash = hashRowContent(publishedBody);
+      const publishedHash = publishedBody === undefined ? undefined : hashRowContent(publishedBody);
+      // #4105 (review passes 2-3): a branch that has not merged origin/main is
+      // behind it, and publishing a tracked row that differs from the page
+      // would put an older version back over a row main has since changed, or
+      // back over a row main has since REMOVED (a discharge). Decided from the
+      // MERGE BASE for EVERY tracked row, before the absent-from-page and
+      // absent-from-main exits below: refuse when the row is at the base and
+      // main lacks it or differs from it (a row absent at the base and absent
+      // on main is this lane's own new row: never refused), unless the tracked
+      // copy IS main's. A row main added after the base (a cherry-pick) has no
+      // body at the base and is refused when it differs from main's. A branch
+      // that merged the current main has `branchBase === undefined`. Where the
+      // merge base cannot be read FOR THIS ROW, or could not be found at all,
+      // this fails closed and says why.
+      if (branchBase !== undefined && baselineRowBodies !== null && trackedHash !== publishedHash) {
+        const mainBody = baselineRowBodies.get(id);
+        const mainHash = mainBody === undefined ? undefined : hashRowContent(mainBody);
+        let why = null;
+        if (trackedHash !== mainHash) {
+          if (branchBase.failed !== undefined) {
+            why = `could not establish where this branch diverged from origin/main: ${branchBase.failed}`;
+          } else if (branchBase.unknown(id)) {
+            why = `${id} cannot be read from the live view at the merge base ${branchBase.mergeBase.slice(0, 8)}`;
+          } else {
+            const atBase = branchBase.bodies.get(id);
+            if (mainBody === undefined) {
+              if (atBase !== undefined) {
+                why = `main removed ${id} since this branch's base ${branchBase.mergeBase.slice(0, 8)}`;
+              }
+            } else if (atBase === undefined || hashRowContent(atBase) !== mainHash) {
+              why = `main changed ${id} since this branch's base ${branchBase.mergeBase.slice(0, 8)}`;
+            }
+          }
+        }
+        if (why !== null) {
+          errors.push(
+            `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}${id}: branch behind origin/main for ${id}; ${branchBase.failed === undefined ? 'merge it first' : 'fetch full history first (the clone may be shallow or not share history with origin/main)'} (${why})`,
+          );
+          continue;
+        }
+      }
+      if (publishedBody === undefined) continue;
       if (trackedHash !== publishedHash) {
         // Hashes differ between tracked and published. Disambiguate using the baseline.
         if (baselineRowBodies === null) {
@@ -2211,35 +2251,6 @@ export function checkLiveView(
           continue;
         }
         const baselineHash = hashRowContent(baselineBody);
-        // #4105 (review pass 2): a branch that has not merged origin/main is
-        // behind it, and publishing a tracked row that differs from main's
-        // would put an older version back over a row main has since changed.
-        // Decided from the MERGE BASE, not from the history walk: refuse any
-        // row whose body there differs from main's body now and whose tracked
-        // copy is not main's — whatever the page carries (a revert, a page
-        // still behind, an already-current page all regress the same way).
-        // A branch that merged main has `branchBase === undefined`. Where the
-        // merge base cannot be read FOR THIS ROW, or could not be found at
-        // all, this fails closed and says why.
-        if (branchBase !== undefined && trackedHash !== baselineHash) {
-          let why = null;
-          if (branchBase.failed !== undefined) {
-            why = `could not establish where this branch diverged from origin/main: ${branchBase.failed}`;
-          } else if (branchBase.unknown(id)) {
-            why = `${id} cannot be read from the live view at the merge base ${branchBase.mergeBase.slice(0, 8)}`;
-          } else {
-            const atBase = branchBase.bodies.get(id);
-            if (atBase === undefined || hashRowContent(atBase) !== baselineHash) {
-              why = `main changed ${id} since this branch's base ${branchBase.mergeBase.slice(0, 8)}`;
-            }
-          }
-          if (why !== null) {
-            errors.push(
-              `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}${id}: branch behind origin/main for ${id}; merge it first (${why})`,
-            );
-            continue;
-          }
-        }
         if (trackedHash === baselineHash) {
           // #4105: after a merge the live page is usually just behind main. If
           // the published body is this row's body at an OLDER commit of
@@ -2669,15 +2680,18 @@ export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunne
 
 // #4105 (review pass 2): `checkLiveView`'s `options.branchBase`. Is this
 // branch missing commits `fetchedSha` (origin/main) has? `undefined` when it
-// is not (it contains main — merged it, or is ahead of it) or when git gives no
-// usable answer (`merge-base --is-ancestor` answers 1 for "not an ancestor";
-// any other status makes no claim). Otherwise the live view at the MERGE BASE:
-// `{ mergeBase, bodies, unknown }` (see `readLiveViewVersion`), or
-// `{ failed: reason }` when the merge base cannot be found, which the caller
-// treats as behind (fail closed).
+// is not (it contains main — merged it, or is ahead of it). Otherwise the live
+// view at the MERGE BASE: `{ mergeBase, bodies, unknown }` (see
+// `readLiveViewVersion`), or `{ failed: reason }` when git gives no usable
+// answer (`--is-ancestor` answers 0 or 1; a timeout or status 128 is neither)
+// or the merge base cannot be found, which the caller treats as behind (fail
+// closed).
 export function resolveBranchBase(repoRoot, liveViewPath, fetchedSha, gitRunner = runGitCommand) {
   const ancestor = gitRunner(['merge-base', '--is-ancestor', fetchedSha, 'HEAD'], repoRoot);
-  if (ancestor.status !== 1) return undefined;
+  if (!ancestor.error && ancestor.status === 0) return undefined;
+  if (ancestor.error || ancestor.status !== 1) {
+    return { failed: `git merge-base --is-ancestor gave no answer (${ancestor.error ? 'did not complete' : `exit ${ancestor.status}`})` };
+  }
   const base = gitRunner(['merge-base', 'HEAD', fetchedSha], repoRoot);
   const mergeBase = typeof base.stdout === 'string' ? base.stdout.trim() : '';
   if (base.error || base.status !== 0 || mergeBase === '') {
@@ -3759,11 +3773,11 @@ function runCheckOnboxRegisterCli() {
       if (branchBehindMainErrors.length > 0) {
         publishedFailed =
           report(
-            `This branch is behind origin/main: ${LIVE_VIEW} carries an older version of a row than the live page`,
+            `This branch is behind origin/main: ${LIVE_VIEW} carries rows main changed since this branch's base`,
             branchBehindMainErrors,
           ) || publishedFailed;
         console.error(
-          'Do not publish. Merge origin/main into this branch, re-run the register build and this command; ' +
+          'Do not publish. Merge the current origin/main into this branch (a shallow clone needs full history first), re-run the register build and this command; ' +
             "publishing now would put the older row text back over main's current one.",
         );
       }

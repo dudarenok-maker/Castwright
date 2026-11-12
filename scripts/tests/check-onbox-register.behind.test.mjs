@@ -280,7 +280,9 @@ test('#4105 pass 2: a row main did not change since the base, a tracked copy equ
 test('#4105 pass 2: a merge base that cannot be established, or whose row cannot be read, fails closed and says why', () => {
   assert.deepEqual(
     baseCheck({ tracked: 'v1', published: 'v2', baseline: 'v2', branchBase: { failed: 'git merge-base failed' } }),
-    [BEHIND_ERR('could not establish where this branch diverged from origin/main: git merge-base failed')],
+    [
+      `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}A1: branch behind origin/main for A1; fetch full history first (the clone may be shallow or not share history with origin/main) (could not establish where this branch diverged from origin/main: git merge-base failed)`,
+    ],
   );
   const unreadable = { ...baseAt('v1'), unknown: () => true };
   assert.deepEqual(
@@ -335,10 +337,14 @@ test('#4105 pass 2 P10: one unparseable version of an UNRELATED row keeps the st
   );
 });
 
-test('#4105 pass 2: resolveBranchBase answers undefined for a branch that contains main, and for a git failure it cannot interpret', () => {
+test('#4105 pass 3: resolveBranchBase answers undefined for a branch that contains main; any git answer other than 0 or 1 fails closed', () => {
   withViews([{ html: twoRowView('v1') }, { html: twoRowView('v2') }], (repo, head) => {
     assert.equal(resolveBranchBase(repo, LV, head, provRunner), undefined);
-    assert.equal(resolveBranchBase(repo, LV, head, () => ({ status: 128, stdout: '', stderr: 'fatal' })), undefined);
+    for (const answer of [{ status: 128, stdout: '', stderr: 'fatal' }, { status: null, error: new Error('ETIMEDOUT') }, { status: null }]) {
+      // Only the ancestry question gets the bad answer; the merge base itself is readable.
+      const got = resolveBranchBase(repo, LV, head, (args, cwd) => (args.includes('--is-ancestor') ? answer : provRunner(args, cwd)));
+      assert.equal(typeof got?.failed, 'string', JSON.stringify(answer));
+    }
   });
 });
 
@@ -486,4 +492,141 @@ test('#4105 pass 2 (M8) CLI: run from a branch whose OWN history carries the liv
     assert.ok(res.stderr.includes('row-content-drift: B101'), res.stderr);
     assert.ok(!res.stderr.includes('live = main@'), res.stderr);
   });
+});
+
+// ===========================================================================
+// PR #4106 review pass 3.
+// ===========================================================================
+
+// A multi-row CLI page: rows = { 101: 'body', 102: 'x' }.
+let pass3PrNumber = 0;
+function rowsPage(repo, nonce, rows) {
+  mkdirSync(join(repo, 'docs', 'testing'), { recursive: true });
+  const nums = Object.keys(rows).map(Number).sort((a, b) => a - b);
+  const html = buildRowContentLiveView(nums.map((k) => ({ id: `B${k}`, body: rows[k], title: `title B${k}` })), 'B').replace(
+    '<title>',
+    `<div hidden data-published-as="1" data-publish-id="${nonce}"></div>\n<title>`,
+  );
+  writeFileSync(join(repo, PROV_LIVE), html);
+  writeFileSync(join(repo, PROV_REGISTER), buildSingleGroupRegister('B', nums, 110));
+  return html;
+}
+function rowsCommit(repo, nonce, rows) {
+  const html = rowsPage(repo, nonce, rows);
+  provGit(repo, 'add', '-A');
+  provGit(repo, 'commit', '-qm', `Merge pull request #${++pass3PrNumber} from x/y`);
+  return html;
+}
+const refusedFor = (res, id, reason) =>
+  res.status === 1 && res.stderr.includes(`branch behind origin/main for ${id}; merge it first (${reason}`);
+
+test('#4105 pass 3 N4 CLI: main discharged (removed) a row and published; a lane cut earlier that still carries it is refused', () => {
+  withCliRepo((repo, cli) => {
+    rowsCommit(repo, 'm0001', { 101: 'v1', 102: 'x', 103: 'owed row' });
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-lane');
+    rowsCommit(repo, 'l0001', { 101: 'LANE', 102: 'x', 103: 'owed row' });
+    provGit(repo, 'switch', '-q', 'main');
+    const discharged = rowsCommit(repo, 'm0002', { 101: 'v1', 102: 'x' });
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    provGit(repo, 'switch', '-q', 'fix/server-lane');
+    const res = cli(['--against-published', cliSaved(repo, 'live.saved.html', discharged)]);
+    assert.ok(refusedFor(res, 'B103', "main removed B103 since this branch's base"), `${res.stdout}\n${res.stderr}`);
+  });
+});
+
+test('#4105 pass 3 N4b CLI: same removal, the lane only edited another row — the removed row is still refused', () => {
+  withCliRepo((repo, cli) => {
+    rowsCommit(repo, 'm0001', { 101: 'v1', 102: 'x', 103: 'owed row' });
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-lane');
+    rowsCommit(repo, 'l0001', { 101: 'v1', 102: 'LANE', 103: 'owed row' });
+    provGit(repo, 'switch', '-q', 'main');
+    const discharged = rowsCommit(repo, 'm0002', { 101: 'v1', 102: 'x' });
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    provGit(repo, 'switch', '-q', 'fix/server-lane');
+    const res = cli(['--against-published', cliSaved(repo, 'live.saved.html', discharged)]);
+    assert.ok(refusedFor(res, 'B103', "main removed B103 since this branch's base"), `${res.stdout}\n${res.stderr}`);
+  });
+});
+
+test('#4105 pass 3 CLI: a row only the lane added (absent at the base, absent on main) is never refused', () => {
+  withCliRepo((repo, cli) => {
+    rowsCommit(repo, 'm0001', { 101: 'v1', 102: 'x' });
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-lane');
+    rowsCommit(repo, 'l0001', { 101: 'v1', 102: 'x', 104: 'lane new row' });
+    provGit(repo, 'switch', '-q', 'main');
+    const v2 = rowsCommit(repo, 'm0002', { 101: 'v2', 102: 'x' });
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    provGit(repo, 'switch', '-q', 'fix/server-lane');
+    const res = cli(['--against-published', cliSaved(repo, 'live.saved.html', v2)]);
+    assert.ok(!res.stderr.includes('branch behind origin/main for B104'), `${res.stdout}\n${res.stderr}`);
+  });
+});
+
+test('#4105 pass 3 CP CLI: a row main added after the base (the lane cherry-picked an earlier version of it) and then changed is refused', () => {
+  withCliRepo((repo, cli) => {
+    rowsCommit(repo, 'm0001', { 101: 'v1', 102: 'x' });
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-k');
+    rowsCommit(repo, 'k0001', { 101: 'v1', 102: 'x', 105: 'K1' });
+    const k1 = provGit(repo, 'rev-parse', 'HEAD').trim();
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-lane', 'main');
+    provGit(repo, 'cherry-pick', k1);
+    provGit(repo, 'switch', '-q', 'fix/server-k');
+    rowsCommit(repo, 'k0002', { 101: 'v1', 102: 'x', 105: 'K2' });
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'merge', '-q', '--no-ff', '--no-edit', 'fix/server-k');
+    const live = rowsCommit(repo, 'm0003', { 101: 'v1', 102: 'x', 105: 'K2' });
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    provGit(repo, 'switch', '-q', 'fix/server-lane');
+    const res = cli(['--against-published', cliSaved(repo, 'live.saved.html', live)]);
+    assert.ok(refusedFor(res, 'B105', "main changed B105 since this branch's base"), `${res.stdout}\n${res.stderr}`);
+  });
+});
+
+test('#4105 pass 3 Q10: v1 -> v3 -> v2 -> v1 with the live page at v2 — main went back to v1 after v2, so the page is not merely behind', () => {
+  // Oldest first. v2 matches the page; v1 (main's body now) occurs AFTER it,
+  // two versions on, beyond a one-version look-ahead.
+  withViews(
+    [{ html: twoRowView('v1') }, { html: twoRowView('v3') }, { html: twoRowView('v2') }, { html: twoRowView('v1') }],
+    (repo, head) => {
+      assert.deepEqual(rowCheck({ repo, head, published: 'v2', current: 'v1' }), [DRIFT_A1]);
+    },
+  );
+});
+
+test('#4105 pass 3 Q8: a shallow clone with no merge base fails closed, and the advice fits a shallow clone', () => {
+  const root = mkdtempSync(join(tmpdir(), 'onbox-shallow-'));
+  try {
+    const origin = join(root, 'origin.git');
+    const seed = join(root, 'seed');
+    const clone = join(root, 'clone');
+    provGit(root, 'init', '-q', '--bare', '-b', 'main', origin);
+    mkdirSync(seed);
+    provGit(seed, 'init', '-q', '-b', 'main');
+    provGit(seed, 'config', 'user.email', 'test@example.com');
+    provGit(seed, 'config', 'user.name', 'Test');
+    provGit(seed, 'config', 'commit.gpgsign', 'false');
+    provGit(seed, 'remote', 'add', 'origin', origin);
+    for (const [i, body] of ['v1', 'v2', 'v3'].entries()) {
+      writeFileSync(join(seed, LV), view(body));
+      provGit(seed, 'add', LV);
+      provGit(seed, 'commit', '-qm', `Merge pull request #${i + 1} from x/y`);
+    }
+    provGit(seed, 'push', '-q', 'origin', 'main');
+    // A depth-1 clone holds only v3; origin then moves on and a depth-1 fetch
+    // brings a tip whose parent this clone does not have: no merge base.
+    provGit(root, 'clone', '-q', '--depth', '1', `file://${origin.replace(/\\/g, '/')}`, clone);
+    writeFileSync(join(seed, LV), view('v4'));
+    provGit(seed, 'add', LV);
+    provGit(seed, 'commit', '-qm', 'Merge pull request #4 from x/y');
+    provGit(seed, 'push', '-q', 'origin', 'main');
+    provGit(clone, 'fetch', '-q', '--depth', '1', 'origin', 'main');
+    const tip = provGit(clone, 'rev-parse', 'FETCH_HEAD').trim();
+    const got = resolveBranchBase(clone, LV, tip, provRunner);
+    assert.equal(typeof got?.failed, 'string', JSON.stringify(got));
+    const errors = baseCheck({ tracked: 'v1', published: 'v2', baseline: 'v2', branchBase: got });
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0], /fetch full history first \(the clone may be shallow/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
