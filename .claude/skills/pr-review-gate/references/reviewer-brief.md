@@ -1157,6 +1157,22 @@ recite:
     the jobs' three readers; a comparator in a new file, or in one its caller
     feeds the prior rows to, passes it, so look for that by reading.
 
+90. **A send-only-what-changed delta taken against a base that the same job's
+    earlier write already moved** — PR #4103 pass 4 (P4-1, #4031): the main
+    job's terminal ledger write sent `ledgerDelta(ledgerBeforePersist,
+    addedOnce)`. The persist itself had just written the bucket's entry as
+    `run-owned`, so the terminal `added-once` equalled the job's pre-persist
+    copy and was never sent, while `clearLedger` in the same op deleted the
+    `run-owned` entry: the row lost its R4 mark and the next run re-minted its
+    decision. Its twin is a send-everything write that re-adds what a route
+    deleted mid-run (R54: the persist wrote back a bucket decision the merge
+    route had deleted). Checkable: for every delta or full write, name its
+    base and list every write to the same file since that base was taken,
+    including the job's own and the routes it races; an entry this write
+    produced is always sent, and one it only carried is sent only if changed.
+    Test with an entry whose new value equals the stale base after an earlier
+    write moved the file, then assert on the file, not the job's copy.
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
