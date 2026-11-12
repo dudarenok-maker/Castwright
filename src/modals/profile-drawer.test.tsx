@@ -6,6 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
+import { notificationsSlice, selectToasts } from '../store/notifications-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
@@ -140,6 +141,7 @@ function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {
       voiceLibrary: voiceLibrarySlice.reducer,
       analysis: analysisSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      notifications: notificationsSlice.reducer,
     },
     preloadedState: myVoices
       ? { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } }
@@ -1958,6 +1960,45 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
       { engine: 'qwen', name: 'qwen-halloran' },
       { scope: 'series', bookId: 'book-1' },
     );
+  });
+
+  /* #4104 — the series write is fire-and-forget: a refusal must still tell the
+     user, while the open book's own save (onSave) is kept. */
+  async function saveWithSeriesWriteRejecting(err: Error) {
+    setVoiceOverride.mockClear();
+    setVoiceOverride.mockRejectedValueOnce(err);
+    const onSave = vi.fn();
+    const char = { ...baseChar, voiceId: 'v_hal', voiceStyle: 'a steady adult voice' };
+    const { store } = renderWithBook(char, onSave);
+    selectQwen();
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    store.dispatch(castActions.setCharacters([char]));
+    store.dispatch(castActions.setQwenOverrideName({ characterId: 'halloran', voiceId: 'qwen-halloran' }));
+    await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    return { store, onSave };
+  }
+
+  it('on Save, a clone-refused series write tells the user and keeps the local save', async () => {
+    const refusal = Object.assign(new Error('Voice has a consented cloned voice'), { status: 409 });
+    const { store, onSave } = await saveWithSeriesWriteRejecting(refusal);
+    await waitFor(() =>
+      expect(selectToasts(store.getState()).map((t) => t.message)).toEqual([
+        'Saved for this book. Other books in the series kept their cloned voice.',
+      ]),
+    );
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('on Save, any other series-write failure shows a generic failure message', async () => {
+    const { store, onSave } = await saveWithSeriesWriteRejecting(new Error('network down'));
+    await waitFor(() =>
+      expect(selectToasts(store.getState()).map((t) => t.message)).toEqual([
+        'Saved for this book, but the voice could not be applied to the rest of the series.',
+      ]),
+    );
+    expect(onSave).toHaveBeenCalledTimes(1);
   });
 
   it('hides the preset Model voice picker while Qwen is selected', async () => {

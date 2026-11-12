@@ -38,6 +38,7 @@ import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppDispatch, useAppSelector } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { voicesActions } from '../store/voices-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { VoicePreviewButton } from '../components/voice-preview-button';
@@ -2268,10 +2269,23 @@ export function ProfileDrawer({
                     { engine: 'qwen', name: qwenVoiceId },
                     { scope: 'series', bookId },
                   )
-                  .catch(() => {
-                    /* The next cast hydrate reconciles a failed write; the
-                       drawer-local error surface already covered the design
-                       step, so a swallow here keeps Save snappy. */
+                  .catch((err: unknown) => {
+                    /* The open book's own save (onSave below) stands either
+                       way. A 409 from this route is always a consented-clone
+                       refusal (#4104): the other books keep their clone, so
+                       say so. Any other failure is told too, rather than
+                       swallowed. A toast, not drawer state, since Save
+                       closes the drawer. */
+                    const refused = (err as { status?: number } | null)?.status === 409;
+                    dispatch(
+                      notificationsActions.pushToast({
+                        kind: refused ? 'info' : 'error',
+                        message: refused
+                          ? 'Saved for this book. Other books in the series kept their cloned voice.'
+                          : 'Saved for this book, but the voice could not be applied to the rest of the series.',
+                        dedupeKey: `series-voice-override-${character.id}`,
+                      }),
+                    );
                   });
               }
               onSave(next, { hadConflict: hasConflict });
