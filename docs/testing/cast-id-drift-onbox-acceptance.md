@@ -1154,7 +1154,10 @@ with per-phase models set (the pipelined path).
    paused"; rename, drawer Save and voice assign are disabled; the link-prior and
    duplicate-review controls are disabled. Mid-run, design a voice for a
    different character through the voice route (profile drawer, Design voice):
-   it works (it is a cast write that stays live, with merges and accept/dismiss).
+   it works (it is a cast write that stays live, with a dismissal). Then try a
+   merge (the drawer's merge or downgrade): it is refused with the "Re-analysis
+   running — that change wasn't saved" toast and changes nothing on disk
+   (plan 291 R55).
 
    Result (pass 1): _______________________________________________________
    Result (pass 2): _______________________________________________________

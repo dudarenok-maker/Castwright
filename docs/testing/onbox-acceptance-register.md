@@ -736,12 +736,17 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-11 (#4031, plan 291), 77 → 78.** Row **B109** (re-analysis only adds
+> **Last change: 2026-11-12 (#4031, PR #4103 pass 5), owed count unchanged.** Row **B109**
+> amended (plan 291 R55): a merge or an accepted suggested merge is refused while the run is
+> going, so the row now observes that refusal; designing a voice stays the live mid-run write.
+> No row added or removed; `next-id` unchanged.
+>
+> **Previous change: 2026-11-12 (#4079, PR #4093), owed count unchanged.** Row **A122** gets a run flag for the 1.7B-tier lifecycle fix (chapter 2 completes at Quality, the lease defers the 1.7B-Base idle watchdog, a Standard render takes none); the refused-own-line Kokoro free was not observed. The row stays owed; no row added or removed; `next-id` unchanged.
+>
+> **Previous change: 2026-11-11 (#4031, plan 291), 77 → 78.** Row **B109** (re-analysis only adds
 > to a real voiced cast, the cast is read-only with a banner until it reloads, Start fresh keeps
 > every decision, a stop and resume match a straight run) added. Group B 9 → 10. `next-id`
 > bumped B109 → B110 in the same change. Row is owed; not run here.
->
-> **Previous change: 2026-11-12 (#4079, PR #4093), owed count unchanged.** Row **A122** gets a run flag for the 1.7B-tier lifecycle fix (chapter 2 completes at Quality, the lease defers the 1.7B-Base idle watchdog, a Standard render takes none); the refused-own-line Kokoro free was not observed. The row stays owed; no row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-11 (#4066, #4037, #4075, PR #4076), owed count unchanged.** Rows **A120** and **A122** run on the box and recorded in new flags (A122 on 2026-11-10 through the HTTP API, A120 run 2 on 2026-11-10 through the browser and the API); both rows stay owed. A122 bullet 7 is amended to state the accepted early-eviction residual (#4075), and A120 steps 6, 13 and 17 are reworded to match what the run showed. No row added or removed; `next-id` unchanged.
 >
@@ -6750,8 +6755,9 @@ The similarly-named-character case ("Brann" and "Brann Weir") is not a bullet he
 
 ### B109 · Re-analysis only adds to a real voiced cast, and the cast is read-only until it reloads ([#4031](https://github.com/dudarenok-maker/Castwright/issues/4031), plan [291](../features/291-reanalysis-single-matcher.md)) · **a real local Ollama analyzer and the Qwen TTS sidecar (VoiceDesign); a real voiced book with a merge, a dismissed suggestion and a locked name-joined character**
 
-Plan 291 replaced four fresh-to-prior matchers with one (`matchFreshToPrior`) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy `.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json` first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). **Mid-run, design a voice for another character through the voice route** (profile drawer, Design voice), because that is a cast write that stays live (merges, accept/dismiss and Voices compare are route-backed and stay live too). Observe:
+Plan 291 replaced four fresh-to-prior matchers with one (`matchFreshToPrior`) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy `.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json` first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). **Mid-run, design a voice for another character through the voice route** (profile drawer, Design voice), because that is a cast write that stays live (a dismissal and Voices compare stay live too). Merging characters and accepting a suggested merge are refused while the run is going (plan 291 R55). Observe:
 - the Cast, Voices and Confirm views show "Re-analysis running — cast edits are paused", and rename, drawer Save and voice assign are disabled while designing a voice still works; the banner clears and the controls come back only after the cast reloads;
+- a merge tried mid-run (the drawer's merge or downgrade, or from a second device) is refused with the "Re-analysis running — that change wasn't saved" toast and changes nothing on disk;
 - the diff of the three files holds only additions plus the route-given voice: no character is lost, renamed, merged or split, and the locked character is fully intact (voice, name, aliases, links);
 - new `cast-id-history` entries are tagged `analyzer`, `displaced` does not grow, and the run raises no `attribution_drift`;
 - a name the analyzer returns that is ambiguous gives a new row plus a suggestion, and the dismissed suggestion does not come back;

@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="112" data-publish-id="01e444dc3eae"></div>
+  <div hidden data-published-as="113" data-publish-id="ace092d31793"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -1042,9 +1042,10 @@
     <details class="item">
       <summary><span class="num">B109</span><span class="iname">Re-analysis only adds to a real voiced cast, and the cast is read-only until it reloads</span><span class="risk">a real local Ollama analyzer and the Qwen TTS sidecar (VoiceDesign); a real voiced book with a merge, a dismissed suggestion and a locked name-joined character</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Plan 291 replaced four fresh-to-prior matchers with one (<code>matchFreshToPrior</code>) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy <code>.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json</code> first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). <b>Mid-run, design a voice for another character through the voice route</b> (profile drawer, Design voice), because that is a cast write that stays live (merges, accept/dismiss and Voices compare are route-backed and stay live too). Observe:</p>
+        <p>Plan 291 replaced four fresh-to-prior matchers with one (<code>matchFreshToPrior</code>) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy <code>.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json</code> first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). <b>Mid-run, design a voice for another character through the voice route</b> (profile drawer, Design voice), because that is a cast write that stays live (a dismissal and Voices compare stay live too). Merging characters and accepting a suggested merge are refused while the run is going (plan 291 R55). Observe:</p>
         <ul>
         <li>The Cast, Voices and Confirm views show &#8220;Re-analysis running &#8212; cast edits are paused&#8221;, and rename, drawer Save and voice assign are disabled while designing a voice still works; the banner clears and the controls come back only after the cast reloads.</li>
+        <li>A merge tried mid-run (the drawer&#8217;s merge or downgrade, or from a second device) is refused with the &#8220;Re-analysis running &#8212; that change wasn&#8217;t saved&#8221; toast and changes nothing on disk.</li>
         <li>The diff of the three files holds only additions plus the route-given voice: no character is lost, renamed, merged or split, and the locked character is fully intact (voice, name, aliases, links).</li>
         <li>New <code>cast-id-history</code> entries are tagged <code>analyzer</code>, <code>displaced</code> does not grow, and the run raises no <code>attribution_drift</code>.</li>
         <li>A name the analyzer returns that is ambiguous gives a new row plus a suggestion, and the dismissed suggestion does not come back.</li>

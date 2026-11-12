@@ -390,16 +390,17 @@ snapshot.
     `unknown-male` / `unknown-female` row joins only a live prior row with its own id, never by
     history, name or surname; otherwise it is a `new` row under its bucket id. Merging a bucket
     into a character stays allowed, and is a one-shot per-book reassignment (R53, item 22): the
-    bucket's lines move to the character in this book, nothing records the merge, and later
-    re-analyses put their background lines on a fresh bucket. A legacy `unknown-* -> X` entry is
-    never followed, and is displaced when the bucket comes back live. *Superseded for buckets
+    bucket's lines move to the character in this book, the merge's history entry is render-only
+    (R56, item 25), and later re-analyses put their background lines on a fresh bucket. An
+    `unknown-* -> X` entry is never followed, and is displaced when the bucket comes back live. *Superseded for buckets
     by R53:* pass 1's "ignored for matching, not displaced". The merge route deletes a bucket
     source's cached plan decisions instead of re-targeting them, and the persist counts a bucket
     row as covered only by a decision that outputs its own id (PR #4103 pass 2 P2-1). A merge
     that lands while a run is going is, for that run, a delete of the bucket: its background
-    lines go to the narrator (rule 13). This is reachable only from a second device or a direct
-    API call, since the analysing tab disables merge. The next run adds a fresh bucket, because
-    neither the merge's ledger delete nor its decision delete is written back (pass 3 P3-1, R54).
+    lines go to the narrator (rule 13). Since R55 (item 24) the server refuses that merge with
+    409 `book_busy` while the run is registered, so this is reachable only for an unregistered
+    run and is kept as defence in depth. The next run adds a fresh bucket, because neither the
+    merge's ledger delete nor its decision delete is written back (pass 3 P3-1, R54).
     *Superseded by R53:* pass 3's overlay branches that re-added a merged-away bucket through
     the history record.
 21. **R50 — Start fresh carries the run ledger** (PR #4103 pass 1 F2). `addedRows` and
@@ -415,6 +416,7 @@ snapshot.
       and drops its cached decisions and ledger entry.
     - It writes no `supersededBy` entry and no other retirement. The bucket id is a shared slot,
       not a persisted character identity, so #2040's retirement rule does not apply.
+      *Superseded by R56 (item 25):* the merge retires the bucket again, render-only.
     - Legacy `unknown-* -> X` entries are never followed by the matcher, the plan, the persist
       overlay, the mid-run collapse or `retireCharacterId`'s target dereference. The one rule
       that enforces this is `followableHistory` in `cast-id-history.ts`.
@@ -429,6 +431,34 @@ snapshot.
     its persist wrote, and takes the delta only for entries the run merely carried.
     - The principle: a write never takes its delta against a base that an earlier write already
       moved.
+24. **R55 — a cast-identity write is refused while an analysis runs** (owner, 2026-11-12, PR #4103
+    pass 5). While an analysis job is registered for the book (`runBookJob`, the signal the cast
+    PUT's 409 uses), every route whose write changes the roster's id set or writes merge /
+    `supersededBy` history answers 409 `book_busy`.
+    - Refused: `POST /cast/merge` (a downgrade included), `merge-suggestions/accept`,
+      `link-orphan-match`, `reject-orphan-match` (POST and DELETE), `unlink-alias`,
+      `cast/create` and `add-from-roster`. A character delete is a whole-slice cast PUT, already
+      refused.
+    - Live: voice design and assign, Voices compare, decline-voice-link, dismiss-suggestion,
+      `add-alias`, `repoint-alias`, `not-linked-to`, `link-prior`, voice style, the tier pin and
+      the series patch. None changes the id set or the identity history.
+    - The check (`castIdentityBusyRefusal`, `book-state.ts`) sits inside each write's own
+      book-op span, so a job cannot register between the check and the write.
+    - The client takes the refused cast PUT's path for a merge or accept 409
+      (`handleCastIdentityBusy`, `cast-gate.ts`): the read-only toast, the era latched, a
+      re-read once the run is over.
+    - Consequences: P5-1 (A1 and A2) and the #4098 cast-side windows are unreachable through any
+      route for a registered job. `collapseMidRunMerges`, R54 and P4-1 stay as defence in depth.
+      Acceptance 13 and 23 are amended.
+25. **R56 — a bucket merge records `supersededBy` again; matching still ignores it** (owner,
+    2026-11-12, PR #4103 pass 5). This reverses R53's "no record" half only.
+    - `POST /cast/merge` with a catch-all source calls `retireCharacterId` again, as on `main`.
+      `buildCastResolver` resolves the bucket's rendered segments, and those of a row downgraded
+      into it earlier (the retirement repoints that row's entry), to the merge target.
+    - `followableHistory()` keeps the entry inert for matching, planning and retirement, and the
+      reclaim displaces it when the bucket returns.
+    - R53's other halves stand: the plan decisions and the ledger entry are dropped, and the
+      merge is one-shot for later runs.
 
 ---
 
@@ -1190,6 +1220,11 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
 - **Add character** (`cast-create`);
 - **rebaseline** (`rebaseline-modal.tsx:427-452`).
 
+*Amended by R55 (item 24):* these controls stay offered, but the server refuses the cast-identity
+ones (merge, suggestion accept, link-orphan, reject-orphan, unlink-alias, Add character, and
+add-from-roster) with 409 `book_busy` while the run is registered; a merge or accept refusal
+takes the read-only toast path (`handleCastIdentityBusy`).
+
 **Item 4 — link-prior is disabled while read-only** (link-prior, and
 `duplicate-review-modal.tsx:135`).
 - *Reason:* `cast-link-prior.ts:251-291` writes only the source book's cast. The current book's
@@ -1813,9 +1848,9 @@ chapter splitting, and the fe-11 class (tabs that missed the run). `remapCjkHono
 
 Shipped date and merge SHA: (filled in on merge, when this plan moves to `archive/`).
 
-- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50, R53, R54) are
-  recorded under *Spec conflicts found* above; the spec's acceptance 14, 20 and 24 and its
-  "New UI" non-goal are amended to match.
+- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50, R53, R54,
+  R55, R56) are recorded under *Spec conflicts found* above; the spec's acceptance 13, 14, 20,
+  23 and 24 and its "New UI" non-goal are amended to match.
 - On-box acceptance owed: one Group B row (B109) in `docs/testing/onbox-acceptance-register.md`
   (run sheet `docs/testing/cast-id-drift-onbox-acceptance.md`).
 - Rollback: not data-safe on its own (see *Architectural impact*): revert, then Start fresh (old
@@ -1848,7 +1883,9 @@ Acceptance 1–25).
   - The server refuses the whole-slice cast PUT with 409 `book_busy` (the existing shape). The
     client toasts, latches the era, and re-hydrates.
   - Edit controls are disabled behind a banner (UX only); route-backed controls stay live;
-    link-prior is disabled.
+    link-prior is disabled. Since R55 the server refuses the cast-identity routes (merge,
+    accept, orphan link and reject, unlink-alias, Add character, add-from-roster) with 409
+    `book_busy` while the run is registered.
   - Rule 11 compares disk against the job's own **last** write before each write, then refreshes
     the fingerprint. The main job's ledger is cached; the subset job keeps its own and refreshes
     `addedRows` entries for the rows it writes.

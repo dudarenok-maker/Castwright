@@ -500,8 +500,11 @@ the suggestions store:
     - A dismissal survives a re-analysis (reconcile included), a Start fresh,
       and a later merge of one of the two into a third character.
     - The pair is not re-suggested.
-13. **Mid-run user writes.** A merge and a dismissal made during a run survive
-    the next interim snapshot and the persist.
+13. **Mid-run user writes.** A dismissal made during a run survives the next
+    interim snapshot and the persist. A mid-run identity write (a merge, an
+    accepted suggestion, an orphan link or reject, an unlinked alias, a new
+    character) is refused with 409 `book_busy`. (Amended by plan 291, ruling
+    R55.)
 14. **Stopped run.**
     - Stopped after snapshots and never resumed: the cast is only extended,
       and a user edit made on a new row survives.
@@ -537,8 +540,11 @@ the suggestions store:
     - An `analyzer` entry is not: a later ambiguous name gives a suggestion.
 22. **Legacy cache.** A cache without the current version is a miss, and the
     resume re-runs from the analyzer.
-23. **Mid-run merge, other files.** After a mid-run merge, the rolled
-    `manuscript-edits.json` and the cache carry the survivor id.
+23. **Mid-run merge, other files.** A mid-run identity write is refused with
+    409 `book_busy`, so no file changes. A merge that still reaches a run (one
+    that runs unregistered) leaves the rolled `manuscript-edits.json` and the
+    cache carrying the survivor id, as defence in depth. (Amended by plan 291,
+    ruling R55.)
 24. **Drift-refused run.** It writes no suggestions. The ones it wrote
     transiently at the Phase-0b snapshot are removed when drift is refused
     (plan 291, ruling Q3/R11).
