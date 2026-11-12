@@ -12091,7 +12091,8 @@ async def adopt_parent(req: Request) -> JSONResponse:
     Re-arms the parent watch on that pid and cancels a pending grace exit (the
     old server died, e.g. a `tsx watch` reload). Loopback callers only: the
     server reaches the sidecar on 127.0.0.1. `armed: false` when this sidecar
-    has no watcher (hand-launched) -- it is then left as it was."""
+    has no watcher (hand-launched) -- it is then left as it was; `reason: "exiting"` when the grace already ran out and this
+    sidecar is on its way out."""
     if (req.client.host if req.client else "") not in ("127.0.0.1", "::1"):
         return JSONResponse({"error": "loopback only"}, status_code=403)
     try:
@@ -12104,6 +12105,8 @@ async def adopt_parent(req: Request) -> JSONResponse:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return JSONResponse({"error": "pid must be a positive integer"}, status_code=400)
     armed = parent_watch.rearm(pid, start_ms if isinstance(start_ms, int) else None)
+    if not armed and parent_watch.is_exiting():
+        return JSONResponse({"armed": False, "reason": "exiting"})
     return JSONResponse({"armed": armed})
 
 

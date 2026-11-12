@@ -76,7 +76,7 @@ def test_server_exit_logs_error_with_code_then_exits_sidecar(caplog: pytest.LogC
         assert exited.wait(5)
         t.thread.join(5)
 
-    assert exit_codes == [0]
+    assert exit_codes == [parent_watch.GRACE_EXIT_CODE]
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(errors) == 1
     msg = errors[0].getMessage()
@@ -486,6 +486,21 @@ def test_post_parent_route_rearms_for_a_loopback_caller(monkeypatch: pytest.Monk
     assert calls == [(4321, 1700000000999)]
 
 
+def test_post_parent_route_reports_exiting_when_the_grace_ran_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    import main
+
+    monkeypatch.setattr(main.parent_watch, "rearm", lambda pid, ms: False)
+    monkeypatch.setattr(main.parent_watch, "is_exiting", lambda: True)
+    c = TestClient(main.app, client=("127.0.0.1", 50000))
+    r = c.post("/parent", json={"pid": 4321})
+    assert r.status_code == 200 and r.json() == {"armed": False, "reason": "exiting"}
+    monkeypatch.setattr(main.parent_watch, "is_exiting", lambda: False)
+    assert c.post("/parent", json={"pid": 4321}).json() == {"armed": False}
+
+
 def test_post_parent_route_refuses_a_non_loopback_caller(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("httpx")
     from fastapi.testclient import TestClient
@@ -585,6 +600,22 @@ def test_production_defaults_rearm_within_the_grace_keeps_the_sidecar(tmp_path: 
     assert "re-armed" in text
 
 
+def test_the_grace_exit_uses_its_own_nonzero_code() -> None:
+    """Not 0 (reads as a clean exit / a pytest pass) and not 42-44 (poison, drain-restart, model-load fault)."""
+    assert parent_watch.GRACE_EXIT_CODE not in (0, 42, 43, 44)
+    codes: list[int] = []
+    done = threading.Event()
+    parent_watch.start_parent_watch(
+        env={"SIDECAR_PARENT_PID": "41"},
+        platform="linux",
+        waiter=lambda pid, ms: 1,
+        on_exit=lambda c: (codes.append(c), done.set()),
+        grace_s=0.05,
+    )
+    assert done.wait(5)
+    assert codes == [parent_watch.GRACE_EXIT_CODE]
+
+
 def test_posix_start_time_mismatch_means_the_parent_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(parent_watch, "_posix_creation_ms", lambda pid: 1_700_000_000_000 + 600_000)
     with pytest.raises(parent_watch.ParentGone):
@@ -601,14 +632,12 @@ def test_posix_start_time_unreadable_keeps_watching(monkeypatch: pytest.MonkeyPa
     assert parent_watch.wait_for_pid_posix(5, start_ms=1_700_000_000_000, poll_s=0, sleep=lambda s: None) is None
 
 
-# --- N1: a wall-clock step must not read as "pid reused" (POSIX env-armed) -----
+# --- N1: a wall-clock step must not read as "pid reused" (POSIX) ---------------
 
 
-def _creation_times(monkeypatch: pytest.MonkeyPatch, server_ms: int, own_ms: int, server_pid: int = 5) -> None:
-    own = parent_watch.os.getpid()
-    monkeypatch.setattr(
-        parent_watch, "_posix_creation_ms", lambda pid: own_ms if pid == own else server_ms if pid == server_pid else None
-    )
+def _creation_times(monkeypatch: pytest.MonkeyPatch, server_ms, ancestors=()) -> None:
+    monkeypatch.setattr(parent_watch, "_posix_creation_ms", lambda pid: server_ms)
+    monkeypatch.setattr(parent_watch, "_ancestor_pids", lambda: set(ancestors))
 
     def gone(pid: int, sig: int) -> None:
         raise ProcessLookupError
@@ -616,49 +645,90 @@ def _creation_times(monkeypatch: pytest.MonkeyPatch, server_ms: int, own_ms: int
     monkeypatch.setattr(parent_watch.os, "kill", gone)
 
 
-def test_posix_relative_check_survives_a_clock_step(monkeypatch: pytest.MonkeyPatch) -> None:
-    """NTP / VM-resume stepped the wall clock +20 s after the server recorded
-    SIDECAR_PARENT_START_MS: psutil's create_time (boot-time based) moved with
-    it, so the absolute comparison fails against a LIVE server. The server must
-    instead be compared with the sidecar's own create_time (same base, the step
-    cancels out): older = ours."""
+def test_posix_an_ancestor_is_accepted_even_when_start_ms_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server that spawned us is in our process ancestry: no clock is involved,
+    so a stepped wall clock (start_ms 20 s off) cannot call it a reused pid."""
     start_ms = 1_700_000_000_000
-    _creation_times(monkeypatch, server_ms=start_ms + 20_000, own_ms=start_ms + 25_000)
-    with pytest.raises(parent_watch.ParentGone):  # the absolute check is what broke
+    _creation_times(monkeypatch, server_ms=start_ms + 20_000, ancestors=[5])
+    with pytest.raises(parent_watch.ParentGone):  # the absolute check is what would break
         parent_watch.wait_for_pid_posix(5, start_ms=start_ms, poll_s=0, sleep=lambda s: None)
     assert (
-        parent_watch.wait_for_pid_posix(
-            5, start_ms=start_ms, poll_s=0, sleep=lambda s: None, relative_to_self=True
-        )
+        parent_watch.wait_for_pid_posix(5, start_ms=start_ms, poll_s=0, sleep=lambda s: None, trust_ancestry=True)
         is None
     )
 
 
-def test_posix_relative_check_treats_a_younger_pid_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A reused pid is created after the sidecar started."""
-    _creation_times(monkeypatch, server_ms=1_700_000_030_000, own_ms=1_700_000_025_000)
+def test_posix_a_non_ancestor_falls_back_to_the_absolute_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    start_ms = 1_700_000_000_000
+    _creation_times(monkeypatch, server_ms=start_ms + 20_000, ancestors=[999])
     with pytest.raises(parent_watch.ParentGone):
-        parent_watch.wait_for_pid_posix(
-            5, start_ms=1_700_000_000_000, poll_s=0, sleep=lambda s: None, relative_to_self=True
-        )
-
-
-def test_posix_relative_check_unreadable_keeps_watching(monkeypatch: pytest.MonkeyPatch) -> None:
-    _creation_times(monkeypatch, server_ms=1, own_ms=1, server_pid=-1)  # server unreadable
+        parent_watch.wait_for_pid_posix(5, start_ms=start_ms, poll_s=0, sleep=lambda s: None, trust_ancestry=True)
+    _creation_times(monkeypatch, server_ms=start_ms + 50, ancestors=[999])
     assert (
-        parent_watch.wait_for_pid_posix(5, start_ms=1, poll_s=0, sleep=lambda s: None, relative_to_self=True)
+        parent_watch.wait_for_pid_posix(5, start_ms=start_ms, poll_s=0, sleep=lambda s: None, trust_ancestry=True)
         is None
     )
 
 
-def test_env_armed_posix_watch_is_relative_but_a_rearm_stays_absolute(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only the env-armed first watch can use the sidecar-relative check; a
-    POST /parent carries the server's own absolute start time."""
+def test_posix_warn_only_logs_a_mismatch_and_keeps_watching(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A /parent caller is alive on loopback, so a start-time mismatch (a clock
+    step) is logged, never a reason to exit."""
+    _creation_times(monkeypatch, server_ms=1_700_000_600_000)
+    with caplog.at_level(logging.WARNING, logger="sidecar"):
+        assert (
+            parent_watch.wait_for_pid_posix(
+                5, start_ms=1_700_000_000_000, poll_s=0, sleep=lambda s: None, warn_only=True
+            )
+            is None
+        )
+    assert "reused" in caplog.text
+
+
+def _live_child(code: str):
+    import subprocess
+
+    return subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+
+
+def test_real_posix_creation_ms_is_in_ms_and_ordered() -> None:
+    """The REAL psutil read (every OS): a seconds/ms slip or a broken import would
+    make every POSIX sidecar judge its live server "reused" (or never judge)."""
+    import os
+
+    pytest.importorskip("psutil")
+    child = _live_child("import time; print(int(time.time()*1000), flush=True); time.sleep(1)")
+    try:
+        own_start_ms = int(child.stdout.readline())
+        created = parent_watch._posix_creation_ms(child.pid)
+        assert created is not None
+        assert abs(created - own_start_ms) < 5_000
+        assert created > parent_watch._posix_creation_ms(os.getpid())
+    finally:
+        child.wait()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="os.kill(pid, 0) sends Ctrl+C on Windows")
+def test_real_posix_younger_child_reads_as_a_reused_pid() -> None:
+    pytest.importorskip("psutil")
+    child = _live_child("import time; time.sleep(2)")
+    try:
+        with pytest.raises(parent_watch.ParentGone):
+            parent_watch.wait_for_pid_posix(
+                child.pid, start_ms=int(time.time() * 1000) - 600_000, poll_s=0.05, trust_ancestry=True
+            )
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_env_armed_posix_watch_trusts_ancestry_and_a_rearm_is_warn_only(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple] = []
     done = threading.Barrier(2, timeout=5)
 
-    def fake(pid, start_ms=None, poll_s=1.0, sleep=time.sleep, relative_to_self=False):
-        seen.append((pid, start_ms, relative_to_self))
+    def fake(pid, start_ms=None, poll_s=1.0, sleep=time.sleep, trust_ancestry=False, warn_only=False):
+        seen.append((pid, start_ms, trust_ancestry, warn_only))
         done.wait()
         return None
 
@@ -672,7 +742,25 @@ def test_env_armed_posix_watch_is_relative_but_a_rearm_stays_absolute(monkeypatc
     done.wait()
     assert w.rearm(77, 1700000001000) is True
     done.wait()
-    assert seen == [(41, 1700000000000, True), (77, 1700000001000, False)]
+    assert seen == [(41, 1700000000000, True, False), (77, 1700000001000, False, True)]
+
+
+def test_ancestor_pids_lists_this_process_parents() -> None:
+    import os
+
+    pytest.importorskip("psutil")
+    assert os.getppid() in parent_watch._ancestor_pids()
+    assert os.getpid() not in parent_watch._ancestor_pids()
+
+
+def test_ancestor_pids_is_empty_when_psutil_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    psutil = pytest.importorskip("psutil")
+
+    def boom(*a, **k):
+        raise psutil.Error("nope")
+
+    monkeypatch.setattr(psutil, "Process", boom)
+    assert parent_watch._ancestor_pids() == set()
 
 
 # --- N6: a re-arm after the grace decision must not be told "armed" ----------
@@ -698,3 +786,31 @@ def test_rearm_after_the_grace_ran_out_is_refused(monkeypatch: pytest.MonkeyPatc
         assert w.rearm(77, None) is False
     finally:
         release.set()
+
+
+# --- a leaked SIDECAR_PARENT_PID must not arm the watch inside the test run -----
+
+
+def test_conftest_drops_a_leaked_parent_pid_before_any_import(tmp_path: Path) -> None:
+    """Run a throwaway pytest session that uses this directory's conftest, with the
+    variables leaked in: the session's own tests must not see them."""
+    import os
+    import shutil
+    import subprocess
+
+    shutil.copy(Path(__file__).with_name("conftest.py"), tmp_path / "conftest.py")
+    (tmp_path / "test_env.py").write_text(
+        "import os\n"
+        "def test_env_is_clean():\n"
+        "    assert 'SIDECAR_PARENT_PID' not in os.environ\n"
+        "    assert 'SIDECAR_PARENT_START_MS' not in os.environ\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ, SIDECAR_PARENT_PID="4242", SIDECAR_PARENT_START_MS="1")
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", str(tmp_path), "-q", "-p", "no:cacheprovider"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr

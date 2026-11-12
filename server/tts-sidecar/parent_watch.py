@@ -15,7 +15,8 @@ server and starts a new one within several seconds (measured 3.8-6.3 s to boot);
 the new server adopts this sidecar and says so with POST /parent, which calls
 rearm() and cancels the pending exit, so on Windows the loaded models stay (on
 POSIX `tsx watch` sends SIGTERM and the server's shutdown stops the sidecar it
-owns, so there is nothing to re-arm). A real death gets no re-arm, and the sidecar exits.
+owns, so there is nothing to re-arm). A real death gets no re-arm, and the sidecar
+exits with GRACE_EXIT_CODE.
 
 No SIDECAR_PARENT_PID (a standalone `npm run tts:sidecar`) -> nothing watches,
 and rearm() is a no-op: a hand-launched sidecar is never taken over.
@@ -41,6 +42,12 @@ PARENT_START_ENV = "SIDECAR_PARENT_START_MS"
 # A dev reload re-adopts within several seconds; 15 s leaves room for a slow tsx cold start
 # without keeping a genuinely orphaned sidecar (and its VRAM) around for long.
 DEFAULT_GRACE_S = 15.0
+
+# The exit code of a sidecar whose server died and was not replaced. 42-44 are
+# the poison / drain-restart / model-load-fault codes; 0 would read as a clean
+# exit, and an inherited SIDECAR_PARENT_PID that ends a pytest run early with 0
+# once looked like a pass (#4054).
+GRACE_EXIT_CODE = 45
 
 # Node's performance.timeOrigin trails the OS process-creation time by tens of
 # ms; a pid reused by another process is created far later than this.
@@ -179,14 +186,14 @@ def _posix_creation_ms(pid: int) -> Optional[int]:
         return None
 
 
-def _check_older_than_self(pid: int, created_ms: Optional[int], own_ms: Optional[int]) -> None:
-    if created_ms is None or own_ms is None:
-        return
-    if created_ms > own_ms:
-        raise ParentGone(
-            f"pid {pid} was created {created_ms - own_ms} ms after this sidecar "
-            "(pid reused by another process)"
-        )
+def _ancestor_pids() -> set[int]:
+    """Pids of this process's ancestors (empty when psutil can't say)."""
+    try:
+        import psutil
+
+        return {p.pid for p in psutil.Process().parents()}
+    except Exception:
+        return set()
 
 
 def wait_for_pid_posix(
@@ -194,23 +201,27 @@ def wait_for_pid_posix(
     start_ms: Optional[int] = None,
     poll_s: float = 1.0,
     sleep: Callable[[float], None] = time.sleep,
-    relative_to_self: bool = False,
+    trust_ancestry: bool = False,
+    warn_only: bool = False,
 ) -> Optional[int]:
     """Poll until `pid` is gone. POSIX only. A non-child's exit code is not
     observable, so this returns None.
 
-    `relative_to_self`: psutil's create_time follows the wall clock (boot time +
-    ticks), so an NTP step or a VM/WSL resume moves it away from a start_ms the
-    server captured earlier -- an absolute comparison then calls a LIVE server
-    "reused". The env-armed watch therefore compares the server's create_time
-    with this sidecar's own (same base, the step cancels out): the server we were
-    spawned by is older, a reused pid is younger. A /parent re-arm carries an
-    absolute start_ms and keeps the absolute check."""
-    if start_ms is not None:
-        if relative_to_self:
-            _check_older_than_self(pid, _posix_creation_ms(pid), _posix_creation_ms(os.getpid()))
-        else:
+    psutil's create_time follows the wall clock (boot time + ticks), so an NTP
+    step or a VM/WSL resume can move it away from a start_ms the server captured
+    earlier, and the absolute comparison then calls a LIVE server "reused".
+    `trust_ancestry` (the env-armed watch): a pid among this process's ancestors
+    is the server that spawned us -- no clock involved -- so it is accepted; any
+    other pid (a hand launch, a detached start) falls back to the absolute check.
+    `warn_only` (a /parent re-arm): the caller is alive on loopback, so a
+    mismatch is logged and the watch goes on."""
+    if start_ms is not None and not (trust_ancestry and pid in _ancestor_pids()):
+        try:
             _check_start_time(pid, start_ms, _posix_creation_ms(pid))
+        except ParentGone as e:
+            if not warn_only:
+                raise
+            log.warning("parent watch: %s; keeping the watch (the caller is alive)", e)
     while True:
         try:
             os.kill(pid, 0)
@@ -258,6 +269,10 @@ class ParentWatch:
         self._pid: Optional[int] = None
         self._exiting = False  # the grace ran out: on_exit is under way, too late to re-arm
         self.thread: Optional[threading.Thread] = None
+
+    @property
+    def exiting(self) -> bool:
+        return self._exiting
 
     def arm(
         self,
@@ -322,7 +337,7 @@ class ParentWatch:
             log.info("a new server took over within %.0fs; sidecar stays up", self._grace_s)
             return
         log.warning("no new server within %.0fs; sidecar exiting", self._grace_s)
-        self._on_exit(0)
+        self._on_exit(GRACE_EXIT_CODE)
 
 
 _active: Optional[ParentWatch] = None
@@ -347,20 +362,28 @@ def start_parent_watch(
         log.info("parent watch off (no valid %s); this sidecar outlives any server", PARENT_PID_ENV)
         return None
     start_ms = _parse_ms(env.get(PARENT_START_ENV))
-    watch = ParentWatch(waiter or _default_waiter(platform), on_exit or os._exit, grace_s)
-    _active = watch
-    log.info("parent watch armed: server pid=%d (start_ms=%s, grace %.0fs)", pid, start_ms, grace_s)
+    default = waiter or _default_waiter(platform)
     first = None
     if waiter is None and platform != "win32":
         # Looked up at call time (not bound now) so the module attribute is what runs.
-        first = lambda p, ms: wait_for_pid_posix(p, ms, relative_to_self=True)  # noqa: E731
+        first = lambda p, ms: wait_for_pid_posix(p, ms, trust_ancestry=True)  # noqa: E731
+        default = lambda p, ms: wait_for_pid_posix(p, ms, warn_only=True)  # noqa: E731
+    watch = ParentWatch(default, on_exit or os._exit, grace_s)
+    _active = watch
+    log.info("parent watch armed: server pid=%d (start_ms=%s, grace %.0fs)", pid, start_ms, grace_s)
     watch.arm(pid, start_ms, first)
     return watch
 
 
 def rearm(pid: int, start_ms: Optional[int] = None) -> bool:
     """Called by POST /parent. False when there is no watcher (a standalone
-    sidecar) or the pid is invalid: nothing changes in either case."""
+    sidecar), the pid is invalid, or the sidecar is already exiting (see
+    is_exiting()): nothing changes in any of them."""
     if _active is None:
         return False
     return _active.rearm(pid, start_ms)
+
+
+def is_exiting() -> bool:
+    """True once the grace ran out and the exit is under way (too late to re-arm)."""
+    return _active is not None and _active.exiting

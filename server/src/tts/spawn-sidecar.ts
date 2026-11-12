@@ -252,7 +252,7 @@ export interface SidecarHealthProbe {
     reload keeps the loaded models. `armed:false` when the sidecar has no such
     route or no watcher (older or hand-launched); never throws. `reason` says
     which: `armed`, `no-watcher` (200 but nothing to arm: hand-launched),
-    `http-<n>` (older sidecar, or the loopback refusal) or `error` (transport). */
+    `exiting` (200 but the sidecar's grace already ran out), `http-<n>` (older sidecar, or the loopback refusal) or `error` (transport). */
 export async function rearmSidecarParent(
   host: string,
   port: number,
@@ -269,8 +269,9 @@ export async function rearmSidecarParent(
       signal: controller.signal,
     });
     if (!res.ok) return { armed: false, reason: `http-${res.status}` };
-    const body = (await res.json().catch(() => ({}))) as { armed?: unknown };
-    return body.armed === true ? { armed: true, reason: 'armed' } : { armed: false, reason: 'no-watcher' };
+    const body = (await res.json().catch(() => ({}))) as { armed?: unknown; reason?: unknown };
+    if (body.armed === true) return { armed: true, reason: 'armed' };
+    return { armed: false, reason: body.reason === 'exiting' ? 'exiting' : 'no-watcher' };
   } catch {
     return { armed: false, reason: 'error' };
   } finally {
@@ -654,7 +655,8 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
      die, waits a grace period and exits unless a new server re-arms it (see
      rearmSidecarParent). Always OURS, in every launcher: overrides a value
      inherited from a grandparent. The start time lets it tell a reused pid from
-     us. A `tsx watch` reload re-adopts within the grace, so models stay loaded. */
+     us. On Windows a `tsx watch` reload re-adopts within the grace, so models stay
+     loaded; on POSIX the reload's SIGTERM makes our shutdown stop the sidecar. */
   env.SIDECAR_PARENT_PID = String(process.pid);
   env.SIDECAR_PARENT_START_MS = String(Math.round(performance.timeOrigin));
   return env;

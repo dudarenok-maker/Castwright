@@ -1827,7 +1827,7 @@ describe('adopting a sidecar re-arms its parent watch (#4054)', () => {
     expect(b.warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
   });
 
-  it.each(['http-404', 'error'])(
+  it.each(['http-404', 'error', 'exiting'])(
     'warns when the re-arm answers %s: the sidecar will exit after its grace',
     async (reason) => {
       const rearmFn = vi.fn(async () => ({ armed: false, reason }));
@@ -1874,6 +1874,16 @@ describe('rearmSidecarParent (#4054)', () => {
     expect(await rearmSidecarParent('h', 1, down as unknown as typeof fetch)).toEqual({
       armed: false,
       reason: 'error',
+    });
+  });
+
+  it('names exiting when the sidecar says its grace already ran out', async () => {
+    const exiting = vi.fn(
+      async () => new Response(JSON.stringify({ armed: false, reason: 'exiting' }), { status: 200 }),
+    );
+    expect(await rearmSidecarParent('h', 1, exiting as unknown as typeof fetch)).toEqual({
+      armed: false,
+      reason: 'exiting',
     });
   });
 

@@ -287,6 +287,12 @@ describe('installShutdownSignals (#4054)', () => {
     }
   });
 
+  it('defaults the platform to the running one: SIGHUP only on win32', () => {
+    const target = new EventEmitter();
+    installShutdownSignals(vi.fn(), { target });
+    expect(target.listenerCount('SIGHUP')).toBe(process.platform === 'win32' ? 1 : 0);
+  });
+
   it('each signal is logged and routed to the shutdown path with its name', () => {
     const target = new EventEmitter();
     const shutdown = vi.fn();

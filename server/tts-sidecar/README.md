@@ -577,14 +577,16 @@ $resp.Headers['X-Sample-Rate']
   spawned this sidecar (#4054). When set, `parent_watch.py` waits on that process. When it dies the
   sidecar **logs the server's exit code at once** (one error line, hex plus a name, e.g.
   `0xC0000409` native crash), **waits a 15 s grace period, and exits only if no new server has
-  picked it up in that time**. A server that adopts a running sidecar says so with
+  picked it up in that time**, with exit code 45 (distinct from 0 and from the 42-44 restart codes). A server that adopts a running sidecar says so with
   `POST /parent {pid, startMs}` (loopback only), which re-arms the watch on the new pid and cancels
   the pending exit; on Windows a `tsx watch` reload re-adopts within several seconds, so the
   sidecar and its loaded models stay (on POSIX `tsx watch` sends SIGTERM and the server's shutdown
   stops the sidecar it owns). A real death sends no re-arm, so the sidecar exits after the grace. The start time
   guards against PID reuse (on Windows a process created more than 10 s away from it is not the
-  server; on POSIX the server must be older than the sidecar itself, which a wall-clock step
-  cannot upset).
+  server; on POSIX the env-armed watch accepts a pid found in the sidecar's own process ancestry (no clock
+  involved) and otherwise falls back to the same absolute check, which a wall-clock step can upset, so a
+  `POST /parent` re-arm only logs a mismatch and keeps watching). The sidecar pytest suite drops an
+  inherited `SIDECAR_PARENT_PID` in `tests/conftest.py`, so a leaked variable cannot end a test run early.
   A server that takes longer than the grace to come back finds the sidecar gone and spawns a
   fresh one. Unset means no watcher (a standalone sidecar, which also ignores `POST /parent`).
 
