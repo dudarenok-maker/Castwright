@@ -1173,6 +1173,24 @@ recite:
     Test with an entry whose new value equals the stale base after an earlier
     write moved the file, then assert on the file, not the job's copy.
 
+91. **A "matches some past version" test that ignores order, so a revert to an
+    older value reads as "behind"** — PR #4106 pass 1 (#4105): a live page whose
+    row body equalled any older `origin/main` version of it was exempted as
+    "merely behind main". The history is ordered, though, and a body main went
+    back to (v1 -> v2 -> v1 against a live v2) matches an older version too;
+    the exemption silently turned a main-side revert into an advisory. Pass 2
+    found the same blindness one level up: "is this branch behind" was inferred
+    from the same history walk (does the tracked body match some older version)
+    rather than read from where the branch diverged, so a revert and a page two
+    versions behind both slipped past it. Checkable: for every "equals one of
+    the past values" predicate, write the A -> B -> A sequence and the
+    A -> B -> C sequence and ask which side each one lands on; where the
+    question is really about a divergence point (behind, stale, already
+    merged), compute it from the point (`merge-base`) rather than from a
+    membership test over the history.
+    (Numbered 91: open PR #4103 holds 89 and 90; renumber on merge if the order
+    changes.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

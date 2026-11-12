@@ -205,7 +205,27 @@ comparison, see the edge list above). The merge step that closes this, run
    `npm run check:onbox-register -- --against-published <saved-file>`. This
    comparison detects structural drift (rows live vs. in register), and — when
    the live-view baseline from `origin/main` is available — also detects
-   content drift (per-row body text hash comparison). Your register having rows
+   content drift (per-row body text hash comparison). A published body equal
+   to an OLDER version of that row on `origin/main`'s recent first-parent
+   history is treated as behind main (#4105), unless main's current body of
+   the row also appears at or before the newest commit carrying the published
+   body (then main went back to it: a revert). Behind main passes, with a
+   non-failing advisory naming the commit the live body matches and the
+   commits that changed the row since (a hand-restored old body reads the
+   same, so the advisory is its only trace). A revert, a body only an unmerged
+   lane carried, and a row some version in the window cannot vouch for stay
+   drift, and the drift line names that commit (a version unreadable only for
+   OTHER rows does not count; a deleted file is "row absent", not unreadable).
+   The mirror image fails, decided from the merge base: when this branch has
+   not merged the current `origin/main`, any tracked row that differs from
+   the live page and is not main's, and that main has since changed, added
+   after the base, or removed (a discharge) relative to
+   `git merge-base HEAD origin/main`, is refused unless the live page
+   already carries your tracked body (`branch-behind-main`, with the reason;
+   a row absent at the base and absent on main, your own new row, is never
+   refused; a merge base that cannot be found or read, as in a shallow
+   clone, fails closed). The no-flag run also rejects a tracked live view
+   whose row markup the drift check cannot read. Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that
    your register lacks is reported when `origin/main`'s own copy of this
