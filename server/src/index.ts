@@ -22,9 +22,15 @@ installTimestamps();
    server vanishing silently (it died twice on 2026-05-30 with no trace). Also
    makes a stray unhandled rejection survivable so a transient async error can't
    take down an unattended generation run. See crash-logging.ts. */
-import { installCrashHandlers, listenWithAutoRebind } from './crash-logging.js';
+import {
+  installCrashHandlers,
+  installExitLogging,
+  installShutdownSignals,
+  listenWithAutoRebind,
+} from './crash-logging.js';
 import { selectBindHost } from './bind-host.js';
 installCrashHandlers();
+installExitLogging();
 
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
@@ -659,6 +665,5 @@ function shutdown(signal: NodeJS.Signals): void {
    booted. */
 if (isDirectlyInvoked(import.meta.url)) {
   await main();
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  installShutdownSignals(shutdown);
 }

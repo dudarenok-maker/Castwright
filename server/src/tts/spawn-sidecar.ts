@@ -201,6 +201,8 @@ export function sidecarCeilingMismatch(health: SidecarHealthProbe): string | nul
    so a clean owned process (governed by the graceful soft/hard recycle path) is
    strictly safer than bolting onto an orphan of unknown leak/build. Dev keeps
    adopt-if-healthy so `tsx watch` HMR doesn't reload the model every save.
+   (#4054: a sidecar this server spawned now exits when the server dies — see
+   SIDECAR_PARENT_PID — so adoption now mainly covers a hand-launched sidecar.)
    Override with SIDECAR_NEVER_ADOPT=1/0. */
 export function neverAdoptSidecar(): boolean {
   const raw = process.env.SIDECAR_NEVER_ADOPT;
@@ -530,6 +532,10 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
        tree (sibling to voices.json), not the sidecar's __file__-relative
        dir. A sidecar restart / cwd change / workspace move can't orphan a
        designed voice (a latent ENOENT on torch.load at synth time). */
+    /* #4054 — the sidecar holds a handle on this pid and exits (logging our
+       exit code) when we die. Always OURS: overrides a value inherited from a
+       grandparent. */
+    SIDECAR_PARENT_PID: String(process.pid),
     QWEN_VOICES_DIR: qwenVoicesDir(),
     /* Cloned-voice latents (fs-38 Wave 3c) — same per-workspace-tree
        rationale as QWEN_VOICES_DIR above, sibling directory. */

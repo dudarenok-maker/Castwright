@@ -34,6 +34,7 @@
  * messages here inherit the standard `YYYY-MM-DD HH:mm:ss.SSS [server]` stamp.
  */
 
+import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 
 export type CrashKind = 'uncaughtException' | 'unhandledRejection';
@@ -172,4 +173,51 @@ export function listenWithAutoRebind(server: RebindServer, opts: AutoRebindOptio
   });
 
   listen();
+}
+
+/* ---- #4054: make a silent server death explain itself ---------------------- */
+
+export interface ExitLoggingHooks {
+  /** Sync writer (default `fs.writeSync(2, …)`). Must be synchronous: an
+   *  'exit' listener can't await, and an async console.* write can be lost. */
+  write?: (line: string) => void;
+  target?: NodeJS.EventEmitter;
+}
+
+/** Write one line with the exit code from a sync `process.on('exit')`. A native
+ *  crash (0xC0000409) never reaches JS so nothing is written then — the sidecar
+ *  logs the code from outside (sidecar/parent_watch.py) — but every JS-visible
+ *  exit (process.exit, a signal handler's exit, natural end) now leaves a line. */
+export function installExitLogging(hooks: ExitLoggingHooks = {}): void {
+  const write = hooks.write ?? ((line: string) => fs.writeSync(2, line));
+  const target = hooks.target ?? process;
+  target.on('exit', (code: number) => {
+    try {
+      write(`${new Date().toISOString()} [server] process exit — exit code ${code}\n`);
+    } catch {
+      /* stderr already closed; nothing left to tell */
+    }
+  });
+}
+
+export interface ShutdownSignalHooks {
+  onLog?: (msg: string) => void;
+  target?: NodeJS.EventEmitter;
+}
+
+/** Route SIGINT/SIGTERM and — new in #4054 — SIGBREAK (Windows Ctrl+Break /
+ *  console close) and SIGHUP (terminal hang-up) through the graceful shutdown.
+ *  Unhandled, either of the last two terminates node with no line at all. */
+export function installShutdownSignals(
+  shutdown: (signal: NodeJS.Signals) => void,
+  hooks: ShutdownSignalHooks = {},
+): void {
+  const log = hooks.onLog ?? ((m: string) => console.log(m));
+  const target = hooks.target ?? process;
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) {
+    target.once(sig, () => {
+      log(`[server] received ${sig}`);
+      shutdown(sig);
+    });
+  }
 }

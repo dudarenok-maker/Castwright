@@ -443,3 +443,22 @@ describe('buildSidecarEnv sources QWEN_VOICES_DIR/XTTS_VOICES_DIR from paths.ts 
     expect(env.XTTS_VOICES_DIR).toBe('/sentinel/xtts-voices');
   });
 });
+
+/* #4054 — the sidecar watches this pid and exits (logging the exit code) when
+   the server dies. */
+describe('buildSidecarEnv passes the server pid (#4054)', () => {
+  it('sets SIDECAR_PARENT_PID to this process pid', () => {
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
+  });
+
+  it('overrides a stale inherited value (a server spawned by a parent that had one)', () => {
+    process.env.SIDECAR_PARENT_PID = '1';
+    try {
+      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+      expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
+    } finally {
+      delete process.env.SIDECAR_PARENT_PID;
+    }
+  });
+});

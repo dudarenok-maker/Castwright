@@ -112,6 +112,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("sidecar")
 
+# #4054 — exit with the Node server that spawned us and log its exit code.
+# No-op unless the server passed SIDECAR_PARENT_PID. See parent_watch.py.
+from parent_watch import start_parent_watch  # noqa: E402
+
+start_parent_watch()
+
 
 def _measure_nvidia_dll_provenance(onnxruntime) -> Optional[tuple]:
     """Best-effort: of the DLLs `preload_dlls()` was asked to find, how many
