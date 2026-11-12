@@ -3074,6 +3074,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/link-prior": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link a character to the same character in a prior book of the series (manual continuity link)
+         * @description The user declares that a character in this book is the same person as one
+         *     in another book of the same series (same author and series, neither
+         *     standalone). The source character's name and aliases are added to the
+         *     target's aliases, the source takes the target's `voiceId` (unless its voice
+         *     is locked or tuned), the target's designed qwen voice is copied onto a
+         *     source with none, and the target's profile fills the source's gaps.
+         *
+         *     A link to a book the character had declined ("Don't reuse") clears that
+         *     decline. #4095 / review passes 1-3 — when it clears a decline, or links a
+         *     character to the book it already links to (the same character, or another
+         *     one of that book; designed before its book's cast was confirmed), the
+         *     character moves onto the target's voice: its `voiceUuid` (none when the
+         *     target has none) and its qwen slot, variants included. Clearing a decline
+         *     also moves the same-book characters on its voice and the characters in other
+         *     books that follow it. A re-point to a character of the book it already links
+         *     to always adopts the new target's voice, whoever else holds the old one, and
+         *     writes that character only: never a follower, a same-book sibling still
+         *     linked to the old character, or a character of the target book. Not for a
+         *     locked or tuned character, nor across a cloned voice on either side. If the
+         *     followers of a cleared decline changed between the plan and the locked step,
+         *     or a book that may hold one cannot be read, the request answers 500 with a
+         *     retry sentence and writes nothing.
+         */
+        post: operations["linkPriorCharacter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cast/{characterId}/reject-orphan-match": {
         parameters: {
             query?: never;
@@ -13323,6 +13364,101 @@ export interface operations {
              *     path-free sentence; one ending "try again." means a book in the series
              *     was unreadable, moved or changed during the step and a retry can work.
              */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    linkPriorCharacter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    sourceCharacterId: string;
+                    targetBookId: string;
+                    targetCharacterId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The link the client records, and what the server changed on the source character */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        matchedFrom: {
+                            bookId: string;
+                            characterId: string;
+                            bookTitle: string;
+                            confidence: number;
+                        };
+                        /** @description The voiceId the character keeps (its own when locked or tuned). */
+                        voiceId?: string;
+                        /** @description Profile content merged from the target onto the source. Present only when the merge changed something. */
+                        profile?: {
+                            evidence?: components["schemas"]["Character"]["evidence"];
+                            attributes?: string[];
+                            description?: string;
+                            tone?: components["schemas"]["Character"]["tone"];
+                            gender?: components["schemas"]["Character"]["gender"];
+                            ageRange?: components["schemas"]["Character"]["ageRange"];
+                        };
+                        /** @description Present only when the link moved the character onto the target's voice (#4095). The client mirrors it onto the character and onto `movedCharacterIds`. */
+                        voice?: {
+                            /** @description The target's voiceUuid; null when it has none (the character then renders the target's legacy key). */
+                            voiceUuid: string | null;
+                            /** @description The target's qwen slot (the shape of a `Character.overrideTtsVoices` slot), variants included; null when it has none. */
+                            qwen: {
+                                name: string;
+                                libraryUuid?: string;
+                                /** @enum {string} */
+                                provenance?: "designed" | "cloned" | "imported";
+                                variants?: {
+                                    [key: string]: {
+                                        name: string;
+                                    };
+                                };
+                            } | null;
+                            /** @description Other characters in the same book that were on the character's voice and moved with it. */
+                            movedCharacterIds: string[];
+                        };
+                    };
+                };
+            };
+            /** @description A required field is missing, or the target is the same book */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A book or character was not found, or the target is not a series-mate */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The followers changed or a book could not be read while the link was being saved; a retry can work */
             500: {
                 headers: {
                     [name: string]: unknown;

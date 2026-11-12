@@ -25,7 +25,7 @@ import { useEffect, useState } from 'react';
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { castActions } from '../store/cast-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { pickMergeSurvivor } from '../lib/voice-character-link';
@@ -88,6 +88,9 @@ export function DuplicateReviewModal({
      pickMergeSurvivor picks (longer-named / substring-containing).
      'a' or 'b'. */
   const [survivor, setSurvivor] = useState<'a' | 'b'>('a');
+  /* The book the cast slice holds: a link is mirrored into it only when it is the
+     loser's (review pass 1). */
+  const openBookId = useAppSelector((s) => s.manuscript?.bookId ?? null);
 
   /* Reset modal state every time it opens with a fresh pair. */
   useEffect(() => {
@@ -131,13 +134,19 @@ export function DuplicateReviewModal({
         targetBookId: winnerBookId,
         targetCharacterId: winnerChar.id,
       });
-      dispatch(
-        castActions.applyManualMatch({
-          characterId: loserChar.id,
-          matchedFrom: res.matchedFrom,
-          voiceId: res.voiceId,
-        }),
-      );
+      /* Review pass 1 — the cast slice holds ONE book: mirror the link only into the
+         book it was made in (the loser's), never into a same-id row of another
+         open book, which the next autosave would then write. */
+      if (openBookId !== null && openBookId === loserBookId) {
+        dispatch(
+          castActions.applyManualMatch({
+            characterId: loserChar.id,
+            matchedFrom: res.matchedFrom,
+            voiceId: res.voiceId,
+            voice: res.voice,
+          }),
+        );
+      }
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `duplicate-link-${loserChar.id}`,

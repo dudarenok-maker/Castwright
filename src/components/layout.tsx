@@ -2795,18 +2795,25 @@ export function Layout() {
               onLinkPrior={
                 bookId
                   ? async (sourceId, targetBookId, targetCharacterId) => {
+                      const openBook = { manuscriptId: store.getState().manuscript.manuscriptId as string };
                       const res = await api.linkPriorCharacter({
                         bookId,
                         sourceCharacterId: sourceId,
                         targetBookId,
                         targetCharacterId,
                       });
+                      /* Review pass 3 -- the cast slice holds ONE book: the link is
+                         already saved on the server, so mirror it only if that book
+                         is still the open one (else a same-id row of the book now
+                         open would take it, and its next autosave would save it). */
+                      if (!selectIsOpenBook(store.getState(), openBook)) return;
                       dispatch(
                         castActions.applyManualMatch({
                           characterId: sourceId,
                           matchedFrom: res.matchedFrom,
                           voiceId: res.voiceId,
                           profile: res.profile,
+                          voice: res.voice,
                         }),
                       );
                       /* Close so the user lands back on the confirm card and can see

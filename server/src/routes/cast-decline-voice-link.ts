@@ -101,7 +101,7 @@ castDeclineVoiceLinkRouter.post(
               dirs,
               plan.followers,
               (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast),
-              { fromBookId },
+              { fromBookId, plannedStranded: plan.stranded },
             ),
           );
         });
