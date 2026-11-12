@@ -2630,31 +2630,34 @@ function planProtectIdsOf(plan: MatchPlan): Set<string> {
     folds as a fresh `new` row would, and the persist drops it by rule 11. Rows the user
     edited (fingerprint changed), `added-once` rows and every prior row stay protected. Main
     job only: the subset job never deletes by the cache's ledger (invariant 6), so a run row
-    folded away there would stay on disk with no lines. An unreadable cast protects all. */
-async function withoutUntouchedRunRows(
-  protectIds: ReadonlySet<string> | undefined,
-  ledger: RunAddedLedger | undefined,
-  bookDir: string | undefined,
-): Promise<ReadonlySet<string> | undefined> {
-  if (!protectIds || !bookDir) return protectIds;
-  const owned = Object.entries(ledger ?? {}).flatMap(([id, e]) =>
-    e.state === 'run-owned' && protectIds.has(id) ? [[id, e.fp] as const] : [],
-  );
-  if (owned.length === 0) return protectIds;
+    folded away there would stay on disk with no lines. An unreadable cast protects all.
+    PR #4103 pass 4 M-c: the cast read (`untouchedRunRowIds`) is taken before the second
+    mid-run merge collapse, so no await sits between that collapse and the fold; the filter
+    itself (`withoutUntouchedRunRows`) is pure. */
+async function untouchedRunRowIds(ledger: RunAddedLedger | undefined, bookDir: string | undefined): Promise<ReadonlySet<string>> {
+  const owned = Object.entries(ledger ?? {}).flatMap(([id, e]) => (e.state === 'run-owned' ? [[id, e.fp] as const] : []));
+  if (!bookDir || owned.length === 0) return new Set();
   let rows: Array<{ id: string } & Record<string, unknown>>;
   try {
     rows = (await readPriorCastLockFree(bookDir)).rows as typeof rows;
   } catch {
-    return protectIds;
+    return new Set();
   }
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const untouched = new Set(
+  return new Set(
     owned.flatMap(([id, fp]) => {
       const r = byId.get(id);
       return r && userOwnedFingerprint(r) === fp ? [id] : [];
     }),
   );
-  return untouched.size === 0 ? protectIds : new Set([...protectIds].filter((id) => !untouched.has(id)));
+}
+
+function withoutUntouchedRunRows(
+  protectIds: ReadonlySet<string> | undefined,
+  untouched: ReadonlySet<string>,
+): ReadonlySet<string> | undefined {
+  if (!protectIds || ![...untouched].some((id) => protectIds.has(id))) return protectIds;
+  return new Set([...protectIds].filter((id) => !untouched.has(id)));
 }
 
 /** R34: the ids a plan added (its `new` rows); the in-memory plan still names them after a
@@ -8202,6 +8205,9 @@ export async function runMainAnalyzerJob(
     }
     stage1.characters = guarded.characters;
     recovered.sentences = guarded.sentences;
+    /* The fold's protect-set cast read (P2-3), taken before the collapse below so no await
+       sits between that collapse and the fold (PR #4103 pass 4 M-c). */
+    const untouchedRunRows = await untouchedRunRowIds(cache.addedRows, liveBookDir(job) ?? undefined);
     /* PR #4103 pass 2 P2-2 — again, right before the fold: a merge that landed after the
        collapse above (the Phase-2 sleep, the settings read, the classifier) is honoured too. */
     const collapsedAgain = await collapseMidRunMerges({
@@ -8224,7 +8230,7 @@ export async function runMainAnalyzerJob(
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
       language: bookLanguage,
-      protectIds: await withoutUntouchedRunRows(planProtectIds, cache.addedRows, liveBookDir(job) ?? undefined),
+      protectIds: withoutUntouchedRunRows(planProtectIds, untouchedRunRows),
     });
     /* Fill each folded survivor's tone from its attributes where the analyzer
        left it blank (axes default to a neutral 50). */

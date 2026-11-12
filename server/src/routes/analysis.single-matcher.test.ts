@@ -143,6 +143,8 @@ const castIoSpy = vi.hoisted(() => ({
   onPersisted: undefined as undefined | (() => void),
   /* Replaces the planned persist's outcome before the job sees it (a shape built directly). */
   mapOutcome: undefined as undefined | ((outcome: unknown) => Promise<unknown>),
+  /* Runs before each lock-free cast read analysis.ts makes (`readPriorCastLockFree`). */
+  beforePriorRead: undefined as undefined | (() => Promise<void>),
 }));
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
@@ -152,6 +154,10 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
       const err = castIoSpy.failSnapshot?.();
       if (err) throw err;
       return actual.writePlanSnapshot(...a);
+    },
+    readPriorCastLockFree: async (...a: Parameters<typeof actual.readPriorCastLockFree>) => {
+      await castIoSpy.beforePriorRead?.();
+      return actual.readPriorCastLockFree(...a);
     },
     persistPlannedCast: async (...a: Parameters<typeof actual.persistPlannedCast>) => {
       const actualOut = await actual.persistPlannedCast(...a);
@@ -3676,6 +3682,36 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
         expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'boris-vane', 'narrator', 'olga']);
         expect(editLines(b)).toEqual({ anna: 3, olga: 1, 'boris-vane': 3 });
         expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, 'boris-vane': 3, narrator: 0 });
+        expectMergeHonoured(b);
+      });
+
+    /* Main-only (one line, R18): only the main job reads the cast for its fold protect set (P2-3). */
+    if (kind === 'main')
+      it('M-c (PR #4103 pass 4): a merge landing in the fold protect-set cast read is honoured by the fold', async () => {
+        const b = olgaBook();
+        const FRESH = { roster: [NARR, fr('anna', 'Anna'), boris], speakerId: 'anna' };
+        const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris'] : ['anna']));
+        /* A run-owned entry on a row the plan joins makes the protect set read the cast (P2-3);
+           its stale fingerprint keeps the row protected, as a user-edited row is. */
+        await saveAnalysisCache(b.manuscriptId, { version: ANALYSIS_CACHE_VERSION, chapters: {}, addedRows: { anna: { state: 'run-owned', fp: 'stale' } } } as never);
+        let job: { replay: { lastPhase: { phaseId?: number } | null } } | undefined;
+        let merged: request.Response | undefined;
+        castIoSpy.beforePriorRead = async () => {
+          if (merged || job?.replay.lastPhase?.phaseId !== 2) return;
+          merged = await mergeRoute(b, 'boris', 'olga');
+        };
+        let events: Awaited<ReturnType<typeof go>>;
+        try {
+          events = await go(b, FRESH, { phase1: script, seedCache: false, onJob: (j) => (job = j as unknown as typeof job) });
+        } finally {
+          castIoSpy.beforePriorRead = undefined;
+        }
+        expect(merged?.status).toBe(200);
+        expect(errCode(events)).toBeUndefined();
+        expect(done(events)).toBe(true);
+        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator', 'olga']);
+        expect(editLines(b)).toEqual({ anna: 3, olga: 1 });
+        expect(linesById(b.bookDir)).toMatchObject({ anna: 3, olga: 1, narrator: 0 });
         expectMergeHonoured(b);
       });
 
