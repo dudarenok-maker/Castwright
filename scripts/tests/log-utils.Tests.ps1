@@ -245,3 +245,51 @@ Describe 'Stop-ProcessTreeByLiveness (PR #3404 pass 3)' {
         $stopSource | Should -Not -Match '\$LASTEXITCODE'
     }
 }
+
+# #4054 -- stop-app.ps1 force-killed whatever process held the pid in a stale
+# .run\*.pid. A pid reused by a younger process must not be taken for ours.
+Describe 'Test-PidFileOwnsProcess (#4054)' {
+    BeforeAll {
+        $script:hideWindow = @{}
+        if ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows) { $script:hideWindow = @{ WindowStyle = 'Hidden' } }
+        function Start-Sleeper {
+            $hide = $script:hideWindow
+            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 120' -PassThru @hide
+        }
+    }
+
+    It "returns 'match' when the process started before its pid file was written" {
+        $p = Start-Sleeper
+        $f = Join-Path $TestDrive 'server.pid'
+        try {
+            Start-Sleep -Milliseconds 300
+            Set-Content -LiteralPath $f -Value $p.Id
+            Test-PidFileOwnsProcess -ProcessId $p.Id -PidFilePath $f | Should -Be 'match'
+        } finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+
+    It "returns 'reused' when the process is younger than the pid file (stale file, recycled pid)" {
+        $p = Start-Sleeper
+        $f = Join-Path $TestDrive 'stale.pid'
+        try {
+            Set-Content -LiteralPath $f -Value $p.Id
+            (Get-Item -LiteralPath $f).LastWriteTime = (Get-Date).AddHours(-2)
+            Test-PidFileOwnsProcess -ProcessId $p.Id -PidFilePath $f | Should -Be 'reused'
+        } finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+
+    It "returns 'unknown' for a pid that no longer exists" {
+        $f = Join-Path $TestDrive 'gone.pid'
+        Set-Content -LiteralPath $f -Value 1
+        $hide = $script:hideWindow
+        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'exit 0' -PassThru @hide
+        $p.WaitForExit()
+        Test-PidFileOwnsProcess -ProcessId $p.Id -PidFilePath $f | Should -Be 'unknown'
+    }
+
+    It 'stop-app.ps1 checks identity before killing and skips a reused pid' {
+        $stopSource = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
+        $stopSource | Should -Match 'Test-PidFileOwnsProcess'
+        $stopSource | Should -Match "\$owner -eq 'reused'"
+    }
+}

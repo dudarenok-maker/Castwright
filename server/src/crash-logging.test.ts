@@ -6,9 +6,12 @@
  * so the test drives the handlers without touching the real process. */
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import fs, { readFileSync } from 'node:fs';
 import {
   formatCrash,
   installCrashHandlers,
+  installExitLogging,
+  installShutdownSignals,
   formatListenError,
   listenWithAutoRebind,
   formatRebindExhausted,
@@ -214,5 +217,114 @@ describe('formatRebindExhausted', () => {
     expect(line).toContain('8443');
     expect(line).toContain('8462');
     expect(line).toContain('20');
+  });
+});
+
+/* #4054 — a silent Windows server death (likely native 0xC0000409) left no
+ * trace. The exit line is written with a SYNC fd write so it survives; the
+ * SIGBREAK/SIGHUP handlers keep those signals from terminating node silently. */
+describe('installExitLogging (#4054)', () => {
+  it("process 'exit' → one sync line carrying the exit code", () => {
+    const target = new EventEmitter();
+    const write = vi.fn();
+    installExitLogging({ target, write });
+
+    target.emit('exit', 3221226505);
+
+    expect(write).toHaveBeenCalledTimes(1);
+    const line = String(write.mock.calls[0][0]);
+    expect(line).toContain('[server] process exit');
+    expect(line).toContain('3221226505');
+    expect(line.endsWith('\n')).toBe(true);
+  });
+
+  it('the default writer goes to stderr (fd 2) via writeSync', () => {
+    const target = new EventEmitter();
+    const spy = vi.spyOn(fs, 'writeSync').mockImplementation(() => 0);
+    try {
+      installExitLogging({ target });
+      target.emit('exit', 0);
+      expect(spy).toHaveBeenCalledWith(2, expect.stringContaining('exit code 0'));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('installExitLogging timestamp (#4054)', () => {
+  it('stamps the line in local time with the standard logger format', () => {
+    const target = new EventEmitter();
+    const write = vi.fn();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 12, 14, 5, 9, 7)); // local 2026-11-12 14:05:09.007
+    try {
+      installExitLogging({ target, write });
+      target.emit('exit', 1);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(String(write.mock.calls[0][0])).toMatch(
+      /^2026-11-12 14:05:09\.007 \[server\] process exit — exit code 1\n$/,
+    );
+  });
+});
+
+describe('installShutdownSignals (#4054)', () => {
+  it('registers SIGINT, SIGTERM, SIGBREAK and SIGHUP on win32', () => {
+    const target = new EventEmitter();
+    installShutdownSignals(vi.fn(), { target, platform: 'win32' });
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
+      expect(target.listenerCount(sig)).toBe(1);
+    }
+  });
+
+  it('leaves SIGHUP alone off win32, so an inherited nohup ignore survives', () => {
+    const target = new EventEmitter();
+    installShutdownSignals(vi.fn(), { target, platform: 'linux' });
+    expect(target.listenerCount('SIGHUP')).toBe(0);
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
+      expect(target.listenerCount(sig)).toBe(1);
+    }
+  });
+
+  it.each([
+    ['win32', 1],
+    ['linux', 0],
+    ['darwin', 0],
+  ])('defaults the platform to the running one (%s): SIGHUP listeners %i', (platform, expected) => {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const target = new EventEmitter();
+      installShutdownSignals(vi.fn(), { target });
+      expect(target.listenerCount('SIGHUP')).toBe(expected);
+    } finally {
+      Object.defineProperty(process, 'platform', real);
+    }
+  });
+
+  it('each signal is logged and routed to the shutdown path with its name', () => {
+    const target = new EventEmitter();
+    const shutdown = vi.fn();
+    const onLog = vi.fn();
+    installShutdownSignals(shutdown, { target, onLog, platform: 'win32' });
+
+    target.emit('SIGBREAK');
+    target.emit('SIGHUP');
+
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('SIGBREAK'));
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining('SIGHUP'));
+    expect(shutdown).toHaveBeenNthCalledWith(1, 'SIGBREAK');
+    expect(shutdown).toHaveBeenNthCalledWith(2, 'SIGHUP');
+  });
+});
+
+describe('index.ts wiring (#4054)', () => {
+  it('installs the exit line at boot and routes signals through installShutdownSignals', () => {
+    const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    // Strip comments first: a commented-out call must not satisfy the pin.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    expect(code).toMatch(/^installExitLogging\(\);$/m);
+    expect(code).toMatch(/^[ \t]*installShutdownSignals\(shutdown\);$/m);
   });
 });

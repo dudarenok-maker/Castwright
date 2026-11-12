@@ -97,6 +97,12 @@ export interface SpawnSidecarOpts {
      by the just-exited child's socket in TCP teardown, and the refusal was
      misread as "no sidecar needed"). */
   onSpawnRefused?: (reason: string) => void;
+  /* #4054 — invoked (awaited, never throwing) when this server honours a healthy
+     sidecar it owns (autoStart on): POSTs our pid to the sidecar so its parent
+     watch switches to us and cancels the grace exit it began when the previous
+     server died. Deliberately no default here: the supervisor wires the real
+     `rearmSidecarParent`, so a test that adopts never talks to a live sidecar. */
+  rearmFn?: (host: string, port: number) => Promise<unknown>;
 }
 
 export interface SidecarHandle {
@@ -238,6 +244,39 @@ export interface SidecarHealthProbe {
   /** Per-card free-VRAM floor as reported by /health gpus[] (Wave 2 §W2.2).
       Absent on an older sidecar or when CUDA is unavailable. */
   gpus?: Array<{ idx: number; freeFloorMb: number | null }>;
+}
+
+/** #4054 — tell an adopted sidecar which server now owns it: `POST /parent
+    {pid, startMs}`. The sidecar re-arms its parent watch on this process and
+    cancels the grace exit it began when the previous server died, so a dev
+    reload keeps the loaded models. `armed:false` when the sidecar has no such
+    route or no watcher (older or hand-launched); never throws. `reason` says
+    which: `armed`, `no-watcher` (200 but nothing to arm: hand-launched),
+    `exiting` (200 but the sidecar's grace already ran out), `http-<n>` (older sidecar, or the loopback refusal) or `error` (transport). */
+export async function rearmSidecarParent(
+  host: string,
+  port: number,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
+): Promise<{ armed: boolean; reason: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`http://${host}:${port}/parent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pid: process.pid, startMs: Math.round(performance.timeOrigin) }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return { armed: false, reason: `http-${res.status}` };
+    const body = (await res.json().catch(() => ({}))) as { armed?: unknown; reason?: unknown };
+    if (body.armed === true) return { armed: true, reason: 'armed' };
+    return { armed: false, reason: body.reason === 'exiting' ? 'exiting' : 'no-watcher' };
+  } catch {
+    return { armed: false, reason: 'error' };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Probe a listening process's /health to decide whether it's the CURRENT
@@ -612,6 +651,14 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
   env.CASTWRIGHT_ACCELERATOR_PROFILE = profile;
   env.KOKORO_ORT_PROVIDERS = JSON.stringify(ortProviders(profile, process.platform));
 
+  /* #4054 — the sidecar holds a handle on this pid, logs our exit code when we
+     die, waits a grace period and exits unless a new server re-arms it (see
+     rearmSidecarParent). Always OURS, in every launcher: overrides a value
+     inherited from a grandparent. The start time lets it tell a reused pid from
+     us. On Windows a `tsx watch` reload re-adopts within the grace, so models stay
+     loaded; on POSIX the reload's SIGTERM makes our shutdown stop the sidecar. */
+  env.SIDECAR_PARENT_PID = String(process.pid);
+  env.SIDECAR_PARENT_START_MS = String(Math.round(performance.timeOrigin));
   return env;
 }
 
@@ -635,6 +682,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     onExit,
     onAdoptExisting,
     onSpawnRefused,
+    rearmFn,
     lastOwnedPid = null,
     platform = process.platform,
   } = opts;
@@ -678,6 +726,19 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
         `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), skipping spawn (current sidecar honoured)`,
       );
       onAdoptExisting?.({ host, port });
+      /* #4054: the previous server's death started the sidecar's grace timer;
+         saying so here is what cancels it (see rearmSidecarParent). */
+      try {
+        // not ours to re-arm when auto-start is off
+        const rearmed = autoStart ? ((await rearmFn?.(host, port)) as { reason?: string } | undefined) : undefined;
+        if (rearmed?.reason && rearmed.reason !== 'armed' && rearmed.reason !== 'no-watcher') {
+          warn(
+            `[sidecar] the adopted sidecar did not re-arm its parent watch (${rearmed.reason}); if it was watching the previous server it will exit after its grace period.`,
+          );
+        }
+      } catch (err) {
+        warn(`[sidecar] could not re-arm the adopted sidecar's parent watch (${(err as Error).message}).`);
+      }
       return null;
     }
     /* autoStart off means "this server does not own the sidecar on this port".
