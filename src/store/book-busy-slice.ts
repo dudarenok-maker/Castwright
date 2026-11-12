@@ -93,11 +93,11 @@ export const stageBookId = (state: BusyPollState): string | null =>
 /** P6-1 (PR #4103 pass 6) — is a cast-identity control for `bookId` paused? For the
     book the stage names: while its cast is read-only, era included (the gate releases
     it after its busy-checked re-read). For any other book nothing polls or re-reads, so
-    nothing would release its era: only live state counts, a running snapshot or a busy
-    reply listing `analysis`. */
+    nothing would release its era, and its busy cache goes stale: only a running snapshot
+    counts. A retry that lands mid-run gets the server's 409 and the read-only toast. */
 export function selectCastIdentityPaused(state: BusyPollState, bookId: string): boolean {
   if (stageBookId(state) === bookId) return selectCastReadOnly(state, bookId);
-  return snapshotRunning(state, bookId) || (state.bookBusy?.busyByBook?.[bookId]?.includes('analysis') ?? false);
+  return snapshotRunning(state, bookId);
 }
 
 const eraEpochOf = (state: CastGateState, bookId: string) => state.cast?.analysisEra?.[bookId]?.epoch;

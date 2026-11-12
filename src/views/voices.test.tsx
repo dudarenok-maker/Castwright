@@ -7,7 +7,7 @@ import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { persistenceMiddleware } from '../store/persistence-middleware';
-import { castGateMiddleware } from '../store/cast-gate';
+import { castGateMiddleware, pollBookBusy } from '../store/cast-gate';
 import { bookBusySlice } from '../store/book-busy-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { changeLogSlice } from '../store/change-log-slice';
@@ -1318,8 +1318,8 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
 
   /* P6-1 (PR #4103 pass 6) — on the global Voices view (#/voices) the stage names no book, so
      nothing ever releases b1's latched era (the gate polls and re-reads only the stage's book).
-     For a book the stage does not name the Merge gate keys only on live state: a running
-     snapshot, or a busy reply listing `analysis`. With the real gate middleware. */
+     For a book the stage does not name the Merge gate keys only on a running snapshot (its
+     busy cache is never polled off-stage, so it goes stale). With the real gate middleware. */
   describe('P6-1: the Merge gate for a book the stage does not name', () => {
     const b1OnDisk: Character[] = [
       { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
@@ -1391,6 +1391,25 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       store.dispatch(analysisActions.clearActiveStream());
 
       const merge = await offerMerge(store);
+      expect(merge).not.toHaveAttribute('aria-disabled');
+      expect(merge).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
+    });
+
+    it('a busy poll lists analysis while b1 is open, the user leaves for #/voices, b1 ends unpolled: Merge is enabled', async () => {
+      const store = makeGateStore();
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'voices_pending' }));
+      resetBookSlices(store.dispatch, 'b1');
+      store.dispatch(castSlice.actions.hydrateCharacters(b1OnDisk));
+      busyTable = { b1: ['analysis'] };
+      /* Not awaited: the poll keeps asking while b1 is on stage and gated. */
+      void store.dispatch(pollBookBusy('b1'));
+      await waitFor(() => expect(store.getState().bookBusy.busyByBook.b1).toEqual(['analysis']));
+      store.dispatch(uiSlice.actions.openVoices());
+      /* The run ends on the server; nothing polls b1 off-stage, so the cache stays stale. */
+      busyTable = {};
+
+      const merge = await offerMerge(store);
+      expect(store.getState().bookBusy.busyByBook.b1).toEqual(['analysis']);
       expect(merge).not.toHaveAttribute('aria-disabled');
       expect(merge).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
     });

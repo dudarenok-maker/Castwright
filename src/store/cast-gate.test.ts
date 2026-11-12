@@ -118,8 +118,8 @@ describe('selectCastReadOnly (invariant 7)', () => {
 
 describe('P6-1 — a book the stage does not name (PR #4103 pass 6)', () => {
   /* Nothing releases such a book's era (the gate polls and re-reads only the stage's
-     book), so its cast-identity controls key only on live state, and a 409 for it latches
-     nothing. */
+     book) and its busy cache goes stale, so its cast-identity controls key only on a
+     running snapshot, and a 409 for it latches nothing. */
   const runEnds = async (store: Store) => {
     busy = {};
     for (let i = 0; i < 20; i++) {
@@ -135,10 +135,11 @@ describe('P6-1 — a book the stage does not name (PR #4103 pass 6)', () => {
     expect(selectCastIdentityPaused({ ...base, analysis: { activeStream: snap('A', { state: 'paused' }) } }, 'A')).toBe(
       false,
     );
-    expect(selectCastIdentityPaused({ ...base, bookBusy: { busyByBook: { A: ['analysis'] } } }, 'A')).toBe(true);
-    expect(selectCastIdentityPaused({ ...base, bookBusy: { busyByBook: { A: ['render'] } } }, 'A')).toBe(false);
+    /* Off-stage the busy cache is never polled, so it goes stale: it does not count. */
+    expect(selectCastIdentityPaused({ ...base, bookBusy: { busyByBook: { A: ['analysis'] } } }, 'A')).toBe(false);
     const onA = { ...base, ui: { stage: { kind: 'ready', bookId: 'A' } } };
     expect(selectCastIdentityPaused({ ...onA, cast: { analysisEra: { A: { epoch: 1 } } } }, 'A')).toBe(true);
+    expect(selectCastIdentityPaused({ ...onA, bookBusy: { busyByBook: { A: ['analysis'] } } }, 'A')).toBe(true);
   });
 
   it('re-analyse A while it is open, go to #/voices, A ends: not paused for A', async () => {

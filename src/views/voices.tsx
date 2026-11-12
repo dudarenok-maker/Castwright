@@ -540,8 +540,9 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   } = compareDerivations;
   /* R57 (PR #4103 pass 5b) — the server refuses a merge while an analysis holds the
      merge's book (R55): Merge is disabled while that book's cast is read-only. P6-1 — for
-     a book the stage does not name (e.g. on #/voices) only a live run counts: nothing
-     releases that book's era, so reading it would pause Merge for good. */
+     a book the stage does not name (e.g. on #/voices) only a running snapshot counts:
+     nothing releases that book's era or re-polls its busy cache, so reading either would
+     pause Merge for good. */
   const mergeBookId = selectedVoices[0]?.bookId;
   const mergeReadOnly = useAppSelector((s) => (mergeBookId ? selectCastIdentityPaused(s, mergeBookId) : false));
 

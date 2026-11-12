@@ -476,8 +476,8 @@ snapshot.
     - Not covered: the Script Review "create new character" confirm stays offered mid-run (its
       409 takes the read-only path), and the Manuscript view shows no paused banner.
     - *Amended by PR #4103 pass 6.* P6-1: for a book the stage does not name (the Voices merge
-      on `#/voices`), the gate keys only on live state, a running snapshot or busy listing
-      `analysis` (`selectCastIdentityPaused`), since nothing releases that book's era; and
+      on `#/voices`), the gate keys only on a running snapshot (`selectCastIdentityPaused`),
+      since nothing releases that book's era or re-polls its busy cache; and
       `handleCastIdentityBusy` latches the era only for the stage's book. P6-2: an
       Add-character form already open when the cast turns read-only pauses its create submit
       and keeps its input; the create handler has no read-only early return.
