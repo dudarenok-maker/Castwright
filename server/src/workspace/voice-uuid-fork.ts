@@ -34,6 +34,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { BOOKS_ROOT, castJsonPath, castReuseCarryoverJsonPath, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
+import type { OwnStamp } from './separated-voices.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
@@ -98,13 +99,14 @@ export async function readBookId(dir: string): Promise<string | undefined> {
 }
 async function readBookIdentity(
   dir: string,
-): Promise<{ bookId?: string; series?: { author: string; series: string }; castConfirmed: boolean }> {
+): Promise<{ bookId?: string; series?: { author: string; series: string }; castConfirmed: boolean; editEpoch: string }> {
   const state = await readStateJsonWithRecovery(stateJsonPath(dir));
   const inSeries = state && state.isStandalone !== true && state.author && state.series;
   return {
     bookId: state?.bookId || undefined,
     series: inSeries ? { author: state.author as string, series: state.series as string } : undefined,
     castConfirmed: state?.castConfirmed === true,
+    editEpoch: state?.editEpoch ?? '',
   };
 }
 
@@ -113,6 +115,15 @@ async function readBookIdentity(
    any state read. */
 export async function readBookCastConfirmed(dir: string): Promise<boolean> {
   return (await readBookIdentity(dir)).castConfirmed;
+}
+
+/* Review pass 4 (🟠1) -- the book and generation an unconfirmed design records a uuid
+   against (separated-voices.ts `OwnStamp`). `editEpoch` is rotated by Re-parse and
+   Start fresh and left alone by Confirm; a state.json that predates it reads ''.
+   Undefined when the book has no bookId (nothing to name). Throws like any state read. */
+export async function readBookOwnStamp(dir: string): Promise<OwnStamp | undefined> {
+  const { bookId, editEpoch } = await readBookIdentity(dir);
+  return bookId ? { bookId, editEpoch } : undefined;
 }
 
 /* A book whose cast.json (or state.json) could not be read, with what its

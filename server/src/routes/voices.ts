@@ -41,7 +41,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { refuseGatedSeriesFanOut } from '../workspace/repaired-series-refusal.js';
-import { BOOK_GONE, peekBook, withBookOp } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import {
@@ -790,8 +790,6 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
   try {
     ensureWorkspace();
     let seriesFilter: { author: string; series: string } | undefined;
-    let gateSeries: { author: string; series: string } | undefined;
-    let onlyBookDir: string | undefined;
     if (scope === 'series') {
       const resolved = await findAuthorSeriesForBookId(bookId!);
       if (!resolved) {
@@ -800,64 +798,84 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
           .json({ error: `Book "${bookId}" not found — can't resolve its series.` });
       }
       seriesFilter = resolved;
-      gateSeries = resolved;
+    }
+    /* The checks, the write and the answer for one scope (the series, the whole
+       workspace, or one book). */
+    const apply = async (
+      filter: { author: string; series: string } | undefined,
+      onlyBookDir: string | undefined,
+    ): Promise<{ status: number; body?: unknown }> => {
+      if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, filter, undefined, onlyBookDir))) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
+              `override would silently revert it to a catalog voice. Reassign that character directly instead.`,
+          },
+        };
+      }
+      /* GATE 2 I-B1 — the SET branch's sibling refusal. The write pins
+         `ttsEngine` to the incoming engine on every matching character, so a
+         character cloned on a DIFFERENT clone-capable engine would keep its
+         marker and stop rendering it. Fail loud instead. */
+      if (
+        parsed !== null &&
+        (await hasClonedSlotAmongMatches(voiceId, filter, parsed.engine, onlyBookDir, await separatedDesignedUuid(parsed)))
+      ) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Voice "${voiceId}" has a consented cloned voice on a linked character, on a different ` +
+              `engine — switching it to ${parsed.engine} would silently stop that voice rendering. ` +
+              `Reassign that character directly instead.`,
+          },
+        };
+      }
+      const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, filter, onlyBookDir);
+      if (updated === 0 && skipped.length === 0) {
+        const where = filter
+          ? `in series "${filter.author} / ${filter.series}"`
+          : 'in any confirmed cast';
+        return { status: 404, body: { error: `No character with voiceId "${voiceId}" found ${where}.` } };
+      }
+      if (updated === 0 && skipped.length > 0) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Voice "${voiceId}" has a consented cloned voice on a linked character — ` +
+              `propagation refused. Reassign that character directly instead.`,
+            skipped,
+          },
+        };
+      }
+      if (skipped.length > 0) return { status: 200, body: { updated, skipped } };
+      return { status: 204 };
+    };
+    const respond = (out: { status: number; body?: unknown }) =>
+      out.body === undefined ? res.status(out.status).end() : res.status(out.status).json(out.body);
+    if (scope === 'series') {
       /* Review pass 3 (E) -- a design (or Keep) in a book whose cast is not confirmed
          is not shared with the series (F8), so the drawer's Save that follows names
-         that book alone, exactly as the design jobs do (`seriesShared ? filter :
-         undefined`): a series write would rewrite the confirmed mates' rows (their
-         library slots and engines included). */
-      const named = await peekBook(bookId!);
-      if (named && named.state?.castConfirmed !== true) {
-        seriesFilter = undefined;
-        onlyBookDir = named.bookDir;
-      }
+         that book alone, exactly as the design jobs do: a series write would rewrite
+         the confirmed mates' rows (their library slots and engines included).
+         Review pass 4 (🟠2) -- decided and written UNDER the book's own book-op, from
+         the handle it hands out: a folder move or a Start fresh cannot land between
+         the read that says "unconfirmed" and the write (the write used to re-create
+         the old folder from a lock-free peek). The series walk below runs only when
+         that locked read says the book is confirmed, and takes each book's op itself
+         (never nested). A Save for a book that is gone falls through to the walk. */
+      const own = await withBookOp(bookId!, async (b) =>
+        b.state.castConfirmed === true ? undefined : apply(undefined, b.bookDir),
+      );
+      if (own !== undefined && own !== BOOK_GONE) return respond(own);
     }
     /* #3713 -- the fan-out matches mates by voice id, so a repaired one is never named: refuse the whole
        write (before any cast.json changes) when the request lacks the current repair epoch. */
-    if (await refuseGatedSeriesFanOut(gateSeries, req, res)) return;
-    if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter, undefined, onlyBookDir))) {
-      return res.status(409).json({
-        error:
-          `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
-          `override would silently revert it to a catalog voice. Reassign that character directly instead.`,
-      });
-    }
-    /* GATE 2 I-B1 — the SET branch's sibling refusal. The write pins
-       `ttsEngine` to the incoming engine on every matching character, so a
-       character cloned on a DIFFERENT clone-capable engine would keep its
-       marker and stop rendering it. Fail loud instead. */
-    if (
-      parsed !== null &&
-      (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine, onlyBookDir, await separatedDesignedUuid(parsed)))
-    ) {
-      return res.status(409).json({
-        error:
-          `Voice "${voiceId}" has a consented cloned voice on a linked character, on a different ` +
-          `engine — switching it to ${parsed.engine} would silently stop that voice rendering. ` +
-          `Reassign that character directly instead.`,
-      });
-    }
-    const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter, onlyBookDir);
-    if (updated === 0 && skipped.length === 0) {
-      const where = seriesFilter
-        ? `in series "${seriesFilter.author} / ${seriesFilter.series}"`
-        : 'in any confirmed cast';
-      return res
-        .status(404)
-        .json({ error: `No character with voiceId "${voiceId}" found ${where}.` });
-    }
-    if (updated === 0 && skipped.length > 0) {
-      return res.status(409).json({
-        error:
-          `Voice "${voiceId}" has a consented cloned voice on a linked character — ` +
-          `propagation refused. Reassign that character directly instead.`,
-        skipped,
-      });
-    }
-    if (skipped.length > 0) {
-      return res.status(200).json({ updated, skipped });
-    }
-    res.status(204).end();
+    if (await refuseGatedSeriesFanOut(seriesFilter, req, res)) return;
+    return respond(await apply(seriesFilter, undefined));
   } catch (e) {
     console.error('[voices] override failed', e);
     /* #2260 FINAL ROUND (B2) — `applyOverrideToCastFiles` →

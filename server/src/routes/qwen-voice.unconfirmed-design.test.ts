@@ -76,6 +76,21 @@ vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
   return { ...actual, readStateJsonWithRecovery };
 });
 
+/* Review pass 4, 🟠3 — when armed, the next rename onto a non-preview name fails (the
+   promote's own move, after a Keep's isolation has already carried the preview). */
+const failPromoteRename = vi.hoisted(() => ({ armed: false }));
+vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/atomic-rename.js')>();
+  const renameWithRetry: typeof actual.renameWithRetry = async (from, to, ...rest) => {
+    if (failPromoteRename.armed && String(from).includes('-preview-') && !String(to).includes('-preview-')) {
+      failPromoteRename.armed = false;
+      throw Object.assign(new Error('EBUSY: simulated'), { code: 'EBUSY' });
+    }
+    return actual.renameWithRetry(from, to, ...rest);
+  };
+  return { ...actual, renameWithRetry };
+});
+
 /* #4072 — when armed, the next series walk stamps its first book and then throws
    (a lock timeout partway through a walk). */
 const failWalk = vi.hoisted(() => ({ armed: false }));
@@ -205,6 +220,7 @@ beforeEach(() => {
   holdWalk.statePath = null;
   holdWalk.ms = 1500;
   failWalk.armed = false;
+  failPromoteRename.armed = false;
   failConfirmedRead.on = false;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
@@ -813,17 +829,195 @@ describe('F8 (review pass 3)', () => {
     expect(retry.body.voiceId).toBe(`qwen-${own}`);
   });
 
-  it('F: a retry that sends the row own stale preview id (its key moved since) is carried onto the new key', async () => {
+  /* Review pass 4, 🟠3 — the row reaches its new key by a REAL isolation: a Keep whose
+     promote then fails after the isolation carried the preview (the retry sends the
+     preview id the client still holds). The old test moved the key with a raw write. */
+  it('F / pass 4: a Keep that failed after its isolation carried the preview: the retry with the old preview id lands', async () => {
     seedUuidDesigned();
     const prev = await design('Book Three', { preview: true });
     const previewed = readFileSync(pt(prev.body.voiceId));
-    const moved = JSON.parse(readFileSync(castPath('Book Three'), 'utf8'));
-    moved.characters[0].voiceUuid = 'u3';
-    moved.characters[0].overrideTtsVoices = { qwen: { name: 'qwen-u3' } };
-    writeFileSync(castPath('Book Three'), JSON.stringify(moved));
+    failPromoteRename.armed = true;
+    const first = await promote('Book Three', prev.body.voiceId);
+    expect(first.status, JSON.stringify(first.body)).toBeGreaterThanOrEqual(500);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).not.toBe('u1'); // the isolation landed
+    expect(existsSync(pt(prev.body.voiceId))).toBe(false); // and carried the preview
+    const retry = await promote('Book Three', prev.body.voiceId);
+    expect(retry.status, JSON.stringify(retry.body)).toBe(200);
+    expect(retry.body.voiceId).toBe(`qwen-${own}`);
+    expect(readFileSync(pt(`qwen-${own}`)).equals(previewed)).toBe(true);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+  });
+});
+
+/* Review pass 4 (final) -- 🟠1: an "own" record names the book and the moment. */
+describe('F8 (review pass 4) -- a separation record is proof of ownership only for its own book and generation', () => {
+  /* What Re-parse and Start fresh do to state.json: un-confirm and rotate the epoch. */
+  const reparse = (t: Title) => {
+    const s = JSON.parse(readFileSync(statePath(t), 'utf8'));
+    writeFileSync(statePath(t), JSON.stringify({ ...s, castConfirmed: false, editEpoch: `epoch-${++counter}` }));
+  };
+  const tear = (t: Title) => writeFileSync(castPath(t), '{"characters":[');
+  const NEW_PT = Buffer.from('SHARED-NEW-PT');
+  const NEW_ANGRY = Buffer.from('SHARED-NEW-ANGRY');
+
+  it('S1: an unconfirmed mint, Confirm, a later book links onto it, the minting book is re-parsed, the later book is torn: the design leaves the uuid alone', async () => {
+    seedNeverDesigned(false);
+    expect((await design('Book Three')).status).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    const ownBytes = readFileSync(pt(`qwen-${own}`));
+    confirm('Book Three');
+    writeBook('Book Four', [{ ...legacy, voiceUuid: own, ...linkTo('Book Three'), overrideTtsVoices: { qwen: { name: `qwen-${own}` } } }]);
+    reparse('Book Three');
+    tear('Book Four');
+    const res = await design('Book Three');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt(`qwen-${own}`)).equals(ownBytes)).toBe(true);
+    expect(row('Book Three').voiceUuid).not.toBe(own);
+  });
+
+  async function seedDeclineChainThenReparse(tearThree: boolean) {
+    reset();
+    writeFileSync(pt('qwen-u_shared'), BOOK_ONE_PT);
+    writeFileSync(join(qwenDir(), 'qwen-u_shared.json'), '{"instruct":"one"}');
+    writeFileSync(pt('qwen-u_new'), NEW_PT);
+    writeFileSync(join(qwenDir(), 'qwen-u_new.json'), '{"instruct":"two after decline"}');
+    writeFileSync(pt('qwen-u_new__angry'), NEW_ANGRY);
+    writeFileSync(join(qwenDir(), 'qwen-u_new__angry.json'), '{"instruct":"angry"}');
+    const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
+    await recordSeparatedVoice('u_new'); // what the decline's separation records
+    writeBook('Book One', [{ ...legacy, voiceUuid: 'u_shared', overrideTtsVoices: { qwen: { name: 'qwen-u_shared' } } }]);
+    writeBook('Book Two', [{ ...legacy, voiceUuid: 'u_new', declinedVoiceFrom: [ids['Book One']], declinedVoiceUuids: ['u_shared'], overrideTtsVoices: { qwen: { name: 'qwen-u_new' } } }], false);
+    writeBook('Book Three', [{ ...legacy, voiceUuid: 'u_new', ...linkTo('Book Two'), overrideTtsVoices: { qwen: { name: 'qwen-u_new', variants: { angry: { name: 'qwen-u_new__angry' } } } } }]);
+    if (tearThree) tear('Book Three');
+  }
+
+  it('S2: a "Don\'t reuse" record is no proof of ownership: a follower that moved with the decline is torn, the re-parsed decliner designs: qwen-u_new is untouched', async () => {
+    await seedDeclineChainThenReparse(true);
+    const res = await design('Book Two');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt('qwen-u_new')).equals(NEW_PT)).toBe(true);
+    expect(readFileSync(pt('qwen-u_new__angry')).equals(NEW_ANGRY)).toBe(true);
+    expect(row('Book Two').voiceUuid).not.toBe('u_new');
+  });
+
+  it('S2 control: the follower readable: the decliner still isolates and the voice is untouched', async () => {
+    await seedDeclineChainThenReparse(false);
+    expect((await design('Book Two')).status).toBe(200);
+    expect(readFileSync(pt('qwen-u_new')).equals(NEW_PT)).toBe(true);
+  });
+
+  it('S3: Book Two mints before Confirm; a new Book Three links onto it; Book Two is torn: Book Three leaves the uuid alone', async () => {
+    reset();
+    writeBook('Book One', [{ ...legacy }]);
+    writeBook('Book Two', [{ ...legacy, ...linkTo('Book One') }], false);
+    expect((await design('Book Two')).status).toBe(200);
+    const u2 = row('Book Two').voiceUuid as string;
+    const twoBytes = readFileSync(pt(`qwen-${u2}`));
+    confirm('Book Two');
+    writeBook('Book Three', [{ ...legacy, voiceUuid: u2, voiceState: 'reused', ...linkTo('Book Two'), overrideTtsVoices: { qwen: { name: `qwen-${u2}` } } }], false);
+    tear('Book Two');
+    const res = await design('Book Three');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(pt(`qwen-${u2}`)).equals(twoBytes)).toBe(true);
+    expect(row('Book Three').voiceUuid).not.toBe(u2);
+  });
+
+  it('control (isolation record): a second design in the same book and generation does not isolate again', async () => {
+    seedUuidDesigned();
+    tear('Book One');
+    tear('Book Two');
+    expect((await design('Book Three')).status).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    const files = uuidBases();
+    expect((await design('Book Three')).status).toBe(200);
+    expect(row('Book Three').voiceUuid).toBe(own);
+    expect(uuidBases()).toEqual(files);
+  });
+
+  it('control (mint record): a book that appears torn after the row minted its own uuid does not make the next design isolate', async () => {
+    reset();
+    writeBook('Book One', [{ id: 'other', name: 'Other', role: 'supporting', color: 'sky' }]);
+    writeBook('Book Three', [{ ...legacy, voiceId: 'v_mira' }], false);
+    expect((await design('Book Three')).status).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).toBeTruthy();
+    tear('Book One'); // a same-series book that cannot be read: it may hold the voice
+    expect((await design('Book Three')).status).toBe(200);
+    expect(row('Book Three').voiceUuid).toBe(own);
+  });
+
+  it('control: a re-parse of the minting book itself, the book torn: the row is not its own any more and isolates', async () => {
+    reset();
+    writeBook('Book One', [{ id: 'other', name: 'Other', role: 'supporting', color: 'sky' }]);
+    writeBook('Book Three', [{ ...legacy, voiceId: 'v_mira' }], false);
+    expect((await design('Book Three')).status).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    reparse('Book Three');
+    tear('Book One');
+    expect((await design('Book Three')).status).toBe(200);
+    expect(row('Book Three').voiceUuid).not.toBe(own);
+  });
+});
+
+/* Review pass 4 -- 🟡4: the variant pre-check scans only this book while it is unconfirmed. */
+describe('F8 (review pass 4) -- the emotion-take clone pre-check in an unconfirmed book', () => {
+  it('R1v: a torn confirmed Book One no longer refuses an emotion take in unconfirmed Book Three, and only Book Three is written', async () => {
+    seedUuidDesigned();
+    writeFileSync(castPath('Book One'), '{"characters":[');
+    const torn = readFileSync(castPath('Book One'), 'utf8');
+    const two = readFileSync(castPath('Book Two'), 'utf8');
+    const res = await design('Book Three', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).not.toBe('u1');
+    expect(res.body.voiceId).toBe(`qwen-${own}__angry`);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(torn);
+    expect(readFileSync(castPath('Book Two'), 'utf8')).toBe(two);
+    expect(readFileSync(pt('qwen-u1__angry')).equals(BOOK_ONE_ANGRY)).toBe(true);
+  });
+
+  it('control: a CONFIRMED Book Three still refuses on a clone anywhere in the series (the pre-check is only narrowed for an unconfirmed book)', async () => {
+    seedUuidDesigned();
+    confirm('Book Three');
+    const one = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+    one.characters[0].overrideTtsVoices = { qwen: { name: 'qwen-u1', provenance: 'cloned', consent: { attested: true } } };
+    writeFileSync(castPath('Book One'), JSON.stringify(one));
+    const res = await design('Book Three', { emotion: 'angry' });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+  });
+});
+
+/* Review pass 4 -- 🟠3: Keep's stale-id carry. */
+describe('F8 (review pass 4) -- Keep carries only a base preview of the key the row was isolated from', () => {
+  it('K1: an emotion preview id sent to Keep in an unconfirmed book is refused and promotes nothing', async () => {
+    seedUuidDesigned();
+    const prev = await design('Book Three', { preview: true, emotion: 'angry' });
+    expect(prev.status, JSON.stringify(prev.body)).toBe(200);
+    const three = readFileSync(castPath('Book Three'), 'utf8');
     const keep = await promote('Book Three', prev.body.voiceId);
-    expect(keep.status, JSON.stringify(keep.body)).toBe(200);
-    expect(keep.body.voiceId).toBe('qwen-u3');
-    expect(readFileSync(pt('qwen-u3')).equals(previewed)).toBe(true);
+    expect(keep.status, JSON.stringify(keep.body)).toBe(400);
+    expect(readFileSync(castPath('Book Three'), 'utf8')).toBe(three);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(uuidBases()).toEqual(['qwen-u1.pt']);
+  });
+
+  it('L1: a preview staged for Ash then a re-point: Keep with the old preview id is refused', async () => {
+    seedUuidDesigned();
+    const ASH_PT = Buffer.from('BOOK-ONE-ASH-PT');
+    writeFileSync(pt('qwen-u_ash'), ASH_PT);
+    writeFileSync(join(qwenDir(), 'qwen-u_ash.json'), '{"instruct":"ash"}');
+    const one = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+    one.characters.push({ id: 'ash', name: 'Ash', role: 'supporting', color: 'sky', voiceId: 'v_ash', voiceUuid: 'u_ash', overrideTtsVoices: { qwen: { name: 'qwen-u_ash' } } });
+    writeFileSync(castPath('Book One'), JSON.stringify(one));
+    const prev = await design('Book Three', { preview: true });
+    expect(prev.status).toBe(200);
+    /* A re-point (link-prior) adopts the target row's voice: the row now sits on Ash's key. */
+    const three = JSON.parse(readFileSync(castPath('Book Three'), 'utf8'));
+    three.characters[0] = { ...three.characters[0], voiceUuid: 'u_ash', voiceId: 'v_ash', overrideTtsVoices: { qwen: { name: 'qwen-u_ash' } }, matchedFrom: { bookId: ids['Book One'], characterId: 'ash', bookTitle: 'Book One', confidence: 0.9 } };
+    writeFileSync(castPath('Book Three'), JSON.stringify(three));
+    const keep = await promote('Book Three', prev.body.voiceId);
+    expect(keep.status, JSON.stringify(keep.body)).toBe(400);
+    expect(readFileSync(pt('qwen-u_ash')).equals(ASH_PT)).toBe(true);
   });
 });

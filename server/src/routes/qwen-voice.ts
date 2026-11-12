@@ -27,7 +27,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { rename, rm, copyFile, stat, readdir, utimes } from 'node:fs/promises';
+import { rename, rm, copyFile, stat, readdir, readFile, utimes } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import {
   constants as fsConstants,
@@ -56,6 +56,7 @@ import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import {
   forgetSeparatedVoice,
   isSeparatedVoice,
+  isOwnSeparatedVoice,
   isSeparatedVoiceSync,
   recordSeparatedVoice,
 } from '../workspace/separated-voices.js';
@@ -87,6 +88,7 @@ import {
   type LinkFollower,
   readBookId,
   readBookCastConfirmed,
+  readBookOwnStamp,
   RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
@@ -733,13 +735,18 @@ async function ownBookPlan(
 /* Review pass 3 (C) — does an unconfirmed design isolate this row? Whenever another
    book's row holds its key (a follower included), and also when a book that could
    not be read may hold it (an unreadable holder is not an absent one) unless the row's
-   uuid is already known to be its own (a recorded separation or mint), which keeps a
-   second design from isolating again and dropping the takes the first one made.
+   uuid is already known to be its own, which keeps a second design from isolating
+   again and dropping the takes the first one made. Review pass 4 (🟠1): "known to be its
+   own" means a record that names THIS book at its CURRENT edit epoch (an unconfirmed
+   mint or isolation, separated-voices.ts `OwnStamp`); a "Don't reuse" record, or one
+   another book or an earlier generation (Re-parse, Start fresh) wrote, is not proof.
    Never a refusal: the isolation writes only this book. */
-async function mustIsolateUnconfirmed(row: MarkedCharacter, scan: VoiceScan): Promise<boolean> {
+async function mustIsolateUnconfirmed(row: MarkedCharacter, scan: VoiceScan, bookDir: string): Promise<boolean> {
   if (scan.heldElsewhere || scan.followers.length > 0) return true;
   if (!scan.unreadableMayHold) return false;
-  return !(row.voiceUuid && (await isSeparatedVoice(row.voiceUuid)));
+  if (!row.voiceUuid) return true;
+  const stamp = await readBookOwnStamp(bookDir);
+  return !(stamp && (await isOwnSeparatedVoice(row.voiceUuid, stamp)));
 }
 
 /* Writes one book's cast.json. Each caller builds it INSIDE its own withCastLocks
@@ -852,7 +859,7 @@ export async function separateVoiceLocked(
   const separate = decline
     ? mustSeparateOnDecline(x, scan, decline.fromBookId)
     : unconfirmed
-      ? await mustIsolateUnconfirmed(x, scan)
+      ? await mustIsolateUnconfirmed(x, scan, bookDir)
       : mustSeparateOnDesign(x, scan);
 
   const locked = new Set(lockedDirs.map((d) => resolve(d)));
@@ -917,8 +924,10 @@ export async function separateVoiceLocked(
   const savesBefore = savesOf(oldKey);
   /* PR #4007 pass 13 — U' is recorded as separated before any row moves onto it
      (separated-voices.ts): a first design by any row on it is never shared. Every
-     failure below that leaves no row on U' takes the record back. */
-  await recordSeparatedVoice(newUuid);
+     failure below that leaves no row on U' takes the record back. An unconfirmed
+     isolation names its book and generation (review pass 4, 🟠1); a decline's record
+     names nobody. */
+  await recordSeparatedVoice(newUuid, unconfirmed ? await readBookOwnStamp(bookDir) : undefined);
   let copied: string[];
   try {
     copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
@@ -1067,7 +1076,7 @@ async function isolateUnconfirmedRow(bookDir: string, characterId: string, keepP
   const row = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
   if (!row) return { uuid: undefined, separated: false };
   const scan = await scanVoiceHolders(bookDir, row, voiceHeldBy(row));
-  if (!(await mustIsolateUnconfirmed(row as MarkedCharacter, scan))) return { uuid: row.voiceUuid ?? undefined, separated: false };
+  if (!(await mustIsolateUnconfirmed(row as MarkedCharacter, scan, bookDir))) return { uuid: row.voiceUuid ?? undefined, separated: false };
   return separateDeclinedVoiceForDesign(bookDir, characterId, true, keepPreviewId);
 }
 
@@ -1094,7 +1103,12 @@ async function isolateForKeep(
   if (!row) return undefined;
   const staged = body.previewVoiceId;
   const expected = previewVoiceIdFor(qwenStorageKey(row, characterId), bookId, characterId);
-  if (staged !== expected && !isOwnStalePreview(staged, bookId, characterId)) return undefined;
+  if (staged !== expected) {
+    if (!(await keysAreIsolationCopies(staged, row, bookId, characterId))) return undefined;
+    /* Review pass 4 (🟠3) -- a retry after an earlier Keep carried the preview and then
+       failed: it already sits under the name the row expects now. */
+    if (!(await exists(qwenVoicePtPath(staged)))) return (await exists(qwenVoicePtPath(expected))) ? expected : undefined;
+  }
   if (!(await exists(qwenVoicePtPath(staged)))) return undefined;
   await isolateUnconfirmedRow(bookDir, characterId, staged);
   let after = await readRow();
@@ -1109,6 +1123,26 @@ async function isolateForKeep(
   await renameWithRetry(qwenVoiceSidecarPath(staged), qwenVoiceSidecarPath(next)).catch(() => {});
   await renameWithRetry(qwenVoiceWavPath(`${staged}__master`), qwenVoiceWavPath(`${next}__master`)).catch(() => {});
   return next;
+}
+
+/* Review pass 4 (🟠3) -- Keep carries a preview the row staged under a key it has left
+   only when the row reached its current key by an isolation FROM that key: a BASE
+   preview (an emotion take is not the base, and promoting it would write the take over
+   the base), whose key's base `.pt` is byte-equal to the current key's (an isolation
+   copies the base family; a re-point to another row's voice, or any other move, leaves
+   a different file, or none). Anything else answers promote's own 400. */
+async function keysAreIsolationCopies(staged: string, row: CastCharacter, bookId: string, characterId: string): Promise<boolean> {
+  if (!isOwnStalePreview(staged, bookId, characterId)) return false;
+  const stagedKey = staged.slice(0, staged.length - `${PREVIEW_SUFFIX}-${previewTag(bookId, characterId)}`.length);
+  if (VARIANT_EMOTIONS.some((e) => stagedKey.endsWith(`__${e}`))) return false;
+  const currentKey = qwenStorageKey(row, characterId);
+  if (stagedKey === currentKey) return false;
+  try {
+    const [was, now] = await Promise.all([readFile(qwenVoicePtPath(stagedKey)), readFile(qwenVoicePtPath(currentKey))]);
+    return was.equals(now);
+  } catch {
+    return false;
+  }
 }
 
 /* A state.json that cannot be read is not "unconfirmed" (review pass 1): the design
@@ -1431,7 +1465,7 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSep
           dirty = true;
         }
       }
-      if (dirty && recordSeparated) await recordSeparatedVoice(uuid);
+      if (dirty && recordSeparated) await recordSeparatedVoice(uuid, await readBookOwnStamp(bookDir));
       try {
         if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
       } catch (e) {
@@ -2500,7 +2534,11 @@ qwenVoiceRouter.post(
     if (
       emotion &&
       (characterHasClonedSlot(character) ||
-        (await seriesClonedOnRowsVoice(character, seriesInfo ?? undefined, bookDir)))
+        /* Review pass 4 (🟡4) -- an unconfirmed book shares nothing with the series (F8),
+           and its take is recorded in this book alone, so a clone on another book is not
+           one this write could touch: scan this book only (a torn confirmed mate would
+           otherwise refuse the take with a 500). */
+        (await seriesClonedOnRowsVoice(character, located.state?.castConfirmed === true ? (seriesInfo ?? undefined) : undefined, bookDir)))
     ) {
       return res.status(409).json({
         error: clonedVariantRefusal(character.name ?? characterId),
