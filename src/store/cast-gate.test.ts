@@ -13,7 +13,13 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api }));
 
-import { castGateMiddleware, selectCastReadOnly, rehydrateCastAfterAnalysis } from './cast-gate';
+import {
+  castGateMiddleware,
+  selectCastReadOnly,
+  selectCastIdentityPaused,
+  rehydrateCastAfterAnalysis,
+  handleCastIdentityBusy,
+} from './cast-gate';
 import { persistenceMiddleware } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
 import { bookBusySlice } from './book-busy-slice';
@@ -107,6 +113,76 @@ describe('selectCastReadOnly (invariant 7)', () => {
     expect(selectCastReadOnly({ ...base, cast: { analysisEra: { A: { epoch: 1 } } } }, 'B')).toBe(false);
     /* A hand-built store with none of the three slices is never read-only. */
     expect(selectCastReadOnly({}, 'A')).toBe(false);
+  });
+});
+
+describe('P6-1 — a book the stage does not name (PR #4103 pass 6)', () => {
+  /* Nothing releases such a book's era (the gate polls and re-reads only the stage's
+     book), so its cast-identity controls key only on live state, and a 409 for it latches
+     nothing. */
+  const runEnds = async (store: Store) => {
+    busy = {};
+    for (let i = 0; i < 20; i++) {
+      store.dispatch(notificationsSlice.actions.pushToast({ kind: 'info', message: `tick ${i}` }));
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+  };
+
+  it('selectCastIdentityPaused: live state only off the stage, the full gate on it', () => {
+    const base = { ui: { stage: { kind: 'voices' } }, cast: { analysisEra: {} }, bookBusy: { busyByBook: {} } };
+    expect(selectCastIdentityPaused({ ...base, cast: { analysisEra: { A: { epoch: 1 } } } }, 'A')).toBe(false);
+    expect(selectCastIdentityPaused({ ...base, analysis: { activeStream: snap('A') } }, 'A')).toBe(true);
+    expect(selectCastIdentityPaused({ ...base, analysis: { activeStream: snap('A', { state: 'paused' }) } }, 'A')).toBe(
+      false,
+    );
+    expect(selectCastIdentityPaused({ ...base, bookBusy: { busyByBook: { A: ['analysis'] } } }, 'A')).toBe(true);
+    expect(selectCastIdentityPaused({ ...base, bookBusy: { busyByBook: { A: ['render'] } } }, 'A')).toBe(false);
+    const onA = { ...base, ui: { stage: { kind: 'ready', bookId: 'A' } } };
+    expect(selectCastIdentityPaused({ ...onA, cast: { analysisEra: { A: { epoch: 1 } } } }, 'A')).toBe(true);
+  });
+
+  it('re-analyse A while it is open, go to #/voices, A ends: not paused for A', async () => {
+    const store = makeStore();
+    open(store, 'A');
+    busy = { A: ['analysis'] };
+    store.dispatch(analysisActions.setActiveStream(snap('A')));
+    expect(selectCastIdentityPaused(store.getState(), 'A')).toBe(true);
+    store.dispatch(uiActions.openVoices());
+    store.dispatch(analysisActions.clearActiveStream());
+    await runEnds(store);
+    expect(selectCastIdentityPaused(store.getState(), 'A')).toBe(false);
+  });
+
+  it.each([
+    ['#/voices', (s: Store) => s.dispatch(uiActions.openVoices())],
+    ["another book's stage", (s: Store) => open(s, 'B')],
+  ])('a 409 for A on %s toasts and latches nothing', async (_n, stage) => {
+    const store = makeStore();
+    stage(store);
+    busy = { A: ['analysis'] };
+    expect(store.dispatch(handleCastIdentityBusy('A', { code: 'book_busy' }))).toBe(true);
+    await settle();
+    expect(store.getState().notifications.toasts.map((t: { dedupeKey?: string }) => t.dedupeKey)).toEqual([
+      'cast-read-only',
+    ]);
+    expect(era(store, 'A')).toBeUndefined();
+    expect(api.getBookBusy).not.toHaveBeenCalledWith('A');
+    await runEnds(store);
+    expect(selectCastReadOnly(store.getState(), 'A')).toBe(false);
+    expect(selectCastIdentityPaused(store.getState(), 'A')).toBe(false);
+  });
+
+  it('control: on A the same 409 latches the era and releases it after the busy-checked re-read', async () => {
+    const store = makeStore();
+    open(store, 'A');
+    busy = { A: ['analysis'] };
+    store.dispatch(handleCastIdentityBusy('A', { code: 'book_busy' }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(era(store, 'A')).toBeDefined();
+    expect(selectCastIdentityPaused(store.getState(), 'A')).toBe(true);
+    await runEnds(store);
+    expect(era(store, 'A')).toBeUndefined();
+    expect(selectCastIdentityPaused(store.getState(), 'A')).toBe(false);
   });
 });
 

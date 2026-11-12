@@ -47,7 +47,7 @@ import {
 import { promoteCharacterVoice } from '../store/voice-library-slice';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
-import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastIdentityPaused } from '../store/cast-gate';
 import {
   DuplicateReviewModal,
   type DuplicateReviewPair,
@@ -539,9 +539,11 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     mergeDisabledReason,
   } = compareDerivations;
   /* R57 (PR #4103 pass 5b) — the server refuses a merge while an analysis holds the
-     merge's book (R55): Merge is disabled while that book's cast is read-only. */
+     merge's book (R55): Merge is disabled while that book's cast is read-only. P6-1 — for
+     a book the stage does not name (e.g. on #/voices) only a live run counts: nothing
+     releases that book's era, so reading it would pause Merge for good. */
   const mergeBookId = selectedVoices[0]?.bookId;
-  const mergeReadOnly = useAppSelector((s) => (mergeBookId ? selectCastReadOnly(s, mergeBookId) : false));
+  const mergeReadOnly = useAppSelector((s) => (mergeBookId ? selectCastIdentityPaused(s, mergeBookId) : false));
 
   /* Plan 101 — pure duplicate-candidate derivation. Same-series same-base-
      voice cross-book pairs whose normalised names dedup-match (per the

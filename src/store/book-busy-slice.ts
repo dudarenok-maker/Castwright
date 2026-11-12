@@ -90,6 +90,16 @@ export interface BusyPollState extends CastGateState {
 export const stageBookId = (state: BusyPollState): string | null =>
   (state.ui?.stage as { bookId?: string } | undefined)?.bookId ?? null;
 
+/** P6-1 (PR #4103 pass 6) — is a cast-identity control for `bookId` paused? For the
+    book the stage names: while its cast is read-only, era included (the gate releases
+    it after its busy-checked re-read). For any other book nothing polls or re-reads, so
+    nothing would release its era: only live state counts, a running snapshot or a busy
+    reply listing `analysis`. */
+export function selectCastIdentityPaused(state: BusyPollState, bookId: string): boolean {
+  if (stageBookId(state) === bookId) return selectCastReadOnly(state, bookId);
+  return snapshotRunning(state, bookId) || (state.bookBusy?.busyByBook?.[bookId]?.includes('analysis') ?? false);
+}
+
 const eraEpochOf = (state: CastGateState, bookId: string) => state.cast?.analysisEra?.[bookId]?.epoch;
 
 /** R30 — is an analysis stream in this tab feeding `bookId`'s snapshot? Asks

@@ -50,7 +50,7 @@ import {
   type BusyPollState,
 } from './book-busy-slice';
 
-export { selectCastReadOnly, pollBookBusy } from './book-busy-slice';
+export { selectCastReadOnly, selectCastIdentityPaused, pollBookBusy } from './book-busy-slice';
 
 interface GateState extends BusyPollState {
   manuscript?: { bookId?: string | null };
@@ -154,13 +154,17 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
     another device, or seen by a tab that has not caught up. It takes the refused cast PUT's
     path (persistence-middleware.ts): the read-only toast, the era latched (the banner and the
     read-only cast), and a re-read once the run is over. True when `err` was that refusal, so
-    the caller raises no failure toast and no re-read of its own. */
+    the caller raises no failure toast and no re-read of its own.
+    P6-1 (pass 6) — only the stage's book is latched: nothing would release another book's
+    era (the gate polls and re-reads the stage's book only), so for it the toast is all; a
+    retry mid-run gets the 409 again. */
 export function handleCastIdentityBusy(bookId: string, err: unknown): GateThunk<boolean> {
-  return (dispatch) => {
+  return (dispatch, getState) => {
     if ((err as { code?: unknown } | null)?.code !== 'book_busy') return false;
     dispatch(
       notificationsActions.pushToast({ kind: 'error', message: CAST_READ_ONLY_MESSAGE, dedupeKey: CAST_READ_ONLY_DEDUPE_KEY }),
     );
+    if (stageBookId(getState()) !== bookId) return true;
     dispatch(castActions.latchAnalysisEra({ bookId }));
     dispatch(requestCastRehydrate(bookId));
     return true;

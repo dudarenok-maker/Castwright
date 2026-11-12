@@ -7,6 +7,12 @@ import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { persistenceMiddleware } from '../store/persistence-middleware';
+import { castGateMiddleware } from '../store/cast-gate';
+import { bookBusySlice } from '../store/book-busy-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { changeLogSlice } from '../store/change-log-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
+import { resetBookSlices } from '../store/reset-book-slices';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -85,6 +91,9 @@ const removeNotLinkedToMock =
     }>
   >();
 
+/* P6-1 — `GET /busy`, per book; the cast-gate tests below swap in a table. */
+const getBookBusyMock = vi.fn<(bookId: string) => Promise<string[]>>(() => Promise.resolve([]));
+
 const promoteToLibraryMock =
   vi.fn<
     (args: { bookId: string; characterId: string; name: string }) => Promise<{
@@ -134,7 +143,7 @@ vi.mock('../lib/api', () => ({
       promoteToLibraryMock(args),
     listVoiceLibrary: () => Promise.resolve({ voices: [] }),
     /* Plan 291 — a failed merge re-reads the cast once busy is clear. */
-    getBookBusy: () => Promise.resolve([]),
+    getBookBusy: (bookId: string) => getBookBusyMock(bookId),
     putBookState: () => Promise.resolve(undefined),
   },
 }));
@@ -233,6 +242,7 @@ beforeEach(() => {
   linkPriorCharacterMock.mockReset();
   notLinkedToMock.mockReset();
   removeNotLinkedToMock.mockReset();
+  getBookBusyMock.mockReset().mockResolvedValue([]);
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -1304,6 +1314,112 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     const merge = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
     expect(merge).not.toHaveAttribute('aria-disabled');
     expect(merge).toBeEnabled();
+  });
+
+  /* P6-1 (PR #4103 pass 6) — on the global Voices view (#/voices) the stage names no book, so
+     nothing ever releases b1's latched era (the gate polls and re-reads only the stage's book).
+     For a book the stage does not name the Merge gate keys only on live state: a running
+     snapshot, or a busy reply listing `analysis`. With the real gate middleware. */
+  describe('P6-1: the Merge gate for a book the stage does not name', () => {
+    const b1OnDisk: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      { id: 'wren', name: 'Wren', role: 'Lead', color: 'peach' },
+      { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'Lead', color: 'peach' },
+      { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta' },
+    ];
+    let busyTable: Record<string, string[]>;
+
+    beforeEach(() => {
+      busyTable = {};
+      getBookBusyMock.mockImplementation(async (bookId: string) => busyTable[bookId] ?? []);
+      getBookState.mockResolvedValue({ state: {}, cast: { characters: b1OnDisk } } as unknown as BookStateResponse);
+    });
+
+    function makeGateStore() {
+      return configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          chapters: chaptersSlice.reducer,
+          analysis: analysisSlice.reducer,
+          bookBusy: bookBusySlice.reducer,
+          notifications: notificationsSlice.reducer,
+          changeLog: changeLogSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          voices: voicesSlice.reducer,
+        },
+        middleware: (gd) =>
+          gd({ serializableCheck: false, immutableCheck: false }).concat(persistenceMiddleware, castGateMiddleware),
+      });
+    }
+
+    /* On #/voices the merge needs b1's cast, which Compare loads. */
+    async function offerMerge(store: ReturnType<typeof makeGateStore>) {
+      render(
+        <Provider store={store}>
+          <LibraryView library={libraryB1} />
+        </Provider>,
+      );
+      selectCard('Wren');
+      selectCard('Wren Sparrow');
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      return screen.findByRole('button', { name: 'Merge into Wren Sparrow' });
+    }
+
+    it('re-analyse b1 while it is open, go to #/voices, b1 ends: Merge is enabled with no paused tooltip', async () => {
+      const store = makeGateStore();
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'voices_pending' }));
+      resetBookSlices(store.dispatch, 'b1');
+      store.dispatch(castSlice.actions.hydrateCharacters(b1OnDisk));
+      busyTable = { b1: ['analysis'] };
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm-b1',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: 0,
+          state: 'running',
+        }),
+      );
+      expect(store.getState().cast.analysisEra?.b1).toBeDefined();
+      store.dispatch(uiSlice.actions.openVoices());
+      busyTable = {};
+      store.dispatch(analysisActions.clearActiveStream());
+
+      const merge = await offerMerge(store);
+      expect(merge).not.toHaveAttribute('aria-disabled');
+      expect(merge).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
+    });
+
+    it('a 409 book_busy for b1 on #/voices toasts, leaves no latch, and Merge works once b1 ends', async () => {
+      const store = makeGateStore();
+      store.dispatch(uiSlice.actions.openVoices());
+      busyTable = { b1: ['analysis'] };
+      mergeCharactersMock.mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'book_busy' }));
+
+      const merge = await offerMerge(store);
+      fireEvent.click(merge);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('cast-read-only'),
+      );
+      /* The run ends on the server; the user retries. */
+      busyTable = {};
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(store.getState().cast.analysisEra?.b1).toBeUndefined();
+      const again = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+      expect(again).not.toHaveAttribute('aria-disabled');
+      expect(again).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
+
+      mergeCharactersMock.mockResolvedValueOnce({ characters: b1OnDisk.filter((c) => c.id !== 'wren') });
+      fireEvent.click(again);
+      await waitFor(() => expect(mergeCharactersMock).toHaveBeenCalledTimes(2));
+    });
   });
 });
 
