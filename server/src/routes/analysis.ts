@@ -1319,16 +1319,27 @@ type RunLedgers = { kind: 'main' } | { kind: 'subset'; own: RunAddedLedger; ownP
 /** A ledger patch of only what changed: the entries of `next` that differ from the job's
     copy `before`, and every `null`. Re-sending an unchanged entry would restore one a mid-run
     merge deleted from the cache file (`ledger: {[source]: null}`, cast-merge.ts) from the job's
-    older copy (#4031 M5). */
+    older copy (#4031 M5). The delta is for entries the run only carried: an entry for a row
+    the persist itself wrote (`written`) is always sent (PR #4103 pass 4 P4-1), because the
+    job's copy is no base for it - the persist's own patch, or a route, has moved the file
+    since, and an entry that equals the copy would otherwise be dropped (by `clearLedger`
+    in the same op, or by the merge's delete). The same principle as R54's decisions base. */
 function ledgerDelta(
   before: RunAddedLedger,
   next: Readonly<Record<string, LedgerEntry | null>>,
+  written: ReadonlySet<string> = new Set(),
 ): Record<string, LedgerEntry | null> {
   const out: Record<string, LedgerEntry | null> = {};
   for (const [id, entry] of Object.entries(next)) {
-    if (entry === null || JSON.stringify(before[id]) !== JSON.stringify(entry)) out[id] = entry;
+    if (entry === null || written.has(id) || JSON.stringify(before[id]) !== JSON.stringify(entry)) out[id] = entry;
   }
   return out;
+}
+
+/** The rows a persist wrote: on the roster it persisted, not merely carried forward. */
+function persistWrittenIds(out: { characters: ReadonlyArray<{ id: string }>; carriedForward: ReadonlyArray<{ id: string }> }): Set<string> {
+  const carried = new Set(out.carriedForward.map((c) => c.id));
+  return new Set(out.characters.map((c) => c.id).filter((id) => !carried.has(id)));
 }
 
 /** R4 at a COMPLETED subset persist (R35a, R35b): `added-once` for the rows the run's own
@@ -1346,8 +1357,7 @@ export function subsetCompletedAddedOnce(out: {
   ledger: RunAddedLedger;
   mainLedger?: RunAddedLedger;
 }): RunAddedLedger {
-  const carried = new Set(out.carriedForward.map((c) => c.id));
-  const written = new Set(out.characters.map((c) => c.id).filter((id) => !carried.has(id)));
+  const written = persistWrittenIds(out);
   const res: RunAddedLedger = {};
   for (const [id, e] of Object.entries(out.ledger)) {
     if (e.state === 'added-once' || written.has(id)) res[id] = { state: 'added-once' };
@@ -8699,10 +8709,12 @@ export async function runMainAnalyzerJob(
            one sticks. The cache takes follow the persist's reroute of lines a
            deleted plan target held to the narrator (rule 13), applied to the cache
            on disk inside the op so a merge's rewrite of the takes is not reverted.
-           Only what changed against the job's copy as the persist read it is sent
-           (M5, PR #4103 pass 3 P3-1): an `added-once` entry the run carried unchanged
-           is already on disk, or a route (a merge) deleted it mid-run and it stays
-           deleted; an entry the persist itself added or converted is re-sent. */
+           An entry for a row this persist wrote is always sent (PR #4103 pass 4 P4-1):
+           the persist's own patch may have made it `run-owned` on disk, which the
+           `clearLedger` below would delete. For an entry the run only carried, just
+           what changed against the job's copy as the persist read it is sent (M5,
+           pass 3 P3-1): unchanged, it is already on disk, or a route (a merge)
+           deleted it mid-run and it stays deleted. */
         const writtenIds = new Set((persisted?.characters ?? []).map((c) => c.id));
         const addedOnce: Record<string, LedgerEntry> = {};
         for (const [k, e] of Object.entries(persisted?.ledger ?? {})) {
@@ -8713,7 +8725,7 @@ export async function runMainAnalyzerJob(
         await mutateAnalysisCache(manuscriptId, {
           fields: { takesPersisted: true, confirmReached: true },
           clearLedger: true,
-          ledger: ledgerDelta(ledgerBeforePersist, addedOnce),
+          ledger: ledgerDelta(ledgerBeforePersist, addedOnce, persisted ? persistWrittenIds(persisted) : undefined),
           ...rerouteDeletedTakesPatch(persisted),
         });
       }
@@ -10634,8 +10646,10 @@ export async function runSubsetAnalyzerJob(
               ...subsetCompletedAddedOnce(out),
             };
             for (const id of out.droppedRunAdded) persistLedger[id] = null;
-            /* Only what changed is sent (M5): a mid-run merge's deletion stays deleted. */
-            const ledgerPatch = ledgerDelta(cache.addedRows ?? {}, persistLedger);
+            /* Only what changed is sent (M5): a mid-run merge's deletion of a carried entry
+               stays deleted. An entry for a row this persist wrote is always sent (PR #4103
+               pass 4 P4-1): the job's copy is no base for it. */
+            const ledgerPatch = ledgerDelta(cache.addedRows ?? {}, persistLedger, persistWrittenIds(out));
             const nextLedger: RunAddedLedger = { ...(cache.addedRows ?? {}) };
             for (const [k, e] of Object.entries(ledgerPatch)) {
               if (e === null) delete nextLedger[k];

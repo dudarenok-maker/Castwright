@@ -141,6 +141,8 @@ const castIoSpy = vi.hoisted(() => ({
   failSnapshot: undefined as undefined | (() => Error | undefined),
   /* Called (no throw) once the planned persist has returned. */
   onPersisted: undefined as undefined | (() => void),
+  /* Replaces the planned persist's outcome before the job sees it (a shape built directly). */
+  mapOutcome: undefined as undefined | ((outcome: unknown) => Promise<unknown>),
 }));
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
@@ -152,7 +154,8 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
       return actual.writePlanSnapshot(...a);
     },
     persistPlannedCast: async (...a: Parameters<typeof actual.persistPlannedCast>) => {
-      const out = await actual.persistPlannedCast(...a);
+      const actualOut = await actual.persistPlannedCast(...a);
+      const out = castIoSpy.mapOutcome ? ((await castIoSpy.mapOutcome(actualOut)) as typeof actualOut) : actualOut;
       if (castIoSpy.afterPersist) throw castIoSpy.afterPersist(out);
       castIoSpy.onPersisted?.();
       return out;
@@ -3962,6 +3965,42 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(entryOf(b, 'unknown-male')).toBeUndefined();
       expectNoBucketRecord(b, 'run 2');
     });
+  });
+
+  /* ---- PR #4103 pass 4 P4-1: the terminal ledger write never drops a row its persist wrote ---- */
+
+  /* The reviewer's route to this shape (a mid-run bucket merge the persist re-added) is gone
+     under R53, so the shape is built directly: run 1 leaves the bucket `added-once`; during
+     run 2 a route deletes that entry from the cache file (as a merge does) and run 2's persist
+     writes the bucket as its own `run-owned` row. A delta taken against the job's copy
+     (`added-once`) would then send nothing, and the main job's `clearLedger` would delete the
+     persist's `run-owned` entry. */
+  it('P4-1: a row the persist wrote keeps its added-once entry, though the job\'s copy already said added-once', async () => {
+    const b = seed([{ ...NARR }, pr('anna', 'Anna')], undefined, `${NEUTRAL}\n\nThe Jogger waved.`);
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') };
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+    expect(entryOf(b, 'unknown-male')).toEqual({ state: 'added-once' });
+    castIoSpy.mapOutcome = async (o) => {
+      const out = o as { characters: Row[]; ledger: Record<string, unknown> };
+      const bucket = out.characters.find((c) => c.id === 'unknown-male')!;
+      await mutateAnalysisCache(b.manuscriptId, { ledger: { 'unknown-male': null } });
+      return { ...out, ledger: { ...out.ledger, 'unknown-male': { state: 'run-owned', fp: userOwnedFingerprint(bucket) } } };
+    };
+    let events: Sent[];
+    try {
+      events = await go(b, FRESH, { seedCache: false });
+    } finally {
+      castIoSpy.mapOutcome = undefined;
+    }
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir))).toContain('unknown-male');
+    expect(entryOf(b, 'unknown-male')).toEqual({ state: 'added-once' });
+    /* So the next run's snapshot still knows the bucket as a run row: no re-minted decision. */
+    expect(done(await go(b, FRESH, { seedCache: false }))).toBe(true);
+    expect(readCache(b.manuscriptId)?.matchPlan?.decisions['unknown-male']).not.toMatchObject({ minted: true });
+    expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('unknown-male'))).toEqual(['unknown-male']);
   });
 
   /* ---- F2: a run after a main run deletes nothing by the earlier run's ledger ---- */
