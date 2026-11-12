@@ -270,10 +270,19 @@ describe('installExitLogging timestamp (#4054)', () => {
 });
 
 describe('installShutdownSignals (#4054)', () => {
-  it('registers SIGINT, SIGTERM, SIGBREAK and SIGHUP', () => {
+  it('registers SIGINT, SIGTERM, SIGBREAK and SIGHUP on win32', () => {
     const target = new EventEmitter();
-    installShutdownSignals(vi.fn(), { target });
+    installShutdownSignals(vi.fn(), { target, platform: 'win32' });
     for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
+      expect(target.listenerCount(sig)).toBe(1);
+    }
+  });
+
+  it('leaves SIGHUP alone off win32, so an inherited nohup ignore survives', () => {
+    const target = new EventEmitter();
+    installShutdownSignals(vi.fn(), { target, platform: 'linux' });
+    expect(target.listenerCount('SIGHUP')).toBe(0);
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
       expect(target.listenerCount(sig)).toBe(1);
     }
   });
@@ -282,7 +291,7 @@ describe('installShutdownSignals (#4054)', () => {
     const target = new EventEmitter();
     const shutdown = vi.fn();
     const onLog = vi.fn();
-    installShutdownSignals(shutdown, { target, onLog });
+    installShutdownSignals(shutdown, { target, onLog, platform: 'win32' });
 
     target.emit('SIGBREAK');
     target.emit('SIGHUP');

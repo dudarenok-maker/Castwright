@@ -11,9 +11,11 @@ Node child.kill() / process.exit(1) (1), Stop-Process (0xFFFFFFFF) and an
 unhandled console event -- Ctrl+C, Ctrl+Break, console close (0xC000013A).
 
 We then wait DEFAULT_GRACE_S before exiting. A dev reload (`tsx watch`) kills the
-server and starts a new one in ~2 s; the new server adopts this sidecar and says
-so with POST /parent, which calls rearm() and cancels the pending exit, so the
-loaded models stay. A real death gets no re-arm, and the sidecar exits.
+server and starts a new one within several seconds (measured 3.8-6.3 s to boot);
+the new server adopts this sidecar and says so with POST /parent, which calls
+rearm() and cancels the pending exit, so on Windows the loaded models stay (on
+POSIX `tsx watch` sends SIGTERM and the server's shutdown stops the sidecar it
+owns, so there is nothing to re-arm). A real death gets no re-arm, and the sidecar exits.
 
 No SIDECAR_PARENT_PID (a standalone `npm run tts:sidecar`) -> nothing watches,
 and rearm() is a no-op: a hand-launched sidecar is never taken over.
@@ -36,7 +38,7 @@ log = logging.getLogger("sidecar")
 PARENT_PID_ENV = "SIDECAR_PARENT_PID"
 PARENT_START_ENV = "SIDECAR_PARENT_START_MS"
 
-# A dev reload re-adopts in ~2 s; 15 s leaves room for a slow tsx cold start
+# A dev reload re-adopts within several seconds; 15 s leaves room for a slow tsx cold start
 # without keeping a genuinely orphaned sidecar (and its VRAM) around for long.
 DEFAULT_GRACE_S = 15.0
 
@@ -177,16 +179,38 @@ def _posix_creation_ms(pid: int) -> Optional[int]:
         return None
 
 
+def _check_older_than_self(pid: int, created_ms: Optional[int], own_ms: Optional[int]) -> None:
+    if created_ms is None or own_ms is None:
+        return
+    if created_ms > own_ms:
+        raise ParentGone(
+            f"pid {pid} was created {created_ms - own_ms} ms after this sidecar "
+            "(pid reused by another process)"
+        )
+
+
 def wait_for_pid_posix(
     pid: int,
     start_ms: Optional[int] = None,
     poll_s: float = 1.0,
     sleep: Callable[[float], None] = time.sleep,
+    relative_to_self: bool = False,
 ) -> Optional[int]:
     """Poll until `pid` is gone. POSIX only. A non-child's exit code is not
-    observable, so this returns None."""
+    observable, so this returns None.
+
+    `relative_to_self`: psutil's create_time follows the wall clock (boot time +
+    ticks), so an NTP step or a VM/WSL resume moves it away from a start_ms the
+    server captured earlier -- an absolute comparison then calls a LIVE server
+    "reused". The env-armed watch therefore compares the server's create_time
+    with this sidecar's own (same base, the step cancels out): the server we were
+    spawned by is older, a reused pid is younger. A /parent re-arm carries an
+    absolute start_ms and keeps the absolute check."""
     if start_ms is not None:
-        _check_start_time(pid, start_ms, _posix_creation_ms(pid))
+        if relative_to_self:
+            _check_older_than_self(pid, _posix_creation_ms(pid), _posix_creation_ms(os.getpid()))
+        else:
+            _check_start_time(pid, start_ms, _posix_creation_ms(pid))
     while True:
         try:
             os.kill(pid, 0)
@@ -232,16 +256,25 @@ class ParentWatch:
         self._cond = threading.Condition()
         self._gen = 0
         self._pid: Optional[int] = None
+        self._exiting = False  # the grace ran out: on_exit is under way, too late to re-arm
         self.thread: Optional[threading.Thread] = None
 
-    def arm(self, pid: int, start_ms: Optional[int]) -> threading.Thread:
+    def arm(
+        self,
+        pid: int,
+        start_ms: Optional[int],
+        waiter: Optional[Callable[[int, Optional[int]], Optional[int]]] = None,
+    ) -> Optional[threading.Thread]:
+        """None when the exit decision has already been taken."""
         with self._cond:
+            if self._exiting:
+                return None
             self._gen += 1
             gen = self._gen
             self._pid = pid
             self._cond.notify_all()
         t = threading.Thread(
-            target=self._run, args=(gen, pid, start_ms), name="parent-watch", daemon=True
+            target=self._run, args=(gen, pid, start_ms, waiter or self._waiter), name="parent-watch", daemon=True
         )
         self.thread = t
         t.start()
@@ -252,13 +285,17 @@ class ParentWatch:
         if _parse_pid(pid) is None:
             return False
         old = self._pid
-        self.arm(pid, start_ms)
+        if self.arm(pid, start_ms) is None:
+            log.warning("parent watch re-arm for pid=%d refused: the sidecar is already exiting", pid)
+            return False
         log.info("parent watch re-armed: server pid=%d (was pid=%s)", pid, old)
         return True
 
-    def _run(self, gen: int, pid: int, start_ms: Optional[int]) -> None:
+    def _run(
+        self, gen: int, pid: int, start_ms: Optional[int], waiter: Callable[[int, Optional[int]], Optional[int]]
+    ) -> None:
         try:
-            code = self._waiter(pid, start_ms)
+            code = waiter(pid, start_ms)
             why = None
         except WatchUnavailable as e:
             log.warning("parent watch disabled: %s", e)
@@ -279,6 +316,8 @@ class ParentWatch:
             log.error("server pid=%d exited with code %d = %s", pid, code, format_exit_code(code))
         with self._cond:
             rearmed = self._cond.wait_for(lambda: self._gen != gen, timeout=self._grace_s)
+            if not rearmed:
+                self._exiting = True  # same lock hold as the timeout: no re-arm can slip in after this
         if rearmed:
             log.info("a new server took over within %.0fs; sidecar stays up", self._grace_s)
             return
@@ -311,7 +350,11 @@ def start_parent_watch(
     watch = ParentWatch(waiter or _default_waiter(platform), on_exit or os._exit, grace_s)
     _active = watch
     log.info("parent watch armed: server pid=%d (start_ms=%s, grace %.0fs)", pid, start_ms, grace_s)
-    watch.arm(pid, start_ms)
+    first = None
+    if waiter is None and platform != "win32":
+        # Looked up at call time (not bound now) so the module attribute is what runs.
+        first = lambda p, ms: wait_for_pid_posix(p, ms, relative_to_self=True)  # noqa: E731
+    watch.arm(pid, start_ms, first)
     return watch
 
 

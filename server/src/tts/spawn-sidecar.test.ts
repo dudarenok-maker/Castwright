@@ -1826,13 +1826,33 @@ describe('adopting a sidecar re-arms its parent watch (#4054)', () => {
     await expect(spawnSidecar({ ...b, autoStart: true, rearmFn })).resolves.toBeNull();
     expect(b.warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
   });
+
+  it.each(['http-404', 'error'])(
+    'warns when the re-arm answers %s: the sidecar will exit after its grace',
+    async (reason) => {
+      const rearmFn = vi.fn(async () => ({ armed: false, reason }));
+      const b = base();
+      await expect(spawnSidecar({ ...b, autoStart: true, rearmFn })).resolves.toBeNull();
+      expect(b.warn).toHaveBeenCalledWith(expect.stringContaining(reason));
+    },
+  );
+
+  it.each([
+    { armed: true, reason: 'armed' },
+    { armed: false, reason: 'no-watcher' },
+  ])('stays quiet for $reason', async (result) => {
+    const rearmFn = vi.fn(async () => result);
+    const b = base();
+    await expect(spawnSidecar({ ...b, autoStart: true, rearmFn })).resolves.toBeNull();
+    expect(b.warn).not.toHaveBeenCalled();
+  });
 });
 
 describe('rearmSidecarParent (#4054)', () => {
   it('POSTs this process pid and start time to /parent on the sidecar', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ armed: true }), { status: 200 }));
     const out = await rearmSidecarParent('127.0.0.1', 9000, fetchImpl as unknown as typeof fetch);
-    expect(out).toEqual({ armed: true });
+    expect(out).toEqual({ armed: true, reason: 'armed' });
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://127.0.0.1:9000/parent');
     expect(init.method).toBe('POST');
@@ -1844,10 +1864,24 @@ describe('rearmSidecarParent (#4054)', () => {
 
   it('reports armed:false for a sidecar without the route (404) or a transport error, never throws', async () => {
     const notFound = vi.fn(async () => new Response('', { status: 404 }));
-    expect(await rearmSidecarParent('h', 1, notFound as unknown as typeof fetch)).toEqual({ armed: false });
+    expect(await rearmSidecarParent('h', 1, notFound as unknown as typeof fetch)).toEqual({
+      armed: false,
+      reason: 'http-404',
+    });
     const down = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     });
-    expect(await rearmSidecarParent('h', 1, down as unknown as typeof fetch)).toEqual({ armed: false });
+    expect(await rearmSidecarParent('h', 1, down as unknown as typeof fetch)).toEqual({
+      armed: false,
+      reason: 'error',
+    });
+  });
+
+  it('names why it did not arm: no-watcher for a 200 {armed:false}', async () => {
+    const standalone = vi.fn(async () => new Response(JSON.stringify({ armed: false }), { status: 200 }));
+    expect(await rearmSidecarParent('h', 1, standalone as unknown as typeof fetch)).toEqual({
+      armed: false,
+      reason: 'no-watcher',
+    });
   });
 });

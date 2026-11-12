@@ -579,9 +579,12 @@ $resp.Headers['X-Sample-Rate']
   `0xC0000409` native crash), **waits a 15 s grace period, and exits only if no new server has
   picked it up in that time**. A server that adopts a running sidecar says so with
   `POST /parent {pid, startMs}` (loopback only), which re-arms the watch on the new pid and cancels
-  the pending exit; a `tsx watch` reload re-adopts in about 2 s, so the sidecar and its loaded
-  models stay. A real death sends no re-arm, so the sidecar exits after the grace. The start time
-  guards against PID reuse (a process created more than 10 s away from it is not the server).
+  the pending exit; on Windows a `tsx watch` reload re-adopts within several seconds, so the
+  sidecar and its loaded models stay (on POSIX `tsx watch` sends SIGTERM and the server's shutdown
+  stops the sidecar it owns). A real death sends no re-arm, so the sidecar exits after the grace. The start time
+  guards against PID reuse (on Windows a process created more than 10 s away from it is not the
+  server; on POSIX the server must be older than the sidecar itself, which a wall-clock step
+  cannot upset).
   A server that takes longer than the grace to come back finds the sidecar gone and spawns a
   fresh one. Unset means no watcher (a standalone sidecar, which also ignores `POST /parent`).
 

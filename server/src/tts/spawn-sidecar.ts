@@ -250,13 +250,15 @@ export interface SidecarHealthProbe {
     {pid, startMs}`. The sidecar re-arms its parent watch on this process and
     cancels the grace exit it began when the previous server died, so a dev
     reload keeps the loaded models. `armed:false` when the sidecar has no such
-    route or no watcher (older or hand-launched); never throws. */
+    route or no watcher (older or hand-launched); never throws. `reason` says
+    which: `armed`, `no-watcher` (200 but nothing to arm: hand-launched),
+    `http-<n>` (older sidecar, or the loopback refusal) or `error` (transport). */
 export async function rearmSidecarParent(
   host: string,
   port: number,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
-): Promise<{ armed: boolean }> {
+): Promise<{ armed: boolean; reason: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -266,11 +268,11 @@ export async function rearmSidecarParent(
       body: JSON.stringify({ pid: process.pid, startMs: Math.round(performance.timeOrigin) }),
       signal: controller.signal,
     });
-    if (!res.ok) return { armed: false };
+    if (!res.ok) return { armed: false, reason: `http-${res.status}` };
     const body = (await res.json().catch(() => ({}))) as { armed?: unknown };
-    return { armed: body.armed === true };
+    return body.armed === true ? { armed: true, reason: 'armed' } : { armed: false, reason: 'no-watcher' };
   } catch {
-    return { armed: false };
+    return { armed: false, reason: 'error' };
   } finally {
     clearTimeout(timer);
   }
@@ -725,7 +727,13 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       /* #4054: the previous server's death started the sidecar's grace timer;
          saying so here is what cancels it (see rearmSidecarParent). */
       try {
-        if (autoStart) await rearmFn?.(host, port); // not ours to re-arm when auto-start is off
+        // not ours to re-arm when auto-start is off
+        const rearmed = autoStart ? ((await rearmFn?.(host, port)) as { reason?: string } | undefined) : undefined;
+        if (rearmed?.reason && rearmed.reason !== 'armed' && rearmed.reason !== 'no-watcher') {
+          warn(
+            `[sidecar] the adopted sidecar did not re-arm its parent watch (${rearmed.reason}); if it was watching the previous server it will exit after its grace period.`,
+          );
+        }
       } catch (err) {
         warn(`[sidecar] could not re-arm the adopted sidecar's parent watch (${(err as Error).message}).`);
       }

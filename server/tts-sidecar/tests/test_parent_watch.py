@@ -199,6 +199,35 @@ def test_real_windows_handle_wait_reads_a_childs_exit_code() -> None:
         child.wait()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="real GetProcessTimes FILETIME conversion")
+def test_real_windows_creation_time_is_in_the_unix_epoch() -> None:
+    """A FILETIME-epoch slip (1601 vs 1970 off by even minutes) would make every
+    Windows sidecar judge its live server 'reused' and exit after the grace --
+    invisible to the fake-api tests. The child prints its own time.time()*1000 at
+    start; the real creation time must agree with it inside the tolerance, and a
+    start_ms 10 minutes earlier must read as a different process."""
+    import subprocess
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys, time; print(int(time.time()*1000), flush=True); time.sleep(0.5)"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        start_ms = int(child.stdout.readline())
+        assert parent_watch.wait_for_pid_windows(child.pid, start_ms=start_ms) is not None
+    finally:
+        child.wait()
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(0.5)"], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        with pytest.raises(parent_watch.ParentGone):
+            parent_watch.wait_for_pid_windows(child.pid, start_ms=int(time.time() * 1000) - 600_000)
+    finally:
+        child.wait()
+
+
 # ---------------------------------------------------------------------------
 # #4054 owner decision: log the server's exit code at once, wait a grace
 # period, exit only if no new server re-armed the watch (POST /parent).
@@ -570,3 +599,102 @@ def test_posix_start_time_unreadable_keeps_watching(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(parent_watch.os, "kill", gone)
     assert parent_watch.wait_for_pid_posix(5, start_ms=1_700_000_000_000, poll_s=0, sleep=lambda s: None) is None
+
+
+# --- N1: a wall-clock step must not read as "pid reused" (POSIX env-armed) -----
+
+
+def _creation_times(monkeypatch: pytest.MonkeyPatch, server_ms: int, own_ms: int, server_pid: int = 5) -> None:
+    own = parent_watch.os.getpid()
+    monkeypatch.setattr(
+        parent_watch, "_posix_creation_ms", lambda pid: own_ms if pid == own else server_ms if pid == server_pid else None
+    )
+
+    def gone(pid: int, sig: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr(parent_watch.os, "kill", gone)
+
+
+def test_posix_relative_check_survives_a_clock_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    """NTP / VM-resume stepped the wall clock +20 s after the server recorded
+    SIDECAR_PARENT_START_MS: psutil's create_time (boot-time based) moved with
+    it, so the absolute comparison fails against a LIVE server. The server must
+    instead be compared with the sidecar's own create_time (same base, the step
+    cancels out): older = ours."""
+    start_ms = 1_700_000_000_000
+    _creation_times(monkeypatch, server_ms=start_ms + 20_000, own_ms=start_ms + 25_000)
+    with pytest.raises(parent_watch.ParentGone):  # the absolute check is what broke
+        parent_watch.wait_for_pid_posix(5, start_ms=start_ms, poll_s=0, sleep=lambda s: None)
+    assert (
+        parent_watch.wait_for_pid_posix(
+            5, start_ms=start_ms, poll_s=0, sleep=lambda s: None, relative_to_self=True
+        )
+        is None
+    )
+
+
+def test_posix_relative_check_treats_a_younger_pid_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reused pid is created after the sidecar started."""
+    _creation_times(monkeypatch, server_ms=1_700_000_030_000, own_ms=1_700_000_025_000)
+    with pytest.raises(parent_watch.ParentGone):
+        parent_watch.wait_for_pid_posix(
+            5, start_ms=1_700_000_000_000, poll_s=0, sleep=lambda s: None, relative_to_self=True
+        )
+
+
+def test_posix_relative_check_unreadable_keeps_watching(monkeypatch: pytest.MonkeyPatch) -> None:
+    _creation_times(monkeypatch, server_ms=1, own_ms=1, server_pid=-1)  # server unreadable
+    assert (
+        parent_watch.wait_for_pid_posix(5, start_ms=1, poll_s=0, sleep=lambda s: None, relative_to_self=True)
+        is None
+    )
+
+
+def test_env_armed_posix_watch_is_relative_but_a_rearm_stays_absolute(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the env-armed first watch can use the sidecar-relative check; a
+    POST /parent carries the server's own absolute start time."""
+    seen: list[tuple] = []
+    done = threading.Barrier(2, timeout=5)
+
+    def fake(pid, start_ms=None, poll_s=1.0, sleep=time.sleep, relative_to_self=False):
+        seen.append((pid, start_ms, relative_to_self))
+        done.wait()
+        return None
+
+    monkeypatch.setattr(parent_watch, "wait_for_pid_posix", fake)
+    w = parent_watch.start_parent_watch(
+        env={"SIDECAR_PARENT_PID": "41", "SIDECAR_PARENT_START_MS": "1700000000000"},
+        platform="linux",
+        on_exit=lambda c: None,
+        grace_s=30,
+    )
+    done.wait()
+    assert w.rearm(77, 1700000001000) is True
+    done.wait()
+    assert seen == [(41, 1700000000000, True), (77, 1700000001000, False)]
+
+
+# --- N6: a re-arm after the grace decision must not be told "armed" ----------
+
+
+def test_rearm_after_the_grace_ran_out_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    exiting = threading.Event()
+    release = threading.Event()
+
+    def on_exit(code: int) -> None:
+        exiting.set()
+        release.wait(5)  # os._exit has not killed us yet: the window N6 describes
+
+    w = parent_watch.start_parent_watch(
+        env={"SIDECAR_PARENT_PID": "41"},
+        platform="linux",
+        waiter=lambda pid, ms: 1,
+        on_exit=on_exit,
+        grace_s=0.1,
+    )
+    try:
+        assert exiting.wait(5)
+        assert w.rearm(77, None) is False
+    finally:
+        release.set()

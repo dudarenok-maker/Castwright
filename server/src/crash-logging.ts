@@ -207,19 +207,24 @@ export function installExitLogging(hooks: ExitLoggingHooks = {}): void {
 export interface ShutdownSignalHooks {
   onLog?: (msg: string) => void;
   target?: NodeJS.EventEmitter;
+  platform?: NodeJS.Platform;
 }
 
-/** Route SIGINT/SIGTERM and — new in #4054 — SIGBREAK (Windows Ctrl+Break) and
- *  SIGHUP (terminal hang-up; node on Windows delivers a console-window close as
+/** Route SIGINT/SIGTERM and — new in #4054 — SIGBREAK (Windows Ctrl+Break) and,
+ *  on win32 only, SIGHUP (node on Windows delivers a console-window close as
  *  SIGHUP, not SIGBREAK) through the graceful shutdown. Unhandled, either of the
- *  last two terminates node with no line at all. */
+ *  last two terminates node with no line at all. SIGHUP is NOT registered on
+ *  POSIX: installing a handler there overrides an inherited `nohup` ignore and
+ *  would make a nohup'd server die on terminal hang-up. */
 export function installShutdownSignals(
   shutdown: (signal: NodeJS.Signals) => void,
   hooks: ShutdownSignalHooks = {},
 ): void {
   const log = hooks.onLog ?? ((m: string) => console.log(m));
   const target = hooks.target ?? process;
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) {
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGBREAK'];
+  if ((hooks.platform ?? process.platform) === 'win32') signals.push('SIGHUP');
+  for (const sig of signals) {
     target.once(sig, () => {
       log(`[server] received ${sig}`);
       shutdown(sig);
