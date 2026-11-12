@@ -198,7 +198,7 @@ function seedDeclinedWithClonedFollower() {
 }
 
 describe('Design & compare on a declined row whose new voice carries a consented clone (#4104)', () => {
-  it('preview and promote write only files; the Save is refused (409) and no cloned row is retargeted', async () => {
+  it('the series Save route is refused (409) for a clone on the new uuid, and no cloned row is retargeted', async () => {
     seedDeclinedWithClonedFollower();
     const threeBefore = readRow('Book Three');
     const oneBefore = readRow('Book One');
@@ -225,6 +225,8 @@ describe('Design & compare on a declined row whose new voice carries a consented
     expect(three.ttsEngine).toBe('coqui');
     expect(three.overrideTtsVoices).toEqual(threeBefore.overrideTtsVoices);
     expect(three.overrideTtsVoices.qwen).toBeUndefined();
+    /* the refused series PUT wrote nothing to Book Two; the real drawer ALSO saves its open book
+       through its own cast PUT (onSave), which is not driven here and is clone-safe by itself */
     expect(readRow('Book Two').overrideTtsVoices?.qwen).toBeUndefined();
     expect(readRow('Book One')).toEqual(oneBefore);
   });
@@ -258,6 +260,44 @@ describe('Design & compare on a declined row whose new voice carries a consented
     expect(saved.status).toBe(204);
     expect(readRow('Book One')).toEqual(oneBefore);
     expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(kept.body.voiceId);
+  });
+});
+
+describe('Design & compare when the follower clone is on the qwen engine (#4104 review)', () => {
+  it('the Save is not refused, and the cloned slot keeps its libraryUuid and provenance so it still plays', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_shared' }));
+    writeBook(
+      'Book Two',
+      2,
+      bookTwoId,
+      wren({ ...linkedToBookOne(), voiceUuid: 'u_shared', declinedVoiceFrom: [bookOneId], declinedVoiceUuids: ['u_shared'] }),
+    );
+    const qwenClone = { qwen: { name: 'qwen-wren-clone', libraryUuid: 'L1', provenance: 'cloned' } };
+    writeBook(
+      'Book Three',
+      3,
+      bookThreeId,
+      wren({
+        voiceUuid: 'u_shared',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: qwenClone,
+        matchedFrom: { bookId: bookTwoId, characterId: 'wren', bookTitle: 'Book Two', confidence: 1 },
+      }),
+    );
+
+    const preview = await designRest(true);
+    expect(preview.status).toBe(200);
+    const kept = await promote(preview.body.voiceId);
+    expect(kept.status).toBe(200);
+    /* the SET check counts only clones on a different engine, so a same-engine clone does not refuse */
+    const saved = await apply(kept.body.voiceId);
+    expect(saved.status).toBe(204);
+
+    const three = readRow('Book Three');
+    expect(three.ttsEngine).toBe('qwen');
+    expect(three.overrideTtsVoices.qwen.libraryUuid).toBe('L1');
+    expect(three.overrideTtsVoices.qwen.provenance).toBe('cloned');
+    expect(three.overrideTtsVoices.qwen.name).toBe(kept.body.voiceId);
   });
 });
 
