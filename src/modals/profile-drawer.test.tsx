@@ -1228,6 +1228,14 @@ describe('ProfileDrawer alias chip editing', () => {
     expect(screen.getByRole('button', { name: 'Unlink Shopkeeper' })).toBeTruthy();
   });
 
+  it('gives the Unlink X button a 44px touch target that collapses on fine pointers', () => {
+    renderDrawer(charWithAliases, { onUnlinkAlias: vi.fn().mockResolvedValue(undefined) });
+    const cls = screen.getByRole('button', { name: 'Unlink Sior' }).className.split(/\s+/);
+    for (const c of ['min-h-[44px]', 'min-w-[44px]', 'fine-pointer:min-h-0', 'fine-pointer:min-w-0']) {
+      expect(cls).toContain(c);
+    }
+  });
+
   it('omits the X button when onUnlinkAlias is not provided (read-only fallback)', () => {
     /* No onUnlinkAlias → chips render with the names but no buttons,
        preserving the pre-feature behaviour for surfaces that don't wire

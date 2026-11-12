@@ -1841,7 +1841,7 @@ export function ProfileDrawer({
                             setUnlinkDialogAlias(a);
                             setAliasError(null);
                           }}
-                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink coarse-pointer:opacity-100"
+                          className="inline-flex items-center justify-center w-5 h-5 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink coarse-pointer:opacity-100"
                         >
                           <IconClose className="w-3 h-3" />
                         </button>
