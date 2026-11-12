@@ -395,6 +395,7 @@ async function runDesignJob(
   modelKey: TtsModelKey,
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
+  castConfirmed: boolean,
 ): Promise<void> {
   /* Decided ONCE per job: the pre-pass and the per-character lazy-skip below must agree, or a
      mid-job flip leaves a persona-less character that neither of them records. */
@@ -426,17 +427,21 @@ async function runDesignJob(
      per-book `hasClonedSlotAmongMatches` call below when `seriesFilter` is
      absent — that scan is already onlyBookDir-restricted (fs-61) and cheap
      regardless of how many characters this loop visits. */
-  const seriesClonedVoiceIds = seriesFilter
-    ? await findClonedVoiceIdsAmongMatches(seriesFilter)
+  /* Review pass 5 (F8/C) -- a design in an unconfirmed book writes only that book, so a clone
+     (or an unreadable cast) on another book is not one it could touch: the scans cover this
+     book alone, decided once per job. */
+  const scanSeries = castConfirmed ? seriesFilter : undefined;
+  const seriesClonedVoiceIds = scanSeries
+    ? await findClonedVoiceIdsAmongMatches(scanSeries)
     : null;
   /* #4074 -- a row on a "Don't reuse"-separated uuid counts only the clones on rows of that
      uuid (seriesClonedOnRowsVoice), which the precomputed per-voiceId set cannot answer. */
   const clonedOnLinkedBook = async (character: CastCharacter): Promise<boolean> =>
     character.voiceUuid && (await isSeparatedVoice(character.voiceUuid))
-      ? seriesClonedOnRowsVoice(character, seriesFilter, job.bookDir)
+      ? seriesClonedOnRowsVoice(character, scanSeries, job.bookDir)
       : seriesClonedVoiceIds
         ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
-        : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
+        : hasClonedSlotAmongMatches(character.voiceId ?? character.id, scanSeries, undefined, job.bookDir);
 
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
@@ -1032,7 +1037,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     /* Sticky: keep running for a reload re-attach. */
   });
 
-  await runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
+  await runDesignJob(job, tasks, modelKey!, language, seriesFilter, located.state?.castConfirmed === true).catch((e) => {
     /* Defensive — the loop catches per-character; a throw here is unexpected.
        #2260 FINAL ROUND (B2) — curated all the same. The REACHABLE contention
        path in this route is per-character and already reports

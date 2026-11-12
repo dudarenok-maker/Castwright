@@ -340,7 +340,14 @@ singleDesignRouter.post(
       !preview &&
       (characterHasClonedSlot(character) ||
         (!hasDeclineMarker(character) &&
-          (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir))))
+          (await hasClonedSlotAmongMatches(
+            character.voiceId ?? character.id,
+            /* Review pass 5 (F8/C) -- an unconfirmed book shares nothing with the series: a clone
+               (or an unreadable cast) on another book is not one this design could touch. */
+            located.state?.castConfirmed === true ? (seriesInfo ?? undefined) : undefined,
+            undefined,
+            bookDir,
+          ))))
     ) {
       return res.status(409).json({
         error: `"${character.name ?? characterId}" has a consented cloned voice on this character, or a linked one elsewhere in the series, and cannot be designed on Qwen without silently retargeting it off that clone.`,

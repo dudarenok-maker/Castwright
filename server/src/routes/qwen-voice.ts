@@ -1104,7 +1104,7 @@ async function isolateForKeep(
   const staged = body.previewVoiceId;
   const expected = previewVoiceIdFor(qwenStorageKey(row, characterId), bookId, characterId);
   if (staged !== expected) {
-    if (!(await keysAreIsolationCopies(staged, row, bookId, characterId))) return undefined;
+    if (!(await keysAreIsolationCopies(bookDir, staged, row, bookId, characterId))) return undefined;
     /* Review pass 4 (🟠3) -- a retry after an earlier Keep carried the preview and then
        failed: it already sits under the name the row expects now. */
     if (!(await exists(qwenVoicePtPath(staged)))) return (await exists(qwenVoicePtPath(expected))) ? expected : undefined;
@@ -1131,15 +1131,26 @@ async function isolateForKeep(
    the base), whose key's base `.pt` is byte-equal to the current key's (an isolation
    copies the base family; a re-point to another row's voice, or any other move, leaves
    a different file, or none). Anything else answers promote's own 400. */
-async function keysAreIsolationCopies(staged: string, row: CastCharacter, bookId: string, characterId: string): Promise<boolean> {
+async function keysAreIsolationCopies(bookDir: string, staged: string, row: CastCharacter, bookId: string, characterId: string): Promise<boolean> {
   if (!isOwnStalePreview(staged, bookId, characterId)) return false;
   const stagedKey = staged.slice(0, staged.length - `${PREVIEW_SUFFIX}-${previewTag(bookId, characterId)}`.length);
   if (VARIANT_EMOTIONS.some((e) => stagedKey.endsWith(`__${e}`))) return false;
   const currentKey = qwenStorageKey(row, characterId);
   if (stagedKey === currentKey) return false;
+  const readBase = (key: string) =>
+    readFile(qwenVoicePtPath(key)).catch((e: NodeJS.ErrnoException) => {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    });
   try {
-    const [was, now] = await Promise.all([readFile(qwenVoicePtPath(stagedKey)), readFile(qwenVoicePtPath(currentKey))]);
-    return was.equals(now);
+    const [was, now] = await Promise.all([readBase(stagedKey), readBase(currentKey)]);
+    if (was && now) return was.equals(now);
+    if (was || now) return false;
+    /* Review pass 5 -- a row nobody designed has no base file at either key (the common
+       first design): the move is proven by the book's own separation record for the
+       row's uuid, which an isolation or a book-scoped mint writes. */
+    const stamp = await readBookOwnStamp(bookDir);
+    return !!(row.voiceUuid && stamp && (await isOwnSeparatedVoice(row.voiceUuid, stamp)));
   } catch {
     return false;
   }
@@ -1436,6 +1447,8 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSep
     const uuid = nanoid();
     const linkId = freshChar.voiceId ?? freshChar.id;
     const legacyKey = `qwen-${linkId}`;
+    /* Review pass 5 -- read before anything is copied: a throw here leaves no copies. */
+    const ownStamp = recordSeparated ? await readBookOwnStamp(bookDir) : undefined;
     /* #4037 — same as the series mint: the legacy key's base family and emotion
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
@@ -1465,7 +1478,7 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSep
           dirty = true;
         }
       }
-      if (dirty && recordSeparated) await recordSeparatedVoice(uuid, await readBookOwnStamp(bookDir));
+      if (dirty && recordSeparated) await recordSeparatedVoice(uuid, ownStamp);
       try {
         if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
       } catch (e) {
@@ -2065,7 +2078,7 @@ async function landStagedDesign(
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     /* #4074 -- before anything is written: a refusal here leaves the key, its rev and
        every row's slots as they were. */
-    if (p.refuseIfSeriesCloned && !p.emotion && !p.preview && (await seriesClonedOnRowsVoice(row, p.seriesFilter, p.bookDir))) {
+    if (p.refuseIfSeriesCloned && !p.emotion && !p.preview && (await seriesClonedOnRowsVoice(row, shareSeries, p.bookDir))) {
       throw new SeriesCloneRefusedError();
     }
     const sharing = await firstDesignOf(row); // decided before the move creates the file

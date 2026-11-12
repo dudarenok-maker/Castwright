@@ -91,6 +91,18 @@ vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
   return { ...actual, renameWithRetry };
 });
 
+/* Review pass 5 (🟡3) -- when armed, reading the book's own stamp throws (the mint's
+   record of a book-scoped separated uuid). */
+const failStampRead = vi.hoisted(() => ({ armed: false }));
+vi.mock('../workspace/voice-uuid-fork.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/voice-uuid-fork.js')>();
+  const readBookOwnStamp: typeof actual.readBookOwnStamp = async (dir) => {
+    if (failStampRead.armed) throw new Error('simulated stamp read failure');
+    return actual.readBookOwnStamp(dir);
+  };
+  return { ...actual, readBookOwnStamp };
+});
+
 /* #4072 — when armed, the next series walk stamps its first book and then throws
    (a lock timeout partway through a walk). */
 const failWalk = vi.hoisted(() => ({ armed: false }));
@@ -214,6 +226,11 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
+  /* Review pass 5 -- the drawer's stream route and Design full cast. */
+  const { singleDesignRouter } = await import('./single-design.js');
+  const { castDesignRouter } = await import('./cast-design.js');
+  app.use('/api/books', singleDesignRouter);
+  app.use('/api/books', castDesignRouter);
 });
 
 beforeEach(() => {
@@ -221,6 +238,7 @@ beforeEach(() => {
   holdWalk.ms = 1500;
   failWalk.armed = false;
   failPromoteRename.armed = false;
+  failStampRead.armed = false;
   failConfirmedRead.on = false;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: unknown, init: { body?: string } | undefined) => {
@@ -1019,5 +1037,163 @@ describe('F8 (review pass 4) -- Keep carries only a base preview of the key the 
     const keep = await promote('Book Three', prev.body.voiceId);
     expect(keep.status, JSON.stringify(keep.body)).toBe(400);
     expect(readFileSync(pt('qwen-u_ash')).equals(ASH_PT)).toBe(true);
+  });
+});
+
+/* Review pass 5 (F8/C) -- a design in an unconfirmed book writes only that book and is never
+   refused because of another book. The drawer's Design uses the stream route and Design full
+   cast the bulk route; neither had the narrowing the REST route and the emotion take had. */
+const parseSse = (text: string) =>
+  text
+    .split('\n\n')
+    .map((b) => b.split('\n').find((l) => l.startsWith('data: ')))
+    .filter(Boolean)
+    .map((l) => JSON.parse((l as string).slice(6)));
+const tear = (t: Title) => writeFileSync(castPath(t), '{"characters":[');
+const streamDesign = (t: Title) =>
+  request(app).post(`/api/books/${ids[t]}/cast/wren/design-voice/stream`).send({ persona: 'a bright voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY });
+const bulkDesign = (t: Title) => request(app).post(`/api/books/${ids[t]}/cast/design`).send({ characterIds: ['wren'], modelKey: QWEN_KEY });
+/* Book Three: unconfirmed, auto-linked onto u1, no qwen slot yet (a bulk job designs it). */
+function seedNoSlotOnU1() {
+  seedUuidDesigned();
+  writeBook('Book Three', [{ ...legacy, voiceUuid: 'u1', voiceState: 'reused', ...linkTo('Book Two') }], false);
+}
+const cloneBookOne = () => {
+  const one = JSON.parse(readFileSync(castPath('Book One'), 'utf8'));
+  one.characters[0].overrideTtsVoices = { qwen: { name: 'qwen-u1', provenance: 'cloned', consent: { attested: true } } };
+  writeFileSync(castPath('Book One'), JSON.stringify(one));
+};
+
+describe('F8 (review pass 5) -- the drawer Design (stream route) in an unconfirmed book', () => {
+  it('SD1: a torn confirmed Book One does not fail the design; only Book Three is written', async () => {
+    seedUuidDesigned();
+    tear('Book One');
+    const torn = readFileSync(castPath('Book One'), 'utf8');
+    const two = readFileSync(castPath('Book Two'), 'utf8');
+    const res = await streamDesign('Book Three');
+    expect(res.status, res.text).toBe(200);
+    expect(parseSse(res.text).some((e: any) => e.type === 'error')).toBe(false);
+    expect(row('Book Three').voiceUuid).not.toBe('u1');
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(torn);
+    expect(readFileSync(castPath('Book Two'), 'utf8')).toBe(two);
+  });
+
+  it('SD2: a consented clone on confirmed Book One does not refuse the design; Book One is untouched', async () => {
+    seedUuidDesigned();
+    cloneBookOne();
+    const one = readFileSync(castPath('Book One'), 'utf8');
+    const res = await streamDesign('Book Three');
+    expect(res.status, res.text).toBe(200);
+    expect(row('Book Three').voiceUuid).not.toBe('u1');
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(one);
+  });
+
+  it('control: a CONFIRMED Book Three still refuses on a clone anywhere in the series', async () => {
+    seedUuidDesigned();
+    confirm('Book Three');
+    cloneBookOne();
+    const res = await streamDesign('Book Three');
+    expect(res.status, res.text).toBe(409);
+    expect(res.body.code).toBe('clone_protected');
+  });
+
+  it('control: a CONFIRMED Book Three still fails on a torn mate (the series scan is kept)', async () => {
+    seedUuidDesigned();
+    confirm('Book Three');
+    tear('Book One');
+    const res = await streamDesign('Book Three');
+    expect(res.status, res.text).toBeGreaterThanOrEqual(500);
+  });
+});
+
+describe('F8 (review pass 5) -- Design full cast (bulk route) in an unconfirmed book', () => {
+  it("BK1: a torn confirmed Book One does not fail the job; Wren is designed on Book Three's own uuid", async () => {
+    seedNoSlotOnU1();
+    tear('Book One');
+    const torn = readFileSync(castPath('Book One'), 'utf8');
+    const res = await bulkDesign('Book Three');
+    const ev = parseSse(res.text);
+    expect(ev.some((e: any) => e.type === 'character_designed'), res.text).toBe(true);
+    expect(ev.some((e: any) => e.type === 'error')).toBe(false);
+    expect(row('Book Three').voiceUuid).not.toBe('u1');
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(torn);
+  });
+
+  it('BK2: a consented clone on confirmed Book One does not skip Wren; Book One is untouched', async () => {
+    seedNoSlotOnU1();
+    cloneBookOne();
+    const one = readFileSync(castPath('Book One'), 'utf8');
+    const res = await bulkDesign('Book Three');
+    const ev = parseSse(res.text);
+    expect(ev.some((e: any) => e.type === 'character_designed'), res.text).toBe(true);
+    expect(ev.some((e: any) => e.reason === 'already_cloned')).toBe(false);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(one);
+  });
+
+  it('control: a CONFIRMED Book Three still skips Wren on a clone anywhere in the series', async () => {
+    seedNoSlotOnU1();
+    confirm('Book Three');
+    cloneBookOne();
+    const ev = parseSse((await bulkDesign('Book Three')).text);
+    expect(ev.some((e: any) => e.type === 'character_designed')).toBe(false);
+    expect(ev.some((e: any) => e.reason === 'already_cloned')).toBe(true);
+  });
+});
+
+describe('F8 (review pass 5) -- Keep retry for a row with no designed base', () => {
+  it('KR1: a legacy row nobody designed, a Keep that failed after its isolation carried the preview: the retry with the old preview id lands', async () => {
+    seedNeverDesigned(false);
+    const prev = await design('Book Three', { preview: true });
+    expect(prev.status, JSON.stringify(prev.body)).toBe(200);
+    const previewed = readFileSync(pt(prev.body.voiceId));
+    failPromoteRename.armed = true;
+    const first = await promote('Book Three', prev.body.voiceId);
+    expect(first.status, JSON.stringify(first.body)).toBeGreaterThanOrEqual(500);
+    const own = row('Book Three').voiceUuid as string;
+    expect(own).toBeTruthy();
+    const retry = await promote('Book Three', prev.body.voiceId);
+    expect(retry.status, JSON.stringify(retry.body)).toBe(200);
+    expect(retry.body.voiceId).toBe(`qwen-${own}`);
+    expect(readFileSync(pt(`qwen-${own}`)).equals(previewed)).toBe(true);
+  });
+});
+
+describe('F8 (review pass 5) -- the book-scoped mint reads its stamp before it copies', () => {
+  it('a stamp read that throws leaves no orphan copy of the legacy key and no uuid on the row', async () => {
+    reset();
+    writeFileSync(pt('qwen-v_wren'), LEGACY_PT);
+    writeFileSync(join(qwenDir(), 'qwen-v_wren.json'), '{"instruct":"legacy"}');
+    writeBook('Book Three', [{ ...legacy, overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } }], false);
+    const before = readdirSync(qwenDir()).sort();
+    failStampRead.armed = true;
+    const res = await design('Book Three');
+    failStampRead.armed = false;
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(row('Book Three').voiceUuid).toBeUndefined();
+    expect(readdirSync(qwenDir()).sort()).toEqual(before);
+  });
+});
+
+describe('F8 (review pass 5) -- the landing clone check of a "Don\'t reuse" row in an unconfirmed book', () => {
+  it('a torn confirmed Book One does not fail the design of a declined unconfirmed row; Book One is untouched', async () => {
+    seedUuidDesigned();
+    writeBook(
+      'Book Three',
+      [{ ...legacy, voiceUuid: 'u1', voiceState: 'reused', ...linkTo('Book Two'), declinedVoiceFrom: [ids['Book One']], overrideTtsVoices: { qwen: { name: 'qwen-u1' } } }],
+      false,
+    );
+    tear('Book One');
+    const torn = readFileSync(castPath('Book One'), 'utf8');
+    /* The stream route is the one that passes refuseIfSeriesCloned (the REST route never refuses). */
+    const res = await streamDesign('Book Three');
+    expect(res.status, res.text).toBe(200);
+    const ev = parseSse(res.text);
+    expect(ev.some((e: any) => e.type === 'error'), res.text).toBe(false);
+    expect(readFileSync(pt('qwen-u1')).equals(BOOK_ONE_PT)).toBe(true);
+    expect(readFileSync(castPath('Book One'), 'utf8')).toBe(torn);
   });
 });
