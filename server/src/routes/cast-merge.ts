@@ -317,8 +317,21 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
       parkedError = err;
       hasParkedError = true;
     };
+    /* R53 (PR #4103 pass 4, owner ruling 2026-11-12) — a merge of a fold bucket
+       (`unknown-male` / `unknown-female`) is ONE-SHOT: the bucket's lines move to the
+       target above, and nothing records the merge for anything to follow later. So it
+       is NOT retired. That is correct under #2040's rule ("any path that changes a
+       persisted character id calls `retireCharacterId`"): the bucket id is a shared
+       slot the fold fills on every run, not a persisted character identity, so this
+       merge changes no character's id. A later run's background lines land on a fresh
+       bucket, a downgrade into the bucket lands on the bucket, and a user delete of a
+       re-added bucket sticks (R4). Its cached plan decisions and its ledger entry go
+       with it in the cache op below. */
+    const sourceIsBucket = sourceId === MALE_BUCKET_ID || sourceId === FEMALE_BUCKET_ID;
     try {
-      const historyResult = await retireCharacterId(bookDir, sourceId, targetId, 'user');
+      const historyResult = sourceIsBucket
+        ? { droppedSelfLoopRejections: [], droppedNotSamePerson: [] }
+        : await retireCharacterId(bookDir, sourceId, targetId, 'user');
       /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
          cast-id-history.json and the one-sided `notLinkedTo` edge on
          cast.json) are created together and must be destroyed together (see
@@ -387,7 +400,6 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        re-targeted, and the next persist re-plans it as its own row. A
        re-targeted `join` would leave the bucket's raw key decided for another
        id and the persist with an undecided roster row. */
-    const sourceIsBucket = sourceId === MALE_BUCKET_ID || sourceId === FEMALE_BUCKET_ID;
     let cacheTouched = false;
     try {
       const cacheResult = await mutateAnalysisCache(state.manuscriptId, {

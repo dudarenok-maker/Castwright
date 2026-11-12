@@ -2335,35 +2335,48 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
-  it('R49 (PR #4103 pass 1 O1): a user merge of the fold bucket into a character does not pull later folded lines onto it', async () => {
+  /* R53 (PR #4103 pass 4): a legacy `unknown-male -> lord-vane` entry, written by `main` (the
+     bucket gone from the cast) or by this branch's earlier commits (the bucket back and live, so
+     its run plans `join unknown-male` and the persist overlays that join), is never followed. */
+  it.each([
+    ['as main left it (the bucket gone)', false],
+    ['as an earlier commit of this release left it (the bucket live)', true],
+  ] as const)('R53 / M-a: a legacy bucket merge entry %s: the bucket returns on its own id and the entry is displaced', async (_label, bucketLive) => {
     const b = mkBook(
-      [{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })],
+      [
+        { ...NARR },
+        pr('anna', 'Anna'),
+        pr('lord-vane', 'Lord Vane', { voiceState: 'locked', aliases: ['Unknown male'] }),
+        ...(bucketLive ? [pr('unknown-male', 'Unknown male', { role: 'minor' })] : []),
+      ],
       { 'unknown-male': 'lord-vane' },
       `${NEUTRAL}\n\nThe Jogger waved.`,
     );
     books.push(b);
     /* "The Jogger" is a descriptor name: the fold puts his lines in the male bucket. */
     const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
-    const events = await go(b, { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') };
+    const events = await go(b, FRESH);
     expect(errCode(events)).toBeUndefined();
     expect(done(events)).toBe(true);
-    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
-    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
-    expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
-    const vane = readCast(b.bookDir).find((c) => c.id === 'lord-vane')!;
-    expect(vane.aliases ?? []).not.toContain('Unknown male');
-    expect(vane.lines ?? 0).toBe(0);
-    /* The user's merge record is kept: ignored for matching, never displaced. */
-    expect(history(b).supersededBy['unknown-male']).toBe('lord-vane');
-    expect(history(b).displaced?.['unknown-male']).toBeUndefined();
-    expect(readSuggestions(b.bookDir)).toEqual([]);
+    if (bucketLive) expect(readCache(b.manuscriptId)?.matchPlan?.decisions['unknown-male']).toMatchObject({ kind: 'join', priorId: 'unknown-male' });
+    const expectSettled = (label: string): void => {
+      expect(ids(readCast(b.bookDir)).sort(), label).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
+      expect(editLines(b), label).toEqual({ anna: 5, 'unknown-male': 4 });
+      expect(linesById(b.bookDir), label).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
+      const vane = readCast(b.bookDir).find((c) => c.id === 'lord-vane')!;
+      expect(vane.aliases, label).toEqual(['Unknown male']);
+      expect(vane.lines ?? 0, label).toBe(0);
+      /* The live bucket reclaims its id: the entry moves to `displaced`, as on `main`. */
+      expect(history(b).supersededBy, label).not.toHaveProperty('unknown-male');
+      expect(history(b).displaced?.['unknown-male'], label).toBe('lord-vane');
+      expect(readSuggestions(b.bookDir), label).toEqual([]);
+    };
+    expectSettled('first run');
     /* A second analysis joins the now-live bucket by id: no minted twin, nothing moves. */
     await clearAnalysisCache(b.manuscriptId);
-    expect(done(await go(b, { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') }))).toBe(true);
-    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
-    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
-    expect(history(b).supersededBy['unknown-male']).toBe('lord-vane');
-    expect(history(b).displaced?.['unknown-male']).toBeUndefined();
+    expect(done(await go(b, FRESH))).toBe(true);
+    expectSettled('second run');
   });
 
   it('A1 (0-line variant): a joined row that gets no lines stays a joined row: this run\'s 0 counts and the analyzer alias', async () => {
@@ -3690,7 +3703,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
 
   /* ---- PR #4103 pass 2 P2-1: a merge of a fold bucket never poisons the cached plan ---- */
 
-  it('P2-1: after the user merges the fold bucket into a character, re-analyses on the cached plan complete and keep the bucket its own', async () => {
+  it('P2-1 / R53: after the user merges the fold bucket into a character, re-analyses on the cached plan complete and put their background lines on a fresh bucket', async () => {
     const b = seed(
       [{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })],
       undefined,
@@ -3716,12 +3729,69 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
       /* The character gains no line (none in the edits above) and no alias from this run. */
       expect(row(b, 'lord-vane')!.aliases).toEqual(mergedAliases);
-      /* The user's record is kept, ignored for matching, never displaced. */
-      expect(history(b).supersededBy).toEqual({ 'unknown-male': 'lord-vane' });
-      expect(history(b).supersededByKind).toEqual({ 'unknown-male': 'user' });
+      /* R53: the merge left no identity record for the bucket, so there is nothing to displace. */
+      expect(history(b).supersededBy).toEqual({});
       expect((history(b) as { displaced?: Record<string, string> }).displaced?.['unknown-male']).toBeUndefined();
       expect(readSuggestions(b.bookDir)).toEqual([]);
     }
+  });
+
+  /* ---- PR #4103 pass 4, R53: a merge of a fold bucket is one-shot ---- */
+
+  describe('R53: a bucket merge moves the lines once and leaves no record a later run or merge follows', () => {
+    const body = `${NEUTRAL}\n\nThe Jogger waved.`;
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') };
+    const vaneBook = (): HarnessBook =>
+      seed([{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })], undefined, body);
+    /** Run 1 (main) puts the Jogger's lines in the male bucket; the user merges the bucket into Lord Vane. */
+    const mergedBook = async (): Promise<{ b: HarnessBook; vaneAliases: unknown }> => {
+      const b = vaneBook();
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+      expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+      expect((await mergeRoute(b, 'unknown-male', 'lord-vane')).status).toBe(200);
+      expect(editLines(b)).toEqual({ anna: 5, 'lord-vane': 4 });
+      expect(history(b).supersededBy).not.toHaveProperty('unknown-male');
+      return { b, vaneAliases: row(b, 'lord-vane')!.aliases };
+    };
+
+    it("P4-2: after the merge and a re-run, a downgrade of Anna joins the bucket at Start fresh, never Lord Vane", async () => {
+      const { b, vaneAliases } = await mergedBook();
+      const rerun = await go(b, FRESH, { seedCache: false });
+      expect(errCode(rerun)).toBeUndefined();
+      expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+      /* "Downgrade to a background voice" on Anna. */
+      expect((await mergeRoute(b, 'anna', 'unknown-male')).status).toBe(200);
+      expect(editLines(b)).toEqual({ 'unknown-male': 9 });
+      expect(history(b).supersededBy).toEqual({ anna: 'unknown-male' });
+      /* Main-only step (one line, R18): Start fresh is a main-job request. Phase 1 speaks the
+         plan-applied id (R29): Anna's prior id is merged away, so the prompt lists the bucket. */
+      const fresh = await runStartFresh(b, { roster: FRESH.roster, speakerId: two('unknown-male', 'the-jogger') });
+      expect(errCode(fresh)).toBeUndefined();
+      expect(done(fresh)).toBe(true);
+      expect(readCache(b.manuscriptId)?.matchPlan?.decisions.anna).toMatchObject({ kind: 'join', priorId: 'unknown-male' });
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['lord-vane', 'narrator', 'unknown-male']);
+      expect(editLines(b)).toEqual({ 'unknown-male': 9 });
+      expect(row(b, 'lord-vane')!.aliases).toEqual(vaneAliases);
+      expect(history(b).supersededBy).toEqual({ anna: 'unknown-male' });
+    });
+
+    it('M-b: merged, re-added by a re-run, then deleted, the bucket stays gone (R4) though the next run hears its speakers again', async () => {
+      const { b, vaneAliases } = await mergedBook();
+      /* The re-run brings a fresh bucket back on its own id, as the run's own row. */
+      expect(done(await go(b, FRESH, { seedCache: false }))).toBe(true);
+      expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+      expect(readCache(b.manuscriptId)?.addedRows?.['unknown-male']).toEqual({ state: 'added-once' });
+      await deleteRow(b, 'unknown-male');
+      const events = await go(b, FRESH, { seedCache: false });
+      expect(errCode(events)).toBeUndefined();
+      expect(done(events)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator']);
+      expect(editLines(b)['unknown-male']).toBeUndefined();
+      expect(editLines(b)['lord-vane']).toBeUndefined();
+      expect(row(b, 'lord-vane')!.aliases).toEqual(vaneAliases);
+      expect(history(b).supersededBy).not.toHaveProperty('unknown-male');
+    });
   });
 
   /* ---- PR #4103 pass 3 P3-1: a merge of the live fold bucket WHILE a run is going ---- */
@@ -3752,19 +3822,21 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(Number(now.lines ?? 0), label).toBeLessThanOrEqual(Number(afterMerge.lines ?? 0));
       expect(Number(now.scenes ?? 0), label).toBeLessThanOrEqual(Number(afterMerge.scenes ?? 0));
     };
-    const expectUserRecordKept = (b: HarnessBook): void => {
-      expect(history(b).supersededBy).toEqual({ 'unknown-male': 'lord-vane' });
-      expect(history(b).supersededByKind).toEqual({ 'unknown-male': 'user' });
-      expect((history(b) as { displaced?: Record<string, string> }).displaced?.['unknown-male']).toBeUndefined();
-      expect(readSuggestions(b.bookDir)).toEqual([]);
+    /* R53 (pass 4): the merge left no identity record for the bucket. */
+    const expectNoBucketRecord = (b: HarnessBook, label: string): void => {
+      expect(history(b).supersededBy, label).not.toHaveProperty('unknown-male');
+      expect(readSuggestions(b.bookDir), label).toEqual([]);
     };
+    /** Boris Vane, one line in the first chapter, is the guard's candidate; he folds too. */
+    const borisP = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger, borisP], speakerId: 'anna' };
+    const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris', 'the-jogger', 'the-jogger'] : ['anna', 'the-jogger']));
 
-    it('the merged run, a further run and a Start fresh all keep the background lines on the bucket', async () => {
+    /* R53 (pass 4): with no record of the merge, the merged run cannot tell it from a delete of
+       the bucket, so its bucket lines go to the narrator (rule 13). The merge also removed the
+       bucket's ledger entry, so the next run adds a fresh bucket for them. */
+    it('the merged run puts its background lines on the narrator; a further run and a Start fresh put them on a fresh bucket', async () => {
       const b = vaneBook();
-      /* Boris Vane, one line in the first chapter, is the guard's candidate; he folds too. */
-      const borisP = fr('boris', 'Boris Vane', { role: 'minor', gender: 'male' });
-      const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger, borisP], speakerId: 'anna' };
-      const script = phase1Script((ch) => (ch === 1 ? ['anna', 'boris', 'the-jogger', 'the-jogger'] : ['anna', 'the-jogger']));
       expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH, { phase1: script }))).toBe(true);
       expect(editLines(b)).toEqual({ anna: 3, 'unknown-male': 5 });
 
@@ -3775,29 +3847,31 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       /* The merge itself gave the character the bucket's names and lines (as on `main`). */
       const afterMerge = m.target()!;
       expect(afterMerge.aliases).toEqual(['Unknown male', 'The Jogger', 'Boris Vane']);
-      const expectBucketKept = (events: Array<{ kind: string; code?: unknown }>, label: string): void => {
+      expect(errCode(merged)).toBeUndefined();
+      expect(done(merged)).toBe(true);
+      expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator']);
+      expect(editLines(b)).toEqual({ anna: 3, narrator: 5 });
+      expect(linesById(b.bookDir)).toMatchObject({ anna: 3, narrator: 5 });
+      expect(entryOf(b, 'unknown-male')).toBeUndefined();
+      expectTargetUntouched(b, afterMerge, 'run 2 (merge during the run)');
+      expectNoBucketRecord(b, 'run 2 (merge during the run)');
+
+      const expectFreshBucket = (events: Array<{ kind: string; code?: unknown }>, edits: Record<string, number>, label: string): void => {
         expect(errCode(events), label).toBeUndefined();
         expect(done(events), label).toBe(true);
         expect(ids(readCast(b.bookDir)).sort(), label).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
-        expect(editLines(b), label).toEqual({ anna: 3, 'unknown-male': 5 });
-        expect(linesById(b.bookDir), label).toMatchObject({ anna: 3, 'unknown-male': 5, narrator: 0 });
+        expect(editLines(b), label).toEqual(edits);
+        expect(linesById(b.bookDir), label).toMatchObject({ ...edits, narrator: 0 });
+        expect(entryOf(b, 'unknown-male'), label).toEqual({ state: 'added-once' });
         expectTargetUntouched(b, afterMerge, label);
-        expectUserRecordKept(b);
+        expectNoBucketRecord(b, label);
       };
-      expectBucketKept(merged, 'run 2 (merge during the run)');
-
-      expectBucketKept(await go(b, FRESH, { seedCache: false, phase1: script }), 'run 3');
+      expectFreshBucket(await go(b, FRESH, { seedCache: false, phase1: script }), { anna: 3, 'unknown-male': 5 }, 'run 3');
 
       /* Main-only (one line, R18): Start fresh is a main-job request. */
       if (kind === 'main') {
         const fresh = await runStartFresh(b, { roster: FRESH.roster, speakerId: two('anna', 'the-jogger') });
-        expect(errCode(fresh)).toBeUndefined();
-        expect(done(fresh)).toBe(true);
-        expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'lord-vane', 'narrator', 'unknown-male']);
-        expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
-        expect(linesById(b.bookDir)).toMatchObject({ anna: 5, 'unknown-male': 4, narrator: 0 });
-        expectTargetUntouched(b, afterMerge, 'Start fresh');
-        expectUserRecordKept(b);
+        expectFreshBucket(fresh, { anna: 5, 'unknown-male': 4 }, 'Start fresh');
       }
     });
 
@@ -3829,7 +3903,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(ids(readCast(b.bookDir))).not.toContain('unknown-male');
       expect(editLines(b)['lord-vane']).toBeUndefined();
       expect(entryOf(b, 'unknown-male')).toBeUndefined();
-      expectUserRecordKept(b);
+      expectNoBucketRecord(b, 'run 2');
     });
   });
 

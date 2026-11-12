@@ -4,7 +4,6 @@
    applies it. */
 
 import { createHash } from 'node:crypto';
-import { FEMALE_BUCKET_ID, MALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { isDefaultNarratorName } from '../tts/language-registry.js';
 import { unionNotLinkedTo } from './cast-name-match.js';
@@ -27,7 +26,6 @@ export const ANALYSIS_OWNED = ['lines', 'scenes', 'evidence', 'attributes', 'det
 type Rec = Record<string, unknown>;
 
 const isNarratorId = (id: string): boolean => NARRATOR_CHARACTER_IDS.includes(id);
-const isCatchAllId = (id: string): boolean => id === MALE_BUCKET_ID || id === FEMALE_BUCKET_ID;
 // `''` counts as absent: older writers persisted empty-string placeholders, and the spec
 // says a joined row keeps "the prior value when present".
 const isAbsent = (v: unknown): boolean => v === undefined || v === null || v === '';
@@ -302,13 +300,7 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
         gone(d.priorId);
         continue;
       }
-      if (isCatchAllId(c.id) && t !== c.id) {
-        // R49 (PR #4103 pass 3 P3-1): a catch-all bucket settles by its own id only, never
-        // through the history to a survivor - a user merge of the bucket, even one landing
-        // while this run is going, is not a merge of this run's background lines.
-        target = c.id;
-        fresh = !currentById.has(c.id);
-      } else target = t;
+      target = t;
     } else if (currentById.has(c.id)) {
       if (!isRunRow(c.id)) {
         if (!collisions.includes(c.id)) collisions.push(c.id);
@@ -325,12 +317,7 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
         gone(c.id);
         continue;
       }
-      // R49 (P3-1): merged away, a catch-all bucket is re-added under its own id. Deleted
-      // (no survivor), it stays gone like any run row (R4).
-      if (isCatchAllId(c.id)) {
-        target = c.id;
-        fresh = true;
-      } else target = t;
+      target = t;
     } else {
       target = c.id;
       fresh = true;

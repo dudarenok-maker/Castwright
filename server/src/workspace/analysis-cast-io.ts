@@ -38,6 +38,7 @@ import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
 import { dropStaleVariants } from './variant-base-rev.js';
 import {
+  followableHistory,
   loadCastIdHistoryWithStatus,
   toMatchHistory,
   type CastIdHistoryReadResult,
@@ -204,9 +205,10 @@ export function refreshLedger(ledger: RunAddedLedger, before: Rows, after: Rows)
 }
 
 /** Exact id, or a user/heal/analyzer `supersededBy` chain to a live survivor;
-    never a normalised-id guess. `null` = not on disk and not merged away. */
+    never a normalised-id guess, and never through a catch-all key (R53,
+    `followableHistory`). `null` = not on disk and not merged away. */
 function makeResolve(current: Rows, history: CastIdHistoryReadResult): (id: string) => string | null {
-  const resolver = buildCastResolver(current, history.history);
+  const resolver = buildCastResolver(current, followableHistory(history.history));
   return (id) => {
     const r = resolver.resolve(id);
     return r && (r.via === 'exact' || r.via === 'history') ? r.character.id : null;
@@ -553,8 +555,8 @@ export async function persistPlannedCast(a: {
     }
 
     // Sentence ids -> the ids the cast now holds. A row this write adds is live after
-    // it, so its lines stay on it: a stale history key on its id (a user merge of an
-    // old fold bucket, R49) never moves them (PR #4103 pass 1 O1).
+    // it, so its lines stay on it: a stale history key on its id never moves them (PR
+    // #4103 pass 1 O1; a legacy fold-bucket key is not followed at all, R53).
     const currentIds = new Set(current.map((r) => r.id));
     const addedNow = new Set(ov.characters.map((c) => c.id).filter((id) => !currentIds.has(id)));
     const toFinal: Record<string, string> = {};

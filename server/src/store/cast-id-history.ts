@@ -59,6 +59,7 @@ import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock } from '../workspace/file-lock.js';
 import type { MatchHistory, NotSamePersonRecord, SupersededKind } from './reanalysis-types.js';
+import { FEMALE_BUCKET_ID, MALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 
 const SUPERSEDED_KINDS: ReadonlySet<string> = new Set<SupersededKind>(['user', 'heal', 'analyzer']);
 
@@ -379,6 +380,24 @@ export async function loadCastIdHistoryWithStatus(
   return { status: 'degraded', history: { schema: 1, supersededBy: {} } };
 }
 
+/** R53 (PR #4103 pass 4, owner ruling 2026-11-12) — the one place that keeps a catch-all
+ *  bucket id (`unknown-male` / `unknown-female`) out of every history a matching, planning or
+ *  retirement path follows. A bucket is a shared slot, not a persisted character identity, so
+ *  a merge of it is one-shot and records nothing (`cast-merge.ts`). An `unknown-* -> X` entry
+ *  can therefore only be a legacy one, written by `main` before this release or by this
+ *  release's earlier commits, and it is never followed: by the matcher and the plan
+ *  (`toMatchHistory`), by the persist overlay and the mid-run merge collapse (their resolvers,
+ *  `analysis-cast-io.ts` / `analysis.ts`), or by `retireCharacterId`'s target dereference.
+ *  It is not deleted here: the persist's reclaim (`dropSupersededIdsReclaimedByLiveCast`)
+ *  moves it to `displaced` once the bucket is live again, as on `main`. `buildCastResolver`'s
+ *  render and attribution callers read the file as it is. Pure; returns a copy. */
+export function followableHistory<T extends { supersededBy: Record<string, string> }>(history: T): T {
+  const supersededBy = Object.fromEntries(
+    Object.entries(history.supersededBy).filter(([k]) => k !== MALE_BUCKET_ID && k !== FEMALE_BUCKET_ID),
+  );
+  return { ...history, supersededBy };
+}
+
 /** #4031 — adapt a status-carrying read to what `matchFreshToPrior` consumes.
  *  An untagged `supersededBy` entry is filled in as `'user'` (rule 12), so the
  *  matcher never has to know the field is optional on disk. A `degraded` read
@@ -388,7 +407,7 @@ export function toMatchHistory(read: CastIdHistoryReadResult): MatchHistory {
   if (read.status === 'degraded') {
     return { status: 'degraded', supersededBy: {}, supersededByKind: {}, displaced: {}, notSamePerson: [] };
   }
-  const h = read.history;
+  const h = followableHistory(read.history);
   const supersededByKind: Record<string, SupersededKind> = {};
   for (const k of Object.keys(h.supersededBy)) supersededByKind[k] = h.supersededByKind?.[k] ?? 'user';
   return {
@@ -677,8 +696,10 @@ export async function retireCharacterId(
 
     // Dereference 'to' through any existing chain first, so the repoint
     // below is order-independent — retiring INTO an already-superseded id
-    // must land on its live target, not the stale intermediate.
-    const resolvedTo = history.supersededBy[to] ?? to;
+    // must land on its live target, not the stale intermediate. R53 (PR #4103
+    // pass 4 P4-2): never through a catch-all key (`followableHistory`), so a
+    // downgrade into a bucket lands on the bucket, not on a legacy merge target.
+    const resolvedTo = followableHistory(history).supersededBy[to] ?? to;
 
     // Never write a self-entry — it would resolve nowhere. The reversal
     // branch above already covers the only way resolvedTo can equal `from`,

@@ -6705,7 +6705,7 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
   }
 
   it(
-    'a fresh fold bucket carrying the superseded "unknown-male" id keeps its own id (R49): the merge entry holds, nothing is displaced, an unrelated entry survives',
+    'a fresh fold bucket carrying the superseded "unknown-male" id keeps its own id (R49) and reclaims it: the legacy merge entry is displaced (R53), an unrelated entry survives',
     async () => {
       const manuscriptId = `test-reclaimed-id-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -6770,8 +6770,9 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         // Plan 291 (#4031) R49 (PR #4103 pass 1 O1): a fold bucket is a shared
         // slot, not a person, so it settles by its own id only. It comes back
         // live as 'unknown-male' (never minted, never joined through the
-        // history), and the persist does not let it reclaim the id from the
-        // user's merge record: that entry is ignored, not displaced.
+        // history). R53 (PR #4103 pass 4): a bucket merge is one-shot and the
+        // legacy entry is never followed, so the live bucket reclaims its id and
+        // the entry is displaced, as on `main`.
         const castAfter = JSON.parse(
           readFileSync(castJsonPath(bookDir), 'utf8'),
         ) as { characters: Array<{ id: string }> };
@@ -6779,15 +6780,12 @@ describe('runMainAnalyzerJob — a re-minted live id drops its history entry (#2
         expect(castAfter.characters.map((c) => c.id)).not.toContain('unknown-male-n1');
 
         const history = await loadCastIdHistory(bookDir);
-        // The entry is a merge that still holds (its target is live), so it
-        // stays a `supersededBy` entry and is never moved to `displaced`
-        // (rule 3, R49) — before plan 291 the reclaimed row displaced it.
-        expect(history.supersededBy).toHaveProperty('unknown-male', 'timkin');
-        expect(history.displaced ?? {}).toEqual({});
+        expect(history.supersededBy).not.toHaveProperty('unknown-male');
+        expect(history.displaced ?? {}).toEqual({ 'unknown-male': 'timkin' });
         // The unrelated entry is untouched — no wholesale history wipe.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
-        // ...and no history alias was reported dropped.
-        expect(job.replay.logs.some((l) => l.message.includes('Dropped 1 history alias'))).toBe(false);
+        // ...and the drop was reported.
+        expect(job.replay.logs.some((l) => l.message.includes('Dropped 1 history alias'))).toBe(true);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
@@ -7858,7 +7856,7 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
   }
 
   it(
-    'a fresh fold bucket carrying the superseded "unknown-male" id keeps its own id (R49) on the subset path: the merge entry holds, nothing is displaced, an unrelated entry survives',
+    'a fresh fold bucket carrying the superseded "unknown-male" id keeps its own id (R49) and reclaims it on the subset path: the legacy merge entry is displaced (R53), an unrelated entry survives',
     async () => {
       const manuscriptId = `test-subset-reclaimed-id-e2e-${Date.now()}-${Math.random()}`;
       const bookDir = makeBookDir();
@@ -7909,8 +7907,8 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
 
         // Plan 291 (#4031, Task 25; mirrors the main twin above): the subset
         // persists through `persistPlannedCast` too. R49 (PR #4103 pass 1 O1): the
-        // fold bucket keeps its own id, and the shared persist never lets it
-        // reclaim the id from the user's merge record.
+        // fold bucket keeps its own id. R53 (PR #4103 pass 4): it reclaims the id,
+        // so the legacy merge entry is displaced, as on `main`.
         const castAfter = JSON.parse(
           readFileSync(castJsonPath(bookDir), 'utf8'),
         ) as { characters: Array<{ id: string }> };
@@ -7918,14 +7916,12 @@ describe('runSubsetAnalyzerJob — a re-minted live id drops its history entry (
         expect(castAfter.characters.map((c) => c.id)).not.toContain('unknown-male-n1');
 
         const history = await loadCastIdHistory(bookDir);
-        // The merge still holds (its target is live): it stays a `supersededBy`
-        // entry and is never moved to `displaced` (rule 3).
-        expect(history.supersededBy).toHaveProperty('unknown-male', 'timkin');
-        expect(history.displaced ?? {}).toEqual({});
+        expect(history.supersededBy).not.toHaveProperty('unknown-male');
+        expect(history.displaced ?? {}).toEqual({ 'unknown-male': 'timkin' });
         // The unrelated entry is untouched — no wholesale history wipe.
         expect(history.supersededBy).toHaveProperty('old-eliza', 'eliza');
-        // ...and no history alias was reported dropped.
-        expect(job.replay.logs.some((l) => l.message.includes('Dropped 1 history alias'))).toBe(false);
+        // ...and the drop was reported.
+        expect(job.replay.logs.some((l) => l.message.includes('Dropped 1 history alias'))).toBe(true);
       } finally {
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);

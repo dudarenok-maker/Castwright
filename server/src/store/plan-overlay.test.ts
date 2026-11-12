@@ -454,23 +454,15 @@ describe('overlayPlanOntoCast ledger (invariant 6)', () => {
   });
 });
 
-describe('overlayPlanOntoCast: a catch-all bucket settles by its own id (R49, PR #4103 pass 3 P3-1)', () => {
+/* R53 (PR #4103 pass 4): the overlay has no bucket rule of its own. A bucket merge records
+   nothing, and the resolver the persist hands in never follows a legacy bucket key
+   (`followableHistory`), so a gone bucket resolves to nothing. The pass-3 units that fed
+   it a bucket -> survivor resolution tested an input that can no longer occur; they are
+   replaced by the `followableHistory` units (cast-id-history.test.ts) and the route test
+   "M-a: a live legacy-era bucket merged mid-run" (analysis.single-matcher.test.ts). */
+describe('overlayPlanOntoCast: a gone run row (R4)', () => {
   const vane: PriorRow = { id: 'lord-vane', name: 'Lord Vane', aliases: ['Unknown male'], lines: 5 };
   const bucket: Row = { id: 'unknown-male', name: 'Unknown male', lines: 4, scenes: 2 };
-  /** The user merged the bucket into Lord Vane: the history resolves it to him. */
-  const merged = (id: string): string | null => (id === 'unknown-male' ? 'lord-vane' : id === 'lord-vane' ? id : null);
-
-  it.each([
-    ['a cached join of the bucket', planOf(join('unknown-male', 'unknown-male')), {}],
-    ['a run row the ledger knows', planOf(nw('unknown-male')), { 'unknown-male': { state: 'added-once' } }],
-  ] as const)('%s, merged away mid-run, is re-added under its own id, never landed on the survivor', (_label, plan, ledger) => {
-    const r = overlay({ current: [vane], roster: [bucket], plan, ledger: ledger as RunAddedLedger, resolve: merged, mode: 'persist' });
-    expect(r.characters.map((c) => c.id).sort()).toEqual(['lord-vane', 'unknown-male']);
-    expect(r.characters.find((c) => c.id === 'unknown-male')).toMatchObject({ lines: 4, scenes: 2 });
-    expect(r.characters.find((c) => c.id === 'lord-vane')).toEqual(vane);
-    expect(r.deletedTargets).toEqual([]);
-    expect(r.ledger['unknown-male']?.state).toBe('run-owned');
-  });
 
   it('a run-row bucket the user deleted (no survivor) stays gone (R4)', () => {
     const r = overlay({

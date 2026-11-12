@@ -212,7 +212,8 @@ function decide(input: MatchInput, plan: MatchPlan, rows: ReadonlyArray<FreshRow
     // R49: a catch-all bucket is a shared slot, not a person. It joins only the
     // live prior row with its own id; never by history or name, so a user merge
     // of an old bucket into a character never pulls later folded lines onto it.
-    // That history entry is the user's record and stays, ignored here.
+    // (A bucket merge records nothing now, and a legacy entry for it never reaches
+    // this history: `followableHistory`, R53.)
     if (isCatchAllId(r.id)) {
       if (priorById.has(r.id)) joinTo(r.id, r.id, 'id');
       else keepAsNew(r.id);

@@ -20,6 +20,7 @@ import {
   stampRecordedAtSeqIfAbsent,
   recordNotSamePerson,
   toMatchHistory,
+  followableHistory,
 } from './cast-id-history.js';
 
 let dir: string;
@@ -1731,5 +1732,39 @@ describe('#4031 — history shape', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('R53 (PR #4103 pass 4): a catch-all bucket key is never followed', () => {
+  /* What `main` (or this branch's earlier commits) wrote for a merge of the bucket. */
+  const legacy = {
+    schema: 1,
+    supersededBy: { 'unknown-male': 'lord-vane', 'unknown-female': 'olga', mayrin: 'mairin', anna: 'unknown-male' },
+    supersededByKind: { 'unknown-male': 'user', 'unknown-female': 'user', mayrin: 'user', anna: 'user' },
+  };
+
+  it('followableHistory drops only the catch-all keys; an entry INTO a bucket is kept', () => {
+    expect(followableHistory(legacy)).toEqual({
+      ...legacy,
+      supersededBy: { mayrin: 'mairin', anna: 'unknown-male' },
+    });
+    /* The input is not mutated. */
+    expect(legacy.supersededBy['unknown-male']).toBe('lord-vane');
+  });
+
+  it('toMatchHistory never offers the matcher a catch-all key', async () => {
+    writeTestHistoryFile(JSON.stringify(legacy));
+    const m = toMatchHistory(await loadCastIdHistoryWithStatus(dir));
+    expect(m.supersededBy).toEqual({ mayrin: 'mairin', anna: 'unknown-male' });
+    expect(m.supersededByKind).toEqual({ mayrin: 'user', anna: 'user' });
+  });
+
+  it('P4-2: a downgrade into a bucket that has a legacy user entry records the bucket, never that entry\'s target', async () => {
+    writeTestHistoryFile(JSON.stringify(legacy));
+    await retireCharacterId(dir, 'boris', 'unknown-male', 'user');
+    const h = await loadCastIdHistory(dir);
+    expect(h.supersededBy.boris).toBe('unknown-male');
+    /* The legacy entry itself is left for the persist's reclaim to displace. */
+    expect(h.supersededBy['unknown-male']).toBe('lord-vane');
   });
 });

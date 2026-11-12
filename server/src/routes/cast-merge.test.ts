@@ -1289,6 +1289,30 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
     expect(readCacheFile().matchPlan!.decisions).toEqual({ 'raw-o': other });
   });
 
+  it('R53 (PR #4103 pass 4): a merge of a fold bucket is one-shot - its lines move, and no identity record is left', async () => {
+    const u = uniq();
+    const tgt = `r53-tgt-${u}`;
+    const down = `r53-down-${u}`;
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters = cast.characters.filter((c) => c.id !== 'unknown-male');
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    seedRows([row(down), row('unknown-male', { name: 'Unknown male' }), row(tgt)]);
+    /* An earlier "Downgrade to a background voice" of another character. */
+    expect((await merge(down, 'unknown-male')).status).toBe(200);
+    seedCache({ chapters: {}, addedRows: { 'unknown-male': { state: 'added-once' }, [tgt]: { state: 'added-once' } } });
+
+    expect((await merge('unknown-male', tgt)).status).toBe(200);
+
+    expect(castRow('unknown-male')).toBeUndefined();
+    const { loadCastIdHistory } = await import('../store/cast-id-history.js');
+    const h = await loadCastIdHistory(bookDir);
+    /* No entry for the bucket, and the downgrade's entry is not repointed onto the target. */
+    expect(h.supersededBy).not.toHaveProperty('unknown-male');
+    expect(h.supersededBy[down]).toBe('unknown-male');
+    /* The bucket's ledger entry goes; the target's stays. */
+    expect(readCacheFile().addedRows).toEqual({ [tgt]: { state: 'added-once' } });
+  });
+
   async function notSamePersonNaming(...ids: string[]): Promise<unknown[]> {
     const { loadCastIdHistory } = await import('../store/cast-id-history.js');
     const h = await loadCastIdHistory(bookDir);

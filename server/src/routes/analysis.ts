@@ -140,6 +140,7 @@ import {
   refuseRetirementsOfLiveIds,
   loadCastIdHistoryWithStatus,
   toMatchHistory,
+  followableHistory,
   CastIdHistoryUnreadableError,
   type CastIdHistoryStatus,
 } from '../store/cast-id-history.js';
@@ -1809,14 +1810,11 @@ async function applyPlannedPersistOutcome(a: {
        lose to it (no tie, no warning). Drop it here, last, so it can't survive past the
        same write cycle that reintroduced the live row. The dropped entries are reported
        so a future banner can flag their segments as needs-your-decision (§4.6, Wave 3). */
-    /* R49 (PR #4103 pass 1 O1): a live fold bucket does not reclaim its id from a user
-       merge of an old bucket. The matcher ignores that entry (the bucket joins only its
-       own live id), and exact-id-first resolution keeps it inert; it is the user's
-       record, so it is never moved to `displaced`. */
-    const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(
-      writeDir,
-      liveIds.filter((id) => id !== MALE_BUCKET_ID && id !== FEMALE_BUCKET_ID),
-    );
+    /* R53 (PR #4103 pass 4): a live fold bucket reclaims its id like any row, so a legacy
+       `unknown-* -> X` entry (a bucket merge recorded by `main` or by this release's
+       earlier commits; a merge of a bucket records nothing now) moves to `displaced`, as
+       on `main`. Nothing followed it in the meantime (`followableHistory`). */
+    const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(writeDir, liveIds);
     /* #2040 Task 14 review item 2a — operator-visible. The dropped pairs are also
        persisted (item 2b, cast-id-history.ts's `displaced`), so this line is a
        heads-up, not the only record. */
@@ -2505,8 +2503,8 @@ export async function resolveCurrentIds<S extends { characterId: string }>(
 
 /* `resolveCurrentIds`' gate, for any set of ids: which of them a user merged away mid-run,
    and onto which live survivor (with the survivor's on-disk row). A catch-all bucket never
-   follows its history (R49): a user merge of an old bucket is not a merge of this run's
-   bucket. Throws on a degraded history. */
+   follows its history (R49): its key is not in the history this reads (`followableHistory`,
+   R53). Throws on a degraded history. */
 async function mergedAwayIds(
   bookDir: string,
   ids: Iterable<string>,
@@ -2519,11 +2517,10 @@ async function mergedAwayIds(
      rather than write ids a merge has retired. */
   if (read.status === 'degraded') throw new Error('cast-id-history.json could not be read');
   const cast = (await readJson<{ characters?: Array<{ id: string }> }>(castJsonPath(bookDir)))?.characters ?? [];
-  const resolver = buildCastResolver(cast, read.history);
+  const resolver = buildCastResolver(cast, followableHistory(read.history));
   const idMap: Record<string, string> = {};
   const survivors = new Map<string, { id: string; name?: unknown }>();
   for (const characterId of new Set(ids)) {
-    if (characterId === MALE_BUCKET_ID || characterId === FEMALE_BUCKET_ID) continue;
     /* A resume reads the stopped leg's snapshot rows as prior, so a run-added id can be a prior id too. */
     const runAdded = addedIds.has(characterId);
     if (!priorIds.has(characterId) && !runAdded) continue;
