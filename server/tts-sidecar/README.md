@@ -572,6 +572,15 @@ $resp.Headers['X-Sample-Rate']
   tunes it; the hard ceiling stays the untouched backstop. `POST /recycle` reuses
   the hard watchdog's drain→exit path verbatim (idempotent), and `/health` also
   carries `committed_mb` for boundary-decision observability.
+- `SIDECAR_PARENT_PID` (unset by default; **the server sets it**, not an operator) —
+  the pid of the Castwright server that spawned this sidecar (#4054). When set,
+  `parent_watch.py` waits on that process and, when it dies, logs one error line
+  with the server's exit code (hex plus a name, e.g. `0xC0000409` native crash)
+  and exits, so a dead server never leaves an orphaned sidecar holding the GPU.
+  Unset means no watcher (a standalone sidecar). It is also left unset under
+  `npm run dev` (`CASTWRIGHT_DEV_RELOAD=1`), where `tsx watch` restarts the server
+  on every save and the new server adopts the running sidecar, so its models stay
+  loaded across a reload.
 
 ## FlashAttention-2 (optional)
 

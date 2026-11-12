@@ -6577,11 +6577,12 @@ The automated tests prove the lever's decisions against a mocked sidecar: what i
 
 ### A123 · The sidecar exits when the server dies, and logs the server's exit code ([#4054](https://github.com/dudarenok-maker/Castwright/issues/4054)) · **the GPU box (Windows), real sidecar**
 
-The automated tests stub the process-handle wait and pin the exit-code wording, the env hand-off and the signal handlers. Only a real server death on Windows shows that the sidecar sees it, reads the real exit code, and leaves no orphan. The point of the row is also diagnostic: the next silent server death should name its own exit code (0xC0000409 means a native crash).
+The automated tests stub the process-handle wait and pin the exit-code wording, the env hand-off (and its absence under `npm run dev`) and the signal handlers. Only a real server death on Windows shows that the sidecar sees it, reads the real exit code, and leaves no orphan. The point of the row is also diagnostic: the next silent server death should name its own exit code (0xC0000409 means a native crash).
 
 - **`taskkill /F`.** Start the app (`npm start`) and wait for `GET /api/sidecar/health` to answer. Kill the server's node process with `taskkill /F /PID <server pid>`. Within a few seconds `logs/tts.log` has one error line `server pid=<pid> exited with code 1 = 0x00000001 (taskkill); sidecar exiting`, the sidecar process is gone, and the sidecar port is free.
 - **`Stop-Process -Force`.** Start the app again and run `Stop-Process -Id <server pid> -Force` from PowerShell. The sidecar logs `0xFFFFFFFF (Stop-Process)` and exits.
 - **Ctrl+C in the server's console.** Start the app again and press Ctrl+C in its console. The server logs `SIGINT received` and tears the sidecar down through its own path; `logs/server.err.log` ends with a `process exit` line carrying exit code 0 (or the sidecar log shows `0xC000013A (Ctrl+C)` if the server was killed by the console before its handler ran). Either way no sidecar is left running.
+- **A dev reload keeps the sidecar.** Start the app with `npm run dev` and wait for `GET /api/sidecar/health` to answer with a model loaded. Save any file under `server/src/` so `tsx watch` restarts the server. The server comes back, adopts the sidecar, `logs/tts.log` has no `exited with code` line, the sidecar pid is unchanged and `/api/sidecar/health` still reports the model loaded (no reload).
 - **A standalone sidecar is untouched.** Start the sidecar alone (`npm run tts:sidecar`, no server). It keeps running and `logs/tts.log` has no `exited with code` line.
 
 *Needs:* the GPU box on Windows with the real sidecar. *Criteria:* this row. Clears when each bullet is recorded with the log line it produced.

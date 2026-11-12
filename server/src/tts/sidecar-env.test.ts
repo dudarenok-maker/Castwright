@@ -445,8 +445,15 @@ describe('buildSidecarEnv sources QWEN_VOICES_DIR/XTTS_VOICES_DIR from paths.ts 
 });
 
 /* #4054 — the sidecar watches this pid and exits (logging the exit code) when
-   the server dies. */
+   the server dies. Under `npm run dev` (CASTWRIGHT_DEV_RELOAD=1, set by the
+   root dev scripts) `tsx watch` restarts the server on every save and the new
+   one adopts the live sidecar, so the watcher must be OFF there. */
 describe('buildSidecarEnv passes the server pid (#4054)', () => {
+  afterEach(() => {
+    delete process.env.CASTWRIGHT_DEV_RELOAD;
+    delete process.env.SIDECAR_PARENT_PID;
+  });
+
   it('sets SIDECAR_PARENT_PID to this process pid', () => {
     const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
     expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
@@ -454,11 +461,26 @@ describe('buildSidecarEnv passes the server pid (#4054)', () => {
 
   it('overrides a stale inherited value (a server spawned by a parent that had one)', () => {
     process.env.SIDECAR_PARENT_PID = '1';
-    try {
-      const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
-      expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
-    } finally {
-      delete process.env.SIDECAR_PARENT_PID;
-    }
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
+  });
+
+  it('does not set SIDECAR_PARENT_PID under a dev reload (CASTWRIGHT_DEV_RELOAD=1)', () => {
+    process.env.CASTWRIGHT_DEV_RELOAD = '1';
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env).not.toHaveProperty('SIDECAR_PARENT_PID');
+  });
+
+  it('removes an inherited SIDECAR_PARENT_PID under a dev reload', () => {
+    process.env.CASTWRIGHT_DEV_RELOAD = '1';
+    process.env.SIDECAR_PARENT_PID = '1234';
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env).not.toHaveProperty('SIDECAR_PARENT_PID');
+  });
+
+  it('treats CASTWRIGHT_DEV_RELOAD=0 as off (watcher stays on)', () => {
+    process.env.CASTWRIGHT_DEV_RELOAD = '0';
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
   });
 });

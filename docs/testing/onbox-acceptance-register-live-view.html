@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="113" data-publish-id="c54483dc0224"></div>
+  <div hidden data-published-as="114" data-publish-id="52b40b181a19"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -907,11 +907,12 @@
     <details class="item">
       <summary><span class="num">A123</span><span class="iname">The sidecar exits when the server dies, and logs the server&#39;s exit code</span><span class="risk">Windows GPU box, real sidecar</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>The automated tests stub the process-handle wait and pin the exit-code wording, the env hand-off and the signal handlers. Only a real server death on Windows shows that the sidecar sees it, reads the real exit code, and leaves no orphan. The point of the row is also diagnostic: the next silent server death should name its own exit code (0xC0000409 means a native crash).</p>
+        <p>The automated tests stub the process-handle wait and pin the exit-code wording, the env hand-off (and its absence under <code>npm run dev</code>) and the signal handlers. Only a real server death on Windows shows that the sidecar sees it, reads the real exit code, and leaves no orphan. The point of the row is also diagnostic: the next silent server death should name its own exit code (0xC0000409 means a native crash).</p>
         <ul>
         <li><strong><code>taskkill /F</code>.</strong> Start the app (<code>npm start</code>) and wait for <code>GET /api/sidecar/health</code> to answer. Kill the server&#39;s node process with <code>taskkill /F /PID &lt;server pid&gt;</code>. Within a few seconds <code>logs/tts.log</code> has one error line <code>server pid=&lt;pid&gt; exited with code 1 = 0x00000001 (taskkill); sidecar exiting</code>, the sidecar process is gone, and the sidecar port is free.</li>
         <li><strong><code>Stop-Process -Force</code>.</strong> Start the app again and run <code>Stop-Process -Id &lt;server pid&gt; -Force</code> from PowerShell. The sidecar logs <code>0xFFFFFFFF (Stop-Process)</code> and exits.</li>
         <li><strong>Ctrl+C in the server&#39;s console.</strong> Start the app again and press Ctrl+C in its console. The server logs <code>SIGINT received</code> and tears the sidecar down through its own path; <code>logs/server.err.log</code> ends with a <code>process exit</code> line carrying exit code 0 (or the sidecar log shows <code>0xC000013A (Ctrl+C)</code> if the server was killed by the console before its handler ran). Either way no sidecar is left running.</li>
+        <li><strong>A dev reload keeps the sidecar.</strong> Start the app with <code>npm run dev</code> and wait for <code>GET /api/sidecar/health</code> to answer with a model loaded. Save any file under <code>server/src/</code> so <code>tsx watch</code> restarts the server. The server comes back, adopts the sidecar, <code>logs/tts.log</code> has no <code>exited with code</code> line, the sidecar pid is unchanged and <code>/api/sidecar/health</code> still reports the model loaded (no reload).</li>
         <li><strong>A standalone sidecar is untouched.</strong> Start the sidecar alone (<code>npm run tts:sidecar</code>, no server). It keeps running and <code>logs/tts.log</code> has no <code>exited with code</code> line.</li>
         </ul>
         <p class="src">the GPU box on Windows with the real sidecar &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4054">#4054</a> &#183; criteria in this row</p>

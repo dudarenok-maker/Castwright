@@ -197,12 +197,21 @@ export function sidecarCeilingMismatch(health: SidecarHealthProbe): string | nul
   return null;
 }
 
+/* True under the root `dev` / `dev:mock` / `dev:lan` scripts, which set
+   CASTWRIGHT_DEV_RELOAD=1 (explicit, not sniffed from tsx internals). `npm start`
+   on Windows runs `dev:server` without it, so the parent watcher stays on. */
+function isDevReload(): boolean {
+  const raw = process.env.CASTWRIGHT_DEV_RELOAD;
+  return raw === '1' || raw === 'true';
+}
+
 /* Prod never adopts a pre-existing sidecar: at boot there is no in-flight synth,
    so a clean owned process (governed by the graceful soft/hard recycle path) is
    strictly safer than bolting onto an orphan of unknown leak/build. Dev keeps
    adopt-if-healthy so `tsx watch` HMR doesn't reload the model every save.
-   (#4054: a sidecar this server spawned now exits when the server dies — see
-   SIDECAR_PARENT_PID — so adoption now mainly covers a hand-launched sidecar.)
+   (#4054: outside `npm run dev` a sidecar this server spawned exits when the
+   server dies — see SIDECAR_PARENT_PID — so adoption there mainly covers a
+   hand-launched sidecar; under a dev reload the sidecar survives and is adopted.)
    Override with SIDECAR_NEVER_ADOPT=1/0. */
 export function neverAdoptSidecar(): boolean {
   const raw = process.env.SIDECAR_NEVER_ADOPT;
@@ -313,8 +322,8 @@ export const LISTENER_PID_DEADLINE_MS = 5000;
     null when it can't tell (no tool, parse miss, error, or deadline expiry) — the caller then
     leaves the process in place rather than killing the wrong thing. The PID
     file (`.run/tts.pid`) is NOT used here: a stale sidecar is often a process
-    we did NOT spawn (orphan across a `tsx watch` reload, or a manual launch),
-    so its PID differs from the last one we recorded. */
+    we did NOT spawn (orphan across a `tsx watch` reload under `npm run dev`, or
+    a manual launch), so its PID differs from the last one we recorded. */
 export function findListenerPid(
   port: number,
   platform: NodeJS.Platform = process.platform,
@@ -422,8 +431,8 @@ export function probeListening(host: string, port: number): Promise<boolean> {
     We hand this fd straight to the child's stdio (see spawnSidecar) instead
     of piping `child.stdout`/`stderr` through a Node WriteStream. The pipe
     approach broke the sidecar's logging the moment the Node parent died
-    (e.g. a `tsx watch` dev reload that restarts the server but ORPHANS the
-    long-lived sidecar): the pipe's read end belonged to the dead parent, so
+    (e.g. a `tsx watch` dev reload under `npm run dev`, which restarts the server
+    but deliberately leaves the long-lived sidecar running, #4054): the pipe's read end belonged to the dead parent, so
     the orphaned sidecar's next stdout/stderr write — notably the
     huggingface `from_pretrained` tqdm progress bar during a model /load —
     raised `OSError: [Errno 22] Invalid argument`, surfacing as an opaque
@@ -532,10 +541,6 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
        tree (sibling to voices.json), not the sidecar's __file__-relative
        dir. A sidecar restart / cwd change / workspace move can't orphan a
        designed voice (a latent ENOENT on torch.load at synth time). */
-    /* #4054 — the sidecar holds a handle on this pid and exits (logging our
-       exit code) when we die. Always OURS: overrides a value inherited from a
-       grandparent. */
-    SIDECAR_PARENT_PID: String(process.pid),
     QWEN_VOICES_DIR: qwenVoicesDir(),
     /* Cloned-voice latents (fs-38 Wave 3c) — same per-workspace-tree
        rationale as QWEN_VOICES_DIR above, sibling directory. */
@@ -618,6 +623,14 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
   env.CASTWRIGHT_ACCELERATOR_PROFILE = profile;
   env.KOKORO_ORT_PROVIDERS = JSON.stringify(ortProviders(profile, process.platform));
 
+  /* #4054 — the sidecar holds a handle on this pid and exits (logging our exit
+     code) when we die. Always OURS: overrides a value inherited from a
+     grandparent. Off under `npm run dev` (CASTWRIGHT_DEV_RELOAD, set by the root
+     dev scripts): `tsx watch` restarts the server on every save and the new one
+     adopts the live sidecar, so it must outlive the server and keep its models
+     loaded. Delete rather than leave an inherited value in place. */
+  if (isDevReload()) delete env.SIDECAR_PARENT_PID;
+  else env.SIDECAR_PARENT_PID = String(process.pid);
   return env;
 }
 
