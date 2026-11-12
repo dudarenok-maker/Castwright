@@ -1501,6 +1501,7 @@ export function checkLiveView(
     rowOwnerLookup,
     retiredPrStates,
     carryOut,
+    committedBodyMatch,
   } = {},
 ) {
   const errors = [];
@@ -2193,6 +2194,11 @@ export function checkLiveView(
         }
         const baselineHash = hashRowContent(baselineBody);
         if (trackedHash === baselineHash) {
+          // #4105: after a merge the live page is simply behind main. If the
+          // published body is this row's body at some commit in origin/main's
+          // history, it is a committed version, not drift. Absent callback
+          // (git unavailable) => no exemption, the drift is reported.
+          if (committedBodyMatch?.(id, publishedHash) === true) continue;
           // Tracked matches baseline (merged to main) — the edit is already
           // committed to the branch and published. But published differs from
           // both, so this is A41-style drift: the published page was
@@ -2493,6 +2499,45 @@ function findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner) {
     if (show.stdout.includes(anchored)) return { sha, html: show.stdout };
   }
   return { sha: null };
+}
+
+// #4105: how many of `mainRef`'s newest first-parent live-view commits are
+// searched for a published row body. Bounded so a long history cannot make the
+// check slow; a body older than this reads as drift (fail closed).
+const COMMITTED_BODY_HISTORY_LIMIT = 150;
+
+// #4105: `checkLiveView`'s `options.committedBodyMatch`. Answers "is the
+// published body (by content hash) this row's body in the live view at some
+// commit on `mainRef`'s first-parent history?" — true means the live page is
+// merely behind main, not hand-edited. Lazy: git is only asked for a row that
+// would otherwise be reported, and each historical file is read at most once.
+// Any git failure answers false, so drift is still reported.
+export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunner = runGitCommand) {
+  let shas = null;
+  const parsed = new Map();
+  return (id, publishedHash) => {
+    if (shas === null) {
+      const log = gitRunner(
+        ['log', '--first-parent', '--format=%H', `--max-count=${COMMITTED_BODY_HISTORY_LIMIT}`, mainRef, '--', liveViewPath],
+        repoRoot,
+      );
+      shas = !log.error && log.status === 0 && typeof log.stdout === 'string' ? log.stdout.split(/\s+/).filter(Boolean) : [];
+    }
+    for (const sha of shas) {
+      if (!parsed.has(sha)) {
+        const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
+        parsed.set(
+          sha,
+          !show.error && show.status === 0 && typeof show.stdout === 'string'
+            ? parseLiveViewRowBodies(stripHtmlComments(show.stdout)).bodies
+            : new Map(),
+        );
+      }
+      const body = parsed.get(sha).get(id);
+      if (body !== undefined && hashRowContent(body) === publishedHash) return true;
+    }
+    return false;
+  };
 }
 
 // #3529: who published the live page — the provenance `checkLiveView`'s
@@ -3351,7 +3396,12 @@ function runCheckOnboxRegisterCli() {
     } else {
       retiredPrStates = resolveRetiredPrStates(repoRoot, retiredPrs);
     }
+    // #4105: only with a frozen origin/main SHA; otherwise drift is reported.
+    const committedBodyMatch = baseline.fetchedSha
+      ? makeCommittedBodyMatch(repoRoot, LIVE_VIEW, baseline.fetchedSha)
+      : undefined;
     const checkOptions = {
+      committedBodyMatch,
       direction: 'extraOnly',
       baselineText: baseline.registerText,
       dischargingIds,

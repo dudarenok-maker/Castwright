@@ -205,7 +205,7 @@ comparison, see the edge list above). The merge step that closes this, run
    `npm run check:onbox-register -- --against-published <saved-file>`. This
    comparison detects structural drift (rows live vs. in register), and — when
    the live-view baseline from `origin/main` is available — also detects
-   content drift (per-row body text hash comparison). Your register having rows
+   content drift (per-row body text hash comparison; a published body equal to that row in some commit of `origin/main's recent first-parent history is a page merely behind main, #4105, and is not reported). Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that
    your register lacks is reported when `origin/main`'s own copy of this

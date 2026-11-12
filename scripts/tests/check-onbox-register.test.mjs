@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'nod
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { checkRegister, checkLiveView, resolveBaselineTexts, CANNOT_VERIFY_BASELINE_ERROR, ROW_CONTENT_DRIFT_ERROR_PREFIX, EXTRACTION_ERROR_PREFIX, THREE_WAY_CONTENT_WARNING_PREFIX, ROW_ID_COLLISION_ERROR_PREFIX, UNMERGED_LANE_ROW_ERROR_PREFIX, UNKNOWN_PROVENANCE_ERROR_PREFIX, PUBLISHING_FILE_ERROR_PREFIX, DISCHARGE_NAME_ERROR_PREFIX, resolvePublishedProvenance, resolveMergeBaseRegister, stripHtmlComments, htmlCellText, ALLOCATION_FLOOR, parseNextIdMarker, ROW_ID_REGEX, splitRowId, parseTitledSections, parseRegisterRowTitles } from '../check-onbox-register.mjs';
+import { checkRegister, checkLiveView, resolveBaselineTexts, CANNOT_VERIFY_BASELINE_ERROR, ROW_CONTENT_DRIFT_ERROR_PREFIX, EXTRACTION_ERROR_PREFIX, THREE_WAY_CONTENT_WARNING_PREFIX, ROW_ID_COLLISION_ERROR_PREFIX, UNMERGED_LANE_ROW_ERROR_PREFIX, UNKNOWN_PROVENANCE_ERROR_PREFIX, PUBLISHING_FILE_ERROR_PREFIX, DISCHARGE_NAME_ERROR_PREFIX, resolvePublishedProvenance, makeCommittedBodyMatch, resolveMergeBaseRegister, stripHtmlComments, htmlCellText, ALLOCATION_FLOOR, parseNextIdMarker, ROW_ID_REGEX, splitRowId, parseTitledSections, parseRegisterRowTitles } from '../check-onbox-register.mjs';
 import * as onbox from '../check-onbox-register.mjs';
 import {
   HERE,
@@ -2239,6 +2239,53 @@ test('#2599: a row whose body is unchanged but risk badge differs is caught as c
   );
 });
 
+
+// #4105: after a merge, "tracked == origin/main, published differs" is also the
+// normal "live page is behind main" state. A published body equal to the row's
+// body at some commit in origin/main's history is a committed version, not drift.
+const BEHIND_DRIFT = `${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`;
+const BEHIND_HISTORY = {
+  new1: buildRowContentLiveView([{ id: 'A1', body: 'Current body on main.' }]),
+  old1: buildRowContentLiveView([{ id: 'A1', body: 'Older committed body.' }]),
+};
+function behindRunner(history = BEHIND_HISTORY) {
+  return (args) => {
+    if (args[0] === 'log') return { status: 0, stdout: Object.keys(history).join('\n') + '\n' };
+    const sha = args[1].split(':')[0];
+    return { status: 0, stdout: history[sha] };
+  };
+}
+function behindCheck(publishedBody, committedBodyMatch) {
+  const mainView = BEHIND_HISTORY.new1;
+  return checkLiveView(
+    buildSingleGroupRegister('A', [1]),
+    buildRowContentLiveView([{ id: 'A1', body: publishedBody }]),
+    {
+      direction: 'extraOnly',
+      baselineText: buildSingleGroupRegister('A', [1]),
+      trackedLiveViewHtml: mainView,
+      baselineLiveViewText: mainView,
+      committedBodyMatch,
+    },
+  );
+}
+
+test('#4105: a published body equal to the row at an older origin/main commit is behind, not drift', () => {
+  const match = makeCommittedBodyMatch('/repo', 'live.html', 'abc', behindRunner());
+  assert.deepEqual(behindCheck('Older committed body.', match), []);
+});
+
+test('#4105: a published body matching no committed version is still row-content-drift', () => {
+  const match = makeCommittedBodyMatch('/repo', 'live.html', 'abc', behindRunner());
+  assert.deepEqual(behindCheck('Hand-edited on the live page.', match), [BEHIND_DRIFT]);
+});
+
+test('#4105: git unavailable fails closed — the drift is still reported', () => {
+  const failing = () => ({ status: 128, stdout: '', stderr: 'fatal' });
+  const match = makeCommittedBodyMatch('/repo', 'live.html', 'abc', failing);
+  assert.deepEqual(behindCheck('Older committed body.', match), [BEHIND_DRIFT]);
+  assert.deepEqual(behindCheck('Older committed body.', undefined), [BEHIND_DRIFT]);
+});
 
 // Group F had exactly one row (F1); this change discharges it, so Group F
 // disappears from the working register entirely, while origin/main's
