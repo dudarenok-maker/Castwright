@@ -107,6 +107,7 @@ beforeAll(async () => {
   const { castDeclineVoiceLinkRouter } = await import('./cast-decline-voice-link.js');
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
   const { voicesRouter } = await import('./voices.js');
+  const { voiceOverrideLinkedRouter } = await import('./voice-override-linked.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
@@ -115,6 +116,7 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', castDeclineVoiceLinkRouter);
   app.use('/api/books', qwenVoiceRouter);
+  app.use('/api/books', voiceOverrideLinkedRouter);
   app.use('/api/voices', voicesRouter);
 });
 
@@ -256,5 +258,46 @@ describe('Design & compare on a declined row whose new voice carries a consented
     expect(saved.status).toBe(204);
     expect(readRow('Book One')).toEqual(oneBefore);
     expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(kept.body.voiceId);
+  });
+});
+
+/* The rebaseline modal's other non-preview caller: a REST base design, then
+   `voice-override-linked` with the designed name. The group match is by shared voiceId, so
+   without the decline check it walked straight back across a "Don't reuse". */
+describe('voice-override-linked after a "Don\'t reuse" decline (#4104 review)', () => {
+  const link = (fromBook: string, name: string) =>
+    request(app)
+      .post(`/api/books/${fromBook}/cast/wren/voice-override-linked`)
+      .send({ override: { engine: 'qwen', name } });
+
+  async function declineThenDesign() {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_one' }));
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    const designed = await designRest(false);
+    expect(designed.status).toBe(200);
+    return designed.body.voiceId as string;
+  }
+
+  it('a rebaseline from the decliner does not put its new voice back on the book it declined', async () => {
+    const name = await declineThenDesign();
+    const oneBefore = readRow('Book One');
+    const res = await link(bookTwoId, name);
+    expect(res.status).toBe(200);
+    expect(res.body.updated.map((u: { bookId: string }) => u.bookId)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
+    expect(readRow('Book Two').voiceUuid).not.toBe('u_one');
+  });
+
+  it('a rebaseline from the declined-from book does not reach the decliner', async () => {
+    await declineThenDesign();
+    const twoBefore = readRow('Book Two');
+    const res = await link(bookOneId, 'qwen-u_one');
+    expect(res.status).toBe(200);
+    expect(res.body.updated.map((u: { bookId: string }) => u.bookId)).not.toContain(bookTwoId);
+    expect(readRow('Book Two')).toEqual(twoBefore);
   });
 });

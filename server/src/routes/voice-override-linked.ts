@@ -39,6 +39,7 @@ import { withCastLock } from '../workspace/cast-lock.js';
 import { itemFailureReason } from '../workspace/file-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
+import { declinesVoice } from '../store/declined-voice.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import {
@@ -148,6 +149,11 @@ voiceOverrideLinkedRouter.post(
 
       /* Decide whether a candidate (in `candBookId`) is in the source's group. */
       const inGroup = (cand: PersistedCharacter, candBookId: string): boolean => {
+        /* #3992 "Don't reuse" -- a declined pair never shares a voice, in either direction, and
+           this goes before the shared-key match: the decliner keeps the old voiceId, so that
+           match would otherwise stamp the new uuid back onto the book it declined. */
+        if (declinesVoice(source, { bookId: candBookId, voiceUuid: cand.voiceUuid })) return false;
+        if (declinesVoice(cand, { bookId, voiceUuid: source.voiceUuid })) return false;
         if ((cand.voiceId ?? cand.id) === canonicalVoiceId) return true; // shared write key
         if (BUCKET_IDS.has(cand.id)) return false;
         if (!intersects(tokensFor(cand), sourceTokens)) return false;
