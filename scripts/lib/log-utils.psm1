@@ -106,4 +106,27 @@ function Stop-ProcessTreeByLiveness {
     }
 }
 
-Export-ModuleMember -Function New-FreshLog, Remove-OldRotatedLogs, Resolve-RunDir, Stop-ProcessTreeByLiveness
+# #4054 — does the process now holding a pid-file's pid still look like the one
+# that wrote it? A pid file outlives its process after a crash or a reboot and
+# Windows reuses pids, so stop-app.ps1 used to taskkill /T /F whatever unrelated
+# process had inherited the number. A process that wrote the file STARTED before
+# the write; one that started later than the file (beyond -SlackSec) is a
+# different process wearing the same pid. Returns 'match', 'reused' (younger than
+# the file; the caller must not kill it) or 'unknown' (no such process -- nothing
+# to kill -- or a start time that cannot be read, which keeps the old behaviour).
+function Test-PidFileOwnsProcess {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [Parameter(Mandatory)][string]$PidFilePath,
+        [int]$SlackSec = 5
+    )
+    $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $proc) { return 'unknown' }
+    try { $started = $proc.StartTime } catch { return 'unknown' }
+    $written = (Get-Item -LiteralPath $PidFilePath -Force -ErrorAction SilentlyContinue).LastWriteTime
+    if (-not $written) { return 'unknown' }
+    if ($started -gt $written.AddSeconds($SlackSec)) { return 'reused' }
+    return 'match'
+}
+
+Export-ModuleMember -Function New-FreshLog, Remove-OldRotatedLogs, Resolve-RunDir, Stop-ProcessTreeByLiveness, Test-PidFileOwnsProcess

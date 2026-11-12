@@ -1666,3 +1666,19 @@ describe('withSidecarHeld (#2192 / #3039)', () => {
     expect(sup.current()).toBeNull();
   });
 });
+
+describe('supervisor wires the adoption re-arm (#4054)', () => {
+  it('passes rearmSidecarParent to spawnSidecar so an adopting server re-arms the sidecar', async () => {
+    const { rearmSidecarParent } = await import('./spawn-sidecar.js');
+    const spawnFn = vi.fn(async (_opts: SpawnSidecarOpts) => null);
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      delayFn: async () => {},
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(spawnFn.mock.calls[0][0].rearmFn).toBe(rearmSidecarParent);
+  });
+});

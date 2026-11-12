@@ -443,3 +443,31 @@ describe('buildSidecarEnv sources QWEN_VOICES_DIR/XTTS_VOICES_DIR from paths.ts 
     expect(env.XTTS_VOICES_DIR).toBe('/sentinel/xtts-voices');
   });
 });
+
+/* #4054 — the sidecar watches this pid, logs the server's exit code when it
+   dies, waits a grace period, then exits unless a new server re-arms it. Always
+   passed, in every launcher: the grace (not a dev flag) keeps a dev reload alive. */
+describe('buildSidecarEnv passes the server pid and start time (#4054)', () => {
+  afterEach(() => {
+    delete process.env.SIDECAR_PARENT_PID;
+    delete process.env.SIDECAR_PARENT_START_MS;
+  });
+
+  it('sets SIDECAR_PARENT_PID to this process pid', () => {
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
+  });
+
+  it('sets SIDECAR_PARENT_START_MS to this process start time', () => {
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.SIDECAR_PARENT_START_MS).toBe(String(Math.round(performance.timeOrigin)));
+  });
+
+  it('overrides stale inherited values (a server spawned by a parent that had them)', () => {
+    process.env.SIDECAR_PARENT_PID = '1';
+    process.env.SIDECAR_PARENT_START_MS = '5';
+    const env = buildSidecarEnv({ modelKey: 'qwen3-tts-0.6b', repoRoot: process.cwd() });
+    expect(env.SIDECAR_PARENT_PID).toBe(String(process.pid));
+    expect(env.SIDECAR_PARENT_START_MS).toBe(String(Math.round(performance.timeOrigin)));
+  });
+});

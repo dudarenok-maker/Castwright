@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="112" data-publish-id="01e444dc3eae"></div>
+  <div hidden data-published-as="117" data-publish-id="2fecf6c4a15f"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">77</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">78</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->43<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->44<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->9<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">43 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">44 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -902,6 +902,22 @@
           <li><b>Passed: the lease defers the 1.7B-Base idle watchdog during a Quality render:</b> Sidecar restarted with <code>QWEN_BASE17_IDLE_TTL=5</code> (the real default is 120 s; the short TTL makes any quiet gap count). Across the 4 min 33 s Quality render of chapter 2 the watchdog never freed the 1.7B-Base (loaded <code>07:34:32.190</code>, no <code>freed after</code> line). The render ended 07:38:50; the lease lapsed and <code>07:40:04.069 Qwen 1.7B-Base unloaded (idle watchdog)</code> / <code>07:40:04.071 Qwen 1.7B-Base freed after &gt;5s idle (watchdog).</code> followed. There is no dedicated &#8220;deferred&#8221; log line; the deferral shows as the absence of a free while the leases were being renewed. A 120 s quiet gap inside a real render was not produced.</li>
           <li><b>Still owed:</b> Bullets 1, 2 and 4-8 of this row were not re-run against PR #4093; the row stays owed. The credited-fit refusal and the Kokoro free need the single-line <code>/synthesize</code> re-run above.</li>
         </ul></div>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A123</span><span class="iname">The sidecar exits when the server dies, and logs the server&#39;s exit code</span><span class="risk">Windows GPU box, real sidecar</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests stub the process-handle wait and pin the exit-code wording, the env hand-off, the grace-then-exit and re-arm logic (including a subprocess run with the production defaults), the adoption call and the signal handlers. Only a real server death on Windows shows that the sidecar reads the real exit code, waits, exits, and that a real dev reload keeps it. The point of the row is also diagnostic: the next silent server death should name its own exit code (0xC0000409 means a native crash). A sidecar the server spawned (<code>npm start</code> or <code>npm run dev:server</code>) always logs to <code>logs/tts.err.log</code>; one started by hand writes to its own terminal. The server&#39;s own exit line goes to the terminal under <code>npm run dev:server</code>, and to <code>logs/server.err.log</code> only under <code>npm start</code>.</p>
+        <ul>
+        <li><strong><code>taskkill /F</code>.</strong> Start the app (<code>npm start</code>) and wait for <code>GET /api/sidecar/health</code> to answer. Find the server&#39;s pid with <code>(Get-NetTCPConnection -LocalPort &lt;PORT&gt; -State Listen).OwningProcess</code> (not <code>.run/server.pid</code>, which is <code>npm.cmd</code>&#39;s pid), then run <code>taskkill /F /PID &lt;server pid&gt;</code>. At once <code>logs/tts.err.log</code> has one error line <code>server pid=&lt;pid&gt; exited with code 1 = 0x00000001 (taskkill, a Node child.kill() (tsx restart, concurrently -k) or process.exit(1))</code>; about 15 s later it has <code>no new server within 15s; sidecar exiting</code>, the sidecar process is gone and its port is free.</li>
+        <li><strong><code>Stop-Process -Force</code>.</strong> Start the app again and run <code>Stop-Process -Id &lt;server pid&gt; -Force</code> from PowerShell. The sidecar logs <code>0xFFFFFFFF (Stop-Process)</code> straight away and exits after the grace.</li>
+        <li><strong>Ctrl+C in the server&#39;s console.</strong> <code>npm start</code> hides the server console, so run <code>npm run dev:server</code> in a visible terminal instead (the sidecar starts with it). Press Ctrl+C. The server logs <code>[server] received SIGINT</code> and tears the sidecar down through its own path; the server&#39;s <code>process exit</code> line (local time, exit code 0) appears in that terminal, not in <code>logs/server.err.log</code> (that file is only written under <code>npm start</code>); the sidecar&#39;s own lines are in <code>logs/tts.err.log</code>; and no sidecar is left running. If the sidecar instead logs <code>0xC000013A (STATUS_CONTROL_C_EXIT, an unhandled console event: Ctrl+C, Ctrl+Break or console close)</code>, the console killed the server before its handler ran; record which you saw.</li>
+        <li><strong>A native-crash stand-in.</strong> Stop the app first (the sidecar port must be free). In ONE terminal start a stand-in server that dies with the fast-fail code and then the real sidecar under its pid: <code>$p = Start-Process node -ArgumentList '-e','setTimeout(()=&gt;process.reallyExit(-1073740791),180000)' -PassThru; $env:SIDECAR_PARENT_PID = $p.Id; npm run tts:sidecar</code> (to use two terminals, print <code>$p.Id</code> in the first and set <code>$env:SIDECAR_PARENT_PID</code> to that number in the second). That terminal (not <code>logs/</code>) shows <code>parent watch armed: server pid=&lt;pid&gt;</code>; about 180 s later (the sidecar takes a while to boot) it has <code>exited with code 3221226505 = 0xC0000409 (fast-fail / STATUS_STACK_BUFFER_OVERRUN, a native crash)</code>, and about 15 s after that the sidecar exits with code 45 (not 0), the grace-exit code. Then <code>Remove-Item Env:SIDECAR_PARENT_PID</code> in that terminal.</li>
+        <li><strong>A dev reload keeps the sidecar.</strong> Do this twice: with <code>npm run dev</code>, and with <code>npm start</code> on Windows. Wait for <code>GET /api/sidecar/health</code> to answer with a model loaded and note the sidecar pid. Save any file under <code>server/src/</code> so <code>tsx watch</code> restarts the server. <code>logs/tts.err.log</code> logs the old server&#39;s exit code at once, then within a few seconds <code>parent watch re-armed: server pid=&lt;new pid&gt;</code> and <code>a new server took over within 15s; sidecar stays up</code>. There is no <code>sidecar exiting</code> line, the sidecar pid is unchanged and <code>/api/sidecar/health</code> still reports the model loaded (no reload).</li>
+        <li><strong>A real death exits after the grace.</strong> Under <code>npm run dev</code>, stop the supervisor first with <code>taskkill /F /PID &lt;tsx watch pid&gt;</code> (no <code>/T</code>: that would kill the sidecar silently), then kill the server with <code>taskkill /F /PID &lt;server pid&gt;</code> so nothing restarts it. The sidecar logs the exit code at once and exits about 15 s later. If a new server starts inside the 15 s the sidecar stays; record the gap you saw.</li>
+        <li><strong>A standalone sidecar is untouched.</strong> In a terminal with <code>SIDECAR_PARENT_PID</code> cleared (<code>Remove-Item Env:SIDECAR_PARENT_PID</code>), start the sidecar alone (<code>npm run tts:sidecar</code>, no server). That terminal has <code>parent watch off</code>, it keeps running, and a server that then starts and adopts it does not change that: stopping the server leaves the sidecar running.</li>
+        </ul>
+        <p class="src">the GPU box on Windows with the real sidecar &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4054">#4054</a> &#183; criteria in this row</p>
       </div>
     </details>
 
