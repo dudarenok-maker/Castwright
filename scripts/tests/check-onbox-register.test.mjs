@@ -2293,6 +2293,7 @@ const BEHIND_HISTORY = behindHistory([
 function behindRunner(history = BEHIND_HISTORY, { showFails = null, garble = null } = {}) {
   return (args) => {
     if (args[0] === 'log') return { status: 0, stdout: history.map((h) => `${h.sha}\t${h.subject}`).join('\n') + '\n' };
+    if (args[0] === 'ls-tree') return { status: 128, stdout: '', stderr: 'fatal' };
     const sha = args[1].split(':')[0];
     if (sha === showFails) return { status: 128, stdout: '', stderr: 'fatal' };
     if (sha === garble) return { status: 0, stdout: '<details class="item"><summary>no num</summary>' };
@@ -2355,24 +2356,36 @@ test('#4105 ABA: main went back to a body older than the published one — a rev
   assert.deepEqual(behindCheck('Body v2 RESULT.', behindMatcher(aba), 'Body v1.'), [BEHIND_DRIFT]);
 });
 
-test('#4105: a version of the live view that cannot be read or parsed grants no exemption', () => {
-  assert.deepEqual(behindCheck('Older committed body.', behindMatcher(BEHIND_HISTORY, { showFails: 'new11111aaaa' })), [BEHIND_DRIFT]);
+test('#4105: a version of the live view that cannot be read or parsed FOR THIS ROW grants no exemption, and the drift line names the commit', () => {
+  const unreadable = (errors, sha) => {
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.ok(errors[0].startsWith(BEHIND_DRIFT), errors[0]);
+    assert.ok(errors[0].includes(sha.slice(0, 8)), errors[0]);
+    assert.ok(!errors[0].includes('hand-edit'), errors[0]);
+  };
+  unreadable(behindCheck('Older committed body.', behindMatcher(BEHIND_HISTORY, { showFails: 'new11111aaaa' })), 'new11111aaaa');
   // The unreadable one is OLDER than the match: the ABA guard cannot rule it out.
   const three = behindHistory([
     ['new11111aaaa', 'Merge pull request #12 from x/y', 'Current body on main.'],
     ['old11111bbbb', 'Merge pull request #7 from x/z', 'Older committed body.'],
     ['anc11111cccc', 'Merge pull request #1 from x/w', 'Ancient body.'],
   ]);
-  assert.deepEqual(behindCheck('Older committed body.', behindMatcher(three, { showFails: 'anc11111cccc' })), [BEHIND_DRIFT]);
-  assert.deepEqual(behindCheck('Older committed body.', behindMatcher(three, { garble: 'anc11111cccc' })), [BEHIND_DRIFT]);
+  unreadable(behindCheck('Older committed body.', behindMatcher(three, { showFails: 'anc11111cccc' })), 'anc11111cccc');
+  // An id-less extraction error hides whichever row it was: unknown for a row the version does not carry.
+  unreadable(behindCheck('Older committed body.', behindMatcher(three, { garble: 'anc11111cccc' })), 'anc11111cccc');
 });
 
-// Review pass 1, 2 (S5): the mirror image — the lane's tracked copy is an
-// older main body and the live page is already current. Publishing it would
-// regress the row.
-test('#4105 S5: a stale lane (tracked = an older main body, published = current) is told to merge main first', () => {
+// Review pass 2, 🟠1: the mirror image — the lane's tracked copy is older than
+// main's and the live page is already current. Publishing it would regress the
+// row. Decided from the merge base (`branchBase`), not from the history walk.
+test('#4105 S5: a stale lane (main changed the row since the branch base) is told to merge main first', () => {
   const current = BEHIND_VIEW('Current body on main.');
   const stale = BEHIND_VIEW('Older committed body.');
+  const atBase = {
+    mergeBase: 'base1111aaaa',
+    bodies: onbox.parseLiveViewRowBodies(stale).bodies,
+    unknown: () => false,
+  };
   const check = (extra) =>
     checkLiveView(buildSingleGroupRegister('A', [1]), current, {
       direction: 'extraOnly',
@@ -2380,17 +2393,22 @@ test('#4105 S5: a stale lane (tracked = an older main body, published = current)
       trackedLiveViewHtml: stale,
       baselineLiveViewText: current,
       committedBodyMatch: behindMatcher(BEHIND_HISTORY),
+      branchBase: atBase,
       ...extra,
     });
-  assert.deepEqual(check({ branchBehindMain: () => true }), [
-    `${onbox.BRANCH_BEHIND_MAIN_ERROR_PREFIX}A1: branch behind origin/main for A1; merge it first`,
+  assert.deepEqual(check({}), [
+    `${onbox.BRANCH_BEHIND_MAIN_ERROR_PREFIX}A1: branch behind origin/main for A1; merge it first (main changed A1 since this branch's base base1111)`,
   ]);
-  // A lane that already merged main and still carries the older text reverted it on purpose.
-  assert.deepEqual(check({ branchBehindMain: () => false }), []);
-  // A genuine pending edit (matches no main version) is never this error.
-  assert.deepEqual(check({ trackedLiveViewHtml: BEHIND_VIEW('Brand new local edit.'), branchBehindMain: () => true }), []);
-  // No git available: no claim either way.
-  assert.deepEqual(check({ committedBodyMatch: undefined, branchBehindMain: () => true }), []);
+  // A lane that already merged main (no branchBase) and still carries the older text reverted it on purpose.
+  assert.deepEqual(check({ branchBase: undefined }), []);
+  // A genuine pending edit of a row main has NOT changed since the base is never this error.
+  assert.deepEqual(
+    check({
+      trackedLiveViewHtml: BEHIND_VIEW('Brand new local edit.'),
+      branchBase: { ...atBase, bodies: onbox.parseLiveViewRowBodies(current).bodies },
+    }),
+    [],
+  );
 });
 
 // Group F had exactly one row (F1); this change discharges it, so Group F

@@ -1511,7 +1511,7 @@ export function checkLiveView(
     retiredPrStates,
     carryOut,
     committedBodyMatch,
-    branchBehindMain,
+    branchBase,
   } = {},
 ) {
   const errors = [];
@@ -2211,17 +2211,56 @@ export function checkLiveView(
           continue;
         }
         const baselineHash = hashRowContent(baselineBody);
+        // #4105 (review pass 2): a branch that has not merged origin/main is
+        // behind it, and publishing a tracked row that differs from main's
+        // would put an older version back over a row main has since changed.
+        // Decided from the MERGE BASE, not from the history walk: refuse any
+        // row whose body there differs from main's body now and whose tracked
+        // copy is not main's — whatever the page carries (a revert, a page
+        // still behind, an already-current page all regress the same way).
+        // A branch that merged main has `branchBase === undefined`. Where the
+        // merge base cannot be read FOR THIS ROW, or could not be found at
+        // all, this fails closed and says why.
+        if (branchBase !== undefined && trackedHash !== baselineHash) {
+          let why = null;
+          if (branchBase.failed !== undefined) {
+            why = `could not establish where this branch diverged from origin/main: ${branchBase.failed}`;
+          } else if (branchBase.unknown(id)) {
+            why = `${id} cannot be read from the live view at the merge base ${branchBase.mergeBase.slice(0, 8)}`;
+          } else {
+            const atBase = branchBase.bodies.get(id);
+            if (atBase === undefined || hashRowContent(atBase) !== baselineHash) {
+              why = `main changed ${id} since this branch's base ${branchBase.mergeBase.slice(0, 8)}`;
+            }
+          }
+          if (why !== null) {
+            errors.push(
+              `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}${id}: branch behind origin/main for ${id}; merge it first (${why})`,
+            );
+            continue;
+          }
+        }
         if (trackedHash === baselineHash) {
           // #4105: after a merge the live page is usually just behind main. If
           // the published body is this row's body at an OLDER commit of
-          // origin/main's history (and main has not gone back to the current
-          // body since — an ABA revert), treat the page as behind main: do not
-          // fail, but advise, naming the matching commit and the commits that
-          // changed the row since. A hand-restored old body is
-          // indistinguishable from a page that is merely behind, hence the
-          // advisory rather than silence. An absent callback (git
-          // unavailable) or any unreadable version => no exemption.
+          // origin/main's history, and the current body does not occur at or
+          // before the newest such commit (otherwise main went back to it,
+          // an ABA revert), treat the page as behind main: do not fail, but
+          // advise, naming the matching commit and the commits that changed
+          // the row since. A hand-restored old body is indistinguishable from
+          // a page that is merely behind, hence the advisory rather than
+          // silence. An absent callback (git unavailable), or a version in
+          // the window that cannot be read for THIS row => no exemption.
           const behind = committedBodyMatch?.(id, publishedHash, baselineHash);
+          if (behind?.unreadable) {
+            // A version in the window cannot be read FOR THIS ROW, so a revert
+            // could be hiding there: no exemption. Name the commit rather than
+            // suggesting a hand edit (#4106 review pass 2).
+            errors.push(
+              `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published (cannot rule out that the live page is merely behind main: the live view at ${behind.unreadable.slice(0, 8)} could not be read for ${id})`,
+            );
+            continue;
+          }
           if (behind) {
             const since = behind.changedBy
               .map((c) => `${c.sha.slice(0, 8)}${c.pr ? ` (#${c.pr})` : ''}`)
@@ -2245,17 +2284,8 @@ export function checkLiveView(
           // tracked differs — the local copy has uncommitted edits not yet
           // merged to main. This is the ordinary pending-publish state:
           // published hasn't changed, tracked is ahead with local work about
-          // to be published. Not drift, skip it — unless the tracked body is
-          // an OLDER origin/main version and this branch has not merged
-          // origin/main (#4105 review pass 1): then it is a stale lane about
-          // to regress a row main already moved on. A branch that HAS merged
-          // main and still carries the older text reverted it on purpose,
-          // which is allowed.
-          if (committedBodyMatch?.(id, trackedHash, baselineHash) && branchBehindMain?.() === true) {
-            errors.push(
-              `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}${id}: branch behind origin/main for ${id}; merge it first`,
-            );
-          }
+          // to be published. Not drift, skip it. (A stale lane is caught
+          // above, from the merge base, before the hashes are compared.)
           continue;
         }
         // If trackedHash !== baselineHash AND publishedHash !== baselineHash,
@@ -2548,18 +2578,52 @@ function findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner) {
 // body older than this reads as drift (fail closed).
 const COMMITTED_BODY_HISTORY_LIMIT = 150;
 
+// #4105 (review pass 2): one version of the live view at `sha`, read for the
+// two history checks. `bodies` is every row it parses; `unknown(id)` is true
+// for a row whose body that version cannot vouch for: an extraction error that
+// NAMES the row ("Row B102: ..."), or — when an error names no row (a block with
+// no id) — any row missing from `bodies`, since the broken block could be it.
+// A version where the path is absent (the file was deleted) is not unreadable:
+// every row is simply absent. A failed `git show` of a path that exists is
+// unreadable for every row.
+function readLiveViewVersion(gitRunner, repoRoot, sha, liveViewPath) {
+  const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
+  if (!show.error && show.status === 0 && typeof show.stdout === 'string') {
+    const parsed = parseLiveViewRowBodies(stripHtmlComments(show.stdout));
+    const named = new Set();
+    let anonymous = false;
+    for (const e of parsed.errors) {
+      const m = e.substring(EXTRACTION_ERROR_PREFIX.length).match(/^Row ([A-Za-z]+\d+): /);
+      if (m) named.add(m[1]);
+      else anonymous = true;
+    }
+    return { bodies: parsed.bodies, unknown: (id) => named.has(id) || (anonymous && !parsed.bodies.has(id)) };
+  }
+  const tree = gitRunner(['ls-tree', '--name-only', sha, '--', liveViewPath], repoRoot);
+  if (!tree.error && tree.status === 0 && typeof tree.stdout === 'string' && tree.stdout.trim() === '') {
+    return { bodies: new Map(), unknown: () => false };
+  }
+  return { bodies: new Map(), unknown: () => true };
+}
+
 // #4105: `checkLiveView`'s `options.committedBodyMatch`. Answers "is `hash`
 // (a row body, by content hash) this row's body in the live view at an OLDER
-// commit on `mainRef`'s first-parent history?" with `null` (no) or
-// `{ matchedSha, changedBy: [{ sha, pr }] }`: the newest commit carrying that
-// body, and the commits since that changed the row (`pr` is the first `#N` in
-// the commit subject, or null). A `null` is returned, never an exemption, when
-//   - git cannot list the history, or ANY version in the window cannot be read
-//     or parsed (an unreadable version could hide a revert);
-//   - no version carries the body; or
+// commit on `mainRef`'s first-parent history?" with `null` (no), a match
+// `{ matchedSha, changedBy: [{ sha, pr }] }` (the newest commit carrying that
+// body, and the commits since that changed the row; `pr` is the first `#N` in
+// the commit subject, or null), or `{ unreadable: sha }` (the newest commit
+// whose live view cannot vouch for THIS row, see `readLiveViewVersion`: no
+// exemption, and the caller names the commit). A `null` or `unreadable` is
+// returned, never an exemption, when
+//   - git cannot list the history (`null`);
+//   - some version in the window cannot be read for this row (`unreadable`):
+//     it could hide a revert. A version unreadable only for OTHER rows does not
+//     count — one malformed unrelated row must not disable the exemption for
+//     every row;
+//   - no version carries the body (`null`); or
 //   - `currentHash` (main's body now) is also found at or older than that
 //     newest match: main went back to a body older than the published one
-//     (v1 -> v2 -> v1), a revert main made, not a page merely behind it.
+//     (v1 -> v2 -> v1), a revert main made, not a page merely behind it (`null`).
 // Lazy: git is only asked once a row would otherwise be reported, and the
 // window is read once.
 export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunner = runGitCommand) {
@@ -2572,21 +2636,20 @@ export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunne
       repoRoot,
     );
     if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return versions;
-    const read = [];
-    for (const line of log.stdout.split('\n').filter(Boolean)) {
-      const [sha, ...subject] = line.split('\t');
-      const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
-      if (show.error || show.status !== 0 || typeof show.stdout !== 'string') return versions;
-      const parsed = parseLiveViewRowBodies(stripHtmlComments(show.stdout));
-      if (parsed.errors.length > 0) return versions;
-      read.push({ sha, pr: subject.join('\t').match(/#(\d+)/)?.[1] ?? null, bodies: parsed.bodies });
-    }
-    versions = read;
+    versions = log.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [sha, ...subject] = line.split('\t');
+        return { sha, pr: subject.join('\t').match(/#(\d+)/)?.[1] ?? null, ...readLiveViewVersion(gitRunner, repoRoot, sha, liveViewPath) };
+      });
     return versions;
   };
   return (id, hash, currentHash) => {
     const all = load();
     if (all === null) return null;
+    const blind = all.find((v) => v.unknown(id));
+    if (blind) return { unreadable: blind.sha };
     const hashAt = (i) => {
       const body = all[i].bodies.get(id);
       return body === undefined ? undefined : hashRowContent(body);
@@ -2602,6 +2665,25 @@ export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunne
     }
     return { matchedSha: all[matched].sha, changedBy };
   };
+}
+
+// #4105 (review pass 2): `checkLiveView`'s `options.branchBase`. Is this
+// branch missing commits `fetchedSha` (origin/main) has? `undefined` when it
+// is not (it contains main — merged it, or is ahead of it) or when git gives no
+// usable answer (`merge-base --is-ancestor` answers 1 for "not an ancestor";
+// any other status makes no claim). Otherwise the live view at the MERGE BASE:
+// `{ mergeBase, bodies, unknown }` (see `readLiveViewVersion`), or
+// `{ failed: reason }` when the merge base cannot be found, which the caller
+// treats as behind (fail closed).
+export function resolveBranchBase(repoRoot, liveViewPath, fetchedSha, gitRunner = runGitCommand) {
+  const ancestor = gitRunner(['merge-base', '--is-ancestor', fetchedSha, 'HEAD'], repoRoot);
+  if (ancestor.status !== 1) return undefined;
+  const base = gitRunner(['merge-base', 'HEAD', fetchedSha], repoRoot);
+  const mergeBase = typeof base.stdout === 'string' ? base.stdout.trim() : '';
+  if (base.error || base.status !== 0 || mergeBase === '') {
+    return { failed: 'git merge-base found no common ancestor' };
+  }
+  return { mergeBase, ...readLiveViewVersion(gitRunner, repoRoot, mergeBase, liveViewPath) };
 }
 
 // #3529: who published the live page — the provenance `checkLiveView`'s
@@ -3464,15 +3546,14 @@ function runCheckOnboxRegisterCli() {
     const committedBodyMatch = baseline.fetchedSha
       ? makeCommittedBodyMatch(repoRoot, LIVE_VIEW, baseline.fetchedSha)
       : undefined;
-    // #4105 (review pass 1): is this branch missing commits origin/main has?
-    // `merge-base --is-ancestor` answers 1 for "not an ancestor"; any other
-    // status (git failure) makes no claim.
-    const branchBehindMain = baseline.fetchedSha
-      ? () => runGitCommand(['merge-base', '--is-ancestor', baseline.fetchedSha, 'HEAD'], repoRoot).status === 1
+    // #4105 (review pass 2): the live view at the merge base, when this branch
+    // has not merged origin/main.
+    const branchBase = baseline.fetchedSha
+      ? resolveBranchBase(repoRoot, LIVE_VIEW, baseline.fetchedSha)
       : undefined;
     const checkOptions = {
       committedBodyMatch,
-      branchBehindMain,
+      branchBase,
       direction: 'extraOnly',
       baselineText: baseline.registerText,
       dischargingIds,
@@ -3798,16 +3879,23 @@ function runCheckOnboxRegisterCli() {
     `${LIVE_VIEW} does not agree with ${REGISTER}`,
     checkLiveView(text, liveViewHtml),
   );
+  // #4105 (review pass 2): a row block the drift check cannot read would stay
+  // in history forever and, for that row, disable the behind-main exemption in
+  // every later run. Refuse it before it can reach main.
+  const rowMarkupFailed = report(
+    `${LIVE_VIEW} has row markup the drift check cannot read`,
+    parseLiveViewRowBodies(stripHtmlComments(liveViewHtml)).errors,
+  );
 
   // Same silent-success gap as --against-published above, closed the same
   // way: a broken `invokedAsCli` and a genuine pass both used to read as
   // "exit 0, no output" — indistinguishable to a test asserting only on the
   // exit code.
-  if (!registerFailed && !liveViewFailed) {
+  if (!registerFailed && !liveViewFailed && !rowMarkupFailed) {
     console.log(`check:onbox-register: OK — ${REGISTER} and ${LIVE_VIEW} agree.`);
   }
 
-  if (registerFailed || liveViewFailed) throw new CliExitError(1);
+  if (registerFailed || liveViewFailed || rowMarkupFailed) throw new CliExitError(1);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

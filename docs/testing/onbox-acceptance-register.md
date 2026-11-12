@@ -207,15 +207,22 @@ comparison, see the edge list above). The merge step that closes this, run
    the live-view baseline from `origin/main` is available — also detects
    content drift (per-row body text hash comparison). A published body equal
    to an OLDER version of that row on `origin/main`'s recent first-parent
-   history, which main has not gone back to since, is treated as behind main
-   (#4105): it passes, with a non-failing advisory naming the commit the live
-   body matches and the commits that changed the row since (a hand-restored
-   old body reads the same, so the advisory is its only trace). A main-side
-   revert, a body only an unmerged lane carried, and a version the walk
-   cannot read stay drift. The mirror image fails: when your tracked row is an
-   older `origin/main` version, the live page already has main's, and this
-   branch has not merged `origin/main`, the check refuses and says to merge
-   it first (`branch-behind-main`). Your register having rows
+   history is treated as behind main (#4105), unless main's current body of
+   the row also appears at or before the newest commit carrying the published
+   body (then main went back to it: a revert). Behind main passes, with a
+   non-failing advisory naming the commit the live body matches and the
+   commits that changed the row since (a hand-restored old body reads the
+   same, so the advisory is its only trace). A revert, a body only an unmerged
+   lane carried, and a row some version in the window cannot vouch for stay
+   drift, and the drift line names that commit (a version unreadable only for
+   OTHER rows does not count; a deleted file is "row absent", not unreadable).
+   The mirror image fails, decided from the merge base: when this branch has
+   not merged `origin/main`, any row whose tracked body is not main's and
+   whose body at `git merge-base HEAD origin/main` differs from main's
+   current one is refused, whatever the live page carries
+   (`branch-behind-main`, with the reason; a merge base that cannot be found
+   or read fails closed). The no-flag run also rejects a tracked live view
+   whose row markup the drift check cannot read. Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that
    your register lacks is reported when `origin/main`'s own copy of this
