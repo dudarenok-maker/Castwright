@@ -950,6 +950,29 @@ describe('fs-58 — ScriptReviewDiff', () => {
     expect(store.getState().scriptReview.byBook['book-A']).toBeDefined();
   });
 
+  /* R57 (PR #4103 pass 5b) — the server refuses a cast create while an analysis runs (R55):
+     a create answered 409 `book_busy` takes the read-only path, not the generic toast. */
+  it('R57: a create answered 409 book_busy takes the read-only path and keeps the review', async () => {
+    createSpy.mockRejectedValueOnce(Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }));
+    const store = makeProposedStore(
+      [{ id: 5, chapterId: 1, proposed: { name: 'Ferra' } }],
+      [{ id: 5, chapterId: 1, text: 'Line five.', characterId: 'narr' }],
+    );
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId="book-A" />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('apply-button'));
+    fireEvent.click(screen.getByTestId('create-character-submit'));
+    await waitFor(() =>
+      expect(store.getState().notifications.toasts.map((t: Toast) => t.dedupeKey)).toContain('cast-read-only'),
+    );
+    expect(store.getState().notifications.toasts.some((t: Toast) => /couldn't create character/i.test(t.message))).toBe(false);
+    expect(store.getState().cast.analysisEra?.['book-A']).toBeDefined();
+    expect(store.getState().scriptReview.byBook['book-A']).toBeDefined();
+  });
+
   it('cancelling mid-confirm creates NO not-yet-confirmed member and hides (not discards) the review', async () => {
     const store = makeProposedStore(
       [

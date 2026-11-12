@@ -736,7 +736,12 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-12 (#4031, PR #4103 pass 5), owed count unchanged.** Row **B109**
+> **Last change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
+> amended (plan 291 R57): the drawer's merge and downgrade are disabled mid-run, so the
+> refused-merge observation now comes from a second device or a tab opened before the run. No
+> row added or removed; `next-id` unchanged.
+>
+> **Previous change: 2026-11-12 (#4031, PR #4103 pass 5), owed count unchanged.** Row **B109**
 > amended (plan 291 R55): a merge or an accepted suggested merge is refused while the run is
 > going, so the row now observes that refusal; designing a voice stays the live mid-run write.
 > No row added or removed; `next-id` unchanged.
@@ -6757,7 +6762,7 @@ The similarly-named-character case ("Brann" and "Brann Weir") is not a bullet he
 
 Plan 291 replaced four fresh-to-prior matchers with one (`matchFreshToPrior`) and made the cast read-only while a re-analysis runs. The automated tests use synthetic rosters and a mock analyzer. Only a real analyzer on a real voiced book shows the names it actually returns, and only a real run shows the banner and the reload timing. Take a real voiced book that has a merged pair, a dismissed merge suggestion and a locked character that a re-analysis would join by name. Copy `.audiobook/{cast,cast-id-history,cast-merge-suggestions}.json` first. Re-analyse it twice: once sequentially, then once with per-phase models set (the pipelined path). **Mid-run, design a voice for another character through the voice route** (profile drawer, Design voice), because that is a cast write that stays live (a dismissal and Voices compare stay live too). Merging characters and accepting a suggested merge are refused while the run is going (plan 291 R55). Observe:
 - the Cast, Voices and Confirm views show "Re-analysis running — cast edits are paused", and rename, drawer Save and voice assign are disabled while designing a voice still works; the banner clears and the controls come back only after the cast reloads;
-- a merge tried mid-run (the drawer's merge or downgrade, or from a second device) is refused with the "Re-analysis running — that change wasn't saved" toast and changes nothing on disk;
+- the drawer's merge and downgrade are disabled mid-run (paused tooltip), and a merge tried from a second device or a tab opened before the run is refused with the "Re-analysis running — that change wasn't saved" toast and changes nothing on disk;
 - the diff of the three files holds only additions plus the route-given voice: no character is lost, renamed, merged or split, and the locked character is fully intact (voice, name, aliases, links);
 - new `cast-id-history` entries are tagged `analyzer`, `displaced` does not grow, and the run raises no `attribution_drift`;
 - a name the analyzer returns that is ambiguous gives a new row plus a suggestion, and the dismissed suggestion does not come back;

@@ -131,6 +131,27 @@ test('while a re-analysis runs the cast is read-only and nothing is saved; when 
   await rename.click({ force: true });
   await expect(drawer.getByRole('textbox', { name: 'Character name' })).toHaveCount(0);
 
+  /* R57 (PR #4103 pass 5b) — the server refuses a merge mid-run (R55), so the drawer's
+     merge controls are disabled too: both downgrades and an in-book Merge. A forced
+     click merges nothing (the mock merge answers an empty roster, which would empty
+     the slice and close the drawer). */
+  for (const name of ['Downgrade to Unknown male', 'Downgrade to Unknown female'])
+    await expect(drawer.getByRole('button', { name })).toHaveAttribute('aria-disabled', 'true');
+  await drawer.getByRole('button', { name: /Merge Captain into another character/i }).click();
+  await drawer.getByRole('button', { name: /Merge target/i }).click();
+  await page.getByRole('dialog', { name: /Reassign speaker/i }).getByRole('option').first().click();
+  const merge = drawer.getByRole('button', { name: /^Merge$/ });
+  await expect(merge).toHaveAttribute('aria-disabled', 'true');
+  await merge.click({ force: true });
+  await drawer.getByRole('button', { name: 'Downgrade to Unknown male' }).click({ force: true });
+  await page.waitForTimeout(300);
+  await expect(drawer.getByRole('button', { name: 'Rename character' })).toBeVisible();
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as Win).__store__.getState().cast.characters.some((c) => c.name === 'Captain Halloran'),
+    ),
+  ).toBe(true);
+
   /* Back on the Cast view for the release: the Confirm route does an entry read
      of its own when the gate lifts, which would mask a gate that never
      re-hydrated. The Cast view has no read of its own. */

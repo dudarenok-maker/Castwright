@@ -4641,12 +4641,16 @@ async function realUnlinkAlias({
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Unlink alias failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Unlink alias failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5137,12 +5141,16 @@ async function realRejectOrphanMatch(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Reject match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Reject match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5246,12 +5254,16 @@ async function realUndoRejectOrphanMatch(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Undo reject match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Undo reject match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5347,12 +5359,16 @@ async function realLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrpha
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Link match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Link match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5383,12 +5399,16 @@ async function realAddFromSeriesRoster(
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Add-from-roster failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Add-from-roster failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5437,12 +5457,16 @@ async function realCreateCharacter(
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Create character failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Create character failed (${res.status}).`), { code });
   }
   return res.json();
 }

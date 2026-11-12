@@ -4380,17 +4380,21 @@ describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
     expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
   });
 
-  it('a merge-suggestion accept mirrors the route result without a toast', async () => {
+  /* R57 (PR #4103 pass 5b) — the accept is no route-backed mirror mid-run any more: the
+     server refuses it (R55), so the card's Merge is disabled and a click sends nothing. */
+  it('a merge-suggestion accept is disabled and sends nothing while read-only', async () => {
+    vi.mocked(api.acceptMergeSuggestion).mockClear();
     vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
       { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
     ]);
-    vi.mocked(api.acceptMergeSuggestion).mockResolvedValueOnce({ characters: [narrator] } as never);
     const store = await readOnlyStore([narrator, marrow]);
     mount(store, [narrator, marrow]);
-    fireEvent.click(await screen.findByTestId('merge-suggestion-merge'));
-    await waitFor(() =>
-      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']),
-    );
+    const accept = await screen.findByTestId('merge-suggestion-merge');
+    expect(accept).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(accept);
+    await Promise.resolve();
+    expect(api.acceptMergeSuggestion).not.toHaveBeenCalled();
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator', 'marrow']);
     expect(toasts(store).filter((m) => READ_ONLY_TOAST.test(m))).toEqual([]);
   });
 
@@ -4450,5 +4454,135 @@ describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
     expect(target.aliases).toEqual(['Marrow']);
     expect(seen).not.toContain('cast/setCharacters');
     expect(api.putBookState).not.toHaveBeenCalled();
+  });
+});
+
+/* R57 (PR #4103 pass 5b) — the server refuses every cast-identity route while an analysis
+   runs (R55). While the cast is read-only the Cast view disables the merge-suggestion accept
+   and the orphan link / reject / undo, with the paused tooltip, and a click calls nothing;
+   dismiss stays live. A 409 `book_busy` from one of those routes (a stale tab, a second
+   device) takes the read-only path, not the generic error toast. */
+describe('R57: the cast-identity controls of the Cast view while read-only', () => {
+  const BOOK = 'b_r57';
+  function renderIdentity(readOnly: boolean) {
+    for (const fn of [api.acceptMergeSuggestion, api.rejectOrphanMatch, api.linkOrphanMatch, api.undoRejectOrphanMatch])
+      vi.mocked(fn).mockClear();
+    vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
+      { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
+    ]);
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+        analysis: analysisSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: BOOK, view: 'cast' } as never },
+        cast: {
+          ...castSlice.getInitialState(),
+          characters: [narrator, marrow],
+          orphanedCharacterFallbacks: {
+            mayrin: {
+              resolution: 'alias' as const,
+              resolvedCharacterId: 'marrow',
+              segments: 6,
+              rejectedAgainst: ['narrator'],
+              audioCurrent: 'true' as const,
+            },
+            coalfall: { resolution: 'unresolved' as const, segments: 67, audioCurrent: 'false' as const },
+          },
+        },
+      },
+    });
+    if (readOnly) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: BOOK }));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+          onContinueToManuscript={() => {}}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+  /** The needs-decision row (coalfall, Marrow picked) and the auto-reconciled row
+      (mayrin, expanded), with each identity control. */
+  function controls() {
+    const decision = within(screen.getByTestId('orphaned-needs-decision')).getByText(/coalfall/).closest('li')!;
+    fireEvent.change(within(decision).getByRole('combobox'), { target: { value: 'marrow' } });
+    fireEvent.click(screen.getByRole('button', { name: /1 character id auto-reconciled/i }));
+    const reconciled = within(screen.getByTestId('orphaned-auto-reconciled-current')).getByText(/mayrin/).closest('li')!;
+    return {
+      reject: within(decision).getByRole('button', { name: 'Not the same character' }),
+      link: within(decision).getByRole('button', { name: /link to this character/i }),
+      rejectReconciled: within(reconciled).getByRole('button', { name: 'Not the same character' }),
+      undo: within(reconciled).getByRole('button', { name: /^Undo "not Narrator"/ }),
+    };
+  }
+  const paused = (el: HTMLElement) => {
+    expect(el).toHaveAttribute('aria-disabled', 'true');
+    expect(el).toHaveAttribute('title', expect.stringMatching(/paused/i));
+  };
+
+  it('read-only: accept, link, reject and undo are disabled and call nothing; dismiss stays live', async () => {
+    renderIdentity(true);
+    const accept = await screen.findByTestId('merge-suggestion-merge');
+    paused(accept);
+    fireEvent.click(accept);
+    expect(screen.getByTestId('merge-suggestion-dismiss')).not.toHaveAttribute('aria-disabled');
+    const c = controls();
+    for (const el of [c.reject, c.link, c.rejectReconciled, c.undo]) {
+      paused(el);
+      fireEvent.click(el);
+    }
+    await Promise.resolve();
+    expect(api.acceptMergeSuggestion).not.toHaveBeenCalled();
+    expect(api.rejectOrphanMatch).not.toHaveBeenCalled();
+    expect(api.linkOrphanMatch).not.toHaveBeenCalled();
+    expect(api.undoRejectOrphanMatch).not.toHaveBeenCalled();
+  });
+
+  it('editable: the same controls are enabled', async () => {
+    renderIdentity(false);
+    expect(await screen.findByTestId('merge-suggestion-merge')).not.toHaveAttribute('aria-disabled');
+    const c = controls();
+    for (const el of [c.reject, c.link, c.rejectReconciled, c.undo]) {
+      expect(el).not.toHaveAttribute('aria-disabled');
+      expect(el).not.toBeDisabled();
+    }
+    fireEvent.click(c.link);
+    await waitFor(() => expect(api.linkOrphanMatch).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    ['link', 'linkOrphanMatch'],
+    ['reject', 'rejectOrphanMatch'],
+    ['undo', 'undoRejectOrphanMatch'],
+  ] as const)('a %s answered 409 book_busy takes the read-only path', async (control, fn) => {
+    vi.mocked(api.getBookBusy).mockResolvedValue(['analysis']);
+    try {
+      const store = renderIdentity(false);
+      await screen.findByTestId('merge-suggestion-merge');
+      vi.mocked(api[fn]).mockRejectedValueOnce(
+        Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }),
+      );
+      fireEvent.click(controls()[control]);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('cast-read-only'),
+      );
+      expect(store.getState().notifications.toasts.filter((t) => t.kind === 'error' && t.dedupeKey !== 'cast-read-only')).toEqual([]);
+      expect(store.getState().cast.analysisEra?.[BOOK]).toBeDefined();
+    } finally {
+      vi.mocked(api.getBookBusy).mockResolvedValue([]);
+    }
   });
 });

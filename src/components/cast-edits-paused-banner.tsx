@@ -7,12 +7,15 @@
    (persistence-middleware.ts), which builds no cast save for a read-only
    book whatever a control does; the controls disabled through
    `pausedControlProps` just stop offering a change that would be refused.
-   Controls that save through their own routes (merge, orphan links, aliases,
-   voice design, the tier pin, ...) stay live. Since R55 (PR #4103 pass 5) the
-   server refuses the cast-identity ones (a merge, an accepted suggestion, an
-   orphan link or reject, an unlinked alias, a new character) with 409
-   `book_busy` while the analysis runs, and the client takes the read-only toast
-   path (`handleCastIdentityBusy`, cast-gate.ts). */
+   Controls that save through their own routes (alias add / repoint, voice
+   design, the tier pin, a suggestion dismissal, ...) stay live. Since R55 (PR
+   #4103 pass 5) the server refuses the cast-identity ones (a merge or downgrade,
+   an accepted suggestion, an orphan link / reject / undo, an alias split into
+   its own character, a new character, an add-from-roster) with 409 `book_busy`
+   while the analysis runs; since R57 (pass 5b) those controls are disabled
+   through `pausedControlProps` too, and a 409 that still arrives (a stale tab, a
+   second device) takes the read-only toast path (`handleCastIdentityBusy`,
+   cast-gate.ts). */
 
 import { useAppSelector } from '../store';
 import { selectCastReadOnly, stageBookId } from '../store/book-busy-slice';

@@ -2856,11 +2856,19 @@ export function Layout() {
                 bookId
                   ? async (sourceCharacterId, aliasName, destination) => {
                       if (destination.mode === 'split') {
-                        const res = await api.unlinkAlias({
-                          bookId,
-                          sourceCharacterId,
-                          aliasName,
-                        });
+                        let res;
+                        try {
+                          res = await api.unlinkAlias({
+                            bookId,
+                            sourceCharacterId,
+                            aliasName,
+                          });
+                        } catch (err) {
+                          /* R57 — a split mints a new character, which the server refuses
+                             while an analysis runs (R55): the read-only path. */
+                          dispatch(handleCastIdentityBusy(bookId, err));
+                          throw err;
+                        }
                         dispatch(
                           castActions.applyUnlinkAlias({
                             sourceCharacterId,

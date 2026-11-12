@@ -62,6 +62,7 @@ const matchVoicesMock = vi.fn();
 const getAnalyzerModelsMock = vi.fn();
 const getAnalysisStateMock = vi.fn();
 const mergeCharactersMock = vi.fn();
+const unlinkAliasMock = vi.fn();
 const getBookBusyMock = vi.fn(async (..._a: unknown[]): Promise<string[]> => []);
 const linkPriorMock = vi.fn();
 
@@ -191,6 +192,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       /* Plan 291 — the profile drawer's merge, and the busy check a failed
          merge's re-read waits on. */
       mergeCharacters: (...args: unknown[]) => mergeCharactersMock(...args),
+      unlinkAlias: (...args: unknown[]) => unlinkAliasMock(...args),
       getBookBusy: (...args: unknown[]) => getBookBusyMock(...args),
       /* The drawer's manual prior-book link (review pass 3, H). */
       linkPriorCharacter: (...args: unknown[]) => linkPriorMock(...args),
@@ -274,6 +276,10 @@ vi.mock('../modals/profile-drawer', async () => {
             onClick={() => void p.onMerge?.(p.character.id, 'other').catch(() => {})}
           />
           <button data-testid="mock-profile-link-prior" onClick={() => void p.onLinkPrior?.('eliza', 'B', 'eliza')} />
+          <button
+            data-testid="mock-profile-unlink"
+            onClick={() => void p.onUnlinkAlias?.(p.character.id, 'Liza', { mode: 'split' }).catch(() => {})}
+          />
         </>
       ) : (
         <actual.ProfileDrawer {...p} />
@@ -6087,6 +6093,34 @@ describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291
       );
       expect(store.getState().cast.analysisEra?.A).toBeDefined();
       expect(store.getState().cast.characters.map((c) => c.id)).toEqual(before);
+    } finally {
+      getBookBusyMock.mockImplementation(async () => []);
+    }
+  });
+
+  /* R57 (PR #4103 pass 5b) — an unlink-alias split (a new character) is refused the same way. */
+  it('an unlink-alias answered 409 book_busy shows the read-only toast and latches the cast read-only', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    getBookBusyMock.mockImplementation(async () => ['analysis']);
+    try {
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      const before = store.getState().cast.characters;
+      unlinkAliasMock.mockRejectedValueOnce(
+        Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }),
+      );
+      act(() => {
+        store.dispatch(uiActions.setOpenProfileId('eliza'));
+      });
+      fireEvent.click(await screen.findByTestId('mock-profile-unlink'));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.some((t) => t.dedupeKey === 'cast-read-only')).toBe(true),
+      );
+      expect(unlinkAliasMock).toHaveBeenCalledWith({ bookId: 'A', sourceCharacterId: 'eliza', aliasName: 'Liza' });
+      expect(store.getState().cast.analysisEra?.A).toBeDefined();
+      expect(store.getState().cast.characters).toEqual(before);
     } finally {
       getBookBusyMock.mockImplementation(async () => []);
     }

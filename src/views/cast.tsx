@@ -172,12 +172,15 @@ function OrphanRejectedChips({
   targets,
   characters,
   busyId,
+  readOnly,
   onUndo,
 }: {
   orphanedId: string;
   targets: string[] | undefined;
   characters: Character[];
   busyId: string | null;
+  /** R57 — the cast is read-only: the undo (DELETE reject-orphan-match) is refused (R55). */
+  readOnly: boolean;
   onUndo: (orphanedId: string, characterId: string) => void;
 }) {
   /* Finding B (#2133 comment) — `rejectedPairsGoverning`'s rule 1 has no
@@ -205,7 +208,8 @@ function OrphanRejectedChips({
               disabled={busyId === orphanedId}
               onClick={() => onUndo(orphanedId, targetId)}
               aria-label={`Undo "not ${name}" for "${orphanedId}"`}
-              className="min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 underline decoration-dotted disabled:opacity-40 disabled:cursor-not-allowed"
+              {...pausedControlProps(readOnly)}
+              className={`min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 underline decoration-dotted disabled:opacity-40 disabled:cursor-not-allowed ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
               Undo
             </button>
@@ -244,6 +248,7 @@ function AutoReconciledSection({
   showTopBorder,
   characters,
   busyId,
+  readOnly,
   onReject,
   onUndo,
 }: {
@@ -255,6 +260,8 @@ function AutoReconciledSection({
   showTopBorder: boolean;
   characters: Character[];
   busyId: string | null;
+  /** R57 — the cast is read-only: reject and undo are refused by the server (R55). */
+  readOnly: boolean;
   onReject: (orphanedId: string, targetCharacterId: string) => void;
   onUndo: (orphanedId: string, characterId: string) => void;
 }) {
@@ -334,7 +341,8 @@ function AutoReconciledSection({
                   type="button"
                   disabled={busyId === orphanedId || !info.resolvedCharacterId}
                   onClick={() => info.resolvedCharacterId && onReject(orphanedId, info.resolvedCharacterId)}
-                  className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                  {...pausedControlProps(readOnly)}
+                  className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
                   Not the same character
                 </button>
@@ -343,6 +351,7 @@ function AutoReconciledSection({
                   targets={info.rejectedAgainst}
                   characters={characters}
                   busyId={busyId}
+                  readOnly={readOnly}
                   onUndo={onUndo}
                 />
               </li>
@@ -553,7 +562,8 @@ export function CastView({
   const dispatch = useAppDispatch();
   /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: what
      writes the cast slice (voice assign, compare) is disabled; the route-backed
-     controls stay live. */
+     controls stay live, except the cast-identity ones the server refuses mid-run
+     (R55): the merge-suggestion accept and the orphan link / reject / undo (R57). */
   const readOnly = useCastReadOnly();
   /* #2040 Task 17 — "not the same character" for either banner section.
      targetCharacterId is the resolvedCharacterId for an auto-reconciled row,
@@ -567,7 +577,7 @@ export function CastView({
      as-is; the matcher it feeds ignores bookId, so a same-book edge binds
      correctly even though the action was designed for cross-book pairs). */
   async function handleRejectOrphanMatch(orphanedId: string, targetCharacterId: string) {
-    if (!bookId || !targetCharacterId) return;
+    if (!bookId || !targetCharacterId || readOnly) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       const res = await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
@@ -597,6 +607,8 @@ export function CastView({
         }),
       );
     } catch (err) {
+      /* R57 — refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return;
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
         notificationsActions.pushToast({
@@ -721,6 +733,8 @@ export function CastView({
       );
       return true;
     } catch (err) {
+      /* R57 — refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return false;
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
         notificationsActions.pushToast({
@@ -745,7 +759,7 @@ export function CastView({
      busy-flag span covers the whole undo+link sequence (F5) rather than
      dropping to `null` in between. */
   async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
-    if (!bookId) return;
+    if (!bookId || readOnly) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       await performUndoOrphanRejection(orphanedId, targetCharacterId);
@@ -779,7 +793,7 @@ export function CastView({
      flag for the WHOLE undo+link span itself, and aborts outright if the
      undo failed (see performUndoOrphanRejection's own doc comment). */
   async function handleLinkOrphanMatch(orphanedId: string, targetCharacterId: string) {
-    if (!bookId || !targetCharacterId) return;
+    if (!bookId || !targetCharacterId || readOnly) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       const info = orphanedCharacterFallbacks[orphanedId];
@@ -823,6 +837,8 @@ export function CastView({
         }),
       );
     } catch (err) {
+      /* R57 — refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return;
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
         notificationsActions.pushToast({
@@ -1254,7 +1270,8 @@ export function CastView({
      then removes the card and mirrors the route's merged cast. Dismiss drops
      the card without merging. */
   async function handleMergeSuggestion(sourceId: string, targetId: string) {
-    if (!bookId) return;
+    /* R57 — the server refuses an accept while an analysis runs (R55). */
+    if (!bookId || readOnly) return;
     let merged: Character[] | undefined;
     try {
       merged = (await api.acceptMergeSuggestion(bookId, sourceId, targetId))?.characters;
@@ -1695,7 +1712,8 @@ export function CastView({
                             (info.rejectedAgainst?.includes(candidateId) ?? false)
                           }
                           onClick={() => handleRejectOrphanMatch(orphanedId, candidateId)}
-                          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                          {...pausedControlProps(readOnly)}
+                          className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           Not the same character
                         </button>
@@ -1718,7 +1736,8 @@ export function CastView({
                           }
                           title={linkDisabledReason}
                           onClick={() => handleLinkOrphanMatch(orphanedId, candidateId)}
-                          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold"
+                          {...pausedControlProps(readOnly)}
+                          className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           Link to this character
                         </button>
@@ -1727,6 +1746,7 @@ export function CastView({
                           targets={info.rejectedAgainst}
                           characters={characters}
                           busyId={orphanRejectBusyId}
+                          readOnly={readOnly}
                           onUndo={handleUndoOrphanRejection}
                         />
                       </li>
@@ -1744,6 +1764,7 @@ export function CastView({
               showTopBorder={needsDecisionOrphans.length > 0}
               characters={characters}
               busyId={orphanRejectBusyId}
+              readOnly={readOnly}
               onReject={handleRejectOrphanMatch}
               onUndo={handleUndoOrphanRejection}
             />
@@ -1756,6 +1777,7 @@ export function CastView({
               showTopBorder={needsDecisionOrphans.length > 0 || autoReconciledCurrent.length > 0}
               characters={characters}
               busyId={orphanRejectBusyId}
+              readOnly={readOnly}
               onReject={handleRejectOrphanMatch}
               onUndo={handleUndoOrphanRejection}
             />
@@ -1805,6 +1827,7 @@ export function CastView({
                   sourceName={sourceName}
                   targetName={targetName}
                   onMerge={() => handleMergeSuggestion(s.sourceId, s.targetId)}
+                  mergeDisabled={readOnly}
                   onDismiss={() => handleDismissSuggestion(s.sourceId, s.targetId)}
                 />
               );

@@ -34,7 +34,7 @@ import {
   dropRetainedSaves,
   flushBookPersistence,
 } from '../store/persistence-middleware';
-import { rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -1060,11 +1060,14 @@ function ReadyViewSwitch({
               dispatch(castActions.addCharacter(res.character));
               return res.character.id;
             } catch (err) {
-              pushToast({
-                kind: 'error',
-                message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
-                dedupeKey: 'add-from-roster',
-              });
+              /* R57 — refused while an analysis runs (R55): the read-only path. */
+              if (!dispatch(handleCastIdentityBusy(bookId, err))) {
+                pushToast({
+                  kind: 'error',
+                  message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
+                  dedupeKey: 'add-from-roster',
+                });
+              }
               throw err;
             }
           }}

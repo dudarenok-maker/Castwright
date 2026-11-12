@@ -28,6 +28,7 @@ import { changeLogActions } from '../store/change-log-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { castActions } from '../store/cast-slice';
 import { notificationsActions } from '../store/notifications-slice';
+import { handleCastIdentityBusy } from '../store/cast-gate';
 import { api } from '../lib/api';
 import { CreateCharacterForm } from './create-character-form';
 import { IconClose } from '../lib/icons';
@@ -433,11 +434,13 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
       // character (qwen-only; no-op otherwise). Inside the try so a failed
       // create falls to the catch and never nudges.
       maybePushVoiceNudge(dispatch, { ttsModelKey, startBookId, createdCharacters });
-    } catch {
+    } catch (err) {
       // A create failed mid-batch. Reset the confirm machine and surface a toast,
       // but DON'T clearReview — the operator can re-trigger. Re-run is safe because
       // setSentenceCharacter is idempotent for an already-applied reattribute.
       setConfirm(null);
+      /* R57 — a create refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(startBookId, err))) return;
       dispatch(
         notificationsActions.pushToast({
           kind: 'error',

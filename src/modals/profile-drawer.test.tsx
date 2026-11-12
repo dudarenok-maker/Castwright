@@ -3120,9 +3120,10 @@ describe('ProfileDrawer design guard (#3084 W4)', () => {
 
 /* Plan 291 (#4031), Task 12 — read-only cast: the drawer shows the paused-edits
    banner and disables what writes the cast slice (Save, rename, tone, lock,
-   link-prior); merge, aliases and the library assign save through their own
-   routes and stay live. UX only: the persistence middleware's catch-all is
-   the guard. */
+   link-prior) and, since R57, the cast-identity routes the server refuses
+   mid-run (merge, downgrade, an alias split); add alias, repoint and the
+   library assign save through their own routes and stay live. UX only: the
+   persistence middleware's catch-all is the guard. */
 describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
   const hart: Character = {
     id: 'hart',
@@ -3238,16 +3239,62 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(onLinkPrior).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
+    /* R57 (PR #4103 pass 5b) — the server refuses a merge mid-run (R55): an in-book
+       "Merge" and both downgrades (a merge into a bucket) are disabled too. */
     const merge = screen.getByRole('button', { name: /^Merge$/ });
-    live(merge);
+    disabled(merge);
+    fireEvent.click(merge);
+    for (const name of ['Downgrade to Unknown male', 'Downgrade to Unknown female']) {
+      const downgrade = screen.getByRole('button', { name });
+      disabled(downgrade);
+      fireEvent.click(downgrade);
+    }
+    await Promise.resolve();
+    expect(onMerge).not.toHaveBeenCalled();
+
+    /* route-backed and live: add alias, reassign lines, and the chip's dialog, whose
+       "move to" (repoint) stays live while "its own character" (unlink-alias) is refused */
+    live(screen.getByRole('button', { name: 'Add alias' }));
+    live(screen.getByRole('button', { name: /Reassign lines/ }));
+    const unlink = screen.getByRole('button', { name: 'Unlink Hart' });
+    live(unlink);
+    fireEvent.click(unlink);
+    const split = screen.getByRole('radio', { name: /its own character/ });
+    disabled(split);
+    expect(split).not.toBeChecked();
+    const move = screen.getByRole('radio', { name: /Move «Hart» to/ });
+    live(move);
+    expect(move).toBeChecked();
+    fireEvent.click(split);
+    expect(split).not.toBeChecked();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Move Hart to' }), { target: { value: 'wren-sparrow' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(onUnlinkAlias).toHaveBeenCalledWith('hart', 'Hart', { mode: 'move', targetCharacterId: 'wren-sparrow' }),
+    );
+  });
+
+  it('R57: merge, downgrade and the split-alias choice are live when the cast is editable', async () => {
+    const onMerge = vi.fn().mockResolvedValue(undefined);
+    const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
+    renderDrawer(hart, { onMerge, onUnlinkAlias, mergeCandidates: [sibling] });
+    const downgrade = screen.getByRole('button', { name: 'Downgrade to Unknown male' });
+    expect(downgrade).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(downgrade);
+    await waitFor(() => expect(onMerge).toHaveBeenCalledWith('hart', 'unknown-male'));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
+    const merge = screen.getByRole('button', { name: /^Merge$/ });
+    expect(merge).not.toHaveAttribute('aria-disabled');
     fireEvent.click(merge);
     await waitFor(() => expect(onMerge).toHaveBeenCalledWith('hart', 'wren-sparrow'));
-
-    /* route-backed: aliases, downgrade, reassign lines */
-    live(screen.getByRole('button', { name: 'Add alias' }));
-    live(screen.getByRole('button', { name: 'Unlink Hart' }));
-    live(screen.getByRole('button', { name: 'Downgrade to Unknown male' }));
-    live(screen.getByRole('button', { name: /Reassign lines/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Hart' }));
+    const split = screen.getByRole('radio', { name: /its own character/ });
+    expect(split).not.toHaveAttribute('aria-disabled');
+    expect(split).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(onUnlinkAlias).toHaveBeenCalledWith('hart', 'Hart', { mode: 'split' }));
   });
 
   it('the same drawer controls are live when the cast is editable', () => {

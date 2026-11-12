@@ -459,6 +459,21 @@ snapshot.
       reclaim displaces it when the bucket returns.
     - R53's other halves stand: the plan decisions and the ledger entry are dropped, and the
       merge is one-shot for later runs.
+26. **R57 — the UI disables every R55-refused control while the cast is read-only** (controller,
+    2026-11-12, PR #4103 pass 5b). Pass 5 left the controls offered; only the server's 409
+    stopped them.
+    - While `selectCastReadOnly` holds, these are `aria-disabled` with the paused tooltip
+      (`pausedControlProps`) and their handlers send nothing: the drawer's in-book Merge and both
+      downgrades; the alias-unlink dialog's "its own character" choice (`unlink-alias`; its
+      "move to", a repoint, stays live); the Cast view's suggestion accept and the orphan link,
+      reject and undo; the Voices merge (gated on the merged book); the Manuscript "Add
+      character" button and the reassign picker's prior-book rows (add-from-roster).
+    - Unchanged: dismiss-suggestion, link-prior (already disabled by item 4), add-alias,
+      repoint, voice design and Don't reuse.
+    - Every refused route's 409 now takes `handleCastIdentityBusy` (a stale tab or a second
+      device): the six client calls throw with the body's `code`.
+    - Not covered: the Script Review "create new character" confirm stays offered mid-run (its
+      409 takes the read-only path), and the Manuscript view shows no paused banner.
 
 ---
 
@@ -1220,10 +1235,11 @@ Create `server/src/routes/analysis.single-matcher.test.ts`.
 - **Add character** (`cast-create`);
 - **rebaseline** (`rebaseline-modal.tsx:427-452`).
 
-*Amended by R55 (item 24):* these controls stay offered, but the server refuses the cast-identity
-ones (merge, suggestion accept, link-orphan, reject-orphan, unlink-alias, Add character, and
-add-from-roster) with 409 `book_busy` while the run is registered; a merge or accept refusal
-takes the read-only toast path (`handleCastIdentityBusy`).
+*Amended by R55 (item 24) and R57 (item 26):* the server refuses the cast-identity ones (merge,
+suggestion accept, link-orphan, reject-orphan, unlink-alias, Add character, and add-from-roster)
+with 409 `book_busy` while the run is registered, and since R57 they are disabled while
+read-only too; a 409 that still arrives takes the read-only toast path
+(`handleCastIdentityBusy`).
 
 **Item 4 — link-prior is disabled while read-only** (link-prior, and
 `duplicate-review-modal.tsx:135`).
@@ -1885,7 +1901,7 @@ Acceptance 1–25).
   - Edit controls are disabled behind a banner (UX only); route-backed controls stay live;
     link-prior is disabled. Since R55 the server refuses the cast-identity routes (merge,
     accept, orphan link and reject, unlink-alias, Add character, add-from-roster) with 409
-    `book_busy` while the run is registered.
+    `book_busy` while the run is registered, and since R57 their controls are disabled too.
   - Rule 11 compares disk against the job's own **last** write before each write, then refreshes
     the fingerprint. The main job's ledger is cached; the subset job keeps its own and refreshes
     `addedRows` entries for the rows it writes.

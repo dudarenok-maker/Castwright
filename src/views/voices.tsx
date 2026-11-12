@@ -11,7 +11,7 @@ import {
 } from '../components/primitives';
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
-import { CastEditsPausedBanner } from '../components/cast-edits-paused-banner';
+import { CastEditsPausedBanner, pausedControlProps } from '../components/cast-edits-paused-banner';
 import { IconPlay, IconSparkle } from '../lib/icons';
 import type {
   BaseVoice,
@@ -47,7 +47,7 @@ import {
 import { promoteCharacterVoice } from '../store/voice-library-slice';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
-import { handleCastIdentityBusy, rehydrateCastAfterAnalysis } from '../store/cast-gate';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import {
   DuplicateReviewModal,
   type DuplicateReviewPair,
@@ -538,6 +538,10 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     mergeTarget,
     mergeDisabledReason,
   } = compareDerivations;
+  /* R57 (PR #4103 pass 5b) — the server refuses a merge while an analysis holds the
+     merge's book (R55): Merge is disabled while that book's cast is read-only. */
+  const mergeBookId = selectedVoices[0]?.bookId;
+  const mergeReadOnly = useAppSelector((s) => (mergeBookId ? selectCastReadOnly(s, mergeBookId) : false));
 
   /* Plan 101 — pure duplicate-candidate derivation. Same-series same-base-
      voice cross-book pairs whose normalised names dedup-match (per the
@@ -1505,7 +1509,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                  the user can see WHY we refuse via the tooltip. */
               <button
                 onClick={() => {
-                  if (!canMerge || !mergeSource || !mergeTarget) return;
+                  if (!canMerge || !mergeSource || !mergeTarget || mergeReadOnly) return;
                   void runMerge(mergeSource, mergeTarget, selectedVoices[0].bookId);
                 }}
                 disabled={!canMerge || mergeBusy}
@@ -1514,7 +1518,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                     ? `Merge "${mergeSource?.name}" into "${mergeTarget.name}" — keeps "${mergeTarget.name}" as the survivor and stores "${mergeSource?.name}" as an alias`
                     : (mergeDisabledReason ?? undefined)
                 }
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed max-w-56 truncate"
+                {...pausedControlProps(mergeReadOnly)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed max-w-56 truncate ${mergeReadOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 {mergeBusy ? 'Merging…' : mergeTarget ? `Merge into ${mergeTarget.name}` : 'Merge'}
               </button>

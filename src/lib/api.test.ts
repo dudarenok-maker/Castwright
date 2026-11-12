@@ -454,6 +454,36 @@ describe('mockCreateCharacter (fs-58 Unit B)', () => {
   });
 });
 
+/* R57 (PR #4103 pass 5b) — every cast-identity route the server refuses mid-run (R55) throws
+   with the body's `code`, so a caller can tell a `book_busy` refusal (an analysis holds the
+   book) from a failure and take the read-only path (`handleCastIdentityBusy`). */
+describe('R57: the cast-identity routes carry the refusal code', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'This book is busy (analysing).', code: 'book_busy' }),
+      })),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['linkOrphanMatch', () => api.linkOrphanMatch({ bookId: 'b', characterId: 'c', orphanedId: 'o' })],
+    ['rejectOrphanMatch', () => api.rejectOrphanMatch({ bookId: 'b', characterId: 'c', orphanedId: 'o' })],
+    ['undoRejectOrphanMatch', () => api.undoRejectOrphanMatch({ bookId: 'b', characterId: 'c', orphanedId: 'o' })],
+    ['unlinkAlias', () => api.unlinkAlias({ bookId: 'b', sourceCharacterId: 'c', aliasName: 'A' })],
+    ['createCharacter', () => api.createCharacter('b', { name: 'N' })],
+    ['addFromSeriesRoster', () => api.addFromSeriesRoster({ bookId: 'b', targetBookId: 'p', targetCharacterId: 'c' })],
+  ] as const)('%s throws with code book_busy and the server sentence', async (_name, call) => {
+    await expect(call()).rejects.toMatchObject({ code: 'book_busy', message: 'This book is busy (analysing).' });
+  });
+});
+
 describe('script-review persistence endpoints', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());

@@ -644,7 +644,8 @@ export function ProfileDrawer({
      book hasn't accumulated one yet. Disabled when the source character is
      itself a bucket or the narrator — neither downgrade makes sense. */
   async function runMergeTo(targetId: string) {
-    if (!onMerge) return;
+    /* R57 — the server refuses a merge (a downgrade included) while an analysis runs (R55). */
+    if (!onMerge || readOnly) return;
     setMergeBusy(true);
     setMergeError(null);
     try {
@@ -717,7 +718,7 @@ export function ProfileDrawer({
   }
 
   async function runUnlinkAlias(aliasName: string, destination: UnlinkDestination) {
-    if (!onUnlinkAlias || aliasBusy) return;
+    if (!onUnlinkAlias || aliasBusy || (readOnly && destination.mode === 'split')) return;
     setAliasBusy(true);
     setAliasError(null);
     try {
@@ -2072,11 +2073,11 @@ export function ProfileDrawer({
                       }}
                       /* Plan 291 — link-prior writes only the source book's cast;
                          the current book's matchedFrom arrives through the cast
-                         slice's PUT, so it waits for the re-analysis. The in-book
-                         merge saves through its own route and stays live. */
-                      {...pausedControlProps(readOnly && !!selectedPrior)}
+                         slice's PUT, so it waits for the re-analysis. R57 — the
+                         in-book merge waits too: the server refuses it mid-run (R55). */
+                      {...pausedControlProps(readOnly)}
                       className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
-                        readOnly && selectedPrior ? 'opacity-40 cursor-not-allowed ' : ''
+                        readOnly ? 'opacity-40 cursor-not-allowed ' : ''
                       }${
                         mergeBusy
                           ? 'bg-magenta/20 text-magenta cursor-wait'
@@ -2110,7 +2111,8 @@ export function ProfileDrawer({
                     aria-label="Downgrade to Unknown male"
                     disabled={mergeBusy}
                     onClick={() => void runMergeTo(UNKNOWN_MALE_ID)}
-                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                    {...pausedControlProps(readOnly)}
+                    className={`px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                   >
                     Unknown male
                   </button>
@@ -2118,7 +2120,8 @@ export function ProfileDrawer({
                     aria-label="Downgrade to Unknown female"
                     disabled={mergeBusy}
                     onClick={() => void runMergeTo(UNKNOWN_FEMALE_ID)}
-                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                    {...pausedControlProps(readOnly)}
+                    className={`px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                   >
                     Unknown female
                   </button>
@@ -2286,6 +2289,9 @@ export function ProfileDrawer({
           targets={mergeCandidates ?? []}
           busy={aliasBusy}
           error={aliasError}
+          /* R57 — "its own character" is unlink-alias, which the server refuses mid-run
+             (R55); "move to" is repoint-alias and stays live. */
+          splitDisabled={readOnly}
           onCancel={() => {
             if (aliasBusy) return;
             setUnlinkDialogAlias(null);

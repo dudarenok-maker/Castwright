@@ -1273,6 +1273,38 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     expect(getBookState).toHaveBeenCalledWith('b1');
     err.mockRestore();
   });
+
+  /* R57 (PR #4103 pass 5b) — the server refuses a merge while an analysis runs (R55): while
+     the merge's book is read-only the button is disabled with the paused tooltip and sends
+     nothing; editable, the same button is enabled (the test above sends through it). */
+  it('R57: Merge is disabled and sends nothing while the book is read-only', async () => {
+    const store = makeMergeStore();
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    render(
+      <Provider store={store}>
+        <LibraryView library={libraryB1} />
+      </Provider>,
+    );
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    const merge = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+    expect(merge).toHaveAttribute('aria-disabled', 'true');
+    expect(merge).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(merge);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mergeCharactersMock).not.toHaveBeenCalled();
+  });
+
+  it('R57: Merge is enabled when the book is editable', () => {
+    renderMerge();
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    const merge = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+    expect(merge).not.toHaveAttribute('aria-disabled');
+    expect(merge).toBeEnabled();
+  });
 });
 
 describe('LibraryView cross-book duplicate review (plan 101)', () => {

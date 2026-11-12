@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import type { Character } from '../lib/types';
+import { pausedControlProps } from '../components/cast-edits-paused-banner';
 
 export type UnlinkDestination = { mode: 'split' } | { mode: 'move'; targetCharacterId: string };
 
@@ -17,14 +18,26 @@ interface Props {
   targets: Character[]; // roster minus source (cast \ this)
   busy?: boolean;
   error?: string | null;
+  /** R57 — the cast is read-only (an analysis runs): the split (a new character) is
+      refused by the server, so it is offered disabled and "move to" is the default. */
+  splitDisabled?: boolean;
   onCancel: () => void;
   onConfirm: (destination: UnlinkDestination) => void;
 }
 
-export function UnlinkAliasDialog({ aliasName, sourceName, targets, busy, error, onCancel, onConfirm }: Props) {
-  const [mode, setMode] = useState<'split' | 'move'>('split');
+export function UnlinkAliasDialog({
+  aliasName,
+  sourceName,
+  targets,
+  busy,
+  error,
+  splitDisabled = false,
+  onCancel,
+  onConfirm,
+}: Props) {
+  const [mode, setMode] = useState<'split' | 'move'>(splitDisabled ? 'move' : 'split');
   const [targetId, setTargetId] = useState('');
-  const canConfirm = mode === 'split' || (mode === 'move' && targetId !== '');
+  const canConfirm = (mode === 'split' && !splitDisabled) || (mode === 'move' && targetId !== '');
 
   function confirm() {
     if (!canConfirm) return;
@@ -45,7 +58,15 @@ export function UnlinkAliasDialog({ aliasName, sourceName, targets, busy, error,
         </h4>
         <div className="flex flex-col gap-2 mb-3">
           <label className="flex items-center gap-2 text-sm text-ink/80 min-h-[44px] fine-pointer:min-h-0">
-            <input type="radio" name="unlink-dest" checked={mode === 'split'} onChange={() => setMode('split')} />
+            <input
+              type="radio"
+              name="unlink-dest"
+              checked={mode === 'split'}
+              onChange={() => {
+                if (!splitDisabled) setMode('split');
+              }}
+              {...pausedControlProps(splitDisabled)}
+            />
             Make «{aliasName}» its own character
           </label>
           <label className="flex items-center gap-2 text-sm text-ink/80 min-h-[44px] fine-pointer:min-h-0">
