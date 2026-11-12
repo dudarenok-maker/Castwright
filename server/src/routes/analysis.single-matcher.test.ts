@@ -3887,6 +3887,33 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       expect(Object.keys(fallbacks).sort()).toEqual(['anna', 'unknown-male']);
       for (const f of Object.values(fallbacks)) expect(f.resolution).toBe('alias');
     });
+
+    /* R58 (PR #4103 pass 5b, controller ruling): R56 repoints the downgrade's entry
+       (`anna → lord-vane`). `anna` is no bucket key, so `followableHistory` keeps it and a later
+       run joins Anna's lines to Lord Vane: the user's own chain, as on `main`. Both jobs do.
+       Not a code defect: an earlier main/subset split came from a harness mock answering with a raw
+       id absent from the prompt. Phase 1 speaks the plan-applied id (R29), and a raw stale id is
+       demoted by the drift gate by design. */
+    it("R58: downgrade Anna, merge the bucket into Lord Vane, re-run: Anna's lines join Lord Vane", async () => {
+      const b = vaneBook();
+      expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+      expect((await mergeRoute(b, 'anna', 'unknown-male')).status).toBe(200);
+      expect((await mergeRoute(b, 'unknown-male', 'lord-vane')).status).toBe(200);
+      expect(history(b).supersededBy).toEqual({ anna: 'lord-vane', 'unknown-male': 'lord-vane' });
+      for (const pass of [1, 2]) {
+        /* Phase 1 speaks the plan-applied id (R29): the prompt lists Anna's row as `lord-vane`. */
+        const events = await go(b, { roster: FRESH.roster, speakerId: two('lord-vane', 'the-jogger') }, { seedCache: false });
+        expect(errCode(events), `pass ${pass}`).toBeUndefined();
+        expect(done(events), `pass ${pass}`).toBe(true);
+        expect(readCache(b.manuscriptId)?.matchPlan?.decisions.anna, `pass ${pass}`).toMatchObject({ kind: 'join', priorId: 'lord-vane' });
+        expect(ids(readCast(b.bookDir)).sort(), `pass ${pass}`).toEqual(['lord-vane', 'narrator', 'unknown-male']);
+        expect(editLines(b), `pass ${pass}`).toEqual({ 'lord-vane': 5, 'unknown-male': 4 });
+        expect(linesById(b.bookDir), `pass ${pass}`).toMatchObject({ 'lord-vane': 5, 'unknown-male': 4, narrator: 0 });
+        expect(history(b).supersededBy, `pass ${pass}`).toEqual({ anna: 'lord-vane' });
+        expect((history(b) as { displaced?: Record<string, string> }).displaced?.['unknown-male'], `pass ${pass}`).toBe('lord-vane');
+        expect(readSuggestions(b.bookDir), `pass ${pass}`).toEqual([]);
+      }
+    });
   });
 
   /* ---- PR #4103 pass 3 P3-1: a merge of the live fold bucket WHILE a run is going ---- */
