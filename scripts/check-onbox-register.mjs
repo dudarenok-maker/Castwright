@@ -1326,6 +1326,15 @@ export const RETIRED_ROW_WARNING_PREFIX = 'retired-row-warning: ';
 // section carries IDs. Those rows cannot be compared, carried or unioned, so
 // the comparison is blind to them until a publish replaces the page.
 export const LEGACY_LIVE_ROW_WARNING_PREFIX = 'legacy-live-row-warning: ';
+// #4105 (review pass 1): advisory, non-blocking. The published row body equals
+// an OLDER origin/main version, so the page is treated as behind main rather
+// than drifted — but main has changed the row since, and a hand-restored old
+// body reads exactly the same, so the commits are named for a human to judge.
+export const BEHIND_MAIN_ADVISORY_PREFIX = 'behind-main-advisory: ';
+// #4105 (review pass 1): the lane's own tracked row is an older origin/main
+// body, the live page already carries main's current one, and this branch has
+// not merged origin/main — publishing it would regress the row.
+export const BRANCH_BEHIND_MAIN_ERROR_PREFIX = 'branch-behind-main: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -1501,6 +1510,8 @@ export function checkLiveView(
     rowOwnerLookup,
     retiredPrStates,
     carryOut,
+    committedBodyMatch,
+    branchBase,
   } = {},
 ) {
   const errors = [];
@@ -2121,11 +2132,19 @@ export function checkLiveView(
   // published content differ:
   // - If tracked matches baseline → this edit is already merged to
   //   origin/main, but the published page hasn't caught up — the classic
-  //   A41 drift signature. Report it.
+  //   A41 drift signature. Report it, EXCEPT (#4105) when the published body
+  //   is an older origin/main version of the row that main has not gone back
+  //   to since (see `makeCommittedBodyMatch`): that page is treated as
+  //   merely behind main and an advisory names the commits that changed the
+  //   row since. A hand-restored old body reads the same way, which is why
+  //   it is an advisory and not silence.
   // - If published matches baseline but tracked doesn't → the tracked copy
   //   has a local edit not yet merged to origin/main, and the published page
   //   is simply unchanged (still at baseline) because nothing has been
-  //   published yet — the ordinary pending-publish state. Don't report.
+  //   published yet — the ordinary pending-publish state. Don't report,
+  //   EXCEPT (#4105) when the tracked body is itself an older origin/main
+  //   version and this branch has not merged origin/main: a stale lane would
+  //   regress the row (`branch-behind-main`).
   // - If neither matches baseline (all three disagree) → a 3-way content
   //   disagreement; report as an advisory warning (not blocking), since
   //   ordinary multi-step publishes (edit, publish, edit again before merge)
@@ -2176,9 +2195,49 @@ export function checkLiveView(
     }
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
-      if (publishedBody === undefined) continue;
       const trackedHash = hashRowContent(trackedBody);
-      const publishedHash = hashRowContent(publishedBody);
+      const publishedHash = publishedBody === undefined ? undefined : hashRowContent(publishedBody);
+      // #4105 (review passes 2-3): a branch that has not merged origin/main is
+      // behind it, and publishing a tracked row that differs from the page
+      // would put an older version back over a row main has since changed, or
+      // back over a row main has since REMOVED (a discharge). Decided from the
+      // MERGE BASE for EVERY tracked row, before the absent-from-page and
+      // absent-from-main exits below: refuse when the row is at the base and
+      // main lacks it or differs from it (a row absent at the base and absent
+      // on main is this lane's own new row: never refused), unless the tracked
+      // copy IS main's. A row main added after the base (a cherry-pick) has no
+      // body at the base and is refused when it differs from main's. A branch
+      // that merged the current main has `branchBase === undefined`. Where the
+      // merge base cannot be read FOR THIS ROW, or could not be found at all,
+      // this fails closed and says why.
+      if (branchBase !== undefined && baselineRowBodies !== null && trackedHash !== publishedHash) {
+        const mainBody = baselineRowBodies.get(id);
+        const mainHash = mainBody === undefined ? undefined : hashRowContent(mainBody);
+        let why = null;
+        if (trackedHash !== mainHash) {
+          if (branchBase.failed !== undefined) {
+            why = `could not establish where this branch diverged from origin/main: ${branchBase.failed}`;
+          } else if (branchBase.unknown(id)) {
+            why = `${id} cannot be read from the live view at the merge base ${branchBase.mergeBase.slice(0, 8)}`;
+          } else {
+            const atBase = branchBase.bodies.get(id);
+            if (mainBody === undefined) {
+              if (atBase !== undefined) {
+                why = `main removed ${id} since this branch's base ${branchBase.mergeBase.slice(0, 8)}`;
+              }
+            } else if (atBase === undefined || hashRowContent(atBase) !== mainHash) {
+              why = `main changed ${id} since this branch's base ${branchBase.mergeBase.slice(0, 8)}`;
+            }
+          }
+        }
+        if (why !== null) {
+          errors.push(
+            `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}${id}: branch behind origin/main for ${id}; ${branchBase.failed === undefined ? 'merge it first' : 'fetch full history first (the clone may be shallow or not share history with origin/main)'} (${why})`,
+          );
+          continue;
+        }
+      }
+      if (publishedBody === undefined) continue;
       if (trackedHash !== publishedHash) {
         // Hashes differ between tracked and published. Disambiguate using the baseline.
         if (baselineRowBodies === null) {
@@ -2193,11 +2252,39 @@ export function checkLiveView(
         }
         const baselineHash = hashRowContent(baselineBody);
         if (trackedHash === baselineHash) {
-          // Tracked matches baseline (merged to main) — the edit is already
-          // committed to the branch and published. But published differs from
-          // both, so this is A41-style drift: the published page was
-          // independently reverted or hand-edited while baseline stayed current.
-          // Genuine drift. Report it.
+          // #4105: after a merge the live page is usually just behind main. If
+          // the published body is this row's body at an OLDER commit of
+          // origin/main's history, and the current body does not occur at or
+          // before the newest such commit (otherwise main went back to it,
+          // an ABA revert), treat the page as behind main: do not fail, but
+          // advise, naming the matching commit and the commits that changed
+          // the row since. A hand-restored old body is indistinguishable from
+          // a page that is merely behind, hence the advisory rather than
+          // silence. An absent callback (git unavailable), or a version in
+          // the window that cannot be read for THIS row => no exemption.
+          const behind = committedBodyMatch?.(id, publishedHash, baselineHash);
+          if (behind?.unreadable) {
+            // A version in the window cannot be read FOR THIS ROW, so a revert
+            // could be hiding there: no exemption. Name the commit rather than
+            // suggesting a hand edit (#4106 review pass 2).
+            errors.push(
+              `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published (cannot rule out that the live page is merely behind main: the live view at ${behind.unreadable.slice(0, 8)} could not be read for ${id})`,
+            );
+            continue;
+          }
+          if (behind) {
+            const since = behind.changedBy
+              .map((c) => `${c.sha.slice(0, 8)}${c.pr ? ` (#${c.pr})` : ''}`)
+              .join(', ');
+            errors.push(
+              `${BEHIND_MAIN_ADVISORY_PREFIX}${id}: live = main@${behind.matchedSha.slice(0, 8)}; changed since by ${since}`,
+            );
+            continue;
+          }
+          // Tracked matches baseline (merged to main), but published matches
+          // no usable committed version, so this is A41-style drift: the
+          // published page was independently reverted or hand-edited while
+          // baseline stayed current. Genuine drift. Report it.
           errors.push(
             `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published`,
           );
@@ -2208,7 +2295,8 @@ export function checkLiveView(
           // tracked differs — the local copy has uncommitted edits not yet
           // merged to main. This is the ordinary pending-publish state:
           // published hasn't changed, tracked is ahead with local work about
-          // to be published. Not drift, skip it.
+          // to be published. Not drift, skip it. (A stale lane is caught
+          // above, from the merge base, before the hashes are compared.)
           continue;
         }
         // If trackedHash !== baselineHash AND publishedHash !== baselineHash,
@@ -2493,6 +2581,123 @@ function findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner) {
     if (show.stdout.includes(anchored)) return { sha, html: show.stdout };
   }
   return { sha: null };
+}
+
+// #4105: how many of `mainRef`'s newest first-parent live-view commits are
+// searched for a published row body. Bounded so a long history cannot make the
+// check slow (every version in the window is read, about 5 s worst case); a
+// body older than this reads as drift (fail closed).
+const COMMITTED_BODY_HISTORY_LIMIT = 150;
+
+// #4105 (review pass 2): one version of the live view at `sha`, read for the
+// two history checks. `bodies` is every row it parses; `unknown(id)` is true
+// for a row whose body that version cannot vouch for: an extraction error that
+// NAMES the row ("Row B102: ..."), or — when an error names no row (a block with
+// no id) — any row missing from `bodies`, since the broken block could be it.
+// A version where the path is absent (the file was deleted) is not unreadable:
+// every row is simply absent. A failed `git show` of a path that exists is
+// unreadable for every row.
+function readLiveViewVersion(gitRunner, repoRoot, sha, liveViewPath) {
+  const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
+  if (!show.error && show.status === 0 && typeof show.stdout === 'string') {
+    const parsed = parseLiveViewRowBodies(stripHtmlComments(show.stdout));
+    const named = new Set();
+    let anonymous = false;
+    for (const e of parsed.errors) {
+      const m = e.substring(EXTRACTION_ERROR_PREFIX.length).match(/^Row ([A-Za-z]+\d+): /);
+      if (m) named.add(m[1]);
+      else anonymous = true;
+    }
+    return { bodies: parsed.bodies, unknown: (id) => named.has(id) || (anonymous && !parsed.bodies.has(id)) };
+  }
+  const tree = gitRunner(['ls-tree', '--name-only', sha, '--', liveViewPath], repoRoot);
+  if (!tree.error && tree.status === 0 && typeof tree.stdout === 'string' && tree.stdout.trim() === '') {
+    return { bodies: new Map(), unknown: () => false };
+  }
+  return { bodies: new Map(), unknown: () => true };
+}
+
+// #4105: `checkLiveView`'s `options.committedBodyMatch`. Answers "is `hash`
+// (a row body, by content hash) this row's body in the live view at an OLDER
+// commit on `mainRef`'s first-parent history?" with `null` (no), a match
+// `{ matchedSha, changedBy: [{ sha, pr }] }` (the newest commit carrying that
+// body, and the commits since that changed the row; `pr` is the first `#N` in
+// the commit subject, or null), or `{ unreadable: sha }` (the newest commit
+// whose live view cannot vouch for THIS row, see `readLiveViewVersion`: no
+// exemption, and the caller names the commit). A `null` or `unreadable` is
+// returned, never an exemption, when
+//   - git cannot list the history (`null`);
+//   - some version in the window cannot be read for this row (`unreadable`):
+//     it could hide a revert. A version unreadable only for OTHER rows does not
+//     count — one malformed unrelated row must not disable the exemption for
+//     every row;
+//   - no version carries the body (`null`); or
+//   - `currentHash` (main's body now) is also found at or older than that
+//     newest match: main went back to a body older than the published one
+//     (v1 -> v2 -> v1), a revert main made, not a page merely behind it (`null`).
+// Lazy: git is only asked once a row would otherwise be reported, and the
+// window is read once.
+export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunner = runGitCommand) {
+  let versions;
+  const load = () => {
+    if (versions !== undefined) return versions;
+    versions = null;
+    const log = gitRunner(
+      ['log', '--first-parent', '--format=%H%x09%s', `--max-count=${COMMITTED_BODY_HISTORY_LIMIT}`, mainRef, '--', liveViewPath],
+      repoRoot,
+    );
+    if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return versions;
+    versions = log.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [sha, ...subject] = line.split('\t');
+        return { sha, pr: subject.join('\t').match(/#(\d+)/)?.[1] ?? null, ...readLiveViewVersion(gitRunner, repoRoot, sha, liveViewPath) };
+      });
+    return versions;
+  };
+  return (id, hash, currentHash) => {
+    const all = load();
+    if (all === null) return null;
+    const blind = all.find((v) => v.unknown(id));
+    if (blind) return { unreadable: blind.sha };
+    const hashAt = (i) => {
+      const body = all[i].bodies.get(id);
+      return body === undefined ? undefined : hashRowContent(body);
+    };
+    const matched = all.findIndex((_, i) => hashAt(i) === hash);
+    if (matched < 0) return null;
+    for (let i = matched + 1; i < all.length; i++) {
+      if (hashAt(i) === currentHash) return null;
+    }
+    const changedBy = [];
+    for (let i = 0; i < matched; i++) {
+      if (hashAt(i) !== hashAt(i + 1)) changedBy.push({ sha: all[i].sha, pr: all[i].pr });
+    }
+    return { matchedSha: all[matched].sha, changedBy };
+  };
+}
+
+// #4105 (review pass 2): `checkLiveView`'s `options.branchBase`. Is this
+// branch missing commits `fetchedSha` (origin/main) has? `undefined` when it
+// is not (it contains main — merged it, or is ahead of it). Otherwise the live
+// view at the MERGE BASE: `{ mergeBase, bodies, unknown }` (see
+// `readLiveViewVersion`), or `{ failed: reason }` when git gives no usable
+// answer (`--is-ancestor` answers 0 or 1; a timeout or status 128 is neither)
+// or the merge base cannot be found, which the caller treats as behind (fail
+// closed).
+export function resolveBranchBase(repoRoot, liveViewPath, fetchedSha, gitRunner = runGitCommand) {
+  const ancestor = gitRunner(['merge-base', '--is-ancestor', fetchedSha, 'HEAD'], repoRoot);
+  if (!ancestor.error && ancestor.status === 0) return undefined;
+  if (ancestor.error || ancestor.status !== 1) {
+    return { failed: `git merge-base --is-ancestor gave no answer (${ancestor.error ? 'did not complete' : `exit ${ancestor.status}`})` };
+  }
+  const base = gitRunner(['merge-base', 'HEAD', fetchedSha], repoRoot);
+  const mergeBase = typeof base.stdout === 'string' ? base.stdout.trim() : '';
+  if (base.error || base.status !== 0 || mergeBase === '') {
+    return { failed: 'git merge-base found no common ancestor' };
+  }
+  return { mergeBase, ...readLiveViewVersion(gitRunner, repoRoot, mergeBase, liveViewPath) };
 }
 
 // #3529: who published the live page — the provenance `checkLiveView`'s
@@ -3351,7 +3556,18 @@ function runCheckOnboxRegisterCli() {
     } else {
       retiredPrStates = resolveRetiredPrStates(repoRoot, retiredPrs);
     }
+    // #4105: only with a frozen origin/main SHA; otherwise drift is reported.
+    const committedBodyMatch = baseline.fetchedSha
+      ? makeCommittedBodyMatch(repoRoot, LIVE_VIEW, baseline.fetchedSha)
+      : undefined;
+    // #4105 (review pass 2): the live view at the merge base, when this branch
+    // has not merged origin/main.
+    const branchBase = baseline.fetchedSha
+      ? resolveBranchBase(repoRoot, LIVE_VIEW, baseline.fetchedSha)
+      : undefined;
     const checkOptions = {
+      committedBodyMatch,
+      branchBase,
       direction: 'extraOnly',
       baselineText: baseline.registerText,
       dischargingIds,
@@ -3456,6 +3672,12 @@ function runCheckOnboxRegisterCli() {
     const legacyLiveRowWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX));
+    const behindMainAdvisories = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(BEHIND_MAIN_ADVISORY_PREFIX));
+    const branchBehindMainErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(BRANCH_BEHIND_MAIN_ERROR_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -3471,6 +3693,8 @@ function runCheckOnboxRegisterCli() {
             !e.startsWith(RETIRED_ROW_ERROR_PREFIX) &&
             !e.startsWith(RETIRED_ROW_WARNING_PREFIX) &&
             !e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX) &&
+            !e.startsWith(BEHIND_MAIN_ADVISORY_PREFIX) &&
+            !e.startsWith(BRANCH_BEHIND_MAIN_ERROR_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -3539,6 +3763,23 @@ function runCheckOnboxRegisterCli() {
         for (const warning of legacyLiveRowWarnings) {
           console.warn(`  ${warning.substring(LEGACY_LIVE_ROW_WARNING_PREFIX.length)}`);
         }
+      }
+      if (behindMainAdvisories.length > 0) {
+        console.warn('\nLive page behind origin/main (not blocking — confirm the live body is not a hand-restored old one):');
+        for (const advisory of behindMainAdvisories) {
+          console.warn(`  ${advisory.substring(BEHIND_MAIN_ADVISORY_PREFIX.length)}`);
+        }
+      }
+      if (branchBehindMainErrors.length > 0) {
+        publishedFailed =
+          report(
+            `This branch is behind origin/main: ${LIVE_VIEW} carries rows main changed since this branch's base`,
+            branchBehindMainErrors,
+          ) || publishedFailed;
+        console.error(
+          'Do not publish. Merge the current origin/main into this branch (a shallow clone needs full history first), re-run the register build and this command; ' +
+            "publishing now would put the older row text back over main's current one.",
+        );
       }
       if (unknownProvenanceErrors.length > 0) {
         publishedFailed =
@@ -3652,16 +3893,23 @@ function runCheckOnboxRegisterCli() {
     `${LIVE_VIEW} does not agree with ${REGISTER}`,
     checkLiveView(text, liveViewHtml),
   );
+  // #4105 (review pass 2): a row block the drift check cannot read would stay
+  // in history forever and, for that row, disable the behind-main exemption in
+  // every later run. Refuse it before it can reach main.
+  const rowMarkupFailed = report(
+    `${LIVE_VIEW} has row markup the drift check cannot read`,
+    parseLiveViewRowBodies(stripHtmlComments(liveViewHtml)).errors,
+  );
 
   // Same silent-success gap as --against-published above, closed the same
   // way: a broken `invokedAsCli` and a genuine pass both used to read as
   // "exit 0, no output" — indistinguishable to a test asserting only on the
   // exit code.
-  if (!registerFailed && !liveViewFailed) {
+  if (!registerFailed && !liveViewFailed && !rowMarkupFailed) {
     console.log(`check:onbox-register: OK — ${REGISTER} and ${LIVE_VIEW} agree.`);
   }
 
-  if (registerFailed || liveViewFailed) throw new CliExitError(1);
+  if (registerFailed || liveViewFailed || rowMarkupFailed) throw new CliExitError(1);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
