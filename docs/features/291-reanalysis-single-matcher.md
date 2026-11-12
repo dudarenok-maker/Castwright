@@ -349,9 +349,10 @@ snapshot.
 7. **On resume,** the linker re-runs on `new` rows only.
 8. **`cast_merge_base_stale`** loses its producer; Task 28 removes it.
 9. **Rule 13's only remaining trigger** is a merge whose history write failed, which C3 makes a
-   failed request. With the cast locked mid-run, no user delete exists. Rule 13 is therefore
-   defensive; its A20 tests use `failNextRetirement` and assert the merge request reported failure.
-   Spec acceptance 20 is amended to match (ruling R13).
+   failed request. With the cast locked mid-run, no user delete exists, and since R55 a merge
+   during a registered run is refused with 409 `book_busy`, so the trigger needs a run that runs
+   unregistered. Rule 13 is therefore defensive; its A20 tests use `failNextRetirement` and assert
+   the merge request reported failure. Spec acceptance 20 is amended to match (rulings R13, R55).
 10. **R11 — drift-refused suggestions.** The plan wins (ruling Q3). Suggestions written transiently
     at the Phase-0b snapshot are removed when a run is drift-refused, so the run leaves none behind.
     Spec acceptance 24 is amended.
@@ -474,6 +475,12 @@ snapshot.
       device): the six client calls throw with the body's `code`.
     - Not covered: the Script Review "create new character" confirm stays offered mid-run (its
       409 takes the read-only path), and the Manuscript view shows no paused banner.
+    - *Amended by PR #4103 pass 6.* P6-1: for a book the stage does not name (the Voices merge
+      on `#/voices`), the gate keys only on live state, a running snapshot or busy listing
+      `analysis` (`selectCastIdentityPaused`), since nothing releases that book's era; and
+      `handleCastIdentityBusy` latches the era only for the stage's book. P6-2: an
+      Add-character form already open when the cast turns read-only pauses its create submit
+      and keeps its input; the create handler has no read-only early return.
 
 ---
 

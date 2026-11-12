@@ -531,10 +531,12 @@ the suggestions store:
       persist.
     - One the user gave a voice mid-run stays.
 20. **Deleted mid-run (rule 13).** The cast is read-only mid-run, so no user
-    delete reaches the run. The one remaining trigger is a merge whose history
-    write failed (the merge request answers 500 and the client reloads): the
-    source stays gone, and its lines are on the narrator. (Amended by plan 291,
-    ruling R13.)
+    delete reaches the run, and a merge during a registered run is refused
+    with 409 `book_busy`. The one remaining trigger is a merge whose history
+    write failed and that still reaches a run (one that runs unregistered; the
+    merge request answers 500 and the client reloads): the source stays gone,
+    and its lines are on the narrator. (Amended by plan 291, rulings R13 and
+    R55.)
 21. **Provenance (rule 12).**
     - An untagged and a `user` entry are T1.
     - An `analyzer` entry is not: a later ambiguous name gives a suggestion.
