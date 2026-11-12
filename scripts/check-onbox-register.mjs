@@ -1326,6 +1326,15 @@ export const RETIRED_ROW_WARNING_PREFIX = 'retired-row-warning: ';
 // section carries IDs. Those rows cannot be compared, carried or unioned, so
 // the comparison is blind to them until a publish replaces the page.
 export const LEGACY_LIVE_ROW_WARNING_PREFIX = 'legacy-live-row-warning: ';
+// #4105 (review pass 1): advisory, non-blocking. The published row body equals
+// an OLDER origin/main version, so the page is treated as behind main rather
+// than drifted — but main has changed the row since, and a hand-restored old
+// body reads exactly the same, so the commits are named for a human to judge.
+export const BEHIND_MAIN_ADVISORY_PREFIX = 'behind-main-advisory: ';
+// #4105 (review pass 1): the lane's own tracked row is an older origin/main
+// body, the live page already carries main's current one, and this branch has
+// not merged origin/main — publishing it would regress the row.
+export const BRANCH_BEHIND_MAIN_ERROR_PREFIX = 'branch-behind-main: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -1502,6 +1511,7 @@ export function checkLiveView(
     retiredPrStates,
     carryOut,
     committedBodyMatch,
+    branchBehindMain,
   } = {},
 ) {
   const errors = [];
@@ -2122,11 +2132,19 @@ export function checkLiveView(
   // published content differ:
   // - If tracked matches baseline → this edit is already merged to
   //   origin/main, but the published page hasn't caught up — the classic
-  //   A41 drift signature. Report it.
+  //   A41 drift signature. Report it, EXCEPT (#4105) when the published body
+  //   is an older origin/main version of the row that main has not gone back
+  //   to since (see `makeCommittedBodyMatch`): that page is treated as
+  //   merely behind main and an advisory names the commits that changed the
+  //   row since. A hand-restored old body reads the same way, which is why
+  //   it is an advisory and not silence.
   // - If published matches baseline but tracked doesn't → the tracked copy
   //   has a local edit not yet merged to origin/main, and the published page
   //   is simply unchanged (still at baseline) because nothing has been
-  //   published yet — the ordinary pending-publish state. Don't report.
+  //   published yet — the ordinary pending-publish state. Don't report,
+  //   EXCEPT (#4105) when the tracked body is itself an older origin/main
+  //   version and this branch has not merged origin/main: a stale lane would
+  //   regress the row (`branch-behind-main`).
   // - If neither matches baseline (all three disagree) → a 3-way content
   //   disagreement; report as an advisory warning (not blocking), since
   //   ordinary multi-step publishes (edit, publish, edit again before merge)
@@ -2194,16 +2212,29 @@ export function checkLiveView(
         }
         const baselineHash = hashRowContent(baselineBody);
         if (trackedHash === baselineHash) {
-          // #4105: after a merge the live page is simply behind main. If the
-          // published body is this row's body at some commit in origin/main's
-          // history, it is a committed version, not drift. Absent callback
-          // (git unavailable) => no exemption, the drift is reported.
-          if (committedBodyMatch?.(id, publishedHash) === true) continue;
-          // Tracked matches baseline (merged to main) — the edit is already
-          // committed to the branch and published. But published differs from
-          // both, so this is A41-style drift: the published page was
-          // independently reverted or hand-edited while baseline stayed current.
-          // Genuine drift. Report it.
+          // #4105: after a merge the live page is usually just behind main. If
+          // the published body is this row's body at an OLDER commit of
+          // origin/main's history (and main has not gone back to the current
+          // body since — an ABA revert), treat the page as behind main: do not
+          // fail, but advise, naming the matching commit and the commits that
+          // changed the row since. A hand-restored old body is
+          // indistinguishable from a page that is merely behind, hence the
+          // advisory rather than silence. An absent callback (git
+          // unavailable) or any unreadable version => no exemption.
+          const behind = committedBodyMatch?.(id, publishedHash, baselineHash);
+          if (behind) {
+            const since = behind.changedBy
+              .map((c) => `${c.sha.slice(0, 8)}${c.pr ? ` (#${c.pr})` : ''}`)
+              .join(', ');
+            errors.push(
+              `${BEHIND_MAIN_ADVISORY_PREFIX}${id}: live = main@${behind.matchedSha.slice(0, 8)}; changed since by ${since}`,
+            );
+            continue;
+          }
+          // Tracked matches baseline (merged to main), but published matches
+          // no usable committed version, so this is A41-style drift: the
+          // published page was independently reverted or hand-edited while
+          // baseline stayed current. Genuine drift. Report it.
           errors.push(
             `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published`,
           );
@@ -2214,7 +2245,17 @@ export function checkLiveView(
           // tracked differs — the local copy has uncommitted edits not yet
           // merged to main. This is the ordinary pending-publish state:
           // published hasn't changed, tracked is ahead with local work about
-          // to be published. Not drift, skip it.
+          // to be published. Not drift, skip it — unless the tracked body is
+          // an OLDER origin/main version and this branch has not merged
+          // origin/main (#4105 review pass 1): then it is a stale lane about
+          // to regress a row main already moved on. A branch that HAS merged
+          // main and still carries the older text reverted it on purpose,
+          // which is allowed.
+          if (committedBodyMatch?.(id, trackedHash, baselineHash) && branchBehindMain?.() === true) {
+            errors.push(
+              `${BRANCH_BEHIND_MAIN_ERROR_PREFIX}${id}: branch behind origin/main for ${id}; merge it first`,
+            );
+          }
           continue;
         }
         // If trackedHash !== baselineHash AND publishedHash !== baselineHash,
@@ -2503,40 +2544,63 @@ function findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner) {
 
 // #4105: how many of `mainRef`'s newest first-parent live-view commits are
 // searched for a published row body. Bounded so a long history cannot make the
-// check slow; a body older than this reads as drift (fail closed).
+// check slow (every version in the window is read, about 5 s worst case); a
+// body older than this reads as drift (fail closed).
 const COMMITTED_BODY_HISTORY_LIMIT = 150;
 
-// #4105: `checkLiveView`'s `options.committedBodyMatch`. Answers "is the
-// published body (by content hash) this row's body in the live view at some
-// commit on `mainRef`'s first-parent history?" — true means the live page is
-// merely behind main, not hand-edited. Lazy: git is only asked for a row that
-// would otherwise be reported, and each historical file is read at most once.
-// Any git failure answers false, so drift is still reported.
+// #4105: `checkLiveView`'s `options.committedBodyMatch`. Answers "is `hash`
+// (a row body, by content hash) this row's body in the live view at an OLDER
+// commit on `mainRef`'s first-parent history?" with `null` (no) or
+// `{ matchedSha, changedBy: [{ sha, pr }] }`: the newest commit carrying that
+// body, and the commits since that changed the row (`pr` is the first `#N` in
+// the commit subject, or null). A `null` is returned, never an exemption, when
+//   - git cannot list the history, or ANY version in the window cannot be read
+//     or parsed (an unreadable version could hide a revert);
+//   - no version carries the body; or
+//   - `currentHash` (main's body now) is also found at or older than that
+//     newest match: main went back to a body older than the published one
+//     (v1 -> v2 -> v1), a revert main made, not a page merely behind it.
+// Lazy: git is only asked once a row would otherwise be reported, and the
+// window is read once.
 export function makeCommittedBodyMatch(repoRoot, liveViewPath, mainRef, gitRunner = runGitCommand) {
-  let shas = null;
-  const parsed = new Map();
-  return (id, publishedHash) => {
-    if (shas === null) {
-      const log = gitRunner(
-        ['log', '--first-parent', '--format=%H', `--max-count=${COMMITTED_BODY_HISTORY_LIMIT}`, mainRef, '--', liveViewPath],
-        repoRoot,
-      );
-      shas = !log.error && log.status === 0 && typeof log.stdout === 'string' ? log.stdout.split(/\s+/).filter(Boolean) : [];
+  let versions;
+  const load = () => {
+    if (versions !== undefined) return versions;
+    versions = null;
+    const log = gitRunner(
+      ['log', '--first-parent', '--format=%H%x09%s', `--max-count=${COMMITTED_BODY_HISTORY_LIMIT}`, mainRef, '--', liveViewPath],
+      repoRoot,
+    );
+    if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return versions;
+    const read = [];
+    for (const line of log.stdout.split('\n').filter(Boolean)) {
+      const [sha, ...subject] = line.split('\t');
+      const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
+      if (show.error || show.status !== 0 || typeof show.stdout !== 'string') return versions;
+      const parsed = parseLiveViewRowBodies(stripHtmlComments(show.stdout));
+      if (parsed.errors.length > 0) return versions;
+      read.push({ sha, pr: subject.join('\t').match(/#(\d+)/)?.[1] ?? null, bodies: parsed.bodies });
     }
-    for (const sha of shas) {
-      if (!parsed.has(sha)) {
-        const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
-        parsed.set(
-          sha,
-          !show.error && show.status === 0 && typeof show.stdout === 'string'
-            ? parseLiveViewRowBodies(stripHtmlComments(show.stdout)).bodies
-            : new Map(),
-        );
-      }
-      const body = parsed.get(sha).get(id);
-      if (body !== undefined && hashRowContent(body) === publishedHash) return true;
+    versions = read;
+    return versions;
+  };
+  return (id, hash, currentHash) => {
+    const all = load();
+    if (all === null) return null;
+    const hashAt = (i) => {
+      const body = all[i].bodies.get(id);
+      return body === undefined ? undefined : hashRowContent(body);
+    };
+    const matched = all.findIndex((_, i) => hashAt(i) === hash);
+    if (matched < 0) return null;
+    for (let i = matched + 1; i < all.length; i++) {
+      if (hashAt(i) === currentHash) return null;
     }
-    return false;
+    const changedBy = [];
+    for (let i = 0; i < matched; i++) {
+      if (hashAt(i) !== hashAt(i + 1)) changedBy.push({ sha: all[i].sha, pr: all[i].pr });
+    }
+    return { matchedSha: all[matched].sha, changedBy };
   };
 }
 
@@ -3400,8 +3464,15 @@ function runCheckOnboxRegisterCli() {
     const committedBodyMatch = baseline.fetchedSha
       ? makeCommittedBodyMatch(repoRoot, LIVE_VIEW, baseline.fetchedSha)
       : undefined;
+    // #4105 (review pass 1): is this branch missing commits origin/main has?
+    // `merge-base --is-ancestor` answers 1 for "not an ancestor"; any other
+    // status (git failure) makes no claim.
+    const branchBehindMain = baseline.fetchedSha
+      ? () => runGitCommand(['merge-base', '--is-ancestor', baseline.fetchedSha, 'HEAD'], repoRoot).status === 1
+      : undefined;
     const checkOptions = {
       committedBodyMatch,
+      branchBehindMain,
       direction: 'extraOnly',
       baselineText: baseline.registerText,
       dischargingIds,
@@ -3506,6 +3577,12 @@ function runCheckOnboxRegisterCli() {
     const legacyLiveRowWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX));
+    const behindMainAdvisories = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(BEHIND_MAIN_ADVISORY_PREFIX));
+    const branchBehindMainErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(BRANCH_BEHIND_MAIN_ERROR_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -3521,6 +3598,8 @@ function runCheckOnboxRegisterCli() {
             !e.startsWith(RETIRED_ROW_ERROR_PREFIX) &&
             !e.startsWith(RETIRED_ROW_WARNING_PREFIX) &&
             !e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX) &&
+            !e.startsWith(BEHIND_MAIN_ADVISORY_PREFIX) &&
+            !e.startsWith(BRANCH_BEHIND_MAIN_ERROR_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -3589,6 +3668,23 @@ function runCheckOnboxRegisterCli() {
         for (const warning of legacyLiveRowWarnings) {
           console.warn(`  ${warning.substring(LEGACY_LIVE_ROW_WARNING_PREFIX.length)}`);
         }
+      }
+      if (behindMainAdvisories.length > 0) {
+        console.warn('\nLive page behind origin/main (not blocking — confirm the live body is not a hand-restored old one):');
+        for (const advisory of behindMainAdvisories) {
+          console.warn(`  ${advisory.substring(BEHIND_MAIN_ADVISORY_PREFIX.length)}`);
+        }
+      }
+      if (branchBehindMainErrors.length > 0) {
+        publishedFailed =
+          report(
+            `This branch is behind origin/main: ${LIVE_VIEW} carries an older version of a row than the live page`,
+            branchBehindMainErrors,
+          ) || publishedFailed;
+        console.error(
+          'Do not publish. Merge origin/main into this branch, re-run the register build and this command; ' +
+            "publishing now would put the older row text back over main's current one.",
+        );
       }
       if (unknownProvenanceErrors.length > 0) {
         publishedFailed =

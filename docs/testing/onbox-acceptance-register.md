@@ -205,7 +205,17 @@ comparison, see the edge list above). The merge step that closes this, run
    `npm run check:onbox-register -- --against-published <saved-file>`. This
    comparison detects structural drift (rows live vs. in register), and — when
    the live-view baseline from `origin/main` is available — also detects
-   content drift (per-row body text hash comparison; a published body equal to that row in some commit of `origin/main's recent first-parent history is a page merely behind main, #4105, and is not reported). Your register having rows
+   content drift (per-row body text hash comparison). A published body equal
+   to an OLDER version of that row on `origin/main`'s recent first-parent
+   history, which main has not gone back to since, is treated as behind main
+   (#4105): it passes, with a non-failing advisory naming the commit the live
+   body matches and the commits that changed the row since (a hand-restored
+   old body reads the same, so the advisory is its only trace). A main-side
+   revert, a body only an unmerged lane carried, and a version the walk
+   cannot read stay drift. The mirror image fails: when your tracked row is an
+   older `origin/main` version, the live page already has main's, and this
+   branch has not merged `origin/main`, the check refuses and says to merge
+   it first (`branch-behind-main`). Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that
    your register lacks is reported when `origin/main`'s own copy of this
