@@ -389,7 +389,6 @@ const ALLOW_G2 = allow([
   ['routes/single-design.ts', 1, 'no-book-write'], // POST design-single/subscribe: re-attach only
   ['routes/voice-library.ts', 1, 'cross-book-walker'], // DELETE /:voiceUuid: library-voice -> per-book book-op in clearLibraryVoiceReferences
   ['routes/voice-match.ts', 1, 'no-book-write'],
-  ['routes/voices.ts', 1, 'cross-book-walker'], // PUT /:voiceId/override: walker
 ]);
 /* G3a: file -> a book resolved before the lock in a guarded handler. The
    no-book-write handlers (annotate-emotion, instruct-annotation, share) resolve

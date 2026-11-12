@@ -6,19 +6,47 @@
    that moved with it, or a same-book row on its key. Only the declining row carries
    the decline marker; this record is what covers the rest.
 
-   One empty file per uuid (paths.ts separatedVoicePath): a uuid is minted once, so
+   One file per uuid (paths.ts separatedVoicePath): a uuid is minted once, so
    two writers never touch the same file, and nothing in a cast.json changes, so
-   re-analysis and the analyzer grammar never see it. It survives a restart. */
+   re-analysis and the analyzer grammar never see it. It survives a restart.
+
+   Review pass 4 (🟠1) -- WHO a record vouches for. The file is empty for a
+   "Don't reuse" separation (the uuid is shared with the followers that moved with it,
+   so it proves nothing about any one row). A book-scoped mint or an isolation in an
+   UNCONFIRMED book (a design before Confirm) writes an `OwnStamp` instead: the book that
+   minted or isolated onto the uuid, and that book's `editEpoch` at the time. A series
+   mint (a confirmed book) records nothing. Only that book, at that same epoch, may treat the uuid as its
+   own (isOwnSeparatedVoice): Confirm leaves the epoch alone, but Re-parse and Start
+   fresh rotate it, and another book that was later linked onto the uuid is not the
+   book named. Every other reader asks only whether the file exists (isSeparatedVoice). */
 
 import { statSync } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { separatedVoicePath } from './paths.js';
 
-export async function recordSeparatedVoice(voiceUuid: string): Promise<void> {
+/** The book and generation that minted or isolated onto a uuid in an unconfirmed design. */
+export interface OwnStamp {
+  bookId: string;
+  editEpoch: string;
+}
+
+export async function recordSeparatedVoice(voiceUuid: string, own?: OwnStamp): Promise<void> {
   const p = separatedVoicePath(voiceUuid);
   await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, '');
+  await writeFile(p, own ? JSON.stringify(own) : '');
+}
+
+/* Is `voiceUuid` recorded as THIS book's own, at this generation? Anything else (no
+   record, an empty "Don't reuse" record, another book's or epoch's stamp, a record
+   that cannot be read or parsed) is no: the caller isolates, which is the safe side. */
+export async function isOwnSeparatedVoice(voiceUuid: string, own: OwnStamp): Promise<boolean> {
+  try {
+    const stamp = JSON.parse(await readFile(separatedVoicePath(voiceUuid), 'utf8')) as Partial<OwnStamp>;
+    return stamp.bookId === own.bookId && stamp.editEpoch === own.editEpoch;
+  } catch {
+    return false;
+  }
 }
 
 /* A rollback: the separation that recorded `voiceUuid` moved no row onto it. */

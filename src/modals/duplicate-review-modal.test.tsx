@@ -16,6 +16,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { castSlice } from '../store/cast-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { manuscriptSlice } from '../store/manuscript-slice';
 import {
   DuplicateReviewModal,
   type DuplicateReviewPair,
@@ -92,15 +93,19 @@ function renderModal(
     loading?: boolean;
     hydrationError?: string | null;
     onResolved?: (resolution: DuplicateResolution) => void;
+    openBookId?: string;
+    castCharacters?: Character[];
   } = {},
 ) {
   const store = configureStore({
     reducer: {
       cast: castSlice.reducer,
       notifications: notificationsSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
     },
     preloadedState: {
-      cast: { characters: pair?.a.character ? [pair.a.character] : [] },
+      cast: { characters: extra.castCharacters ?? (pair?.a.character ? [pair.a.character] : []) },
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: extra.openBookId ?? null },
     },
   });
   return {
@@ -272,6 +277,37 @@ describe('DuplicateReviewModal — link path', () => {
       expect(screen.getByText('Series guard failed')).toBeInTheDocument();
     });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('DuplicateReviewModal — link mirror only into the book it was made in (review pass 1)', () => {
+  const linked = {
+    matchedFrom: { bookId: 'ns', characterId: 'v_eliza', bookTitle: 'The Northern Star', confidence: 1 },
+    voiceId: 'v_eliza',
+    voice: { voiceUuid: 'u_ns', qwen: { name: 'qwen-u_ns' }, movedCharacterIds: [] },
+  };
+  it('the loser\'s book is open: its row takes the link and the voice', async () => {
+    linkSpy.mockResolvedValue(linked);
+    const pair = buildPair();
+    const onClose = vi.fn();
+    const { store } = renderModal(pair, onClose, { openBookId: 'sb', castCharacters: [pair.b.character as Character] });
+    fireEvent.click(screen.getByRole('button', { name: /Same character — link them/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const row = store.getState().cast.characters.find((c) => c.id === 'v_eliza_sb');
+    expect(row?.voiceUuid).toBe('u_ns');
+    expect(row?.matchedFrom?.bookId).toBe('ns');
+  });
+
+  it('another book is open with a same-id row: nothing is mirrored into it', async () => {
+    linkSpy.mockResolvedValue(linked);
+    const pair = buildPair();
+    const onClose = vi.fn();
+    const { store } = renderModal(pair, onClose, { openBookId: 'other-book', castCharacters: [pair.b.character as Character] });
+    fireEvent.click(screen.getByRole('button', { name: /Same character — link them/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const row = store.getState().cast.characters.find((c) => c.id === 'v_eliza_sb');
+    expect(row?.voiceUuid).toBeUndefined();
+    expect(row?.matchedFrom).toBeUndefined();
   });
 });
 

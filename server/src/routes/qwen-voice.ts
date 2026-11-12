@@ -27,7 +27,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { rename, rm, copyFile, stat, readdir, utimes } from 'node:fs/promises';
+import { rename, rm, copyFile, stat, readdir, readFile, utimes } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import {
   constants as fsConstants,
@@ -56,6 +56,7 @@ import { withCastLock, withCastLocks } from '../workspace/cast-lock.js';
 import {
   forgetSeparatedVoice,
   isSeparatedVoice,
+  isOwnSeparatedVoice,
   isSeparatedVoiceSync,
   recordSeparatedVoice,
 } from '../workspace/separated-voices.js';
@@ -81,10 +82,13 @@ import {
   namedQwenVoices,
   scanVoiceHolders,
   voiceHeldBy,
+  type VoiceScan,
   mustSeparateOnDecline,
   mustSeparateOnDesign,
   type LinkFollower,
   readBookId,
+  readBookCastConfirmed,
+  readBookOwnStamp,
   RetryableForkError,
 } from '../workspace/voice-uuid-fork.js';
 import { nanoid } from 'nanoid';
@@ -703,19 +707,55 @@ function withDeclineMark(row: MarkedCharacter, fromBookId: string | undefined, l
    followers, the whole chain that leads down to it (they move with it). Lock-free and read-only; the locked step re-scans
    and fails when the set it finds is not covered. Throws CharacterGoneError for a
    row that is not there. `fromBookId` is the book a decline declines (never a
-   follower's book). */
+   follower's book). F1 — a decline also holds the books of the rows an earlier
+   decline left behind (`stranded`), which a repeat decline carries. */
 export async function separationPlan(
   bookDir: string,
   characterId: string,
   fromBookId?: string,
-): Promise<{ bookIds: string[]; followers: LinkFollower[] }> {
+): Promise<{ bookIds: string[]; followers: LinkFollower[]; stranded: LinkFollower[] }> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const x = cast?.characters?.find((c) => c.id === characterId) as MarkedCharacter | undefined;
   if (!x) throw new CharacterGoneError();
   const xBookId = await readBookId(bookDir);
   if (!xBookId) throw new Error('Cannot separate a voice in a book that has no bookId.');
-  const { followers } = await scanVoiceHolders(bookDir, x, voiceHeldBy(x), fromBookId);
-  return { bookIds: [xBookId, ...followers.map((f) => f.bookId)], followers };
+  const scan = await scanVoiceHolders(bookDir, x, voiceHeldBy(x), fromBookId);
+  const stranded = fromBookId ? (scan.stranded ?? []) : [];
+  return {
+    bookIds: [...new Set([xBookId, ...scan.followers.map((f) => f.bookId), ...stranded.map((f) => f.bookId)])],
+    followers: scan.followers,
+    stranded,
+  };
+}
+
+/* The books an `unconfirmed` separation holds: the row's own, alone (it moves no
+   other book). Throws CharacterGoneError for a row that is not there. */
+async function ownBookPlan(
+  bookDir: string,
+  characterId: string,
+): Promise<{ bookIds: string[]; followers: LinkFollower[]; stranded: LinkFollower[] }> {
+  const cast = await readJson<CastFile>(castJsonPath(bookDir));
+  if (!cast?.characters?.some((c) => c.id === characterId)) throw new CharacterGoneError();
+  const bookId = await readBookId(bookDir);
+  if (!bookId) throw new Error('Cannot separate a voice in a book that has no bookId.');
+  return { bookIds: [bookId], followers: [], stranded: [] };
+}
+
+/* Review pass 3 (C) — does an unconfirmed design isolate this row? Whenever another
+   book's row holds its key (a follower included), and also when a book that could
+   not be read may hold it (an unreadable holder is not an absent one) unless the row's
+   uuid is already known to be its own, which keeps a second design from isolating
+   again and dropping the takes the first one made. Review pass 4 (🟠1): "known to be its
+   own" means a record that names THIS book at its CURRENT edit epoch (an unconfirmed
+   mint or isolation, separated-voices.ts `OwnStamp`); a "Don't reuse" record, or one
+   another book or an earlier generation (Re-parse, Start fresh) wrote, is not proof.
+   Never a refusal: the isolation writes only this book. */
+async function mustIsolateUnconfirmed(row: MarkedCharacter, scan: VoiceScan, bookDir: string): Promise<boolean> {
+  if (scan.heldElsewhere || scan.followers.length > 0) return true;
+  if (!scan.unreadableMayHold) return false;
+  if (!row.voiceUuid) return true;
+  const stamp = await readBookOwnStamp(bookDir);
+  return !(stamp && (await isOwnSeparatedVoice(row.voiceUuid, stamp)));
 }
 
 /* Writes one book's cast.json. Each caller builds it INSIDE its own withCastLocks
@@ -734,6 +774,50 @@ export interface SeparationResult {
   movedSameBook: string[];
 }
 
+/* F1 — move the rows an earlier decline left behind (`stranded`, each book locked
+   by the caller) onto X's own voice, as a decline moves its followers
+   (withForkedUuid): the rows of each book on the voice a stranded row holds, with
+   its link id. Returns each book written with the cast it had, for a rollback; a
+   failure puts back what was written and rethrows. */
+type CarriedBook = { dir: string; before: CastFile; writeCast: CastWriter };
+async function carryStranded(stranded: LinkFollower[], x: MarkedCharacter, writeCast: CastWriter): Promise<CarriedBook[]> {
+  const written: CarriedBook[] = [];
+  try {
+    for (const dir of new Set(stranded.map((f) => resolve(f.dir)))) {
+      const cast = await readJson<CastFile>(castJsonPath(dir));
+      if (!cast?.characters) continue;
+      const ids = new Set(stranded.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
+      const rows = cast.characters.filter((c) => ids.has(c.id));
+      const onSameVoice = (c: CastCharacter) =>
+        rows.some((r) => voiceHeldBy(r)(c) && (r.voiceId ?? r.id) === (c.voiceId ?? c.id));
+      let changed = false;
+      const characters = cast.characters.map((c) => {
+        if (!onSameVoice(c)) return c;
+        changed = true;
+        return withForkedUuid(c, x.voiceUuid as string);
+      });
+      if (!changed) continue;
+      await writeCast(dir, { ...cast, characters });
+      written.push({ dir, before: cast, writeCast });
+    }
+  } catch (e) {
+    await rollBack(written);
+    throw e;
+  }
+  console.log(`[qwen-voice] ${x.id}: carried ${written.length} book(s) an earlier decline left behind onto qwen-${x.voiceUuid}`);
+  return written;
+}
+
+async function rollBack(written: CarriedBook[]): Promise<void> {
+  for (const w of [...written].reverse()) {
+    try {
+      await w.writeCast(w.dir, w.before);
+    } catch (e) {
+      console.error('[qwen-voice] could not roll a carried row back', e);
+    }
+  }
+}
+
 /* #3992 — the ONE separation step, shared by the decline route and a design of a
    row declined before the route did this. The caller holds the row's book's design
    lock, then `withBookOps` over `separationPlan`'s books (X's handle resolving to
@@ -750,14 +834,26 @@ export interface SeparationResult {
    follower's rows on that key; a follower set that differs from `planned` fails
    with a retry sentence before anything is copied. Any failure rolls every written book back and
    removes the copies, so the step lands whole or not at all; a follower whose
-   rollback also failed keeps the copies it now points at. */
+   rollback also failed keeps the copies it now points at.
+   F1 (owner decision: refuse while unreadable) — a decline that must separate
+   while a book that may be in the row's chain cannot be read (scanVoiceHolders'
+   `chainUnreadable`) fails with the retry sentence before anything is written, so
+   no follower is ever left on the voice the row leaves. A repeat decline carries
+   the rows an earlier decline left behind (`plannedStranded`, re-checked here)
+   onto the row's own voice. */
 export async function separateVoiceLocked(
   bookDir: string,
   characterId: string,
   lockedDirs: string[],
   planned: LinkFollower[],
   writeCast: CastWriter,
-  decline?: { fromBookId: string },
+  decline?: { fromBookId: string; plannedStranded?: LinkFollower[] },
+  /** F8 (review pass 1) — a design in a book whose cast is not confirmed: separate
+      the row whenever another book's row holds its key, and record no declined uuid. */
+  unconfirmed?: boolean,
+  /** Review pass 2 — with `unconfirmed`, a preview id staged under the old key that
+      is carried to the new key by the caller instead of being dropped. */
+  keepPreviewId?: string,
 ): Promise<SeparationResult> {
   const fresh = await readJson<CastFile>(castJsonPath(bookDir));
   const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
@@ -765,9 +861,35 @@ export async function separateVoiceLocked(
   const x = fresh.characters[idx] as MarkedCharacter;
   const holds = voiceHeldBy(x);
   const scan = await scanVoiceHolders(bookDir, x, holds, decline?.fromBookId);
-  const separate = decline ? mustSeparateOnDecline(x, scan, decline.fromBookId) : mustSeparateOnDesign(x, scan);
+  /* Review pass 2 — `unconfirmed` (F8) moves this book's rows only and never writes
+     another book: whoever else holds the key (a follower included) is a reason to
+     separate, never a row to move, and no book in the chain needs reading. */
+  const followers = unconfirmed ? [] : scan.followers;
+  const separate = decline
+    ? mustSeparateOnDecline(x, scan, decline.fromBookId)
+    : unconfirmed
+      ? await mustIsolateUnconfirmed(x, scan, bookDir)
+      : mustSeparateOnDesign(x, scan);
 
+  const locked = new Set(lockedDirs.map((d) => resolve(d)));
+  const chainKey = (fs: LinkFollower[]) => fs.map((f) => `${resolve(f.dir)}|${f.characterId}`).sort().join('\n');
   if (!separate) {
+    /* F1 — a repeat decline: the rows an earlier decline left behind (it went
+       through with a chain member unreadable) move onto the row's own voice now,
+       under the same locks, before the marker. A set that differs from the plan's
+       is not the one the locks were taken for. */
+    const stranded = decline && x.voiceUuid ? (scan.stranded ?? []) : [];
+    if (decline && x.voiceUuid) {
+      /* Review pass 2 (owner decision: refuse while unreadable) — a repeat decline
+         refuses too, so no row of an unreadable book is left behind. */
+      if (scan.chainUnreadable) {
+        throw new RetryableForkError('A book in this series could not be read while the voice was being separated; try again.');
+      }
+      if (chainKey(stranded) !== chainKey(decline.plannedStranded ?? []) || stranded.some((f) => !locked.has(resolve(f.dir)))) {
+        throw new RetryableForkError('A book in this series changed while the voice was being separated; try again.');
+      }
+    }
+    const carried = stranded.length ? await carryStranded(stranded, x, writeCast) : [];
     const marked = withDeclineMark(x, decline?.fromBookId, undefined);
     /* PR #4007 pass 13 — a decline that needed no separation leaves the row on a
        uuid no other book's row holds but its followers: the decliner's own voice,
@@ -781,6 +903,7 @@ export async function separateVoiceLocked(
         await writeCast(bookDir, fresh);
       } catch (e) {
         if (own) await forgetSeparatedVoice(own);
+        await rollBack(carried);
         throw e;
       }
     }
@@ -791,14 +914,15 @@ export async function separateVoiceLocked(
      now is NOT skipped: skipping it would leave a row linked into the chain on the
      old voice while X moves. A chain that differs in any way from the plan's (a
      link that landed or left after the plan, a row that joined or left the voice)
-     is not the set the locks were taken for. Fail; nothing has been written. */
-  const locked = new Set(lockedDirs.map((d) => resolve(d)));
+     is not the set the locks were taken for. Fail; nothing has been written.
+     F1 — neither is a book that could not be read from the start, when it may be in
+     the chain (any book of X's series but a declined one): every separation, a
+     decline's or a design's (owner decision, review pass 1), refuses. */
   const unreadable = new Set(scan.unreadableDirs);
-  if (planned.some((f) => unreadable.has(resolve(f.dir)))) {
+  if (!unconfirmed && (planned.some((f) => unreadable.has(resolve(f.dir))) || scan.chainUnreadable)) {
     throw new RetryableForkError('A book in this series could not be read while the voice was being separated; try again.');
   }
-  const chainKey = (fs: LinkFollower[]) => fs.map((f) => `${resolve(f.dir)}|${f.characterId}`).sort().join('\n');
-  if (chainKey(scan.followers) !== chainKey(planned) || scan.followers.some((f) => !locked.has(resolve(f.dir)))) {
+  if (chainKey(followers) !== chainKey(planned) || followers.some((f) => !locked.has(resolve(f.dir)))) {
     throw new RetryableForkError('A book in this series changed while the voice was being separated; try again.');
   }
 
@@ -809,8 +933,10 @@ export async function separateVoiceLocked(
   const savesBefore = savesOf(oldKey);
   /* PR #4007 pass 13 — U' is recorded as separated before any row moves onto it
      (separated-voices.ts): a first design by any row on it is never shared. Every
-     failure below that leaves no row on U' takes the record back. */
-  await recordSeparatedVoice(newUuid);
+     failure below that leaves no row on U' takes the record back. An unconfirmed
+     isolation names its book and generation (review pass 4, 🟠1); a decline's record
+     names nobody. */
+  await recordSeparatedVoice(newUuid, unconfirmed ? await readBookOwnStamp(bookDir) : undefined);
   let copied: string[];
   try {
     copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
@@ -841,13 +967,13 @@ export async function separateVoiceLocked(
      row it links to is still on the old one. */
   const written: Array<{ dir: string; before: CastFile }> = [];
   try {
-    for (const dir of new Set(scan.followers.map((f) => resolve(f.dir)))) {
+    for (const dir of new Set(followers.map((f) => resolve(f.dir)))) {
       const cast = await readJson<CastFile>(castJsonPath(dir));
       if (!cast?.characters) continue;
-      const followerIds = new Set(scan.followers.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
+      const followerIds = new Set(followers.filter((f) => resolve(f.dir) === dir).map((f) => f.characterId));
       const linkIds = new Set(cast.characters.filter((c) => followerIds.has(c.id)).map((c) => c.voiceId ?? c.id));
       let changed = false;
-      const followerBookId = scan.followers.find((f) => resolve(f.dir) === dir)!.bookId;
+      const followerBookId = followers.find((f) => resolve(f.dir) === dir)!.bookId;
       const characters = cast.characters.map((c) => {
         if (!holds(c) || !linkIds.has(c.voiceId ?? c.id)) return c;
         changed = true;
@@ -867,7 +993,11 @@ export async function separateVoiceLocked(
       if (ownBookId) moved.push({ bookId: ownBookId, characterId: c.id });
       if (c.id !== characterId) movedSameBook.push(c.id);
     }
-    fresh.characters[idx] = withDeclineMark(fresh.characters[idx] as MarkedCharacter, decline?.fromBookId, oldUuid);
+    fresh.characters[idx] = withDeclineMark(
+      fresh.characters[idx] as MarkedCharacter,
+      decline?.fromBookId,
+      unconfirmed ? undefined : oldUuid,
+    );
     await writeCast(bookDir, fresh);
   } catch (e) {
     /* Put every follower already written back (still inside the locks, so nothing
@@ -897,10 +1027,10 @@ export async function separateVoiceLocked(
       w.separated = true;
     }
   }
-  await dropStagedPreviews(oldKey, moved);
+  await dropStagedPreviews(oldKey, moved, keepPreviewId);
   console.log(
     `[qwen-voice] ${characterId}: separated from ${oldKey} onto qwen-${newUuid}` +
-      ` (${scan.followers.length} follower(s) moved)`,
+      ` (${followers.length} follower(s) moved)`,
   );
   return { voiceUuid: newUuid, separated: true, row: fresh.characters[idx] as MarkedCharacter, movedSameBook };
 }
@@ -909,8 +1039,13 @@ export async function separateVoiceLocked(
    mustSeparateOnDesign): run the route's separation once, under the same locks,
    then design the row's own key. Caller holds the design lock. Returns the row's
    uuid after the step, and whether the locked re-decision did separate it (#4067). */
-async function separateDeclinedVoiceForDesign(bookDir: string, characterId: string): Promise<UuidStep> {
-  const plan = await separationPlan(bookDir, characterId);
+async function separateDeclinedVoiceForDesign(
+  bookDir: string,
+  characterId: string,
+  unconfirmed = false,
+  keepPreviewId?: string,
+): Promise<UuidStep> {
+  const plan = unconfirmed ? await ownBookPlan(bookDir, characterId) : await separationPlan(bookDir, characterId);
   const out = await withBookOps(plan.bookIds, (books) => {
     const own = books.find((b) => b.bookId === plan.bookIds[0]);
     if (!own || resolve(own.bookDir) !== resolve(bookDir)) {
@@ -919,8 +1054,15 @@ async function separateDeclinedVoiceForDesign(bookDir: string, characterId: stri
     return withCastLocks(
       books.map((b) => b.bookDir),
       () =>
-        separateVoiceLocked(bookDir, characterId, books.map((b) => b.bookDir), plan.followers, (dir, cast) =>
-          writeJsonAtomic(castJsonPath(dir), cast),
+        separateVoiceLocked(
+          bookDir,
+          characterId,
+          books.map((b) => b.bookDir),
+          plan.followers,
+          (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast),
+          undefined,
+          unconfirmed,
+          keepPreviewId,
         ),
     );
   });
@@ -928,6 +1070,110 @@ async function separateDeclinedVoiceForDesign(bookDir: string, characterId: stri
     throw new RetryableForkError('A book in this series was removed while the voice was being separated; try again.');
   }
   return { uuid: out.voiceUuid, separated: out.separated };
+}
+
+/* F8 (owner decision: "not until confirmed"; review passes 1-2) — in a book whose
+   cast is not confirmed, a design (base or emotion) never writes a key another
+   book's row uses: the analysis-time linker stamps an earlier book's uuid onto a
+   freshly analysed row, and that match may be wrong. Such a row (any other book's
+   row on its key, a follower included) moves onto a uuid of its own first, with a
+   copy of its voice's base family (the same step and locks as a declined row's
+   design separation, narrowed to this book): only this book's rows move and no other
+   book is written. The caller holds the design lock. `keepPreviewId` is a preview
+   the caller carries to the new key. */
+async function isolateUnconfirmedRow(bookDir: string, characterId: string, keepPreviewId?: string): Promise<UuidStep> {
+  const row = (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+  if (!row) return { uuid: undefined, separated: false };
+  const scan = await scanVoiceHolders(bookDir, row, voiceHeldBy(row));
+  if (!(await mustIsolateUnconfirmed(row as MarkedCharacter, scan, bookDir))) return { uuid: row.voiceUuid ?? undefined, separated: false };
+  return separateDeclinedVoiceForDesign(bookDir, characterId, true, keepPreviewId);
+}
+
+/* Review pass 2 — Keep (promote) in an unconfirmed book: a preview moves nothing, so
+   the row is isolated here, and the preview it staged under the old key goes with it
+   to the new one, whose id it returns (the promote then expects that id, not the
+   one the design answered). Only for a preview this row staged (anything else
+   promote answers itself). The caller holds the design lock.
+   Review pass 3: (D) a row with no uuid that nothing isolated is given one here
+   (a book-scoped mint, recorded as separated), because a preview mints none; (F) a
+   body the promote would refuse isolates nothing, and the row's own stale preview id
+   (its key moved since, e.g. an earlier Keep isolated it and then failed) is carried
+   to the key it is on now, so a retry lands. */
+async function isolateForKeep(
+  bookDir: string,
+  bookId: string,
+  characterId: string,
+  body: { previewVoiceId: string; sampleVoiceId: unknown; modelKey: unknown },
+): Promise<string | undefined> {
+  if (await bookCastConfirmedOrRetry(bookDir)) return undefined; // the common case reads no cast.json
+  if (typeof body.sampleVoiceId !== 'string' || !body.sampleVoiceId.trim() || !isTtsModelKey(body.modelKey)) return undefined;
+  const readRow = async () => (await readJson<CastFile>(castJsonPath(bookDir)))?.characters?.find((c) => c.id === characterId);
+  const row = await readRow();
+  if (!row) return undefined;
+  const staged = body.previewVoiceId;
+  const expected = previewVoiceIdFor(qwenStorageKey(row, characterId), bookId, characterId);
+  if (staged !== expected) {
+    if (!(await keysAreIsolationCopies(bookDir, staged, row, bookId, characterId))) return undefined;
+    /* Review pass 4 (🟠3) -- a retry after an earlier Keep carried the preview and then
+       failed: it already sits under the name the row expects now. */
+    if (!(await exists(qwenVoicePtPath(staged)))) return (await exists(qwenVoicePtPath(expected))) ? expected : undefined;
+  }
+  if (!(await exists(qwenVoicePtPath(staged)))) return undefined;
+  await isolateUnconfirmedRow(bookDir, characterId, staged);
+  let after = await readRow();
+  if (after && !after.voiceUuid) {
+    await mintBookVoiceUuid(bookDir, characterId, true);
+    after = await readRow();
+  }
+  if (!after) return undefined;
+  const next = previewVoiceIdFor(qwenStorageKey(after, characterId), bookId, characterId);
+  if (next === staged) return undefined;
+  await renameWithRetry(qwenVoicePtPath(staged), qwenVoicePtPath(next));
+  await renameWithRetry(qwenVoiceSidecarPath(staged), qwenVoiceSidecarPath(next)).catch(() => {});
+  await renameWithRetry(qwenVoiceWavPath(`${staged}__master`), qwenVoiceWavPath(`${next}__master`)).catch(() => {});
+  return next;
+}
+
+/* Review pass 4 (🟠3) -- Keep carries a preview the row staged under a key it has left
+   only when the row reached its current key by an isolation FROM that key: a BASE
+   preview (an emotion take is not the base, and promoting it would write the take over
+   the base), whose key's base `.pt` is byte-equal to the current key's (an isolation
+   copies the base family; a re-point to another row's voice, or any other move, leaves
+   a different file, or none). Anything else answers promote's own 400. */
+async function keysAreIsolationCopies(bookDir: string, staged: string, row: CastCharacter, bookId: string, characterId: string): Promise<boolean> {
+  if (!isOwnStalePreview(staged, bookId, characterId)) return false;
+  const stagedKey = staged.slice(0, staged.length - `${PREVIEW_SUFFIX}-${previewTag(bookId, characterId)}`.length);
+  if (VARIANT_EMOTIONS.some((e) => stagedKey.endsWith(`__${e}`))) return false;
+  const currentKey = qwenStorageKey(row, characterId);
+  if (stagedKey === currentKey) return false;
+  const readBase = (key: string) =>
+    readFile(qwenVoicePtPath(key)).catch((e: NodeJS.ErrnoException) => {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    });
+  try {
+    const [was, now] = await Promise.all([readBase(stagedKey), readBase(currentKey)]);
+    if (was && now) return was.equals(now);
+    if (was || now) return false;
+    /* Review pass 5 -- a row nobody designed has no base file at either key (the common
+       first design): the move is proven by the book's own separation record for the
+       row's uuid, which an isolation or a book-scoped mint writes. */
+    const stamp = await readBookOwnStamp(bookDir);
+    return !!(row.voiceUuid && stamp && (await isOwnSeparatedVoice(row.voiceUuid, stamp)));
+  } catch {
+    return false;
+  }
+}
+
+/* A state.json that cannot be read is not "unconfirmed" (review pass 1): the design
+   refuses and writes nothing. */
+async function bookCastConfirmedOrRetry(bookDir: string): Promise<boolean> {
+  try {
+    return await readBookCastConfirmed(bookDir);
+  } catch (err) {
+    console.error('[qwen-voice] book state unreadable at the design uuid step', err);
+    throw new RetryableForkError('This book could not be read right now; try again.');
+  }
 }
 
 /* The uuid step's answer: the row's uuid, and whether the step separated the row. */
@@ -1040,106 +1286,160 @@ async function ensureCharacterVoiceUuidStep(
   bookDir: string,
   characterId: string,
   seriesFilter?: { author: string; series: string },
+  /** Review pass 3 (C) — a mint in an unconfirmed book is recorded as separated. */
+  unconfirmed?: boolean,
 ): Promise<UuidStep> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
   if (!cast || !character) return { uuid: undefined, separated: false };
   if (await needsDesignSeparation(bookDir, character)) return separateDeclinedVoiceForDesign(bookDir, characterId);
-  return { uuid: await readOrMintVoiceUuid(bookDir, characterId, character, seriesFilter), separated: false };
+  return { uuid: await readOrMintVoiceUuid(bookDir, characterId, character, seriesFilter, unconfirmed), separated: false };
 }
+
+/* #4072 (owner decision: the second mint adopts the first one's uuid) — the series
+   mints in flight, by series and link id, each to the uuid it stamps on its row.
+   The design lock is per book, so two books of one series can mint the same
+   uuid-less link at once ("Design full cast" on two books); each minting its own
+   uuid let their walks race and split the link across two voices. */
+const seriesMints = new Map<string, Promise<string | undefined>>();
+const seriesMintKey = (series: { author: string; series: string }, linkId: string): string =>
+  JSON.stringify([series.author, series.series, linkId]);
 
 async function readOrMintVoiceUuid(
   bookDir: string,
   characterId: string,
   character: CastCharacter,
   seriesFilter?: { author: string; series: string },
+  unconfirmed?: boolean,
 ): Promise<string | undefined> {
   if (character.voiceUuid) return character.voiceUuid;
 
   if (seriesFilter) {
-    /* forEachMatchingCastCharacter takes its own per-book cast lock as it
-       walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
-       unlocked and delegating; it must not gain a lock of its own. */
     const linkId = character.voiceId ?? character.id;
-    const uuid = nanoid();
-    /* PR #4007 pass 11, P11-3 (owner decision: the mint copies before it stamps) —
-       a linked legacy row is stamped only once `qwen-<uuid>` holds a copy of the
-       legacy key's base family, so a stamped row always has its file: a design
-       that never lands (Design & compare then Cancel, a failed landing, a decline
-       in between) leaves every stamped book speaking its own voice. With nothing
-       to copy (nobody designed the legacy key) only the designing row is stamped.
-       The caller holds the design lock. */
-    /* P11-2 — the mint's key is saving until its walk ends (savingKeys). */
-    return whileSaving(`qwen-${uuid}`, async () => {
-      const legacyKey = `qwen-${linkId}`;
-      const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
-      if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
-        await removeFiles(copied);
-        /* Owner decision (share a first design): the landing shares it when it
-           writes the key's first file, under its locks (shareFirstDesign). */
-        return stampOwnRow(bookDir, characterId, uuid);
-      }
-      /* #4037 — the emotion variants travel with the base, before any row is stamped
-         (a failed copy removes its own files; the base copy goes too). */
-      /* What the mint wrote at each new-key variant file (refreshVariantCopies). */
-      const prints = new Map<string, string | null>();
-      try {
-        const variants = await copyVariantFamilies(legacyKey, `qwen-${uuid}`);
-        copied.push(...variants);
-        recordMintPrints(prints, variants);
-      } catch (e) {
-        await removeFiles(copied);
-        throw e;
-      }
-      /* A row that already has its own uuid keeps it: a separated row still shares
-         `voiceId` with the earlier book, and restamping it would orphan its own
-         designed voice. #4062 — `stampedAny` counts a book only once its cast.json
-         write has landed (`onWritten`): a write that fails, or a later row of the
-         same book that throws, leaves the copies with no book naming them. */
-      let stampedAny = false;
-      let stampedInBook = false;
-      const stamp = (c: CastCharacter): CastCharacter => {
-        if (c.voiceUuid) return c;
-        refreshVariantCopies(c, legacyKey, `qwen-${uuid}`, prints, copied);
-        stampedInBook = true;
-        return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
-      };
-      try {
-        await forEachMatchingCastCharacter(linkId, seriesFilter, stamp, undefined, () => {
-          if (stampedInBook) stampedAny = true;
-          stampedInBook = false;
-        });
-      } catch (e) {
-        /* A book stamped before the failure points at the copy, which is its own
-           voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
-        if (!stampedAny) await removeFiles(copied);
-        throw e;
-      }
-      /* The row's uuid as the walk left it, not the one minted here: a row a
-         decline stamped meanwhile keeps its own (#4028 (c)). P11-1 — the walk skips
-         every book whose cast is not confirmed, the designing book included (a
-         design from the Confirm screen), so a row the walk did not stamp is stamped
-         here, with its same-book rows on the link; every other book stamped holds the
-         copy, so nothing is left without its file even when the row is gone. */
-      const stampedFirst = stampedAny;
-      try {
-        const stamped = await stampOwnRow(bookDir, characterId, uuid, linkId, {
-          from: legacyKey,
-          to: `qwen-${uuid}`,
-          prints,
-          copied,
-        });
-        /* stampOwnRow wrote nothing (the row is gone, or already holds another uuid)
-           and the walk stamped no book: no row names the copies. */
-        if (!stampedFirst && stamped !== uuid) await removeFiles(copied);
-        return stamped;
-      } catch (e) {
-        if (!stampedFirst) await removeFiles(copied);
-        throw e;
-      }
-    });
+    const key = seriesMintKey(seriesFilter, linkId);
+    /* #4072 — a mint of this link already in flight: wait for it and take its uuid
+       onto this row (its walk has usually stamped the row already; stampOwnRow then
+       answers that uuid and writes nothing). Never a mint of its own, unless the
+       one in flight failed or left no uuid. Checked and registered with no await in
+       between, so two mints can never both miss each other. */
+    for (let inFlight = seriesMints.get(key); inFlight; inFlight = seriesMints.get(key)) {
+      /* #4072 (review pass 1) — a mint that stamped some books and then failed
+         still names its uuid (withStampedUuid): adopt that one, never a new one. */
+      const adopted = await inFlight.catch((e: unknown) => (e as { stampedVoiceUuid?: string } | undefined)?.stampedVoiceUuid);
+      if (adopted) return stampOwnRow(bookDir, characterId, adopted, linkId);
+    }
+    const minting = mintSeriesVoiceUuid(bookDir, characterId, linkId, seriesFilter);
+    seriesMints.set(key, minting);
+    try {
+      return await minting;
+    } finally {
+      if (seriesMints.get(key) === minting) seriesMints.delete(key);
+    }
   }
+  return mintBookVoiceUuid(bookDir, characterId, unconfirmed);
+}
 
+/* #4072 — a series mint's failure after it stamped a book carries the uuid it
+   stamped, so a mint waiting on it adopts that uuid rather than splitting the link. */
+function withStampedUuid(e: unknown, uuid: string | undefined): unknown {
+  if (!uuid || !(e instanceof Error)) return e;
+  return Object.assign(e, { stampedVoiceUuid: uuid });
+}
+
+/* The series mint proper (readOrMintVoiceUuid registers it as in flight). */
+async function mintSeriesVoiceUuid(
+  bookDir: string,
+  characterId: string,
+  linkId: string,
+  seriesFilter: { author: string; series: string },
+): Promise<string | undefined> {
+  /* forEachMatchingCastCharacter takes its own per-book cast lock as it
+     walks — a locked leaf (cast-lock.ts rule 1) — so this branch stays
+     unlocked and delegating; it must not gain a lock of its own. */
+  const uuid = nanoid();
+  /* PR #4007 pass 11, P11-3 (owner decision: the mint copies before it stamps) —
+     a linked legacy row is stamped only once `qwen-<uuid>` holds a copy of the
+     legacy key's base family, so a stamped row always has its file: a design
+     that never lands (Design & compare then Cancel, a failed landing, a decline
+     in between) leaves every stamped book speaking its own voice. With nothing
+     to copy (nobody designed the legacy key) only the designing row is stamped.
+     The caller holds the design lock. */
+  /* P11-2 — the mint's key is saving until its walk ends (savingKeys). */
+  return whileSaving(`qwen-${uuid}`, async () => {
+    const legacyKey = `qwen-${linkId}`;
+    const copied = await copyBaseFamily(legacyKey, `qwen-${uuid}`);
+    if (!copied.includes(qwenVoicePtPath(`qwen-${uuid}`))) {
+      await removeFiles(copied);
+      /* Owner decision (share a first design): the landing shares it when it
+         writes the key's first file, under its locks (shareFirstDesign). */
+      return stampOwnRow(bookDir, characterId, uuid);
+    }
+    /* #4037 — the emotion variants travel with the base, before any row is stamped
+       (a failed copy removes its own files; the base copy goes too). */
+    /* What the mint wrote at each new-key variant file (refreshVariantCopies). */
+    const prints = new Map<string, string | null>();
+    try {
+      const variants = await copyVariantFamilies(legacyKey, `qwen-${uuid}`);
+      copied.push(...variants);
+      recordMintPrints(prints, variants);
+    } catch (e) {
+      await removeFiles(copied);
+      throw e;
+    }
+    /* A row that already has its own uuid keeps it: a separated row still shares
+       `voiceId` with the earlier book, and restamping it would orphan its own
+       designed voice. #4062 — `stampedAny` counts a book only once its cast.json
+       write has landed (`onWritten`): a write that fails, or a later row of the
+       same book that throws, leaves the copies with no book naming them. */
+    let stampedAny = false;
+    let stampedInBook = false;
+    const stamp = (c: CastCharacter): CastCharacter => {
+      if (c.voiceUuid) return c;
+      refreshVariantCopies(c, legacyKey, `qwen-${uuid}`, prints, copied);
+      stampedInBook = true;
+      return withRekeyedVariants({ ...c, voiceUuid: uuid }, legacyKey, `qwen-${uuid}`);
+    };
+    try {
+      await forEachMatchingCastCharacter(linkId, seriesFilter, stamp, undefined, () => {
+        if (stampedInBook) stampedAny = true;
+        stampedInBook = false;
+      });
+    } catch (e) {
+      /* A book stamped before the failure points at the copy, which is its own
+         voice's bytes: it keeps them. With nothing stamped the copy is a stray. */
+      if (!stampedAny) await removeFiles(copied);
+      throw withStampedUuid(e, stampedAny ? uuid : undefined);
+    }
+    /* The row's uuid as the walk left it, not the one minted here: a row a
+       decline stamped meanwhile keeps its own (#4028 (c)). P11-1 — the walk skips
+       every book whose cast is not confirmed, the designing book included (a
+       design from the Confirm screen), so a row the walk did not stamp is stamped
+       here, with its same-book rows on the link; every other book stamped holds the
+       copy, so nothing is left without its file even when the row is gone. */
+    const stampedFirst = stampedAny;
+    try {
+      const stamped = await stampOwnRow(bookDir, characterId, uuid, linkId, {
+        from: legacyKey,
+        to: `qwen-${uuid}`,
+        prints,
+        copied,
+      });
+      /* stampOwnRow wrote nothing (the row is gone, or already holds another uuid)
+         and the walk stamped no book: no row names the copies. */
+      if (!stampedFirst && stamped !== uuid) await removeFiles(copied);
+      return stamped;
+    } catch (e) {
+      if (!stampedFirst) await removeFiles(copied);
+      throw withStampedUuid(e, stampedFirst ? uuid : undefined);
+    }
+  });
+}
+
+/* The book-scoped mint: a standalone book, or (F8) a book whose cast is not
+   confirmed. `recordSeparated` (the latter, review pass 3): the uuid is recorded as
+   separated before a row names it, so a later design of the row is not isolated
+   again (mustIsolateUnconfirmed). */
+async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSeparated?: boolean): Promise<string | undefined> {
   /* Book-scoped — the caller's design lock serialises only against OTHER
      design-lock holders (e.g. another design on this book), not against a
      non-design cast.json writer (e.g. cast-aliases), so the read above is
@@ -1156,6 +1456,8 @@ async function readOrMintVoiceUuid(
     const uuid = nanoid();
     const linkId = freshChar.voiceId ?? freshChar.id;
     const legacyKey = `qwen-${linkId}`;
+    /* Review pass 5 -- read before anything is copied: a throw here leaves no copies. */
+    const ownStamp = recordSeparated ? await readBookOwnStamp(bookDir) : undefined;
     /* #4037 — same as the series mint: the legacy key's base family and emotion
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
@@ -1185,9 +1487,11 @@ async function readOrMintVoiceUuid(
           dirty = true;
         }
       }
+      if (dirty && recordSeparated) await recordSeparatedVoice(uuid, ownStamp);
       try {
         if (dirty) await writeJsonAtomic(castJsonPath(bookDir), freshCast);
       } catch (e) {
+        if (dirty && recordSeparated) await forgetSeparatedVoice(uuid);
         await removeFiles(copied);
         throw e;
       }
@@ -1233,11 +1537,17 @@ function isOwnStalePreview(previewVoiceId: string, bookId: string, characterId: 
 /* #4028 — drop the previews the given rows staged under `oldKey` (base and every
    emotion), after a decline moved them off it. Another row's preview on the same
    key carries another tag and stays. Best-effort. */
-async function dropStagedPreviews(oldKey: string, rows: Array<{ bookId: string; characterId: string }>): Promise<void> {
+async function dropStagedPreviews(
+  oldKey: string,
+  rows: Array<{ bookId: string; characterId: string }>,
+  /** Review pass 2 — a Keep isolating its row carries this preview to the new key. */
+  keepPreviewId?: string,
+): Promise<void> {
   const files: string[] = [];
   for (const { bookId, characterId } of rows) {
     for (const designed of [oldKey, ...VARIANT_EMOTIONS.map((e) => `${oldKey}__${e}`)]) {
       const id = previewVoiceIdFor(designed, bookId, characterId);
+      if (id === keepPreviewId) continue;
       files.push(qwenVoicePtPath(id), qwenVoiceSidecarPath(id), qwenVoiceWavPath(`${id}__master`));
     }
   }
@@ -1407,6 +1717,9 @@ export interface DesignQwenVoiceResult {
       (the uuid step's separation, which also renamed its qwen slot and dropped its
       variants). A client cannot tell that from a first mint by the uuid alone. */
   separated?: boolean;
+  /** F8 — the design was shared with the series (its book's cast is confirmed); a
+      caller propagating the slot uses the series scope only then. */
+  seriesShared?: boolean;
   fellBackToDesignVoice?: boolean;
   fallbackReason?: 'not-installed' | 'corrupt';
 }
@@ -1724,7 +2037,8 @@ async function shareKeptDesign(
   characterId: string,
   writeCast: CastWriter,
 ): Promise<void> {
-  if (!seriesFilter) return;
+  /* F8 — a Keep in a book whose cast is not confirmed shares nothing. */
+  if (!seriesFilter || !own.state.castConfirmed) return;
   const row = (await readJson<CastFile>(castJsonPath(own.bookDir)))?.characters?.find((c) => c.id === characterId);
   if (!row) return;
   await shareFirstDesign({ bookDir: own.bookDir, bookId: own.bookId, seriesFilter }, first, row as MarkedCharacter, first.voiceId, others, writeCast);
@@ -1751,11 +2065,13 @@ async function landStagedDesign(
   watcher: { key: string },
   /** #4040 — a variant design: the base `rev` read when its render began. */
   variantBaseRev?: string,
+  /** F8 — the series a first design is shared with: none in an unconfirmed book. */
+  shareSeries?: { author: string; series: string },
 ): Promise<{ voiceId: string; url: string; voiceUuid?: string }> {
   const audition = (voiceName: string) =>
     voiceSampleFileName({ cacheScope: p.sampleVoiceId, modelKey: p.modelKey, text: calibrationText, voiceName });
   const moved = () => new RetryableForkError('This book moved while the voice was being designed; try again.');
-  const mayShare = !p.emotion && !p.preview && !!p.seriesFilter;
+  const mayShare = !p.emotion && !p.preview && !!shareSeries;
   /* The first-design rule for a row: on an ordinary series voice (its own uuid,
      not one "Don't reuse" created), and no file at its key yet (this write creates
      it). */
@@ -1776,7 +2092,7 @@ async function landStagedDesign(
     const voiceId = p.preview ? previewVoiceIdFor(designed, p.bookId, p.characterId) : designed;
     /* #4074 -- before anything is written: a refusal here leaves the key, its rev and
        every row's slots as they were. */
-    if (p.refuseIfSeriesCloned && !p.emotion && !p.preview && (await seriesClonedOnRowsVoice(row, p.seriesFilter, p.bookDir))) {
+    if (p.refuseIfSeriesCloned && !p.emotion && !p.preview && (await seriesClonedOnRowsVoice(row, shareSeries, p.bookDir))) {
       throw new SeriesCloneRefusedError();
     }
     const sharing = await firstDesignOf(row); // decided before the move creates the file
@@ -1810,7 +2126,7 @@ async function landStagedDesign(
       });
       if (slotted) await writeCast(p.bookDir, { ...cast, characters });
     }
-    if (sharing) await shareFirstDesign(p, sharing, row as MarkedCharacter, voiceId, others, writeCast);
+    if (sharing) await shareFirstDesign({ ...p, seriesFilter: shareSeries }, sharing, row as MarkedCharacter, voiceId, others, writeCast);
     const landedAudition = audition(voiceId);
     await rm(voiceSampleFilePath(landedAudition), { force: true });
     await rename(voiceSampleFilePath(audition(staging)), voiceSampleFilePath(landedAudition)).catch(() => {});
@@ -1819,7 +2135,7 @@ async function landStagedDesign(
   const planned = await firstDesignOf(
     (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId),
   );
-  const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, p.seriesFilter) : [];
+  const shareIds = planned ? await legacyKeyHolderBookIds(p.bookDir, planned.linkId, shareSeries) : [];
   let out: Awaited<ReturnType<typeof land>> | typeof BOOK_GONE = BOOK_GONE;
   if (shareIds.length) {
     out = await withBookOps([p.bookId, ...shareIds], async (books) => {
@@ -1909,6 +2225,8 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
   });
 
   const tag = watchTag(p.bookId, p.characterId);
+  /* F8 — the series this design shares with (none in an unconfirmed book). */
+  let shareSeries: { author: string; series: string } | undefined;
   return withDesignLock(p.bookDir, async () => {
     try {
       /* P11-5 — the key this design may land on, read with the anchor under the
@@ -1947,10 +2265,28 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       const now = (await readJson<CastFile>(castJsonPath(p.bookDir)))?.characters?.find((c) => c.id === p.characterId);
       if (!now) throw new CharacterGoneError();
       if (qwenStorageKey(now, p.characterId) !== watcher.key) throw new DesignVoiceChangedError();
-      const step = p.emotion
-        ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
-        : await ensureCharacterVoiceUuidStep(p.bookDir, p.characterId, p.seriesFilter);
-      const uuid = requireDesignVoiceUuid(p.character, !!p.emotion, step.uuid);
+      /* F8 (owner decision: "not until confirmed") — in a book whose cast is not
+         confirmed, a link may be a wrong auto-proposed match: a design there (base
+         or emotion) first moves a row whose key another book holds onto a uuid of
+         its own (isolateUnconfirmedRow), a base design mints the row's own uuid
+         (book-scoped), and nothing is shared with the series, neither the mint's
+         walk nor a first design. A state.json that cannot be read is not
+         "unconfirmed" (review pass 1): the design refuses and writes nothing. */
+      const confirmed = await bookCastConfirmedOrRetry(p.bookDir);
+      shareSeries = confirmed ? p.seriesFilter : undefined;
+      /* Review pass 2 — a preview moves nothing (it lands on a `-preview` sibling), so
+         it isolates nothing: Cancel must leave the row as it was. Keep isolates. */
+      if (!confirmed && !p.preview) await isolateUnconfirmedRow(p.bookDir, p.characterId);
+      /* Review pass 3 (D) -- a preview in an unconfirmed book mints and separates
+         nothing either: it stages under the row's current key, and Keep
+         (isolateForKeep) separates or mints and carries it. */
+      const stagedOnly = !confirmed && !!p.preview;
+      const step: UuidStep = stagedOnly
+        ? { uuid: now.voiceUuid ?? undefined, separated: false }
+        : p.emotion
+          ? await forkDeclinedVoiceUuidIfShared(p.bookDir, p.characterId)
+          : await ensureCharacterVoiceUuidStep(p.bookDir, p.characterId, shareSeries, !confirmed);
+      const uuid = stagedOnly ? step.uuid : requireDesignVoiceUuid(p.character, !!p.emotion, step.uuid);
       /* The uuid step's own move: a separation already moved the watcher, and a
          first mint gives a row that had no uuid its new key. A row that had one and
          now answers another, unannounced, was changed by some other writer; a link
@@ -1963,7 +2299,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
       if (after && (after.voiceId ?? after.id) !== watcher.linkId) throw new DesignVoiceChangedError();
       let landed: Awaited<ReturnType<typeof landStagedDesign>>;
       try {
-        landed = await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev);
+        landed = await landStagedDesign(p, voiceId, calibrationText, watcher, variantBaseRev, shareSeries);
       } catch (err) {
         if (err instanceof SeriesCloneRefusedError) {
           err.voiceUuid = uuid;
@@ -1971,7 +2307,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
         }
         throw err;
       }
-      return { ...rendered, ...landed, separated: step.separated || !!watcher.separated };
+      return { ...rendered, ...landed, separated: step.separated || !!watcher.separated, seriesShared: !!shareSeries };
     } catch (e) {
       await removeStaged(voiceId, stagedAudition);
       /* The sidecar cached the staged render's prompt under this one-off id; a failed
@@ -2229,7 +2565,11 @@ qwenVoiceRouter.post(
     if (
       emotion &&
       (characterHasClonedSlot(character) ||
-        (await seriesClonedOnRowsVoice(character, seriesInfo ?? undefined, bookDir)))
+        /* Review pass 4 (🟡4) -- an unconfirmed book shares nothing with the series (F8),
+           and its take is recorded in this book alone, so a clone on another book is not
+           one this write could touch: scan this book only (a torn confirmed mate would
+           otherwise refuse the take with a 500). */
+        (await seriesClonedOnRowsVoice(character, located.state?.castConfirmed === true ? (seriesInfo ?? undefined) : undefined, bookDir)))
     ) {
       return res.status(409).json({
         error: clonedVariantRefusal(character.name ?? characterId),
@@ -2243,7 +2583,7 @@ qwenVoiceRouter.post(
        (#1057). #4028: the design lands on the row's key as it stands when the
        render finishes (designQwenVoiceForCharacter). */
     try {
-      const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+      const { voiceId, url, voiceUuid, seriesShared } = await designQwenVoiceForCharacter({
         bookId,
         bookDir,
         seriesFilter: seriesInfo ?? undefined,
@@ -2264,13 +2604,14 @@ qwenVoiceRouter.post(
          drawer's Save. */
       if (emotion && body.preview !== true) {
         /* Propagate the variant across the series (linked cast) — book-scoped
-           only for a standalone. Mirrors the base-voice series scope. */
+           only for a standalone, or (F8) a book whose cast is not confirmed.
+           Mirrors the base-voice series scope. */
         const outcome = await persistEmotionVariant(
           bookDir,
           characterId,
           emotion,
           voiceId,
-          seriesInfo ?? undefined,
+          seriesShared ? (seriesInfo ?? undefined) : undefined,
         );
         if (outcome === 'skippedClone') {
           return res.status(409).json({
@@ -2525,6 +2866,18 @@ qwenVoiceRouter.post(
       .json({ voiceId: moved.realVoiceId, url: voiceSamplePublicUrl(moved.realFileName), voiceUuid: moved.voiceUuid });
     };
     const outcome = await withDesignLock(peeked.bookDir, async () => {
+      try {
+        const carried = await isolateForKeep(peeked.bookDir, bookId, characterId, {
+          previewVoiceId: typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '',
+          sampleVoiceId: typeof body.sampleVoiceId === 'string' ? body.sampleVoiceId.trim() : '',
+          modelKey: body.modelKey,
+        });
+        if (carried) body.previewVoiceId = carried;
+      } catch (e) {
+        if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
+        if (e instanceof CharacterGoneError) return res.status(404).json({ error: e.message });
+        throw e;
+      }
       const seriesInfo = peeked.state?.isStandalone === true ? null : await findAuthorSeriesForBookId(bookId);
       const row = seriesInfo
         ? (await readJson<CastFile>(castJsonPath(peeked.bookDir)).catch(() => undefined))?.characters?.find((c) => c.id === characterId)

@@ -33,7 +33,7 @@ import {
 } from '../analyzer/ollama-residency.js';
 import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
 import { withCapacityRetry, getCapacityWaiterCount } from '../gpu/capacity-retry.js';
-import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
+import { evictIdleQwenBase, freeKokoroForRenderSynth } from '../gpu/evict-idle-tts.js';
 import { coquiLanguageCode } from './voice-mapping.js';
 import { manifestSlotFor } from './clone-engines.js';
 import { sidecarLanguageName } from './language.js';
@@ -445,6 +445,8 @@ export class SidecarTtsProvider implements TtsProvider {
       maxAttempts: this.maxCapacityAttempts,
       isRenderSynth: renderSynth === true,
       evictIdleTts: (deviceKey, quiet) => evictIdleQwenBase({ modelKey, deviceKey, signal, quiet }),
+      freeKokoroForRender:
+        renderSynth === true ? () => freeKokoroForRenderSynth({ modelKey, isRenderSynth: true, signal }) : undefined,
     });
     if (!response.ok) await throwForResponse(response);
     return response;

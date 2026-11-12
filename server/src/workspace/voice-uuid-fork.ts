@@ -34,6 +34,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { BOOKS_ROOT, castJsonPath, castReuseCarryoverJsonPath, stateJsonPath } from './paths.js';
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
+import type { OwnStamp } from './separated-voices.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { qwenStorageKey } from '../tts/voice-mapping.js';
@@ -96,13 +97,44 @@ async function readOtherBookCast<T>(dir: string): Promise<T | null | typeof UNRE
 export async function readBookId(dir: string): Promise<string | undefined> {
   return (await readBookIdentity(dir)).bookId;
 }
-async function readBookIdentity(dir: string): Promise<{ bookId?: string; series?: { author: string; series: string } }> {
+async function readBookIdentity(
+  dir: string,
+): Promise<{ bookId?: string; series?: { author: string; series: string }; castConfirmed: boolean; editEpoch: string }> {
   const state = await readStateJsonWithRecovery(stateJsonPath(dir));
   const inSeries = state && state.isStandalone !== true && state.author && state.series;
   return {
     bookId: state?.bookId || undefined,
     series: inSeries ? { author: state.author as string, series: state.series as string } : undefined,
+    castConfirmed: state?.castConfirmed === true,
+    editEpoch: state?.editEpoch ?? '',
   };
+}
+
+/* F8 (owner decision: "not until confirmed") — is this book's cast confirmed? A
+   design in a book whose cast is not shares nothing with the series. Throws like
+   any state read. */
+export async function readBookCastConfirmed(dir: string): Promise<boolean> {
+  return (await readBookIdentity(dir)).castConfirmed;
+}
+
+/* Review pass 4 (🟠1) -- the book and generation an unconfirmed design records a uuid
+   against (separated-voices.ts `OwnStamp`). `editEpoch` is rotated by Re-parse and
+   Start fresh and left alone by Confirm; a state.json that predates it reads ''.
+   Undefined when the book has no bookId (nothing to name). Throws like any state read. */
+export async function readBookOwnStamp(dir: string): Promise<OwnStamp | undefined> {
+  const { bookId, editEpoch } = await readBookIdentity(dir);
+  return bookId ? { bookId, editEpoch } : undefined;
+}
+
+/* A book whose cast.json (or state.json) could not be read, with what its
+   state.json still says about it, if anything (`known`: it was read), and its cast
+   rows when only its state.json could not be read. */
+interface UnreadableBook {
+  dir: string;
+  known: boolean;
+  bookId?: string;
+  series?: { author: string; series: string };
+  rows?: CastRow[];
 }
 
 interface OtherBook {
@@ -117,9 +149,12 @@ interface OtherBook {
    library. A book whose cast.json OR state.json cannot be read is not in `books`
    (without its bookId no link can be matched to it) and is reported in
    `unreadableDirs` so each caller decides what not knowing means. */
-async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; unreadableDirs: string[] }> {
+async function loadOtherBooks(
+  selfDir: string,
+): Promise<{ books: OtherBook[]; unreadableDirs: string[]; unreadable: UnreadableBook[] }> {
   const out: OtherBook[] = [];
   const unreadableDirs: string[] = [];
+  const unreadable: UnreadableBook[] = [];
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -128,6 +163,13 @@ async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; un
         const cast = await readOtherBookCast<CastFile>(dir);
         if (cast === UNREADABLE) {
           unreadableDirs.push(resolve(dir));
+          /* F1 — its state.json may still say which book and series it is. */
+          try {
+            const id = await readBookIdentity(dir);
+            unreadable.push({ dir: resolve(dir), known: true, bookId: id.bookId, series: id.series });
+          } catch {
+            unreadable.push({ dir: resolve(dir), known: false });
+          }
           continue;
         }
         if (!cast?.characters?.length) continue;
@@ -137,13 +179,14 @@ async function loadOtherBooks(selfDir: string): Promise<{ books: OtherBook[]; un
         } catch (e) {
           console.warn(`[voice-uuid-fork] skipping unreadable state.json in ${dir}: ${(e as Error).message}`);
           unreadableDirs.push(resolve(dir));
+          unreadable.push({ dir: resolve(dir), known: false, rows: cast.characters });
           continue;
         }
         out.push({ dir, bookId: identity.bookId, series: identity.series, rows: cast.characters });
       }
     }
   }
-  return { books: out, unreadableDirs };
+  return { books: out, unreadableDirs, unreadable };
 }
 
 export interface LinkFollower {
@@ -245,6 +288,17 @@ export interface VoiceScan {
   holderBookIds: Set<string>;
   /** Folders of the other books that could not be read (anything could be in them). */
   unreadableDirs: string[];
+  /** F1 — a book that could not be read may be in X's follower chain: it is in X's
+      series (or its series cannot be told), and it is not a book X declines. */
+  chainUnreadable?: boolean;
+  /** Review pass 3 (C) — a book that could not be read may hold X's voice: it is in X's
+      series (or its series cannot be told) and its rows, when they read, include one
+      on the voice. An unconfirmed design isolates on this (never refuses). */
+  unreadableMayHold?: boolean;
+  /** F1 — rows a decline LEFT BEHIND: the chain that leads down to X among rows
+      still on the voice X left (a uuid on X's `declinedVoiceUuids`, or, for a
+      legacy decline, X's legacy key). Only for a row that carries the marker. */
+  stranded?: LinkFollower[];
 }
 
 /* One bounded pass over the library: who else holds X's voice, split into X's
@@ -254,14 +308,48 @@ export interface VoiceScan {
    never followers (chainFollowers). */
 export async function scanVoiceHolders(
   bookDir: string,
-  character: { id: string; declinedVoiceFrom?: string[] | null },
+  character: {
+    id: string;
+    voiceId?: string | null;
+    voiceUuid?: string | null;
+    declinedVoiceFrom?: string[] | null;
+    declinedVoiceUuids?: string[] | null;
+  },
   holds: VoiceHolds,
   fromBookId?: string,
 ): Promise<VoiceScan> {
   const selfDir = resolve(bookDir);
-  const { books, unreadableDirs } = await loadOtherBooks(selfDir);
+  const { books, unreadableDirs, unreadable } = await loadOtherBooks(selfDir);
   const declined = new Set([...(character.declinedVoiceFrom ?? []), ...(fromBookId ? [fromBookId] : [])]);
   const followers = await chainFollowers(selfDir, character, holds, books, declined);
+  /* F1 (owner decision: refuse while unreadable) — every link is series-scoped
+     (link-prior, the linker and Confirm's matcher all are), so only a book of X's
+     own series can be in its chain. A declined book is never a follower (P10-1),
+     and a book with no bookId cannot be one either. A book whose state.json cannot
+     be read is judged by its cast rows when those read (review pass 1: does a row
+     on X's voice link to X or a follower's book?); one whose cast.json cannot be
+     read either counts. */
+  const selfIdentity = await readBookIdentity(selfDir);
+  const selfSeries = selfIdentity.series;
+  const sameSeries = (s?: { author: string; series: string }): boolean =>
+    !!s && !!selfSeries && s.author === selfSeries.author && s.series === selfSeries.series;
+  const unreadableMayHold = unreadable.some((b) =>
+    b.known ? sameSeries(b.series) : b.rows ? b.rows.some(holds) : true,
+  );
+  /* F1 — the rows a decline left behind (before this rule, a decline went through
+     with a chain member unreadable): linked down to X, on the voice X left. */
+  const leftUuids = character.declinedVoiceUuids ?? [];
+  const linkId = character.voiceId ?? character.id;
+  const leftBehind: VoiceHolds = (y) =>
+    y.voiceUuid ? y.voiceUuid !== character.voiceUuid && leftUuids.includes(y.voiceUuid) : !leftUuids.length && (y.voiceId ?? y.id) === linkId;
+  const chainBookIds = new Set([selfIdentity.bookId, ...followers.map((f) => f.bookId)].filter(Boolean) as string[]);
+  const linksIntoChain = (rows: CastRow[]): boolean =>
+    rows.some((y) => (holds(y) || leftBehind(y)) && chainBookIds.has((y.matchedFrom as MatchedFrom)?.bookId ?? ''));
+  const chainUnreadable = unreadable.some((b) =>
+    b.known ? !!b.bookId && !declined.has(b.bookId) && sameSeries(b.series) : b.rows ? linksIntoChain(b.rows) : true,
+  );
+  const stranded =
+    character.declinedVoiceFrom?.length && character.voiceUuid ? await chainFollowers(selfDir, character, leftBehind, books, declined) : [];
   const followed = new Set(followers.map((f) => rowKey(f.dir, f.characterId)));
   const holderBookIds = new Set<string>();
   let heldElsewhere = false;
@@ -272,7 +360,7 @@ export async function scanVoiceHolders(
       if (b.bookId) holderBookIds.add(b.bookId);
     }
   }
-  return { followers, heldElsewhere, holderBookIds, unreadableDirs };
+  return { followers, heldElsewhere, holderBookIds, unreadableDirs, chainUnreadable, unreadableMayHold, stranded };
 }
 
 /* PR #4007 pass 11 (owner decision: share a first design) — the bookIds of the

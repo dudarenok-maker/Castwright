@@ -80,6 +80,12 @@ describe('describeVramBlockers', () => {
     expect(describeVramBlockers({ qwenLoaded: true, generationActive: true, blockedOpIsRender: true })).toEqual([]);
   });
 
+  it('#4079: a refused render-own synth still reads true after the Kokoro exception — Kokoro may be back (fallback line), wait/pause', () => {
+    const out = describeVramBlockers({ kokoroLoaded: true, generationActive: true, blockedOpIsRender: true });
+    expect(out).toHaveLength(1);
+    expect(out[0].remedy).toMatch(/wait for the render to finish, or pause it/);
+  });
+
   it('lists Kokoro only when both Coqui and Kokoro are resident', () => {
     expect(describeVramBlockers({ coquiLoaded: true, kokoroLoaded: true })).toHaveLength(1);
   });

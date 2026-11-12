@@ -157,6 +157,11 @@ export interface CapacityRetryOpts {
       later poll asks again. A render in flight answers `false`, which spends
       the latch. */
   evictIdleTts?: (deviceKey: string, quiet: QuietPollState) => Promise<boolean | 'declined'>;
+  /** #4079 — the render-own-synth exception to the lever above: free an
+      on-GPU Kokoro (never a Qwen tier) when a render's Quality synth is
+      refused. Only wired for a chapter render's own call; one-shot per call.
+      Returns true when Kokoro was unloaded (the loop then retries at once). */
+  freeKokoroForRender?: (deviceKey: string) => Promise<boolean>;
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
@@ -342,6 +347,7 @@ export async function withCapacityRetry(
   const quiet: QuietPollState = { minGapMs: pollMs, sawRepair: false, idleSince: null, epoch: null };
   let evicted = false;
   let evictedTts = false;
+  let freedKokoroForRender = false;
   let waiting = false;
   /* Set once the generic maxAttempts bound is reached AND isDesignResident()
      reported true at that moment — from then on this call is polling on the
@@ -411,6 +417,12 @@ export async function withCapacityRetry(
           evictedTts = true;
           if (freedTts) continue; // immediate retry after freeing VRAM
         }
+      }
+
+      /* #4079 — a render's own Quality synth may free Kokoro (only). One-shot per call. */
+      if (!freedKokoroForRender && opts.freeKokoroForRender) {
+        freedKokoroForRender = true;
+        if (await opts.freeKokoroForRender(noCap.deviceKey)) continue;
       }
 
       if (usingDesignBudget) {

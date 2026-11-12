@@ -317,12 +317,16 @@ describe('#3992 — Book Three follows Book Two when Book Two forks', () => {
     expect(book1Intact()).toBe(true);
   });
 
-  it('an unreadable follower cast is skipped, not a failure: Book Two still forks and Book One is safe', async () => {
+  /* Owner decision (PR #4097 review pass 1, (a)): the design-time separation
+     refuses like a decline while a book that may be in the chain cannot be read,
+     instead of separating Book Two and leaving Book Three behind on u_shared. */
+  it('an unreadable follower cast refuses the fork ("try again."): nothing moves and Book One is safe', async () => {
     seedChain();
     writeFileSync(castPath('Book Three'), '{"characters":[{"id":');
     const res = await design('Book Two');
-    expect(res.status).toBe(200);
-    expect(readRow('Book Two').voiceUuid).not.toBe('u_shared');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readRow('Book Two').voiceUuid).toBe('u_shared');
     expect(readFileSync(castPath('Book Three'), 'utf8')).toBe('{"characters":[{"id":');
     expect(book1Intact()).toBe(true);
   });

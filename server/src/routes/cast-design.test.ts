@@ -2452,3 +2452,115 @@ describe('cast-design — bulk design never overwrites a voice picked mid-synthe
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
   });
 });
+
+/* F8 (#4096), review pass 1 — the bulk job ("Design full cast") propagates a base
+   design's qwen slot series-wide only when the design core shared it, i.e. only
+   in a book whose cast is confirmed. */
+describe('F8 — Design full cast in an unconfirmed book keeps the slot in that book', () => {
+  const otherDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, 'Book Zero');
+  function writeOtherBook() {
+    mkdirSync(join(otherDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_zero', manuscriptId: 'm_b_zero', title: 'Book Zero', author: AUTHOR, series: SERIES,
+        seriesPosition: 0, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
+        chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(otherDir(), 'manuscript.txt'), 'placeholder');
+    /* The same character, linked by voiceId, never designed (no uuid, no slot). */
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'aria', name: 'Aria', role: 'lead', color: 'rose', voiceId: 'v_aria' }] }),
+    );
+  }
+  const setConfirmed = (confirmed: boolean) => {
+    const p = join(bookDir, '.audiobook', 'state.json');
+    writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, 'utf8')), castConfirmed: confirmed }));
+  };
+  const otherSlot = () =>
+    JSON.parse(readFileSync(join(otherDir(), '.audiobook', 'cast.json'), 'utf8')).characters[0].overrideTtsVoices;
+  afterEach(() => rmSync(otherDir(), { recursive: true, force: true }));
+
+  it('unconfirmed: the linked row in a confirmed book takes no slot', async () => {
+    writeOtherBook();
+    setConfirmed(false);
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).filter((e) => e.type === 'character_designed').map((e) => e.characterId)).toEqual(['aria']);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+    expect(otherSlot()).toBeUndefined();
+  });
+
+  it('control: confirmed, the linked row takes the slot as before', async () => {
+    writeOtherBook();
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(otherSlot()?.qwen?.name).toBe('qwen-v_aria');
+  });
+});
+
+/* F8 (#4096), review pass 2 — the same scope for the bulk job's EMOTION variants: the
+   take propagates series-wide only when the design core shared the design (a book
+   whose cast is confirmed). */
+describe('F8 — Design full cast emotion variants follow the core\'s sharing decision', () => {
+  const marlow = {
+    id: 'marlow',
+    name: 'Marlow',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'v_marlow',
+    voiceStyle: 'a charismatic, quick-witted young man',
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
+  };
+  const otherDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, 'Book Zero');
+  /* The same character in another book of the series, on the same (legacy) base. */
+  function writeOtherBook() {
+    mkdirSync(join(otherDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_zero', manuscriptId: 'm_b_zero', title: 'Book Zero', author: AUTHOR, series: SERIES,
+        seriesPosition: 0, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
+        chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(otherDir(), 'manuscript.txt'), 'placeholder');
+    writeFileSync(join(otherDir(), '.audiobook', 'cast.json'), JSON.stringify({ characters: [{ ...marlow }] }));
+  }
+  const otherSlot = () =>
+    JSON.parse(readFileSync(join(otherDir(), '.audiobook', 'cast.json'), 'utf8')).characters[0].overrideTtsVoices.qwen;
+  beforeEach(() => {
+    writeBookOnDisk([...characters, marlow]);
+    writeOtherBook();
+  });
+  afterEach(() => rmSync(otherDir(), { recursive: true, force: true }));
+  const runVariant = () =>
+    request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, scope: 'variants', characterIds: [], variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }] });
+
+  it('the core did not share the design (an unconfirmed book): the linked row in another book takes no take', async () => {
+    vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/voice-samples/qwen-v_marlow__angry.mp3',
+      seriesShared: false,
+    });
+    expect((await runVariant()).status).toBe(200);
+    expect(charById('marlow')?.overrideTtsVoices?.qwen?.variants?.angry?.name).toBe('qwen-v_marlow__angry');
+    expect(otherSlot().variants).toBeUndefined();
+  });
+
+  it('control: the core shared the design, the linked row takes the take as before', async () => {
+    vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/voice-samples/qwen-v_marlow__angry.mp3',
+      seriesShared: true,
+    });
+    expect((await runVariant()).status).toBe(200);
+    expect(otherSlot().variants?.angry?.name).toBe('qwen-v_marlow__angry');
+  });
+});

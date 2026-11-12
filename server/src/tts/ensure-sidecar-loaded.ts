@@ -293,10 +293,12 @@ export async function reconcileResidentQwenTiers(
   const dropKokoro = keep.keepKokoro === false && h.kokoro_loaded === true;
   if (dropKokoro) evictions.push(unload('kokoro'));
   if (evictions.length === 0) return false;
-  console.info(
-    `[generation] VRAM reconcile: evicting unused Qwen tier(s) ` +
-      `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B ' : ''}${dropKokoro ? 'Kokoro' : ''}]`.trim(),
-  );
+  const tiers = [
+    !keep.keep06 && h.qwen_loaded ? '0.6B' : '',
+    !keep.keep17 && h.qwen_base17_loaded ? '1.7B' : '',
+    dropKokoro ? 'Kokoro' : '',
+  ].filter(Boolean);
+  console.info(`[generation] VRAM reconcile: evicting unused Qwen tier(s) [${tiers.join(' ')}]`);
   await Promise.allSettled(evictions);
   return allEvicted;
 }

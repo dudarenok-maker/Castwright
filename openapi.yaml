@@ -4838,6 +4838,113 @@ paths:
             path-free sentence; one ending "try again." means a book in the series
             was unreadable, moved or changed during the step and a retry can work.
 
+  /api/books/{bookId}/cast/link-prior:
+    post:
+      summary: Link a character to the same character in a prior book of the series (manual continuity link)
+      operationId: linkPriorCharacter
+      description: |
+        The user declares that a character in this book is the same person as one
+        in another book of the same series (same author and series, neither
+        standalone). The source character's name and aliases are added to the
+        target's aliases, the source takes the target's `voiceId` (unless its voice
+        is locked or tuned), the target's designed qwen voice is copied onto a
+        source with none, and the target's profile fills the source's gaps.
+
+        A link to a book the character had declined ("Don't reuse") clears that
+        decline. #4095 / review passes 1-3 — when it clears a decline, or links a
+        character to the book it already links to (the same character, or another
+        one of that book; designed before its book's cast was confirmed), the
+        character moves onto the target's voice: its `voiceUuid` (none when the
+        target has none) and its qwen slot, variants included. Clearing a decline
+        also moves the same-book characters on its voice and the characters in other
+        books that follow it. A re-point to a character of the book it already links
+        to always adopts the new target's voice, whoever else holds the old one, and
+        writes that character only: never a follower, a same-book sibling still
+        linked to the old character, or a character of the target book. Not for a
+        locked or tuned character, nor across a cloned voice on either side. If the
+        followers of a cleared decline changed between the plan and the locked step,
+        or a book that may hold one cannot be read, the request answers 500 with a
+        retry sentence and writes nothing.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceCharacterId, targetBookId, targetCharacterId]
+              properties:
+                sourceCharacterId: { type: string }
+                targetBookId: { type: string }
+                targetCharacterId: { type: string }
+      responses:
+        '200':
+          description: The link the client records, and what the server changed on the source character
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [matchedFrom]
+                properties:
+                  matchedFrom:
+                    type: object
+                    required: [bookId, characterId, bookTitle, confidence]
+                    properties:
+                      bookId: { type: string }
+                      characterId: { type: string }
+                      bookTitle: { type: string }
+                      confidence: { type: number }
+                  voiceId:
+                    type: string
+                    description: The voiceId the character keeps (its own when locked or tuned).
+                  profile:
+                    type: object
+                    description: Profile content merged from the target onto the source. Present only when the merge changed something.
+                    properties:
+                      evidence: { $ref: '#/components/schemas/Character/properties/evidence' }
+                      attributes: { type: array, items: { type: string } }
+                      description: { type: string }
+                      tone: { $ref: '#/components/schemas/Character/properties/tone' }
+                      gender: { $ref: '#/components/schemas/Character/properties/gender' }
+                      ageRange: { $ref: '#/components/schemas/Character/properties/ageRange' }
+                  voice:
+                    type: object
+                    description: Present only when the link moved the character onto the target's voice (#4095). The client mirrors it onto the character and onto `movedCharacterIds`.
+                    required: [voiceUuid, qwen, movedCharacterIds]
+                    properties:
+                      voiceUuid:
+                        type: string
+                        nullable: true
+                        description: The target's voiceUuid; null when it has none (the character then renders the target's legacy key).
+                      qwen:
+                        type: object
+                        nullable: true
+                        description: The target's qwen slot (the shape of a `Character.overrideTtsVoices` slot), variants included; null when it has none.
+                        required: [name]
+                        properties:
+                          name: { type: string }
+                          libraryUuid: { type: string }
+                          provenance: { type: string, enum: [designed, cloned, imported] }
+                          variants:
+                            type: object
+                            additionalProperties:
+                              type: object
+                              required: [name]
+                              properties:
+                                name: { type: string }
+                      movedCharacterIds:
+                        type: array
+                        items: { type: string }
+                        description: Other characters in the same book that were on the character's voice and moved with it.
+        '400':
+          description: A required field is missing, or the target is the same book
+        '404':
+          description: A book or character was not found, or the target is not a series-mate
+        '409':
+          description: A book has no cast on disk yet
+        '500':
+          description: The followers changed or a book could not be read while the link was being saved; a retry can work
   /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
     post:
       summary: "Reject an orphaned-id reconciliation (\"not the same character\") — #2040 Task 17"

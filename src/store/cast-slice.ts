@@ -737,9 +737,18 @@ export const castSlice = createSlice({
           gender?: Character['gender'];
           ageRange?: Character['ageRange'];
         };
+        /* F7 — the server moved the row back onto the voice of the book it had
+           declined: mirror its uuid (null: none) and qwen slot (null: none), so the
+           autosave this action triggers writes them, not the voice it left. */
+        voice?: {
+          voiceUuid: string | null;
+          qwen: NonNullable<Character['overrideTtsVoices']>['qwen'] | null;
+          /* Review pass 1 — same-book rows on its voice that moved with it. */
+          movedCharacterIds?: string[];
+        };
       }>,
     ) => {
-      const { characterId, matchedFrom, voiceId, profile } = a.payload;
+      const { characterId, matchedFrom, voiceId, profile, voice } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
@@ -748,6 +757,17 @@ export const castSlice = createSlice({
         c.matchFactors = undefined;
         c.voiceId = voiceId ?? c.voiceId;
         c.voiceState = 'reused';
+      }
+      if (voice) {
+        const moved = new Set(voice.movedCharacterIds ?? []);
+        for (const row of s.characters) {
+          if (row !== c && !moved.has(row.id)) continue;
+          if (voice.voiceUuid) row.voiceUuid = voice.voiceUuid;
+          else delete row.voiceUuid;
+          const { qwen: _left, ...otherSlots } = row.overrideTtsVoices ?? {};
+          void _left;
+          row.overrideTtsVoices = voice.qwen ? { ...otherSlots, qwen: voice.qwen } : otherSlots;
+        }
       }
       if (profile) {
         if (profile.evidence !== undefined) c.evidence = profile.evidence;

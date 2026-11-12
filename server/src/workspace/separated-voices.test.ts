@@ -66,6 +66,25 @@ describe('separated-voices', () => {
     expect(await mod.isSeparatedVoice('uUnreadable')).toBe(false);
   });
 
+  it('review pass 4: a stamped record is "own" only for the book and edit epoch it names', async () => {
+    const own = { bookId: 'b1', editEpoch: 'e1' };
+    await mod.recordSeparatedVoice('uStamped', own);
+    expect(await mod.isSeparatedVoice('uStamped')).toBe(true); // every other reader still sees a record
+    expect(await mod.isOwnSeparatedVoice('uStamped', own)).toBe(true);
+    expect(await mod.isOwnSeparatedVoice('uStamped', { bookId: 'b2', editEpoch: 'e1' })).toBe(false);
+    expect(await mod.isOwnSeparatedVoice('uStamped', { bookId: 'b1', editEpoch: 'e2' })).toBe(false);
+  });
+
+  it('review pass 4: an empty ("Don\'t reuse"), absent or unparseable record is never own', async () => {
+    const own = { bookId: 'b1', editEpoch: '' };
+    await mod.recordSeparatedVoice('uEmpty');
+    expect(await mod.isOwnSeparatedVoice('uEmpty', own)).toBe(false);
+    expect(await mod.isOwnSeparatedVoice('uAbsentOwn', own)).toBe(false);
+    writeFileSync(recordPath('uGarbage'), '{not json');
+    expect(await mod.isOwnSeparatedVoice('uGarbage', own)).toBe(false);
+    expect(await mod.isSeparatedVoice('uGarbage')).toBe(true);
+  });
+
   it('a uuid cannot name a path outside the record folder', async () => {
     await mod.recordSeparatedVoice('../escape').catch(() => {}); // refused or sanitised, never outside
     expect(existsSync(join(workspaceRoot, 'voices', 'escape'))).toBe(false);
