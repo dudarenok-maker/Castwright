@@ -287,10 +287,20 @@ describe('installShutdownSignals (#4054)', () => {
     }
   });
 
-  it('defaults the platform to the running one: SIGHUP only on win32', () => {
-    const target = new EventEmitter();
-    installShutdownSignals(vi.fn(), { target });
-    expect(target.listenerCount('SIGHUP')).toBe(process.platform === 'win32' ? 1 : 0);
+  it.each([
+    ['win32', 1],
+    ['linux', 0],
+    ['darwin', 0],
+  ])('defaults the platform to the running one (%s): SIGHUP listeners %i', (platform, expected) => {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const target = new EventEmitter();
+      installShutdownSignals(vi.fn(), { target });
+      expect(target.listenerCount('SIGHUP')).toBe(expected);
+    } finally {
+      Object.defineProperty(process, 'platform', real);
+    }
   });
 
   it('each signal is logged and routed to the shutdown path with its name', () => {
