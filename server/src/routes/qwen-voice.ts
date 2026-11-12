@@ -2550,6 +2550,15 @@ qwenVoiceRouter.post(
        is gated: a base design on this route writes `qwen-<voiceUuid>.pt` and
        persists no override, so it never touches the clone.
 
+       #4104 -- WHY a declined row's base design is not scanned here (the stream
+       route passes `refuseIfSeriesCloned`, this one does not): this route is the
+       Design & compare flow, and nothing in it retargets a row. A preview writes
+       only a `-preview` file; promote-voice writes only files; the cast.json write
+       is the drawer's Save, `PUT /api/voices/:voiceId/override`, which refuses a
+       clone on the row's new uuid (#4069: hasClonedSlotAmongMatches scoped to the
+       rows on that uuid, plus applyOverrideToCastFiles's own check). Pinned end to
+       end by qwen-voice.design-compare-clone-gate.test.ts.
+
        Sits here (not immediately after the emotion-shape 400 above) so it
        runs AFTER the persona/sampleVoiceId/modelKey 400 validators below and
        reuses `isStandalone`/`seriesInfo`, computed once for this purpose
