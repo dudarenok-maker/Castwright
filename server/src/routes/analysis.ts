@@ -1323,7 +1323,9 @@ type RunLedgers = { kind: 'main' } | { kind: 'subset'; own: RunAddedLedger; ownP
     the persist itself wrote (`written`) is always sent (PR #4103 pass 4 P4-1), because the
     job's copy is no base for it - the persist's own patch, or a route, has moved the file
     since, and an entry that equals the copy would otherwise be dropped (by `clearLedger`
-    in the same op, or by the merge's delete). The same principle as R54's decisions base. */
+    in the same op, or by the merge's delete). The same principle as R54's decisions base.
+    R55 (PR #4103 pass 5): a merge is refused while a registered job runs, so the mid-run
+    merge both halves guard against is defence in depth. */
 function ledgerDelta(
   before: RunAddedLedger,
   next: Readonly<Record<string, LedgerEntry | null>>,
@@ -1755,7 +1757,8 @@ function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknow
     from and last saved. A decision the persist left as `base` holds it, and which the file
     no longer holds, was deleted by a route during the run (a fold-bucket merge, P2-1 (a))
     and stays deleted: re-adding it would make every later run on the cache re-apply it.
-    A decision this persist added or changed is still sent. */
+    A decision this persist added or changed is still sent. R55 (PR #4103 pass 5): that
+    route is refused while a registered job runs, so this is defence in depth. */
 export function persistDecisionsTransform(
   decisions: Readonly<Record<string, MatchDecision>>,
   droppedIds: ReadonlyArray<string> = [],
@@ -2501,7 +2504,8 @@ async function patchCacheInFailureCatch(
    `X-n1`) is left alone too; only an id with no decision yet, a join of itself or of its
    history survivor, or the survivor's own `new` (the plan the merge re-targeted), follows
    the merge. Lock-free reads of cast.json and the history, so it is safe under the `book`
-   lock and inside the cache op. */
+   lock and inside the cache op. R55 (PR #4103 pass 5): a merge is refused while a registered
+   job runs, so this is defence in depth, as `collapseMidRunMerges` below is. */
 export async function resolveCurrentIds<S extends { characterId: string }>(
   bookDir: string | undefined,
   remint: Readonly<Record<string, string>>,
@@ -2569,7 +2573,11 @@ async function mergedAwayIds(
    which would pair it with a same-named sibling). The in-memory plan follows the merge
    (`retargetPlanForMerge`, as the merge route did to the cache's), so the persist, the
    dedup constraints and the fold's protected ids all see it. `null` when nothing was
-   merged away (or there is no plan or book dir). */
+   merged away (or there is no plan or book dir).
+   R55 (PR #4103 pass 5) — no route reaches this for a registered job any more: every
+   cast-identity write (a merge, an accepted suggestion, an orphan link, ...) answers 409
+   `book_busy` while the run's `runBookJob` token is held. It stays as defence in depth, for
+   a merge that slips past that gate (a run with no `bookId` runs unregistered). */
 async function collapseMidRunMerges(a: {
   bookDir: string | undefined;
   roster: CharacterOutput[];

@@ -10020,7 +10020,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast yet */
+            /**
+             * @description Book has no cast yet; or `{ error, code: book_busy }` while an analysis
+             *     job is registered for the book (R55, #4031): a merge waits until the
+             *     analysis finishes. Nothing was written.
+             */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13536,7 +13540,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast on disk yet */
+            /** @description Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13591,7 +13595,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast on disk yet */
+            /** @description Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -13646,7 +13650,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Book has no cast on disk yet */
+            /** @description Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;

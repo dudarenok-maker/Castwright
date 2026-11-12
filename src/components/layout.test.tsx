@@ -6062,6 +6062,35 @@ describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291
     expect(mergeCharactersMock).toHaveBeenCalledWith({ bookId: 'A', sourceId: 'eliza', targetId: 'other' });
     expect(getBookStateMock.mock.calls.length).toBeGreaterThan(reads);
   });
+
+  /* R55 (PR #4103 pass 5) — the server refuses a merge while an analysis runs (one started
+     from another device, or seen by a stale tab). It takes the refused cast PUT's path: the
+     read-only toast, the era latched so the cast reads as read-only, and no crash. */
+  it('a merge answered 409 book_busy shows the read-only toast and latches the cast read-only', async () => {
+    getBookStateMock.mockImplementation(async (id: string) => bookStateFor(id, null));
+    getBookBusyMock.mockImplementation(async () => ['analysis']);
+    try {
+      const store = makeStore();
+      openAt(store, 'A');
+      renderLayoutAt(store, 'A');
+      await waitFor(() => expect(store.getState().manuscript.bookId).toBe('A'));
+      const before = store.getState().cast.characters.map((c) => c.id);
+      mergeCharactersMock.mockRejectedValueOnce(
+        Object.assign(new Error('This book is busy (analysing).'), { code: 'book_busy' }),
+      );
+      act(() => {
+        store.dispatch(uiActions.setOpenProfileId('eliza'));
+      });
+      fireEvent.click(await screen.findByTestId('mock-profile-merge'));
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.some((t) => t.dedupeKey === 'cast-read-only')).toBe(true),
+      );
+      expect(store.getState().cast.analysisEra?.A).toBeDefined();
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(before);
+    } finally {
+      getBookBusyMock.mockImplementation(async () => []);
+    }
+  });
 });
 
 describe('Layout — a full read issued before the gate cleared never lands stale (plan 291, #4031 rounds 2-3)', () => {

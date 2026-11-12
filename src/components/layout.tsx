@@ -43,7 +43,7 @@ import {
   castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
-import { rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { CastEditsPausedStatus } from './cast-edits-paused-banner';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
@@ -2805,8 +2805,11 @@ export function Layout() {
                         res = await api.mergeCharacters({ bookId, sourceId, targetId });
                       } catch (err) {
                         /* Plan 291 (C3) — a failed merge may have finished its
-                           other writes: re-read the cast. */
-                        void dispatch(rehydrateCastAfterAnalysis(bookId));
+                           other writes: re-read the cast. R55 — a merge refused
+                           while an analysis runs takes the read-only path instead. */
+                        if (!dispatch(handleCastIdentityBusy(bookId, err))) {
+                          void dispatch(rehydrateCastAfterAnalysis(bookId));
+                        }
                         throw err;
                       }
                       dispatch(castActions.applyMerge({ characters: res.characters }));

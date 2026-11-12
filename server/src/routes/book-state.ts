@@ -1131,6 +1131,18 @@ export function busySentence(
     : `This book is busy (${what}). Stop it or wait for it to finish, then replace its manuscript.`;
 }
 
+/* R55 (PR #4103 pass 5, owner ruling 2026-11-12) — a cast-identity write (one that changes
+   the roster's id set, or writes merge / `supersededBy` history) is refused while an analysis
+   job is registered for the book, the same signal the whole-slice cast PUT below uses. Call it
+   INSIDE the write's own book-op span, before any read or write: a registration takes book-op
+   (`runBookJob`), so a job cannot register between this check and the write. A write that only
+   touches voice, style or decline markers, and a suggestion dismissal, never calls it. null
+   when the write may go ahead. */
+export function castIdentityBusyRefusal(bookId: string): { error: string; code: 'book_busy' } | null {
+  const kinds = bookJobKinds(bookId);
+  return kinds.includes('analysis') ? { error: busySentence(kinds, 'cast-save'), code: 'book_busy' } : null;
+}
+
 /* #3711 — the 409 for each refusal the sanctioned movers raise. Every body is
    `{ error: <sentence>, code }`; none carries a path. null = not one of ours. */
 function bookOpRefusal(

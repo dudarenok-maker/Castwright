@@ -1911,7 +1911,10 @@ paths:
         '404':
           description: Book or character not found
         '409':
-          description: Book has no cast yet
+          description: |
+            Book has no cast yet; or `{ error, code: book_busy }` while an analysis
+            job is registered for the book (R55, #4031): a merge waits until the
+            analysis finishes. Nothing was written.
 
   /api/books/{bookId}/cast/tier:
     post:
@@ -4996,7 +4999,7 @@ paths:
         '500':
           description: Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
     delete:
       summary: Undo a rejected orphaned-id reconciliation (#2092/#2089)
       operationId: undoRejectOrphanMatch
@@ -5033,7 +5036,7 @@ paths:
         '500':
           description: Failed to restore the forgotten alias entry, or to durably remove the rejection — retry
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
 
   /api/books/{bookId}/cast/{characterId}/link-orphan-match:
     post:
@@ -5080,7 +5083,7 @@ paths:
         '500':
           description: Failed to durably record the alias — retry, the write is idempotent
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
 
   /api/books/{bookId}/annotate-emotion:
     post:

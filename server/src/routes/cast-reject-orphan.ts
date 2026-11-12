@@ -240,6 +240,7 @@ import {
 import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castRejectOrphanRouter = Router();
 
@@ -364,6 +365,9 @@ castRejectOrphanRouter.post(
        for the ride inside this span, mirroring cast-merge.ts's
        retireCharacterId precedent. */
     withCastLock(bookDir, async () => {
+      /* R55 — a history write: refused while an analysis runs, inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return res.status(409).json(busy);
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({
@@ -568,6 +572,9 @@ castRejectOrphanRouter.delete(
        POST above, so it takes the same per-book lock. It was written before
        withCastLock existed and the guard test is what surfaced it. */
     withCastLock(bookDir, async () => {
+      /* R55 — a history write: refused while an analysis runs, inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return res.status(409).json(busy);
       const cast = await readJson<CastFile>(castJsonPath(bookDir));
       if (!cast?.characters?.length) {
         return res.status(409).json({

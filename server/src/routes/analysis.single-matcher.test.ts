@@ -4039,6 +4039,54 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(ids(readCast(b.bookDir)).filter((id) => id.startsWith('unknown-male'))).toEqual(['unknown-male']);
   });
 
+  /* ---- PR #4103 pass 5, R55: an identity write is refused while the job is registered ---- */
+
+  /* The reviewer's P5-1 timing: the merge fires just after the persist released its cast lock
+     (`castIoSpy.mapOutcome`) and before the job's ledger writes. The job is still registered
+     there: `runBookJob` holds its token until `startMain` / `startSubset` has awaited the
+     whole job and its drain (analysis.ts). So the merge is refused, and the background group
+     is still the run's own row on the next run. The other tests in this file drive the job
+     unregistered, which is what keeps the earlier race defences under test. */
+  it('R55 / P5-1: a bucket merge timed just after the persist is refused, and the group survives on run 3', async () => {
+    const b = seed(
+      [{ ...NARR }, pr('anna', 'Anna'), pr('lord-vane', 'Lord Vane', { voiceState: 'locked' })],
+      undefined,
+      `${NEUTRAL}\n\nThe Jogger waved.`,
+    );
+    const jogger = fr('the-jogger', 'The Jogger', { role: 'minor', gender: 'male', evidence: [{ quote: 'The Jogger waved' }] });
+    const FRESH = { roster: [NARR, fr('anna', 'Anna'), jogger], speakerId: two('anna', 'the-jogger') };
+    expect(done(await run(b.manuscriptId, b.bookDir, 'main', FRESH))).toBe(true);
+    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+    const { runBookJob } = await import('../workspace/book-jobs.js');
+    const bookOp = await import('../workspace/book-op-lock.js');
+    let merge: request.Response | undefined;
+    castIoSpy.mapOutcome = async (o) => {
+      castIoSpy.mapOutcome = undefined;
+      merge = await mergeRoute(b, 'unknown-male', 'lord-vane');
+      return o;
+    };
+    let events: Sent[] = [];
+    try {
+      const reg = await runBookJob(b.bookId, 'analysis', async () => {
+        events = await go(b, FRESH, { seedCache: false });
+      });
+      if (reg === bookOp.BOOK_GONE) throw new Error('test setup: book not found');
+      await reg.done;
+    } finally {
+      castIoSpy.mapOutcome = undefined;
+    }
+    expect(merge?.status).toBe(409);
+    expect(merge?.body.code).toBe('book_busy');
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+    expect(entryOf(b, 'unknown-male')).toEqual({ state: 'added-once' });
+    /* Run 3: the bucket is still the run's own row, so its lines stay on it. */
+    expect(done(await go(b, FRESH, { seedCache: false }))).toBe(true);
+    expect(ids(readCast(b.bookDir))).toContain('unknown-male');
+    expect(editLines(b)).toEqual({ anna: 5, 'unknown-male': 4 });
+  });
+
   /* ---- F2: a run after a main run deletes nothing by the earlier run's ledger ---- */
 
   const entryOf = (b: HarnessBook, id: string): unknown => readCache(b.manuscriptId)?.addedRows?.[id];

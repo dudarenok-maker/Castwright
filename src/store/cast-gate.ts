@@ -35,9 +35,13 @@ import { api } from '../lib/api';
 import { castActions, type CastApplyMeta } from './cast-slice';
 import { analysisActions, ANALYSIS_STREAM_LIVE_QUERY, type AnalysisStreamSnapshot } from './analysis-slice';
 import { beginFullRead, castWrittenSince, flushBookPersistence } from './persistence-middleware';
+import { notificationsActions } from './notifications-slice';
 import {
+  CAST_READ_ONLY_DEDUPE_KEY,
+  CAST_READ_ONLY_MESSAGE,
   REQUEST_CAST_REHYDRATE,
   busyPollDelay,
+  requestCastRehydrate,
   pollBookBusy,
   selectCastReadOnly,
   snapshotRunning,
@@ -142,6 +146,24 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
     });
     flights.set(bookId, flight);
     return flight;
+  };
+}
+
+/** R55 (PR #4103 pass 5) — the server refuses a cast-identity route (a merge, an accepted
+    suggestion, ...) with 409 `book_busy` while an analysis holds the book: one started from
+    another device, or seen by a tab that has not caught up. It takes the refused cast PUT's
+    path (persistence-middleware.ts): the read-only toast, the era latched (the banner and the
+    read-only cast), and a re-read once the run is over. True when `err` was that refusal, so
+    the caller raises no failure toast and no re-read of its own. */
+export function handleCastIdentityBusy(bookId: string, err: unknown): GateThunk<boolean> {
+  return (dispatch) => {
+    if ((err as { code?: unknown } | null)?.code !== 'book_busy') return false;
+    dispatch(
+      notificationsActions.pushToast({ kind: 'error', message: CAST_READ_ONLY_MESSAGE, dedupeKey: CAST_READ_ONLY_DEDUPE_KEY }),
+    );
+    dispatch(castActions.latchAnalysisEra({ bookId }));
+    dispatch(requestCastRehydrate(bookId));
+    return true;
   };
 }
 

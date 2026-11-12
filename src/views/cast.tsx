@@ -47,7 +47,7 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { distinctDriftChapterCount } from '../store/revisions-slice';
-import { rehydrateCastAfterAnalysis } from '../store/cast-gate';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis } from '../store/cast-gate';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -1259,6 +1259,8 @@ export function CastView({
     try {
       merged = (await api.acceptMergeSuggestion(bookId, sourceId, targetId))?.characters;
     } catch (err) {
+      /* R55 — refused while an analysis runs: the read-only path, and keep the card. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return;
       /* Plan 291 (C3) — a failed accept may have finished its other writes:
          re-read the cast, and keep the card. */
       console.error('[cast] merge-suggestion accept failed', err);

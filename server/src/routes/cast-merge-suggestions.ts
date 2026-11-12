@@ -32,6 +32,7 @@ import {
   requestFailureMessageFs,
 } from '../workspace/file-lock.js';
 import { performCastMerge, didCastMergeApply } from './cast-merge.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castMergeSuggestionsRouter = Router();
 
@@ -126,6 +127,9 @@ castMergeSuggestionsRouter.post(
     let outcome;
     try {
       outcome = await withBookOp(bookId, async ({ bookDir, state }) => {
+        /* R55 — refused while an analysis runs, checked inside this book-op span. */
+        const busy = castIdentityBusyRefusal(bookId);
+        if (busy) return res.status(409).json(busy);
         let merged: Awaited<ReturnType<typeof performCastMerge>>;
         try {
           merged = await performCastMerge({ bookId, bookDir, state, sourceId, targetId });

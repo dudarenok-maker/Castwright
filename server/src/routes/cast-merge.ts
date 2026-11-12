@@ -37,6 +37,7 @@ import { retargetPlanForMerge } from '../store/plan-overlay.js';
 import { unionNotLinkedTo } from '../store/cast-name-match.js';
 import type { NotSamePersonRecord } from '../store/reanalysis-types.js';
 import { normaliseForMatch } from './analysis.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
@@ -527,10 +528,14 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   try {
     /* #3711 — book-op outermost (inside the try so its own acquisition timeout
        takes the curated-failure seam below, like every other lock timeout). */
-    const result = await withBookOp(bookId, ({ bookDir, state }) =>
-      performCastMerge({ bookId, bookDir, state, sourceId, targetId }),
-    );
+    const result = await withBookOp(bookId, async ({ bookDir, state }) => {
+      /* R55 — refused while an analysis runs, checked inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return busy;
+      return performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+    });
     if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    if ('code' in result) return res.status(409).json(result);
     return res.json(result);
   } catch (err) {
     const e = err as { status?: number; error?: string };

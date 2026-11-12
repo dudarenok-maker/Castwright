@@ -4456,12 +4456,16 @@ async function realMergeCharacters({
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Character merge failed (${res.status}).`);
+    /* R55 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Character merge failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -4521,12 +4525,16 @@ async function realAcceptMergeSuggestion(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Accept merge-suggestion failed (${res.status}).`);
+    /* R55 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Accept merge-suggestion failed (${res.status}).`), { code });
   }
   return res.json();
 }
