@@ -786,7 +786,10 @@ Design rationale:
   records the old id before the new one takes over; any path that joins on a
   `characterId` from manuscript attribution or a frozen render resolves it
   through `buildCastResolver` (`server/src/store/cast-resolve.ts`) rather than
-  a raw `.get()`. Don't add a second id matcher or a second id-history field.
+  a raw `.get()`. Don't add a second id matcher or a second id-history field. A
+  catch-all bucket's history entry (a merge of `unknown-male` / `unknown-female`) is
+  render-only: `followableHistory()` keeps it out of every matching, planning and
+  retirement read.
 
 ## Testing discipline (REQUIRED for every change)
 
