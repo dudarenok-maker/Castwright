@@ -293,7 +293,8 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        Record the retirement through the same choke point every other
        id-losing path uses, so the resolver (§4.3) picks it up at render time.
        Kind `'user'` (a deliberate merge), so a later run's matcher joins the
-       source's id onto the survivor.
+       source's id onto the survivor. A fold bucket source is retired too, but
+       its entry is render-only: see R56 below.
 
        Lock order: this runs INSIDE the cast lock, and `retireCharacterId`
        takes `cast-id-history` beneath it — `cast` -> `cast-id-history`, the
@@ -318,21 +319,22 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
       parkedError = err;
       hasParkedError = true;
     };
-    /* R53 (PR #4103 pass 4, owner ruling 2026-11-12) — a merge of a fold bucket
-       (`unknown-male` / `unknown-female`) is ONE-SHOT: the bucket's lines move to the
-       target above, and nothing records the merge for anything to follow later. So it
-       is NOT retired. That is correct under #2040's rule ("any path that changes a
-       persisted character id calls `retireCharacterId`"): the bucket id is a shared
-       slot the fold fills on every run, not a persisted character identity, so this
-       merge changes no character's id. A later run's background lines land on a fresh
-       bucket, a downgrade into the bucket lands on the bucket, and a user delete of a
-       re-added bucket sticks (R4). Its cached plan decisions and its ledger entry go
+    /* R53 (PR #4103 pass 4) and R56 (pass 5, owner rulings 2026-11-12) — a merge of a
+       fold bucket (`unknown-male` / `unknown-female`) is ONE-SHOT for later runs: the
+       bucket's lines move to the target above, and no matching, planning or retirement
+       path follows the merge afterwards. It IS retired (R56, reversing R53's "no
+       record" half), as on `main`: the chapters already rendered with the bucket's lines,
+       and with any character downgraded into it before (whose entry the retirement
+       repoints), persist the bucket id, and the history entry is what resolves them to
+       the target. The entry is render-only: `followableHistory()` keeps it out of every
+       matching, planning and retirement read, so a later run's background lines land on
+       a fresh bucket and a downgrade into the bucket lands on the bucket; the persist's
+       reclaim moves it to `displaced` once the bucket is live again, and a user delete of
+       a re-added bucket sticks (R4). Its cached plan decisions and its ledger entry go
        with it in the cache op below. */
     const sourceIsBucket = sourceId === MALE_BUCKET_ID || sourceId === FEMALE_BUCKET_ID;
     try {
-      const historyResult = sourceIsBucket
-        ? { droppedSelfLoopRejections: [], droppedNotSamePerson: [] }
-        : await retireCharacterId(bookDir, sourceId, targetId, 'user');
+      const historyResult = await retireCharacterId(bookDir, sourceId, targetId, 'user');
       /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
          cast-id-history.json and the one-sided `notLinkedTo` edge on
          cast.json) are created together and must be destroyed together (see

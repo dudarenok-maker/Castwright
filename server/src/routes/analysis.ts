@@ -1830,10 +1830,10 @@ async function applyPlannedPersistOutcome(a: {
        lose to it (no tie, no warning). Drop it here, last, so it can't survive past the
        same write cycle that reintroduced the live row. The dropped entries are reported
        so a future banner can flag their segments as needs-your-decision (§4.6, Wave 3). */
-    /* R53 (PR #4103 pass 4): a live fold bucket reclaims its id like any row, so a legacy
-       `unknown-* -> X` entry (a bucket merge recorded by `main` or by this release's
-       earlier commits; a merge of a bucket records nothing now) moves to `displaced`, as
-       on `main`. Nothing followed it in the meantime (`followableHistory`). */
+    /* R53 (PR #4103 pass 4): a live fold bucket reclaims its id like any row, so an
+       `unknown-* -> X` entry (a bucket merge's render-only record, R56, or one `main`
+       wrote) moves to `displaced`, as on `main`. Nothing followed it in the meantime
+       (`followableHistory`). */
     const displacedByReclaim = await dropSupersededIdsReclaimedByLiveCast(writeDir, liveIds);
     /* #2040 Task 14 review item 2a — operator-visible. The dropped pairs are also
        persisted (item 2b, cast-id-history.ts's `displaced`), so this line is a

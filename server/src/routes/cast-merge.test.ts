@@ -1289,7 +1289,7 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
     expect(readCacheFile().matchPlan!.decisions).toEqual({ 'raw-o': other });
   });
 
-  it('R53 (PR #4103 pass 4): a merge of a fold bucket is one-shot - its lines move, and no identity record is left', async () => {
+  it('R53 / R56 (PR #4103 passes 4-5): a merge of a fold bucket moves its lines and leaves a render-only record, as main did', async () => {
     const u = uniq();
     const tgt = `r53-tgt-${u}`;
     const down = `r53-down-${u}`;
@@ -1306,9 +1306,11 @@ describe('cast-merge — single matcher (#4031 Task 13)', () => {
     expect(castRow('unknown-male')).toBeUndefined();
     const { loadCastIdHistory } = await import('../store/cast-id-history.js');
     const h = await loadCastIdHistory(bookDir);
-    /* No entry for the bucket, and the downgrade's entry is not repointed onto the target. */
-    expect(h.supersededBy).not.toHaveProperty('unknown-male');
-    expect(h.supersededBy[down]).toBe('unknown-male');
+    /* R56: the bucket is retired onto the target and the downgrade's entry is repointed with
+       it, so both ids' rendered lines resolve to the target. Matching never follows the
+       bucket key (`followableHistory`, pinned in cast-id-history.test.ts). */
+    expect(h.supersededBy['unknown-male']).toBe(tgt);
+    expect(h.supersededBy[down]).toBe(tgt);
     /* The bucket's ledger entry goes; the target's stays. */
     expect(readCacheFile().addedRows).toEqual({ [tgt]: { state: 'added-once' } });
   });

@@ -383,9 +383,9 @@ export async function loadCastIdHistoryWithStatus(
 /** R53 (PR #4103 pass 4, owner ruling 2026-11-12) — the one place that keeps a catch-all
  *  bucket id (`unknown-male` / `unknown-female`) out of every history a matching, planning or
  *  retirement path follows. A bucket is a shared slot, not a persisted character identity, so
- *  a merge of it is one-shot and records nothing (`cast-merge.ts`). An `unknown-* -> X` entry
- *  can therefore only be a legacy one, written by `main` before this release or by this
- *  release's earlier commits, and it is never followed: by the matcher and the plan
+ *  a merge of it is one-shot for later runs (`cast-merge.ts`). Its `unknown-* -> X` entry
+ *  (R56, pass 5: recorded again, as on `main`, so the bucket's rendered lines resolve to X)
+ *  is render-only, as is a legacy one, and it is never followed: by the matcher and the plan
  *  (`toMatchHistory`), by the persist overlay and the mid-run merge collapse (their resolvers,
  *  `analysis-cast-io.ts` / `analysis.ts`), or by `retireCharacterId`'s target dereference.
  *  It is not deleted here: the persist's reclaim (`dropSupersededIdsReclaimedByLiveCast`)
