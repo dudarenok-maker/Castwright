@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-11-12
 owner: null
 ---
 
 # 291 — Re-analysis: one authoritative cast matcher (#4031)
 
-> Status: active. Implemented on `fix/server-4031-single-matcher` (Tasks 1–29); on-box
+> Status: stable (shipped 2026-11-12, PR #4103). Implemented on `fix/server-4031-single-matcher` (Tasks 1–29); on-box
 > acceptance owed (register row B109, see Ship notes). Revised 2026-11-08 after three
 > assumption-checker rounds, an owner-authorised focused review of the client save path, and the
 > owner's and coordinator's rulings recorded below.
@@ -1869,7 +1869,15 @@ chapter splitting, and the fe-11 class (tabs that missed the run). `remapCjkHono
 
 ## Ship notes
 
-Shipped date and merge SHA: (filled in on merge, when this plan moves to `archive/`).
+Shipped 2026-11-12 via PR #4103 (branch `fix/server-4031-single-matcher`, head `8382303c` before
+this archive commit); the PR link is the durable pointer to the merge.
+
+- Owner rulings after review changed the design in four places: R53 made a catch-all bucket merge
+  one-shot, R55 made the server refuse cast-identity writes (merge, accept, orphan link and
+  reject, unlink-alias, Add character, add-from-roster) with 409 `book_busy` while an analysis
+  runs, R56 reversed R53's "no record" half so a bucket merge records `supersededBy` again
+  (matching still ignores it), and R57 had the UI disable every R55-refused control while the
+  cast is read-only. See rulings 22 to 26 above.
 
 - Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50, R53, R54,
   R55, R56) are recorded under *Spec conflicts found* above; the spec's acceptance 13, 14, 20,
@@ -1886,7 +1894,7 @@ Shipped date and merge SHA: (filled in on merge, when this plan moves to `archiv
 
 ## Handover brief (copy to #4031)
 
-**Plan:** `docs/features/291-reanalysis-single-matcher.md`.
+**Plan:** `docs/features/archive/291-reanalysis-single-matcher.md`.
 **Spec:** `docs/superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md` (Rules 1–13,
 Acceptance 1–25).
 

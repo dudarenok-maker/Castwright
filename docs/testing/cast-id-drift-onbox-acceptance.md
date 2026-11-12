@@ -1133,7 +1133,7 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 ## 12. Plan 291 (#4031) — re-analysis only adds to the cast; the cast is read-only until it reloads
 
 Register row: [B109](onbox-acceptance-register.md) (Group B). Plan:
-[`docs/features/291-reanalysis-single-matcher.md`](../features/291-reanalysis-single-matcher.md)
+[`docs/features/archive/291-reanalysis-single-matcher.md`](../features/archive/291-reanalysis-single-matcher.md)
 ("Manual acceptance walkthrough"). Spec:
 [`docs/superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md`](../superpowers/specs/2026-11-06-reanalysis-single-matcher-design.md).
 
