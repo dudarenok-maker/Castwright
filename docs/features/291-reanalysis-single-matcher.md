@@ -388,23 +388,47 @@ snapshot.
 20. **R49 — a fold bucket settles by its own id only** (PR #4103 pass 1 O1; overturns the earlier ruling, R45 in the run ledger, that let a bucket
     name-match a same-named character). A fresh
     `unknown-male` / `unknown-female` row joins only a live prior row with its own id, never by
-    history, name or surname; otherwise it is a `new` row under its bucket id. An existing
-    `unknown-* -> X` user entry (a user merge of an old bucket) is the user's record: ignored for
-    matching and not displaced when the bucket comes back live. Merging a bucket into a character
-    stays allowed (a per-book reassignment); it no longer leaks into later runs, including when the
-    merge lands while a run is going. The merge route deletes a bucket source's cached plan
-    decisions instead of re-targeting them, and the persist counts a bucket row as covered only by
-    a decision that outputs its own id (PR #4103 pass 2 P2-1). The persist's overlay never resolves
-    a bucket roster row through the history to a survivor: merged away, it is re-added under its
-    own id; deleted (no survivor), it stays gone (R4). The main job's terminal ledger write sends
-    only what changed against the job's copy as the persist read it, so a mid-run merge's ledger
-    delete is not undone (PR #4103 pass 3 P3-1).
+    history, name or surname; otherwise it is a `new` row under its bucket id. Merging a bucket
+    into a character stays allowed, and is a one-shot per-book reassignment (R53, item 22): the
+    bucket's lines move to the character in this book, nothing records the merge, and later
+    re-analyses put their background lines on a fresh bucket. A legacy `unknown-* -> X` entry is
+    never followed, and is displaced when the bucket comes back live. *Superseded for buckets
+    by R53:* pass 1's "ignored for matching, not displaced". The merge route deletes a bucket
+    source's cached plan decisions instead of re-targeting them, and the persist counts a bucket
+    row as covered only by a decision that outputs its own id (PR #4103 pass 2 P2-1). A merge
+    that lands while a run is going is, for that run, a delete of the bucket: its background
+    lines go to the narrator (rule 13). This is reachable only from a second device or a direct
+    API call, since the analysing tab disables merge. The next run adds a fresh bucket, because
+    neither the merge's ledger delete nor its decision delete is written back (pass 3 P3-1, R54).
+    *Superseded by R53:* pass 3's overlay branches that re-added a merged-away bucket through
+    the history record.
 21. **R50 — Start fresh carries the run ledger** (PR #4103 pass 1 F2). `addedRows` and
     `runAddedPairs` survive the cache clear, so the rows a stopped run added stay droppable by the
     next run (rule 11). Everything else Start fresh discards is still discarded. The carry is
     written straight after the clear, before any step that can throw, and the main job's fold
     does not protect a joined row whose entry is `run-owned` with an unchanged fingerprint, so a
     one-off the next run hears again folds as a fresh row would (PR #4103 pass 2 P2-3).
+22. **R53 — a catch-all bucket merge is one-shot** (owner, 2026-11-12, PR #4103 pass 4). This
+    was chosen because R49's "keep the entry but ignore it" produced a new bug in every review
+    pass.
+    - `POST /cast/merge` with an `unknown-male` / `unknown-female` source moves the bucket's lines
+      and drops its cached decisions and ledger entry.
+    - It writes no `supersededBy` entry and no other retirement. The bucket id is a shared slot,
+      not a persisted character identity, so #2040's retirement rule does not apply.
+    - Legacy `unknown-* -> X` entries are never followed by the matcher, the plan, the persist
+      overlay, the mid-run collapse or `retireCharacterId`'s target dereference. The one rule
+      that enforces this is `followableHistory` in `cast-id-history.ts`.
+    - The persist's reclaim displaces a legacy entry once the bucket is live, as on `main`.
+    - Consequences: a later downgrade into the bucket lands on the bucket (P4-2), and a deleted
+      re-added bucket stays gone (R4, M-b).
+    - `buildCastResolver`'s render and attribution callers are unchanged.
+23. **R54 — the persist never re-adds a plan decision a route deleted mid-run** (controller,
+    PR #4103 pass 4). `persistDecisionsTransform` takes the job's own copy of the plan as its
+    base. A decision the persist left unchanged, and which the file no longer holds, stays
+    deleted. It shares one principle with P4-1: a ledger write always sends the entry of a row
+    its persist wrote, and takes the delta only for entries the run merely carried.
+    - The principle: a write never takes its delta against a base that an earlier write already
+      moved.
 
 ---
 
@@ -1789,7 +1813,7 @@ chapter splitting, and the fe-11 class (tabs that missed the run). `remapCjkHono
 
 Shipped date and merge SHA: (filled in on merge, when this plan moves to `archive/`).
 
-- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50) are
+- Spec conflicts and late rulings (R11, R12, R13, R22, R35, R38, R42, R43, R46, R47, M4, R49, R50, R53, R54) are
   recorded under *Spec conflicts found* above; the spec's acceptance 14, 20 and 24 and its
   "New UI" non-goal are amended to match.
 - On-box acceptance owed: one Group B row (B109) in `docs/testing/onbox-acceptance-register.md`
