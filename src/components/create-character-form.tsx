@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { pausedControlProps } from './cast-edits-paused-banner';
 
 type Fields = { name: string; gender?: string; ageRange?: string };
 
@@ -8,12 +9,16 @@ export function CreateCharacterForm({
   onSubmit,
   onReattributeExisting,
   onCancel,
+  createPaused = false,
 }: {
   initial?: Fields;
   rosterByName: Map<string, { id: string; name: string }>;
   onSubmit: (f: Fields) => void;
   onReattributeExisting?: (characterId: string) => void;
   onCancel: () => void;
+  /** P6-2 (PR #4103 pass 6) — the cast turned read-only while the form was open: the create
+      submit is paused (R57's `pausedControlProps`) and sends nothing; the input is kept. */
+  createPaused?: boolean;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [gender, setGender] = useState(initial?.gender ?? '');
@@ -22,6 +27,7 @@ export function CreateCharacterForm({
   const key = name.trim().toLowerCase();
   const existing = key ? rosterByName.get(key) : undefined;
   const disabled = key.length === 0;
+  const paused = createPaused && !existing;
 
   const selectClass =
     'mt-1 w-full min-h-[44px] fine-pointer:min-h-0 rounded-xl border border-ink/15 px-3 text-sm bg-canvas text-ink';
@@ -78,16 +84,18 @@ export function CreateCharacterForm({
           type="button"
           data-testid="create-character-submit"
           disabled={disabled}
-          onClick={() =>
-            existing
-              ? onReattributeExisting?.(existing.id)
-              : onSubmit({
-                  name: name.trim(),
-                  gender: gender || undefined,
-                  ageRange: ageRange || undefined,
-                })
-          }
-          className="px-4 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-ink text-canvas text-sm font-semibold disabled:opacity-40"
+          {...pausedControlProps(paused)}
+          onClick={() => {
+            if (paused) return;
+            if (existing) onReattributeExisting?.(existing.id);
+            else
+              onSubmit({
+                name: name.trim(),
+                gender: gender || undefined,
+                ageRange: ageRange || undefined,
+              });
+          }}
+          className={`px-4 min-h-[44px] fine-pointer:min-h-0 rounded-full bg-ink text-canvas text-sm font-semibold disabled:opacity-40 ${paused ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           {existing ? `Reattribute to «${existing.name}»` : 'Create character'}
         </button>

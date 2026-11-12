@@ -1825,6 +1825,46 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
     expect(store.getState().notifications.toasts.some((t: Toast) => /couldn't create character/i.test(t.message))).toBe(false);
     expect(store.getState().cast.analysisEra?.['bk-r57']).toBeDefined();
   });
+
+  /* P6-2 (PR #4103 pass 6) — a form opened while editable is still open when the cast turns
+     read-only. Its submit is paused like the Add button (R57), and a click on it never closes
+     the form as if the character had been created. */
+  it('P6-2: a form open when the cast turns read-only pauses its submit and never closes silently', async () => {
+    createCharacter.mockReset();
+    createCharacter.mockResolvedValue({ character: { id: 'ferra', name: 'Ferra', role: 'character', color: 'unset' } });
+    const store = r57View({ readOnly: false });
+    fireEvent.click(screen.getByRole('button', { name: /add character/i }));
+    expect(screen.getByTestId('create-character-form')).toBeInTheDocument();
+    act(() => {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'bk-r57' }));
+    });
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Ferra' } });
+    const submit = screen.getByTestId('create-character-submit');
+    expect(submit).toHaveAttribute('aria-disabled', 'true');
+    expect(submit).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    await userEvent.setup().click(submit);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(createCharacter).not.toHaveBeenCalled();
+    /* Still open, with the user's input intact. */
+    expect(screen.getByTestId('create-character-form')).toBeInTheDocument();
+    expect(screen.getByLabelText(/name/i)).toHaveValue('Ferra');
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['narrator']);
+  });
+
+  it('P6-2: the form submits again once the cast is editable', async () => {
+    createCharacter.mockReset();
+    createCharacter.mockResolvedValue({ character: { id: 'ferra', name: 'Ferra', role: 'character', color: 'unset' } });
+    r57View({ readOnly: false });
+    fireEvent.click(screen.getByRole('button', { name: /add character/i }));
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Ferra' } });
+    const submit = screen.getByTestId('create-character-submit');
+    expect(submit).not.toHaveAttribute('aria-disabled');
+    await userEvent.setup().click(submit);
+    await waitFor(() => expect(createCharacter).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId('create-character-form')).toBeNull());
+  });
 });
 
 describe('isExcludedSentenceId', () => {

@@ -811,7 +811,9 @@ export function ManuscriptView({
      guard below — hooks cannot be called conditionally (Rules of Hooks). */
   const handleCreateCharacter = useCallback(
     async (fields: { name: string; gender?: string; ageRange?: string }) => {
-      if (!bookId || castReadOnly) return;
+      /* P6-2 — no read-only early return: a resolve reads as success and closes the form. A
+         create the server refuses mid-run takes the 409 path below (the form stays open). */
+      if (!bookId) return;
       try {
         const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
         dispatch(castActions.addCharacter(result.character));
@@ -828,7 +830,7 @@ export function ManuscriptView({
         throw err;
       }
     },
-    [bookId, dispatch, castReadOnly],
+    [bookId, dispatch],
   );
 
   /* fs-58 Task 10 — unresolved-findings badges on the Review Script button
@@ -1746,6 +1748,7 @@ function SidebarPanels({
                 }}
                 onReattributeExisting={() => setAddingChar(false)}
                 onCancel={() => setAddingChar(false)}
+                createPaused={createDisabled}
               />
             </div>
           )}
