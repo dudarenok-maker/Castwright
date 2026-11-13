@@ -45,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import {
   checkBOM,
+  checkBodySize,
   checkConflictMarkers,
   checkMojibake,
   formatHonouredEcho,
@@ -120,15 +121,26 @@ export function resolveReleaseBody({ annotation, fileExists, fileText, notesLabe
 
   if (!mojibakeRes.ok) return { ok: false, reason: mojibakeRes.reason, echo };
 
+  // GitHub rejects a release body over 125,000 characters, but only at
+  // `gh release create` — fail here, in CI, with the reason spelled out. The
+  // check runs on the exact string that gets published (`body` below), not on
+  // the annotation: `%(contents)` adds a trailing newline the file never had,
+  // so checking the annotation refuses a file that is exactly at the limit.
+  const sized = (body, label, source) => {
+    const sizeRes = checkBodySize(body, label);
+    if (!sizeRes.ok) return { ok: false, reason: sizeRes.reason, echo };
+    return { ok: true, body, echo, source };
+  };
+
   // Rule 2 — no file to compare against: the placeholder-tag path.
   if (!fileExists) {
-    return { ok: true, body: annotation, echo, source: 'annotation' };
+    return sized(annotation, ANNOTATION_LABEL, 'annotation');
   }
 
   // Rule 3 — the normal case: file and annotation agree, publish the
   // guarded file rather than the unchecked annotation copy.
   if (normalise(fileText) === normalise(annotation)) {
-    return { ok: true, body: fileText, echo, source: 'file' };
+    return sized(fileText, notesLabel, 'file');
   }
 
   // Rule 4 — genuine divergence. Fail closed; name both sources and sizes,
@@ -179,7 +191,10 @@ if (isDirectlyInvoked(import.meta.url)) {
     process.exit(1);
   }
 
-  writeFileSync(resolve(outPath), res.body, 'utf8');
+  // checkBodySize measured the CRLF -> LF form (that is what the Ubuntu publish
+  // job sends), so write that same string: checked body == published body.
+  const body = res.body.replace(/\r\n/g, '\n');
+  writeFileSync(resolve(outPath), body, 'utf8');
   // #2168 review, Minor 4 — label from resolveReleaseBody's own explicit
   // `source`, not re-derived by comparing res.body === annotation, which
   // would mislabel itself if the file ever happened to be byte-identical to
@@ -188,7 +203,7 @@ if (isDirectlyInvoked(import.meta.url)) {
   // (on-box register row G2) without a full `cat` of a body that can run to
   // tens of KB.
   const sourceLabel = res.source === 'annotation' ? ANNOTATION_LABEL : DEFAULT_NOTES_FILE;
-  const bodyBytes = Buffer.byteLength(res.body, 'utf8');
+  const bodyBytes = Buffer.byteLength(body, 'utf8');
   process.stdout.write(
     `[release-body] OK — wrote ${outPath} from ${sourceLabel} (${bodyBytes} bytes)\n`,
   );

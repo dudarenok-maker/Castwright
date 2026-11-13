@@ -2570,6 +2570,12 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/testing/onbox-wave4-linkage.md'), true);
   assert.equal(isFrozenPath('docs/release-notes-next.md'), true);
   assert.equal(isFrozenPath('RELEASE_NOTES.md'), true);
+  // Archived full technical changelogs (docs/release-notes/vX.Y.Z-full.md):
+  // shipped-entry diaries like release-notes-next.md, so a citation inside one
+  // is skipped.
+  assert.equal(isFrozenPath('docs/release-notes/v1.15.0-full.md'), true);
+  assert.equal(isFrozenPath('docs\\release-notes\\v1.15.0-full.md'), true);
+  assert.equal(isFrozenPath('docs/release-notes-other.md'), false);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register-live-view.html'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-sitting-plan.md'), false);
