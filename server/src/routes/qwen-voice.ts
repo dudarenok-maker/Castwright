@@ -938,8 +938,12 @@ export async function separateVoiceLocked(
      (separated-voices.ts): a first design by any row on it is never shared. Every
      failure below that leaves no row on U' takes the record back. An unconfirmed
      isolation names its book and generation (review pass 4, 🟠1); a decline's record
-     names nobody. */
-  await recordSeparatedVoice(newUuid, unconfirmed ? ((await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP) : undefined);
+     names nobody. PR #4109 review pass 4 (🟠1): an isolation of a decline-marked row
+     is a "Don't reuse" voice too, so its stamp carries the decline flag. */
+  await recordSeparatedVoice(
+    newUuid,
+    unconfirmed ? declinedIf(hasDeclineMarker(x), (await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP) : undefined,
+  );
   let copied: string[];
   try {
     copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
@@ -1459,8 +1463,11 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSep
     const uuid = nanoid();
     const linkId = freshChar.voiceId ?? freshChar.id;
     const legacyKey = `qwen-${linkId}`;
-    /* Review pass 5 -- read before anything is copied: a throw here leaves no copies. */
-    const ownStamp = recordSeparated ? ((await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP) : undefined;
+    /* Review pass 5 -- read before anything is copied: a throw here leaves no copies.
+       PR #4109 review pass 4 (🟠1): a decline-marked row's stamp carries the decline flag. */
+    const ownStamp = recordSeparated
+      ? declinedIf(hasDeclineMarker(freshChar), (await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP)
+      : undefined;
     /* #4037 — same as the series mint: the legacy key's base family and emotion
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
@@ -1911,6 +1918,11 @@ interface FirstDesignShare {
 
 /* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
 export const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
+
+/* PR #4109 review pass 4 (🟠1) -- an unconfirmed mint's or isolation's stamp, with the decline
+   flag when the row it moves carries the marker (separated-voices.ts). */
+const declinedIf = <S extends object>(declined: boolean, stamp: S): S & { declined?: true } =>
+  declined ? { ...stamp, declined: true } : stamp;
 
 /* #4074 — does a consented clone sit on the row's own voice anywhere in the series? A
    row on a "Don't reuse"-separated uuid (separated-voices.ts) shares that voice with only

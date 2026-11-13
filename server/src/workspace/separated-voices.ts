@@ -25,12 +25,14 @@
    voices. The rebaseline (voice-override-linked) keeps apart only a "Don't reuse" voice,
    never one first designed before Confirm, so it reads isDeclineSeparatedVoiceSync: an
    empty record (every "Don't reuse" separation, then and now), or an OwnStamp carrying
-   `declined: true`, which a decline of a row already on an OwnStamp uuid adds
-   (markDeclineSeparatedVoice; that decline mints nothing, so it writes no record of its
-   own). An OwnStamp written before the flag existed cannot say whether such a decline
-   followed it; the caller answers that from the cast (a row on the uuid carrying the
-   decline marker), and without one it is not a "Don't reuse" voice, which is main's
-   behaviour (the rebaseline unifies it). */
+   `declined: true`. Two writers set the flag: a decline of a row already on an OwnStamp
+   uuid adds it (markDeclineSeparatedVoice; that decline mints nothing, so it writes no
+   record of its own), and an unconfirmed mint or isolation writes it straight away when
+   the row it moves already carries the decline marker (PR #4109 review pass 4). So an
+   OwnStamp without the flag held by a decline-marked row is one written before the flag
+   existed, or one whose row got its marker without a decline (a legacy marker): it cannot say whether a decline followed it, so the caller answers that from
+   the cast (a row on the uuid carrying the decline marker), and without one it is not a
+   "Don't reuse" voice, which is main's behaviour (the rebaseline unifies it). */
 
 import { readFileSync, statSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -51,7 +53,7 @@ export const UNNAMED_OWN_STAMP = { ownStamp: true } as const;
 
 export async function recordSeparatedVoice(
   voiceUuid: string,
-  own?: OwnStamp | typeof UNNAMED_OWN_STAMP,
+  own?: (OwnStamp | typeof UNNAMED_OWN_STAMP) & { declined?: true },
 ): Promise<void> {
   const p = separatedVoicePath(voiceUuid);
   await mkdir(dirname(p), { recursive: true });
@@ -120,7 +122,7 @@ export async function markDeclineSeparatedVoice(voiceUuid: string): Promise<(() 
 
 /* Is `voiceUuid` a "Don't reuse" voice? No record: no. An empty record, or a stamp with
    `declined: true`: yes. An OwnStamp without the flag: `heldByDecliner`, the caller's
-   answer for a record written before the flag (see the header). Fails closed: a record
+   answer for a record written before the flag or without a decline (see the header). Fails closed: a record
    that cannot be read or parsed counts as a "Don't reuse" one. Synchronous, like
    isSeparatedVoiceSync. */
 export function isDeclineSeparatedVoiceSync(voiceUuid: string, heldByDecliner: boolean): boolean {

@@ -527,4 +527,59 @@ describe('voice-override-linked for a voice first designed before Confirm (#4109
     expect(ids(res)).not.toContain(bookOneId);
     expect(readRow('Book One')).toEqual(oneBefore);
   });
+
+  /* Pass-4 review (🟠1): an isolation in an unconfirmed book wrote its OwnStamp without the decline
+     flag even for a decline-marked row, so once the decliner left the scan the rebaseline unified
+     the uuid with the book it declined. */
+  it('ISO: an unconfirmed isolation of a decliner flags its record, so the declined book stays apart', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_one' }), false);
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    const r0 = readRow('Book Two').voiceUuid as string;
+    expect(r0).not.toBe('u_one');
+    /* a follower linked while Book Two was confirmed, before a Start fresh */
+    writeBook('Book Three', 3, bookThreeId, wren({ ...fromBook(bookTwoId, 'Book Two'), voiceUuid: r0 }));
+    const designed = await designIn(bookTwoId); // isolates: a follower holds its key
+    expect(designed.status).toBe(200);
+    const u2 = readRow('Book Two').voiceUuid as string;
+    expect(u2).not.toBe(r0);
+    expect(readRow('Book Two').declinedVoiceFrom).toEqual([bookOneId]);
+    confirm('Book Two');
+    writeBook('Book Four', 4, bookFourId, wren({ ...fromBook(bookTwoId, 'Book Two'), voiceUuid: u2 }));
+    rmSync(bookDir('Book Two'), { recursive: true, force: true }); // the decliner leaves the scan
+    const oneBefore = readRow('Book One');
+
+    const res = await link(bookFourId, `qwen-${u2}`);
+    expect(res.status).toBe(200);
+    expect(ids(res)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
+    expect(readRow('Book One').voiceUuid).toBe('u_one');
+    expect(JSON.parse(readFileSync(recordFor(u2), 'utf8'))).toMatchObject({ bookId: bookTwoId, declined: true });
+  });
+
+  /* The same for Keep's book-scoped mint of a decline-marked row with no uuid (a legacy marker:
+     the decline route always gives a uuid-less row one of its own). */
+  it('ISO Keep: a Keep that mints for a decliner flags its record, so the declined book stays apart', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceId: 'v_one', voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), declinedVoiceFrom: [bookOneId] }), false);
+    const preview = await designRest(true);
+    expect(preview.status).toBe(200);
+    const kept = await promote(preview.body.voiceId);
+    expect(kept.status).toBe(200);
+    const um = readRow('Book Two').voiceUuid as string;
+    expect(um).toBeTruthy();
+    confirm('Book Two');
+    writeBook('Book Four', 4, bookFourId, wren({ ...fromBook(bookTwoId, 'Book Two'), voiceUuid: um }));
+    rmSync(bookDir('Book Two'), { recursive: true, force: true });
+    const oneBefore = readRow('Book One');
+
+    const res = await link(bookFourId, `qwen-${um}`);
+    expect(res.status).toBe(200);
+    expect(ids(res)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
+    expect(JSON.parse(readFileSync(recordFor(um), 'utf8'))).toMatchObject({ bookId: bookTwoId, declined: true });
+  });
 });
