@@ -90,24 +90,37 @@ export function unquoteGitPath(path) {
 // line is exempt (#4120, owner decision 2026-11-13).
 const VERSION_FILE = `${SIDECAR_PREFIX}version.py`;
 const VERSION_LINE = /^[-+]__version__ = "\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"$/;
-const DIFF_HEADER_LINE = /^(?:diff --git |index |--- |\+\+\+ |@@ )/;
+const DIFF_HEADER_LINE = /^(?:diff --git |index |--- |\+\+\+ )/;
+const HUNK_HEADER_LINE = /^@@ /;
 
 // True only for a `git diff -U0` of version.py whose every changed line is a
-// `__version__ = "<semver>"` line: exactly one removed and one added. Checks the
-// hunk CONTENT, not the filename. Any other line -- another changed line, a mode
-// change, a rename, a binary marker, an empty or garbled diff -- is false, so
-// every doubt keeps the gate (fail closed).
+// `__version__ = "<semver>"` line: exactly one removed and one added, in a single
+// hunk. Checks the hunk CONTENT, not the filename. The diff is parsed
+// structurally: header lines are only recognised BEFORE the first `@@` hunk
+// header; inside a hunk every line is content, so an added `++ x` (rendered
+// `+++ x`) is judged as content, not skipped as a header. Any other line --
+// another changed line, a mode change, a rename, a binary marker, a `\ No
+// newline` marker, an empty or garbled diff -- is false, so every doubt keeps
+// the gate (fail closed).
 export function isVersionOnlyBump(diffText) {
   if (typeof diffText !== 'string') return false;
+  const lines = diffText.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  let hunks = 0;
   let removed = 0;
   let added = 0;
-  for (const line of diffText.split('\n')) {
-    if (line === '' || DIFF_HEADER_LINE.test(line)) continue;
+  for (const line of lines) {
+    if (hunks === 0) {
+      if (HUNK_HEADER_LINE.test(line)) hunks = 1;
+      else if (!DIFF_HEADER_LINE.test(line)) return false;
+      continue;
+    }
+    if (HUNK_HEADER_LINE.test(line)) return false;
     if (!VERSION_LINE.test(line)) return false;
     if (line[0] === '-') removed += 1;
     else added += 1;
   }
-  return removed === 1 && added === 1;
+  return hunks === 1 && removed === 1 && added === 1;
 }
 
 // `versionDiff` is the `git diff -U0` text of version.py; omitting it (or any

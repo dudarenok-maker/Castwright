@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -865,10 +865,99 @@ test('isVersionOnlyBump rejects non-bump shapes', () => {
   }
 });
 
-test('CLI: version-only bump diff exempts the gate with the "does not apply" message', () => {
+test('a version.py in another sidecar directory is not the exempt file', () => {
+  for (const path of ['server/tts-sidecar/foo/version.py', 'server/tts-sidecar/xversion.py']) {
+    assert.equal(touchesSidecar([path], BUMP_DIFF), true, path);
+  }
+});
+
+test('two removed version lines and nothing added is not a bump', () => {
+  const diff = versionDiff('-__version__ = "1.14.0"', '-__version__ = "1.13.0"');
+  assert.equal(isVersionOnlyBump(diff), false);
+});
+
+test('the version line in a second hunk is not a bump', () => {
+  const diff = [
+    versionDiff('-__version__ = "1.14.0"').trimEnd(),
+    '@@ -0,0 +1 @@',
+    '+__version__ = "1.15.0"',
+    '',
+  ].join('\n');
+  assert.equal(isVersionOnlyBump(diff), false);
+});
+
+// Real `git diff -U0` output, produced in a throwaway repo seeded with the real
+// version.py blob and diffed the way the workflow does. The hand-written
+// fixtures above cannot show how git renders a content line that itself starts
+// with `++ ` or `-- ` (it comes out as `+++ ` / `--- `, which look like headers).
+const REAL_VERSION_PY = readFileSync(resolve(dirname(scriptPath), '..', 'server/tts-sidecar/version.py'), 'utf8')
+  .replace(/__version__ = "[^"]+"/, '__version__ = "1.14.0"');
+
+function realGitVersionDiff(baseText, headText) {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-realgit-'));
+  try {
+    const git = (...a) =>
+      spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } });
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    git('config', 'core.autocrlf', 'false');
+    mkdirSync(join(dir, 'server/tts-sidecar'), { recursive: true });
+    writeFileSync(join(dir, VERSION_PY), baseText);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(join(dir, VERSION_PY), headText);
+    git('add', '-A');
+    git('commit', '-qm', 'head');
+    const head = git('rev-parse', 'HEAD').stdout.trim();
+    return git('diff', '-U0', base, head, '--', VERSION_PY).stdout;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const bumpedText = (text) => text.replace('__version__ = "1.14.0"', '__version__ = "1.15.0"');
+
+test('real git diff: a clean bump is exempt', () => {
+  const diff = realGitVersionDiff(REAL_VERSION_PY, bumpedText(REAL_VERSION_PY));
+  assert.equal(isVersionOnlyBump(diff), true, diff);
+});
+
+test('real git diff: an added content line that renders as "+++ " is not skipped as a header', () => {
+  const diff = realGitVersionDiff(
+    REAL_VERSION_PY,
+    `${bumpedText(REAL_VERSION_PY)}++ __import__("os").system("echo pwned")\n`,
+  );
+  assert.match(diff, /^\+\+\+ __import__/m);
+  assert.equal(isVersionOnlyBump(diff), false, diff);
+  assert.equal(touchesSidecar([VERSION_PY], diff), true);
+});
+
+test('real git diff: a removed content line that renders as "--- " is not skipped as a header', () => {
+  const diff = realGitVersionDiff(`${REAL_VERSION_PY}-- old\n`, bumpedText(REAL_VERSION_PY));
+  assert.match(diff, /^--- old/m);
+  assert.equal(isVersionOnlyBump(diff), false, diff);
+});
+
+test('real git diff: moving the version line above the docstring is not a bump', () => {
+  const moved = `__version__ = "1.15.0"\n${REAL_VERSION_PY.replace('__version__ = "1.14.0"\n', '')}`;
+  const diff = realGitVersionDiff(REAL_VERSION_PY, moved);
+  assert.equal(isVersionOnlyBump(diff), false, diff);
+});
+
+test('CLI: version-only bump diff exempts the gate with the version-bump message', () => {
   const result = runCli(`${VERSION_PY}\npackage.json\n`, '', BUMP_DIFF);
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
-  assert.match(result.stdout, /does not apply/);
+  assert.match(result.stdout, /only bumps __version__/);
+  assert.doesNotMatch(result.stdout, /does not touch/);
+});
+
+test('CLI: a PR with no sidecar file says it does not touch the sidecar', () => {
+  const result = runCli('package.json\n', '', BUMP_DIFF);
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  assert.match(result.stdout, /does not touch server\/tts-sidecar/);
+  assert.doesNotMatch(result.stdout, /only bumps/);
 });
 
 test('CLI: no diff file, or a non-bump diff, keeps the gate', () => {
