@@ -18,7 +18,8 @@
    mint (a confirmed book) records nothing. Only that book, at that same epoch, may treat the uuid as its
    own (isOwnSeparatedVoice): Confirm leaves the epoch alone, but Re-parse and Start
    fresh rotate it, and another book that was later linked onto the uuid is not the
-   book named. Every other reader asks only whether the file exists (isSeparatedVoice).
+   book named. Every other reader but the rebaseline (below) asks only whether the file
+   exists (isSeparatedVoice).
 
    PR #4109 review pass 3 (owner decision 2026-11-13) -- WHICH records are "Don't reuse"
    voices. The rebaseline (voice-override-linked) keeps apart only a "Don't reuse" voice,

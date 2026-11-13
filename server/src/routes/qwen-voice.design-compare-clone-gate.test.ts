@@ -347,7 +347,7 @@ describe('voice-override-linked after a "Don\'t reuse" decline (#4104 review)', 
 /* Pass-2 review (#4110): only the declining row carries the marker, so its followers (and a
    book nobody declined) keep the shared voiceId and used to match across the separation.
    PR #4007 pass 13: a voice "Don't reuse" created is never shared outside its chain, so a
-   separated uuid matches only a row on the SAME uuid. */
+   "Don't reuse" uuid matches only a row on the SAME uuid. */
 describe('voice-override-linked across a separated chain (#4110)', () => {
   const link = (fromBook: string, name: string) =>
     request(app)
