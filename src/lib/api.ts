@@ -2357,11 +2357,7 @@ async function mockSetCastTier(
    silently skip a book on a divergent key. Server rediscovers the group
    (respecting notLinkedTo); the caller only supplies the representative's home
    (bookId, characterId). */
-export interface LinkedOverrideResponse {
-  canonicalVoiceId: string;
-  updated: Array<{ bookId: string; bookTitle: string; characterId: string }>;
-  failed: Array<{ bookId: string; bookTitle: string; error: string }>;
-}
+export type LinkedOverrideResponse = ApiComponents['schemas']['LinkedVoiceOverrideResponse'];
 
 async function realSetVoiceOverrideLinked(
   bookId: string,

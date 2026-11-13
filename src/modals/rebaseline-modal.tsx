@@ -63,6 +63,14 @@ function isNarrator(c: Character): boolean {
   return (c.name ?? '').toLowerCase() === 'narrator';
 }
 
+/* A `voice-override-linked` 207 entry that refused a book because a row there carries a
+   consented clone. The server types the entry (reason: 'clone_protected',
+   server/src/routes/voice-override-linked.ts, applyToBookLocked); the sentence match is only a
+   fallback for an older server that does not send it yet. */
+function isCloneRefusal(f: { error: string; reason?: string }): boolean {
+  return f.reason === 'clone_protected' || f.error.includes('has a consented cloned voice');
+}
+
 /* Wires the modal to the store. Mounted in the Voices view; renders nothing
    when the modal is closed OR there is no book to anchor the series write
    (the global #/voices tab without a loaded book). */
@@ -424,6 +432,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
        voice) — surfaced as one error toast after the loop, mirroring the
        `res.failed` → toast pattern in src/views/voices.tsx. */
     const refusedBookTitles = new Set<string>();
+    /* PR #4109 review pass 3 -- every other `failed` entry (the route's name guard, lock
+       contention, a missing cast) is not a kept clone, and is reported as what it is. */
+    const failedBookTitles = new Set<string>();
     for (const p of included) {
       const character = charById.get(p.characterId);
       if (!character || !p.proposedVoiceId) continue;
@@ -439,7 +450,9 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           engine: 'qwen',
           name: p.proposedVoiceId,
         });
-        for (const f of linked.failed) refusedBookTitles.add(f.bookTitle);
+        for (const f of linked.failed) {
+          (isCloneRefusal(f) ? refusedBookTitles : failedBookTitles).add(f.bookTitle);
+        }
         /* The endpoint refuses PER BOOK (a book with a consented cloned slot
            refuses that book's write while siblings still update) — a 207
            response resolves normally, it does NOT throw. Refusing to apply
@@ -505,6 +518,15 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           kind: 'error',
           message: `Kept consented cloned voices unchanged in: ${[...refusedBookTitles].join(', ')}.`,
           dedupeKey: `rebaseline-refused:${bookId}`,
+        }),
+      );
+    }
+    if (failedBookTitles.size > 0) {
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: `Couldn't update the voice in: ${[...failedBookTitles].join(', ')}.`,
+          dedupeKey: `rebaseline-failed:${bookId}`,
         }),
       );
     }

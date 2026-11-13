@@ -58,7 +58,9 @@ import {
   isSeparatedVoice,
   isOwnSeparatedVoice,
   isSeparatedVoiceSync,
+  markDeclineSeparatedVoice,
   recordSeparatedVoice,
+  UNNAMED_OWN_STAMP,
 } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
@@ -894,15 +896,16 @@ export async function separateVoiceLocked(
     /* PR #4007 pass 13 — a decline that needed no separation leaves the row on a
        uuid no other book's row holds but its followers: the decliner's own voice,
        recorded like a separation's (separated-voices.ts) before the marker lands. A
-       failed write takes back only a record this step made. */
-    const own = decline && x.voiceUuid && !(await isSeparatedVoice(x.voiceUuid)) ? x.voiceUuid : undefined;
-    if (own) await recordSeparatedVoice(own);
+       failed write takes back only a record this step made. PR #4109 review pass 3: a
+       uuid already recorded as an OwnStamp (a design before Confirm) gets the decline
+       flag, so the rebaseline keeps it apart as a "Don't reuse" voice. */
+    const undoRecord = decline && x.voiceUuid ? await markDeclineSeparatedVoice(x.voiceUuid) : undefined;
     if (JSON.stringify(marked) !== JSON.stringify(x)) {
       fresh.characters[idx] = marked;
       try {
         await writeCast(bookDir, fresh);
       } catch (e) {
-        if (own) await forgetSeparatedVoice(own);
+        if (undoRecord) await undoRecord();
         await rollBack(carried);
         throw e;
       }
@@ -935,8 +938,12 @@ export async function separateVoiceLocked(
      (separated-voices.ts): a first design by any row on it is never shared. Every
      failure below that leaves no row on U' takes the record back. An unconfirmed
      isolation names its book and generation (review pass 4, 🟠1); a decline's record
-     names nobody. */
-  await recordSeparatedVoice(newUuid, unconfirmed ? await readBookOwnStamp(bookDir) : undefined);
+     names nobody. PR #4109 review pass 4 (🟠1): an isolation of a decline-marked row
+     is a "Don't reuse" voice too, so its stamp carries the decline flag. */
+  await recordSeparatedVoice(
+    newUuid,
+    unconfirmed ? declinedIf(hasDeclineMarker(x), (await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP) : undefined,
+  );
   let copied: string[];
   try {
     copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
@@ -1456,8 +1463,11 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSep
     const uuid = nanoid();
     const linkId = freshChar.voiceId ?? freshChar.id;
     const legacyKey = `qwen-${linkId}`;
-    /* Review pass 5 -- read before anything is copied: a throw here leaves no copies. */
-    const ownStamp = recordSeparated ? await readBookOwnStamp(bookDir) : undefined;
+    /* Review pass 5 -- read before anything is copied: a throw here leaves no copies.
+       PR #4109 review pass 4 (🟠1): a decline-marked row's stamp carries the decline flag. */
+    const ownStamp = recordSeparated
+      ? declinedIf(hasDeclineMarker(freshChar), (await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP)
+      : undefined;
     /* #4037 — same as the series mint: the legacy key's base family and emotion
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
@@ -1909,8 +1919,14 @@ interface FirstDesignShare {
 /* P12-1 — the row declined some book ("Don't reuse"): its voice is its own. */
 export const hasDeclineMarker = (c: CastCharacter): boolean => ((c as MarkedCharacter).declinedVoiceFrom ?? []).length > 0;
 
+/* PR #4109 review pass 4 (🟠1) -- an unconfirmed mint's or isolation's stamp, with the decline
+   flag when the row it moves carries the marker (separated-voices.ts). */
+const declinedIf = <S extends object>(declined: boolean, stamp: S): S & { declined?: true } =>
+  declined ? { ...stamp, declined: true } : stamp;
+
 /* #4074 — does a consented clone sit on the row's own voice anywhere in the series? A
-   row on a "Don't reuse"-separated uuid (separated-voices.ts) shares that voice with only
+   row on a separated uuid (any separated-voice record, separated-voices.ts: a "Don't
+   reuse" separation, or a mint or isolation before Confirm) shares that voice with only
    the rows that hold the same uuid, so only those count: a clone on the declined book's
    row is on the voice this row left. Any other row (no uuid, an ordinary shared one, a
    stale marker) keeps the full `voiceId` scan -- what applyOverrideToCastFiles decides. */
@@ -1922,7 +1938,8 @@ export async function seriesClonedOnRowsVoice(
   return hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, bookDir, await separatedUuidOf(character));
 }
 
-/* The row's uuid when it is a "Don't reuse"-separated voice, else undefined. */
+/* The row's uuid when any separated-voice record exists for it ("Don't reuse" or an
+   OwnStamp alike), else undefined. */
 async function separatedUuidOf(character: CastCharacter): Promise<string | undefined> {
   const uuid = character.voiceUuid;
   return uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
@@ -2549,6 +2566,20 @@ qwenVoiceRouter.post(
        drawer's existing handling reads it identically. Only the VARIANT path
        is gated: a base design on this route writes `qwen-<voiceUuid>.pt` and
        persists no override, so it never touches the clone.
+
+       #4104 -- WHY a declined row's base design is not scanned here (the stream
+       route passes `refuseIfSeriesCloned` on a non-preview design only; a preview
+       skips the scan on both routes, so they differ only on a non-preview base
+       design, the rebaseline modal's). The design itself persists no override and
+       retargets no cloned slot. A preview of a marker-only decline does write
+       cast.json: its uuid step separates the row and moves the same-uuid rows with
+       it, never touching a library or cloned slot or `ttsEngine`. promote-voice
+       writes cast.json only to isolate a decline in an unconfirmed book or to share
+       a design with other books, again leaving clones alone. The clone gates sit at
+       the writes: the drawer's Save is a scoped `PUT /api/voices/:voiceId/override`
+       (#4069) plus its book-local cast PUT, and the rebaseline's is
+       `voice-override-linked`, which refuses a cloned target per book. Pinned by
+       qwen-voice.design-compare-clone-gate.test.ts.
 
        Sits here (not immediately after the emotion-shape 400 above) so it
        runs AFTER the persona/sampleVoiceId/modelKey 400 validators below and
