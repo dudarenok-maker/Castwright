@@ -115,6 +115,17 @@ describe('separated-voices', () => {
     expect(await mod.markDeclineSeparatedVoice('uAlready')).toBeUndefined();
   });
 
+  it('#4104: an unconfirmed record for a book with no bookId is an unnamed stamp, not a "Don\'t reuse" one', async () => {
+    await mod.recordSeparatedVoice('uUnnamed', mod.UNNAMED_OWN_STAMP);
+    expect(await mod.isSeparatedVoice('uUnnamed')).toBe(true); // every other reader still sees a record
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', false)).toBe(false);
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', true)).toBe(true); // a decline-marked row on it
+    expect(await mod.isOwnSeparatedVoice('uUnnamed', { bookId: 'b1', editEpoch: '' })).toBe(false);
+    const undo = await mod.markDeclineSeparatedVoice('uUnnamed'); // a later decline flags it like any stamp
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', false)).toBe(true);
+    await undo!();
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', false)).toBe(false);
+  });
   it('a uuid cannot name a path outside the record folder', async () => {
     await mod.recordSeparatedVoice('../escape').catch(() => {}); // refused or sanitised, never outside
     expect(existsSync(join(workspaceRoot, 'voices', 'escape'))).toBe(false);

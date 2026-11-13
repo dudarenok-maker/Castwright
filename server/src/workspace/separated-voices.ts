@@ -43,7 +43,16 @@ export interface OwnStamp {
   editEpoch: string;
 }
 
-export async function recordSeparatedVoice(voiceUuid: string, own?: OwnStamp): Promise<void> {
+/* #4104 -- the record an unconfirmed mint or isolation writes in a book with no bookId (nothing to
+   name). It must not be the empty file, which reads as a Don't reuse voice: it names nobody, so
+   isOwnSeparatedVoice is never true for it (the caller isolates, as before), and it is an OwnStamp
+   without declined for isDeclineSeparatedVoiceSync. */
+export const UNNAMED_OWN_STAMP = { ownStamp: true } as const;
+
+export async function recordSeparatedVoice(
+  voiceUuid: string,
+  own?: OwnStamp | typeof UNNAMED_OWN_STAMP,
+): Promise<void> {
   const p = separatedVoicePath(voiceUuid);
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, own ? JSON.stringify(own) : '');

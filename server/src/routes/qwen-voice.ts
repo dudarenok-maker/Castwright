@@ -60,6 +60,7 @@ import {
   isSeparatedVoiceSync,
   markDeclineSeparatedVoice,
   recordSeparatedVoice,
+  UNNAMED_OWN_STAMP,
 } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
@@ -938,7 +939,7 @@ export async function separateVoiceLocked(
      failure below that leaves no row on U' takes the record back. An unconfirmed
      isolation names its book and generation (review pass 4, 🟠1); a decline's record
      names nobody. */
-  await recordSeparatedVoice(newUuid, unconfirmed ? await readBookOwnStamp(bookDir) : undefined);
+  await recordSeparatedVoice(newUuid, unconfirmed ? ((await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP) : undefined);
   let copied: string[];
   try {
     copied = await copyBaseFamily(oldKey, `qwen-${newUuid}`);
@@ -1459,7 +1460,7 @@ async function mintBookVoiceUuid(bookDir: string, characterId: string, recordSep
     const linkId = freshChar.voiceId ?? freshChar.id;
     const legacyKey = `qwen-${linkId}`;
     /* Review pass 5 -- read before anything is copied: a throw here leaves no copies. */
-    const ownStamp = recordSeparated ? await readBookOwnStamp(bookDir) : undefined;
+    const ownStamp = recordSeparated ? ((await readBookOwnStamp(bookDir)) ?? UNNAMED_OWN_STAMP) : undefined;
     /* #4037 — same as the series mint: the legacy key's base family and emotion
        variants move to `qwen-<uuid>` before any row is stamped, so a stamped row
        always has its files (Design & compare resolves `qwen-<uuid>.pt`; a redesign
