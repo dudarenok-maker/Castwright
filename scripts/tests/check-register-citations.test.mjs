@@ -2576,6 +2576,11 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/release-notes/v1.15.0-full.md'), true);
   assert.equal(isFrozenPath('docs\\release-notes\\v1.15.0-full.md'), true);
   assert.equal(isFrozenPath('docs/release-notes-other.md'), false);
+  // Wiki release-notes pages are generated verbatim copies of the published
+  // GitHub Release bodies; the rest of docs/wiki/ stays checked.
+  assert.equal(isFrozenPath('docs/wiki/Release-Notes-v1.15.0.md'), true);
+  assert.equal(isFrozenPath('docs/wiki/Release-Notes.md'), true);
+  assert.equal(isFrozenPath('docs/wiki/Some-Guide.md'), false);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register-live-view.html'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-sitting-plan.md'), false);

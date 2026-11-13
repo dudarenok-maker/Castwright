@@ -484,6 +484,10 @@ const FROZEN_EXACT = new Set([
 //   - release-notes/: archived full technical changelogs
 //     (docs/release-notes/vX.Y.Z-full.md), the same shipped-entry diary shape
 //     as release-notes-next.md above, spread across one file per release.
+//   - wiki/Release-Notes*: generated verbatim copies of the published GitHub
+//     Release bodies (`npm run wiki:release-notes`: the per-version pages and
+//     the Release-Notes.md index), the same shipped-entry shape as
+//     release-notes/ above. The rest of docs/wiki/ stays checked.
 //
 // `docs/features/archive/` used to be listed here too. Pass-7 review of PR
 // #2630 (finding B) found that wrong: it is 193 of these 274 frozen files —
@@ -509,6 +513,7 @@ const FROZEN_PREFIXES = [
   'docs/testing/onbox-wave4-results/',
   'docs/testing/onbox-wave5-results/',
   'docs/release-notes/',
+  'docs/wiki/Release-Notes',
 ];
 
 export function isFrozenPath(relPath) {
