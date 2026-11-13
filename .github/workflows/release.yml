@@ -428,10 +428,11 @@ jobs:
     name: Archive Done board items
     needs: publish
     runs-on: ubuntu-latest
-    # 10 (not the usual 5): archiving is one sequential `gh` CLI call per item
-    # (no batching) — generous headroom in case a backlog piles up again
-    # (e.g. this job itself gets skipped for a cycle) before the next tag.
-    timeout-minutes: 10
+    # 30 (not the usual 5): archiving is one sequential `gh` CLI call per item
+    # (no batching), and a long release cycle accumulates hundreds of Done
+    # items. The v1.15.0 backlog exceeded the earlier 10 minutes (run
+    # 43375535330 was cancelled mid-list).
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
