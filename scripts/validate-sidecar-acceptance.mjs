@@ -85,9 +85,55 @@ export function unquoteGitPath(path) {
   return out;
 }
 
-export function touchesSidecar(files) {
+// A release bump rewrites exactly one line of this file (scripts/bump-version.mjs)
+// and touches no sidecar behaviour, so a diff whose ONLY sidecar change is that
+// line is exempt (#4120, owner decision 2026-11-13).
+const VERSION_FILE = `${SIDECAR_PREFIX}version.py`;
+const VERSION_LINE = /^[-+]__version__ = "\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"$/;
+const DIFF_HEADER_LINE = /^(?:diff --git |index |--- |\+\+\+ )/;
+const HUNK_HEADER_LINE = /^@@ /;
+
+// True only for a `git diff -U0` of version.py whose every changed line is a
+// `__version__ = "<semver>"` line: exactly one removed and one added, in a single
+// hunk. Checks the hunk CONTENT, not the filename. The diff is parsed
+// structurally: header lines are only recognised BEFORE the first `@@` hunk
+// header; inside a hunk every line is content, so an added `++ x` (rendered
+// `+++ x`) is judged as content, not skipped as a header. Any other line --
+// another changed line, a mode change, a rename, a binary marker, a `\ No
+// newline` marker, an empty or garbled diff -- is false, so every doubt keeps
+// the gate (fail closed).
+export function isVersionOnlyBump(diffText) {
+  if (typeof diffText !== 'string') return false;
+  const lines = diffText.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  let hunks = 0;
+  let removed = 0;
+  let added = 0;
+  for (const line of lines) {
+    if (hunks === 0) {
+      if (HUNK_HEADER_LINE.test(line)) hunks = 1;
+      else if (!DIFF_HEADER_LINE.test(line)) return false;
+      continue;
+    }
+    if (HUNK_HEADER_LINE.test(line)) return false;
+    if (!VERSION_LINE.test(line)) return false;
+    if (line[0] === '-') removed += 1;
+    else added += 1;
+  }
+  return hunks === 1 && removed === 1 && added === 1;
+}
+
+// `versionDiff` is the `git diff -U0` text of version.py; omitting it (or any
+// unreadable value) means no exemption is possible.
+export function touchesSidecar(files, versionDiff) {
   if (!Array.isArray(files)) return false;
-  return files.some((f) => typeof f === 'string' && unquoteGitPath(f).startsWith(SIDECAR_PREFIX));
+  const exemptVersionBump = isVersionOnlyBump(versionDiff);
+  return files.some((f) => {
+    if (typeof f !== 'string') return false;
+    const path = unquoteGitPath(f);
+    if (!path.startsWith(SIDECAR_PREFIX)) return false;
+    return !(exemptVersionBump && path === VERSION_FILE);
+  });
 }
 
 // Splits a newline-separated file list (the shape `git diff --name-only`
@@ -384,8 +430,8 @@ export function hasRegisterLink(body, rowIds = loadRegisterRowIds()) {
   return parsed !== null && rowIds.has(parsed.rowId);
 }
 
-export function passesSidecarAcceptanceGate(files, body, rowIds = loadRegisterRowIds()) {
-  if (!touchesSidecar(files)) return true;
+export function passesSidecarAcceptanceGate(files, body, rowIds = loadRegisterRowIds(), versionDiff) {
+  if (!touchesSidecar(files, versionDiff)) return true;
   return hasPassingRecordedRun(body) || hasRegisterLink(body, rowIds);
 }
 
@@ -439,9 +485,10 @@ export function failureDetail(link, { rowIds, readable }) {
   return null;
 }
 
-// CLI mode: node scripts/validate-sidecar-acceptance.mjs <pr-files-file> <pr-body-file>
+// CLI mode: node scripts/validate-sidecar-acceptance.mjs <pr-files-file> <pr-body-file> [<version-diff-file>]
 // <pr-files-file> is a newline-separated list of changed files (the shape
-// `git diff --name-only` emits); <pr-body-file> is the raw PR body.
+// `git diff --name-only` emits); <pr-body-file> is the raw PR body;
+// <version-diff-file> is the optional `git diff -U0` of version.py.
 if (isDirectlyInvoked(import.meta.url)) {
   const filesPath = process.argv[2];
   const bodyPath = process.argv[3];
@@ -453,14 +500,26 @@ if (isDirectlyInvoked(import.meta.url)) {
   }
   const files = parseFileList(readFileSync(filesPath, 'utf8'));
   const body = readFileSync(bodyPath, 'utf8');
-  if (!touchesSidecar(files)) {
+  // Optional third arg: the `git diff -U0` of version.py. An absent or
+  // unreadable file leaves versionDiff undefined, so the gate applies.
+  let versionDiff;
+  if (process.argv[4]) {
+    try {
+      versionDiff = readFileSync(process.argv[4], 'utf8');
+    } catch {
+      versionDiff = undefined;
+    }
+  }
+  if (!touchesSidecar(files, versionDiff)) {
     console.log(
-      'This PR does not touch server/tts-sidecar/** -- sidecar acceptance gate does not apply.',
+      files.some((f) => unquoteGitPath(f).startsWith(SIDECAR_PREFIX))
+        ? 'This PR only bumps __version__ in server/tts-sidecar/version.py -- sidecar acceptance gate does not apply.'
+        : 'This PR does not touch server/tts-sidecar/** -- sidecar acceptance gate does not apply.',
     );
     process.exit(0);
   }
   const register = readRegisterRowIds();
-  if (!passesSidecarAcceptanceGate(files, body, register.rowIds)) {
+  if (!passesSidecarAcceptanceGate(files, body, register.rowIds, versionDiff)) {
     // A cited-but-nonexistent row, and a register this gate could not read
     // at all, are the two failures the generic help text does not explain.
     // Name whichever applies before printing that text.

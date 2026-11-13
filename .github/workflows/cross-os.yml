@@ -126,7 +126,7 @@ jobs:
       - name: Probe origin/main for frontend/e2e changes (last 7 days)
         id: probe
         run: |
-          if git log --since='7 days ago' --name-only --pretty=format: origin/main \
+          if git log --since='7 days ago' --name-only --no-renames --pretty=format: origin/main \
             | sort -u \
             | grep -qE '^(src/|e2e/|index\.html$|vite\.config\.ts$|tailwind\.config\.ts$|playwright\.config\.ts$|package(-lock)?\.json$)'; then
             echo "frontend_e2e=true" >> "$GITHUB_OUTPUT"

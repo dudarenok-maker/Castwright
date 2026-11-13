@@ -58,12 +58,13 @@ export function evaluateDocsOnlyPush(stdinText, { listChangedFiles }) {
 
 // Real git-backed lister for CLI mode. `null` on any git error (never skip on
 // uncertainty).
-function gitChangedFiles(remoteSha, localSha) {
+export function gitChangedFiles(remoteSha, localSha, cwd) {
   let revArg;
   if (remoteSha && !isZeroSha(remoteSha)) {
     revArg = `${remoteSha}..${localSha}`;
   } else {
     const mb = spawnSync('git', ['merge-base', localSha, 'origin/main'], {
+      cwd,
       encoding: 'utf8',
       windowsHide: true,
       env: scrubGitEnv(),
@@ -71,7 +72,10 @@ function gitChangedFiles(remoteSha, localSha) {
     if (mb.status !== 0 || !mb.stdout.trim()) return null;
     revArg = `${mb.stdout.trim()}..${localSha}`;
   }
-  const res = spawnSync('git', ['diff', '--name-only', revArg], {
+  // --no-renames: default detection lists only a rename's destination, so a
+  // move of src/x.md into docs/ would read as docs-only.
+  const res = spawnSync('git', ['diff', '--name-only', '--no-renames', revArg], {
+    cwd,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
