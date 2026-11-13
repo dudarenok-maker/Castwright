@@ -1985,7 +1985,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     const { store, onSave } = await saveWithSeriesWriteRejecting(refusal);
     await waitFor(() =>
       expect(selectToasts(store.getState()).map((t) => t.message)).toEqual([
-        'Saved for this book. Other books in the series kept their cloned voice.',
+        'Saved for this book only. Another book in the series uses a cloned voice for this character, so the rest of the series was left as it was.',
       ]),
     );
     expect(onSave).toHaveBeenCalledTimes(1);

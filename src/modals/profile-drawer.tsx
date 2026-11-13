@@ -2283,7 +2283,7 @@ export function ProfileDrawer({
                       notificationsActions.pushToast({
                         kind: refused ? 'info' : 'error',
                         message: refused
-                          ? 'Saved for this book. Other books in the series kept their cloned voice.'
+                          ? 'Saved for this book only. Another book in the series uses a cloned voice for this character, so the rest of the series was left as it was.'
                           : 'Saved for this book, but the voice could not be applied to the rest of the series.',
                         dedupeKey: `series-voice-override-${character.id}`,
                       }),
