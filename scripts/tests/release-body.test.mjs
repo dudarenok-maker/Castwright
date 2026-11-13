@@ -466,6 +466,23 @@ test('multi-byte annotation whose bytes exceed 125k is refused even under 125k c
   }
 });
 
+// The size check measures the CRLF -> LF normalised body (checkBodySize), so the
+// written body must BE that normalised string, not the raw one it was measured as.
+test('Rule 2: a CRLF annotation is written with LF endings, within the limit', () => {
+  const dir = setupRepo();
+  try {
+    const body = `${'x'.repeat(20)}\r\n`.repeat(5700); // 125,400 raw, 119,700 once normalised
+    makeAnnotatedTag(dir, 'release-body-test-crlf', body);
+    const out = runReleaseBody(dir, 'release-body-test-crlf', 'out.md');
+    assert.equal(out.status, 0, out.stderr);
+    const written = readFileSync(resolve(dir, 'out.md'), 'utf8');
+    assert.equal(written.includes('\r'), false);
+    assert.ok(Buffer.byteLength(written, 'utf8') <= 125000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The normal release path (Rule 3) publishes the FILE, not the annotation.
 // `%(contents)` adds a trailing newline, so the annotation is one character
 // longer than the file: the limit must be applied to what is published.

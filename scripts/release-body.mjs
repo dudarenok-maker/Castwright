@@ -191,7 +191,10 @@ if (isDirectlyInvoked(import.meta.url)) {
     process.exit(1);
   }
 
-  writeFileSync(resolve(outPath), res.body, 'utf8');
+  // checkBodySize measured the CRLF -> LF form (that is what the Ubuntu publish
+  // job sends), so write that same string: checked body == published body.
+  const body = res.body.replace(/\r\n/g, '\n');
+  writeFileSync(resolve(outPath), body, 'utf8');
   // #2168 review, Minor 4 — label from resolveReleaseBody's own explicit
   // `source`, not re-derived by comparing res.body === annotation, which
   // would mislabel itself if the file ever happened to be byte-identical to
@@ -200,7 +203,7 @@ if (isDirectlyInvoked(import.meta.url)) {
   // (on-box register row G2) without a full `cat` of a body that can run to
   // tens of KB.
   const sourceLabel = res.source === 'annotation' ? ANNOTATION_LABEL : DEFAULT_NOTES_FILE;
-  const bodyBytes = Buffer.byteLength(res.body, 'utf8');
+  const bodyBytes = Buffer.byteLength(body, 'utf8');
   process.stdout.write(
     `[release-body] OK — wrote ${outPath} from ${sourceLabel} (${bodyBytes} bytes)\n`,
   );
