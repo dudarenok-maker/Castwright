@@ -1,3 +1,5 @@
+# Castwright 1.16.0
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**

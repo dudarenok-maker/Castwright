@@ -4,7 +4,14 @@ name: Sidecar acceptance gate
 # .github/workflows/pr-issue-link.yml's shape: a small, always-triggered
 # validator gated on a specific, checkable PR-body format -- but this one
 # only requires that format when the PR's diff touches
-# server/tts-sidecar/**, the ONE directory whose 38
+# server/tts-sidecar/** (renames included: the file list is built with
+# --no-renames so a move OUT of the directory still lists its source path),
+# except that a diff whose ONLY sidecar change is the `__version__` line of
+# server/tts-sidecar/version.py (a release bump, #4120) is exempt. The
+# exemption is decided on the actual `git diff -U0` hunk content, not the
+# filename, and fails closed (any other changed line, mode change, new or
+# deleted file, or an unreadable diff keeps the gate). The directory is the
+# ONE whose 38
 # `pytest.importorskip("torch")` tests (14 files) run exclusively via a
 # local `npm run test:sidecar` on real hardware and have no automated CI
 # equivalent (see docs/superpowers/specs/2026-09-05-commit-gate-rebalance-
@@ -55,9 +62,21 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
           MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
-          git diff --name-only "$MERGE_BASE" "$HEAD" > "$RUNNER_TEMP/pr-files.txt"
+          git diff --name-only --no-renames "$MERGE_BASE" "$HEAD" >"$RUNNER_TEMP/pr-files.txt"
           echo "Changed files in this PR:"
           cat "$RUNNER_TEMP/pr-files.txt"
+
+      - name: Capture the version.py diff
+        # #4120: a diff whose ONLY sidecar change is the `__version__` line of
+        # server/tts-sidecar/version.py (a release bump) is exempt. The
+        # validator decides that from this diff's hunks. Fails closed: if the
+        # diff cannot be read the file is removed and the gate applies.
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+          git diff -U0 "$MERGE_BASE" "$HEAD" -- server/tts-sidecar/version.py > "$RUNNER_TEMP/version-diff.txt" \
+            || rm -f "$RUNNER_TEMP/version-diff.txt"
 
       - name: Write PR body to a temp file
         # Same file-passing pattern as pr-issue-link.yml's PR_BODY handling
@@ -68,4 +87,4 @@ jobs:
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
 
       - name: Validate sidecar acceptance
-        run: node scripts/validate-sidecar-acceptance.mjs "$RUNNER_TEMP/pr-files.txt" "$RUNNER_TEMP/pr-body.txt"
+        run: node scripts/validate-sidecar-acceptance.mjs "$RUNNER_TEMP/pr-files.txt" "$RUNNER_TEMP/pr-body.txt" "$RUNNER_TEMP/version-diff.txt"

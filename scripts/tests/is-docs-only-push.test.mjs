@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isDocsOnlyFile, isDocsOnlyDiff, evaluateDocsOnlyPush } from '../is-docs-only-push.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import {
+  isDocsOnlyFile,
+  isDocsOnlyDiff,
+  evaluateDocsOnlyPush,
+  gitChangedFiles,
+} from '../is-docs-only-push.mjs';
+import { cleanGitEnv } from './verify-cache-test-support.mjs';
 
 const ZERO = '0'.repeat(40);
 const line = (localSha, remoteSha = ZERO, remoteRef = 'refs/heads/feature') =>
@@ -67,6 +77,39 @@ test('multiple refs are unioned — one non-doc file anywhere blocks the skip', 
     listChangedFiles: (_remoteSha, localSha) => files[localSha],
   });
   assert.equal(r.docsOnly, false);
+});
+
+test('gitChangedFiles lists both paths of a rename (a move out of src into docs is not docs-only)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'docs-only-rename-'));
+  try {
+    const git = (...a) => {
+      const r = spawnSync('git', a, {
+        cwd: dir,
+        encoding: 'utf8',
+        windowsHide: true,
+        env: cleanGitEnv(),
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'docs'));
+    writeFileSync(join(dir, 'src', 'a.md'), 'content that is long enough to be a rename\n'.repeat(5));
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD');
+    git('mv', 'src/a.md', 'docs/a.md');
+    git('commit', '-qm', 'move');
+    const head = git('rev-parse', 'HEAD');
+    const files = gitChangedFiles(base, head, dir);
+    assert.deepEqual([...files].sort(), ['docs/a.md', 'src/a.md']);
+    assert.equal(isDocsOnlyDiff(files), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('no ref lines at all is not docs-only (nothing to skip)', () => {

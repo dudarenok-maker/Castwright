@@ -1046,7 +1046,7 @@ export function diffSafeForChangedOnly(step, diffFiles) {
 // can be unit-tested directly, including that it deliberately does NOT touch
 // GIT_INDEX_FILE — see scripts/tests/verify-cache.test.mjs.
 export function stagedDiffFiles(cwd) {
-  const r = spawnSync('git', ['diff', '--cached', '--name-only'], {
+  const r = spawnSync('git', ['diff', '--cached', '--name-only', '--no-renames'], {
     cwd,
     encoding: 'utf8',
     env: gitEnv(),
@@ -1114,7 +1114,7 @@ export function branchDiffFiles(cwd) {
   });
   if (base.error || base.status !== 0) return null;
   const baseSha = base.stdout.trim();
-  const r = spawnSync('git', ['diff', '--name-only', baseSha, 'HEAD'], {
+  const r = spawnSync('git', ['diff', '--name-only', '--no-renames', baseSha, 'HEAD'], {
     cwd,
     encoding: 'utf8',
     env,

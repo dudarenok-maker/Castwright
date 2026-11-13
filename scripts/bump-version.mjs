@@ -237,6 +237,27 @@ export function execGit(args, options) {
   return execFileSync('git', args, { windowsHide: true, ...options, env: scrubGitEnv(options?.env) });
 }
 
+export function releaseNextSteps(branch, newTag) {
+  const bumpBranch = `chore/bump-${newTag}`;
+  const version = newTag.replace(/^v/, '');
+  return [
+    `     main's ruleset rejects a direct push, so the bump commit goes in through a PR,`,
+    `     and the required pr-issue-link check needs that PR to close an issue.`,
+    `     1. gh issue create --title "Cut ${newTag}" --body "Version bump for ${newTag}." --label type:chore --label area:ops`,
+    `        (note the issue number it prints)`,
+    `     2. git push origin HEAD:refs/heads/${bumpBranch}`,
+    `        gh pr create --base ${branch} --head ${bumpBranch} --title "chore: bump version to ${version}" --body "Closes #<issue>"`,
+    `     3. Merge it with a MERGE COMMIT (gh pr merge --merge) once verify.yml is green.`,
+    `        (A version-only bump of server/tts-sidecar/version.py needs no "Sidecar acceptance:" line.)`,
+    `     4. git switch ${branch} && git pull --ff-only   (local ${branch} fast-forwards past the bump commit)`,
+    `        Verify the tag still points at the bump commit and that it reached origin/${branch}:`,
+    `          git rev-parse "${newTag}^{commit}"`,
+    `          git merge-base --is-ancestor "${newTag}^{commit}" origin/${branch} && echo in origin/${branch}`,
+    `     5. git push origin ${newTag}`,
+    `     6. Watch .github/workflows/release.yml — the tag push triggers it.`,
+  ];
+}
+
 function git(args, opts = {}) {
   return execGit(args, {
     cwd: repoRoot,
@@ -802,9 +823,7 @@ async function main() {
 
   info('');
   info(`[OK] Bump complete${gateOn ? ' (cross-OS verified)' : ''}. Next steps:`);
-  info(`     1. git push origin ${branch}`);
-  info(`     2. git push origin ${newTag}`);
-  info(`     3. Watch .github/workflows/release.yml — the tag push triggers it.`);
+  for (const line of releaseNextSteps(branch, newTag)) info(line);
   if (!args.notesFile) {
     info('');
     info(`[NOTE] Tag annotation is a placeholder. To replace with real notes BEFORE pushing:`);
