@@ -287,23 +287,37 @@ export function checkBOM(text, label) {
    (docs/release-notes-next.md / the tag annotation), never to RELEASE_NOTES.md
    (the in-app notes, which have no such limit).
 
-   Counted in characters, not bytes. GitHub's limit is a character count
-   (Rails `length` validation, i.e. Unicode code points); we use the UTF-16
-   length (`String#length`), which is the stricter of the two — an astral
-   character (emoji) is 2 here but 1 code point — so anything this accepts,
-   GitHub accepts too. Deliberately no --force/allowlist: like the BOM and
-   conflict-marker checks, GitHub will reject it regardless. */
+   We have not observed how GitHub counts (UTF-16 units, code points, or UTF-8
+   bytes), so this enforces the STRICTEST of UTF-16 length and UTF-8 byte
+   length — a code-point count is never larger than either, so anything this
+   accepts is accepted under all three readings. This is a safety rail, not a
+   target: real bodies are condensed to about 60k. Text is measured with CRLF
+   normalised to LF, because CI publishes the LF blob while a
+   `core.autocrlf=true` checkout holds CRLF. Deliberately no --force/allowlist:
+   like the BOM and conflict-marker checks, GitHub will reject it regardless. */
 export const MAX_RELEASE_BODY_CHARS = 125000;
 
 /** Check that `label`'s text fits in a GitHub release body. */
 export function checkBodySize(text, label) {
-  const chars = String(text ?? '').length;
-  if (chars <= MAX_RELEASE_BODY_CHARS) return { ok: true, reason: '' };
+  const measured = String(text ?? '').replace(/\r\n/g, '\n');
+  const units = measured.length;
+  const bytes = Buffer.byteLength(measured, 'utf8');
+  if (units <= MAX_RELEASE_BODY_CHARS && bytes <= MAX_RELEASE_BODY_CHARS) {
+    return { ok: true, reason: '' };
+  }
+  const over = [
+    units > MAX_RELEASE_BODY_CHARS ? 'UTF-16 length' : null,
+    bytes > MAX_RELEASE_BODY_CHARS ? 'UTF-8 byte length' : null,
+  ]
+    .filter(Boolean)
+    .join(' and ');
   return {
     ok: false,
     reason:
-      `${label} is ${chars} characters, over GitHub's ${MAX_RELEASE_BODY_CHARS}-character limit for a ` +
-      `release body — it would only be rejected at the final publish step, after the tag is pushed. ` +
+      `${label} is ${units} UTF-16 characters and ${bytes} UTF-8 bytes; its ${over} is over ` +
+      `GitHub's ${MAX_RELEASE_BODY_CHARS}-character limit for a release body (the check enforces the ` +
+      `strictest measure, since how GitHub counts is unverified) — it would only be rejected at the ` +
+      `final publish step, after the tag is pushed. ` +
       `Condense it to fit, and archive the full text under docs/release-notes/ ` +
       `(there is no --force override for this check).`,
   };

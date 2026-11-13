@@ -432,7 +432,7 @@ test('annotation over the 125000-character limit blocks publish, naming the anno
     makeAnnotatedTag(dir, 'release-body-test-big', `Castwright notes\n${'x'.repeat(125000)}\n`);
     const out = runReleaseBody(dir, 'release-body-test-big', 'out.md');
     assert.notEqual(out.status, 0);
-    assert.match(out.stderr, /the tag annotation is \d+ characters/);
+    assert.match(out.stderr, /the tag annotation is \d+ UTF-16 characters/);
     assert.match(out.stderr, /125000-character limit/);
     assert.equal(existsSync(resolve(dir, 'out.md')), false);
   } finally {
@@ -440,14 +440,59 @@ test('annotation over the 125000-character limit blocks publish, naming the anno
   }
 });
 
-test('multi-byte annotation (bytes > 125k, characters < 125k) still publishes', () => {
+test('multi-byte annotation whose BYTES are within 125k publishes', () => {
   const dir = setupRepo();
   try {
-    const body = `Castwright notes\n${'Ж'.repeat(124000)}\n`;
+    const body = `Castwright notes\n${'Ж'.repeat(60000)}\n`; // 120,000 bytes
     makeAnnotatedTag(dir, 'release-body-test-cyr', body);
     const out = runReleaseBody(dir, 'release-body-test-cyr', 'out.md');
     assert.equal(out.status, 0, out.stderr);
     assert.equal(existsSync(resolve(dir, 'out.md')), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('multi-byte annotation whose bytes exceed 125k is refused even under 125k characters', () => {
+  const dir = setupRepo();
+  try {
+    makeAnnotatedTag(dir, 'release-body-test-cyr-big', `Castwright notes\n${'Ж'.repeat(100000)}\n`);
+    const out = runReleaseBody(dir, 'release-body-test-cyr-big', 'out.md');
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /UTF-8 bytes/);
+    assert.equal(existsSync(resolve(dir, 'out.md')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The normal release path (Rule 3) publishes the FILE, not the annotation.
+// `%(contents)` adds a trailing newline, so the annotation is one character
+// longer than the file: the limit must be applied to what is published.
+test('Rule 3: a notes file of exactly 125000 characters publishes', () => {
+  const dir = setupRepo();
+  try {
+    const file = 'x'.repeat(125000);
+    writeNotesFile(dir, file);
+    makeAnnotatedTag(dir, 'release-body-test-r3-limit', file);
+    const out = runReleaseBody(dir, 'release-body-test-r3-limit', 'out.md');
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(readFileSync(resolve(dir, 'out.md'), 'utf8'), file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Rule 3: a notes file of 125001 characters is refused, naming the file', () => {
+  const dir = setupRepo();
+  try {
+    const file = 'x'.repeat(125001);
+    writeNotesFile(dir, file);
+    makeAnnotatedTag(dir, 'release-body-test-r3-over', file);
+    const out = runReleaseBody(dir, 'release-body-test-r3-over', 'out.md');
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /docs\/release-notes-next\.md is 125001/);
+    assert.equal(existsSync(resolve(dir, 'out.md')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -122,19 +122,25 @@ export function resolveReleaseBody({ annotation, fileExists, fileText, notesLabe
   if (!mojibakeRes.ok) return { ok: false, reason: mojibakeRes.reason, echo };
 
   // GitHub rejects a release body over 125,000 characters, but only at
-  // `gh release create` — fail here, in CI, with the reason spelled out.
-  const sizeRes = checkBodySize(annotation, ANNOTATION_LABEL);
-  if (!sizeRes.ok) return { ok: false, reason: sizeRes.reason, echo };
+  // `gh release create` — fail here, in CI, with the reason spelled out. The
+  // check runs on the exact string that gets published (`body` below), not on
+  // the annotation: `%(contents)` adds a trailing newline the file never had,
+  // so checking the annotation refuses a file that is exactly at the limit.
+  const sized = (body, label, source) => {
+    const sizeRes = checkBodySize(body, label);
+    if (!sizeRes.ok) return { ok: false, reason: sizeRes.reason, echo };
+    return { ok: true, body, echo, source };
+  };
 
   // Rule 2 — no file to compare against: the placeholder-tag path.
   if (!fileExists) {
-    return { ok: true, body: annotation, echo, source: 'annotation' };
+    return sized(annotation, ANNOTATION_LABEL, 'annotation');
   }
 
   // Rule 3 — the normal case: file and annotation agree, publish the
   // guarded file rather than the unchecked annotation copy.
   if (normalise(fileText) === normalise(annotation)) {
-    return { ok: true, body: fileText, echo, source: 'file' };
+    return sized(fileText, notesLabel, 'file');
   }
 
   // Rule 4 — genuine divergence. Fail closed; name both sources and sizes,
