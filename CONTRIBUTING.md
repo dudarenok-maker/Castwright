@@ -763,6 +763,12 @@ tag message, which the release workflow uses as the GitHub Release body — so t
 file IS the source of truth. Its leading HTML-comment carries a
 `release-notes-next-version:` marker the bump checks against the version being
 cut (a stale or missing file fails the bump rather than shipping a placeholder).
+GitHub rejects a release body over 125,000 characters, so the bump, the
+release-notes gate and `release-body.mjs` refuse a file over that limit (the
+strictest of its UTF-16 length and UTF-8 byte length, CRLF counted as LF; no
+`--force` override) — condense the body before the cut, and archive the full
+technical changelog under `docs/release-notes/vX.Y.Z-full.md`, linked from the
+condensed body (the v1.15.0 cut does this).
 The regression plans under `docs/features/` are the long-form companion
 (reference plan / PR numbers in parens, e.g. `(#637, plan 195)`). The
 user-facing, brand-voice notes are separate — `RELEASE_NOTES.md`, shown in-app
