@@ -238,10 +238,21 @@ describe('mergeSeriesCast', () => {
     });
 
     it('a component never gains a member through a third row that bridges the decline', () => {
-      /* An alias row in Book Three with no uuid name-matches both sides; it may join one, not both. */
+      /* An alias row in Book Three with no uuid name-matches both sides; it may join one, not both.
+         The decliner has no uuid either, so only the book marker keeps it from Book One and
+         nothing keeps either of them from the bridge directly. */
       const bridge = char({ id: 'wren-sparrow', name: 'Wren Sparrow', aliases: ['Wren'], sourceBookId: 'b3', lines: 1 });
-      const out = mergeSeriesCast([one()], [bridge, declinedTwo()], 'b1');
+      const out = mergeSeriesCast([one()], [bridge, declinedTwo({ voiceUuid: undefined })], 'b1');
       expect(out).toHaveLength(2);
+    });
+
+    it('a follower that shares only the write key still joins the decliner, not the declined book', () => {
+      /* No name match, so only pass 1 (the key) can put it with the decliner; the declined
+         book holds the key first and refuses it. */
+      const follower = char({ id: 'girl', name: 'The Girl', voiceId: 'v_wren', voiceUuid: 'r0', sourceBookId: 'b3', lines: 3 });
+      const out = mergeSeriesCast([one()], [declinedTwo(), follower], 'b1');
+      expect(out).toHaveLength(2);
+      expect(out.find((c) => c.sourceBookId === 'b2')!.lines).toBe(10);
     });
 
     it('rows on different uuids with no decline anywhere still collapse (as on main)', () => {
