@@ -59,6 +59,18 @@ jobs:
           echo "Changed files in this PR:"
           cat "$RUNNER_TEMP/pr-files.txt"
 
+      - name: Capture the version.py diff
+        # #4120: a diff whose ONLY sidecar change is the `__version__` line of
+        # server/tts-sidecar/version.py (a release bump) is exempt. The
+        # validator decides that from this diff's hunks. Fails closed: if the
+        # diff cannot be read the file is removed and the gate applies.
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+          git diff -U0 "$MERGE_BASE" "$HEAD" -- server/tts-sidecar/version.py > "$RUNNER_TEMP/version-diff.txt" \
+            || rm -f "$RUNNER_TEMP/version-diff.txt"
+
       - name: Write PR body to a temp file
         # Same file-passing pattern as pr-issue-link.yml's PR_BODY handling
         # — the body can't be interpreted as a shell expression this way.
@@ -68,4 +80,4 @@ jobs:
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
 
       - name: Validate sidecar acceptance
-        run: node scripts/validate-sidecar-acceptance.mjs "$RUNNER_TEMP/pr-files.txt" "$RUNNER_TEMP/pr-body.txt"
+        run: node scripts/validate-sidecar-acceptance.mjs "$RUNNER_TEMP/pr-files.txt" "$RUNNER_TEMP/pr-body.txt" "$RUNNER_TEMP/version-diff.txt"

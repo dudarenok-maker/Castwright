@@ -21,6 +21,7 @@ import {
   loadRegisterRowIds,
   readRegisterRowIds,
   failureDetail,
+  isVersionOnlyBump,
 } from '../validate-sidecar-acceptance.mjs';
 
 // Synthetic register row IDs, used ONLY as fixtures for this validator's
@@ -348,14 +349,20 @@ test('a sidecar-touching PR named only by a git-quoted path still needs acceptan
 // exported functions directly, but nothing at that level proves the CLI
 // wiring (argv, exit codes) actually works.
 
-function runCli(files, body) {
+function runCli(files, body, versionDiff) {
   const dir = mkdtempSync(join(tmpdir(), 'sidecar-acceptance-'));
   try {
     const filesFile = join(dir, 'files.txt');
     const bodyFile = join(dir, 'body.txt');
     writeFileSync(filesFile, files);
     writeFileSync(bodyFile, body);
-    return spawnSync(process.execPath, [scriptPath, filesFile, bodyFile], {
+    const args = [scriptPath, filesFile, bodyFile];
+    if (versionDiff !== undefined) {
+      const diffFile = join(dir, 'version-diff.txt');
+      writeFileSync(diffFile, versionDiff);
+      args.push(diffFile);
+    }
+    return spawnSync(process.execPath, args, {
       encoding: 'utf8',
       windowsHide: true,
     });
@@ -774,4 +781,114 @@ test('the real pull_request_template.md, fed whole as a PR body, does NOT satisf
     'pull_request_template.md no longer mentions the sidecar acceptance line -- fixture is stale',
   );
   assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, template), false);
+});
+
+// --- version-only bump exemption (#4120) --------------------------------------
+// A diff whose ONLY sidecar change is the `__version__` line of
+// server/tts-sidecar/version.py is exempt: a release bump touches no sidecar
+// behaviour. Decided on the actual diff hunks, not the filename, and fails
+// closed -- an absent/unreadable/odd diff keeps the gate.
+
+const VERSION_PY = 'server/tts-sidecar/version.py';
+
+function versionDiff(...changed) {
+  return [
+    `diff --git a/${VERSION_PY} b/${VERSION_PY}`,
+    'index 1111111..2222222 100644',
+    `--- a/${VERSION_PY}`,
+    `+++ b/${VERSION_PY}`,
+    '@@ -10 +10 @@',
+    ...changed,
+    '',
+  ].join('\n');
+}
+
+const BUMP_DIFF = versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"');
+const BUMP_PLUS_OTHER_LINE_DIFF = [
+  versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"').trimEnd(),
+  '@@ -3 +3 @@',
+  '-informational',
+  '+changed docstring',
+  '',
+].join('\n');
+
+test('version-only bump: exempt when version.py is the only sidecar file', () => {
+  assert.equal(isVersionOnlyBump(BUMP_DIFF), true);
+  assert.equal(touchesSidecar([VERSION_PY, 'package.json'], BUMP_DIFF), false);
+  assert.equal(passesSidecarAcceptanceGate([VERSION_PY], '', FIXTURE_ROWS, BUMP_DIFF), true);
+});
+
+test('version.py with another line changed: still gated', () => {
+  assert.equal(isVersionOnlyBump(BUMP_PLUS_OTHER_LINE_DIFF), false);
+  assert.equal(touchesSidecar([VERSION_PY], BUMP_PLUS_OTHER_LINE_DIFF), true);
+  assert.equal(
+    passesSidecarAcceptanceGate([VERSION_PY], '', FIXTURE_ROWS, BUMP_PLUS_OTHER_LINE_DIFF),
+    false,
+  );
+});
+
+test('version.py bump plus another sidecar file: still gated', () => {
+  assert.equal(touchesSidecar([VERSION_PY, 'server/tts-sidecar/main.py'], BUMP_DIFF), true);
+  assert.equal(
+    passesSidecarAcceptanceGate([VERSION_PY, 'server/tts-sidecar/main.py'], '', FIXTURE_ROWS, BUMP_DIFF),
+    false,
+  );
+});
+
+test('unreadable or missing diff: gated (fails closed)', () => {
+  for (const diff of [undefined, null, '', '   \n', 'garbage']) {
+    assert.equal(touchesSidecar([VERSION_PY], diff), true, `diff=${JSON.stringify(diff)}`);
+  }
+  assert.equal(touchesSidecar([VERSION_PY]), true);
+});
+
+test('isVersionOnlyBump rejects non-bump shapes', () => {
+  const cases = {
+    'non-semver value': versionDiff('-__version__ = "1.14.0"', '+__version__ = "latest"'),
+    'added line only': versionDiff('+__version__ = "1.15.0"'),
+    'removed line only (deletion)': versionDiff('-__version__ = "1.14.0"'),
+    'a different variable': versionDiff('-__build__ = "1.14.0"', '+__build__ = "1.15.0"'),
+    'trailing code on the line': versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"; import os'),
+    'a mode change header': versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"').replace(
+      'index 1111111',
+      'old mode 100644\nnew mode 100755\nindex 1111111',
+    ),
+    'two version lines': versionDiff(
+      '-__version__ = "1.14.0"',
+      '-__version__ = "1.13.0"',
+      '+__version__ = "1.15.0"',
+      '+__version__ = "1.16.0"',
+    ),
+  };
+  for (const [label, diff] of Object.entries(cases)) {
+    assert.equal(isVersionOnlyBump(diff), false, label);
+  }
+});
+
+test('CLI: version-only bump diff exempts the gate with the "does not apply" message', () => {
+  const result = runCli(`${VERSION_PY}\npackage.json\n`, '', BUMP_DIFF);
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  assert.match(result.stdout, /does not apply/);
+});
+
+test('CLI: no diff file, or a non-bump diff, keeps the gate', () => {
+  assert.equal(runCli(`${VERSION_PY}\n`, '').status, 1);
+  assert.equal(runCli(`${VERSION_PY}\n`, '', BUMP_PLUS_OTHER_LINE_DIFF).status, 1);
+  assert.equal(runCli(`${VERSION_PY}\nserver/tts-sidecar/main.py\n`, '', BUMP_DIFF).status, 1);
+});
+
+test('CLI: an unreadable diff path keeps the gate', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-acceptance-'));
+  try {
+    writeFileSync(join(dir, 'files.txt'), `${VERSION_PY}\n`);
+    writeFileSync(join(dir, 'body.txt'), '');
+    const result = spawnSync(
+      process.execPath,
+      [scriptPath, join(dir, 'files.txt'), join(dir, 'body.txt'), join(dir, 'no-such-diff.txt')],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    assert.equal(result.status, 1, `stderr: ${result.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
