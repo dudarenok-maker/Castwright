@@ -603,7 +603,16 @@ register](docs/testing/onbox-acceptance-register.md). This exists because 38
 `npm run test:sidecar` — never in CI (`verify.yml`'s sidecar leg deliberately
 installs the lean, torch-free dependency set, so those tests report as
 skipped there). A PR that doesn't touch `server/tts-sidecar/**` is unaffected
-and needs nothing in its body.
+and needs nothing in its body. A rename out of the directory counts as touching
+it (the file list is built with `--no-renames`, so the source path shows).
+
+**One exemption (#4120):** a PR whose only sidecar change is the `__version__`
+line of `server/tts-sidecar/version.py` — the release version bump — needs no
+line either. The validator decides this from the actual `git diff -U0` hunk of
+that file (exactly one `__version__ = "<semver>"` line removed and one added, in
+one hunk), not from the filename, and fails closed: any other changed line, a
+mode change, a new or deleted file, another sidecar file in the same PR, or a
+diff it cannot read keeps the gate on.
 
 Write one of these two lines plainly (not inside backticks or a code block)
 in the PR body:
@@ -700,8 +709,12 @@ node scripts/bump-version.mjs --level minor
 # 4. `main`'s ruleset rejects a direct push, so the bump commit goes in through
 #    a PR (the route v1.13.0, v1.14.0 and v1.15.0 took). The bump left the
 #    commit and the tag on local `main`; put the commit on a branch and PR it.
+#    The required pr-issue-link check needs the PR to close an issue, and
+#    `gh pr create` needs a --body when it is not run interactively, so file the
+#    issue first and note its number.
+gh issue create --title "Cut vX.Y.Z" --body "Version bump for vX.Y.Z." --label type:chore --label area:ops
 git push origin HEAD:refs/heads/chore/bump-vX.Y.Z
-gh pr create --base main --head chore/bump-vX.Y.Z --title "chore: bump version to X.Y.Z"
+gh pr create --base main --head chore/bump-vX.Y.Z --title "chore: bump version to X.Y.Z" --body "Closes #<issue>"
 #    Merge it with a MERGE COMMIT (gh pr merge --merge) once verify.yml is green.
 #    A bump that changes only the `__version__` line of server/tts-sidecar/version.py
 #    needs no "Sidecar acceptance:" line (the gate exempts it, #4120); any other

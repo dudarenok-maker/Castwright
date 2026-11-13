@@ -1539,6 +1539,14 @@ test('releaseNextSteps: routes the bump through a chore/bump-vX.Y.Z PR, then the
   assert.match(text, /git push origin HEAD:refs\/heads\/chore\/bump-v9\.9\.9/);
   assert.match(text, /gh pr create/);
   assert.match(text, /merge commit/i);
+  // pr-issue-link.yml is a required check, and `gh pr create` needs a body
+  // when it is not run interactively: file the issue first, then link it.
+  assert.match(text, /gh issue create --title "Cut v9\.9\.9" .*--label type:chore --label area:ops/);
+  assert.match(text, /gh pr create .*--body "Closes #<issue>"/);
+  assert.ok(
+    text.indexOf('gh issue create') < text.indexOf('gh pr create'),
+    'the issue must be filed before the PR that closes it',
+  );
   assert.match(text, /git rev-parse "v9\.9\.9\^\{commit\}"/);
   assert.match(text, /merge-base --is-ancestor/);
   assert.match(text, /git pull --ff-only/);

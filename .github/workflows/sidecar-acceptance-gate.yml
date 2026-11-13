@@ -4,7 +4,14 @@ name: Sidecar acceptance gate
 # .github/workflows/pr-issue-link.yml's shape: a small, always-triggered
 # validator gated on a specific, checkable PR-body format -- but this one
 # only requires that format when the PR's diff touches
-# server/tts-sidecar/**, the ONE directory whose 38
+# server/tts-sidecar/** (renames included: the file list is built with
+# --no-renames so a move OUT of the directory still lists its source path),
+# except that a diff whose ONLY sidecar change is the `__version__` line of
+# server/tts-sidecar/version.py (a release bump, #4120) is exempt. The
+# exemption is decided on the actual `git diff -U0` hunk content, not the
+# filename, and fails closed (any other changed line, mode change, new or
+# deleted file, or an unreadable diff keeps the gate). The directory is the
+# ONE whose 38
 # `pytest.importorskip("torch")` tests (14 files) run exclusively via a
 # local `npm run test:sidecar` on real hardware and have no automated CI
 # equivalent (see docs/superpowers/specs/2026-09-05-commit-gate-rebalance-
