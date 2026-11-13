@@ -685,9 +685,10 @@ export async function hasClonedSlotAmongMatches(
   return false;
 }
 
-/* #4067 -- the uuid of a designed-voice override (`qwen-<uuid>`) when that voice is one
-   "Don't reuse" separated (separated-voices.ts), else undefined. Only rows holding that
-   uuid belong to such a voice; every other row matched by `voiceId` is on another one. */
+/* #4067 -- the uuid of a designed-voice override (`qwen-<uuid>`) when any separated-voice
+   record exists for it (separated-voices.ts: a "Don't reuse" separation, or the OwnStamp a
+   mint or isolation before Confirm writes), else undefined. Only rows holding that uuid
+   belong to such a voice; every other row matched by `voiceId` is on another one. */
 async function separatedDesignedUuid(
   override: { engine: TtsEngine; name: string } | null,
 ): Promise<string | undefined> {

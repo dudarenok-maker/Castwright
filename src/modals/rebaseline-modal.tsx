@@ -64,11 +64,10 @@ function isNarrator(c: Character): boolean {
 }
 
 /* A `voice-override-linked` 207 entry that refused a book because a row there carries a
-   consented clone. The entry is typed (eason: 'clone_protected', server/src/routes/voice-override-linked.ts,
-   applyToBookLocked); the sentence match covers an older server. */
+   consented clone. The server types the entry (reason: 'clone_protected',
+   server/src/routes/voice-override-linked.ts, applyToBookLocked); the sentence match is only a
+   fallback for an older server that does not send it yet. */
 function isCloneRefusal(f: { error: string; reason?: string }): boolean {
-  /* The server types the refusal (eason); the sentence match is only a fallback for an
-     older server that does not send it yet. */
   return f.reason === 'clone_protected' || f.error.includes('has a consented cloned voice');
 }
 

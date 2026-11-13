@@ -584,6 +584,99 @@ describe('voice-override-linked for a voice first designed before Confirm (#4109
   });
 });
 
+/* Pass-4 review (🟡3): call sites no route test pinned, driven at the narrowest exported seam. */
+describe('separated-voice record writers at their own seams (#4109 pass 4)', () => {
+  const recordFor = (u: string) => join(workspaceRoot, 'voices', 'separated', u);
+  const writer = (dir: string, cast: unknown) =>
+    import('../workspace/state-io.js').then(({ writeJsonAtomic }) => writeJsonAtomic(join(dir, '.audiobook', 'cast.json'), cast));
+  const dropBookId = (t: string) => {
+    const p = join(bookDir(t), '.audiobook', 'state.json');
+    const { bookId: _drop, ...rest } = JSON.parse(readFileSync(p, 'utf8'));
+    writeFileSync(p, JSON.stringify(rest));
+  };
+
+  /* M6: a decline that needs no separation flags the row's OwnStamp record before its cast
+     write; a failed write puts the record's original bytes back. */
+  it('a decline whose cast write fails restores the OwnStamp record byte for byte', async () => {
+    const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
+    await recordSeparatedVoice('u_two', { bookId: bookTwoId, editEpoch: 'e1' });
+    const before = readFileSync(recordFor('u_two'));
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_two' }));
+    const castBefore = readFileSync(castPath('Book Two'));
+    const { withCastLocks } = await import('../workspace/cast-lock.js');
+    const { separateVoiceLocked } = await import('./qwen-voice.js');
+    const dir = bookDir('Book Two');
+    await expect(
+      withCastLocks([dir], () =>
+        separateVoiceLocked(dir, 'wren', [dir], [], async () => {
+          throw new Error('disk full');
+        }, { fromBookId: bookOneId }),
+      ),
+    ).rejects.toThrow('disk full');
+    expect(readFileSync(recordFor('u_two')).equals(before)).toBe(true);
+    expect(readFileSync(castPath('Book Two')).equals(castBefore)).toBe(true);
+  });
+
+  it('a decline whose cast write fails removes the record it created', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_two' }));
+    const { withCastLocks } = await import('../workspace/cast-lock.js');
+    const { separateVoiceLocked } = await import('./qwen-voice.js');
+    const dir = bookDir('Book Two');
+    await expect(
+      withCastLocks([dir], () =>
+        separateVoiceLocked(dir, 'wren', [dir], [], async () => {
+          throw new Error('disk full');
+        }, { fromBookId: bookOneId }),
+      ),
+    ).rejects.toThrow('disk full');
+    expect(() => readFileSync(recordFor('u_two'))).toThrow();
+  });
+
+  /* M5: no route reaches a book with no bookId (a design resolves its book through
+     /api/books/:bookId), so the isolation is driven directly. Its record must not be the empty
+     file, which reads as "Don't reuse". */
+  it('an unconfirmed isolation in a book with no bookId writes an unnamed OwnStamp, not the empty file', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_one' }), false);
+    dropBookId('Book Two');
+    const { withCastLocks } = await import('../workspace/cast-lock.js');
+    const { separateVoiceLocked } = await import('./qwen-voice.js');
+    const { isDeclineSeparatedVoiceSync } = await import('../workspace/separated-voices.js');
+    const dir = bookDir('Book Two');
+    const out = await withCastLocks([dir], () => separateVoiceLocked(dir, 'wren', [dir], [], writer, undefined, true));
+    expect(out.separated).toBe(true);
+    const u = readRow('Book Two').voiceUuid as string;
+    expect(u).not.toBe('u_one');
+    expect(JSON.parse(readFileSync(recordFor(u), 'utf8'))).toEqual({ ownStamp: true });
+    expect(isDeclineSeparatedVoiceSync(u, false)).toBe(false);
+  });
+
+  /* M4: the same for the book-scoped mint, reached through the exported design core (an
+     unconfirmed base design of a row with no uuid that no other book holds). */
+  it('an unconfirmed mint in a book with no bookId writes an unnamed OwnStamp, not the empty file', async () => {
+    writeBook('Book Two', 2, bookTwoId, wren(), false);
+    dropBookId('Book Two');
+    const { designQwenVoiceForCharacter } = await import('./qwen-voice.js');
+    const { isDeclineSeparatedVoiceSync } = await import('../workspace/separated-voices.js');
+    await designQwenVoiceForCharacter({
+      bookId: bookTwoId,
+      bookDir: bookDir('Book Two'),
+      character: readRow('Book Two') as never,
+      characterId: 'wren',
+      persona: 'a warm voice',
+      sampleVoiceId: 'v_wren',
+      modelKey: QWEN_KEY,
+      language: 'english',
+    }).catch(() => {}); // the landing's book-op cannot resolve a book with no bookId; the mint precedes it
+    const u = readRow('Book Two').voiceUuid as string;
+    expect(u).toBeTruthy();
+    expect(JSON.parse(readFileSync(recordFor(u), 'utf8'))).toEqual({ ownStamp: true });
+    expect(isDeclineSeparatedVoiceSync(u, false)).toBe(false);
+  });
+});
+
 /* Pass-4 review (🟠2): the rebaseline decided each sibling's membership from its lock-free scan,
    so a "Don't reuse" that landed between the scan and that sibling's write was undone. */
 describe('voice-override-linked racing a "Don\'t reuse" decline (#4109 pass 4)', () => {

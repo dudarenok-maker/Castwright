@@ -6,9 +6,12 @@
    that moved with it, or a same-book row on its key. Only the declining row carries
    the decline marker; this record is what covers the rest.
 
-   One file per uuid (paths.ts separatedVoicePath): a uuid is minted once, so
-   two writers never touch the same file, and nothing in a cast.json changes, so
-   re-analysis and the analyzer grammar never see it. It survives a restart.
+   One file per uuid (paths.ts separatedVoicePath): a uuid is minted once, so only its
+   minting writer creates the file. The one later writer is a decline of a row already on
+   it (markDeclineSeparatedVoice), which rewrites it under the decliner's book-op and cast
+   locks; every holder of the uuid is in that decliner's chain, so those writes are
+   serialised. Nothing in a cast.json changes, so re-analysis and the analyzer grammar
+   never see it. It survives a restart.
 
    Review pass 4 (🟠1) -- WHO a record vouches for. The file is empty for a
    "Don't reuse" separation (the uuid is shared with the followers that moved with it,
@@ -48,7 +51,8 @@ export interface OwnStamp {
 /* #4104 -- the record an unconfirmed mint or isolation writes in a book with no bookId (nothing to
    name). It must not be the empty file, which reads as a Don't reuse voice: it names nobody, so
    isOwnSeparatedVoice is never true for it (the caller isolates, as before), and it is an OwnStamp
-   without declined for isDeclineSeparatedVoiceSync. */
+   without declined for isDeclineSeparatedVoiceSync. A defence: no route reaches such a book today
+   (a design resolves its book through /api/books/:bookId). */
 export const UNNAMED_OWN_STAMP = { ownStamp: true } as const;
 
 export async function recordSeparatedVoice(

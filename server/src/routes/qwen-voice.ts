@@ -1925,7 +1925,8 @@ const declinedIf = <S extends object>(declined: boolean, stamp: S): S & { declin
   declined ? { ...stamp, declined: true } : stamp;
 
 /* #4074 — does a consented clone sit on the row's own voice anywhere in the series? A
-   row on a "Don't reuse"-separated uuid (separated-voices.ts) shares that voice with only
+   row on a separated uuid (any separated-voice record, separated-voices.ts: a "Don't
+   reuse" separation, or a mint or isolation before Confirm) shares that voice with only
    the rows that hold the same uuid, so only those count: a clone on the declined book's
    row is on the voice this row left. Any other row (no uuid, an ordinary shared one, a
    stale marker) keeps the full `voiceId` scan -- what applyOverrideToCastFiles decides. */
@@ -1937,7 +1938,8 @@ export async function seriesClonedOnRowsVoice(
   return hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, bookDir, await separatedUuidOf(character));
 }
 
-/* The row's uuid when it is a "Don't reuse"-separated voice, else undefined. */
+/* The row's uuid when any separated-voice record exists for it ("Don't reuse" or an
+   OwnStamp alike), else undefined. */
 async function separatedUuidOf(character: CastCharacter): Promise<string | undefined> {
   const uuid = character.voiceUuid;
   return uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
