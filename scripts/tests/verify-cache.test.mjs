@@ -2061,6 +2061,17 @@ test('stagedDiffFiles: returns null when cwd is not a git repo', () => {
   assert.equal(files, null);
 });
 
+test('stagedDiffFiles: a staged rename lists both the source and the destination path', () => {
+  const dir = makeGitFixture();
+  mkdirSync(join(dir, 'server'));
+  writeFileSync(join(dir, 'server', 'x.ts'), 'export const x = "long enough to be detected as a rename";\n'.repeat(5), 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'add x']);
+  mkdirSync(join(dir, 'elsewhere'));
+  gitAt(dir, ['mv', 'server/x.ts', 'elsewhere/x.ts']);
+  assert.deepEqual([...stagedDiffFiles(dir)].sort(), ['elsewhere/x.ts', 'server/x.ts']);
+});
+
 test('stagedDiffFiles: ignores an ambient GIT_DIR pointing elsewhere', () => {
   // Same shape as branchDiffFiles' own "ignores an ambient GIT_DIR" test
   // above — stagedDiffFiles must resolve git state strictly relative to its

@@ -3,11 +3,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { cleanGitEnv } from './verify-cache-test-support.mjs';
 import {
   touchesSidecar,
   unquoteGitPath,
@@ -890,14 +891,23 @@ test('the version line in a second hunk is not a bump', () => {
 // version.py blob and diffed the way the workflow does. The hand-written
 // fixtures above cannot show how git renders a content line that itself starts
 // with `++ ` or `-- ` (it comes out as `+++ ` / `--- `, which look like headers).
-const REAL_VERSION_PY = readFileSync(resolve(dirname(scriptPath), '..', 'server/tts-sidecar/version.py'), 'utf8')
-  .replace(/__version__ = "[^"]+"/, '__version__ = "1.14.0"');
+// Read from the committed BLOB, not the working tree: a Windows checkout with
+// core.autocrlf=true holds version.py as CRLF, and every diff content line would
+// then end in a carriage return and be rejected before the line under test is reached.
+// The non-whitespace pattern (not a quoted one) keeps an unpaired quote out of the regex literal,
+// which server/src/spawn-windows-hide.test.ts refuses (#2747).
+const REAL_VERSION_PY = spawnSync('git', ['show', 'HEAD:server/tts-sidecar/version.py'], {
+  cwd: dirname(scriptPath),
+  encoding: 'utf8',
+  windowsHide: true,
+  env: cleanGitEnv(),
+}).stdout.replace(/__version__ = \S+/, '__version__ = "1.14.0"');
 
 function realGitVersionDiff(baseText, headText) {
   const dir = mkdtempSync(join(tmpdir(), 'sidecar-realgit-'));
   try {
     const git = (...a) =>
-      spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } });
+      spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...cleanGitEnv(), GIT_CONFIG_NOSYSTEM: '1' } });
     git('init', '-q');
     git('config', 'user.email', 't@t');
     git('config', 'user.name', 't');
@@ -953,7 +963,7 @@ test('real git: --no-renames shows the sidecar source path of a rename out of th
   const dir = mkdtempSync(join(tmpdir(), 'sidecar-rename-'));
   try {
     const git = (...a) => {
-      const r = spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true });
+      const r = spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, env: cleanGitEnv() });
       assert.equal(r.status, 0, r.stderr);
       return r.stdout.trim();
     };
@@ -978,14 +988,21 @@ test('real git: --no-renames shows the sidecar source path of a rename out of th
   }
 });
 
-test('workflows: every `git diff --name-only` that builds a scope file list passes --no-renames', () => {
-  const root = resolve(dirname(scriptPath), '..');
-  for (const wf of ['sidecar-acceptance-gate.yml', 'verify.yml']) {
-    const text = readFileSync(join(root, '.github', 'workflows', wf), 'utf8');
-    const cmds = text.split('\n').filter((l) => /git diff --name-only/.test(l) && !l.trim().startsWith('#'));
-    assert.ok(cmds.length > 0, `${wf}: no file-list command found (regex broke?)`);
-    for (const c of cmds) assert.match(c, /--no-renames/, `${wf}: ${c.trim()}`);
+test('workflows: every `git diff|log ... --name-only` in any workflow passes --no-renames', () => {
+  const dir = join(resolve(dirname(scriptPath), '..'), '.github', 'workflows');
+  let found = 0;
+  for (const wf of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f))) {
+    // Join backslash continuations so a flag on a continued line is seen.
+    const text = readFileSync(join(dir, wf), 'utf8').replace(/\\\r?\n/g, ' ');
+    for (const l of text.split(/\r?\n/)) {
+      if (l.trim().startsWith('#')) continue;
+      if (/\bgit\s+(diff|log)\b/.test(l) && /--name-only/.test(l)) {
+        found++;
+        assert.match(l, /--no-renames/, `${wf}: ${l.trim()}`);
+      }
+    }
   }
+  assert.ok(found >= 3, `expected at least 3 --name-only invocations, saw ${found}`);
 });
 
 test('CLI: version-only bump diff exempts the gate with the version-bump message', () => {

@@ -299,7 +299,7 @@ describe('trimUnreleasedReleaseNotes (mid-cycle in-progress section)', () => {
     expect(out).toContain('Older bullet');
   });
 
-  it('drops an empty reopened in-progress section so the shipped build never shows a bare heading', () => {
+  it('drops an empty reopened in-progress section so the mock release-notes path never shows a bare heading', () => {
     const md = '# Castwright 1.16.0\n\n# Castwright 1.15.0\n\n- Shipped bullet.\n';
     expect(trimUnreleasedReleaseNotes(md, '1.15.0')).toBe('# Castwright 1.15.0\n\n- Shipped bullet.\n');
   });
