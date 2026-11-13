@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit, releaseNextSteps } from '../bump-version.mjs';
 import { scrubGitEnv, scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -1527,4 +1527,25 @@ test('bump-version: explicit --notes-file docs/release-notes-next.md from a subd
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- release next-steps text (#4120) -----------------------------------------
+// `main`'s ruleset rejects a direct push, so the printed procedure must route
+// the bump commit through a PR and push the tag only after it has merged.
+
+test('releaseNextSteps: routes the bump through a chore/bump-vX.Y.Z PR, then the tag', () => {
+  const text = releaseNextSteps('main', 'v9.9.9').join('\n');
+  assert.doesNotMatch(text, /git push origin main/);
+  assert.match(text, /git push origin HEAD:refs\/heads\/chore\/bump-v9\.9\.9/);
+  assert.match(text, /gh pr create/);
+  assert.match(text, /merge commit/i);
+  assert.match(text, /git rev-parse "v9\.9\.9\^\{commit\}"/);
+  assert.match(text, /merge-base --is-ancestor/);
+  assert.match(text, /git pull --ff-only/);
+  assert.match(text, /release\.yml/);
+  // the tag push comes after the merge and the verification, not before
+  const tagPush = text.indexOf('git push origin v9.9.9');
+  assert.ok(tagPush > 0, 'tag push step missing');
+  assert.ok(tagPush > text.indexOf('rev-parse'));
+  assert.ok(tagPush > text.search(/merge commit/i));
 });

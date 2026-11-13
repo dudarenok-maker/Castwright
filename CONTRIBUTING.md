@@ -697,13 +697,28 @@ node scripts/bump-version.mjs --level minor
 #    would otherwise fail the tag at publish time; --allow-notes-divergence
 #    cuts anyway, --dry-run only reports it.)
 
-# 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
-git push origin main
+# 4. `main`'s ruleset rejects a direct push, so the bump commit goes in through
+#    a PR (the route v1.13.0, v1.14.0 and v1.15.0 took). The bump left the
+#    commit and the tag on local `main`; put the commit on a branch and PR it.
+git push origin HEAD:refs/heads/chore/bump-vX.Y.Z
+gh pr create --base main --head chore/bump-vX.Y.Z --title "chore: bump version to X.Y.Z"
+#    Merge it with a MERGE COMMIT (gh pr merge --merge) once verify.yml is green.
+#    A bump that changes only the `__version__` line of server/tts-sidecar/version.py
+#    needs no "Sidecar acceptance:" line (the gate exempts it, #4120); any other
+#    sidecar change in the PR still does.
+
+# 5. After the merge, local `main` fast-forwards past the bump commit. Check the
+#    tag still points at the bump commit and that commit is in origin/main, THEN
+#    push the tag. The tag push fires .github/workflows/release.yml.
+git switch main
+git pull --ff-only
+git rev-parse "vX.Y.Z^{commit}"     # must be the bump commit
+git merge-base --is-ancestor "vX.Y.Z^{commit}" origin/main && echo ok
 git push origin vX.Y.Z
 
-# 5. Watch:  gh run watch   (or the Actions tab in the browser)
+# 6. Watch:  gh run watch   (or the Actions tab in the browser)
 
-# 6. Once the release is published, refresh the wiki's Release Notes section
+# 7. Once the release is published, refresh the wiki's Release Notes section
 #    (fs-68) with the new version's body, then publish docs/wiki -> the wiki repo.
 npm run wiki:release-notes
 npm run wiki:sync
