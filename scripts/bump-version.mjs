@@ -443,10 +443,16 @@ async function main() {
   // The default is a path WITHIN THE REPO, so it is looked up (and, once
   // chosen, read) against `repoRoot` — not the invocation cwd — or a run from
   // a subdirectory finds nothing and later crashes on `resolve(null)`.
+  // `defaulted` (not a string compare after the fact) tells an operator who
+  // typed `--notes-file docs/release-notes-next.md` from a subdirectory — whose
+  // cwd file is theirs to name — apart from the default, which lives at the root.
+  // `args.notesFile` stays the operator-facing label; `notesPath` is what's read.
+  const defaulted = !args.notesFile;
   args.notesFile = resolveNotesFile(args.notesFile, (p) =>
     existsSync(p === DEFAULT_NOTES_FILE ? resolve(repoRoot, p) : p),
   );
-  if (args.notesFile === DEFAULT_NOTES_FILE) args.notesFile = resolve(repoRoot, DEFAULT_NOTES_FILE);
+  const notesSrc =
+    defaulted && args.notesFile === DEFAULT_NOTES_FILE ? resolve(repoRoot, DEFAULT_NOTES_FILE) : args.notesFile;
 
   // #2170 (decided 2026-08-06, superseding the #2168-review heads-up below) —
   // release.yml's release-body.mjs sources the PUBLISHED GitHub release body
@@ -478,10 +484,10 @@ async function main() {
   // the `--notes-file does not exist` pre-flight above, which does the same)
   // — an operator's notes file legitimately lives wherever they're standing.
   if (
-    resolve(args.notesFile ?? '') !== resolve(repoRoot, DEFAULT_NOTES_FILE) &&
+    resolve(notesSrc ?? '') !==resolve(repoRoot, DEFAULT_NOTES_FILE) &&
     existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))
   ) {
-    const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
+    const explicitText = readFileSync(resolve(notesSrc), 'utf8');
     const defaultText = readFileSync(resolve(repoRoot, DEFAULT_NOTES_FILE), 'utf8');
     // Finding 5 — the tag annotation is built from buildTagMessage(explicitText),
     // which strips a defensive BOM (see buildTagMessage's own doc comment);
@@ -639,7 +645,7 @@ async function main() {
   // Catches the "release-notes-next.md still holds the last release" trap —
   // a stale marker would otherwise become the GitHub release body verbatim.
   if (args.notesFile) {
-    const notesFileText = readFileSync(resolve(args.notesFile), 'utf8');
+    const notesFileText = readFileSync(resolve(notesSrc), 'utf8');
     const stale = staleNotesVersion(notesFileText, newVersion);
     if (stale) {
       if (args.force) info(`[WARN] notes-file gate (--force): ${args.notesFile} declares ${stale}, cutting ${newVersion}`);
@@ -789,7 +795,7 @@ async function main() {
   // `--cleanup=verbatim` and the BOM strip are both load-bearing.
   info('[STEP] git tag ...');
   if (args.notesFile) {
-    createAnnotatedTag({ repoRoot, newTag, notesFile: args.notesFile });
+    createAnnotatedTag({ repoRoot, newTag, notesFile: notesSrc });
   } else {
     git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Castwright ${newTag}`]);
   }

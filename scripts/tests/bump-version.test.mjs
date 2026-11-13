@@ -1492,6 +1492,38 @@ test('bump-version run from a subdirectory finds the default notes file (no cras
     assert.doesNotMatch(out.stderr, /ERR_INVALID_ARG_TYPE/);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /release-notes-next\.md/);
+    // The operator-facing label stays repo-relative, not an absolute path.
+    assert.match(out.stdout, /\(annotation from docs\/release-notes-next\.md\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// An EXPLICIT `--notes-file docs/release-notes-next.md` from a subdirectory names
+// <cwd>/docs/release-notes-next.md, not the root default. It must not be swapped
+// for the root file (which skipped the #2170 divergence guard with no warning);
+// spelled `./docs/...` it already warned, so the bare spelling must too.
+test('bump-version: explicit --notes-file docs/release-notes-next.md from a subdirectory is not swapped for the root file', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'), { recursive: true });
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.1\n\nFixes:\n- the ROOT file.\n');
+    mkdirSync(resolve(dir, 'server', 'docs'), { recursive: true });
+    writeFileSync(
+      resolve(dir, 'server', 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- a DIFFERENT subdirectory file.\n',
+    );
+    const out = spawnSync(
+      'node',
+      [
+        resolve(dir, 'scripts', 'bump-version.mjs'),
+        '--level', 'patch', '--dry-run', '--skip-cross-os',
+        '--notes-file', 'docs/release-notes-next.md',
+      ],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv(), windowsHide: true },
+    );
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    assert.match(out.stdout, /\[DRY-RUN\]\[WARN\].*disagree after normalising/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
