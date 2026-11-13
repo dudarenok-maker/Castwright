@@ -2581,6 +2581,9 @@ test('isFrozenPath: excludes the documented frozen globs', () => {
   assert.equal(isFrozenPath('docs/wiki/Release-Notes-v1.15.0.md'), true);
   assert.equal(isFrozenPath('docs/wiki/Release-Notes.md'), true);
   assert.equal(isFrozenPath('docs/wiki/Some-Guide.md'), false);
+  // A hand-written page in the Release-Notes namespace (the wiki generator
+  // deliberately leaves these alone) is NOT a generated copy: stays checked.
+  assert.equal(isFrozenPath('docs/wiki/Release-Notes-FAQ.md'), false);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-register-live-view.html'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-sitting-plan.md'), false);
