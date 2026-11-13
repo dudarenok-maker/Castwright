@@ -440,7 +440,13 @@ async function main() {
   }
   // Default to the canonical in-repo notes so a release can't ship a silent
   // placeholder body (the refusal is enforced after the cheap pre-flights).
-  args.notesFile = resolveNotesFile(args.notesFile, existsSync);
+  // The default is a path WITHIN THE REPO, so it is looked up (and, once
+  // chosen, read) against `repoRoot` — not the invocation cwd — or a run from
+  // a subdirectory finds nothing and later crashes on `resolve(null)`.
+  args.notesFile = resolveNotesFile(args.notesFile, (p) =>
+    existsSync(p === DEFAULT_NOTES_FILE ? resolve(repoRoot, p) : p),
+  );
+  if (args.notesFile === DEFAULT_NOTES_FILE) args.notesFile = resolve(repoRoot, DEFAULT_NOTES_FILE);
 
   // #2170 (decided 2026-08-06, superseding the #2168-review heads-up below) —
   // release.yml's release-body.mjs sources the PUBLISHED GitHub release body
@@ -471,7 +477,10 @@ async function main() {
   // itself is intentionally left resolved against the invocation cwd (see
   // the `--notes-file does not exist` pre-flight above, which does the same)
   // — an operator's notes file legitimately lives wherever they're standing.
-  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))) {
+  if (
+    resolve(args.notesFile ?? '') !== resolve(repoRoot, DEFAULT_NOTES_FILE) &&
+    existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))
+  ) {
     const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
     const defaultText = readFileSync(resolve(repoRoot, DEFAULT_NOTES_FILE), 'utf8');
     // Finding 5 — the tag annotation is built from buildTagMessage(explicitText),
@@ -492,7 +501,7 @@ async function main() {
         `pushed. Align the two files, or pass --allow-notes-divergence to cut anyway (the ` +
         `publish job WILL FAIL unless you fix it before pushing the tag).`;
       // Finding 4 — every other CONDITIONAL pre-flight in main() reports
-      // rather than dies under --dry-run (the four that die unconditionally
+      // rather than dies under --dry-run (the five that die unconditionally
       // each carry their own comment explaining why — no legitimate reason
       // for a conflict marker or a BOM to ship, ever). A dry run creates no
       // tag, so refusing here protects nothing while destroying the preview;
