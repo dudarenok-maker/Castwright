@@ -85,6 +85,36 @@ describe('separated-voices', () => {
     expect(await mod.isSeparatedVoice('uGarbage')).toBe(true);
   });
 
+  it('PR #4109 pass 3: only an empty record or a declined stamp is a "Don\'t reuse" voice', async () => {
+    await mod.recordSeparatedVoice('uDecl');
+    expect(mod.isDeclineSeparatedVoiceSync('uDecl', false)).toBe(true);
+    await mod.recordSeparatedVoice('uOwn', { bookId: 'b1', editEpoch: 'e1' });
+    expect(mod.isDeclineSeparatedVoiceSync('uOwn', false)).toBe(false);
+    expect(mod.isDeclineSeparatedVoiceSync('uOwn', true)).toBe(true); // a legacy stamp a decliner holds
+    expect(mod.isDeclineSeparatedVoiceSync('uNone', true)).toBe(false);
+    writeFileSync(recordPath('uJunk'), '{not json');
+    expect(mod.isDeclineSeparatedVoiceSync('uJunk', false)).toBe(true); // fails closed
+  });
+
+  it('PR #4109 pass 3: marking a decline flags a stamp (still own), writes an absent record, and undoes', async () => {
+    const own = { bookId: 'b1', editEpoch: 'e1' };
+    await mod.recordSeparatedVoice('uMark', own);
+    const undo = await mod.markDeclineSeparatedVoice('uMark');
+    expect(mod.isDeclineSeparatedVoiceSync('uMark', false)).toBe(true);
+    expect(await mod.isOwnSeparatedVoice('uMark', own)).toBe(true);
+    await undo!();
+    expect(mod.isDeclineSeparatedVoiceSync('uMark', false)).toBe(false);
+    expect(await mod.isOwnSeparatedVoice('uMark', own)).toBe(true);
+
+    const undoNew = await mod.markDeclineSeparatedVoice('uFresh');
+    expect(mod.isDeclineSeparatedVoiceSync('uFresh', false)).toBe(true);
+    await undoNew!();
+    expect(existsSync(recordPath('uFresh'))).toBe(false);
+
+    await mod.recordSeparatedVoice('uAlready');
+    expect(await mod.markDeclineSeparatedVoice('uAlready')).toBeUndefined();
+  });
+
   it('a uuid cannot name a path outside the record folder', async () => {
     await mod.recordSeparatedVoice('../escape').catch(() => {}); // refused or sanitised, never outside
     expect(existsSync(join(workspaceRoot, 'voices', 'escape'))).toBe(false);

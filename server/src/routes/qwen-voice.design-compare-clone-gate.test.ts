@@ -57,7 +57,7 @@ const bookDir = (t: string) => join(workspaceRoot, 'books', AUTHOR, SERIES, t);
 const castPath = (t: string) => join(bookDir(t), '.audiobook', 'cast.json');
 const readRow = (t: string): Record<string, any> => JSON.parse(readFileSync(castPath(t), 'utf8')).characters[0];
 
-function writeBook(t: string, position: number, id: string, row: Record<string, unknown>) {
+function writeBook(t: string, position: number, id: string, row: Record<string, unknown>, castConfirmed = true) {
   mkdirSync(join(bookDir(t), '.audiobook'), { recursive: true });
   writeFileSync(
     join(bookDir(t), '.audiobook', 'state.json'),
@@ -70,7 +70,7 @@ function writeBook(t: string, position: number, id: string, row: Record<string, 
       seriesPosition: position,
       isStandalone: false,
       manuscriptFile: 'manuscript.txt',
-      castConfirmed: true,
+      castConfirmed,
       chapters: [],
       language: 'en',
       coverGradient: ['#000', '#fff'],
@@ -411,5 +411,120 @@ describe('voice-override-linked across a separated chain (#4110)', () => {
     expect(ids(res)).toContain(bookThreeId);
     expect(readRow('Book Three').voiceUuid).toBe(moved);
     expect(readRow('Book Three').overrideTtsVoices.qwen.name).toBe(name);
+  });
+});
+
+/* Pass-3 review (owner decision 2026-11-13): the separated-voice record is ALSO written as an
+   OwnStamp by a design or Keep before Confirm. Only a "Don't reuse" voice is kept apart; a voice
+   first designed during cast review unifies across the series, as it does on main. */
+describe('voice-override-linked for a voice first designed before Confirm (#4109 pass 3)', () => {
+  const link = (fromBook: string, name: string) =>
+    request(app)
+      .post(`/api/books/${fromBook}/cast/wren/voice-override-linked`)
+      .send({ override: { engine: 'qwen', name } });
+  const ids = (res: { body: { updated: Array<{ bookId: string }> } }) => res.body.updated.map((u) => u.bookId);
+  const designIn = (id: string) =>
+    request(app)
+      .post(`/api/books/${id}/cast/wren/design-voice`)
+      .send({ persona: 'a warm voice', sampleVoiceId: 'v_wren', modelKey: QWEN_KEY, preview: false });
+  const recordFor = (u: string) => join(workspaceRoot, 'voices', 'separated', u);
+  const confirm = (t: string) => {
+    const p = join(bookDir(t), '.audiobook', 'state.json');
+    writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, 'utf8')), castConfirmed: true }));
+  };
+  const fromBook = (id: string, title: string) => ({
+    matchedFrom: { bookId: id, characterId: 'wren', bookTitle: title, confidence: 1 },
+  });
+
+  it('PH: a voice minted before Confirm still reaches the series, alias and shared-voiceId rows alike', async () => {
+    writeBook('Book One', 1, bookOneId, wren(), false);
+    const designed = await designIn(bookOneId);
+    expect(designed.status).toBe(200);
+    const u = readRow('Book One').voiceUuid as string;
+    expect(u).toBeTruthy();
+    expect(JSON.parse(readFileSync(recordFor(u), 'utf8'))).toMatchObject({ bookId: bookOneId }); // an OwnStamp
+    confirm('Book One');
+    writeBook('Book Two', 2, bookTwoId, {
+      ...wren({ voiceId: 'v_ws' }),
+      id: 'wren-sparrow',
+      name: 'Wren Sparrow',
+      aliases: ['Wren'],
+    });
+    writeBook('Book Three', 3, bookThreeId, wren({ voiceUuid: 'u_three' }));
+
+    const res = await link(bookOneId, designed.body.voiceId);
+    expect(res.status).toBe(200);
+    expect(res.body.failed).toEqual([]);
+    expect(ids(res)).toEqual(expect.arrayContaining([bookOneId, bookTwoId, bookThreeId]));
+    expect(readRow('Book Three').voiceUuid).toBe(u);
+    expect(readRow('Book Three').overrideTtsVoices.qwen.name).toBe(designed.body.voiceId);
+    expect(readRow('Book Two').voiceUuid).toBe(u);
+    expect(readRow('Book Two').overrideTtsVoices.qwen.name).toBe(designed.body.voiceId);
+  });
+
+  /* Book Three is linked to Book One, and its design before Confirm isolates it onto an OwnStamp uuid. */
+  async function isolatedBeforeConfirm() {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Three', 3, bookThreeId, wren({ ...fromBook(bookOneId, 'Book One'), voiceUuid: 'u_one' }), false);
+    const designed = await designIn(bookThreeId);
+    expect(designed.status).toBe(200);
+    const u3 = readRow('Book Three').voiceUuid as string;
+    expect(u3).not.toBe('u_one');
+    expect(JSON.parse(readFileSync(recordFor(u3), 'utf8'))).toMatchObject({ bookId: bookThreeId });
+    confirm('Book Three');
+    return { name: designed.body.voiceId as string, u3 };
+  }
+
+  it('PA: a rebaseline from Book One reaches a book isolated before its Confirm', async () => {
+    await isolatedBeforeConfirm();
+    const res = await link(bookOneId, 'qwen-u_one');
+    expect(res.status).toBe(200);
+    expect(ids(res)).toContain(bookThreeId);
+    expect(readRow('Book Three').voiceUuid).toBe('u_one');
+  });
+
+  it('PA reverse: a rebaseline from the isolated book reaches Book One', async () => {
+    const { name, u3 } = await isolatedBeforeConfirm();
+    const res = await link(bookThreeId, name);
+    expect(res.status).toBe(200);
+    expect(ids(res)).toContain(bookOneId);
+    expect(readRow('Book One').voiceUuid).toBe(u3);
+  });
+
+  it('a decline of a row already on an OwnStamp uuid is still kept apart from the declined book', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_one' }), false);
+    const designed = await designIn(bookTwoId); // isolates Book Two onto an OwnStamp uuid
+    expect(designed.status).toBe(200);
+    const u2 = readRow('Book Two').voiceUuid as string;
+    expect(u2).not.toBe('u_one');
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).toBe(u2); // no separation was needed
+    /* A follower of the decliner, which carries no marker. Book Two stays unconfirmed, so the
+       route cannot see the decliner's marker: only the record says this voice is a "Don't reuse" one. */
+    writeBook('Book Three', 3, bookThreeId, wren({ ...fromBook(bookTwoId, 'Book Two'), voiceUuid: u2 }));
+    const oneBefore = readRow('Book One');
+
+    const res = await link(bookThreeId, designed.body.voiceId);
+    expect(res.status).toBe(200);
+    expect(ids(res)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
+  });
+
+  it('a legacy OwnStamp record (no decline flag) held by a decline-marked row is still kept apart', async () => {
+    const { recordSeparatedVoice } = await import('../workspace/separated-voices.js');
+    await recordSeparatedVoice('u_two', { bookId: bookTwoId, editEpoch: '' }); // as written before the flag existed
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ voiceUuid: 'u_two', declinedVoiceFrom: [bookOneId] }));
+    writeBook('Book Three', 3, bookThreeId, wren({ ...fromBook(bookTwoId, 'Book Two'), voiceUuid: 'u_two' }));
+    const oneBefore = readRow('Book One');
+    const res = await link(bookThreeId, 'qwen-u_two');
+    expect(res.status).toBe(200);
+    expect(ids(res)).toContain(bookTwoId);
+    expect(ids(res)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
   });
 });

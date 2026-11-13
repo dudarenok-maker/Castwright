@@ -40,7 +40,7 @@ import { itemFailureReason } from '../workspace/file-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { declinesVoice } from '../store/declined-voice.js';
-import { isSeparatedVoiceSync } from '../workspace/separated-voices.js';
+import { isDeclineSeparatedVoiceSync } from '../workspace/separated-voices.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import {
@@ -70,6 +70,8 @@ type PersistedCharacter = CharacterOutput & {
   overrideTtsVoice?: unknown; // legacy singular field — dropped on write
   ttsEngine?: Engine | null;
   notLinkedTo?: Array<{ bookId: string; characterId: string }>;
+  /** #3992 "Don't reuse" marker (store/declined-voice.ts). */
+  declinedVoiceFrom?: string[];
 };
 interface CastFile {
   characters: PersistedCharacter[];
@@ -148,6 +150,20 @@ voiceOverrideLinkedRouter.post(
       const canonicalVoiceId = source.voiceId ?? source.id;
       const sourceTokens = tokensFor(source);
 
+      /* Series-mates (confirmed, same author+series, source book excluded). */
+      const siblings = await scanSeriesFullCharactersForBookId(bookId);
+
+      /* PR #4109 review pass 3 -- the uuids a decline-marked row holds, in every cast read here.
+         An OwnStamp record written before the decline flag existed counts as a "Don't reuse"
+         voice only when such a row holds it (separated-voices.ts). */
+      const declinerUuids = new Set(
+        [...sourceCast.characters, ...siblings.map((r) => r.character as PersistedCharacter)]
+          .filter((c) => !!c.voiceUuid && (c.declinedVoiceFrom ?? []).length > 0)
+          .map((c) => c.voiceUuid as string),
+      );
+      const keptApart = (u: string | undefined): boolean =>
+        !!u && isDeclineSeparatedVoiceSync(u, declinerUuids.has(u));
+
       /* Decide whether a candidate (in `candBookId`) is in the source's group. */
       const inGroup = (cand: PersistedCharacter, candBookId: string): boolean => {
         /* #3992 "Don't reuse" -- a declined pair never shares a voice, in either direction, and
@@ -157,13 +173,11 @@ voiceOverrideLinkedRouter.post(
         if (declinesVoice(cand, { bookId, voiceUuid: source.voiceUuid })) return false;
         /* PR #4007 pass 13 (owner decision): a voice "Don't reuse" created is never shared outside the
            chain that moved with it. Only the decliner carries the marker, so its followers and a book
-           nobody declined would still match on the shared voiceId -- a separated uuid matches only
-           a row on that same uuid, the rule PUT /override applies through #4067. */
-        if (
-          source.voiceUuid !== cand.voiceUuid &&
-          ((!!source.voiceUuid && isSeparatedVoiceSync(source.voiceUuid)) ||
-            (!!cand.voiceUuid && isSeparatedVoiceSync(cand.voiceUuid)))
-        ) {
+           nobody declined would still match on the shared voiceId -- a "Don't reuse" uuid matches
+           only a row on that same uuid, the rule PUT /override applies through #4067. PR #4109
+           review pass 3 (owner decision): only a "Don't reuse" voice, never one merely first
+           designed before Confirm (whose record is an OwnStamp), which unifies as on main. */
+        if (source.voiceUuid !== cand.voiceUuid && (keptApart(source.voiceUuid) || keptApart(cand.voiceUuid))) {
           return false;
         }
         if ((cand.voiceId ?? cand.id) === canonicalVoiceId) return true; // shared write key
@@ -178,8 +192,6 @@ voiceOverrideLinkedRouter.post(
       const sourceIds = sourceCast.characters.filter((c) => inGroup(c, bookId)).map((c) => c.id);
       if (!sourceIds.includes(source.id)) sourceIds.push(source.id);
 
-      /* Series-mates (confirmed, same author+series, source book excluded). */
-      const siblings = await scanSeriesFullCharactersForBookId(bookId);
       const byBook = new Map<string, { bookTitle: string; ids: string[] }>();
       for (const rec of siblings) {
         const cand = rec.character as PersistedCharacter;

@@ -58,6 +58,7 @@ import {
   isSeparatedVoice,
   isOwnSeparatedVoice,
   isSeparatedVoiceSync,
+  markDeclineSeparatedVoice,
   recordSeparatedVoice,
 } from '../workspace/separated-voices.js';
 import { isFsError, isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
@@ -894,15 +895,16 @@ export async function separateVoiceLocked(
     /* PR #4007 pass 13 — a decline that needed no separation leaves the row on a
        uuid no other book's row holds but its followers: the decliner's own voice,
        recorded like a separation's (separated-voices.ts) before the marker lands. A
-       failed write takes back only a record this step made. */
-    const own = decline && x.voiceUuid && !(await isSeparatedVoice(x.voiceUuid)) ? x.voiceUuid : undefined;
-    if (own) await recordSeparatedVoice(own);
+       failed write takes back only a record this step made. PR #4109 review pass 3: a
+       uuid already recorded as an OwnStamp (a design before Confirm) gets the decline
+       flag, so the rebaseline keeps it apart as a "Don't reuse" voice. */
+    const undoRecord = decline && x.voiceUuid ? await markDeclineSeparatedVoice(x.voiceUuid) : undefined;
     if (JSON.stringify(marked) !== JSON.stringify(x)) {
       fresh.characters[idx] = marked;
       try {
         await writeCast(bookDir, fresh);
       } catch (e) {
-        if (own) await forgetSeparatedVoice(own);
+        if (undoRecord) await undoRecord();
         await rollBack(carried);
         throw e;
       }
