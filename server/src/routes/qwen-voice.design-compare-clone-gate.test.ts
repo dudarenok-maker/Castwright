@@ -49,6 +49,7 @@ let app: Express;
 let bookOneId: string;
 let bookTwoId: string;
 let bookThreeId: string;
+let bookFourId: string;
 const fetchMock = vi.fn();
 
 const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
@@ -112,6 +113,7 @@ beforeAll(async () => {
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
   bookThreeId = makeBookId(AUTHOR, SERIES, 'Book Three');
+  bookFourId = makeBookId(AUTHOR, SERIES, 'Book Four');
   app = express();
   app.use(express.json());
   app.use('/api/books', castDeclineVoiceLinkRouter);
@@ -339,5 +341,75 @@ describe('voice-override-linked after a "Don\'t reuse" decline (#4104 review)', 
     expect(res.status).toBe(200);
     expect(res.body.updated.map((u: { bookId: string }) => u.bookId)).not.toContain(bookTwoId);
     expect(readRow('Book Two')).toEqual(twoBefore);
+  });
+});
+
+/* Pass-2 review (#4110): only the declining row carries the marker, so its followers (and a
+   book nobody declined) keep the shared voiceId and used to match across the separation.
+   PR #4007 pass 13: a voice "Don't reuse" created is never shared outside its chain, so a
+   separated uuid matches only a row on the SAME uuid. */
+describe('voice-override-linked across a separated chain (#4110)', () => {
+  const link = (fromBook: string, name: string) =>
+    request(app)
+      .post(`/api/books/${fromBook}/cast/wren/voice-override-linked`)
+      .send({ override: { engine: 'qwen', name } });
+  const ids = (res: { body: { updated: Array<{ bookId: string }> } }) => res.body.updated.map((u) => u.bookId);
+  const fromTwo = () => ({
+    matchedFrom: { bookId: bookTwoId, characterId: 'wren', bookTitle: 'Book Two', confidence: 1 },
+  });
+
+  /* One on u_one; Two linked to One; Three linked to Two; Two declines, so Two and Three move. */
+  async function declineWithFollower() {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_one' }));
+    writeBook('Book Three', 3, bookThreeId, wren({ ...fromTwo(), voiceUuid: 'u_one' }));
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    const moved = readRow('Book Two').voiceUuid as string;
+    expect(moved).not.toBe('u_one');
+    expect(readRow('Book Three').voiceUuid).toBe(moved);
+    const designed = await designRest(false);
+    expect(designed.status).toBe(200);
+    return { name: designed.body.voiceId as string, moved };
+  }
+
+  it('F-A: a rebaseline from the follower does not stamp the new voice onto the declined book', async () => {
+    const { name } = await declineWithFollower();
+    const oneBefore = readRow('Book One');
+    const res = await link(bookThreeId, name);
+    expect(res.status).toBe(200);
+    expect(ids(res)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
+  });
+
+  it('F-B: a rebaseline from the declined book does not pull the follower back', async () => {
+    await declineWithFollower();
+    const threeBefore = readRow('Book Three');
+    const res = await link(bookOneId, 'qwen-u_one');
+    expect(res.status).toBe(200);
+    expect(ids(res)).not.toContain(bookThreeId);
+    expect(ids(res)).not.toContain(bookTwoId);
+    expect(readRow('Book Three')).toEqual(threeBefore);
+  });
+
+  it('a book nobody declined that matches by voiceId does not receive the separated uuid', async () => {
+    const { name } = await declineWithFollower();
+    writeBook('Book Four', 4, bookFourId, wren({ voiceUuid: 'u_four' }));
+    const fourBefore = readRow('Book Four');
+    const res = await link(bookTwoId, name);
+    expect(res.status).toBe(200);
+    expect(ids(res)).not.toContain(bookFourId);
+    expect(readRow('Book Four')).toEqual(fourBefore);
+  });
+
+  it('a rebaseline within the separated chain still updates the follower', async () => {
+    const { name, moved } = await declineWithFollower();
+    const res = await link(bookTwoId, name);
+    expect(res.status).toBe(200);
+    expect(ids(res)).toContain(bookThreeId);
+    expect(readRow('Book Three').voiceUuid).toBe(moved);
+    expect(readRow('Book Three').overrideTtsVoices.qwen.name).toBe(name);
   });
 });

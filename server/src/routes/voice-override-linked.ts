@@ -40,6 +40,7 @@ import { itemFailureReason } from '../workspace/file-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { declinesVoice } from '../store/declined-voice.js';
+import { isSeparatedVoiceSync } from '../workspace/separated-voices.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import {
@@ -154,6 +155,17 @@ voiceOverrideLinkedRouter.post(
            match would otherwise stamp the new uuid back onto the book it declined. */
         if (declinesVoice(source, { bookId: candBookId, voiceUuid: cand.voiceUuid })) return false;
         if (declinesVoice(cand, { bookId, voiceUuid: source.voiceUuid })) return false;
+        /* PR #4007 pass 13 (owner decision): a voice "Don't reuse" created is never shared outside the
+           chain that moved with it. Only the decliner carries the marker, so its followers and a book
+           nobody declined would still match on the shared voiceId -- a separated uuid matches only
+           a row on that same uuid, the rule PUT /override applies through #4067. */
+        if (
+          source.voiceUuid !== cand.voiceUuid &&
+          ((!!source.voiceUuid && isSeparatedVoiceSync(source.voiceUuid)) ||
+            (!!cand.voiceUuid && isSeparatedVoiceSync(cand.voiceUuid)))
+        ) {
+          return false;
+        }
         if ((cand.voiceId ?? cand.id) === canonicalVoiceId) return true; // shared write key
         if (BUCKET_IDS.has(cand.id)) return false;
         if (!intersects(tokensFor(cand), sourceTokens)) return false;
