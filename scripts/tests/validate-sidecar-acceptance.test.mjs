@@ -988,18 +988,40 @@ test('real git: --no-renames shows the sidecar source path of a rename out of th
   }
 });
 
-test('workflows: every `git diff|log ... --name-only` in any workflow passes --no-renames', () => {
-  const dir = join(resolve(dirname(scriptPath), '..'), '.github', 'workflows');
+// The matcher allows git global options (`-C dir`, `-c k=v`, `--no-pager`)
+// between `git` and the subcommand, and covers `show` as well as diff/log.
+const GIT_LISTING_RE = /\bgit(?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:=\S+)?))*\s+(?:diff|log|show)\b/;
+
+function findRenameBlindListings(text) {
+  // Join backslash continuations so a flag on a continued line is seen.
+  const joined = text.replace(/\\\r?\n/g, ' ');
+  const hits = [];
+  for (const l of joined.split(/\r?\n/)) {
+    if (l.trim().startsWith('#')) continue;
+    if (GIT_LISTING_RE.test(l) && /--name-only/.test(l)) hits.push(l);
+  }
+  return hits;
+}
+
+test('class guard matcher: sees the global-option and `show` spellings', () => {
+  for (const l of [
+    'git diff --name-only a b',
+    'git -C dir diff --name-only a b',
+    'git -c core.quotePath=false diff --name-only a b',
+    'git --no-pager log --name-only a..b',
+    'git show --name-only --pretty=format: "$HEAD"',
+  ]) {
+    assert.equal(findRenameBlindListings(l).length, 1, l);
+  }
+});
+
+test('workflows and actions: every `git diff|log|show ... --name-only` under .github passes --no-renames', () => {
+  const dir = join(resolve(dirname(scriptPath), '..'), '.github');
   let found = 0;
-  for (const wf of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f))) {
-    // Join backslash continuations so a flag on a continued line is seen.
-    const text = readFileSync(join(dir, wf), 'utf8').replace(/\\\r?\n/g, ' ');
-    for (const l of text.split(/\r?\n/)) {
-      if (l.trim().startsWith('#')) continue;
-      if (/\bgit\s+(diff|log)\b/.test(l) && /--name-only/.test(l)) {
-        found++;
-        assert.match(l, /--no-renames/, `${wf}: ${l.trim()}`);
-      }
+  for (const rel of readdirSync(dir, { recursive: true }).filter((f) => /\.ya?ml$/.test(f))) {
+    for (const l of findRenameBlindListings(readFileSync(join(dir, rel), 'utf8'))) {
+      found++;
+      assert.match(l, /--no-renames/, `${rel}: ${l.trim()}`);
     }
   }
   assert.ok(found >= 3, `expected at least 3 --name-only invocations, saw ${found}`);

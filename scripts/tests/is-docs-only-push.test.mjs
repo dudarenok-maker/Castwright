@@ -10,6 +10,7 @@ import {
   evaluateDocsOnlyPush,
   gitChangedFiles,
 } from '../is-docs-only-push.mjs';
+import { cleanGitEnv } from './verify-cache-test-support.mjs';
 
 const ZERO = '0'.repeat(40);
 const line = (localSha, remoteSha = ZERO, remoteRef = 'refs/heads/feature') =>
@@ -82,7 +83,12 @@ test('gitChangedFiles lists both paths of a rename (a move out of src into docs 
   const dir = mkdtempSync(join(tmpdir(), 'docs-only-rename-'));
   try {
     const git = (...a) => {
-      const r = spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true });
+      const r = spawnSync('git', a, {
+        cwd: dir,
+        encoding: 'utf8',
+        windowsHide: true,
+        env: cleanGitEnv(),
+      });
       assert.equal(r.status, 0, r.stderr);
       return r.stdout.trim();
     };
