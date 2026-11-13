@@ -2271,10 +2271,12 @@ export function ProfileDrawer({
                   )
                   .catch((err: unknown) => {
                     /* The open book's own save (onSave below) stands either
-                       way. A 409 from this route is always a consented-clone
-                       refusal (#4104): the other books keep their clone, so
-                       say so. Any other failure is told too, rather than
-                       swallowed. A toast, not drawer state, since Save
+                       way. Every 409 that reaches this catch is a consented-clone
+                       refusal (#4104): the route's other 409, book_repaired_reload,
+                       never gets here, since repairFetch reloads the page and
+                       its promise never settles. A refusal leaves the whole
+                       series write undone, so say so. Any other failure is told
+                       too, rather than swallowed. A toast, not drawer state, since Save
                        closes the drawer. */
                     const refused = (err as { status?: number } | null)?.status === 409;
                     dispatch(
