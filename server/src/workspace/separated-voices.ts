@@ -6,11 +6,12 @@
    that moved with it, or a same-book row on its key. Only the declining row carries
    the decline marker; this record is what covers the rest.
 
-   One file per uuid (paths.ts separatedVoicePath): a uuid is minted once, so only its
-   minting writer creates the file. The one later writer is a decline of a row already on
-   it (markDeclineSeparatedVoice), which rewrites it under the decliner's book-op and cast
-   locks; every holder of the uuid is in that decliner's chain, so those writes are
-   serialised. Nothing in a cast.json changes, so re-analysis and the analyzer grammar
+   One file per uuid (paths.ts separatedVoicePath): a uuid is minted once, so a separation, an
+   isolation or an unconfirmed mint writes the file only as it mints the uuid. The one later writer is a decline
+   of a row already on it (markDeclineSeparatedVoice), which flags an existing record, or
+   creates the empty one for a uuid that has none (any uuid a series mint made), under the
+   decliner's book-op and cast locks; every holder of the uuid is in that decliner's chain, so
+   those writes are serialised. Nothing in a cast.json changes, so re-analysis and the analyzer grammar
    never see it. It survives a restart.
 
    Review pass 4 (🟠1) -- WHO a record vouches for. The file is empty for a

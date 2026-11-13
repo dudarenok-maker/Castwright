@@ -7,7 +7,7 @@
    assert no cloned row loses its clone or is retargeted off it. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -42,6 +42,8 @@ vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
+/* Polling budget for a race test's observable step (vi.waitFor), never a fixed sleep. */
+const WAIT = { timeout: 10_000, interval: 5 };
 
 let workspaceRoot: string;
 let audioDir: string;
@@ -109,6 +111,7 @@ beforeAll(async () => {
   const { qwenVoiceRouter } = await import('./qwen-voice.js');
   const { voicesRouter } = await import('./voices.js');
   const { voiceOverrideLinkedRouter } = await import('./voice-override-linked.js');
+  const { castNotLinkedToRouter } = await import('./cast-not-linked-to.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookOneId = makeBookId(AUTHOR, SERIES, 'Book One');
   bookTwoId = makeBookId(AUTHOR, SERIES, 'Book Two');
@@ -119,6 +122,7 @@ beforeAll(async () => {
   app.use('/api/books', castDeclineVoiceLinkRouter);
   app.use('/api/books', qwenVoiceRouter);
   app.use('/api/books', voiceOverrideLinkedRouter);
+  app.use('/api/books', castNotLinkedToRouter);
   app.use('/api/voices', voicesRouter);
 });
 
@@ -660,16 +664,20 @@ describe('separated-voice record writers at their own seams (#4109 pass 4)', () 
     dropBookId('Book Two');
     const { designQwenVoiceForCharacter } = await import('./qwen-voice.js');
     const { isDeclineSeparatedVoiceSync } = await import('../workspace/separated-voices.js');
-    await designQwenVoiceForCharacter({
-      bookId: bookTwoId,
-      bookDir: bookDir('Book Two'),
-      character: readRow('Book Two') as never,
-      characterId: 'wren',
-      persona: 'a warm voice',
-      sampleVoiceId: 'v_wren',
-      modelKey: QWEN_KEY,
-      language: 'english',
-    }).catch(() => {}); // the landing's book-op cannot resolve a book with no bookId; the mint precedes it
+    /* the landing's book-op cannot resolve a book with no bookId; the mint precedes it, and the
+       failed design leaves the minted uuid and its record behind */
+    await expect(
+      designQwenVoiceForCharacter({
+        bookId: bookTwoId,
+        bookDir: bookDir('Book Two'),
+        character: readRow('Book Two') as never,
+        characterId: 'wren',
+        persona: 'a warm voice',
+        sampleVoiceId: 'v_wren',
+        modelKey: QWEN_KEY,
+        language: 'english',
+      }),
+    ).rejects.toThrow('Book no longer exists');
     const u = readRow('Book Two').voiceUuid as string;
     expect(u).toBeTruthy();
     expect(JSON.parse(readFileSync(recordFor(u), 'utf8'))).toEqual({ ownStamp: true });
@@ -709,7 +717,9 @@ describe('voice-override-linked racing a "Don\'t reuse" decline (#4109 pass 4)',
       .post(`/api/books/${bookOneId}/cast/wren/voice-override-linked`)
       .send({ override: { engine: 'qwen', name: 'qwen-u_one' } })
       .then((r) => r);
-    await new Promise((r) => setTimeout(r, 400)); // the source step is done; Book Two's write waits
+    /* the source step (scan included) is done, so Book Two's write waits on the held book-op */
+    await vi.waitFor(() => expect(readRow('Book One').overrideTtsVoices?.qwen?.name).toBe('qwen-u_one'), WAIT);
+    expect(readRow('Book Two').overrideTtsVoices?.qwen).toBeUndefined();
     release();
     await holder;
     const res = await pending;
@@ -720,5 +730,110 @@ describe('voice-override-linked racing a "Don\'t reuse" decline (#4109 pass 4)',
     expect(two.voiceUuid).not.toBe('u_one');
     expect(two.overrideTtsVoices?.qwen).toBeUndefined();
     expect(res.body.updated.map((u: { bookId: string }) => u.bookId)).not.toContain(bookTwoId);
+  });
+
+  /* Pass-5 review (🟡2, probe P2): the mirror case. The decline lands on the rebaseline's SOURCE
+     after the source's own step, while the book it declines waits. That decline needs no
+     separation, so only the record it writes for the source's uuid keeps the two apart. */
+  it('P2: a decline on the rebaseline\'s source that lands mid-run keeps the declined book off its voice', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceId: 'v_one', voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_two' }));
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    const holder = withBookOp(bookOneId, async () => {
+      entered();
+      await held;
+    });
+    await inside;
+    const oneBefore = readRow('Book One');
+    const pending = request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/voice-override-linked`)
+      .send({ override: { engine: 'qwen', name: 'qwen-u_two' } })
+      .then((r) => r);
+    await vi.waitFor(() => expect(readRow('Book Two').overrideTtsVoices?.qwen?.name).toBe('qwen-u_two'), WAIT);
+    const declined = await request(app)
+      .post(`/api/books/${bookTwoId}/cast/wren/decline-voice-link`)
+      .send({ fromBookId: bookOneId });
+    expect(declined.status).toBe(200);
+    expect(readRow('Book Two').voiceUuid).toBe('u_two'); // no separation: only the record says so
+    release();
+    await holder;
+    const res = await pending;
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.updated.map((u: { bookId: string }) => u.bookId)).not.toContain(bookOneId);
+    expect(readRow('Book One')).toEqual(oneBefore);
+  });
+});
+
+/* Pass-5 review (🟠1): the in-lock re-check re-applied only the decline rules, so a "Not the same
+   character" (`notLinkedTo`) that landed between the scan and a sibling's write was overridden. */
+describe('voice-override-linked racing a "Not the same character" (#4109 pass 5)', () => {
+  const sparrow = () => ({ ...wren({ voiceId: 'v_ws', voiceUuid: 'u_ws' }), id: 'wren-sparrow', name: 'Wren Sparrow', aliases: ['Wren'] });
+  /* Book One is the source. Of the other two, the one the scan reaches FIRST (directory order is the
+     filesystem's, so it is read back rather than assumed) shares the source's key and is held; the
+     second is the alias match the pair is written against. */
+  function seedThree() {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren());
+    writeBook('Book Three', 3, bookThreeId, wren());
+    const ids: Record<string, string> = { 'Book Two': bookTwoId, 'Book Three': bookThreeId };
+    const [first, second] = readdirSync(join(workspaceRoot, 'books', AUTHOR, SERIES)).filter((t) => t !== 'Book One');
+    writeFileSync(castPath(first), JSON.stringify({ characters: [wren({ voiceUuid: 'u_held' })] }));
+    writeFileSync(castPath(second), JSON.stringify({ characters: [sparrow()] }));
+    return { held: { title: first, id: ids[first] }, alias: { title: second, id: ids[second] } };
+  }
+  const markApart = (aliasId: string) =>
+    request(app)
+      .post(`/api/books/${aliasId}/cast/wren-sparrow/not-linked-to`)
+      .send({ otherBookId: bookOneId, otherCharacterId: 'wren' });
+  const rebaseline = () =>
+    request(app)
+      .post(`/api/books/${bookOneId}/cast/wren/voice-override-linked`)
+      .send({ override: { engine: 'qwen', name: 'qwen-u_one' } });
+  const ids = (res: { body: { updated: Array<{ bookId: string }> } }) => res.body.updated.map((u) => u.bookId);
+
+  it('P4: a pair written while an earlier sibling is held keeps the alias match out of the rebaseline', async () => {
+    const { held, alias } = seedThree();
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    const holder = withBookOp(held.id, async () => {
+      entered();
+      await gate;
+    });
+    await inside;
+    const pending = rebaseline().then((r) => r);
+    /* the source step (scan included) is done, so the loop waits on the held book */
+    await vi.waitFor(() => expect(readRow('Book One').overrideTtsVoices?.qwen?.name).toBe('qwen-u_one'), WAIT);
+    const marked = await markApart(alias.id);
+    expect(marked.status, JSON.stringify(marked.body)).toBe(200);
+    const aliasBefore = readRow(alias.title);
+    expect(aliasBefore.notLinkedTo).toEqual([{ bookId: bookOneId, characterId: 'wren' }]);
+    release();
+    await holder;
+    const res = await pending;
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(ids(res)).toContain(held.id);
+    expect(readRow(held.title).voiceUuid).toBe('u_one');
+    expect(ids(res)).not.toContain(alias.id);
+    expect(readRow(alias.title)).toEqual(aliasBefore);
+  });
+
+  it('P4c: the same pair written before the rebaseline keeps the alias match out', async () => {
+    const { held, alias } = seedThree();
+    expect((await markApart(alias.id)).status).toBe(200);
+    const aliasBefore = readRow(alias.title);
+    const res = await rebaseline();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(ids(res)).toContain(held.id);
+    expect(ids(res)).not.toContain(alias.id);
+    expect(readRow(alias.title)).toEqual(aliasBefore);
   });
 });
