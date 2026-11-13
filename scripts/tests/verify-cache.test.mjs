@@ -1990,6 +1990,21 @@ test('branchDiffFiles: returns files changed since branching off main', () => {
   assert.deepEqual(files, ['feature.txt']);
 });
 
+test('branchDiffFiles: a rename lists BOTH the source and the destination path', () => {
+  // Default rename detection lists only the destination, hiding a move out of
+  // a scoped directory (e.g. server/tts-sidecar/**) from every scope glob.
+  const dir = makeGitFixture();
+  mkdirSync(join(dir, 'src-dir'), { recursive: true });
+  writeFileSync(join(dir, 'src-dir', 'moved.txt'), 'content that is long enough to be a rename\n'.repeat(5), 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'add moved']);
+  gitAt(dir, ['switch', '-q', '-c', 'feature']);
+  mkdirSync(join(dir, 'elsewhere'), { recursive: true });
+  gitAt(dir, ['mv', 'src-dir/moved.txt', 'elsewhere/moved.txt']);
+  gitAt(dir, ['commit', '-q', '-m', 'move out']);
+  assert.deepEqual(branchDiffFiles(dir).sort(), ['elsewhere/moved.txt', 'src-dir/moved.txt']);
+});
+
 test('branchDiffFiles: empty array (not null) when run directly on main with nothing new', () => {
   const dir = makeGitFixture();
   const files = branchDiffFiles(dir);

@@ -55,7 +55,7 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
           MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
-          git diff --name-only "$MERGE_BASE" "$HEAD" > "$RUNNER_TEMP/pr-files.txt"
+          git diff --name-only --no-renames "$MERGE_BASE" "$HEAD" >"$RUNNER_TEMP/pr-files.txt"
           echo "Changed files in this PR:"
           cat "$RUNNER_TEMP/pr-files.txt"
 

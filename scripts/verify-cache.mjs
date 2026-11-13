@@ -1114,7 +1114,7 @@ export function branchDiffFiles(cwd) {
   });
   if (base.error || base.status !== 0) return null;
   const baseSha = base.stdout.trim();
-  const r = spawnSync('git', ['diff', '--name-only', baseSha, 'HEAD'], {
+  const r = spawnSync('git', ['diff', '--name-only', '--no-renames', baseSha, 'HEAD'], {
     cwd,
     encoding: 'utf8',
     env,

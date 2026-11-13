@@ -140,7 +140,7 @@ jobs:
             # main would otherwise treat every file main moved past the fork
             # point as "changed in this PR".
             MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
-            FILES="$(git diff --name-only "$MERGE_BASE" "$HEAD")"
+            FILES="$(git diff --name-only --no-renames "$MERGE_BASE" "$HEAD")"
           fi
           echo "Changed files in this PR:"
           echo "$FILES"

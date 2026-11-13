@@ -946,6 +946,48 @@ test('real git diff: moving the version line above the docstring is not a bump',
   assert.equal(isVersionOnlyBump(diff), false, diff);
 });
 
+// A rename out of server/tts-sidecar/** is listed by default rename detection
+// as only its destination. Both workflows that build a changed-file list for
+// scope decisions must ask for --no-renames so the source path is visible.
+test('real git: --no-renames shows the sidecar source path of a rename out of the sidecar', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-rename-'));
+  try {
+    const git = (...a) => {
+      const r = spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    mkdirSync(join(dir, 'server/tts-sidecar'), { recursive: true });
+    mkdirSync(join(dir, 'server/legacy'), { recursive: true });
+    writeFileSync(join(dir, 'server/tts-sidecar/main.py'), 'print("hello world, long enough")\n'.repeat(5));
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD');
+    git('mv', 'server/tts-sidecar/main.py', 'server/legacy/main.py');
+    git('commit', '-qm', 'move');
+    const head = git('rev-parse', 'HEAD');
+    const defaultList = parseFileList(git('diff', '--name-only', base, head));
+    const noRenames = parseFileList(git('diff', '--name-only', '--no-renames', base, head));
+    assert.equal(touchesSidecar(defaultList), false, 'default listing hides the source (the bug)');
+    assert.equal(touchesSidecar(noRenames), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('workflows: every `git diff --name-only` that builds a scope file list passes --no-renames', () => {
+  const root = resolve(dirname(scriptPath), '..');
+  for (const wf of ['sidecar-acceptance-gate.yml', 'verify.yml']) {
+    const text = readFileSync(join(root, '.github', 'workflows', wf), 'utf8');
+    const cmds = text.split('\n').filter((l) => /git diff --name-only/.test(l) && !l.trim().startsWith('#'));
+    assert.ok(cmds.length > 0, `${wf}: no file-list command found (regex broke?)`);
+    for (const c of cmds) assert.match(c, /--no-renames/, `${wf}: ${c.trim()}`);
+  }
+});
+
 test('CLI: version-only bump diff exempts the gate with the version-bump message', () => {
   const result = runCli(`${VERSION_PY}\npackage.json\n`, '', BUMP_DIFF);
   assert.equal(result.status, 0, `stderr: ${result.stderr}`);
