@@ -11,6 +11,8 @@
         (plan 122): normalised name/alias token match, respecting the user's
         `notLinkedTo` "intentionally different" markers and never matching a
         fold bucket.
+   Never, though, when the server's own group would keep the two apart: a "Don't reuse"
+   decline between them, or a decliner's voice against another (see `keptApart` below).
 
    Rule 2 is why a recurring character detected under divergent ids across
    books ("Wren" / "Wren Sparrow", "Castor" / "bron-te") now reads as ONE
@@ -62,22 +64,51 @@ export function mergeSeriesCast(
   ];
   const n = nodes.length;
 
-  /* Union-find; `parent[max] = min` so the root is always the lowest index. */
+  /* PR #4109 review pass 3 -- two rows the server's group (voice-override-linked `inGroup`)
+     keeps apart never share a row here, or the row would carry the decliner's voice onto the
+     declined book (marked "unchanged", or a refused Approve). A "Don't reuse" pair, in either
+     direction; and rows on different uuids when either uuid is held by a decline-marked row,
+     since only the decliner carries the marker and its followers sit on its uuid. The server
+     also reads a separation record the client cannot see, so a "Don't reuse" voice whose
+     decliner is not in this series cast (an unconfirmed book) still collapses here. */
+  const declinerUuids = new Set(
+    nodes
+      .filter((x) => !!x.c.voiceUuid && (x.c.declinedVoiceFrom ?? []).length > 0)
+      .map((x) => x.c.voiceUuid as string),
+  );
+  const declines = (row: Character, other: Node) =>
+    (!!other.bookId && (row.declinedVoiceFrom ?? []).includes(other.bookId)) ||
+    (!!other.c.voiceUuid && (row.declinedVoiceUuids ?? []).includes(other.c.voiceUuid));
+  const keptApart = (a: Node, b: Node) =>
+    declines(a.c, b) ||
+    declines(b.c, a) ||
+    (a.c.voiceUuid !== b.c.voiceUuid &&
+      [a.c.voiceUuid, b.c.voiceUuid].some((u) => !!u && declinerUuids.has(u)));
+
+  /* Union-find; `parent[max] = min` so the root is always the lowest index. A union that
+     would put a kept-apart pair in one component is skipped, checked over both components'
+     members so no third row bridges the pair. */
   const parent = nodes.map((_, i) => i);
+  const members = nodes.map((_, i) => [i]);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   const union = (a: number, b: number) => {
     const ra = find(a);
     const rb = find(b);
-    if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+    if (ra === rb) return;
+    if (members[ra].some((x) => members[rb].some((y) => keptApart(nodes[x], nodes[y])))) return;
+    const [lo, hi] = [Math.min(ra, rb), Math.max(ra, rb)];
+    parent[hi] = lo;
+    members[lo].push(...members[hi]);
   };
 
-  /* Pass 1 — union by write key (voiceId ?? id). */
-  const keyOwner = new Map<string, number>();
+  /* Pass 1 — union by write key (voiceId ?? id). Every earlier holder of the key is tried,
+     since a kept-apart pair can leave the key's rows in more than one component. */
+  const keyHolders = new Map<string, number[]>();
   for (let i = 0; i < n; i += 1) {
     const k = writeKey(nodes[i].c);
-    const prev = keyOwner.get(k);
-    if (prev === undefined) keyOwner.set(k, i);
-    else union(prev, i);
+    const prev = keyHolders.get(k) ?? [];
+    for (const j of prev) union(j, i);
+    keyHolders.set(k, [...prev, i]);
   }
 
   /* Pass 2 — union by name/alias identity (respects notLinkedTo, skips buckets).

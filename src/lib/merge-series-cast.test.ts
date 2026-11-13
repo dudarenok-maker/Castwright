@@ -187,4 +187,66 @@ describe('mergeSeriesCast', () => {
     const out = mergeSeriesCast(anchor, siblings, 'b1');
     expect(out).toHaveLength(2);
   });
+
+  /* PR #4109 review pass 3 -- the modal's group follows the server's (voice-override-linked):
+     never across a "Don't reuse", and never carries the decliner's voice onto the declined book. */
+  describe('across a "Don\'t reuse" decline', () => {
+    const one = () => char({ id: 'wren', name: 'Wren', voiceId: 'v_wren', voiceUuid: 'u_one', ttsEngine: 'kokoro', lines: 10 });
+    const declinedTwo = (extra: Partial<Character> = {}) =>
+      char({
+        id: 'wren',
+        name: 'Wren',
+        voiceId: 'v_wren',
+        voiceUuid: 'r0',
+        sourceBookId: 'b2',
+        declinedVoiceFrom: ['b1'],
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-r0' } },
+        lines: 7,
+        ...extra,
+      });
+
+    it('keeps the declined book and the decliner on separate rows, and carries no voice across', () => {
+      const out = mergeSeriesCast([one()], [declinedTwo()], 'b1');
+      expect(out).toHaveLength(2);
+      const anchorRow = out.find((c) => !c.sourceBookId)!;
+      expect(anchorRow.ttsEngine).toBe('kokoro');
+      expect(anchorRow.overrideTtsVoices?.qwen).toBeUndefined();
+      expect(anchorRow.lines).toBe(10);
+    });
+
+    it('also when only the declined uuid is on the marker (the reverse direction)', () => {
+      const two = declinedTwo({ declinedVoiceFrom: undefined, declinedVoiceUuids: ['u_one'] });
+      expect(mergeSeriesCast([one()], [two], 'b1')).toHaveLength(2);
+    });
+
+    it("keeps the decliner's follower (no marker of its own) apart from the declined book", () => {
+      const follower = char({
+        id: 'wren',
+        name: 'Wren',
+        voiceId: 'v_wren',
+        voiceUuid: 'r0',
+        sourceBookId: 'b3',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-r0' } },
+        lines: 3,
+      });
+      const out = mergeSeriesCast([one()], [declinedTwo(), follower], 'b1');
+      expect(out).toHaveLength(2);
+      /* the decliner and its follower still form one row */
+      expect(out.find((c) => c.sourceBookId === 'b2')!.lines).toBe(10);
+    });
+
+    it('a component never gains a member through a third row that bridges the decline', () => {
+      /* An alias row in Book Three with no uuid name-matches both sides; it may join one, not both. */
+      const bridge = char({ id: 'wren-sparrow', name: 'Wren Sparrow', aliases: ['Wren'], sourceBookId: 'b3', lines: 1 });
+      const out = mergeSeriesCast([one()], [bridge, declinedTwo()], 'b1');
+      expect(out).toHaveLength(2);
+    });
+
+    it('rows on different uuids with no decline anywhere still collapse (as on main)', () => {
+      const two = char({ id: 'wren', name: 'Wren', voiceId: 'v_wren', voiceUuid: 'u_two', sourceBookId: 'b2', lines: 7 });
+      expect(mergeSeriesCast([one()], [two], 'b1')).toHaveLength(1);
+    });
+  });
 });
