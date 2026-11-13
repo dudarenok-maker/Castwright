@@ -281,8 +281,10 @@ describe('loadMockReleaseNotes (real bundled notes, lazily loaded)', () => {
     /* The retired fixture ('# v1.6.0 / - In-app upgrades.') would fail both:
        one section, and a bare 'v1.6.0' heading without the brand name. */
     expect(parsed.length).toBeGreaterThan(1);
-    expect(parsed[0].heading).toMatch(/^Castwright \d+\.\d+\.\d+/);
-    expect(parsed[0].bullets.length).toBeGreaterThan(0);
+    for (const section of parsed) expect(section.heading).toMatch(/^Castwright \d+\.\d+\.\d+/);
+    /* The top section may legally be empty: a reopened in-progress section
+       has no bullets until the first PR with a user-facing line lands. */
+    expect(parsed.some((section) => section.bullets.length > 0)).toBe(true);
   });
 });
 
@@ -295,6 +297,11 @@ describe('trimUnreleasedReleaseNotes (mid-cycle in-progress section)', () => {
     expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
     expect(out).not.toContain('Unreleased bullet');
     expect(out).toContain('Older bullet');
+  });
+
+  it('drops an empty reopened in-progress section so the shipped build never shows a bare heading', () => {
+    const md = '# Castwright 1.16.0\n\n# Castwright 1.15.0\n\n- Shipped bullet.\n';
+    expect(trimUnreleasedReleaseNotes(md, '1.15.0')).toBe('# Castwright 1.15.0\n\n- Shipped bullet.\n');
   });
 
   it('serves the document unchanged when the running version has no section (dev builds)', () => {
