@@ -64,10 +64,12 @@ function isNarrator(c: Character): boolean {
 }
 
 /* A `voice-override-linked` 207 entry that refused a book because a row there carries a
-   consented clone. The entry carries only its sentence, so this matches the one the route
-   writes for that refusal (server/src/routes/voice-override-linked.ts, applyToBookLocked). */
-function isCloneRefusal(error: string): boolean {
-  return error.includes('has a consented cloned voice');
+   consented clone. The entry is typed (eason: 'clone_protected', server/src/routes/voice-override-linked.ts,
+   applyToBookLocked); the sentence match covers an older server. */
+function isCloneRefusal(f: { error: string; reason?: string }): boolean {
+  /* The server types the refusal (eason); the sentence match is only a fallback for an
+     older server that does not send it yet. */
+  return f.reason === 'clone_protected' || f.error.includes('has a consented cloned voice');
 }
 
 /* Wires the modal to the store. Mounted in the Voices view; renders nothing
@@ -450,7 +452,7 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
           name: p.proposedVoiceId,
         });
         for (const f of linked.failed) {
-          (isCloneRefusal(f.error) ? refusedBookTitles : failedBookTitles).add(f.bookTitle);
+          (isCloneRefusal(f) ? refusedBookTitles : failedBookTitles).add(f.bookTitle);
         }
         /* The endpoint refuses PER BOOK (a book with a consented cloned slot
            refuses that book's write while siblings still update) — a 207

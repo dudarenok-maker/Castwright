@@ -3023,6 +3023,50 @@ paths:
                         characterId: { type: string }
                         reason: { type: string }
 
+  /api/books/{bookId}/cast/{characterId}/voice-override-linked:
+    post:
+      summary: Write (or clear) a voice override across a character's linked series group
+      operationId: setVoiceOverrideLinked
+      description: |
+        Name/alias-aware series voice write used by the rebaseline approve
+        (plan 122). Writes the override to every member book of the
+        character's group. 207 when any book failed; the other books' writes
+        stand. A book with a consented cloned voice on a targeted row is
+        refused whole and reported with `reason: clone_protected`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [override]
+              properties:
+                override:
+                  oneOf:
+                    - $ref: '#/components/schemas/BaseVoice'
+                    - type: 'null'
+      responses:
+        '200':
+          description: Written to every book in the group
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkedVoiceOverrideResponse' }
+        '207':
+          description: At least one book failed; see the failed entries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkedVoiceOverrideResponse' }
+        '400':
+          description: bookId/characterId missing or the override is malformed
+        '404':
+          description: Book or character not found
+        '409':
+          description: Source book has no cast yet, or a repaired book needs a reload (book_repaired_reload)
+
   # --- Voice library (fs-38 Wave 1) --------------------------------
   /api/voice-library:
     get:
@@ -8143,6 +8187,36 @@ components:
             description: "Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors.",
           }
 
+    LinkedVoiceOverrideResponse:
+      type: object
+      required: [canonicalVoiceId, updated, failed]
+      properties:
+        canonicalVoiceId: { type: string }
+        updated:
+          type: array
+          items:
+            type: object
+            required: [bookId, bookTitle, characterId]
+            properties:
+              bookId: { type: string }
+              bookTitle: { type: string }
+              characterId: { type: string }
+        failed:
+          type: array
+          items:
+            type: object
+            required: [bookId, bookTitle, error]
+            properties:
+              bookId: { type: string }
+              bookTitle: { type: string }
+              error: { type: string }
+              reason:
+                type: string
+                enum: [clone_protected]
+                description: >-
+                  Typed cause, additive. `clone_protected`: the book was refused because a
+                  targeted row carries a consented cloned voice. Absent for every other failure
+                  (older servers never send it; match `error` as a fallback).
     BaseVoice:
       type: object
       required: [engine, name]

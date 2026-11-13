@@ -2360,7 +2360,7 @@ async function mockSetCastTier(
 export interface LinkedOverrideResponse {
   canonicalVoiceId: string;
   updated: Array<{ bookId: string; bookTitle: string; characterId: string }>;
-  failed: Array<{ bookId: string; bookTitle: string; error: string }>;
+  failed: Array<{ bookId: string; bookTitle: string; error: string; reason?: 'clone_protected' }>;
 }
 
 async function realSetVoiceOverrideLinked(

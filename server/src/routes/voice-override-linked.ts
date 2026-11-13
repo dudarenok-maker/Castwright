@@ -26,7 +26,7 @@
 
    Body: { override: { engine, name } | null }  (null clears the engine map).
    Response: { canonicalVoiceId, updated: [{bookId,bookTitle,characterId}],
-   failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200.
+   failed: [{bookId,bookTitle,error,reason?}] }. 207 when failed.length>0, else 200.
    A series whose matched mate is a repaired book (#3713) is refused whole (409 book_repaired_reload) on a
    request without the current repair epoch, before the source is written. */
 
@@ -79,6 +79,10 @@ interface CastFile {
 
 const BUCKET_IDS = new Set(['unknown-male', 'unknown-female', 'narrator']);
 
+/* The consented-clone refusal in applyToBookLocked: the 207 failed entry carries
+   reason: 'clone_protected' so the client need not match the sentence (#4104). */
+class CloneProtectedError extends Error {}
+
 function parseOverride(value: unknown): { engine: Engine; name: string } | null | 'invalid' {
   if (value === null) return null;
   if (typeof value !== 'object') return 'invalid';
@@ -104,7 +108,7 @@ voiceOverrideLinkedRouter.post(
     }
 
     const updated: Array<{ bookId: string; bookTitle: string; characterId: string }> = [];
-    const failed: Array<{ bookId: string; bookTitle: string; error: string }> = [];
+    const failed: Array<{ bookId: string; bookTitle: string; error: string; reason?: 'clone_protected' }> = [];
     const writeBook = async (
       bookDir: string,
       w: { bookId: string; bookTitle: string; ids: string[] },
@@ -125,6 +129,7 @@ voiceOverrideLinkedRouter.post(
           bookId: w.bookId,
           bookTitle: w.bookTitle,
           error: itemFailureReason(err, err instanceof Error ? err.message : String(err)),
+          ...(err instanceof CloneProtectedError ? { reason: 'clone_protected' as const } : {}),
         });
       }
     };
@@ -371,7 +376,7 @@ async function applyToBookLocked(
        directly. */
     const blocked = characterHasClonedSlot(c);
     if (blocked) {
-      throw new Error(
+      throw new CloneProtectedError(
         `Character "${c.name ?? c.id}" has a consented cloned voice — series rebaseline refuses to ` +
           `remove or replace it. Reassign the character directly instead.`,
       );

@@ -2016,6 +2016,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/cast/{characterId}/voice-override-linked": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write (or clear) a voice override across a character's linked series group
+         * @description Name/alias-aware series voice write used by the rebaseline approve
+         *     (plan 122). Writes the override to every member book of the
+         *     character's group. 207 when any book failed; the other books' writes
+         *     stand. A book with a consented cloned voice on a targeted row is
+         *     refused whole and reported with `reason: clone_protected`.
+         */
+        post: operations["setVoiceOverrideLinked"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voice-library": {
         parameters: {
             query?: never;
@@ -5745,6 +5769,24 @@ export interface components {
             name: string;
             /** @description Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors. */
             description: string;
+        };
+        LinkedVoiceOverrideResponse: {
+            canonicalVoiceId: string;
+            updated: {
+                bookId: string;
+                bookTitle: string;
+                characterId: string;
+            }[];
+            failed: {
+                bookId: string;
+                bookTitle: string;
+                error: string;
+                /**
+                 * @description Typed cause, additive. `clone_protected`: the book was refused because a targeted row carries a consented cloned voice. Absent for every other failure (older servers never send it; match `error` as a fallback).
+                 * @enum {string}
+                 */
+                reason?: "clone_protected";
+            }[];
         };
         /**
          * @description One unmodified speaker exposed by a TTS engine. The pair (engine, name)
@@ -11321,6 +11363,73 @@ export interface operations {
                         }[];
                     };
                 };
+            };
+        };
+    };
+    setVoiceOverrideLinked: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description #3713 — the `repairEpoch` `GET /api/info` served when the page loaded.
+                 *     Required (in effect) on a write that names a repaired book; a request
+                 *     without the current value is refused whole with 409
+                 *     `book_repaired_reload`. Sent on every write by the client.
+                 */
+                "X-Repair-Epoch"?: components["parameters"]["RepairEpoch"];
+            };
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    override: components["schemas"]["BaseVoice"] | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Written to every book in the group */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkedVoiceOverrideResponse"];
+                };
+            };
+            /** @description At least one book failed; see the failed entries */
+            207: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkedVoiceOverrideResponse"];
+                };
+            };
+            /** @description bookId/characterId missing or the override is malformed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or character not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source book has no cast yet, or a repaired book needs a reload (book_repaired_reload) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -1211,6 +1211,38 @@ describe('RebaselineModal — approve honours a server refusal (fs-38 wave3c tas
     );
   });
 
+  it('a failed entry typed reason clone_protected gets the clone toast whatever its error text says', async () => {
+    const cast = [char('narrator', 'Narrator', 500), char('clara', 'Clara', 90)];
+    setVoiceOverrideLinked.mockImplementation(async (bookId: string, characterId: string) => ({
+      canonicalVoiceId: `v_${characterId}`,
+      updated: [],
+      failed:
+        characterId === 'clara'
+          ? [{ bookId, bookTitle: 'Book One', error: 'Refused: protected voice.', reason: 'clone_protected' as const }]
+          : [],
+    }));
+    const store = makeStore(cast, [voice('voice-clara', 'clara')]);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    if (!store.getState().rebaseline.selectedCharacterIds.includes('clara')) {
+      fireEvent.click(screen.getByLabelText('Rebaseline Clara'));
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('ready'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('failed'));
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(
+      'Kept consented cloned voices unchanged in: Book One.',
+    );
+  });
   /* PR #4109 review pass 3: a 207 `failed` entry is not always a clone refusal (the name guard,
      lock contention, a missing cast), and the toast must not claim one that never happened. */
   it('a refusal that is not a clone refusal is not reported as a kept clone', async () => {
