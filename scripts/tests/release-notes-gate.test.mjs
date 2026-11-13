@@ -18,6 +18,8 @@ import {
   hasBOM,
   stripBOM,
   checkBOM,
+  checkBodySize,
+  MAX_RELEASE_BODY_CHARS,
 } from '../release-notes-gate.mjs';
 
 const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\n- **x.** y.';
@@ -1029,6 +1031,123 @@ test('the CLI passes on clean, BOM-free RELEASE_NOTES.md and docs/release-notes-
     const out = runGate(dir, ['v1.0.0']);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /OK — RELEASE_NOTES\.md leads with 1\.0\.0/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Release-body size guard — GitHub rejects a release body over 125,000
+// characters, but only at the very last publish step (after the tag is pushed).
+// docs/release-notes-next.md IS that body, so the gate refuses it up front.
+// Counted in characters (UTF-16 length), never bytes: Cyrillic/emoji bodies are
+// 2-4x larger in bytes than in characters.
+test('checkBodySize passes a body just under the limit and at exactly the limit', () => {
+  assert.equal(MAX_RELEASE_BODY_CHARS, 125000);
+  assert.equal(checkBodySize('a'.repeat(MAX_RELEASE_BODY_CHARS - 1), 'notes.md').ok, true);
+  assert.equal(checkBodySize('a'.repeat(MAX_RELEASE_BODY_CHARS), 'notes.md').ok, true);
+});
+
+test('checkBodySize fails one character over, naming the limit, the count, and the fix', () => {
+  const res = checkBodySize('a'.repeat(MAX_RELEASE_BODY_CHARS + 1), 'docs/release-notes-next.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /docs\/release-notes-next\.md is 125001 UTF-16 characters and 125001 UTF-8 bytes/);
+  assert.match(res.reason, /UTF-16 length and UTF-8 byte length is over/);
+  assert.match(res.reason, /125000-character limit/);
+  assert.match(res.reason, /condense/i);
+  assert.match(res.reason, /docs\/release-notes\//);
+});
+
+// GitHub's counting rule is unverified, so the STRICTEST measure binds: a
+// Cyrillic body of exactly 125,000 characters is 250,000 bytes -> refused.
+test('checkBodySize refuses a Cyrillic body of 125000 characters (bytes over), naming the measure and both numbers', () => {
+  const body = 'Ж'.repeat(MAX_RELEASE_BODY_CHARS); // 2 bytes each
+  const res = checkBodySize(body, 'notes.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /125000 UTF-16 characters and 250000 UTF-8 bytes/);
+  assert.match(res.reason, /its UTF-8 byte length is over/);
+  assert.doesNotMatch(res.reason, /UTF-16 length is over/);
+});
+
+test('checkBodySize passes a multi-byte body whose BYTES are within the limit', () => {
+  assert.equal(checkBodySize('Ж'.repeat(MAX_RELEASE_BODY_CHARS / 2), 'notes.md').ok, true); // exactly 125,000 bytes
+  assert.equal(checkBodySize('Ж'.repeat(MAX_RELEASE_BODY_CHARS / 2 + 1), 'notes.md').ok, false);
+});
+
+// Kills the "count code points only" mutant: 62,501 emoji are 62,501 code
+// points but 125,002 UTF-16 units (and 250,004 bytes).
+test('checkBodySize refuses 62501 emoji (125002 UTF-16 units, 62501 code points)', () => {
+  const res = checkBodySize('\u{1F600}'.repeat(62501), 'notes.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /125002 UTF-16 characters/);
+});
+
+// A `core.autocrlf=true` checkout holds CRLF; CI publishes the LF blob.
+test('checkBodySize counts CRLF as one character (LF-normalised)', () => {
+  const line = 'a'.repeat(98) + '\r\n'; // 100 raw, 99 LF-normalised
+  const body = line.repeat(1250) + 'a'.repeat(5); // raw 125,005, LF-normalised 123,755
+  assert.ok(body.length > MAX_RELEASE_BODY_CHARS);
+  assert.equal(checkBodySize(body, 'notes.md').ok, true);
+  assert.equal(checkBodySize('a\r\n'.repeat(MAX_RELEASE_BODY_CHARS / 2) + 'aa', 'notes.md').ok, false); // LF-normalised 125,002
+});
+
+test('the CLI fails on an oversize docs/release-notes-next.md, naming the file and count', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `# v1.0.0\n\n${'x'.repeat(MAX_RELEASE_BODY_CHARS)}\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /docs\/release-notes-next\.md is 125011 UTF-16 characters/);
+    assert.match(out.stderr, /125000-character limit/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI does NOT apply the size limit to RELEASE_NOTES.md (in-app notes)', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(
+      resolve(dir, 'RELEASE_NOTES.md'),
+      `# v1.0.0\n\n- Something shipped.\n\n${'x'.repeat(MAX_RELEASE_BODY_CHARS + 10)}\n`,
+    );
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.0\n\n- Something shipped.\n');
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI refuses a multi-byte docs/release-notes-next.md whose bytes exceed 125k even though chars do not', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `# v1.0.0\n\n${'Ж'.repeat(MAX_RELEASE_BODY_CHARS - 100)}\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /UTF-8 bytes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI passes a multi-byte docs/release-notes-next.md whose bytes are within 125k', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `# v1.0.0\n\n${'Ж'.repeat(60000)}\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

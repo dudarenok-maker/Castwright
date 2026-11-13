@@ -1441,3 +1441,90 @@ test('bump-version refuses to cut without notes (no placeholder by default)', ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Release-body size guard — GitHub rejects a release body over 125,000
+// characters only at the final publish step, after the tag is pushed. The
+// --notes-file becomes that body, so bump-version refuses before any mutation.
+test('bump-version refuses an over-limit --notes-file, even with --force, before any mutation', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-big-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, `# v1.0.1\n\nFixes:\n- the bug\n${'x'.repeat(125000)}\n`);
+    const headBefore = gitExec(['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /125000-character limit/);
+    // "Before any mutation": no tag, no new commit, version files untouched.
+    assert.equal(gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim(), '');
+    assert.equal(gitExec(['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }), headBefore);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.0');
+    assert.equal(readVersion(dir, 'server/package.json'), '1.0.0');
+    assert.equal(readVersion(dir, 'package-lock.json'), '1.0.0');
+    assert.equal(readVersion(dir, 'server/package-lock.json'), '1.0.0');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Running from a subdirectory (`cd server && node ../scripts/bump-version.mjs`)
+// without --notes-file: the default notes file must be found relative to the
+// repo root, not the cwd — it used to resolve to null and crash with
+// ERR_INVALID_ARG_TYPE.
+test('bump-version run from a subdirectory finds the default notes file (no crash)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'), { recursive: true });
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.1\n\n- the fix\n');
+    const out = spawnSync(
+      'node',
+      [resolve(dir, 'scripts', 'bump-version.mjs'), '--level', 'patch', '--dry-run', '--skip-cross-os'],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv(), windowsHide: true },
+    );
+    assert.doesNotMatch(out.stderr, /ERR_INVALID_ARG_TYPE/);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /release-notes-next\.md/);
+    // The operator-facing label stays repo-relative, not an absolute path.
+    assert.match(out.stdout, /\(annotation from docs\/release-notes-next\.md\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// An EXPLICIT `--notes-file docs/release-notes-next.md` from a subdirectory names
+// <cwd>/docs/release-notes-next.md, not the root default. It must not be swapped
+// for the root file (which skipped the #2170 divergence guard with no warning);
+// spelled `./docs/...` it already warned, so the bare spelling must too.
+test('bump-version: explicit --notes-file docs/release-notes-next.md from a subdirectory is not swapped for the root file', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'), { recursive: true });
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.1\n\nFixes:\n- the ROOT file.\n');
+    mkdirSync(resolve(dir, 'server', 'docs'), { recursive: true });
+    writeFileSync(
+      resolve(dir, 'server', 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- a DIFFERENT subdirectory file.\n',
+    );
+    const out = spawnSync(
+      'node',
+      [
+        resolve(dir, 'scripts', 'bump-version.mjs'),
+        '--level', 'patch', '--dry-run', '--skip-cross-os',
+        '--notes-file', 'docs/release-notes-next.md',
+      ],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv(), windowsHide: true },
+    );
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    assert.match(out.stdout, /\[DRY-RUN\]\[WARN\].*disagree after normalising/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

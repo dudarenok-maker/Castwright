@@ -481,6 +481,9 @@ const FROZEN_EXACT = new Set([
 //     number as evidence of a specific run; silently renumbering an ID
 //     inside one would make the transcript disagree with the run it
 //     recorded, without fixing anything.
+//   - release-notes/: archived full technical changelogs
+//     (docs/release-notes/vX.Y.Z-full.md), the same shipped-entry diary shape
+//     as release-notes-next.md above, spread across one file per release.
 //
 // `docs/features/archive/` used to be listed here too. Pass-7 review of PR
 // #2630 (finding B) found that wrong: it is 193 of these 274 frozen files —
@@ -505,6 +508,7 @@ const FROZEN_PREFIXES = [
   'docs/testing/onbox-wave3-results/',
   'docs/testing/onbox-wave4-results/',
   'docs/testing/onbox-wave5-results/',
+  'docs/release-notes/',
 ];
 
 export function isFrozenPath(relPath) {
