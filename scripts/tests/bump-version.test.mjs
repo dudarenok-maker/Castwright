@@ -1441,3 +1441,28 @@ test('bump-version refuses to cut without notes (no placeholder by default)', ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Release-body size guard — GitHub rejects a release body over 125,000
+// characters only at the final publish step, after the tag is pushed. The
+// --notes-file becomes that body, so bump-version refuses before any mutation.
+test('bump-version refuses an over-limit --notes-file, even with --force, before any mutation', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-big-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, `# v1.0.1\n\nFixes:\n- the bug\n${'x'.repeat(125000)}\n`);
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /125000-character limit/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

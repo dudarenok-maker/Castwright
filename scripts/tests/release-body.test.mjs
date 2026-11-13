@@ -422,3 +422,33 @@ test('cleanGitEnv strips a git env override regardless of stored casing', () => 
     Object.assign(process.env, saved);
   }
 });
+
+// Release-body size guard — GitHub rejects a body over 125,000 characters at
+// the last publish step; the annotation is what is actually published, so it is
+// refused here, in CI, before `gh release create`.
+test('annotation over the 125000-character limit blocks publish, naming the annotation', () => {
+  const dir = setupRepo();
+  try {
+    makeAnnotatedTag(dir, 'release-body-test-big', `Castwright notes\n${'x'.repeat(125000)}\n`);
+    const out = runReleaseBody(dir, 'release-body-test-big', 'out.md');
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /the tag annotation is \d+ characters/);
+    assert.match(out.stderr, /125000-character limit/);
+    assert.equal(existsSync(resolve(dir, 'out.md')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('multi-byte annotation (bytes > 125k, characters < 125k) still publishes', () => {
+  const dir = setupRepo();
+  try {
+    const body = `Castwright notes\n${'Ж'.repeat(124000)}\n`;
+    makeAnnotatedTag(dir, 'release-body-test-cyr', body);
+    const out = runReleaseBody(dir, 'release-body-test-cyr', 'out.md');
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(existsSync(resolve(dir, 'out.md')), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

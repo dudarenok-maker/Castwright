@@ -18,6 +18,8 @@ import {
   hasBOM,
   stripBOM,
   checkBOM,
+  checkBodySize,
+  MAX_RELEASE_BODY_CHARS,
 } from '../release-notes-gate.mjs';
 
 const REAL = '# Castwright 1.7.0\n- **Mac.** Runs on Mac.\n\n# Castwright 1.6.0\n- **x.** y.';
@@ -1029,6 +1031,85 @@ test('the CLI passes on clean, BOM-free RELEASE_NOTES.md and docs/release-notes-
     const out = runGate(dir, ['v1.0.0']);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /OK — RELEASE_NOTES\.md leads with 1\.0\.0/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Release-body size guard — GitHub rejects a release body over 125,000
+// characters, but only at the very last publish step (after the tag is pushed).
+// docs/release-notes-next.md IS that body, so the gate refuses it up front.
+// Counted in characters (UTF-16 length), never bytes: Cyrillic/emoji bodies are
+// 2-4x larger in bytes than in characters.
+test('checkBodySize passes a body just under the limit and at exactly the limit', () => {
+  assert.equal(MAX_RELEASE_BODY_CHARS, 125000);
+  assert.equal(checkBodySize('a'.repeat(MAX_RELEASE_BODY_CHARS - 1), 'notes.md').ok, true);
+  assert.equal(checkBodySize('a'.repeat(MAX_RELEASE_BODY_CHARS), 'notes.md').ok, true);
+});
+
+test('checkBodySize fails one character over, naming the limit, the count, and the fix', () => {
+  const res = checkBodySize('a'.repeat(MAX_RELEASE_BODY_CHARS + 1), 'docs/release-notes-next.md');
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /docs\/release-notes-next\.md is 125001 characters/);
+  assert.match(res.reason, /125000-character limit/);
+  assert.match(res.reason, /condense/i);
+  assert.match(res.reason, /docs\/release-notes\//);
+});
+
+test('checkBodySize counts characters, not bytes (Cyrillic body over 125k bytes passes)', () => {
+  const body = 'Ж'.repeat(MAX_RELEASE_BODY_CHARS); // 2 bytes each
+  assert.ok(Buffer.byteLength(body, 'utf8') > MAX_RELEASE_BODY_CHARS);
+  assert.equal(checkBodySize(body, 'notes.md').ok, true);
+});
+
+test('checkBodySize counts characters, not bytes (emoji body over 125k bytes passes)', () => {
+  const body = '\u{1F600}'.repeat(MAX_RELEASE_BODY_CHARS / 2); // 4 bytes, 2 UTF-16 units each
+  assert.ok(Buffer.byteLength(body, 'utf8') > MAX_RELEASE_BODY_CHARS);
+  assert.equal(checkBodySize(body, 'notes.md').ok, true);
+});
+
+test('the CLI fails on an oversize docs/release-notes-next.md, naming the file and count', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `# v1.0.0\n\n${'x'.repeat(MAX_RELEASE_BODY_CHARS)}\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /docs\/release-notes-next\.md is 125011 characters/);
+    assert.match(out.stderr, /125000-character limit/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI does NOT apply the size limit to RELEASE_NOTES.md (in-app notes)', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(
+      resolve(dir, 'RELEASE_NOTES.md'),
+      `# v1.0.0\n\n- Something shipped.\n\n${'x'.repeat(MAX_RELEASE_BODY_CHARS + 10)}\n`,
+    );
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.0\n\n- Something shipped.\n');
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI passes a multi-byte docs/release-notes-next.md whose bytes exceed 125k but chars do not', () => {
+  const dir = setupGateFixture();
+  try {
+    writeFileSync(resolve(dir, 'RELEASE_NOTES.md'), '# v1.0.0\n\n- Something shipped.\n');
+    writeFileSync(
+      resolve(dir, 'docs', 'release-notes-next.md'),
+      `# v1.0.0\n\n${'Ж'.repeat(MAX_RELEASE_BODY_CHARS - 100)}\n`,
+    );
+    const out = runGate(dir, ['v1.0.0']);
+    assert.equal(out.status, 0, out.stderr);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

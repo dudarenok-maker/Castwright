@@ -280,6 +280,35 @@ export function checkBOM(text, label) {
   };
 }
 
+/* GitHub rejects a release body longer than 125,000 characters — but only at
+   the very last step (`gh release create`, after the tag is already pushed),
+   so an oversize docs/release-notes-next.md passed every earlier gate. This
+   check fails early instead. It applies to the PUBLISHED technical body only
+   (docs/release-notes-next.md / the tag annotation), never to RELEASE_NOTES.md
+   (the in-app notes, which have no such limit).
+
+   Counted in characters, not bytes. GitHub's limit is a character count
+   (Rails `length` validation, i.e. Unicode code points); we use the UTF-16
+   length (`String#length`), which is the stricter of the two — an astral
+   character (emoji) is 2 here but 1 code point — so anything this accepts,
+   GitHub accepts too. Deliberately no --force/allowlist: like the BOM and
+   conflict-marker checks, GitHub will reject it regardless. */
+export const MAX_RELEASE_BODY_CHARS = 125000;
+
+/** Check that `label`'s text fits in a GitHub release body. */
+export function checkBodySize(text, label) {
+  const chars = String(text ?? '').length;
+  if (chars <= MAX_RELEASE_BODY_CHARS) return { ok: true, reason: '' };
+  return {
+    ok: false,
+    reason:
+      `${label} is ${chars} characters, over GitHub's ${MAX_RELEASE_BODY_CHARS}-character limit for a ` +
+      `release body — it would only be rejected at the final publish step, after the tag is pushed. ` +
+      `Condense it to fit, and archive the full text under docs/release-notes/ ` +
+      `(there is no --force override for this check).`,
+  };
+}
+
 /* #2018 — unresolved git conflict markers must never reach a published
    release. Not hypothetical: a `git merge origin/main` on the branch for PR
    #2010 left three markers inside RELEASE_NOTES.md's own v1.15.0 section, and
@@ -672,6 +701,16 @@ if (isDirectlyInvoked(import.meta.url)) {
     if (!mojibakeRes.ok) {
       process.stderr.write(`[release-notes-gate] ${mojibakeRes.reason}\n`);
       process.exit(1);
+    }
+
+    // Body-size limit: only the technical file that becomes the GitHub
+    // release body, never RELEASE_NOTES.md (the in-app notes).
+    if (label === 'docs/release-notes-next.md') {
+      const sizeRes = checkBodySize(text, label);
+      if (!sizeRes.ok) {
+        process.stderr.write(`[release-notes-gate] ${sizeRes.reason}\n`);
+        process.exit(1);
+      }
     }
   }
 

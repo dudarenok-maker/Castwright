@@ -45,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import {
   checkBOM,
+  checkBodySize,
   checkConflictMarkers,
   checkMojibake,
   formatHonouredEcho,
@@ -119,6 +120,11 @@ export function resolveReleaseBody({ annotation, fileExists, fileText, notesLabe
   if (!conflictRes.ok) return { ok: false, reason: conflictRes.reason, echo };
 
   if (!mojibakeRes.ok) return { ok: false, reason: mojibakeRes.reason, echo };
+
+  // GitHub rejects a release body over 125,000 characters, but only at
+  // `gh release create` — fail here, in CI, with the reason spelled out.
+  const sizeRes = checkBodySize(annotation, ANNOTATION_LABEL);
+  if (!sizeRes.ok) return { ok: false, reason: sizeRes.reason, echo };
 
   // Rule 2 — no file to compare against: the placeholder-tag path.
   if (!fileExists) {

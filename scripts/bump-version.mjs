@@ -30,6 +30,7 @@ import {
   checkMojibake,
   checkConflictMarkers,
   checkBOM,
+  checkBodySize,
   stripBOM,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
@@ -670,6 +671,13 @@ async function main() {
       else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);
       else die(`Mojibake gate: ${mojibakeCheck.reason}`);
     }
+
+    // Pre-flight 6d: this file becomes the GitHub release body, which GitHub
+    // rejects over 125,000 characters — but only at the final publish step,
+    // after the tag is pushed. Same unconditional posture as 6a/6c: no
+    // --force, no --dry-run downgrade (GitHub rejects it regardless).
+    const sizeCheck = checkBodySize(notesFileText, args.notesFile);
+    if (!sizeCheck.ok) die(sizeCheck.reason);
   }
 
   const gateOn = !args.skipCrossOs;
