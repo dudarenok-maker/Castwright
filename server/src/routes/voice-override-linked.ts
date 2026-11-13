@@ -83,6 +83,9 @@ const BUCKET_IDS = new Set(['unknown-male', 'unknown-female', 'narrator']);
    reason: 'clone_protected' so the client need not match the sentence (#4104). */
 class CloneProtectedError extends Error {}
 
+/* Does a targeted row still belong to the group, judged on the in-lock read of its book? */
+type KeepRow = (c: PersistedCharacter, fresh: CastFile) => boolean;
+
 function parseOverride(value: unknown): { engine: Engine; name: string } | null | 'invalid' {
   if (value === null) return null;
   if (typeof value !== 'object') return 'invalid';
@@ -114,9 +117,10 @@ voiceOverrideLinkedRouter.post(
       w: { bookId: string; bookTitle: string; ids: string[] },
       canonicalVoiceId: string,
       canonicalVoiceUuid: string | undefined,
+      keep: KeepRow,
     ): Promise<void> => {
       try {
-        const wrote = await applyToBook(bookDir, w.ids, canonicalVoiceId, canonicalVoiceUuid, override);
+        const wrote = await applyToBook(bookDir, w.ids, canonicalVoiceId, canonicalVoiceUuid, override, keep);
         for (const id of wrote) {
           updated.push({ bookId: w.bookId, bookTitle: w.bookTitle, characterId: id });
         }
@@ -166,25 +170,52 @@ voiceOverrideLinkedRouter.post(
           .filter((c) => !!c.voiceUuid && (c.declinedVoiceFrom ?? []).length > 0)
           .map((c) => c.voiceUuid as string),
       );
-      const keptApart = (u: string | undefined): boolean =>
-        !!u && isDeclineSeparatedVoiceSync(u, declinerUuids.has(u));
+      const keptApart = (u: string | undefined, alsoDeclinerUuids?: Set<string>): boolean =>
+        !!u && isDeclineSeparatedVoiceSync(u, declinerUuids.has(u) || !!alsoDeclinerUuids?.has(u));
 
-      /* Decide whether a candidate (in `candBookId`) is in the source's group. */
-      const inGroup = (cand: PersistedCharacter, candBookId: string): boolean => {
+      /* Is a candidate (in `candBookId`) kept out of the source's group by a "Don't reuse"?
+         `alsoDeclinerUuids`: the uuids decline-marked rows hold in a cast read since the scan. */
+      const declineApart = (cand: PersistedCharacter, candBookId: string, alsoDeclinerUuids?: Set<string>): boolean => {
         /* #3992 "Don't reuse" -- a declined pair never shares a voice, in either direction, and
            this goes before the shared-key match: the decliner keeps the old voiceId, so that
            match would otherwise stamp the new uuid back onto the book it declined. */
-        if (declinesVoice(source, { bookId: candBookId, voiceUuid: cand.voiceUuid })) return false;
-        if (declinesVoice(cand, { bookId, voiceUuid: source.voiceUuid })) return false;
+        if (declinesVoice(source, { bookId: candBookId, voiceUuid: cand.voiceUuid })) return true;
+        if (declinesVoice(cand, { bookId, voiceUuid: source.voiceUuid })) return true;
         /* PR #4007 pass 13 (owner decision): a voice "Don't reuse" created is never shared outside the
            chain that moved with it. Only the decliner carries the marker, so its followers and a book
            nobody declined would still match on the shared voiceId -- a "Don't reuse" uuid matches
-           only a row on that same uuid, the rule PUT /override applies through #4067. PR #4109
-           review pass 3 (owner decision): only a "Don't reuse" voice, never one merely first
-           designed before Confirm (whose record is an OwnStamp), which unifies as on main. */
-        if (source.voiceUuid !== cand.voiceUuid && (keptApart(source.voiceUuid) || keptApart(cand.voiceUuid))) {
-          return false;
-        }
+           only a row on that same uuid. PUT /override (#4067) scopes more widely: it keeps a row to
+           its uuid whenever ANY separated-voice record exists for it, so for a voice first designed
+           before Confirm the drawer's series Save reaches only the rows already on that uuid, while
+           this rebaseline unifies it. PR #4109 review pass 3 (owner decision): only a "Don't reuse"
+           voice is kept apart here, never one merely first designed before Confirm (whose record is
+           an OwnStamp), which unifies as on main. */
+        return (
+          source.voiceUuid !== cand.voiceUuid &&
+          (keptApart(source.voiceUuid, alsoDeclinerUuids) || keptApart(cand.voiceUuid, alsoDeclinerUuids))
+        );
+      };
+
+      /* PR #4109 review pass 4 (🟠2) -- the scan above is lock-free, and a decline locks only the
+         decliner's chain, so it can land between the scan and a series-mate's write. CLAUDE.md's
+         cast.json rule 2: the decision goes inside the lock, so each book's write re-applies the
+         decline rules to its in-lock row and skips a row that no longer belongs. */
+      const stillInGroup =
+        (candBookId: string) =>
+        (cand: PersistedCharacter, fresh: CastFile): boolean =>
+          !declineApart(
+            cand,
+            candBookId,
+            new Set(
+              fresh.characters
+                .filter((c) => !!c.voiceUuid && (c.declinedVoiceFrom ?? []).length > 0)
+                .map((c) => c.voiceUuid as string),
+            ),
+          );
+
+      /* Decide whether a candidate (in `candBookId`) is in the source's group. */
+      const inGroup = (cand: PersistedCharacter, candBookId: string): boolean => {
+        if (declineApart(cand, candBookId)) return false;
         if ((cand.voiceId ?? cand.id) === canonicalVoiceId) return true; // shared write key
         if (BUCKET_IDS.has(cand.id)) return false;
         if (!intersects(tokensFor(cand), sourceTokens)) return false;
@@ -215,17 +246,19 @@ voiceOverrideLinkedRouter.post(
         { bookId, bookTitle: sourceLocated.state.title, ids: sourceIds },
         canonicalVoiceId,
         source.voiceUuid,
+        stillInGroup(bookId),
       );
       return {
         canonicalVoiceId,
         canonicalVoiceUuid: source.voiceUuid,
+        stillInGroup,
         byBook,
         series: { author: sourceLocated.state.author, series: sourceLocated.state.series },
       };
     });
     if (sourceStep === BOOK_GONE) return res.status(404).json({ error: `Book "${bookId}" not found.` });
     if (!('byBook' in sourceStep)) return sourceStep;
-    const { canonicalVoiceId, canonicalVoiceUuid, byBook, series } = sourceStep;
+    const { canonicalVoiceId, canonicalVoiceUuid, stillInGroup, byBook, series } = sourceStep;
 
     for (const [siblingBookId, { bookTitle, ids }] of byBook) {
       try {
@@ -244,6 +277,7 @@ voiceOverrideLinkedRouter.post(
           { bookId: siblingBookId, bookTitle, ids },
           canonicalVoiceId,
           canonicalVoiceUuid,
+          stillInGroup(siblingBookId),
         );
       });
       } catch (err) {
@@ -318,6 +352,7 @@ export async function applyToBook(
   canonicalVoiceId: string,
   canonicalVoiceUuid: string | undefined,
   override: { engine: Engine; name: string } | null,
+  keep?: KeepRow,
 ): Promise<string[]> {
   /* #1981 — the read is inside the lock; every guard/throw below (cloned-slot
      refusal, the reserved-prefix consent check) is a decision derived from
@@ -330,7 +365,7 @@ export async function applyToBook(
      leave a staleness window against a concurrent redesign of the source
      between that unlocked read and a given target's write. Cross-book
      propagation staleness is tracked on #2006, not fixed here. */
-  return withCastLock(bookDir, () => applyToBookLocked(bookDir, ids, canonicalVoiceId, canonicalVoiceUuid, override));
+  return withCastLock(bookDir, () => applyToBookLocked(bookDir, ids, canonicalVoiceId, canonicalVoiceUuid, override, keep));
 }
 
 async function applyToBookLocked(
@@ -339,10 +374,20 @@ async function applyToBookLocked(
   canonicalVoiceId: string,
   canonicalVoiceUuid: string | undefined,
   override: { engine: Engine; name: string } | null,
+  keep?: KeepRow,
 ): Promise<string[]> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   if (!cast?.characters?.length) throw new Error('Cast on disk is empty');
-  const want = new Set(ids);
+  /* PR #4109 review pass 4 (🟠2) -- a row a "Don't reuse" took out of the group since the
+     route's scan is skipped: neither written nor failed, like a book that left the series. */
+  const want = new Set(
+    ids.filter((id) => {
+      const c = cast.characters.find((r) => r.id === id);
+      if (!c || !keep || keep(c, cast)) return true;
+      console.log(`[voice-override-linked] ${bookDir}/${id}: skipped, a "Don't reuse" landed since the group was read`);
+      return false;
+    }),
+  );
 
   for (const c of cast.characters) {
     if (!want.has(c.id)) continue;

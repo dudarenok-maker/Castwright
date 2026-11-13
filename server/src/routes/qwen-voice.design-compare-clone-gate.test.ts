@@ -583,3 +583,49 @@ describe('voice-override-linked for a voice first designed before Confirm (#4109
     expect(JSON.parse(readFileSync(recordFor(um), 'utf8'))).toMatchObject({ bookId: bookTwoId, declined: true });
   });
 });
+
+/* Pass-4 review (🟠2): the rebaseline decided each sibling's membership from its lock-free scan,
+   so a "Don't reuse" that landed between the scan and that sibling's write was undone. */
+describe('voice-override-linked racing a "Don\'t reuse" decline (#4109 pass 4)', () => {
+  it('RACE: a decline that lands while the rebaseline waits for the book keeps the book off the voice it declined', async () => {
+    writeBook('Book One', 1, bookOneId, wren({ voiceUuid: 'u_one' }));
+    writeBook('Book Two', 2, bookTwoId, wren({ ...linkedToBookOne(), voiceUuid: 'u_one' }));
+    const { withBookOp } = await import('../workspace/book-op-lock.js');
+    const { withCastLocks } = await import('../workspace/cast-lock.js');
+    const { writeJsonAtomic } = await import('../workspace/state-io.js');
+    const { separationPlan, separateVoiceLocked } = await import('./qwen-voice.js');
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    const holder = withBookOp(bookTwoId, async (two) => {
+      entered();
+      await held;
+      /* the decline's own locked step, under Book Two's book-op */
+      const plan = await separationPlan(two.bookDir, 'wren', bookOneId);
+      expect(plan.followers).toEqual([]);
+      await withCastLocks([two.bookDir], () =>
+        separateVoiceLocked(two.bookDir, 'wren', [two.bookDir], plan.followers, (dir, cast) => writeJsonAtomic(join(dir, '.audiobook', 'cast.json'), cast), {
+          fromBookId: bookOneId,
+          plannedStranded: plan.stranded,
+        }),
+      );
+    });
+    await inside;
+    const pending = request(app)
+      .post(`/api/books/${bookOneId}/cast/wren/voice-override-linked`)
+      .send({ override: { engine: 'qwen', name: 'qwen-u_one' } })
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 400)); // the source step is done; Book Two's write waits
+    release();
+    await holder;
+    const res = await pending;
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const two = readRow('Book Two');
+    expect(two.declinedVoiceFrom).toEqual([bookOneId]);
+    expect(two.voiceUuid).not.toBe('u_one');
+    expect(two.overrideTtsVoices?.qwen).toBeUndefined();
+    expect(res.body.updated.map((u: { bookId: string }) => u.bookId)).not.toContain(bookTwoId);
+  });
+});
