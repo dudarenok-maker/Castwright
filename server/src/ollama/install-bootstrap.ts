@@ -26,7 +26,9 @@
  *
  * Dependency-injectable. `httpFn` and `spawnFn` are constructor params so
  * the route's vitest harness can run the full state machine offline. The
- * default exports use real `fetch` + `child_process.spawn`.
+ * default exports use real `fetch` + `child_process.spawn`, but those
+ * defaults refuse to run under vitest (#3712): a test that forgets to inject
+ * `httpFn` / `spawnFn` fails loudly instead of downloading or spawning.
  *
  * IMPORTANT: we never auto-pull a model after install. That's a separate
  * user click. See plan 61's "Out of scope" — auto-pull would silently
@@ -39,6 +41,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 
 export type InstallJobStatus =
   | 'idle'
@@ -178,8 +181,15 @@ export class InstallBootstrap {
 
   constructor(opts: InstallBootstrapOptions = {}) {
     this.resolveAssetUrl = opts.resolveAssetUrl ?? defaultResolveAssetUrl;
-    this.httpFn = opts.httpFn ?? defaultHttpFn;
-    this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as SpawnFn);
+    this.httpFn =
+      opts.httpFn ??
+      refuseUnderVitest(defaultHttpFn, 'InstallBootstrap: real download refused under vitest (#3712); inject httpFn');
+    this.spawnFn =
+      opts.spawnFn ??
+      refuseUnderVitest(
+        realSpawn as unknown as SpawnFn,
+        'InstallBootstrap: real spawn refused under vitest (#3712); inject spawnFn',
+      );
     this.getPlatform = opts.getPlatform ?? (() => process.platform);
     this.getArch = opts.getArch ?? (() => process.arch);
     this.detectOllamaFn = opts.detectOllama ?? (() => defaultDetectOllama(this.spawnFn));
