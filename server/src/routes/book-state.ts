@@ -12,7 +12,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { readFile, readdir, rm, writeFile, unlink } from 'node:fs/promises';
+import { readFile, rm, writeFile, unlink } from 'node:fs/promises';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -113,7 +113,7 @@ import {
   carryTitleSynthesized,
   carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
-import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
+import { CHAPTER_AUDIO_EXTS, chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import {
   putManuscript,
   getManuscript,
@@ -781,10 +781,8 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     // can render true progress on re-open. Matches chapters by slug.
     let completedSlugs: string[] = [];
     try {
-      const files = existsSync(audioDir(bookDir)) ? await readdir(audioDir(bookDir)) : [];
-      const audioFiles = files.filter((f) => /\.(mp3|m4a|opus)$/i.test(f));
       completedSlugs = state.chapters
-        .filter((c) => audioFiles.some((f) => f.startsWith(c.slug)))
+        .filter((c) => chapterAudioExists(audioDir(bookDir), c.slug))
         .map((c) => c.slug);
     } catch {
       /* fall through with empty list */
