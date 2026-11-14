@@ -127,6 +127,12 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
       // fell back to the cpu overlay, and never installed the amd overlay
       expect(joined.some((c) => /install -r .*cpu\.txt/.test(c))).toBe(true);
       expect(joined.some((c) => /amd-rocm\.txt/.test(c))).toBe(false);
+      // provenance (#3712): the FAILED line is installForProfile's own log(); only the fake pip ran
+      expect(
+        stdoutSpy.mock.calls.some((c) =>
+          String(c[0]).includes('[bootstrap-venv] AMD ROCm install FAILED'),
+        ),
+      ).toBe(true);
       // and recorded the fallback marker for the runtime/UI to surface
       expect(existsSync(join(d, '.accelerator-fallback.json'))).toBe(true);
       expect(JSON.parse(readFileSync(join(d, '.accelerator-fallback.json'), 'utf8'))).toEqual({
