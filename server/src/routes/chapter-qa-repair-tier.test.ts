@@ -87,6 +87,8 @@ interface Case {
   rowKind: 'audition' | 'in-book';
   rowTier?: string;             // audition row's recorded modelKey
   renderedModelKey?: string;    // snapshot.renderedModelKey (in-book proxy)
+  snapModelKey?: string;        // snapshot.modelKey when it differs from oldTier (a partial write rebuilds it)
+  noSnapshot?: boolean;         // omit characterSnapshots entirely
   requestKey: string;
   embed: 'high' | 'low';
 }
@@ -107,12 +109,14 @@ async function runCase(c: Case) {
     bookId, chapterId: 1, chapterTitle: 'Chapter 1', durationSec: 2.0, sampleRate: SR, modelKey: c.oldTier,
     synthesizedAt: new Date().toISOString(),
     segments: [{ groupIndex: 0, characterId: 'castor', sentenceIds: [20], startSec: 0, endSec: 2.0 }],
-    characterSnapshots: {
-      castor: {
-        voiceEngine: 'qwen', resolvedVoiceName: 'qwen-b', modelKey: c.oldTier,
-        ...(c.renderedModelKey ? { renderedModelKey: c.renderedModelKey } : {}),
+    ...(c.noSnapshot ? {} : {
+      characterSnapshots: {
+        castor: {
+          voiceEngine: 'qwen', resolvedVoiceName: 'qwen-b', modelKey: c.snapModelKey ?? c.oldTier,
+          ...(c.renderedModelKey ? { renderedModelKey: c.renderedModelKey } : {}),
+        },
       },
-    },
+    }),
   }));
   writeFileSync(join(audioRoot, `${SLUG}.render-integrity.json`), JSON.stringify([{
     characterId: 'castor', sentenceIds: [20], verdict: 'voice-mismatch', cosine: 0.3, severity: 'severe', fixable: true,
@@ -192,6 +196,26 @@ describe('#3518 qa-repair centroid filter — Qwen tier', () => {
 
   it('T6 in-book same tier: in-book row kept and repaired', async () => {
     const done = await runCase({ oldTier: T06, rowKind: 'in-book', renderedModelKey: T06, requestKey: T06, embed: 'high' });
+    expect(synthesiseChapter).toHaveBeenCalled();
+    expect(done.repaired).toContain(0);
+  });
+
+  /* Precedence of the in-book tier: snapshot.renderedModelKey > snapshot.modelKey > segments-file modelKey.
+     A partial write rebuilds snapshot.modelKey but keeps renderedModelKey frozen at the full render. */
+  it('T7 second repair at 1.7B after a first one: snapshot.modelKey=1.7B but renderedModelKey=0.6B, in-book row dropped', async () => {
+    const done = await runCase({ oldTier: T17, snapModelKey: T17, rowKind: 'in-book', renderedModelKey: T06, requestKey: T17, embed: 'high' });
+    expect(synthesiseChapter).not.toHaveBeenCalled();
+    expect(done.stillSuspect).toContain(0);
+  });
+
+  it('T8 no snapshot: falls back to the segments-file modelKey; a mismatching request drops the in-book row', async () => {
+    const done = await runCase({ oldTier: T06, noSnapshot: true, rowKind: 'in-book', requestKey: T17, embed: 'high' });
+    expect(synthesiseChapter).not.toHaveBeenCalled();
+    expect(done.stillSuspect).toContain(0);
+  });
+
+  it('T9 no snapshot: segments-file modelKey equal to the request keeps the in-book row', async () => {
+    const done = await runCase({ oldTier: T06, noSnapshot: true, rowKind: 'in-book', requestKey: T06, embed: 'high' });
     expect(synthesiseChapter).toHaveBeenCalled();
     expect(done.repaired).toContain(0);
   });
