@@ -4,6 +4,7 @@ Full, unabridged release notes for every shipped version — copied verbatim
 from each version's GitHub Release. For the shorter, user-facing summary
 surfaced in the app, see [RELEASE_NOTES.md](https://github.com/dudarenok-maker/Castwright/blob/main/RELEASE_NOTES.md).
 
+- [v1.15.0](Release-Notes-v1.15.0) — 2026-11-13
 - [v1.14.0](Release-Notes-v1.14.0) — 2026-07-23
 - [v1.13.0](Release-Notes-v1.13.0) — 2026-07-12
 - [v1.12.3](Release-Notes-v1.12.3) — 2026-07-11

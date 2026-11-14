@@ -3,11 +3,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { cleanGitEnv } from './verify-cache-test-support.mjs';
 import {
   touchesSidecar,
   unquoteGitPath,
@@ -21,6 +22,7 @@ import {
   loadRegisterRowIds,
   readRegisterRowIds,
   failureDetail,
+  isVersionOnlyBump,
 } from '../validate-sidecar-acceptance.mjs';
 
 // Synthetic register row IDs, used ONLY as fixtures for this validator's
@@ -348,14 +350,20 @@ test('a sidecar-touching PR named only by a git-quoted path still needs acceptan
 // exported functions directly, but nothing at that level proves the CLI
 // wiring (argv, exit codes) actually works.
 
-function runCli(files, body) {
+function runCli(files, body, versionDiff) {
   const dir = mkdtempSync(join(tmpdir(), 'sidecar-acceptance-'));
   try {
     const filesFile = join(dir, 'files.txt');
     const bodyFile = join(dir, 'body.txt');
     writeFileSync(filesFile, files);
     writeFileSync(bodyFile, body);
-    return spawnSync(process.execPath, [scriptPath, filesFile, bodyFile], {
+    const args = [scriptPath, filesFile, bodyFile];
+    if (versionDiff !== undefined) {
+      const diffFile = join(dir, 'version-diff.txt');
+      writeFileSync(diffFile, versionDiff);
+      args.push(diffFile);
+    }
+    return spawnSync(process.execPath, args, {
       encoding: 'utf8',
       windowsHide: true,
     });
@@ -774,4 +782,283 @@ test('the real pull_request_template.md, fed whole as a PR body, does NOT satisf
     'pull_request_template.md no longer mentions the sidecar acceptance line -- fixture is stale',
   );
   assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, template), false);
+});
+
+// --- version-only bump exemption (#4120) --------------------------------------
+// A diff whose ONLY sidecar change is the `__version__` line of
+// server/tts-sidecar/version.py is exempt: a release bump touches no sidecar
+// behaviour. Decided on the actual diff hunks, not the filename, and fails
+// closed -- an absent/unreadable/odd diff keeps the gate.
+
+const VERSION_PY = 'server/tts-sidecar/version.py';
+
+function versionDiff(...changed) {
+  return [
+    `diff --git a/${VERSION_PY} b/${VERSION_PY}`,
+    'index 1111111..2222222 100644',
+    `--- a/${VERSION_PY}`,
+    `+++ b/${VERSION_PY}`,
+    '@@ -10 +10 @@',
+    ...changed,
+    '',
+  ].join('\n');
+}
+
+const BUMP_DIFF = versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"');
+const BUMP_PLUS_OTHER_LINE_DIFF = [
+  versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"').trimEnd(),
+  '@@ -3 +3 @@',
+  '-informational',
+  '+changed docstring',
+  '',
+].join('\n');
+
+test('version-only bump: exempt when version.py is the only sidecar file', () => {
+  assert.equal(isVersionOnlyBump(BUMP_DIFF), true);
+  assert.equal(touchesSidecar([VERSION_PY, 'package.json'], BUMP_DIFF), false);
+  assert.equal(passesSidecarAcceptanceGate([VERSION_PY], '', FIXTURE_ROWS, BUMP_DIFF), true);
+});
+
+test('version.py with another line changed: still gated', () => {
+  assert.equal(isVersionOnlyBump(BUMP_PLUS_OTHER_LINE_DIFF), false);
+  assert.equal(touchesSidecar([VERSION_PY], BUMP_PLUS_OTHER_LINE_DIFF), true);
+  assert.equal(
+    passesSidecarAcceptanceGate([VERSION_PY], '', FIXTURE_ROWS, BUMP_PLUS_OTHER_LINE_DIFF),
+    false,
+  );
+});
+
+test('version.py bump plus another sidecar file: still gated', () => {
+  assert.equal(touchesSidecar([VERSION_PY, 'server/tts-sidecar/main.py'], BUMP_DIFF), true);
+  assert.equal(
+    passesSidecarAcceptanceGate([VERSION_PY, 'server/tts-sidecar/main.py'], '', FIXTURE_ROWS, BUMP_DIFF),
+    false,
+  );
+});
+
+test('unreadable or missing diff: gated (fails closed)', () => {
+  for (const diff of [undefined, null, '', '   \n', 'garbage']) {
+    assert.equal(touchesSidecar([VERSION_PY], diff), true, `diff=${JSON.stringify(diff)}`);
+  }
+  assert.equal(touchesSidecar([VERSION_PY]), true);
+});
+
+test('isVersionOnlyBump rejects non-bump shapes', () => {
+  const cases = {
+    'non-semver value': versionDiff('-__version__ = "1.14.0"', '+__version__ = "latest"'),
+    'added line only': versionDiff('+__version__ = "1.15.0"'),
+    'removed line only (deletion)': versionDiff('-__version__ = "1.14.0"'),
+    'a different variable': versionDiff('-__build__ = "1.14.0"', '+__build__ = "1.15.0"'),
+    'trailing code on the line': versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"; import os'),
+    'a mode change header': versionDiff('-__version__ = "1.14.0"', '+__version__ = "1.15.0"').replace(
+      'index 1111111',
+      'old mode 100644\nnew mode 100755\nindex 1111111',
+    ),
+    'two version lines': versionDiff(
+      '-__version__ = "1.14.0"',
+      '-__version__ = "1.13.0"',
+      '+__version__ = "1.15.0"',
+      '+__version__ = "1.16.0"',
+    ),
+  };
+  for (const [label, diff] of Object.entries(cases)) {
+    assert.equal(isVersionOnlyBump(diff), false, label);
+  }
+});
+
+test('a version.py in another sidecar directory is not the exempt file', () => {
+  for (const path of ['server/tts-sidecar/foo/version.py', 'server/tts-sidecar/xversion.py']) {
+    assert.equal(touchesSidecar([path], BUMP_DIFF), true, path);
+  }
+});
+
+test('two removed version lines and nothing added is not a bump', () => {
+  const diff = versionDiff('-__version__ = "1.14.0"', '-__version__ = "1.13.0"');
+  assert.equal(isVersionOnlyBump(diff), false);
+});
+
+test('the version line in a second hunk is not a bump', () => {
+  const diff = [
+    versionDiff('-__version__ = "1.14.0"').trimEnd(),
+    '@@ -0,0 +1 @@',
+    '+__version__ = "1.15.0"',
+    '',
+  ].join('\n');
+  assert.equal(isVersionOnlyBump(diff), false);
+});
+
+// Real `git diff -U0` output, produced in a throwaway repo seeded with the real
+// version.py blob and diffed the way the workflow does. The hand-written
+// fixtures above cannot show how git renders a content line that itself starts
+// with `++ ` or `-- ` (it comes out as `+++ ` / `--- `, which look like headers).
+// Read from the committed BLOB, not the working tree: a Windows checkout with
+// core.autocrlf=true holds version.py as CRLF, and every diff content line would
+// then end in a carriage return and be rejected before the line under test is reached.
+// The non-whitespace pattern (not a quoted one) keeps an unpaired quote out of the regex literal,
+// which server/src/spawn-windows-hide.test.ts refuses (#2747).
+const REAL_VERSION_PY = spawnSync('git', ['show', 'HEAD:server/tts-sidecar/version.py'], {
+  cwd: dirname(scriptPath),
+  encoding: 'utf8',
+  windowsHide: true,
+  env: cleanGitEnv(),
+}).stdout.replace(/__version__ = \S+/, '__version__ = "1.14.0"');
+
+function realGitVersionDiff(baseText, headText) {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-realgit-'));
+  try {
+    const git = (...a) =>
+      spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, env: { ...cleanGitEnv(), GIT_CONFIG_NOSYSTEM: '1' } });
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    git('config', 'core.autocrlf', 'false');
+    mkdirSync(join(dir, 'server/tts-sidecar'), { recursive: true });
+    writeFileSync(join(dir, VERSION_PY), baseText);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(join(dir, VERSION_PY), headText);
+    git('add', '-A');
+    git('commit', '-qm', 'head');
+    const head = git('rev-parse', 'HEAD').stdout.trim();
+    return git('diff', '-U0', base, head, '--', VERSION_PY).stdout;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const bumpedText = (text) => text.replace('__version__ = "1.14.0"', '__version__ = "1.15.0"');
+
+test('real git diff: a clean bump is exempt', () => {
+  const diff = realGitVersionDiff(REAL_VERSION_PY, bumpedText(REAL_VERSION_PY));
+  assert.equal(isVersionOnlyBump(diff), true, diff);
+});
+
+test('real git diff: an added content line that renders as "+++ " is not skipped as a header', () => {
+  const diff = realGitVersionDiff(
+    REAL_VERSION_PY,
+    `${bumpedText(REAL_VERSION_PY)}++ __import__("os").system("echo pwned")\n`,
+  );
+  assert.match(diff, /^\+\+\+ __import__/m);
+  assert.equal(isVersionOnlyBump(diff), false, diff);
+  assert.equal(touchesSidecar([VERSION_PY], diff), true);
+});
+
+test('real git diff: a removed content line that renders as "--- " is not skipped as a header', () => {
+  const diff = realGitVersionDiff(`${REAL_VERSION_PY}-- old\n`, bumpedText(REAL_VERSION_PY));
+  assert.match(diff, /^--- old/m);
+  assert.equal(isVersionOnlyBump(diff), false, diff);
+});
+
+test('real git diff: moving the version line above the docstring is not a bump', () => {
+  const moved = `__version__ = "1.15.0"\n${REAL_VERSION_PY.replace('__version__ = "1.14.0"\n', '')}`;
+  const diff = realGitVersionDiff(REAL_VERSION_PY, moved);
+  assert.equal(isVersionOnlyBump(diff), false, diff);
+});
+
+// A rename out of server/tts-sidecar/** is listed by default rename detection
+// as only its destination. Both workflows that build a changed-file list for
+// scope decisions must ask for --no-renames so the source path is visible.
+test('real git: --no-renames shows the sidecar source path of a rename out of the sidecar', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-rename-'));
+  try {
+    const git = (...a) => {
+      const r = spawnSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, env: cleanGitEnv() });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    mkdirSync(join(dir, 'server/tts-sidecar'), { recursive: true });
+    mkdirSync(join(dir, 'server/legacy'), { recursive: true });
+    writeFileSync(join(dir, 'server/tts-sidecar/main.py'), 'print("hello world, long enough")\n'.repeat(5));
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD');
+    git('mv', 'server/tts-sidecar/main.py', 'server/legacy/main.py');
+    git('commit', '-qm', 'move');
+    const head = git('rev-parse', 'HEAD');
+    const defaultList = parseFileList(git('diff', '--name-only', base, head));
+    const noRenames = parseFileList(git('diff', '--name-only', '--no-renames', base, head));
+    assert.equal(touchesSidecar(defaultList), false, 'default listing hides the source (the bug)');
+    assert.equal(touchesSidecar(noRenames), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The matcher allows git global options (`-C dir`, `-c k=v`, `--no-pager`)
+// between `git` and the subcommand, and covers `show` as well as diff/log.
+const GIT_LISTING_RE = /\bgit(?:\s+(?:-[Cc]\s+\S+|--[\w-]+(?:=\S+)?))*\s+(?:diff|log|show)\b/;
+
+function findRenameBlindListings(text) {
+  // Join backslash continuations so a flag on a continued line is seen.
+  const joined = text.replace(/\\\r?\n/g, ' ');
+  const hits = [];
+  for (const l of joined.split(/\r?\n/)) {
+    if (l.trim().startsWith('#')) continue;
+    if (GIT_LISTING_RE.test(l) && /--name-only/.test(l)) hits.push(l);
+  }
+  return hits;
+}
+
+test('class guard matcher: sees the global-option and `show` spellings', () => {
+  for (const l of [
+    'git diff --name-only a b',
+    'git -C dir diff --name-only a b',
+    'git -c core.quotePath=false diff --name-only a b',
+    'git --no-pager log --name-only a..b',
+    'git show --name-only --pretty=format: "$HEAD"',
+  ]) {
+    assert.equal(findRenameBlindListings(l).length, 1, l);
+  }
+});
+
+test('workflows and actions: every `git diff|log|show ... --name-only` under .github passes --no-renames', () => {
+  const dir = join(resolve(dirname(scriptPath), '..'), '.github');
+  let found = 0;
+  for (const rel of readdirSync(dir, { recursive: true }).filter((f) => /\.ya?ml$/.test(f))) {
+    for (const l of findRenameBlindListings(readFileSync(join(dir, rel), 'utf8'))) {
+      found++;
+      assert.match(l, /--no-renames/, `${rel}: ${l.trim()}`);
+    }
+  }
+  assert.ok(found >= 3, `expected at least 3 --name-only invocations, saw ${found}`);
+});
+
+test('CLI: version-only bump diff exempts the gate with the version-bump message', () => {
+  const result = runCli(`${VERSION_PY}\npackage.json\n`, '', BUMP_DIFF);
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  assert.match(result.stdout, /only bumps __version__/);
+  assert.doesNotMatch(result.stdout, /does not touch/);
+});
+
+test('CLI: a PR with no sidecar file says it does not touch the sidecar', () => {
+  const result = runCli('package.json\n', '', BUMP_DIFF);
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  assert.match(result.stdout, /does not touch server\/tts-sidecar/);
+  assert.doesNotMatch(result.stdout, /only bumps/);
+});
+
+test('CLI: no diff file, or a non-bump diff, keeps the gate', () => {
+  assert.equal(runCli(`${VERSION_PY}\n`, '').status, 1);
+  assert.equal(runCli(`${VERSION_PY}\n`, '', BUMP_PLUS_OTHER_LINE_DIFF).status, 1);
+  assert.equal(runCli(`${VERSION_PY}\nserver/tts-sidecar/main.py\n`, '', BUMP_DIFF).status, 1);
+});
+
+test('CLI: an unreadable diff path keeps the gate', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sidecar-acceptance-'));
+  try {
+    writeFileSync(join(dir, 'files.txt'), `${VERSION_PY}\n`);
+    writeFileSync(join(dir, 'body.txt'), '');
+    const result = spawnSync(
+      process.execPath,
+      [scriptPath, join(dir, 'files.txt'), join(dir, 'body.txt'), join(dir, 'no-such-diff.txt')],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    assert.equal(result.status, 1, `stderr: ${result.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
