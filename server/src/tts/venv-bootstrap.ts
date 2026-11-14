@@ -19,12 +19,15 @@
  *
  * Dependency-injectable (`spawnFn`, `detectVenvFn`, `findPythonFn`) so the
  * vitest harness runs the whole machine offline with no real Python spawn.
+ * The spawn and Python-lookup defaults refuse under vitest (#3712), so a test
+ * must inject `spawnFn` and `findPythonFn`.
  */
 
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { findPython312 } from './python-discovery.js';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 import { getKnob } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
 
@@ -93,9 +96,19 @@ export class VenvBootstrap {
 
   constructor(opts: VenvBootstrapOptions) {
     this.repoRoot = opts.repoRoot;
-    this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as VenvSpawnFn);
+    this.spawnFn =
+      opts.spawnFn ??
+      refuseUnderVitest(
+        realSpawn as unknown as VenvSpawnFn,
+        'VenvBootstrap: real spawn refused under vitest (#3712); inject spawnFn',
+      );
     this.detectVenvFn = opts.detectVenvFn ?? sidecarVenvPresent;
-    this.findPythonFn = opts.findPythonFn ?? (() => findPython312());
+    this.findPythonFn =
+      opts.findPythonFn ??
+      refuseUnderVitest(
+        () => findPython312(),
+        'VenvBootstrap: real Python lookup refused under vitest (#3712); inject findPythonFn',
+      );
   }
 
   /** Probe state without kicking off a job. Used by GET /detect. */
