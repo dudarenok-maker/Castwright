@@ -4872,6 +4872,7 @@ class PlacementController:
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
         reclaim: Optional[Callable[[str], bool]] = None,
         own_resident_tier: Optional[Callable[[str, Optional[str], Optional[dict]], tuple[Optional[str], int, Optional[str]]]] = None,
+        own_resident_warm_mb: Optional[Callable[[str, Optional[str], Optional[dict]], int]] = None,
     ) -> None:
         self.probe = probe
         # #4079 — `(evict_step_name, weights_mb, card)` for the request's OWN tier
@@ -4884,6 +4885,11 @@ class PlacementController:
         # peak, so every other admission sees `total - peak` and a reload stays
         # covered.
         self.own_resident_tier = own_resident_tier if own_resident_tier is not None else (lambda engine, model, cfg: (None, 0, None))
+        # #4102 — MB subtracted from the request's cold peak BEFORE booking, when
+        # the model it needs (a Qwen mint's 1.7B-Base) is already resident: the
+        # ledger books the warm amount, not the cold peak. Unlike the #4079
+        # credit above this is a booking, not a fit-only adjustment.
+        self.own_resident_warm_mb = own_resident_warm_mb if own_resident_warm_mb is not None else (lambda engine, model, cfg: 0)
         # Evict-step names a live reservation needs resident (name -> holders),
         # so another admission's ladder cannot run them between this
         # reservation's hold and the op's own in-flight claim.
@@ -5128,6 +5134,7 @@ class PlacementController:
         # engine's `neededMb`).
         resident = self.is_resident(engine)
         peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
+        peak = max(peak - self.own_resident_warm_mb(engine, model, cfg), 0)
         protect, credit_mb, credit_card = self.own_resident_tier(engine, model, cfg)
         constraint = credit_card if credit_card is not None else (resident if resident is not None else pinned)
         reserve_cap = self.reserve_mb()
@@ -5429,6 +5436,7 @@ class PlacementController:
         # needs an incremental forward-only reservation, not the cold-load peak
         # unconditionally booked before this.
         peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
+        peak = max(peak - self.own_resident_warm_mb(engine, model, cfg), 0)
         protect, credit_mb, credit_card = self.own_resident_tier(engine, model, cfg)
         constraint = credit_card if credit_card is not None else (resident if resident is not None else pinned)
         reserve_cap = self.reserve_mb()
@@ -6103,8 +6111,24 @@ def _module_weights_mb(loaded: Any) -> int:
 # out of the free VRAM the probe reads, so its fit check adds them back (see
 # `PlacementController.own_resident_tier`); otherwise the full cold booking
 # double-counts them and sends the request down the ladder to evict (and then
-# reload) the very model it was about to use.
+# reload) the very model it was about to use. #4102: the same figure is also a
+# mint's warm discount (`_own_resident_warm_mb`): a mint with the base resident
+# books its cold peak minus these weights.
 _QWEN_BASE17_WEIGHTS_MB = 3400
+
+
+def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
+    """`(card, weights_mb)` when a 1.7b Qwen request finds the 1.7B-Base
+    resident (card from `_qwen_resident_device_key`), else None."""
+    if engine != "qwen" or "1.7b" not in (model or "").lower():
+        return None
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine) or qwen._base17 is None:
+        return None
+    card = _qwen_resident_device_key(qwen)
+    if card is None:
+        return None
+    return (card, getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB)
 
 
 def _own_resident_tier(
@@ -6115,19 +6139,26 @@ def _own_resident_tier(
     resident, else `(None, 0, None)`. `card` is the device Qwen is on
     (`_qwen_resident_device_key`, which sees `_base17` where `_is_resident` does
     not); `weights_mb` is the footprint measured at load, else the fallback.
-    Mint (`op == "mint"`) has the same self-evict shape but is NOT covered here
-    (reported separately on #4102); design_voice evicts the base itself."""
-    none = (None, 0, None)
-    if engine != "qwen" or "1.7b" not in (model or "").lower() or (cfg or {}).get("op") in ("mint", "design"):
-        return none
-    qwen = ENGINES.get("qwen")
-    if not isinstance(qwen, QwenEngine) or qwen._base17 is None:
-        return none
-    card = _qwen_resident_device_key(qwen)
-    if card is None:
-        return none
-    weights = getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB
-    return ("qwen.base17", weights, card)
+    A mint (`op == "mint"`, #4102) with the base resident PROTECTS it on that
+    card with NO credit (`("qwen.base17", 0, card)`); its warm booking comes
+    from `_own_resident_warm_mb`. design_voice evicts the base itself."""
+    op = (cfg or {}).get("op")
+    if op == "design":
+        return (None, 0, None)
+    found = _own_resident_qwen_card(engine, model)
+    if found is None:
+        return (None, 0, None)
+    card, weights = found
+    return ("qwen.base17", 0 if op == "mint" else weights, card)
+
+
+def _own_resident_warm_mb(engine: str, model: Optional[str], cfg: Optional[dict]) -> int:
+    """PlacementController.own_resident_warm_mb (#4102): the resident 1.7B-Base
+    weights a Qwen mint does not need to book again, else 0."""
+    if (cfg or {}).get("op") != "mint":
+        return 0
+    found = _own_resident_qwen_card(engine, model)
+    return found[1] if found is not None else 0
 
 
 # Module-level admission instance /synthesize reserves against when the flag
@@ -6142,6 +6173,7 @@ _placement = PlacementController(
     idle_evict_steps=_idle_evict_steps,
     is_resident=_is_resident,
     own_resident_tier=_own_resident_tier,
+    own_resident_warm_mb=_own_resident_warm_mb,
 )
 
 
