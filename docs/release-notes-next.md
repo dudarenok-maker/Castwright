@@ -36,3 +36,7 @@ history at cut time.
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
+
+## 📦 Dependencies
+
+- **Dependabot server-npm group refresh: 9 updates landed, two majors** (#4121). Runtime: `@google/genai` 2.30.0→3.0.0, `entities` 8.1.0→9.0.0, `openai` 7.43.0→7.54.0, `express-rate-limit` 8.7.1→8.7.4, `cookie` 2.0.1→2.0.2, `undici` 8.12.3→8.12.4. Dev-only: `vitest` 5.0.5→5.1.0, `@types/node` 26.6.5→26.6.6, `supertest` 7.3.1→7.3.2. `@google/genai` 3.0 flips the Gemini Developer API default from `v1beta` to `v1`, and `v1` has no speech output (`speechConfig` / `responseModalities: AUDIO`), so every `new GoogleGenAI` (Gemini TTS, the analyzer transport, the model catalog) now pins `apiVersion: GEMINI_API_VERSION` (`'v1beta'`, exported from `analyzer/catalog/gemini-catalog.ts`); `analyzer/gemini-api-version.test.ts` and `tts/gemini.timeout.test.ts` assert the request path against a real-SDK local endpoint.
