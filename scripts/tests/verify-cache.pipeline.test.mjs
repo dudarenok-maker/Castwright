@@ -355,7 +355,7 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
     // pass 2, B4 — this guard mirrors the one runStepProcess's own equivalent test already has
     // a few lines up). The bound sits below the self-exit so it stays
     // falsifiable (#3682).
-    assertHangFixtureKilled(dir, elapsed, watch);
+    await assertHangFixtureKilled(dir, elapsed, watch);
     assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
     const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
     assert.ok(timeoutLine, `expected a [timeout] line, got:\n${logs.join('\n')}`);

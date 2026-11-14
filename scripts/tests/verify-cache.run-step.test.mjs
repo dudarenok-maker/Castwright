@@ -143,7 +143,7 @@ test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a c
       'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
         'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
     );
-    assertHangFixtureKilled(dir, elapsed, watch);
+    await assertHangFixtureKilled(dir, elapsed, watch);
   } finally {
     watch.disarm();
   }
@@ -792,7 +792,7 @@ test(
         elapsed < STEP_BUDGET_PAST_LAUNCH_MS + 40_000,
         `the re-sweep must release the step within seconds, not the fixture's ${HANG_FIXTURE_SELF_EXIT_MS}ms self-exit — took ${elapsed}ms`,
       );
-      assertHangFixtureKilled(dir, elapsed, watch);
+      await assertHangFixtureKilled(dir, elapsed, watch);
     } finally {
       watch.disarm();
     }
