@@ -1,5 +1,7 @@
 # Castwright 1.16.0
 
+- **If Castwright's server ever stops on a serious internal error, it now leaves a diagnostic report in your logs folder,** so the cause can be tracked down.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**

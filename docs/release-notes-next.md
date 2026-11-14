@@ -36,3 +36,7 @@ history at cut time.
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
+
+## 🩺 Diagnostics
+
+- **The server now writes a Node diagnostic report when it dies of a V8 fatal error,** into `logs/node-reports/` (`<APP_LOG_DIR>/node-reports/` when set), with Node's default timestamp-and-pid file name. It is enabled in-process at the start of boot, so every launcher gets it (`npm start`, `npm run dev`, `dev:lan`, `start:lan`, `start:prod`), and the boot logs `[server] diagnostic report on a fatal error -> <dir>` (or an `OFF` line if the folder can't be created; boot continues). Evidence capture for the unexplained silent server deaths; a native crash (0xC0000409) writes no report, so read the folder together with the sidecar's exit-code line. On-box row A124. (#4054)
