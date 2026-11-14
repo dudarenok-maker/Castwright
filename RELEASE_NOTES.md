@@ -1,5 +1,9 @@
 # Castwright 1.16.0
 
+**What's new in 1.16.0**
+
+- **Opus books show their progress again.** Reopening an Opus book now shows the chapters you've already made as done, and a chapter that only has an earlier take left over is no longer marked finished.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**

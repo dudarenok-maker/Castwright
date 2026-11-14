@@ -33,6 +33,10 @@ PR-by-PR as the v1.16.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🔊 Generation quality & engine health
+
+- **`completedSlugs` in the book-state GET now counts a chapter only when its live take exists.** It used a `.mp3/.m4a/.opus` regex plus `startsWith(slug)`, so Opus (`.ogg`) books never showed a chapter as done and a lone `<slug>.previous.mp3` counted as done; it now asks `chapterAudioExists` (the same live-take finder exports use), which also stops `ch-1` matching `ch-10.mp3`. Covered by `server/src/routes/book-state.completed-slugs.test.ts` (#4166).
+
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.

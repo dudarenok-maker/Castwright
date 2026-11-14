@@ -10261,7 +10261,7 @@ components:
         completedSlugs:
           type: array
           items: { type: string }
-          description: Slugs of chapters that already have an audio file on disk.
+          description: Slugs of chapters whose live audio take (<slug>.mp3, .m4a or .ogg) exists on disk. A preserved earlier take (<slug>.previous.*) does not count.
         sliceRevisions:
           type: object
           description: |

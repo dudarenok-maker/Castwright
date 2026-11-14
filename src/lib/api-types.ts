@@ -7293,7 +7293,7 @@ export interface components {
             revisions: components["schemas"]["RevisionsState"] | null;
             /** @description Plan 286 — present only when revisions.json could not be read. A fixed, path-free user-facing sentence (or, for a newer-schema file, the server's own "upgrade the server" sentence); the client toasts it verbatim. */
             revisionsError?: string;
-            /** @description Slugs of chapters that already have an audio file on disk. */
+            /** @description Slugs of chapters whose live audio take (<slug>.mp3, .m4a or .ogg) exists on disk. A preserved earlier take (<slug>.previous.*) does not count. */
             completedSlugs: string[];
             /**
              * @description Plan 289 — per-field revision tokens of the four `PUT /state`
