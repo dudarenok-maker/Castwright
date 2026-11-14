@@ -20,7 +20,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { walk } from '../lib/module-graph.mjs';
 import {
   composeInputHash,
@@ -62,7 +62,6 @@ import {
   parseLastHeartbeat,
   pidAlive,
   stepByName,
-  waitForPidDead,
 } from './verify-cache-test-support.mjs';
 
 const { hasVitestStep, makeTailAccumulator, MAX_STDERR_BUFFER, SCHEMA_VERSION } = _internals;
@@ -1427,12 +1426,42 @@ test('pidAlive: a zombie (stat state Z) counts as dead, a running process as ali
   assert.equal(pidAlive(process.pid, { readStat: () => null }), true, 'no /proc info falls back to the signal-0 probe');
 });
 
-test('waitForPidDead: resolves true once the pid dies within the bound, false if it outlives it (Castwright#4193)', async () => {
-  let polls = 0;
-  const aliveThrice = () => ++polls <= 3;
-  assert.equal(await waitForPidDead(1, { timeoutMs: 1000, intervalMs: 1, alive: aliveThrice }), true);
-  assert.equal(await waitForPidDead(1, { timeoutMs: 30, intervalMs: 5, alive: () => true }), false);
-});
+// Real /proc, real zombie: the backgrounded `sleep 0` exits at once and stays a
+// zombie because its parent was exec'd into `sleep 5` and never reaps it.
+test(
+  'pidAlive: a real zombie reads as dead while kill(pid, 0) still succeeds (Castwright#4193)',
+  { skip: process.platform !== 'linux' },
+  async () => {
+    const parent = spawn('sh', ['-c', 'sleep 0 & echo $!; exec sleep 5'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      const pid = await new Promise((res, rej) => {
+        let out = '';
+        parent.stdout.on('data', (d) => {
+          out += d;
+          if (out.includes('\n')) res(Number(out.trim()));
+        });
+        parent.once('error', rej);
+        parent.once('close', () => rej(new Error('fixture exited before printing the pid')));
+      });
+      assert.ok(Number.isInteger(pid) && pid > 0, `bad zombie pid ${pid}`);
+      const deadline = Date.now() + 5_000;
+      const stateOf = () => {
+        try {
+          const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+          return stat.slice(stat.lastIndexOf(')') + 1).trim().charAt(0);
+        } catch {
+          return null;
+        }
+      };
+      while (stateOf() !== 'Z' && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(stateOf(), 'Z', 'fixture never became a zombie');
+      assert.doesNotThrow(() => process.kill(pid, 0), 'signal 0 must still succeed on a zombie (the bug)');
+      assert.equal(pidAlive(pid), false);
+    } finally {
+      parent.kill('SIGKILL');
+    }
+  },
+);
 
 test('computeStepBudgetMs widens the FLOOR for an UNCALIBRATED step (no cache entry) under LOW_CONCURRENCY (B2)', () => {
   const floorMs = 45 * 60 * 1000;

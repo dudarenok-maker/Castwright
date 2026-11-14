@@ -11,6 +11,7 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { runPipeline, STEPS } from '../verify-cache.mjs';
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
+import { waitForExit } from '../restart-after-upgrade.mjs';
 
 // Track temporary directories created by mkTmp() so we can clean them up after all tests.
 const createdDirs = [];
@@ -155,18 +156,6 @@ export function pidAlive(pid, { readStat = readProcStat } = {}) {
   return state !== 'Z';
 }
 
-// Poll until pid is dead (or zombie), bounded: a real survivor is a process that
-// is still alive well past the reap latency, so a bound that is generous for the
-// reap still fails a genuinely partial kill.
-export async function waitForPidDead(pid, { timeoutMs = 5_000, intervalMs = 50, alive = pidAlive } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (alive(pid)) {
-    if (Date.now() >= deadline) return false;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return true;
-}
-
 // null unless the file holds a real pid: a read landing between the fixture's
 // truncating open and its write sees '' -> Number('') === 0, and pid 0 means
 // "this process" (the whole group on POSIX) to process.kill — it would SIGKILL
@@ -211,7 +200,9 @@ export async function assertHangFixtureKilled(dir, elapsed, watch) {
       `fixture survived the kill (partial kill): pid ${watch.survivorPid} was still alive ${SURVIVOR_GRACE_MS}ms after the budget fired — the tree kill missed a descendant (call returned after ${elapsed}ms)`,
     );
     assert.ok(
-      await waitForPidDead(pid),
+      // Bounded: a real survivor stays alive well past the reap latency, so a
+      // bound generous for the reap still fails a genuinely partial kill.
+      await waitForExit({ pid, timeoutMs: 5_000, intervalMs: 50, isAlive: pidAlive }),
       `fixture survived the kill (partial kill): pid ${pid} is still alive after the call returned (took ${elapsed}ms)`,
     );
     assert.ok(
