@@ -60,7 +60,9 @@ import {
   makeGitFixture,
   mkTmp,
   parseLastHeartbeat,
+  pidAlive,
   stepByName,
+  waitForPidDead,
 } from './verify-cache-test-support.mjs';
 
 const { hasVitestStep, makeTailAccumulator, MAX_STDERR_BUFFER, SCHEMA_VERSION } = _internals;
@@ -1412,6 +1414,24 @@ test('parseLastHeartbeat: a torn tail is dropped, the last complete line wins (C
 
 test('parseLastHeartbeat: a non-numeric complete line fails the finite assertion (Castwright#3419)', () => {
   assert.throws(() => parseLastHeartbeat('1 10 3\nx y z\n'), /finite numbers/);
+});
+
+// #4193: a SIGKILLed fixture is a zombie until its (re-parented) parent reaps
+// it, and kill(pid, 0) succeeds on a zombie — so the survivor check saw a dead
+// process as alive when 'close' fired before the reap.
+test('pidAlive: a zombie (stat state Z) counts as dead, a running process as alive (Castwright#4193)', () => {
+  assert.equal(pidAlive(process.pid, { readStat: () => '4242 (node) Z 1 4242 4242 0 -1' }), false);
+  assert.equal(pidAlive(process.pid, { readStat: () => '4242 (node) S 1 4242 4242 0 -1' }), true);
+  // comm may contain spaces and parens; the state is the field after the LAST ')'.
+  assert.equal(pidAlive(process.pid, { readStat: () => '4242 (a) Z b) S 1 4242' }), true);
+  assert.equal(pidAlive(process.pid, { readStat: () => null }), true, 'no /proc info falls back to the signal-0 probe');
+});
+
+test('waitForPidDead: resolves true once the pid dies within the bound, false if it outlives it (Castwright#4193)', async () => {
+  let polls = 0;
+  const aliveThrice = () => ++polls <= 3;
+  assert.equal(await waitForPidDead(1, { timeoutMs: 1000, intervalMs: 1, alive: aliveThrice }), true);
+  assert.equal(await waitForPidDead(1, { timeoutMs: 30, intervalMs: 5, alive: () => true }), false);
 });
 
 test('computeStepBudgetMs widens the FLOOR for an UNCALIBRATED step (no cache entry) under LOW_CONCURRENCY (B2)', () => {
