@@ -542,6 +542,79 @@ describe('persistPlannedCast', () => {
     expect(ids(readCast())).not.toContain('bob');
   });
 
+  describe('the narrator is exempt from rule 13 (#4100)', () => {
+    const edits = () =>
+      JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')).sentences as Array<{
+        characterId: string;
+      }>;
+
+    it('P1 wiped char-narrator: the narrator lines land on the re-created row', async () => {
+      writeCast([row('alice', 'Alice')]);
+      const out = await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('narrator', 'char-narrator', 'narrator'), join('alice', 'alice')),
+          roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+          sentences: sentences('narrator', 'narrator', 'alice'),
+        }),
+      );
+      const cast = readCast();
+      expect(ids(cast).sort()).toEqual(['alice', 'char-narrator']);
+      expect(cast.find((c) => c.id === 'char-narrator')?.lines).toBe(2);
+      expect(out.sentences.map((s) => s.characterId)).toEqual(['char-narrator', 'char-narrator', 'alice']);
+      expect(out.sentences.some((s) => 'priorCharacterId' in s && s.priorCharacterId)).toBe(false);
+      expect(out.deletedTargets).toEqual([]);
+      expect(edits().map((s) => s.characterId)).toEqual(out.sentences.map((s) => s.characterId));
+    });
+
+    it('P2 wiped narrator (same id): the row comes back and keeps its lines', async () => {
+      writeCast([row('alice', 'Alice')]);
+      const out = await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('narrator', 'narrator'), join('alice', 'alice')),
+          roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+          sentences: sentences('narrator', 'narrator', 'alice'),
+        }),
+      );
+      expect(readCast().find((c) => c.id === 'narrator')?.lines).toBe(2);
+      expect(out.sentences.map((s) => s.characterId)).toEqual(['narrator', 'narrator', 'alice']);
+      expect(out.sentences.some((s) => 'priorCharacterId' in s && s.priorCharacterId)).toBe(false);
+      expect(out.deletedTargets).toEqual([]);
+    });
+
+    it('P3 another row deleted too: only the non-narrator row is a deleted target', async () => {
+      writeCast([row('alice', 'Alice')]);
+      const out = await persistPlannedCast(
+        persistArgs({
+          plan: planOf(
+            join('narrator', 'char-narrator', 'narrator'),
+            join('alice', 'alice'),
+            join('bob', 'bob'),
+          ),
+          roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice'), row('bob', 'Bob')),
+          sentences: sentences('narrator', 'narrator', 'bob', 'alice'),
+        }),
+      );
+      expect(out.deletedTargets).toEqual(['bob']);
+      expect(out.sentences.find((s) => s.priorCharacterId === 'bob')).toMatchObject({
+        characterId: 'char-narrator',
+      });
+      expect(readCast().find((c) => c.id === 'char-narrator')?.lines).toBe(3);
+    });
+
+    it('P4 no retirement and no history file', async () => {
+      writeCast([row('alice', 'Alice')]);
+      const out = await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('narrator', 'char-narrator', 'narrator'), join('alice', 'alice')),
+          roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+          sentences: sentences('narrator', 'narrator', 'alice'),
+        }),
+      );
+      expect(out.retirements).toEqual([]);
+      expect(existsSync(castIdHistoryPath(bookDir))).toBe(false);
+    });
+  });
+
   it('this run\'s narrator sentences take the prior narrator id and a merged-away target\'s take its survivor', async () => {
     writeCast([row('char-narrator', 'Narrator'), row('alice', 'Alice')]);
     writeHistory({ supersededBy: { bob: 'alice' } });

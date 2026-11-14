@@ -446,7 +446,9 @@ export type PersistOutcomeError = Error & { persistOutcome?: PersistOutcome };
        overlay never meets an undecided row;
     3. re-resolve every plan target through the current history (exact | history);
     4. overlay (`persist`), remap this run's sentences (narrator -> the prior
-       narrator id, a merged-away target -> its survivor, a re-mint -> its new id),
+       narrator id, a merged-away target -> its survivor, a re-mint -> its new id;
+       a narrator-id speaker with no live target -> the narrator row the overlay
+       wrote, #4100: the narrator is exempt from rule 13),
        reroute lines of a deleted target to the book's narrator, recount, write
        cast.json;
     5. write manuscript-edits.json under the `book` lock, nested;
@@ -559,15 +561,17 @@ export async function persistPlannedCast(a: {
     // #4103 pass 1 O1; a legacy fold-bucket key is not followed at all, R53).
     const currentIds = new Set(current.map((r) => r.id));
     const addedNow = new Set(ov.characters.map((c) => c.id).filter((id) => !currentIds.has(id)));
+    const narratorId = ov.characters.map((c) => c.id).find(isNarratorId) ?? 'narrator';
     const toFinal: Record<string, string> = {};
     for (const id of new Set(sentences.map((s) => s.characterId))) {
       if (addedNow.has(id)) continue;
       const d = isNarratorId(id) ? plan.decisions[id] : undefined;
       const target = d?.kind === 'join' ? resolve(d.priorId) : resolve(id);
       if (target && target !== id) toFinal[id] = target;
+      // A narrator-id speaker with no live target goes to the narrator row the overlay wrote (#4100).
+      else if (!target && isNarratorId(id) && narratorId !== id) toFinal[id] = narratorId;
     }
     sentences = remapSentenceIds(sentences, toFinal);
-    const narratorId = ov.characters.map((c) => c.id).find(isNarratorId) ?? 'narrator';
     sentences = rerouteDeletedTargets(sentences, new Set(ov.deletedTargets), narratorId);
 
     const carried = new Set(ov.carriedForward.map((c) => c.id));
