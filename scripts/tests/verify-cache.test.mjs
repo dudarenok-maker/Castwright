@@ -1432,7 +1432,7 @@ test(
   'pidAlive: a real zombie reads as dead while kill(pid, 0) still succeeds (Castwright#4193)',
   { skip: process.platform !== 'linux' },
   async () => {
-    const parent = spawn('sh', ['-c', 'sleep 0 & echo $!; exec sleep 5'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const parent = spawn('sh', ['-c', 'sleep 0 & echo $!; exec sleep 5'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     try {
       const pid = await new Promise((res, rej) => {
         let out = '';
