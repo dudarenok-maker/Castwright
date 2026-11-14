@@ -43,7 +43,7 @@ import {
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
-import { currentCastVoiceName } from '../audio/render-integrity/current-voice.js';
+import { currentCastModelKey, currentCastVoiceName } from '../audio/render-integrity/current-voice.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict } from '../tts/segment-qa.js';
 import {
   verifySegmentTranscript,
@@ -454,11 +454,14 @@ chapterQaRepairRouter.post(
          scoring and this repair resolves through cast-id history to its live row
          and is judged on that row's current voice; only an id with NO live row at
          all has no current voice → auditionCentroidUsableForCurrent returns false
-         (conservative drop). The model key is left on the
-         snapshot/segFile fallback (unchanged): a same-engine voice reassignment leaves it
-         valid and an engine change is caught by the voice-name mismatch above —
-         except a Qwen tier change (per-character elevation or a repair at a different
-         tier), which keeps the old tier's centroid; known gap, #3518. After this filter a filtered-out character behaves exactly like "no
+         (conservative drop). The model key is derived from the current cast plus
+         the run key, the same way the voice is — currentCastModelKey(c, engine,
+         modelKey), never the snapshot — so a Qwen tier change (per-character
+         elevation or a repair at another tier) drops the old tier's audition
+         centroid (#3518). An in-book row records no model key, so its tier is the
+         character's last full render of this chapter
+         (`renderedModelKey ?? modelKey ?? segFile.modelKey`). After this filter a
+         filtered-out character behaves exactly like "no
          centroid" at every downstream `centroids?.[charId]` site. An in-book row is
          kept only when it recorded no `inBookVoiceName` (legacy) or that name
          equals the current cast voice; one built from an older voice is dropped
@@ -469,12 +472,10 @@ chapterQaRepairRouter.post(
           Object.entries(readCentroidsMap).filter(([charId, row]) => {
             const current = castResolver.resolve(charId)?.character;
             const currentVoiceName = current ? currentCastVoiceName(current, engine) : undefined;
+            const currentModelKey = current ? currentCastModelKey(current, engine, modelKey) : undefined;
             const snap = segFile.characterSnapshots?.[charId];
-            return auditionCentroidUsableForCurrent(
-              row,
-              currentVoiceName,
-              snap?.modelKey ?? segFile.modelKey,
-            );
+            const inBookRenderModelKey = snap?.renderedModelKey ?? snap?.modelKey ?? segFile.modelKey;
+            return auditionCentroidUsableForCurrent(row, currentVoiceName, currentModelKey, inBookRenderModelKey);
           }),
         );
       /* #3362 pass-4 fix (🟠D / owner design b) — centroids/verdict rows are
