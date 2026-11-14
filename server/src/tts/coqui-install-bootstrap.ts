@@ -24,6 +24,7 @@
 
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 import {
   detectCoquiInstallStateOnDisk,
   type CoquiInstallState,
@@ -100,7 +101,12 @@ export class CoquiInstallBootstrap {
 
   constructor(opts: CoquiInstallOptions) {
     this.repoRoot = opts.repoRoot;
-    this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as CoquiSpawnFn);
+    this.spawnFn =
+      opts.spawnFn ??
+      refuseUnderVitest(
+        realSpawn as unknown as CoquiSpawnFn,
+        'CoquiInstallBootstrap: real spawn refused under vitest (#3712); inject spawnFn',
+      );
     this.detectFn = opts.detectFn ?? (() => detectCoquiInstallStateOnDisk(this.repoRoot));
     this.installArgs = opts.installArgs ?? [];
     this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;

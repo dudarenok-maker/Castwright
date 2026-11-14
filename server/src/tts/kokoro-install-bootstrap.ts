@@ -26,6 +26,7 @@
 
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 import { detectKokoroInstalledOnDisk } from './kokoro-install-detect.js';
 import { resolveVenvRuntimeProfile } from './spawn-sidecar.js';
 import { restoreOrtRuntime, type OrtRestoreOutcome } from './ort-restore.js';
@@ -101,7 +102,12 @@ export class KokoroInstallBootstrap {
 
   constructor(opts: KokoroInstallOptions) {
     this.repoRoot = opts.repoRoot;
-    this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as KokoroSpawnFn);
+    this.spawnFn =
+      opts.spawnFn ??
+      refuseUnderVitest(
+        realSpawn as unknown as KokoroSpawnFn,
+        'KokoroInstallBootstrap: real spawn refused under vitest (#3712); inject spawnFn',
+      );
     this.detectFn = opts.detectFn ?? (() => detectKokoroInstalledOnDisk(this.repoRoot));
     this.installArgs = opts.installArgs ?? [];
     this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;
