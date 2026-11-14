@@ -48,7 +48,7 @@ vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
    outside any lock) until Book Two's row carries a uuid, or `ms` pass: the walk
    has stamped Book One and waits while a second mint's walk reaches Book Two first.
    That is the interleaving that split the link before the fix. */
-const holdWalk = vi.hoisted(() => ({ statePath: null as string | null, castPath: '', ms: 1500 }));
+const holdWalk = vi.hoisted(() => ({ statePath: null as string | null, castPath: '', ms: 1500, reached: false }));
 /* Review pass 1, 🟠5 — the design core's own read of the book's castConfirmed fails
    (a transient EBUSY) while every other read of state.json works. */
 const failConfirmedRead = vi.hoisted(() => ({ on: false }));
@@ -68,6 +68,7 @@ vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
     }
     if (holdWalk.statePath && path === holdWalk.statePath && (new Error().stack ?? '').includes('forEachMatchingCastCharacter')) {
       holdWalk.statePath = null;
+      holdWalk.reached = true;
       const until = Date.now() + holdWalk.ms;
       while (!twoHasUuid() && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
     }
@@ -236,6 +237,7 @@ beforeAll(async () => {
 beforeEach(() => {
   holdWalk.statePath = null;
   holdWalk.ms = 1500;
+  holdWalk.reached = false;
   failWalk.armed = false;
   failPromoteRename.armed = false;
   failStampRead.armed = false;
@@ -454,8 +456,14 @@ describe('#4072 — two concurrent base mints of one legacy series link end on o
     holdWalk.castPath = join(workspaceRoot, 'never-there.json');
     holdWalk.ms = 800;
     failWalk.armed = true;
-    const first = design('Book One');
-    await new Promise((r) => setTimeout(r, 100));
+    /* `.then` fires the request now (a supertest call is lazy until then-ed), so the
+       first mint really is in flight while we wait. */
+    const first = design('Book One').then((r) => r);
+    /* Wait for the first walk to actually be held, not a fixed sleep: on a loaded runner
+       100ms is not enough and Book Two's design would run first. */
+    const reachedBy = Date.now() + 5000;
+    while (!holdWalk.reached && Date.now() < reachedBy) await new Promise((r) => setTimeout(r, 10));
+    expect(holdWalk.reached, 'first walk never reached its hold').toBe(true);
     const [a, b] = await Promise.all([first, design('Book Two')]);
     expect(a.status).toBeGreaterThanOrEqual(500);
     expect(b.status, JSON.stringify(b.body)).toBe(200);
