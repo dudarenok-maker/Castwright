@@ -6,16 +6,18 @@
    which a subsequent detect/classify flags as needs-reinstall (a broken loop).
    Returns null when no 3.12 is found → the caller degrades to per-OS manual
    Python-3.12 acquisition guidance (see ensure-python312.mjs). Injectable runFn
-   for tests. */
+   for tests. The DEFAULT probe refuses under vitest (#3712): a test that forgets
+   to inject runFn or mock this module fails loudly instead of spawning Python. */
 import { spawnSync } from 'node:child_process';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 
 type ProbeResult = { status: number | null; stdout: string; stderr: string };
 type RunFn = (cmd: string, args: string[]) => ProbeResult;
 
-const defaultRunFn: RunFn = (cmd, args) => {
+const defaultRunFn: RunFn = refuseUnderVitest((cmd, args) => {
   const r = spawnSync(cmd, [...args, '--version'], { windowsHide: true, encoding: 'utf8' });
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
-};
+}, 'findPython312: real Python lookup refused under vitest (#3712); pass runFn or mock python-discovery');
 
 export function findPython312(opts?: { platform?: NodeJS.Platform; runFn?: RunFn }): { cmd: string; args: string[] } | null {
   const platform = opts?.platform ?? process.platform;
