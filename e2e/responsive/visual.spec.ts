@@ -42,7 +42,7 @@
  *
  * Pairs with docs/features/archive/37-e2e-playwright.md "Visual baselines". */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { goToAnalysing, goToConfirm, waitForConfirmViewReady, waitForListenViewReady } from '../helpers';
@@ -96,6 +96,15 @@ const VISUAL_DIFF_OPTS = { maxDiffPixelRatio: 0.05 } as const;
    clipped ~64px <header>, so a 1% tolerance on the element screenshot catches
    it. See docs/superpowers/specs/2026-06-20-visual-diff-sensitivity-design.md. */
 const TOPBAR_DIFF_RATIO = 0.01;
+
+/* #4192 — the version pill changes every release and the Status pill's label
+   tracks live app state, so both are masked in the top-bar baselines. Only the
+   two pills are covered (not the header), so the #925 repaint gate still sees
+   the header background. */
+const topbarMask = (page: Page) => [
+  page.getByTestId('version-pill'),
+  page.getByTestId('status-pill'),
+];
 
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
@@ -175,6 +184,7 @@ test.describe('visual baselines', () => {
     await page.waitForTimeout(300);
     await expect(page.getByRole('banner')).toHaveScreenshot('topbar.png', {
       maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+      mask: topbarMask(page),
     });
   });
 
@@ -197,6 +207,7 @@ test.describe('visual baselines', () => {
     try {
       await expect(page.getByRole('banner')).toHaveScreenshot('topbar.png', {
         maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+        mask: topbarMask(page),
       });
     } catch {
       threw = true;
@@ -349,6 +360,7 @@ test.describe('visual baselines (dark theme)', () => {
     await page.waitForTimeout(300);
     await expect(page.getByRole('banner')).toHaveScreenshot('topbar-dark.png', {
       maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+      mask: topbarMask(page),
     });
   });
 });
