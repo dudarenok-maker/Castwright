@@ -1,5 +1,5 @@
 /**
- * #3524 — the ONE place a character's CURRENT cast.json voice is derived from an engine,
+ * #3524 / #3518 — the ONE place a character's CURRENT cast.json voice AND model key are derived from an engine,
  * shared by `scoreBook` (aggregate.ts) and the qa-repair route (chapter-qa-repair.ts).
  *
  * The two callers share the derivation, but not the input: qa-repair passes the engine its
@@ -14,8 +14,8 @@
  */
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../../tts/synthesise-chapter.js';
 import { pickVoiceForEngine } from '../../tts/voice-mapping.js';
-import { resolveCharacterEngine } from '../../tts/per-character-engine.js';
-import { ALL_TTS_ENGINES, type TtsEngine } from '../../tts/model-keys.js';
+import { resolveCharacterEngine, resolveCharacterQwenTier } from '../../tts/per-character-engine.js';
+import { ALL_TTS_ENGINES, canonicalModelKeyForEngine, type TtsEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { isNonEnglish, resolveEligibleEngines } from '../../tts/language.js';
 import { resolveClonedRetargetEngine } from '../../tts/clone-engines.js';
 
@@ -48,4 +48,23 @@ export function currentCastVoiceName(
   if (!engine) return undefined;
   const name = pickVoiceForEngine(engine, toVoiceLike(character), buildHintFromCast(character));
   return name || undefined;
+}
+
+/** #3518 — the model key `character` re-renders under now (engine model and, for Qwen, the
+ *  quality tier), derived from the cast plus the run's model key — never from a previous
+ *  render's snapshot. Mirrors the formula `buildCharacterSnapshots` stamps
+ *  (character-snapshots.ts): for 'qwen' the elevate-only per-character tier resolved against
+ *  the run key canonicalised to Qwen; any other engine its canonical key. `undefined` when no
+ *  engine is known. */
+export function currentCastModelKey(
+  character: CastCharacter,
+  defaultEngine: TtsEngine | undefined,
+  runModelKey: TtsModelKey,
+  bookLanguage?: string,
+): TtsModelKey | undefined {
+  const engine = currentCharacterEngine(character, defaultEngine, bookLanguage);
+  if (!engine) return undefined;
+  return engine === 'qwen'
+    ? resolveCharacterQwenTier(character, canonicalModelKeyForEngine('qwen', runModelKey))
+    : canonicalModelKeyForEngine(engine, runModelKey);
 }
