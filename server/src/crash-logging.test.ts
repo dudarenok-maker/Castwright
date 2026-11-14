@@ -7,8 +7,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import fs, { readFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   formatCrash,
+  enableFatalErrorReports,
   installCrashHandlers,
   installExitLogging,
   installShutdownSignals,
@@ -319,6 +322,63 @@ describe('installShutdownSignals (#4054)', () => {
   });
 });
 
+describe('enableFatalErrorReports (#4054)', () => {
+  it('R1 enables: creates the dir, then sets directory and reportOnFatalError', () => {
+    const report = { reportOnFatalError: false, directory: '' };
+    const mkdir = vi.fn();
+    const log = vi.fn();
+    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log })).toBe(true);
+    expect(mkdir).toHaveBeenCalledTimes(1);
+    expect(mkdir).toHaveBeenCalledWith('X/node-reports');
+    expect(report.directory).toBe('X/node-reports');
+    expect(report.reportOnFatalError).toBe(true);
+    const line = String(log.mock.calls[0][0]);
+    expect(line).toContain('diagnostic report on a fatal error');
+    expect(line).toContain('X/node-reports');
+  });
+
+  it('R2 a folder that cannot be made: logs OFF, returns false, leaves report untouched', () => {
+    const report = { reportOnFatalError: false, directory: '' };
+    const mkdir = vi.fn(() => {
+      throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    });
+    const log = vi.fn();
+    let result: boolean | undefined;
+    expect(() => {
+      result = enableFatalErrorReports('X/node-reports', { report, mkdir, log });
+    }).not.toThrow();
+    expect(result).toBe(false);
+    expect(report.reportOnFatalError).toBe(false);
+    expect(report.directory).toBe('');
+    const line = String(log.mock.calls[0][0]);
+    expect(line).toContain('OFF');
+    expect(line).toContain('EACCES');
+  });
+
+  it('R3 the real process.report: creates the folder, never touches filename', () => {
+    const saved = {
+      reportOnFatalError: process.report.reportOnFatalError,
+      directory: process.report.directory,
+      filename: process.report.filename,
+    };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-4054-'));
+    const dir = path.join(root, 'node-reports');
+    try {
+      expect(fs.existsSync(dir)).toBe(false);
+      expect(enableFatalErrorReports(dir, { log: vi.fn() })).toBe(true);
+      expect(fs.existsSync(dir)).toBe(true);
+      expect(process.report.directory).toBe(dir);
+      expect(process.report.reportOnFatalError).toBe(true);
+      expect(process.report.filename).toBe(saved.filename);
+    } finally {
+      process.report.reportOnFatalError = saved.reportOnFatalError;
+      process.report.directory = saved.directory;
+      process.report.filename = saved.filename;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('index.ts wiring (#4054)', () => {
   it('installs the exit line at boot and routes signals through installShutdownSignals', () => {
     const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
@@ -326,5 +386,19 @@ describe('index.ts wiring (#4054)', () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
     expect(code).toMatch(/^installExitLogging\(\);$/m);
     expect(code).toMatch(/^[ \t]*installShutdownSignals\(shutdown\);$/m);
+  });
+
+  it('R4 enables fatal-error reports as the first statement of main(), never at module scope', () => {
+    const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    const call = code.match(
+      /^\s*enableFatalErrorReports\(resolve\(resolveLogDir\(repoRoot\), 'node-reports'\)\);$/m,
+    );
+    expect(call).not.toBeNull();
+    const mainAt = code.indexOf('async function main(): Promise<void> {');
+    expect(mainAt).toBeGreaterThan(-1);
+    expect(call!.index!).toBeGreaterThan(mainAt);
+    expect(call!.index!).toBeLessThan(code.indexOf('ensureWorkspace();', mainAt));
+    expect(code.slice(0, mainAt)).not.toContain('enableFatalErrorReports(');
   });
 });

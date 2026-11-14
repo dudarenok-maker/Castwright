@@ -204,6 +204,42 @@ export function installExitLogging(hooks: ExitLoggingHooks = {}): void {
   });
 }
 
+export interface FatalErrorReportHooks {
+  /** Default `process.report`. Only these two fields are written; `filename` is never touched. */
+  report?: { reportOnFatalError: boolean; directory: string };
+  /** Default `fs.mkdirSync(dir, { recursive: true })`. */
+  mkdir?: (dir: string) => void;
+  /** Default `console.log`. */
+  log?: (msg: string) => void;
+}
+
+/** #4054's evidence capture: turn on Node's diagnostic report for a V8 fatal
+ *  error. It is the in-process equivalent of `--report-on-fatalerror
+ *  --report-directory=<dir>`, so every launcher gets it with no flag change.
+ *  It writes only on a V8 fatal error (OOM, a failed internal assertion), never
+ *  on a native 0xC0000409 / 0xC0000005 — the sidecar's exit-code line covers
+ *  those. The filename is left at Node's default (timestamp + pid) on purpose,
+ *  so the next fatal error cannot overwrite an earlier report. Node does not
+ *  create a missing report directory, hence the mkdir first. Never throws. */
+export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHooks = {}): boolean {
+  const report = hooks.report ?? process.report;
+  const mkdir = hooks.mkdir ?? ((d: string) => void fs.mkdirSync(d, { recursive: true }));
+  const log = hooks.log ?? ((msg: string) => console.log(msg));
+  try {
+    mkdir(dir);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    log(
+      `[server] diagnostic reports on a fatal error are OFF: could not create ${dir} (${e?.code ?? e?.message})`,
+    );
+    return false;
+  }
+  report.directory = dir;
+  report.reportOnFatalError = true;
+  log(`[server] diagnostic report on a fatal error -> ${dir}`);
+  return true;
+}
+
 export interface ShutdownSignalHooks {
   onLog?: (msg: string) => void;
   target?: NodeJS.EventEmitter;
