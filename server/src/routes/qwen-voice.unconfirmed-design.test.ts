@@ -454,6 +454,8 @@ describe('#4072 — two concurrent base mints of one legacy series link end on o
        reach its mint and wait; then that walk stamps Book One and throws. */
     holdWalk.statePath = resolve(statePath('Book One'));
     holdWalk.castPath = join(workspaceRoot, 'never-there.json');
+    /* Fixed on purpose: nothing in this file shows Book Two waiting on the mint (no spy before its
+       `seriesMints` lookup). If Book Two lands after 800ms, this fails with a split-uuid signature. */
     holdWalk.ms = 800;
     failWalk.armed = true;
     /* `.then` fires the request now (a supertest call is lazy until then-ed), so the
@@ -464,7 +466,9 @@ describe('#4072 — two concurrent base mints of one legacy series link end on o
     const reachedBy = Date.now() + 5000;
     while (!holdWalk.reached && Date.now() < reachedBy) await new Promise((r) => setTimeout(r, 10));
     expect(holdWalk.reached, 'first walk never reached its hold').toBe(true);
-    const [a, b] = await Promise.all([first, design('Book Two')]);
+    const settled: string[] = [];
+    const [a, b] = await Promise.all([first.then((r) => (settled.push('a'), r)), design('Book Two').then((r) => (settled.push('b'), r))]);
+    expect(settled, 'the second mint must wait for the first one to settle').toEqual(['a', 'b']);
     expect(a.status).toBeGreaterThanOrEqual(500);
     expect(b.status, JSON.stringify(b.body)).toBe(200);
     const u = row('Book One').voiceUuid as string;
