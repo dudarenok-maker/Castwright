@@ -244,7 +244,8 @@ export function planConstraintsFor(a: {
     fields from `current` (filled from the analyzer when absent) and its
     analysis-owned fields from the roster; aliases are unioned. The rule-11 ledger
     (invariant 6) records the fingerprint of the job's last write of each row it
-    added. */
+    added. At persist the narrator is exempt from rule 13 (#4100): a narrator roster row
+    whose target is gone always lands on a row (an existing narrator-id row, else a fresh one). */
 export function overlayPlanOntoCast<C extends { id: string }>(input: {
   current: ReadonlyArray<PriorRow>;
   roster: ReadonlyArray<C>;
@@ -280,6 +281,16 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
     if (!into.includes(id)) into.push(id);
   };
 
+  /* #4100: at persist a narrator roster row is never gone. It lands on the first
+     narrator-id row of the re-read cast as an ordinary write, else it is added fresh
+     (under the join's narrator priorId when there is one, else its own id). */
+  const narratorLanding = (c: { id: string }, d: MatchDecision): { target: string; fresh: boolean } | null => {
+    if (mode !== 'persist' || !isNarratorId(c.id)) return null;
+    const existing = current.find((r) => isNarratorId(r.id));
+    if (existing) return { target: existing.id, fresh: false };
+    return { target: d.kind === 'join' && isNarratorId(d.priorId) ? d.priorId : c.id, fresh: true };
+  };
+
   // Group the roster rows by the cast row they land on.
   const byOutput = decisionsByOutput(plan);
   const groups = new Map<string, { row: Rec; fresh: boolean; declines: NotLinkedEntry[] }>();
@@ -297,10 +308,13 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
     if (d.kind === 'join') {
       const t = resolve(d.priorId);
       if (t === null || !currentById.has(t)) {
-        gone(d.priorId);
-        continue;
-      }
-      target = t;
+        const landing = narratorLanding(c, d);
+        if (!landing) {
+          gone(d.priorId);
+          continue;
+        }
+        ({ target, fresh } = landing);
+      } else target = t;
     } else if (currentById.has(c.id)) {
       if (!isRunRow(c.id)) {
         if (!collisions.includes(c.id)) collisions.push(c.id);
@@ -313,11 +327,14 @@ export function overlayPlanOntoCast<C extends { id: string }>(input: {
       // added-once so clearing the ledger can never let a later run re-add it.
       const t = resolve(c.id);
       if (t === null || t === c.id || !currentById.has(t)) {
-        if (ledger[c.id]?.state === 'run-owned') ledger[c.id] = { state: 'added-once' };
-        gone(c.id);
-        continue;
-      }
-      target = t;
+        const landing = narratorLanding(c, d);
+        if (!landing) {
+          if (ledger[c.id]?.state === 'run-owned') ledger[c.id] = { state: 'added-once' };
+          gone(c.id);
+          continue;
+        }
+        ({ target, fresh } = landing);
+      } else target = t;
     } else {
       target = c.id;
       fresh = true;
