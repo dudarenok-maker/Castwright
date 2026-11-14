@@ -1,5 +1,7 @@
 # Castwright 1.16.0
 
+- **Fix audio no longer judges a new take by the wrong yardstick.** When it re-records a line at a different voice quality than the line was made at, it leaves the line for you to check instead of comparing it against the old quality's sound and guessing.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**

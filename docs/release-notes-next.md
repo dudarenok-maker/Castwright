@@ -36,3 +36,7 @@ history at cut time.
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
+
+## 🔧 Fixes
+
+- **qa-repair no longer scores a re-recorded line against a reference voice recorded at a different Qwen quality tier.** It now derives each character's current model key from the cast plus the requested tier (`currentCastModelKey`, the same formula as the render's per-character stamp) and drops an `audition` centroid recorded at another tier, and an `in-book` centroid whose chapter last rendered the character at another tier, so a 1.7B re-render is never scored against a 0.6B reference (or the reverse); a dropped character is treated as "no reference" (#3518)
