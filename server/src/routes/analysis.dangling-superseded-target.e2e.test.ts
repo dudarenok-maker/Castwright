@@ -1,5 +1,5 @@
-/* #2110 — full-chain regression: retirement -> target dropped by a
-   re-analysis -> re-create by name, driven through the REAL production
+/* #2110 — full-chain regression: retirement -> target deleted (plan 291: by the user,
+   mid-run; a re-analysis no longer drops a prior row) -> re-create by name, driven through the REAL production
    pieces (runMainAnalyzerJob, the same job function POST /analyze invokes,
    and the real POST /:bookId/cast/create route via supertest), not a
    hand-rolled helper.
@@ -169,6 +169,7 @@ function buildPhase1Analyzer(): Analyzer {
       _prompt: string,
       _call: StageCall,
     ): Promise<Stage2ChapterOutput> {
+      await deleteAntonOnce();
       return { sentences: mockAttributionSentencesForChapter(chapterId) };
     },
     runEmotionChapter: () => Promise.reject(new Error('not used')),
@@ -177,6 +178,20 @@ function buildPhase1Analyzer(): Analyzer {
     runAttributionEscalation: () =>
       Promise.reject(new Error('no flagged windows — escalation should never be called')),
   };
+}
+
+/* Plan 291 (#4031): a re-analysis no longer drops the unvoiced 'антон' row - rule 1 carries
+   every prior row forward. The target now dies the way it still can: the user deletes the
+   row while the run is in flight (rule 13: it stays deleted). That delete is simulated here,
+   as the cast routes write it - under the cast lock - on the first Phase-1 call. */
+let antonDeleted = false;
+async function deleteAntonOnce(): Promise<void> {
+  if (antonDeleted) return;
+  antonDeleted = true;
+  await withCastLock(bookDir, async () => {
+    const cast = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as { characters: Array<{ id: string }> };
+    writeFileSync(castJsonPath(bookDir), JSON.stringify({ characters: cast.characters.filter((c) => c.id !== 'антон') }));
+  });
 }
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
@@ -198,6 +213,7 @@ let retireCharacterId: typeof import('../store/cast-id-history.js').retireCharac
 let buildCastResolver: typeof import('../store/cast-resolve.js').buildCastResolver;
 let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
 let makeBookId: typeof import('../workspace/paths.js').makeBookId;
+let withCastLock: typeof import('../workspace/cast-lock.js').withCastLock;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-dangling-target-e2e-'));
@@ -215,6 +231,7 @@ beforeAll(async () => {
   const resolveMod = await import('../store/cast-resolve.js');
   const pathsMod = await import('../workspace/paths.js');
   const createMod = await import('./cast-create.js');
+  const castLockMod = await import('../workspace/cast-lock.js');
 
   runMainAnalyzerJob = analysisMod.runMainAnalyzerJob;
   putManuscript = manuscriptsMod.putManuscript;
@@ -226,6 +243,7 @@ beforeAll(async () => {
   buildCastResolver = resolveMod.buildCastResolver;
   castJsonPath = pathsMod.castJsonPath;
   makeBookId = pathsMod.makeBookId;
+  withCastLock = castLockMod.withCastLock;
 
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -266,6 +284,7 @@ function seedStateJson(): void {
 }
 
 function seedPriorCastWithDyingAnton(): void {
+  antonDeleted = false;
   writeFileSync(
     castJsonPath(bookDir),
     JSON.stringify({
@@ -359,9 +378,8 @@ describe('#2110 — dangling supersededBy target: retirement -> re-analysis drop
         if (!recordRef) throw new Error('stub manuscript not found');
 
         // Step 1: re-analysis (the REAL job runner, same one POST /analyze
-        // invokes) — the fresh roster never mentions 'антон', and it is
-        // unvoiced, so the carry-forward loop drops it with NO retirement
-        // ever recorded for the drop itself.
+        // invokes), during which the user deletes 'антон' (see
+        // deleteAntonOnce) - NO retirement is ever recorded for a delete.
         await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
           requestedFresh: false,
           allowStage1Shrink: true,
@@ -481,9 +499,8 @@ describe('#2110 — dangling supersededBy target: retirement -> re-analysis drop
         const recordRef = getManuscript(manuscriptId);
         if (!recordRef) throw new Error('stub manuscript not found');
 
-        // Step 1: same re-analysis as the safe-direction test — drops the
-        // dangling 'антон' row and prunes 'anton' -> 'антон' into
-        // `displaced`.
+        // Step 1: same re-analysis (and mid-run delete of 'антон') as the
+        // safe-direction test — prunes 'anton' -> 'антон' into `displaced`.
         await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
           requestedFresh: false,
           allowStage1Shrink: true,

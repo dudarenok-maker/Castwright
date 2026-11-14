@@ -49,6 +49,17 @@ vi.mock('../store/analysis-cache.js', async () => {
       if (args[1].stage1) ((globalThis as G).__rwm_stage1_saved as (() => void) | undefined)?.();
       return actual.saveAnalysisCache(...args);
     },
+    /* #4031 Task 19 - the main job saves through field-scoped patches; the same hooks see the
+       cache a patch wrote (after the write: the patch is applied inside the cache op). */
+    mutateAnalysisCache: async (...args: Parameters<typeof actual.mutateAnalysisCache>) => {
+      const written = await actual.mutateAnalysisCache(...args);
+      if (written) {
+        const hook = (globalThis as G).__rwm_save_hook as ((c: typeof written) => void | Promise<void>) | undefined;
+        await hook?.(structuredClone(written));
+        if (written.stage1) ((globalThis as G).__rwm_stage1_saved as (() => void) | undefined)?.();
+      }
+      return written;
+    },
   };
 });
 /* Counts Phase-1 workers parked in awaitPhase1Dispatch, so a case can prove every one settles. */
@@ -329,7 +340,7 @@ async function runMain(label: string, seedCache: Record<string, unknown>, opts: 
   const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
   const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
   const { runMainAnalyzerJob, __testRegisterJobForTest } = await import('./analysis.js');
-  await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+  await saveAnalysisCache(seed.manuscriptId, { version: 2, ...seedCache } as never);
   const stateBefore = readFileSync(join(seed.bookDir, '.audiobook', 'state.json'), 'utf8');
   const castCalls: number[] = [];
   const stage2Calls: number[] = [];

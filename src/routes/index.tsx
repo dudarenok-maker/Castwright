@@ -3,7 +3,7 @@
    something different from the current redux state. The Layout component
    owns the reverse direction (Redux→URL sync). */
 
-import { useEffect, useMemo, useState, lazy, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, type ReactNode } from 'react';
 import {
   createHashRouter,
   Navigate,
@@ -27,7 +27,14 @@ import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
-import { beginFullRead, castWrittenSince, dropRetainedSaves, flushBookPersistence } from '../store/persistence-middleware';
+import {
+  beginFullRead,
+  castEraClearedSince,
+  castWrittenSince,
+  dropRetainedSaves,
+  flushBookPersistence,
+} from '../store/persistence-middleware';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
@@ -223,8 +230,10 @@ export function BooksRoute() {
            means the next read adopts it as a different book, without depending
            on the `manuscriptActions.reset()` beside it forcing a full reload
            (OD31: and drop its preview — the new take stays live). */
-        dispatch(castActions.hydrateCharacters([]));
-        dispatch(manuscriptActions.reset());
+        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+          dispatch(castActions.hydrateCharacters([]));
+          dispatch(manuscriptActions.reset());
+        }
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -272,16 +281,15 @@ export function BooksRoute() {
            circuit and leave the cleared slices unrefreshed when the user
            navigates back into the analysing stage.
 
-           Unconditional reset: this code runs from the books library, where
-           ui.stage.bookId is always undefined at the time of the click, so
-           gating on the render-time `bookId === b.bookId` would never fire
-           (the separate "left the book" check after the await reads the LIVE
-           stage instead). Any per-book state still in redux is by definition
-           the *previous* open's residue, so wiping it is correct regardless
-           of which book is being re-parsed — the next book open re-hydrates
-           from disk. */
-        dispatch(castActions.hydrateCharacters([]));
-        dispatch(manuscriptActions.reset());
+           Gated on the LIVE manuscript identity (not the render-time stage,
+           which is undefined here): the await above may have let the user open
+           another book, and wiping the slices then would strand that book's
+           Ready view with no identity to re-hydrate from. A different book's
+           residue is not this re-parse's to clear; its own open re-reads it. */
+        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+          dispatch(castActions.hydrateCharacters([]));
+          dispatch(manuscriptActions.reset());
+        }
         dispatch(revisionsActions.forgetBook(b.bookId));
         dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -690,7 +698,7 @@ export function AnalysingRoute() {
            never read this one. Skipped, the slices keep the other book's id
            and the layout reads this one from disk on the way to Confirm. */
         if (selectIsOpenBook(reduxStore.getState(), payload)) {
-          dispatch(castActions.hydrateFromAnalysis(payload));
+          dispatch(castActions.hydrateFromAnalysis(payload, { bookId: payload.bookId }));
           /* hydrateFromAnalysis atomically pins the chapters slice to
              payload.bookId via its currentBookId reducer field, so the
              cross-book tick guard in applyGenerationTick has a truthful
@@ -708,6 +716,64 @@ export function AnalysingRoute() {
   );
 }
 
+/* The cast/chapters/manuscript slices hold ONE book. Until they name the route's
+   book (its read has landed), they still hold the previous one, and a failed read
+   leaves them so; show this instead of that book's rows under this URL (A120 run
+   2, F6). `notFound` is a read that answered "no such book": it will not arrive. */
+/* Did the server answer "no such book" for this route's book? Layout's own read
+   answers `null` without stamping an identity when the slices hold none, so a
+   Ready route would wait for it forever. One bounded read while `enabled`; the
+   id that answered is stored, so the flag never outlives its book. */
+function useBookNotFound(bookId: string, enabled: boolean): boolean {
+  const [answeredNullFor, setAnsweredNullFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled || !bookId) return;
+    const life = new AbortController();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers)
+      .then((res) => {
+        if (res === null && !life.signal.aborted) setAnsweredNullFor(bookId);
+      })
+      .catch(() => {
+        /* a failing read is Layout's retry notice to report; keep loading */
+      });
+    return () => {
+      life.abort();
+      timers.forEach(clearTimeout);
+    };
+  }, [bookId, enabled]);
+  return answeredNullFor === bookId;
+}
+
+/* `listed`: the library lists this book, so a 404 is not "gone" — the server also
+   404s a "Ready to analyse" or unreadable row, which has no state to open. */
+function BookNotLoaded({ notFound = false, listed = false }: { notFound?: boolean; listed?: boolean }) {
+  const navigate = useNavigate();
+  if (notFound) {
+    return (
+      <div role="alert" className="p-10 text-center text-sm text-ink/70 space-y-3">
+        <p>
+          {listed
+            ? "We couldn't open this book."
+            : "We couldn't find this book. It may have been renamed or deleted."}
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="px-4 py-2 rounded-full bg-ink text-white text-sm font-medium min-h-[44px] fine-pointer:min-h-0"
+        >
+          Back to the library
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div role="status" className="p-10 text-center text-sm text-ink/60">
+      Loading this book…
+    </div>
+  );
+}
+
 export function ConfirmRoute() {
   const { bookId = '' } = useParams<{ bookId: string }>();
   const [searchParams] = useSearchParams();
@@ -715,9 +781,17 @@ export function ConfirmRoute() {
   useHydrateStage({ kind: 'confirm', bookId, openProfileId }, [bookId, openProfileId]);
 
   const dispatch = useAppDispatch();
+  const routeStore = useStore<RootState>();
+  const [notFoundFor, setNotFoundFor] = useState<string | null>(null);
+  const notFound = notFoundFor === bookId;
+  const listed = useAppSelector((s) => s.library.books.some((b) => b.bookId === bookId));
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
+  /* Plan 291 (#4031), item 12 — the book's cast gate, and the book whose entry
+     read has run (so a gate that rises and drops again reads nothing twice). */
+  const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
+  const entryReadDone = useRef<string | null>(null);
   /* Re-analyse fires a fresh local-analyzer pass; guard it the same way
      book imports do so it can't evict TTS mid-chapter. Gemini/Gemma
      engines pass through unguarded. */
@@ -747,9 +821,24 @@ export function ConfirmRoute() {
      #3967 — each attempt is bounded (15 s, growing on later attempts), an
      expired read is retried on the hydrate's schedule until it lands, and it
      is aborted when the route is left, so re-entering Confirm never piles up
-     open reads. */
+     open reads.
+     Plan 291 (#4031), item 12 — Confirm shares the cast gate. While the book's
+     cast is read-only (an analysis era is latched, which every analysis apply
+     does) this effect issues the busy-gated re-hydrate instead of reading. The
+     read below is owed for the visit (analysis gaps, designed voices) and runs
+     exactly once, whenever the gate drops while the route is mounted: at once
+     if it was never up, otherwise after the gate's own re-hydrate released it
+     (which may be long after: a live stream, or busy still listing the run,
+     keeps the gate up). A read cut short by the gate rising again is owed
+     again. A read the gate's clear has overtaken (castEraClearedSince)
+     hydrates nothing: like one a cast save overtook, it reads again. */
   useEffect(() => {
     if (!bookId) return;
+    if (entryReadDone.current === bookId) return;
+    if (castReadOnly) {
+      void dispatch(rehydrateCastAfterAnalysis(bookId));
+      return;
+    }
     let cancelled = false;
     const life = new AbortController();
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -765,23 +854,42 @@ export function ConfirmRoute() {
           const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
           return readWithRetry((signal) => api.getBookState(bookId, signal), life.signal, timers).then((res) => {
             if (cancelled) return;
+            const done = () => {
+              entryReadDone.current = bookId;
+            };
             /* #3435 — the same skipped hydrate left the Generate view's analysis
                gaps as they were before the run; take them from the server (a main
                result can still carry a flagged chapter, decision B). */
-            if (res) {
+            /* Both writes below are guarded by the slices holding THIS book:
+               the gaps replace the chapters slice's map wholesale. */
+            if (res && routeStore.getState().manuscript.bookId === bookId) {
               dispatch(
                 chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
               );
             }
-            if (res?.cast?.characters && res.cast.characters.length > 0) {
-              if ((dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true) {
+            /* A read that answered "no such book" will never arrive. */
+            if (!res) setNotFoundFor(bookId);
+            /* Hydrate only while the slices hold THIS book: otherwise this roster
+               would sit under another book's manuscript and its next edit would be
+               PUT into that book. Layout's full read hydrates the cast anyway. */
+            if (
+              res?.cast?.characters &&
+              res.cast.characters.length > 0 &&
+              routeStore.getState().manuscript.bookId === bookId
+            ) {
+              if (
+                (dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true ||
+                (dispatch(castEraClearedSince(bookId, readSeq) as never) as unknown) === true
+              ) {
                 if (n < 2) attempt(n + 1);
+                else done();
                 return;
               }
               /* hydrate, not an edit: setCharacters is persisted and would echo
                  this disk snapshot straight back as a cast.json PUT (#3376). */
               dispatch(castActions.hydrateCharacters(res.cast.characters));
             }
+            done();
           });
         })
         .catch(() => {
@@ -794,7 +902,9 @@ export function ConfirmRoute() {
       life.abort();
       timers.forEach(clearTimeout);
     };
-  }, [bookId, dispatch]);
+  }, [bookId, dispatch, castReadOnly, routeStore]);
+
+  if (manuscript.bookId !== bookId || notFound) return <BookNotLoaded notFound={notFound} listed={listed} />;
 
   return (
     <>
@@ -821,7 +931,7 @@ export function ConfirmRoute() {
             targetCharacterId,
           });
           if (res?.source) {
-            dispatch(castActions.updateCharacter(res.source));
+            dispatch(castActions.updateCharacter(res.source, { routeBacked: true }));
           }
         }}
         onConfirm={() => {
@@ -905,17 +1015,23 @@ function ReadyViewSwitch({
   const changeLogEvents = useAppSelector((s) => s.changeLog.events);
 
   const activeBook = library.books.find((b) => b.bookId === bookId);
-  /* Anchored to the manuscript slice's bookId so cross-book navigation —
-     e.g. analysing Book A → clicking the generation pill to open Book B's
-     Generate view — doesn't render Book A's stale title under
-     "Generating …" until the disk re-hydrate lands. See manuscript-slice
-     bookId tracking + Layout's matching projectTitle/hydration guards. */
+  /* The slices hold ONE book (manuscript-slice bookId tracking): while they
+     still hold another the gate below shows a loading or not-found state, so by
+     the time a view renders `manuscript.title` is this book's. */
   const manuscriptMatchesBook = manuscript.bookId === bookId;
-  const projectTitle =
-    (manuscriptMatchesBook ? manuscript.title : null) || activeBook?.title || null;
+  const notFound = useBookNotFound(bookId, !manuscriptMatchesBook);
+  const projectTitle = manuscript.title || activeBook?.title || null;
 
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
     dispatch(castActions.setCharacters(typeof next === 'function' ? next(characters) : next));
+
+  /* The slices hold one book: never show the previous one's rows under this URL. */
+  /* `notFound` sticks: Layout's own null branch stamps this book's identity on
+     the slices (resetBookSlices), which would otherwise swap the alert for an
+     empty view. The flag is keyed by id, so it dies with the book. */
+  if (!manuscriptMatchesBook || notFound) {
+    return <BookNotLoaded notFound={notFound} listed={activeBook !== undefined} />;
+  }
 
   switch (view) {
     case 'manuscript':
@@ -944,11 +1060,14 @@ function ReadyViewSwitch({
               dispatch(castActions.addCharacter(res.character));
               return res.character.id;
             } catch (err) {
-              pushToast({
-                kind: 'error',
-                message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
-                dedupeKey: 'add-from-roster',
-              });
+              /* R57 — refused while an analysis runs (R55): the read-only path. */
+              if (!dispatch(handleCastIdentityBusy(bookId, err))) {
+                pushToast({
+                  kind: 'error',
+                  message: `Couldn't add ${entry.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
+                  dedupeKey: 'add-from-roster',
+                });
+              }
               throw err;
             }
           }}

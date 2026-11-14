@@ -134,6 +134,7 @@ async function seedBook(tag: string, chapterTitles: string[]) {
   writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({ sentences }));
   const { saveAnalysisCache } = await import('../store/analysis-cache.js');
   await saveAnalysisCache(manuscriptId, {
+    version: 2,
     stage1: {
       characters: [
         {

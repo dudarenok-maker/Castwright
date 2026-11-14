@@ -29,7 +29,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter, CharacterGoneError } from './qwen-voice.js';
+import { designQwenVoiceForCharacter, CharacterGoneError, SeriesCloneRefusedError, hasDeclineMarker } from './qwen-voice.js';
 import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
 import { isLockAcquisitionTimeout, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
@@ -137,7 +137,7 @@ async function runSingleDesign(
     registerProgressToken(progressToken, job);
     const progressUrl = `${serverLoopbackBaseUrl()}/api/internal/design-progress`;
 
-    const { voiceId, url, voiceUuid } = await designQwenVoiceForCharacter({
+    const { voiceId, url, voiceUuid, separated, seriesShared } = await designQwenVoiceForCharacter({
       bookId: job.bookId,
       bookDir: job.bookDir,
       seriesFilter,
@@ -149,6 +149,7 @@ async function runSingleDesign(
       language,
       preview: job.preview,
       persistSlot: !job.preview,
+      refuseIfSeriesCloned: !job.preview && hasDeclineMarker(character),
       progressToken,
       progressUrl,
     });
@@ -166,6 +167,7 @@ async function runSingleDesign(
         previewUrl: url,
         persona,
         voiceUuid,
+        separated,
       });
       return;
     }
@@ -175,10 +177,12 @@ async function runSingleDesign(
        book instead of sweeping every book in the workspace sharing the
        same bare character id (e.g. "narrator"). */
     const matchKey = character.voiceId ?? character.id;
+    /* F8 — a design the core did not share with the series (its book's cast is not
+       confirmed) persists its slot in this book only. */
     const { updated, skipped } = await applyOverrideToCastFiles(
       matchKey,
       { engine: 'qwen', name: voiceId },
-      seriesFilter,
+      seriesShared ? seriesFilter : undefined,
       job.bookDir,
     );
     if (updated === 0 && skipped.length > 0) {
@@ -196,11 +200,25 @@ async function runSingleDesign(
       voiceId,
       url,
       voiceUuid,
+      separated,
     });
   } catch (e) {
     /* #3992 — the character vanished between the read above and the fork/mint. */
     if (e instanceof CharacterGoneError) {
       endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
+      return;
+    }
+    /* #4074 -- the clone scan refused the design after its uuid step and before the
+       landing: nothing of the design was written. */
+    if (e instanceof SeriesCloneRefusedError) {
+      /* The uuid step's separation persists, so the open tab is told like a `designed`. */
+      endJob(job, {
+        type: 'error',
+        code: 'clone_protected',
+        characterId: job.characterId,
+        ...(e.separated && e.voiceUuid ? { voiceUuid: e.voiceUuid, separated: true } : {}),
+        message: `"${job.characterName}" has a consented cloned voice on this character, or a linked one elsewhere in the series — the design was not persisted.`,
+      });
       return;
     }
     /* #2260 FINAL ROUND (B2) — this try encloses `ensureCharacterVoiceUuid` and
@@ -307,11 +325,29 @@ singleDesignRouter.post(
        #2006 series-wide veto: a clone anywhere in the linked series is as
        routine and deterministic a refusal as a clone on this exact book —
        checked here too, so the request 409s before any GPU round rather
-       than failing at the write-time check below. */
+       than failing at the write-time check below.
+       #4074 exception: a row carrying a "Don't reuse" marker
+       (`declinedVoiceFrom`) may be moved onto a new voice uuid by the design
+       itself (the uuid step runs AFTER the GPU render), so a clone on the
+       voice it is leaving — the declined book's — is not one this design
+       could retarget. Only the row's own slots are checked here for such a
+       row; the series scan runs in the design's landing (refuseIfSeriesCloned),
+       after the uuid step and before anything is written, scoped to the rows
+       on the new uuid (#4069). A refusal there answers `clone_protected` and
+       writes nothing, at the cost of one GPU render; applyOverrideToCastFiles
+       below stays as the residual-window backstop. */
     if (
       !preview &&
       (characterHasClonedSlot(character) ||
-        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
+        (!hasDeclineMarker(character) &&
+          (await hasClonedSlotAmongMatches(
+            character.voiceId ?? character.id,
+            /* Review pass 5 (F8/C) -- an unconfirmed book shares nothing with the series: a clone
+               (or an unreadable cast) on another book is not one this design could touch. */
+            located.state?.castConfirmed === true ? (seriesInfo ?? undefined) : undefined,
+            undefined,
+            bookDir,
+          ))))
     ) {
       return res.status(409).json({
         error: `"${character.name ?? characterId}" has a consented cloned voice on this character, or a linked one elsewhere in the series, and cannot be designed on Qwen without silently retargeting it off that clone.`,

@@ -39,6 +39,7 @@ import { uiSlice, type UiState } from './ui-slice';
 import { settingsSlice, type SettingsState } from './settings-slice';
 import { accountSlice } from './account-slice';
 import { castSlice } from './cast-slice';
+import { bookBusySlice } from './book-busy-slice';
 import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { manuscriptSlice, type ManuscriptState } from './manuscript-slice';
@@ -64,6 +65,7 @@ import { prosodySlice } from './prosody-slice';
 import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
 import { restructureGuardMiddleware } from './restructure-guard-middleware';
 import { persistenceMiddleware } from './persistence-middleware';
+import { castGateMiddleware } from './cast-gate';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { castDesignMiddleware } from './cast-design-stream-middleware';
@@ -190,6 +192,7 @@ export const store = configureStore({
     settings: persistedSettingsReducer,
     account: accountSlice.reducer,
     cast: castSlice.reducer,
+    bookBusy: bookBusySlice.reducer,
     chapters: chaptersSlice.reducer,
     revisions: revisionsSlice.reducer,
     manuscript: persistedManuscriptReducer,
@@ -227,6 +230,7 @@ export const store = configureStore({
     }).concat(
       restructureGuardMiddleware,
       persistenceMiddleware,
+      castGateMiddleware,
       revisionPlayerMiddleware,
       generationStreamMiddleware(getStreamRunner),
       analysisStreamMiddleware,

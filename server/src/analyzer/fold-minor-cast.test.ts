@@ -1001,3 +1001,33 @@ describe('Wave E — Russian descriptor phrases (safe tier)', () => {
     expect(female?.aliases).toContain('женщина с двумя овчарками на поводке');
   });
 });
+
+describe('foldMinorCast protectIds (#4031 — a row that joined a prior character is never folded)', () => {
+  it('a protected id is never folded or dropped, even at 0 lines', () => {
+    const chars = [
+      makeChar('narrator'),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
+      makeChar('silent-prior', { name: 'Silent Prior', gender: 'male' }), // 0 lines -> would drop
+      makeChar('brief-prior', { name: 'Brief Prior', gender: 'male' }), // 1 line -> would fold
+      makeChar('jogger-prior', { name: 'Unknown Jogger', gender: 'male' }), // descriptor -> would fold
+      makeChar('silent-new', { name: 'Silent New', gender: 'male' }), // unprotected control: dropped
+    ];
+    const sentences = makeSentences([
+      [1, 'wren'], [1, 'wren'], [1, 'wren'],
+      [1, 'brief-prior'],
+    ]);
+
+    const result = foldMinorCast(chars, sentences, {
+      protectIds: new Set(['silent-prior', 'brief-prior', 'jogger-prior']),
+    });
+
+    const ids = result.characters.map((c) => c.id);
+    expect(ids).toEqual(expect.arrayContaining(['silent-prior', 'brief-prior', 'jogger-prior']));
+    expect(result.rewrites).not.toHaveProperty('silent-prior');
+    expect(result.rewrites).not.toHaveProperty('brief-prior');
+    expect(result.rewrites).not.toHaveProperty('jogger-prior');
+    expect(result.dropped).not.toContain('Silent Prior');
+    // the control row is still dropped, so the protection is what spared the others
+    expect(result.dropped).toContain('Silent New');
+  });
+});

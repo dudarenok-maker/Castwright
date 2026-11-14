@@ -66,6 +66,66 @@ describe('separated-voices', () => {
     expect(await mod.isSeparatedVoice('uUnreadable')).toBe(false);
   });
 
+  it('review pass 4: a stamped record is "own" only for the book and edit epoch it names', async () => {
+    const own = { bookId: 'b1', editEpoch: 'e1' };
+    await mod.recordSeparatedVoice('uStamped', own);
+    expect(await mod.isSeparatedVoice('uStamped')).toBe(true); // every other reader still sees a record
+    expect(await mod.isOwnSeparatedVoice('uStamped', own)).toBe(true);
+    expect(await mod.isOwnSeparatedVoice('uStamped', { bookId: 'b2', editEpoch: 'e1' })).toBe(false);
+    expect(await mod.isOwnSeparatedVoice('uStamped', { bookId: 'b1', editEpoch: 'e2' })).toBe(false);
+  });
+
+  it('review pass 4: an empty ("Don\'t reuse"), absent or unparseable record is never own', async () => {
+    const own = { bookId: 'b1', editEpoch: '' };
+    await mod.recordSeparatedVoice('uEmpty');
+    expect(await mod.isOwnSeparatedVoice('uEmpty', own)).toBe(false);
+    expect(await mod.isOwnSeparatedVoice('uAbsentOwn', own)).toBe(false);
+    writeFileSync(recordPath('uGarbage'), '{not json');
+    expect(await mod.isOwnSeparatedVoice('uGarbage', own)).toBe(false);
+    expect(await mod.isSeparatedVoice('uGarbage')).toBe(true);
+  });
+
+  it('PR #4109 pass 3: only an empty record or a declined stamp is a "Don\'t reuse" voice', async () => {
+    await mod.recordSeparatedVoice('uDecl');
+    expect(mod.isDeclineSeparatedVoiceSync('uDecl', false)).toBe(true);
+    await mod.recordSeparatedVoice('uOwn', { bookId: 'b1', editEpoch: 'e1' });
+    expect(mod.isDeclineSeparatedVoiceSync('uOwn', false)).toBe(false);
+    expect(mod.isDeclineSeparatedVoiceSync('uOwn', true)).toBe(true); // a legacy stamp a decliner holds
+    expect(mod.isDeclineSeparatedVoiceSync('uNone', true)).toBe(false);
+    writeFileSync(recordPath('uJunk'), '{not json');
+    expect(mod.isDeclineSeparatedVoiceSync('uJunk', false)).toBe(true); // fails closed
+  });
+
+  it('PR #4109 pass 3: marking a decline flags a stamp (still own), writes an absent record, and undoes', async () => {
+    const own = { bookId: 'b1', editEpoch: 'e1' };
+    await mod.recordSeparatedVoice('uMark', own);
+    const undo = await mod.markDeclineSeparatedVoice('uMark');
+    expect(mod.isDeclineSeparatedVoiceSync('uMark', false)).toBe(true);
+    expect(await mod.isOwnSeparatedVoice('uMark', own)).toBe(true);
+    await undo!();
+    expect(mod.isDeclineSeparatedVoiceSync('uMark', false)).toBe(false);
+    expect(await mod.isOwnSeparatedVoice('uMark', own)).toBe(true);
+
+    const undoNew = await mod.markDeclineSeparatedVoice('uFresh');
+    expect(mod.isDeclineSeparatedVoiceSync('uFresh', false)).toBe(true);
+    await undoNew!();
+    expect(existsSync(recordPath('uFresh'))).toBe(false);
+
+    await mod.recordSeparatedVoice('uAlready');
+    expect(await mod.markDeclineSeparatedVoice('uAlready')).toBeUndefined();
+  });
+
+  it('#4104: an unconfirmed record for a book with no bookId is an unnamed stamp, not a "Don\'t reuse" one', async () => {
+    await mod.recordSeparatedVoice('uUnnamed', mod.UNNAMED_OWN_STAMP);
+    expect(await mod.isSeparatedVoice('uUnnamed')).toBe(true); // every other reader still sees a record
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', false)).toBe(false);
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', true)).toBe(true); // a decline-marked row on it
+    expect(await mod.isOwnSeparatedVoice('uUnnamed', { bookId: 'b1', editEpoch: '' })).toBe(false);
+    const undo = await mod.markDeclineSeparatedVoice('uUnnamed'); // a later decline flags it like any stamp
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', false)).toBe(true);
+    await undo!();
+    expect(mod.isDeclineSeparatedVoiceSync('uUnnamed', false)).toBe(false);
+  });
   it('a uuid cannot name a path outside the record folder', async () => {
     await mod.recordSeparatedVoice('../escape').catch(() => {}); // refused or sanitised, never outside
     expect(existsSync(join(workspaceRoot, 'voices', 'escape'))).toBe(false);

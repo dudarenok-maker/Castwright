@@ -40,6 +40,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 
 export const castAddFromRosterRouter = Router();
 
@@ -94,6 +95,9 @@ castAddFromRosterRouter.post(
        read-only consultation through `peekBook`, which takes no lock and writes
        nothing. */
     const outcome = await withBookOp(sourceBookId, async (sourceLocated) => {
+      /* R55 — a new row changes the id set: refused while an analysis runs, inside this book-op span. */
+      const busy = castIdentityBusyRefusal(sourceBookId);
+      if (busy) return res.status(409).json(busy);
       const targetLocated = await peekBook(targetBookId);
       if (!targetLocated)
         return res.status(404).json({ error: `Target book "${targetBookId}" not found.` });

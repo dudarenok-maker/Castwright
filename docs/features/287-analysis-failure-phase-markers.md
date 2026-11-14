@@ -61,8 +61,8 @@ owner: null
 2. **The main run's result** is reached only with every non-excluded chapter in `sentencesByChapter`: each is replayed (`:5262-5276`) or in `taskIndices` (`:5305-5309`), and any task failure is terminal (`:5850-5866`).
 3. **The overflow terminal** carries `fixes`; the middleware's persistent overflow toast (`analysis-stream-middleware.ts`, the `HALTED_TYPE` hook) is unchanged.
 4. **Cold boot** never surfaces a halted or paused pill for a cast-confirmed book (`src/lib/analysis-pill-gate.ts:15-21`).
-5. **The interim-write lock contract** (#1981): interim cast.json writes go through `castBase.writeChecked` (`:4798`, `:5040`).
-6. **A main run on a confirmed book keeps the cast's designed voice fields** (merge via `mergeAnalysisResultWithExistingCast`; pinned by a test in T6).
+5. **The interim-write lock contract** (#1981): interim cast.json writes take the cast lock and re-read under it (`writePlanSnapshot` in `workspace/analysis-cast-io.ts`; plan 291 replaced the `castBase.writeChecked` merge base).
+6. **A main run on a confirmed book keeps the cast's designed voice fields** (the plan overlay, `overlayPlanOntoCast`, carries the prior row's user-owned fields; plan 291 replaced `mergeAnalysisResultWithExistingCast`; pinned by a test in T6).
 
 ## Conventions for every task
 

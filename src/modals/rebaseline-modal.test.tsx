@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 import { RebaselineModalContainer } from './rebaseline-modal';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
@@ -127,7 +128,8 @@ function makeStore(
   {
     openBookId = 'book-1' as string | null,
     loadedBookId = openBookId,
-  }: { openBookId?: string | null; loadedBookId?: string | null } = {},
+    readOnly = false,
+  }: { openBookId?: string | null; loadedBookId?: string | null; readOnly?: boolean } = {},
 ) {
   const baseUi = { ...uiSlice.getInitialState(), rebaselineModalOpen: true };
   const ui =
@@ -143,7 +145,8 @@ function makeStore(
             openProfileId: null,
           },
         };
-  return configureStore({
+  const store = configureStore({
+    middleware: (gDM) => (readOnly ? gDM().concat(persistenceMiddleware) : gDM()),
     reducer: {
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
@@ -164,6 +167,9 @@ function makeStore(
       manuscript: { ...manuscriptSlice.getInitialState(), bookId: loadedBookId },
     },
   });
+  /* Plan 291 (#4031) - a latched analysis era makes the book's cast read-only. */
+  if (readOnly && openBookId) store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: openBookId }));
+  return store;
 }
 
 /* Canonical cast: narrator dominates lines (excluded), Maerin + Marlow carry
@@ -1001,6 +1007,31 @@ describe('RebaselineModal — reuse already-approved voices', () => {
   });
 });
 
+describe('RebaselineModal — approve while the cast is read-only (plan 291, I1)', () => {
+  it('mirrors the route result into the slice without a read-only toast', async () => {
+    const store = makeStore(CHARACTERS, VOICES, { readOnly: true });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(screen.getByTestId('rebaseline-approve')).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledTimes(2));
+    const maerin = store.getState().cast.characters.find((c) => c.id === 'maerin')!;
+    expect(maerin.overrideTtsVoices?.qwen?.name).toBe('qwen-maerin');
+    expect(
+      store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+    ).toEqual([]);
+  });
+});
+
 describe('RebaselineModal — approve', () => {
   it('writes a series-scoped Qwen override for each included character', async () => {
     const store = makeStore(CHARACTERS, VOICES);
@@ -1175,6 +1206,82 @@ describe('RebaselineModal — approve honours a server refusal (fs-38 wave3c tas
       provenance: 'cloned',
     });
     expect(clara.ttsEngine).toBe('coqui');
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(
+      'Kept consented cloned voices unchanged in: Book One.',
+    );
+  });
+
+  it('a failed entry typed reason clone_protected gets the clone toast whatever its error text says', async () => {
+    const cast = [char('narrator', 'Narrator', 500), char('clara', 'Clara', 90)];
+    setVoiceOverrideLinked.mockImplementation(async (bookId: string, characterId: string) => ({
+      canonicalVoiceId: `v_${characterId}`,
+      updated: [],
+      failed:
+        characterId === 'clara'
+          ? [{ bookId, bookTitle: 'Book One', error: 'Refused: protected voice.', reason: 'clone_protected' as const }]
+          : [],
+    }));
+    const store = makeStore(cast, [voice('voice-clara', 'clara')]);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    if (!store.getState().rebaseline.selectedCharacterIds.includes('clara')) {
+      fireEvent.click(screen.getByLabelText('Rebaseline Clara'));
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('ready'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('failed'));
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toContain(
+      'Kept consented cloned voices unchanged in: Book One.',
+    );
+  });
+  /* PR #4109 review pass 3: a 207 `failed` entry is not always a clone refusal (the name guard,
+     lock contention, a missing cast), and the toast must not claim one that never happened. */
+  it('a refusal that is not a clone refusal is not reported as a kept clone', async () => {
+    const cast = [char('narrator', 'Narrator', 500), char('clara', 'Clara', 90)];
+    setVoiceOverrideLinked.mockImplementation(async (bookId: string, characterId: string) => ({
+      canonicalVoiceId: `v_${characterId}`,
+      updated: [],
+      failed:
+        characterId === 'clara'
+          ? [
+              {
+                bookId,
+                bookTitle: 'Book One',
+                error: `Character "Clara" — refusing to write "qwen-r0" as its qwen voice: it doesn't match this character's own consented voice.`,
+              },
+            ]
+          : [],
+    }));
+    const store = makeStore(cast, [voice('voice-clara', 'clara')]);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitForReady();
+    if (!store.getState().rebaseline.selectedCharacterIds.includes('clara')) {
+      fireEvent.click(screen.getByLabelText('Rebaseline Clara'));
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('ready'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-approve'));
+    });
+    await waitFor(() => expect(store.getState().rebaseline.proposals.clara.status).toBe('failed'));
+    const messages = store.getState().notifications.toasts.map((t) => t.message);
+    expect(messages.some((m) => /cloned/.test(m))).toBe(false);
+    expect(messages).toContain("Couldn't update the voice in: Book One.");
   });
 });
 

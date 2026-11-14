@@ -8,15 +8,17 @@
  * already-established ASCII-kebab id that a prior analysis run retired in
  * favour of its non-ASCII (typically Cyrillic) sibling, even though both ids
  * name the SAME character. PR #2640's `stripEstablishedAsciiRewrites`
- * (`server/src/analyzer/roster-dedup.ts`) stops this from happening again
- * going FORWARD, in a fresh analysis run; it does nothing for damage already
+ * (`server/src/analyzer/roster-dedup.ts`) stopped this from happening again
+ * going FORWARD, in a fresh analysis run (plan 291 deleted it: the single
+ * matcher's join keeps an established prior id); neither does anything for damage already
  * written to disk before that fix shipped. This script is the repair pass
  * for that pre-existing damage — see docs/testing/onbox-a34-results/
  * step-1-scope.md (step 1 of this same chain) for the on-box scope: 1 hit
  * (`Заказ Коалфолла`'s `oduvan` → `одуван`) across the 23 books scanned.
  *
- * Detection (mirrors `stripEstablishedAsciiRewrites`'s own gate exactly —
- * see that function's doc comment for the two rejected, too-broad/too-narrow
+ * Detection (mirrors the deleted `stripEstablishedAsciiRewrites`'s own gate
+ * exactly — see that function's doc comment, last present at commit 6718588e,
+ * for the two rejected, too-broad/too-narrow
  * alternatives; this script does not re-litigate that choice, only reuses
  * its conclusion):
  *
@@ -175,11 +177,10 @@ export function parseArgs(argv) {
 }
 
 /** ASCII kebab-case test — lowercase letters/digits, single hyphens between
- *  groups, no leading/trailing hyphen. Verbatim copy of
- *  `server/src/analyzer/roster-dedup.ts`'s `isAsciiKebabId` (not exported
- *  there) — the exact shape test the wrong-direction defect is defined
- *  against; this script and that comparator must never disagree about what
- *  counts as "established ASCII". */
+ *  groups, no leading/trailing hyphen. Verbatim copy of the
+ *  `isAsciiKebabId` that `server/src/analyzer/roster-dedup.ts` held until
+ *  plan 291 deleted it — the exact shape test the wrong-direction defect is
+ *  defined against. */
 export function isAsciiKebabId(id) {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id);
 }
@@ -274,8 +275,9 @@ export function planBookRepairs(input, deps = { normaliseForMatch }) {
      ARRAY ENTRIES, exactly as `resolveTierAName`
      (`repair-cast-id-drift.mjs:378-384`) does — that function returns
      `undefined` on a tie and its own doc comment says why: it is "the same
-     'a tie means stop' rule `buildCastResolver` and `remapFreshToPriorIds`
-     both already apply; this function must not reintroduce a looser one."
+     'a tie means stop' rule `buildCastResolver` applies (and
+     `remapFreshToPriorIds` applied, until plan 291 deleted it); this function
+     must not reintroduce a looser one."
      A bare 1-1 name comparison IS a looser one. Minor cast routinely shares
      a display name (Солдат, Стражник, Голос, and the unknown-male/
      unknown-female buckets), and here a wrong answer is not a skipped strip

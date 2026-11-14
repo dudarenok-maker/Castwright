@@ -733,7 +733,7 @@ export function AnalysingView({
                — snapshots upsert by id, preserving locked voices on survivors.
                Only while the cast slice still holds this book (open-book.ts). */
             if (selectIsOpenBook(store.getState(), { manuscriptId })) {
-              dispatch(castActions.replaceLiveRoster(characters));
+              dispatch(castActions.replaceLiveRoster(characters, { bookId: bookId ?? null }));
             }
           },
           onChapterFailed: ({ chapterId, message, code, remediation, phase }) => {
@@ -776,9 +776,9 @@ export function AnalysingView({
           },
           onWarning: ({ code, message }) => {
             if (cancelled) return;
-            /* dedupeKey collapses a burst across the five merge-base write
-               sites into one toast. Wire kind is 'warning'; ToastKind is
-               'warn' — they are different vocabularies, not a typo. */
+            /* dedupeKey collapses a burst of the same warning into one toast.
+               Wire kind is 'warning'; ToastKind is 'warn' — they are
+               different vocabularies, not a typo. */
             dispatch(
               notificationsActions.pushToast({ kind: 'warn', message, dedupeKey: code }),
             );
@@ -1163,7 +1163,7 @@ export function AnalysingView({
           markEvent();
           /* Full roster snapshot — replace, don't accumulate (see the other
              onCastUpdate handler above and replaceLiveRoster's rationale). */
-          if (isOpenBook()) dispatch(castActions.replaceLiveRoster(characters));
+          if (isOpenBook()) dispatch(castActions.replaceLiveRoster(characters, { bookId: bookId ?? null }));
         },
         onChapterFailed: ({ chapterId: failedId, message, code, remediation, phase }) => {
           markEvent();
@@ -1186,9 +1186,9 @@ export function AnalysingView({
           }));
         },
         onWarning: ({ code, message }) => {
-          /* dedupeKey collapses a burst across the five merge-base write
-             sites into one toast. Wire kind is 'warning'; ToastKind is
-             'warn' — they are different vocabularies, not a typo. */
+          /* dedupeKey collapses a burst of the same warning into one toast.
+             Wire kind is 'warning'; ToastKind is 'warn' — they are
+             different vocabularies, not a typo. */
           dispatch(
             notificationsActions.pushToast({ kind: 'warn', message, dedupeKey: code }),
           );
@@ -1283,6 +1283,20 @@ export function AnalysingView({
               fixes: err.fixes,
             }),
           );
+          setConn('idle');
+          return;
+        }
+        /* #4031 (A22) — `analysis_cache_legacy`: the book's saved analysis predates
+           the current cache version, so the server stopped this Retry before writing
+           anything. The chapter is not fixed: keep its row and show the server's
+           message on it (which says to run the full analysis). The kept row also
+           keeps the cast_incomplete auto-resume disarmed. */
+        if (err instanceof AnalysisError && err.code === 'analysis_cache_legacy') {
+          setFailedChapters((prev) => {
+            const existing = prev.find((f) => f.chapterId === chapterId);
+            const filtered = prev.filter((f) => f.chapterId !== chapterId);
+            return [...filtered, { chapterId, message: err.message, code: err.code, phase: existing?.phase ?? 'cast' }];
+          });
           setConn('idle');
           return;
         }

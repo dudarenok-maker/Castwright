@@ -38,6 +38,7 @@ import { gradientForTtsVoice } from '../lib/voice-palette';
 import { useAppDispatch, useAppSelector } from '../store';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { voicesActions } from '../store/voices-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { VoicePreviewButton } from '../components/voice-preview-button';
@@ -48,6 +49,12 @@ import { UnlinkAliasDialog, type UnlinkDestination } from './unlink-alias-dialog
 import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
+import {
+  CAST_EDITS_PAUSED_TOOLTIP,
+  CastEditsPausedBanner,
+  pausedControlProps,
+  useCastReadOnly,
+} from '../components/cast-edits-paused-banner';
 import { castDesignActions } from '../store/cast-design-slice';
 import { refreshEmotionVariants } from '../store/emotion-variants-refresh';
 import {
@@ -257,6 +264,11 @@ export function ProfileDrawer({
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
   const playback = useSamplePlayback();
   const dispatch = useAppDispatch();
+  /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: what
+     writes the cast slice (Save, rename, tone, lock, link-prior) is disabled;
+     merge, aliases and the library assign save through their own routes and
+     stay live. */
+  const readOnly = useCastReadOnly();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   /* #3084 W4 — a persona engine on the Voice engine's card pauses a running render first. */
   const { guard: personaGuard, modal: personaGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
@@ -633,7 +645,8 @@ export function ProfileDrawer({
      book hasn't accumulated one yet. Disabled when the source character is
      itself a bucket or the narrator — neither downgrade makes sense. */
   async function runMergeTo(targetId: string) {
-    if (!onMerge) return;
+    /* R57 — the server refuses a merge (a downgrade included) while an analysis runs (R55). */
+    if (!onMerge || readOnly) return;
     setMergeBusy(true);
     setMergeError(null);
     try {
@@ -683,13 +696,14 @@ export function ProfileDrawer({
   }, [editingName]);
 
   function beginRename() {
+    if (readOnly) return;
     setNameDraft(character.name);
     setNameError(null);
     setEditingName(true);
   }
 
   function runRename(value: string) {
-    if (!onRename) return;
+    if (!onRename || readOnly) return;
     const trimmed = value.trim();
     if (!trimmed) {
       setNameError('Name cannot be empty.');
@@ -705,7 +719,7 @@ export function ProfileDrawer({
   }
 
   async function runUnlinkAlias(aliasName: string, destination: UnlinkDestination) {
-    if (!onUnlinkAlias || aliasBusy) return;
+    if (!onUnlinkAlias || aliasBusy || (readOnly && destination.mode === 'split')) return;
     setAliasBusy(true);
     setAliasError(null);
     try {
@@ -745,7 +759,7 @@ export function ProfileDrawer({
      applyManualMatch lights up the "Continuity preserved" footer (not on
      a locked or tuned row, which records no matchedFrom). */
   async function runLinkPriorTo(targetBookId: string, targetCharacterId: string) {
-    if (!onLinkPrior) return;
+    if (!onLinkPrior || readOnly) return;
     setMergeBusy(true);
     setMergeError(null);
     try {
@@ -1182,7 +1196,8 @@ export function ProfileDrawer({
                   aria-label="Save name"
                   disabled={!nameDraft.trim()}
                   onClick={() => runRename(nameDraft)}
-                  className="shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/15 disabled:text-ink/40 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0"
+                  {...pausedControlProps(readOnly)}
+                  className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/15 disabled:text-ink/40 disabled:cursor-not-allowed min-h-[44px] fine-pointer:min-h-0 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
                   Save
                 </button>
@@ -1196,7 +1211,8 @@ export function ProfileDrawer({
                   <button
                     aria-label="Rename character"
                     onClick={beginRename}
-                    className="shrink-0 text-[11px] font-medium text-ink/45 hover:text-magenta underline-offset-2 hover:underline"
+                    {...pausedControlProps(readOnly)}
+                    className={`shrink-0 text-[11px] font-medium text-ink/45 hover:text-magenta underline-offset-2 hover:underline min-h-[44px] fine-pointer:min-h-0 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                   >
                     Rename
                   </button>
@@ -1208,10 +1224,15 @@ export function ProfileDrawer({
             )}
             <p className="text-xs text-ink/60 truncate">{character.role}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-2 rounded-full hover:bg-ink/5 text-ink/60"
+          >
             <IconClose className="w-4 h-4" />
           </button>
         </div>
+        <CastEditsPausedBanner className="mx-6 mt-4 rounded-xl" />
 
         <div className="p-6 space-y-8">
           <p className="text-sm text-ink/70 leading-relaxed">{character.description}</p>
@@ -1668,8 +1689,12 @@ export function ProfileDrawer({
                 <IconStar className="w-3.5 h-3.5" /> Save to library
               </button>
               <button
-                onClick={() => onLock(character)}
-                className={`px-3 py-2 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${character.voiceState === 'locked' ? 'border-ink/30 bg-ink/6 text-ink' : 'border-ink/10 hover:bg-ink/4 text-ink'}`}
+                onClick={() => {
+                  if (readOnly) return;
+                  onLock(character);
+                }}
+                {...pausedControlProps(readOnly)}
+                className={`px-3 py-2 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${character.voiceState === 'locked' ? 'border-ink/30 bg-ink/6 text-ink' : 'border-ink/10 hover:bg-ink/4 text-ink'} ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 <IconLock className="w-3.5 h-3.5" />{' '}
                 {character.voiceState === 'locked' ? 'Locked' : 'Lock'}
@@ -1800,8 +1825,12 @@ export function ProfileDrawer({
                       {onRename && !isBucket && (
                         <button
                           aria-label={`Make ${a} the primary name`}
-                          onClick={() => onRename(character.id, a)}
-                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-magenta/15 hover:text-magenta coarse-pointer:opacity-100"
+                          onClick={() => {
+                            if (readOnly) return;
+                            onRename(character.id, a);
+                          }}
+                          {...pausedControlProps(readOnly)}
+                          className={`inline-flex items-center justify-center w-5 h-5 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full text-ink/55 hover:bg-magenta/15 hover:text-magenta coarse-pointer:opacity-100 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           <IconStar className="w-3 h-3" />
                         </button>
@@ -1813,7 +1842,7 @@ export function ProfileDrawer({
                             setUnlinkDialogAlias(a);
                             setAliasError(null);
                           }}
-                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink coarse-pointer:opacity-100"
+                          className="inline-flex items-center justify-center w-5 h-5 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full text-ink/55 hover:bg-ink/10 hover:text-ink coarse-pointer:opacity-100"
                         >
                           <IconClose className="w-3 h-3" />
                         </button>
@@ -2043,7 +2072,14 @@ export function ProfileDrawer({
                           void runLinkPriorTo(selectedPrior.bookId, selectedPrior.id);
                         else void runMergeTo(mergeTargetId);
                       }}
+                      /* Plan 291 — link-prior writes only the source book's cast;
+                         the current book's matchedFrom arrives through the cast
+                         slice's PUT, so it waits for the re-analysis. R57 — the
+                         in-book merge waits too: the server refuses it mid-run (R55). */
+                      {...pausedControlProps(readOnly)}
                       className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
+                        readOnly ? 'opacity-40 cursor-not-allowed ' : ''
+                      }${
                         mergeBusy
                           ? 'bg-magenta/20 text-magenta cursor-wait'
                           : 'bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/20 disabled:text-ink/50 disabled:cursor-not-allowed'
@@ -2076,7 +2112,8 @@ export function ProfileDrawer({
                     aria-label="Downgrade to Unknown male"
                     disabled={mergeBusy}
                     onClick={() => void runMergeTo(UNKNOWN_MALE_ID)}
-                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                    {...pausedControlProps(readOnly)}
+                    className={`px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                   >
                     Unknown male
                   </button>
@@ -2084,7 +2121,8 @@ export function ProfileDrawer({
                     aria-label="Downgrade to Unknown female"
                     disabled={mergeBusy}
                     onClick={() => void runMergeTo(UNKNOWN_FEMALE_ID)}
-                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                    {...pausedControlProps(readOnly)}
+                    className={`px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                   >
                     Unknown female
                   </button>
@@ -2108,6 +2146,7 @@ export function ProfileDrawer({
               <ToneSlider
                 label="Warmth"
                 value={tone.warmth ?? 50}
+                disabled={readOnly}
                 onChange={(v) => setTone({ ...tone, warmth: v })}
                 leftLabel="Cool"
                 rightLabel="Warm"
@@ -2115,6 +2154,7 @@ export function ProfileDrawer({
               <ToneSlider
                 label="Pace"
                 value={tone.pace ?? 50}
+                disabled={readOnly}
                 onChange={(v) => setTone({ ...tone, pace: v })}
                 leftLabel="Slow"
                 rightLabel="Brisk"
@@ -2122,6 +2162,7 @@ export function ProfileDrawer({
               <ToneSlider
                 label="Authority"
                 value={tone.authority ?? 50}
+                disabled={readOnly}
                 onChange={(v) => setTone({ ...tone, authority: v })}
                 leftLabel="Soft"
                 rightLabel="Commanding"
@@ -2129,6 +2170,7 @@ export function ProfileDrawer({
               <ToneSlider
                 label="Emotion"
                 value={tone.emotion ?? 50}
+                disabled={readOnly}
                 onChange={(v) => setTone({ ...tone, emotion: v })}
                 leftLabel="Restrained"
                 rightLabel="Expressive"
@@ -2144,9 +2186,14 @@ export function ProfileDrawer({
           >
             Discard
           </button>
+          {/* Plan 291 — read-only cast: Save stays focusable and aria-disabled so its
+              tooltip is reachable by keyboard and touch; the click is ignored. */}
           <PrimaryButton
             variant="dark"
+            softDisabled={readOnly}
+            title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}
             onClick={() => {
+              if (readOnly) return;
               /* Per-character engine (plan 108): 'default' clears the
                  field (use the project default); a real engine pins it. */
               const nextEngine = engineChoice === 'default' ? undefined : engineChoice;
@@ -2208,6 +2255,7 @@ export function ProfileDrawer({
               if (hasConflict) {
                 next.voiceId = undefined;
                 next.matchedFrom = undefined;
+                next.matchFactors = undefined;
               }
               /* Series-scoped override write — fire-and-forget; the redux
                  character carries the same value so the UI is correct even
@@ -2221,10 +2269,25 @@ export function ProfileDrawer({
                     { engine: 'qwen', name: qwenVoiceId },
                     { scope: 'series', bookId },
                   )
-                  .catch(() => {
-                    /* The next cast hydrate reconciles a failed write; the
-                       drawer-local error surface already covered the design
-                       step, so a swallow here keeps Save snappy. */
+                  .catch((err: unknown) => {
+                    /* The open book's own save (onSave below) stands either
+                       way. Every 409 that reaches this catch is a consented-clone
+                       refusal (#4104): the route's other 409, book_repaired_reload,
+                       never gets here, since repairFetch reloads the page and
+                       its promise never settles. A refusal leaves the whole
+                       series write undone, so say so. Any other failure is told
+                       too, rather than swallowed. A toast, not drawer state, since Save
+                       closes the drawer. */
+                    const refused = (err as { status?: number } | null)?.status === 409;
+                    dispatch(
+                      notificationsActions.pushToast({
+                        kind: refused ? 'info' : 'error',
+                        message: refused
+                          ? 'Saved for this book only. Another book in the series uses a cloned voice for this character, so the rest of the series was left as it was.'
+                          : 'Saved for this book, but the voice could not be applied to the rest of the series.',
+                        dedupeKey: `series-voice-override-${character.id}`,
+                      }),
+                    );
                   });
               }
               onSave(next, { hadConflict: hasConflict });
@@ -2242,6 +2305,9 @@ export function ProfileDrawer({
           targets={mergeCandidates ?? []}
           busy={aliasBusy}
           error={aliasError}
+          /* R57 — "its own character" is unlink-alias, which the server refuses mid-run
+             (R55); "move to" is repoint-alias and stays live. */
+          splitDisabled={readOnly}
           onCancel={() => {
             if (aliasBusy) return;
             setUnlinkDialogAlias(null);
@@ -2631,15 +2697,24 @@ interface ToneSliderProps {
   onChange: (v: number) => void;
   leftLabel: string;
   rightLabel: string;
+  /* Plan 291 — read-only cast: the slider is disabled with the paused tooltip. */
+  disabled?: boolean;
 }
-export function ToneSlider({ label, value, onChange, leftLabel, rightLabel }: ToneSliderProps) {
+export function ToneSlider({
+  label,
+  value,
+  onChange,
+  leftLabel,
+  rightLabel,
+  disabled = false,
+}: ToneSliderProps) {
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-ink">{label}</span>
         <span className="text-xs text-ink/50 tabular-nums">{value}</span>
       </div>
-      <div className="relative h-1.5 rounded-full bg-ink/10">
+      <div className={`relative h-1.5 rounded-full bg-ink/10 ${disabled ? 'opacity-50' : ''}`}>
         <div
           className="absolute left-0 top-0 bottom-0 rounded-full bg-gradient-cta-horizontal"
           style={{ width: `${value}%` }}
@@ -2649,14 +2724,25 @@ export function ToneSlider({ label, value, onChange, leftLabel, rightLabel }: To
           min={0}
           max={100}
           value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="absolute inset-0 w-full opacity-0 cursor-pointer"
+          aria-label={label}
+          aria-describedby={disabled ? `tone-paused-${label}` : undefined}
+          {...pausedControlProps(disabled)}
+          onChange={(e) => {
+            if (disabled) return;
+            onChange(Number(e.target.value));
+          }}
+          className={`absolute inset-0 w-full opacity-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
         />
         <span
           className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white border border-ink/30 shadow-sm pointer-events-none"
           style={{ left: `${value}%` }}
         />
       </div>
+      {disabled && (
+        <span id={`tone-paused-${label}`} className="sr-only">
+          {CAST_EDITS_PAUSED_TOOLTIP}
+        </span>
+      )}
       <div className="flex items-center justify-between mt-1.5 text-[11px] text-ink/40">
         <span>{leftLabel}</span>
         <span>{rightLabel}</span>

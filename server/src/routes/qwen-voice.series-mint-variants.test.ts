@@ -136,6 +136,11 @@ describe('#4037 — the series mint copies a legacy voice’s emotion variants',
     /* the base family copies as before, and the legacy files stay where they were */
     expect(existsSync(join(qwenDir(), `qwen-${uuid}.pt`))).toBe(true);
     expect(existsSync(join(qwenDir(), 'qwen-v_wren__angry.pt'))).toBe(true);
+    for (const f of ['.pt', '.json', '__1.7b.pt', '__master.wav']) {
+      for (const k of ['qwen-v_wren', 'qwen-v_wren__angry']) {
+        expect(readFileSync(join(qwenDir(), `${k}${f}`), 'utf8')).toBe(`bytes of ${k}${f}`);
+      }
+    }
     /* exactly the base family and the angry family were written: the base's
        `__1.7b` / `__master` files are copied once, as base files, never again
        as if `1.7b` / `master` were emotions */
@@ -158,6 +163,7 @@ describe('#4037 — the series mint copies a legacy voice’s emotion variants',
     /* the walk skips the unconfirmed designing book; stampOwnRow stamps it */
     expect(readRow('Book Two').voiceUuid).toBe(uuid);
     expect(readRow('Book Two').overrideTtsVoices.qwen.variants.angry.name).toBe(`qwen-${uuid}__angry`);
+    expect(existsSync(join(qwenDir(), `qwen-${uuid}__angry.pt`))).toBe(true);
   });
 
   it('a failed variant copy stamps nothing and leaves no copy behind', async () => {

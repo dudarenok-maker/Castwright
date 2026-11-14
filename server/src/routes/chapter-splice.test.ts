@@ -542,6 +542,37 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(segFile.segments[1].endSec - segFile.segments[1].startSec).toBeCloseTo(0.3, 5);
   });
 
+  /* #4066 — a splice re-synthesises on the GPU but never enters generation's
+     inFlightByBook, so the route's own `registerSplice` is the only thing that
+     makes the VRAM-eviction gate see it. Hold the mocked synth open mid-job and
+     read the gate. Mutation: replacing the route's registerSplice call with a
+     no-op leaves the gate false mid-job. */
+  it('#4066 — the gate reads active while a re-record is mid-synth, and inactive after', async () => {
+    const gate = await import('../gpu/active-generation-gate.js');
+    const synthMock = vi.mocked((await import('../tts/synthesise-chapter.js')).synthesiseChapter);
+    let started!: () => void;
+    const startedP = new Promise<void>((r) => (started = r));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    synthMock.mockImplementationOnce((async () => {
+      started();
+      await held;
+      return { pcm: tone(0.3, 9000), sampleRate: SR, segments: [], durationSec: 0.3 };
+    }) as never);
+    expect(gate.isAnyGenerationActive()).toBe(false);
+
+    const inflight = request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] })
+      .then((r) => r);
+    await startedP;
+    expect(gate.isAnyGenerationActive()).toBe(true);
+    release();
+    const res = await inflight;
+    expect(res.text).toContain('splice_complete');
+    expect(gate.isAnyGenerationActive()).toBe(false);
+  });
+
   /* #3362 pass-6 (🟡1) — a rerecord's resynthesizedIndices must be EXACTLY
      the on-disk indices this call re-synthesised (`targetIndices`, fs-10's
      own index mapping) — never omitted, never every segment. Mutation M2

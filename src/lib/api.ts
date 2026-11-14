@@ -304,9 +304,9 @@ export interface AnalyseOpts {
       prior books" pill so the user sees the context being applied.
       `names` is the first three for display; `count` is the total. */
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
-  /** #2015 — a non-fatal advisory from the server (today only
-      `cast_merge_base_stale`). Both the full-book and the subset stream emit
-      it; the subset route carries two of the five merge-base write sites. */
+  /** A non-fatal advisory from the server (today only the non-story
+      reasoning-overflow fallback, `analyzer-reasoning-overflow-nonstory`).
+      Both the full-book and the subset stream can emit it. */
   onWarning?: (warning: { code: string; message: string }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. */
@@ -414,27 +414,11 @@ export interface LinkPriorCharacterArgs {
   targetBookId: string;
   targetCharacterId: string;
 }
-export interface LinkPriorCharacterResponse {
-  matchedFrom: {
-    bookId: string;
-    characterId: string;
-    bookTitle: string;
-    confidence: number;
-  };
-  voiceId?: string;
-  /* Profile content merged FROM the prior character onto the source at link
-     time (representative quotes + descriptors). Present only when the merge
-     actually changed something. The frontend applies it via applyManualMatch
-     so the open drawer shows the reused character's quotes without a reload. */
-  profile?: {
-    evidence?: import('./types').Character['evidence'];
-    attributes?: string[];
-    description?: string;
-    tone?: import('./types').Character['tone'];
-    gender?: import('./types').Character['gender'];
-    ageRange?: import('./types').Character['ageRange'];
-  };
-}
+/* POST /api/books/:bookId/cast/link-prior — generated from openapi.yaml. `voice`
+   (F7 / #4095) is present when the link moved the row onto the target's voice;
+   the client mirrors it onto the row and `movedCharacterIds` via applyManualMatch. */
+export type LinkPriorCharacterResponse =
+  ApiPaths['/api/books/{bookId}/cast/link-prior']['post']['responses']['200']['content']['application/json'];
 /* Series roster — the union of confirmed casts across every prior book
    in the same (author, series). Powers the Profile Drawer's "From prior
    books in <series>" optgroup so the user can manually link to a
@@ -1425,10 +1409,22 @@ export async function mockGetBookState(
     : withRevisions;
 }
 
+/* e2e seam (plan 291, #4031): every mock PUT, in order, exposed on
+   `window.__castwrightMockCalls` so a spec can assert what was (and was not)
+   written. Mock mode only: nothing else reaches `mockPutBookState`. */
+const e2eCallLog: Array<{ name: 'putBookState'; bookId: string; req: PutStateRequest }> = [];
+/* Recorded only under the e2e (and unit-test) mode, so `dev:mock` and the
+   marketing capture never accumulate it. */
+const RECORD_MOCK_CALLS = import.meta.env.MODE === 'e2e' || import.meta.env.MODE === 'test';
+
 export async function mockPutBookState(
   bookId: string,
   req: PutStateRequest,
 ): Promise<PutStateResponse> {
+  if (RECORD_MOCK_CALLS) {
+    e2eCallLog.push({ name: 'putBookState', bookId, req: JSON.parse(JSON.stringify(req)) });
+    (globalThis as unknown as { __castwrightMockCalls?: typeof e2eCallLog }).__castwrightMockCalls = e2eCallLog;
+  }
   await wait(20);
   const prev = MOCK_BOOK_STATES.get(bookId) ?? emptyBookStateResponse(bookId);
   const next = applyMockSliceWrite(prev, req);
@@ -1659,18 +1655,59 @@ async function mockUploadManuscript({
   };
 }
 
-export async function mockAnalyseManuscript(
+/* Plan 291 (#4031) — the books whose mock analysis run is in flight, and the
+   run itself keyed by manuscript. `mockGetBookBusy` answers `['analysis']` for
+   a book in the set; a second `mockAnalyseManuscript` for a manuscript whose run
+   is live attaches to it (the real server's subscribe path) and never starts a
+   second run. */
+const MOCK_RUNNING_ANALYSIS = new Set<{ bookId: string }>();
+const MOCK_ANALYSIS_RUNS = new Map<
+  string,
+  { subs: Set<AnalyseOpts>; promise: Promise<AnalyseResponse> }
+>();
+
+export function mockAnalyseManuscript(
   manuscriptId: string,
-  { onPhase, onHeartbeat }: AnalyseOpts = {},
+  opts: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
+  const live = MOCK_ANALYSIS_RUNS.get(manuscriptId);
+  if (live) {
+    live.subs.add(opts);
+    return live.promise;
+  }
+  /* The demo capture freezes every call on its pose; nothing to attach to. */
+  if (DEMO_CAPTURE) return runMockAnalysis(manuscriptId, new Set([opts]));
+  const subs = new Set<AnalyseOpts>([opts]);
+  /* Cleared by this run's own token, so an older run ending never clears a
+     newer run's registration of the same book. */
+  const token = { bookId: ANALYSIS_NORTHERN_STAR.bookId };
+  MOCK_RUNNING_ANALYSIS.add(token);
+  const promise = runMockAnalysis(manuscriptId, subs).finally(() => {
+    MOCK_ANALYSIS_RUNS.delete(manuscriptId);
+    MOCK_RUNNING_ANALYSIS.delete(token);
+  });
+  MOCK_ANALYSIS_RUNS.set(manuscriptId, { subs, promise });
+  return promise;
+}
+
+async function runMockAnalysis(
+  manuscriptId: string,
+  subs: Set<AnalyseOpts>,
+): Promise<AnalyseResponse> {
+  const each = (fn: (o: AnalyseOpts) => void) => subs.forEach(fn);
   if (DEMO_CAPTURE) {
     const p = HOLLOW_TIDE_POSED.analysing;
-    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live });
+    each((o) => o.onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live }));
     // Freeze on the analysing screen: never resolve, never advance.
     return new Promise<never>(() => {});
   }
   const res = ANALYSIS_NORTHERN_STAR;
   let heartbeatEmitted = false;
+  /* Roster frames: Phase 0 grows the cast in thirds (a third at 40% progress, two
+     thirds at 70%, the whole roster when the phase ends), as the real stream's
+     `cast-update` does, so the client's live-roster path runs end to end. */
+  const rosterFrames = [0.4, 0.7, 1];
+  let rosterEmitted = 0;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
     await new Promise<void>((resolve) => {
@@ -1716,13 +1753,23 @@ export async function mockAnalyseManuscript(
              HeartbeatRow speed pulse alongside the sentence headline. */
           if (!heartbeatEmitted) {
             heartbeatEmitted = true;
-            onHeartbeat?.({
-              phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
-              elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
-            });
+            each((o) =>
+              o.onHeartbeat?.({
+                phaseId: 0, receivedBytes: 4096, charsPerSec: 320,
+                elapsedMs, sinceLastChunkMs: 0, chapterIndex: 1,
+              }),
+            );
           }
         }
-        onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live });
+        each((o) => o.onPhase?.({ phaseId: ph.id, progress, model: 'qwen3.5:9b', live }));
+        if (ph.id === 0) {
+          while (rosterEmitted < rosterFrames.length && progress >= rosterFrames[rosterEmitted]) {
+            const n = Math.ceil(res.characters.length * rosterFrames[rosterEmitted]);
+            const characters = res.characters.slice(0, n);
+            each((o) => o.onCastUpdate?.({ characters }));
+            rosterEmitted += 1;
+          }
+        }
         if (progress >= 1) {
           clearInterval(t);
           resolve();
@@ -1730,6 +1777,12 @@ export async function mockAnalyseManuscript(
       }, 60);
     });
   }
+  /* e2e seam: a spec holds the finished run open (busy still `['analysis']`)
+     by setting `window.__castwrightMockAnalysisHold` to a promise before it
+     starts the analysis, then resolves that promise when it wants the run to
+     end. Undefined in normal dev/prod. */
+  await (globalThis as unknown as { __castwrightMockAnalysisHold?: Promise<void> })
+    .__castwrightMockAnalysisHold;
   /* The real server mints the manuscript id once at confirm and writes it to
      state.json, so the analysed book's state always reports the id the
      client holds. The mock resolves every upload to the one fixture book,
@@ -2304,11 +2357,7 @@ async function mockSetCastTier(
    silently skip a book on a divergent key. Server rediscovers the group
    (respecting notLinkedTo); the caller only supplies the representative's home
    (bookId, characterId). */
-export interface LinkedOverrideResponse {
-  canonicalVoiceId: string;
-  updated: Array<{ bookId: string; bookTitle: string; characterId: string }>;
-  failed: Array<{ bookId: string; bookTitle: string; error: string }>;
-}
+export type LinkedOverrideResponse = ApiComponents['schemas']['LinkedVoiceOverrideResponse'];
 
 async function realSetVoiceOverrideLinked(
   bookId: string,
@@ -2521,8 +2570,8 @@ async function realGetBookBusy(bookId: string): Promise<BookBusyKinds> {
   return ((await res.json()) as { kinds: BookBusyKinds }).kinds;
 }
 
-async function mockGetBookBusy(_bookId: string): Promise<BookBusyKinds> {
-  return [];
+export async function mockGetBookBusy(bookId: string): Promise<BookBusyKinds> {
+  return [...MOCK_RUNNING_ANALYSIS].some((r) => r.bookId === bookId) ? ['analysis'] : [];
 }
 
 /* fs-51 — per-book performance-QA report (acoustic re-record rate, ASR
@@ -4403,12 +4452,16 @@ async function realMergeCharacters({
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Character merge failed (${res.status}).`);
+    /* R55 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Character merge failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -4447,11 +4500,17 @@ async function mockListMergeSuggestions(_bookId: string): Promise<MergeSuggestio
   return [...mockMergeSuggestions];
 }
 
+/* #4031 M7 — the accept answers the merged cast (openapi); `characters` is optional
+   here only because the mock has no cast to return. */
+export interface AcceptMergeSuggestionResponse {
+  characters?: Character[];
+}
+
 async function realAcceptMergeSuggestion(
   bookId: string,
   sourceId: string,
   targetId: string,
-): Promise<void> {
+): Promise<AcceptMergeSuggestionResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/merge-suggestions/accept`,
     {
@@ -4462,24 +4521,30 @@ async function realAcceptMergeSuggestion(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Accept merge-suggestion failed (${res.status}).`);
+    /* R55 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Accept merge-suggestion failed (${res.status}).`), { code });
   }
+  return res.json();
 }
 
 async function mockAcceptMergeSuggestion(
   _bookId: string,
   sourceId: string,
   targetId: string,
-): Promise<void> {
+): Promise<AcceptMergeSuggestionResponse> {
   await wait(60);
   mockMergeSuggestions = mockMergeSuggestions.filter(
     (s) => !(s.sourceId === sourceId && s.targetId === targetId),
   );
+  return {};
 }
 
 async function realDismissMergeSuggestion(
@@ -4572,12 +4637,16 @@ async function realUnlinkAlias({
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Unlink alias failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Unlink alias failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -4984,9 +5053,13 @@ export interface DeclineVoiceLinkResponse {
   declinedVoiceFrom: string[];
   declinedVoiceUuids: string[];
   voiceUuid: string | null;
+  /** True when the row was moved onto a voice of its own (a fork); false when it already owned its voice. */
+  separated: boolean;
   /** Other rows of the same book that moved onto `voiceUuid` with it. */
   movedCharacterIds: string[];
 }
+
+const DECLINE_UNREACHABLE = 'Check the server is running, then try again.';
 
 async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   const { bookId, characterId, fromBookId } = args;
@@ -4997,7 +5070,10 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fromBookId }),
     },
-  );
+  ).catch(() => {
+    /* server unreachable: fetch's own text ("Failed to fetch") is not a sentence */
+    throw new Error(DECLINE_UNREACHABLE);
+  });
   if (!res.ok) {
     let detail = '';
     try {
@@ -5005,14 +5081,14 @@ async function realDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<Decline
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Don't-reuse failed (${res.status}).`);
+    throw new Error(detail || DECLINE_UNREACHABLE);
   }
   return res.json();
 }
 
 async function mockDeclineVoiceLink(args: DeclineVoiceLinkArgs): Promise<DeclineVoiceLinkResponse> {
   await wait(80);
-  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] };
+  return { declinedVoiceFrom: [args.fromBookId], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] };
 }
 
 /* POST /api/books/:bookId/cast/:characterId/reject-orphan-match  (#2040 Task
@@ -5061,12 +5137,16 @@ async function realRejectOrphanMatch(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Reject match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Reject match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5170,12 +5250,16 @@ async function realUndoRejectOrphanMatch(
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Undo reject match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Undo reject match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5271,12 +5355,16 @@ async function realLinkOrphanMatch(args: LinkOrphanMatchArgs): Promise<LinkOrpha
   );
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Link match failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Link match failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5307,12 +5395,16 @@ async function realAddFromSeriesRoster(
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Add-from-roster failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Add-from-roster failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -5361,12 +5453,16 @@ async function realCreateCharacter(
   });
   if (!res.ok) {
     let detail = '';
+    let code: string | undefined;
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      const body = (await res.json()) as { error?: string; code?: string };
+      detail = body.error ?? '';
+      code = body.code;
     } catch {
       /* not json */
     }
-    throw new Error(detail || `Create character failed (${res.status}).`);
+    /* R57 — `code` tells a `book_busy` refusal (an analysis holds the book) from a failure. */
+    throw Object.assign(new Error(detail || `Create character failed (${res.status}).`), { code });
   }
   return res.json();
 }
@@ -6639,7 +6735,7 @@ export interface CastDesignCallbacks {
   onHeartbeat?: (e: { characterId: string }) => void;
   /** A character was designed + persisted; `voiceId` is the bespoke qwen name.
       srv-43: `voiceUuid` is present when the single-design SSE path emits it. */
-  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string }) => void;
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string; voiceUuid?: string; separated?: boolean }) => void;
   /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
   onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string; viaFallback?: boolean; fallbackReason?: 'not-installed' | 'corrupt' }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
@@ -6660,7 +6756,15 @@ export interface CastDesignCallbacks {
     failures: Array<{ characterId: string; name: string; error: string }>;
   }) => void;
   /** Catastrophic abort (NOT a per-character failure). */
-  onError?: (e: { code: string; message: string }) => void;
+  onError?: (e: {
+    code: string;
+    message: string;
+    /** A single design's `clone_protected` refusal after its uuid step separated the
+        row: the separation persists, so the event names the row and its new uuid. */
+    characterId?: string;
+    voiceUuid?: string;
+    separated?: boolean;
+  }) => void;
   /** Single-design sub-phase tick (honest progress). */
   onPhase?: (e: { characterId: string; phase: DesignPhase }) => void;
   /** Single re-design finished — preview staged, awaiting A/B compare. */
@@ -6673,6 +6777,9 @@ export interface CastDesignCallbacks {
     /** srv-43: uuid of the character's bespoke voice file — lets the drawer
         resolve the uuid-keyed cache entry before the next cast refetch. */
     voiceUuid?: string;
+    /** #4067 — the design first separated a declined row onto a voice of its own
+        (new uuid, qwen slot renamed, variants dropped); see SingleDesignEvent. */
+    separated?: boolean;
   }) => void;
   /** Single-design (re)subscribe seed — replayed once on reload re-attach so the
       slice can open a single snapshot at the right character + phase. */
@@ -6705,6 +6812,7 @@ interface CastDesignStreamEvent {
   previewUrl?: string;
   persona?: string;
   voiceUuid?: string;
+  separated?: boolean;
   mode?: 'first' | 'redesign';
   url?: string;
   viaFallback?: boolean;
@@ -6785,6 +6893,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             characterId: e.characterId,
             voiceId: e.voiceId,
             voiceUuid: e.voiceUuid,
+            separated: e.separated,
           });
         break;
       case 'preview_ready':
@@ -6800,6 +6909,7 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
             previewUrl: e.previewUrl,
             persona: e.persona ?? '',
             voiceUuid: e.voiceUuid,
+            separated: e.separated,
           });
         break;
       case 'progress':
@@ -6853,7 +6963,13 @@ export async function readCastDesignStream(res: Response, cb: CastDesignCallback
         });
         break;
       case 'error':
-        cb.onError?.({ code: e.code ?? 'unknown', message: e.message ?? 'Cast design failed.' });
+        cb.onError?.({
+          code: e.code ?? 'unknown',
+          message: e.message ?? 'Cast design failed.',
+          characterId: e.characterId,
+          voiceUuid: e.voiceUuid,
+          separated: e.separated,
+        });
         break;
       default:
         break;
@@ -8754,7 +8870,13 @@ export interface GpuQueueState {
   /** Live per-device VRAM reading, same shape the sidecar's /capacity
       reports. */
   devices: GpuQueueDevice[];
+  /** #4066 — the last time a voice design or a Quality op unloaded resident
+      TTS models to free VRAM (server/src/gpu/tts-auto-free-notice.ts), or
+      null. Absent on an older server. */
+  lastTtsAutoFree?: TtsAutoFreeNotice | null;
 }
+
+export type TtsAutoFreeNotice = ApiComponents['schemas']['TtsAutoFreeNotice'];
 
 async function realGetGpuQueueState(): Promise<GpuQueueState> {
   /* Permissive: a 404 / 5xx (older server, partial deploy, hot-reload
@@ -8775,7 +8897,7 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
      the pill's "GPU busy · N waiting ·" prefix can be exercised by
      stubbing the api surface in tests. */
   await wait(20);
-  return { queueDepth: 0, devices: [] };
+  return { queueDepth: 0, devices: [], lastTtsAutoFree: null };
 }
 
 /* Task 16/16.5 (#1230 item 2, #2974) — outcome of the most recent code-43

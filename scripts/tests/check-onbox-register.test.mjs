@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'nod
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { checkRegister, checkLiveView, resolveBaselineTexts, CANNOT_VERIFY_BASELINE_ERROR, ROW_CONTENT_DRIFT_ERROR_PREFIX, EXTRACTION_ERROR_PREFIX, THREE_WAY_CONTENT_WARNING_PREFIX, ROW_ID_COLLISION_ERROR_PREFIX, UNMERGED_LANE_ROW_ERROR_PREFIX, UNKNOWN_PROVENANCE_ERROR_PREFIX, PUBLISHING_FILE_ERROR_PREFIX, DISCHARGE_NAME_ERROR_PREFIX, resolvePublishedProvenance, resolveMergeBaseRegister, stripHtmlComments, htmlCellText, ALLOCATION_FLOOR, parseNextIdMarker, ROW_ID_REGEX, splitRowId, parseTitledSections, parseRegisterRowTitles } from '../check-onbox-register.mjs';
+import { checkRegister, checkLiveView, resolveBaselineTexts, CANNOT_VERIFY_BASELINE_ERROR, ROW_CONTENT_DRIFT_ERROR_PREFIX, EXTRACTION_ERROR_PREFIX, THREE_WAY_CONTENT_WARNING_PREFIX, ROW_ID_COLLISION_ERROR_PREFIX, UNMERGED_LANE_ROW_ERROR_PREFIX, UNKNOWN_PROVENANCE_ERROR_PREFIX, PUBLISHING_FILE_ERROR_PREFIX, DISCHARGE_NAME_ERROR_PREFIX, resolvePublishedProvenance, makeCommittedBodyMatch, resolveMergeBaseRegister, stripHtmlComments, htmlCellText, ALLOCATION_FLOOR, parseNextIdMarker, ROW_ID_REGEX, splitRowId, parseTitledSections, parseRegisterRowTitles } from '../check-onbox-register.mjs';
 import * as onbox from '../check-onbox-register.mjs';
 import {
   HERE,
@@ -2176,6 +2176,39 @@ test('#2599: a genuine revert (published differs from baseline/tracked) fails', 
     [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`],
     `a genuine revert should fail, got: ${JSON.stringify(errors)}`,
   );
+  // Through the #4105 matcher: the "old" body was never on main, so it is
+  // still a hand-edit (drift). Had main once carried it, the page is merely
+  // behind — an advisory, not a failure (owner decision, #4106 review pass 1).
+  const never = makeCommittedBodyMatch('/repo', 'live.html', 'abc', (args) =>
+    args[0] === 'log'
+      ? { status: 0, stdout: 'cur11111aaaa\tMerge pull request #5 from x/y\n' }
+      : { status: 0, stdout: baselineLiveView },
+  );
+  assert.deepEqual(
+    checkLiveView(workingRegister, publishedLiveView, {
+      direction: 'extraOnly',
+      baselineText: baselineRegister,
+      trackedLiveViewHtml,
+      baselineLiveViewText: baselineLiveView,
+      committedBodyMatch: never,
+    }),
+    [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`],
+  );
+  const once = makeCommittedBodyMatch('/repo', 'live.html', 'abc', (args) =>
+    args[0] === 'log'
+      ? { status: 0, stdout: 'cur11111aaaa\tMerge pull request #5 from x/y\nold11111bbbb\tMerge pull request #4 from x/z\n' }
+      : { status: 0, stdout: args[1].startsWith('cur') ? baselineLiveView : publishedLiveView },
+  );
+  assert.deepEqual(
+    checkLiveView(workingRegister, publishedLiveView, {
+      direction: 'extraOnly',
+      baselineText: baselineRegister,
+      trackedLiveViewHtml,
+      baselineLiveViewText: baselineLiveView,
+      committedBodyMatch: once,
+    }),
+    [`${onbox.BEHIND_MAIN_ADVISORY_PREFIX}A1: live = main@old11111; changed since by cur11111 (#5)`],
+  );
 });
 
 
@@ -2239,6 +2272,144 @@ test('#2599: a row whose body is unchanged but risk badge differs is caught as c
   );
 });
 
+
+// #4105: after a merge, "tracked == origin/main, published differs" is also the
+// normal "live page is behind main" state. A published body equal to the row's
+// body at an older origin/main commit is a committed version, not drift — but
+// only advisory-worthy (owner decision, review pass 1): the check says which
+// commit the live body matches and which commits changed the row since. A main
+// that has gone back to the published body since (ABA) is a real revert.
+const BEHIND_DRIFT = `${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`;
+const BEHIND_VIEW = (body) => buildRowContentLiveView([{ id: 'A1', body }]);
+// Newest first, like `git log`.
+function behindHistory(versions) {
+  return versions.map(([sha, subject, body]) => ({ sha, subject, view: BEHIND_VIEW(body) }));
+}
+const BEHIND_HISTORY = behindHistory([
+  ['new11111aaaa', 'Merge pull request #12 from x/y', 'Current body on main.'],
+  ['old11111bbbb', 'Merge pull request #7 from x/z', 'Older committed body.'],
+]);
+// `showFails` makes `git show` fail for that sha; `garble` makes it return unparseable HTML.
+function behindRunner(history = BEHIND_HISTORY, { showFails = null, garble = null } = {}) {
+  return (args) => {
+    if (args[0] === 'log') return { status: 0, stdout: history.map((h) => `${h.sha}\t${h.subject}`).join('\n') + '\n' };
+    if (args[0] === 'ls-tree') return { status: 128, stdout: '', stderr: 'fatal' };
+    const sha = args[1].split(':')[0];
+    if (sha === showFails) return { status: 128, stdout: '', stderr: 'fatal' };
+    if (sha === garble) return { status: 0, stdout: '<details class="item"><summary>no num</summary>' };
+    return { status: 0, stdout: history.find((h) => h.sha === sha).view };
+  };
+}
+const behindMatcher = (history, opts) => makeCommittedBodyMatch('/repo', 'live.html', 'abc', behindRunner(history, opts));
+function behindCheck(publishedBody, committedBodyMatch, currentBody = 'Current body on main.', extra = {}) {
+  const mainView = BEHIND_VIEW(currentBody);
+  return checkLiveView(
+    buildSingleGroupRegister('A', [1]),
+    BEHIND_VIEW(publishedBody),
+    {
+      direction: 'extraOnly',
+      baselineText: buildSingleGroupRegister('A', [1]),
+      trackedLiveViewHtml: mainView,
+      baselineLiveViewText: mainView,
+      committedBodyMatch,
+      ...extra,
+    },
+  );
+}
+const BEHIND_ADVISORY = `${onbox.BEHIND_MAIN_ADVISORY_PREFIX}A1: live = main@old11111; changed since by new11111 (#12)`;
+
+test('#4105: a published body equal to the row at an older origin/main commit is behind — silent apart from an advisory naming the commits', () => {
+  assert.deepEqual(behindCheck('Older committed body.', behindMatcher(BEHIND_HISTORY)), [BEHIND_ADVISORY]);
+});
+
+test('#4105: the advisory lists every commit that changed the row since, with its PR number when the subject has one', () => {
+  const history = behindHistory([
+    ['new11111aaaa', 'Merge pull request #12 from x/y', 'Current body on main.'],
+    ['mid11111cccc', 'unrelated commit that left the row alone', 'Mid body.'],
+    ['mid22222dddd', 'Merge pull request #9 from x/q', 'Mid body.'],
+    ['old11111bbbb', 'no pr number here', 'Older committed body.'],
+  ]);
+  assert.deepEqual(behindCheck('Older committed body.', behindMatcher(history)), [
+    `${onbox.BEHIND_MAIN_ADVISORY_PREFIX}A1: live = main@old11111; changed since by new11111 (#12), mid22222 (#9)`,
+  ]);
+});
+
+test('#4105: a published body matching no committed version is still row-content-drift', () => {
+  assert.deepEqual(behindCheck('Hand-edited on the live page.', behindMatcher(BEHIND_HISTORY)), [BEHIND_DRIFT]);
+});
+
+test('#4105: git unavailable fails closed — the drift is still reported', () => {
+  const failing = () => ({ status: 128, stdout: '', stderr: 'fatal' });
+  const match = makeCommittedBodyMatch('/repo', 'live.html', 'abc', failing);
+  assert.deepEqual(behindCheck('Older committed body.', match), [BEHIND_DRIFT]);
+  assert.deepEqual(behindCheck('Older committed body.', undefined), [BEHIND_DRIFT]);
+});
+
+// Review pass 1, 1 (S1): v1 -> v2 -> v1 on main with the live page on v2 is a
+// revert main made, not a page merely behind it.
+test('#4105 ABA: main went back to a body older than the published one — a revert, reported as drift', () => {
+  const aba = behindHistory([
+    ['aba11111aaaa', 'Merge pull request #3 from x/revert', 'Body v1.'],
+    ['aba22222bbbb', 'Merge pull request #2 from x/result', 'Body v2 RESULT.'],
+    ['aba33333cccc', 'Merge pull request #1 from x/first', 'Body v1.'],
+  ]);
+  assert.deepEqual(behindCheck('Body v2 RESULT.', behindMatcher(aba), 'Body v1.'), [BEHIND_DRIFT]);
+});
+
+test('#4105: a version of the live view that cannot be read or parsed FOR THIS ROW grants no exemption, and the drift line names the commit', () => {
+  const unreadable = (errors, sha) => {
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.ok(errors[0].startsWith(BEHIND_DRIFT), errors[0]);
+    assert.ok(errors[0].includes(sha.slice(0, 8)), errors[0]);
+    assert.ok(!errors[0].includes('hand-edit'), errors[0]);
+  };
+  unreadable(behindCheck('Older committed body.', behindMatcher(BEHIND_HISTORY, { showFails: 'new11111aaaa' })), 'new11111aaaa');
+  // The unreadable one is OLDER than the match: the ABA guard cannot rule it out.
+  const three = behindHistory([
+    ['new11111aaaa', 'Merge pull request #12 from x/y', 'Current body on main.'],
+    ['old11111bbbb', 'Merge pull request #7 from x/z', 'Older committed body.'],
+    ['anc11111cccc', 'Merge pull request #1 from x/w', 'Ancient body.'],
+  ]);
+  unreadable(behindCheck('Older committed body.', behindMatcher(three, { showFails: 'anc11111cccc' })), 'anc11111cccc');
+  // An id-less extraction error hides whichever row it was: unknown for a row the version does not carry.
+  unreadable(behindCheck('Older committed body.', behindMatcher(three, { garble: 'anc11111cccc' })), 'anc11111cccc');
+});
+
+// Review pass 2, 🟠1: the mirror image — the lane's tracked copy is older than
+// main's and the live page is already current. Publishing it would regress the
+// row. Decided from the merge base (`branchBase`), not from the history walk.
+test('#4105 S5: a stale lane (main changed the row since the branch base) is told to merge main first', () => {
+  const current = BEHIND_VIEW('Current body on main.');
+  const stale = BEHIND_VIEW('Older committed body.');
+  const atBase = {
+    mergeBase: 'base1111aaaa',
+    bodies: onbox.parseLiveViewRowBodies(stale).bodies,
+    unknown: () => false,
+  };
+  const check = (extra) =>
+    checkLiveView(buildSingleGroupRegister('A', [1]), current, {
+      direction: 'extraOnly',
+      baselineText: buildSingleGroupRegister('A', [1]),
+      trackedLiveViewHtml: stale,
+      baselineLiveViewText: current,
+      committedBodyMatch: behindMatcher(BEHIND_HISTORY),
+      branchBase: atBase,
+      ...extra,
+    });
+  assert.deepEqual(check({}), [
+    `${onbox.BRANCH_BEHIND_MAIN_ERROR_PREFIX}A1: branch behind origin/main for A1; merge it first (main changed A1 since this branch's base base1111)`,
+  ]);
+  // A lane that already merged main (no branchBase) and still carries the older text reverted it on purpose.
+  assert.deepEqual(check({ branchBase: undefined }), []);
+  // A genuine pending edit of a row main has NOT changed since the base is never this error.
+  assert.deepEqual(
+    check({
+      trackedLiveViewHtml: BEHIND_VIEW('Brand new local edit.'),
+      branchBase: { ...atBase, bodies: onbox.parseLiveViewRowBodies(current).bodies },
+    }),
+    [],
+  );
+});
 
 // Group F had exactly one row (F1); this change discharges it, so Group F
 // disappears from the working register entirely, while origin/main's

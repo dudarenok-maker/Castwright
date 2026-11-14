@@ -38,6 +38,7 @@ import { useState, useRef } from 'react';
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
+import { pausedControlProps, useCastReadOnly } from '../components/cast-edits-paused-banner';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { patchEntry, retryEngine } from '../store/voice-library-slice';
@@ -146,8 +147,11 @@ function CloneVerdictRow({
     }
   };
 
+  /* Plan 291 (#4031) — "Cast on <engine>" writes the cast slice, so it waits
+     for a re-analysis; the library actions save through their own routes. */
+  const readOnly = useCastReadOnly();
   const onCastOnEngine = () => {
-    if (!character || !verdict.castOnEngine) return;
+    if (readOnly || !character || !verdict.castOnEngine) return;
     onCastPending?.();
     dispatch(castActions.updateCharacter({ ...character, ttsEngine: verdict.castOnEngine }));
   };
@@ -205,7 +209,8 @@ function CloneVerdictRow({
       {verdict.reason === 'wrong-engine' && verdict.castOnEngine && (
         <button
           onClick={onCastOnEngine}
-          className="mt-2 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] fine-pointer:min-h-0"
+          {...pausedControlProps(readOnly)}
+          className={`mt-2 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] fine-pointer:min-h-0 ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           Cast on {ENGINE_LABEL[verdict.castOnEngine]}
         </button>

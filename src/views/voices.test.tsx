@@ -5,6 +5,14 @@ import { act, render, screen, fireEvent, within, waitFor } from '@testing-librar
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
+import { persistenceMiddleware } from '../store/persistence-middleware';
+import { castGateMiddleware, pollBookBusy } from '../store/cast-gate';
+import { bookBusySlice } from '../store/book-busy-slice';
+import { chaptersSlice } from '../store/chapters-slice';
+import { changeLogSlice } from '../store/change-log-slice';
+import { bookMetaSlice } from '../store/book-meta-slice';
+import { resetBookSlices } from '../store/reset-book-slices';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -83,6 +91,9 @@ const removeNotLinkedToMock =
     }>
   >();
 
+/* P6-1 — `GET /busy`, per book; the cast-gate tests below swap in a table. */
+const getBookBusyMock = vi.fn<(bookId: string) => Promise<string[]>>(() => Promise.resolve([]));
+
 const promoteToLibraryMock =
   vi.fn<
     (args: { bookId: string; characterId: string; name: string }) => Promise<{
@@ -131,6 +142,9 @@ vi.mock('../lib/api', () => ({
     promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
       promoteToLibraryMock(args),
     listVoiceLibrary: () => Promise.resolve({ voices: [] }),
+    /* Plan 291 — a failed merge re-reads the cast once busy is clear. */
+    getBookBusy: (bookId: string) => getBookBusyMock(bookId),
+    putBookState: () => Promise.resolve(undefined),
   },
 }));
 
@@ -193,6 +207,7 @@ function makeStore() {
       manuscript: manuscriptSlice.reducer,
       voices: voicesSlice.reducer,
       notifications: notificationsSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
   });
   store.dispatch(castSlice.actions.setCharacters(characters));
@@ -227,6 +242,7 @@ beforeEach(() => {
   linkPriorCharacterMock.mockReset();
   notLinkedToMock.mockReset();
   removeNotLinkedToMock.mockReset();
+  getBookBusyMock.mockReset().mockResolvedValue([]);
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -930,6 +946,44 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       expect(call.patch).toMatchObject({ gender: 'female' });
     });
 
+    it('plan 291 I1/I2: Save while the cast is read-only still opens the modal, mirrors the route result and raises no read-only toast', async () => {
+      seriesPatchCharacter.mockResolvedValue({
+        updated: [{ bookId: 'b1', bookTitle: 'Book One', characterId: 'narrator' }],
+        failed: [],
+      });
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          voices: voicesSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (gDM) => gDM().concat(persistenceMiddleware),
+      });
+      store.dispatch(castSlice.actions.setCharacters(charactersB1));
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+      store.dispatch(uiSlice.actions.confirmCast());
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+      render(
+        <Provider store={store}>
+          <LibraryView library={libraryB1} />
+        </Provider>,
+      );
+      openModal();
+      const sideA = screen.getByLabelText(/Side A: Narrator/);
+      fireEvent.change(within(sideA).getByLabelText('Gender for Narrator'), {
+        target: { value: 'female' },
+      });
+      fireEvent.click(within(sideA).getByRole('button', { name: 'Save' }));
+      await flush();
+      expect(seriesPatchCharacter).toHaveBeenCalledTimes(1);
+      expect(store.getState().cast.characters.find((c) => c.id === 'narrator')?.gender).toBe('female');
+      expect(
+        store.getState().notifications.toasts.filter((t) => /Re-analysis running/.test(t.message)),
+      ).toEqual([]);
+    });
+
     it('pushes a "Saved to N books in this series" toast when updated covers multiple books', async () => {
       seriesPatchCharacter.mockResolvedValue({
         updated: [
@@ -1203,6 +1257,188 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     });
     /* Pill collapses on success — Selected label is gone. */
     expect(screen.queryByText(/^Selected$/)).toBeNull();
+  });
+
+  it('a rejected merge or accept re-hydrates the cast', async () => {
+    /* Plan 291 (C3) — a merge whose history write failed has finished its
+       other writes, then failed the request: the cast is re-read from disk. */
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mergeCharactersMock.mockRejectedValue(new Error('retirement failed'));
+    const onDisk: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'Lead', color: 'peach', aliases: ['Wren'] },
+    ];
+    getBookState.mockResolvedValue({ state: {}, cast: { characters: onDisk } } as unknown as BookStateResponse);
+    const store = makeMergeStore();
+    store.dispatch(manuscriptSlice.actions.resetForBook('b1'));
+    render(
+      <Provider store={store}>
+        <LibraryView library={libraryB1} />
+      </Provider>,
+    );
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    fireEvent.click(screen.getByRole('button', { name: 'Merge into Wren Sparrow' }));
+    await waitFor(() => expect(store.getState().cast.characters).toEqual(onDisk));
+    expect(getBookState).toHaveBeenCalledWith('b1');
+    err.mockRestore();
+  });
+
+  /* R57 (PR #4103 pass 5b) — the server refuses a merge while an analysis runs (R55): while
+     the merge's book is read-only the button is disabled with the paused tooltip and sends
+     nothing; editable, the same button is enabled (the test above sends through it). */
+  it('R57: Merge is disabled and sends nothing while the book is read-only', async () => {
+    const store = makeMergeStore();
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    render(
+      <Provider store={store}>
+        <LibraryView library={libraryB1} />
+      </Provider>,
+    );
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    const merge = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+    expect(merge).toHaveAttribute('aria-disabled', 'true');
+    expect(merge).toHaveAttribute('title', expect.stringMatching(/paused/i));
+    fireEvent.click(merge);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mergeCharactersMock).not.toHaveBeenCalled();
+  });
+
+  it('R57: Merge is enabled when the book is editable', () => {
+    renderMerge();
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    const merge = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+    expect(merge).not.toHaveAttribute('aria-disabled');
+    expect(merge).toBeEnabled();
+  });
+
+  /* P6-1 (PR #4103 pass 6) — on the global Voices view (#/voices) the stage names no book, so
+     nothing ever releases b1's latched era (the gate polls and re-reads only the stage's book).
+     For a book the stage does not name the Merge gate keys only on a running snapshot (its
+     busy cache is never polled off-stage, so it goes stale). With the real gate middleware. */
+  describe('P6-1: the Merge gate for a book the stage does not name', () => {
+    const b1OnDisk: Character[] = [
+      { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+      { id: 'wren', name: 'Wren', role: 'Lead', color: 'peach' },
+      { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'Lead', color: 'peach' },
+      { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta' },
+    ];
+    let busyTable: Record<string, string[]>;
+
+    beforeEach(() => {
+      busyTable = {};
+      getBookBusyMock.mockImplementation(async (bookId: string) => busyTable[bookId] ?? []);
+      getBookState.mockResolvedValue({ state: {}, cast: { characters: b1OnDisk } } as unknown as BookStateResponse);
+    });
+
+    function makeGateStore() {
+      return configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          manuscript: manuscriptSlice.reducer,
+          chapters: chaptersSlice.reducer,
+          analysis: analysisSlice.reducer,
+          bookBusy: bookBusySlice.reducer,
+          notifications: notificationsSlice.reducer,
+          changeLog: changeLogSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          voices: voicesSlice.reducer,
+        },
+        middleware: (gd) =>
+          gd({ serializableCheck: false, immutableCheck: false }).concat(persistenceMiddleware, castGateMiddleware),
+      });
+    }
+
+    /* On #/voices the merge needs b1's cast, which Compare loads. */
+    async function offerMerge(store: ReturnType<typeof makeGateStore>) {
+      render(
+        <Provider store={store}>
+          <LibraryView library={libraryB1} />
+        </Provider>,
+      );
+      selectCard('Wren');
+      selectCard('Wren Sparrow');
+      fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+      return screen.findByRole('button', { name: 'Merge into Wren Sparrow' });
+    }
+
+    it('re-analyse b1 while it is open, go to #/voices, b1 ends: Merge is enabled with no paused tooltip', async () => {
+      const store = makeGateStore();
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'voices_pending' }));
+      resetBookSlices(store.dispatch, 'b1');
+      store.dispatch(castSlice.actions.hydrateCharacters(b1OnDisk));
+      busyTable = { b1: ['analysis'] };
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm-b1',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: 0,
+          state: 'running',
+        }),
+      );
+      expect(store.getState().cast.analysisEra?.b1).toBeDefined();
+      store.dispatch(uiSlice.actions.openVoices());
+      busyTable = {};
+      store.dispatch(analysisActions.clearActiveStream());
+
+      const merge = await offerMerge(store);
+      expect(merge).not.toHaveAttribute('aria-disabled');
+      expect(merge).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
+    });
+
+    it('a busy poll lists analysis while b1 is open, the user leaves for #/voices, b1 ends unpolled: Merge is enabled', async () => {
+      const store = makeGateStore();
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'voices_pending' }));
+      resetBookSlices(store.dispatch, 'b1');
+      store.dispatch(castSlice.actions.hydrateCharacters(b1OnDisk));
+      busyTable = { b1: ['analysis'] };
+      /* Not awaited: the poll keeps asking while b1 is on stage and gated. */
+      void store.dispatch(pollBookBusy('b1'));
+      await waitFor(() => expect(store.getState().bookBusy.busyByBook.b1).toEqual(['analysis']));
+      store.dispatch(uiSlice.actions.openVoices());
+      /* The run ends on the server; nothing polls b1 off-stage, so the cache stays stale. */
+      busyTable = {};
+
+      const merge = await offerMerge(store);
+      expect(store.getState().bookBusy.busyByBook.b1).toEqual(['analysis']);
+      expect(merge).not.toHaveAttribute('aria-disabled');
+      expect(merge).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
+    });
+
+    it('a 409 book_busy for b1 on #/voices toasts, leaves no latch, and Merge works once b1 ends', async () => {
+      const store = makeGateStore();
+      store.dispatch(uiSlice.actions.openVoices());
+      busyTable = { b1: ['analysis'] };
+      mergeCharactersMock.mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'book_busy' }));
+
+      const merge = await offerMerge(store);
+      fireEvent.click(merge);
+      await waitFor(() =>
+        expect(store.getState().notifications.toasts.map((t) => t.dedupeKey)).toContain('cast-read-only'),
+      );
+      /* The run ends on the server; the user retries. */
+      busyTable = {};
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(store.getState().cast.analysisEra?.b1).toBeUndefined();
+      const again = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
+      expect(again).not.toHaveAttribute('aria-disabled');
+      expect(again).not.toHaveAttribute('title', expect.stringMatching(/paused/i));
+
+      mergeCharactersMock.mockResolvedValueOnce({ characters: b1OnDisk.filter((c) => c.id !== 'wren') });
+      fireEvent.click(again);
+      await waitFor(() => expect(mergeCharactersMock).toHaveBeenCalledTimes(2));
+    });
   });
 });
 
@@ -2646,5 +2882,71 @@ describe('#1866 — the rollup empty state vs. the facet rows', () => {
     expect(screen.queryByRole('group', { name: 'Filter by emotion variants' })).toBeNull();
     expect(screen.queryByText('No voices match this filter')).toBeNull();
     expect(screen.getByText('Preset')).toBeInTheDocument();
+  });
+});
+
+/* Plan 291 (#4031), Task 12 — read-only cast: Voices shows the paused-edits
+   banner and disables Compare (its modal writes the open book's cast slice);
+   rebaseline and the other route-backed controls stay live. UX only: the
+   persistence middleware's catch-all is the guard. */
+describe('the banner shows on the four surfaces while read-only and not otherwise', () => {
+  function renderPaused(readOnly: boolean) {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    if (readOnly) {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot({ bookId: 'b1', manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' } as never));
+    }
+    render(
+      <Provider store={store}>
+        <LibraryView library={library} />
+      </Provider>,
+    );
+    return store;
+  }
+  const pickCard = (name: string) =>
+    fireEvent.click(
+      screen.getByText(name).closest('div.group')!.querySelector('[aria-label="Select voice for compare"]')!,
+    );
+
+  it('Voices: the banner is a status region while read-only and absent otherwise', () => {
+    renderPaused(true);
+    const banner = screen.getByTestId('cast-edits-paused-banner');
+    /* announced by the one app-level region in Layout, not by a surface */
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(banner).toHaveTextContent('Re-analysis running — cast edits are paused');
+  });
+
+  it('Voices: no banner when the cast is editable', () => {
+    renderPaused(false);
+    expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
+  });
+
+  it('every listed client-slice control is disabled; every listed route control stays enabled', () => {
+    renderPaused(true);
+    pickCard('Narrator');
+    pickCard('Oduvan');
+    /* Compare saves through api.seriesPatchCharacter (a route), so it is live */
+    const compare = screen.getByRole('button', { name: 'Compare' });
+    expect(compare).not.toHaveAttribute('aria-disabled');
+    expect(compare).toBeEnabled();
+    expect(compare.className).toContain('min-h-[44px]');
+    fireEvent.click(compare);
+    expect(screen.getByText('Compare cast members')).toBeInTheDocument();
+    /* route-backed: rebaseline saves through its own route */
+    const rebaseline = screen.getByTestId('open-rebaseline');
+    expect(rebaseline).not.toHaveAttribute('aria-disabled');
+    expect(rebaseline).not.toBeDisabled();
+  });
+
+  it('Voices: Compare opens its modal when the cast is editable', () => {
+    renderPaused(false);
+    pickCard('Narrator');
+    pickCard('Oduvan');
+    const compare = screen.getByRole('button', { name: 'Compare' });
+    expect(compare).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(compare);
+    expect(screen.getByText('Compare cast members')).toBeInTheDocument();
   });
 });

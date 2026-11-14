@@ -87,6 +87,17 @@ export async function stampVariantBaseRev(variantKey: string, baseRev: string | 
   });
 }
 
+/** A voice family file was renamed or copied onto `key` (a promote, a library
+    save, a separation copy): point the `voiceId` the sidecar wrote into its json at
+    the key it now lives at. Leaves a json with no `voiceId` field, or an absent one,
+    untouched. Best-effort for the caller: nothing reads the field. */
+export async function stampKeyVoiceId(key: string): Promise<void> {
+  const path = qwenVoiceSidecarPath(key);
+  const json = await readJson<Record<string, unknown>>(path);
+  if (!json || typeof json.voiceId !== 'string' || json.voiceId === key) return;
+  await writeJsonAtomic(path, { ...json, voiceId: key });
+}
+
 interface VariantRow {
   id?: string;
   voiceId?: string | null;

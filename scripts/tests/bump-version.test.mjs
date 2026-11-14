@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit, releaseNextSteps } from '../bump-version.mjs';
 import { scrubGitEnv, scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -1440,4 +1440,120 @@ test('bump-version refuses to cut without notes (no placeholder by default)', ()
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// Release-body size guard — GitHub rejects a release body over 125,000
+// characters only at the final publish step, after the tag is pushed. The
+// --notes-file becomes that body, so bump-version refuses before any mutation.
+test('bump-version refuses an over-limit --notes-file, even with --force, before any mutation', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const notes = resolve(tmpdir(), `bump-notes-big-${process.pid}-${Date.now()}.md`);
+    writeFileSync(notes, `# v1.0.1\n\nFixes:\n- the bug\n${'x'.repeat(125000)}\n`);
+    const headBefore = gitExec(['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+    const out = runBump(dir, [
+      '--level',
+      'patch',
+      '--notes-file',
+      notes,
+      '--force',
+      '--allow-placeholder',
+      '--skip-cross-os',
+    ]);
+    rmSync(notes, { force: true });
+    assert.notEqual(out.status, 0);
+    assert.match(out.stderr, /125000-character limit/);
+    // "Before any mutation": no tag, no new commit, version files untouched.
+    assert.equal(gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim(), '');
+    assert.equal(gitExec(['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }), headBefore);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.0');
+    assert.equal(readVersion(dir, 'server/package.json'), '1.0.0');
+    assert.equal(readVersion(dir, 'package-lock.json'), '1.0.0');
+    assert.equal(readVersion(dir, 'server/package-lock.json'), '1.0.0');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Running from a subdirectory (`cd server && node ../scripts/bump-version.mjs`)
+// without --notes-file: the default notes file must be found relative to the
+// repo root, not the cwd — it used to resolve to null and crash with
+// ERR_INVALID_ARG_TYPE.
+test('bump-version run from a subdirectory finds the default notes file (no crash)', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'), { recursive: true });
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.1\n\n- the fix\n');
+    const out = spawnSync(
+      'node',
+      [resolve(dir, 'scripts', 'bump-version.mjs'), '--level', 'patch', '--dry-run', '--skip-cross-os'],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv(), windowsHide: true },
+    );
+    assert.doesNotMatch(out.stderr, /ERR_INVALID_ARG_TYPE/);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /release-notes-next\.md/);
+    // The operator-facing label stays repo-relative, not an absolute path.
+    assert.match(out.stdout, /\(annotation from docs\/release-notes-next\.md\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// An EXPLICIT `--notes-file docs/release-notes-next.md` from a subdirectory names
+// <cwd>/docs/release-notes-next.md, not the root default. It must not be swapped
+// for the root file (which skipped the #2170 divergence guard with no warning);
+// spelled `./docs/...` it already warned, so the bare spelling must too.
+test('bump-version: explicit --notes-file docs/release-notes-next.md from a subdirectory is not swapped for the root file', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    mkdirSync(resolve(dir, 'docs'), { recursive: true });
+    writeFileSync(resolve(dir, 'docs', 'release-notes-next.md'), '# v1.0.1\n\nFixes:\n- the ROOT file.\n');
+    mkdirSync(resolve(dir, 'server', 'docs'), { recursive: true });
+    writeFileSync(
+      resolve(dir, 'server', 'docs', 'release-notes-next.md'),
+      '# v1.0.1\n\nFixes:\n- a DIFFERENT subdirectory file.\n',
+    );
+    const out = spawnSync(
+      'node',
+      [
+        resolve(dir, 'scripts', 'bump-version.mjs'),
+        '--level', 'patch', '--dry-run', '--skip-cross-os',
+        '--notes-file', 'docs/release-notes-next.md',
+      ],
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv(), windowsHide: true },
+    );
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    assert.match(out.stdout, /\[DRY-RUN\]\[WARN\].*disagree after normalising/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- release next-steps text (#4120) -----------------------------------------
+// `main`'s ruleset rejects a direct push, so the printed procedure must route
+// the bump commit through a PR and push the tag only after it has merged.
+
+test('releaseNextSteps: routes the bump through a chore/bump-vX.Y.Z PR, then the tag', () => {
+  const text = releaseNextSteps('main', 'v9.9.9').join('\n');
+  assert.doesNotMatch(text, /git push origin main/);
+  assert.match(text, /git push origin HEAD:refs\/heads\/chore\/bump-v9\.9\.9/);
+  assert.match(text, /gh pr create/);
+  assert.match(text, /merge commit/i);
+  // pr-issue-link.yml is a required check, and `gh pr create` needs a body
+  // when it is not run interactively: file the issue first, then link it.
+  assert.match(text, /gh issue create --title "Cut v9\.9\.9" .*--label type:chore --label area:ops/);
+  assert.match(text, /gh pr create .*--body "Closes #<issue>"/);
+  assert.ok(
+    text.indexOf('gh issue create') < text.indexOf('gh pr create'),
+    'the issue must be filed before the PR that closes it',
+  );
+  assert.match(text, /git rev-parse "v9\.9\.9\^\{commit\}"/);
+  assert.match(text, /merge-base --is-ancestor/);
+  assert.match(text, /git pull --ff-only/);
+  assert.match(text, /release\.yml/);
+  // the tag push comes after the merge and the verification, not before
+  const tagPush = text.indexOf('git push origin v9.9.9');
+  assert.ok(tagPush > 0, 'tag push step missing');
+  assert.ok(tagPush > text.indexOf('rev-parse'));
+  assert.ok(tagPush > text.search(/merge commit/i));
 });

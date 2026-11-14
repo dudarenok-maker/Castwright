@@ -372,6 +372,37 @@ vi.mock('../store/analysis-cache.js', async () => {
     hasCurrentTake: actual.hasCurrentTake,
     analysisCompleteFor: actual.analysisCompleteFor,
     reachedConfirm: actual.reachedConfirm,
+    /* plan 291: the run classifies the cache and makes its first (version-2) write
+       and the resume-shrink stage1 write through the mutate seam. */
+    ANALYSIS_CACHE_VERSION: actual.ANALYSIS_CACHE_VERSION,
+    classifyAnalysisCache: actual.classifyAnalysisCache,
+    mutateAnalysisCache: async (
+      id: string,
+      patch: {
+        createIfAbsent?: true;
+        version?: number;
+        stage1?: unknown;
+        chapters?: Record<number, unknown>;
+        fields?: Record<string, unknown>;
+        transform?: (c: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>;
+      },
+    ) => {
+      const existing = mem.get(id) as Record<string, unknown> | undefined;
+      if (!existing && !patch.createIfAbsent) return null;
+      /* Task 19: the main job's per-chapter saves are patches too - a take, the
+         failure/pending fields, and a transform. */
+      const next = {
+        chapters: {},
+        ...existing,
+        ...(patch.version !== undefined ? { version: patch.version } : {}),
+        ...(patch.stage1 ? { stage1: patch.stage1 } : {}),
+        ...(patch.chapters ? { chapters: { ...(existing?.chapters as object), ...patch.chapters } } : {}),
+        ...patch.fields,
+      };
+      const out = patch.transform ? await patch.transform(next) : next;
+      mem.set(id, out);
+      return out;
+    },
     loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
     saveAnalysisCache: async (id: string, cache: unknown) => { mem.set(id, cache); },
     clearAnalysisCache: async (id: string) => { mem.delete(id); },
@@ -845,6 +876,7 @@ describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 287 T5)',
     /* A resume: chapter 1's cast failed on an earlier run (cast record, the `[]`
        marker, no take). */
     await saveAnalysisCache(manuscriptId, {
+      version: 2,
       chapters: {},
       chapterCast: { 1: [] },
       failedChapterIds: [1],
@@ -917,6 +949,7 @@ describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 287 T5)',
     const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
     /* A resume: chapters 1 and 2 had their cast fail on an earlier run. */
     await saveAnalysisCache(manuscriptId, {
+      version: 2,
       chapters: {},
       chapterCast: { 1: [], 2: [] },
       failedChapterIds: [1, 2],

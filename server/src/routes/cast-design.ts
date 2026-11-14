@@ -50,7 +50,16 @@ import {
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
-import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant } from './qwen-voice.js';
+import {
+  DesignSlotTakenError,
+  SeriesCloneRefusedError,
+  VARIANT_EMOTIONS,
+  designQwenVoiceForCharacter,
+  hasDeclineMarker,
+  persistEmotionVariant,
+  resolveVariantPersona,
+  seriesClonedOnRowsVoice,
+} from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
   applyOverrideToCastFiles,
@@ -58,6 +67,7 @@ import {
   hasClonedSlotAmongMatches,
 } from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
+import { isSeparatedVoice } from '../workspace/separated-voices.js';
 import { personaSharesGpu, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import {
   AnalysisAbortedError,
@@ -386,6 +396,7 @@ async function runDesignJob(
   modelKey: TtsModelKey,
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
+  castConfirmed: boolean,
 ): Promise<void> {
   /* Decided ONCE per job: the pre-pass and the per-character lazy-skip below must agree, or a
      mid-job flip leaves a persona-less character that neither of them records. */
@@ -417,13 +428,21 @@ async function runDesignJob(
      per-book `hasClonedSlotAmongMatches` call below when `seriesFilter` is
      absent — that scan is already onlyBookDir-restricted (fs-61) and cheap
      regardless of how many characters this loop visits. */
-  const seriesClonedVoiceIds = seriesFilter
-    ? await findClonedVoiceIdsAmongMatches(seriesFilter)
+  /* Review pass 5 (F8/C) -- a design in an unconfirmed book writes only that book, so a clone
+     (or an unreadable cast) on another book is not one it could touch: the scans cover this
+     book alone, decided once per job. */
+  const scanSeries = castConfirmed ? seriesFilter : undefined;
+  const seriesClonedVoiceIds = scanSeries
+    ? await findClonedVoiceIdsAmongMatches(scanSeries)
     : null;
-  const clonedOnLinkedBook = (character: CastCharacter): Promise<boolean> | boolean =>
-    seriesClonedVoiceIds
-      ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
-      : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
+  /* #4074 -- a row on a "Don't reuse"-separated uuid counts only the clones on rows of that
+     uuid (seriesClonedOnRowsVoice), which the precomputed per-voiceId set cannot answer. */
+  const clonedOnLinkedBook = async (character: CastCharacter): Promise<boolean> =>
+    character.voiceUuid && (await isSeparatedVoice(character.voiceUuid))
+      ? seriesClonedOnRowsVoice(character, scanSeries, job.bookDir)
+      : seriesClonedVoiceIds
+        ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
+        : hasClonedSlotAmongMatches(character.voiceId ?? character.id, scanSeries, undefined, job.bookDir);
 
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
@@ -464,8 +483,20 @@ async function runDesignJob(
          engine (coqui). The owner's decision (GATE 2 review): skip this
          character and report it — refusing the whole sweep would let one
          cloned character block designing the rest; retargeting is the
-         defect itself. */
-      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
+         defect itself.
+         #4074 exception: a row carrying a "Don't reuse" marker
+         (`declinedVoiceFrom`) may be moved onto a new voice uuid by the design
+         itself (after the render), so a clone on the voice it is leaving —
+         the declined book's — is not one this design could retarget. Only its
+         own slots are checked here; the series scan runs in the design's
+         landing (refuseIfSeriesCloned), after the uuid step and before
+         anything is written, scoped to the rows on the new uuid (#4069), and
+         reports through the same `clonedSkips` channel; the write-time check in
+         applyOverrideToCastFiles below stays as the residual-window backstop. */
+      if (
+        characterHasClonedSlot(character) ||
+        (!hasDeclineMarker(character) && (await clonedOnLinkedBook(character)))
+      ) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -546,7 +577,17 @@ async function runDesignJob(
          that card inside `withGpuLoad`, the exact plan-108 OOM this pre-pass was built to
          prevent. Skip without retrying — and without a second `character_failed` when the
          pre-pass already recorded one. */
-      let persona = (character.voiceStyle ?? '').trim();
+      let persona: string;
+      try {
+        /* A variant is designed from its base's persona: when the row records none,
+           the one the base design stored (same helper as the single route). */
+        persona = await resolveVariantPersona(character as CastCharacter, characterId, '', emotion);
+      } catch (e) {
+        const message = (e as Error).message || 'Persona unavailable.';
+        job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+        broadcast(job, { type: 'character_failed', characterId, name: character.name ?? characterId, errorReason: message });
+        continue;
+      }
       if (!persona) {
         if (sharesGpu) {
           /* Skip — the pre-pass owns shared-GPU persona-gen; retrying here while VoiceDesign loads
@@ -644,7 +685,7 @@ async function runDesignJob(
              applyOverrideToCastFiles/persistEmotionVariant — not escape the
              loop and halt the whole job on the first contended character
              (#3027 follow-up, N1). */
-          const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
+          const { voiceId, fellBackToDesignVoice, fallbackReason, seriesShared } = await designQwenVoiceForCharacter({
             bookId: job.bookId,
             bookDir: job.bookDir,
             seriesFilter,
@@ -656,6 +697,8 @@ async function runDesignJob(
             language,
             emotion,
             persistSlot: !emotion,
+            skipIfSlotted: !emotion,
+            refuseIfSeriesCloned: !emotion && hasDeclineMarker(character),
             signal: job.controller.signal,
           });
 
@@ -666,12 +709,21 @@ async function runDesignJob(
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            const { updated, skipped } = await applyOverrideToCastFiles(
+            /* F8 — not shared by the core (an unconfirmed book): this book only. */
+            const { updated, skipped, keptOwnSlot } = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
-              seriesFilter,
+              seriesShared ? seriesFilter : undefined,
               job.bookDir,
+              { bookDir: job.bookDir, characterId },
             );
+            /* #4031 -- a voice picked after the landing released its lock: the
+               override declined this row under the book's lock. */
+            if (keptOwnSlot) {
+              job.skipped += 1;
+              broadcast(job, { type: 'character_skipped', characterId });
+              break;
+            }
             /* Series-wide veto, mirroring the variant branch's own clone-skip
                reporting below: a cloned slot exists somewhere in the scope,
                caught fresh at write time (residual window after the upfront
@@ -694,7 +746,8 @@ async function runDesignJob(
           } else {
             /* Variant path — record the slot and propagate it across the
                series (linked cast), the same scope the base voice uses. */
-            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
+            /* F8 — not shared by the core (an unconfirmed book): this book only. */
+            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesShared ? seriesFilter : undefined);
             if (outcome === 'skippedClone') {
               job.skipped += 1;
               job.clonedSkips.push({ characterId, name: character.name ?? characterId });
@@ -716,6 +769,26 @@ async function runDesignJob(
           }
           break;
         } catch (e) {
+          /* #4031 -- a voice picked while the render ran, caught under the lock at the
+             landing: the same freshness skip as above, not a failure. */
+          if (e instanceof DesignSlotTakenError) {
+            job.skipped += 1;
+            broadcast(job, { type: 'character_skipped', characterId });
+            break;
+          }
+          /* #4074 -- the landing refused the design (a clone on a row of its new uuid)
+             before writing anything: the same skip as the early gate. */
+          if (e instanceof SeriesCloneRefusedError) {
+            job.skipped += 1;
+            job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+            broadcast(job, {
+              type: 'character_skipped',
+              characterId,
+              name: character.name ?? characterId,
+              reason: 'already_cloned',
+            });
+            break;
+          }
           const message = (e as Error).message || 'Voice design failed.';
           if (isSidecarRestartClass(e, message)) {
             /* Sidecar down/recycling/poison-restarting. Ride out the respawn
@@ -981,7 +1054,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     /* Sticky: keep running for a reload re-attach. */
   });
 
-  await runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
+  await runDesignJob(job, tasks, modelKey!, language, seriesFilter, located.state?.castConfirmed === true).catch((e) => {
     /* Defensive — the loop catches per-character; a throw here is unexpected.
        #2260 FINAL ROUND (B2) — curated all the same. The REACHABLE contention
        path in this route is per-character and already reports

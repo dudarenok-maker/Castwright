@@ -159,8 +159,8 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
     // dropSupersededIdsReclaimedByLiveCast, dropSupersededTargetsNoLongerLive,
     // forgetSupersededId, restoreSupersededId, rejectOrphanedId,
     // rejectOrphanedPair, unrejectOrphanedPair, undoRejectedPairs,
-    // stampRecordedAtSeqIfAbsent.
-    expect(SRC.match(WRITE_RE)?.length ?? 0).toBe(11);
+    // stampRecordedAtSeqIfAbsent, recordNotSamePerson (#4031).
+    expect(SRC.match(WRITE_RE)?.length ?? 0).toBe(12);
     // 9 raw regex matches, verified line-by-line (round-1 review, M5 —
     // corrects an earlier version of this comment that miscounted the
     // split): 5 REAL assignments, all inside retireCharacterId or

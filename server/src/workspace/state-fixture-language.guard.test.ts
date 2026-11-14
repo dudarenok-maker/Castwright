@@ -284,7 +284,6 @@ const DELIBERATE_WINDOW = 4000;
 const KNOWN_GAP: Record<string, number> = {
   'routes/analysis.test.ts': 13,
   'routes/analysis.live-id-retire-filter.test.ts': 1,
-  'routes/analysis.merge-base-detect.test.ts': 1,
   'routes/analysis.persist-block-degraded-history.test.ts': 3,
   'routes/analysis.persist-lock-timeout.test.ts': 1,
   'routes/analysis.rename-midrun.test.ts': 1,

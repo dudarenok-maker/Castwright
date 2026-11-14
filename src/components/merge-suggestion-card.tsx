@@ -4,6 +4,7 @@
    dismiss (Dismiss) so this component stays stateless. */
 
 import type { MergeSuggestion } from '../lib/api';
+import { pausedControlProps } from './cast-edits-paused-banner';
 
 interface Props {
   suggestion: MergeSuggestion;
@@ -13,6 +14,9 @@ interface Props {
   targetName: string;
   onMerge: () => Promise<void> | void;
   onDismiss: () => Promise<void> | void;
+  /** R57 — the cast is read-only (an analysis runs): the server refuses the accept
+      (R55), so Merge is disabled. Dismiss stays live. */
+  mergeDisabled?: boolean;
 }
 
 export function MergeSuggestionCard({
@@ -21,6 +25,7 @@ export function MergeSuggestionCard({
   targetName,
   onMerge,
   onDismiss,
+  mergeDisabled = false,
 }: Props) {
   return (
     <div
@@ -41,8 +46,11 @@ export function MergeSuggestionCard({
         <button
           type="button"
           data-testid="merge-suggestion-merge"
-          onClick={() => void onMerge()}
-          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold transition-colors"
+          onClick={() => {
+            if (!mergeDisabled) void onMerge();
+          }}
+          {...pausedControlProps(mergeDisabled)}
+          className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold transition-colors ${mergeDisabled ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           Merge
         </button>

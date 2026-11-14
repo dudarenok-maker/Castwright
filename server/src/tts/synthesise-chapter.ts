@@ -2286,6 +2286,7 @@ export async function synthesiseChapter(
                  call. Omitting the flag here would render a German book under
                  an English chapter title. */
               cloned: hasClonedProvenance(narratorChar, 'qwen'),
+              renderSynth: true,
               signal: sig,
             }),
           { signal: sig },
@@ -2548,6 +2549,7 @@ export async function synthesiseChapter(
               modelKey: route.modelKey,
               language: langCode,
               cloned,
+              renderSynth: true,
               signal: sig,
             }),
           {
@@ -2626,6 +2628,7 @@ export async function synthesiseChapter(
                  `cloned` above decides which items actually put it on the
                  wire. */
               language: langCode,
+              renderSynth: true,
               signal: sig,
             }),
           {

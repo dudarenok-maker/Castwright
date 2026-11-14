@@ -47,6 +47,7 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { distinctDriftChapterCount } from '../store/revisions-slice';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis } from '../store/cast-gate';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -63,6 +64,11 @@ import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
+import {
+  CastEditsPausedBanner,
+  pausedControlProps,
+  useCastReadOnly,
+} from '../components/cast-edits-paused-banner';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
 import { DesignScopePicker } from '../components/design-scope-picker';
 import { MergeSuggestionCard } from '../components/merge-suggestion-card';
@@ -166,12 +172,15 @@ function OrphanRejectedChips({
   targets,
   characters,
   busyId,
+  readOnly,
   onUndo,
 }: {
   orphanedId: string;
   targets: string[] | undefined;
   characters: Character[];
   busyId: string | null;
+  /** R57 — the cast is read-only: the undo (DELETE reject-orphan-match) is refused (R55). */
+  readOnly: boolean;
   onUndo: (orphanedId: string, characterId: string) => void;
 }) {
   /* Finding B (#2133 comment) — `rejectedPairsGoverning`'s rule 1 has no
@@ -199,7 +208,8 @@ function OrphanRejectedChips({
               disabled={busyId === orphanedId}
               onClick={() => onUndo(orphanedId, targetId)}
               aria-label={`Undo "not ${name}" for "${orphanedId}"`}
-              className="min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 underline decoration-dotted disabled:opacity-40 disabled:cursor-not-allowed"
+              {...pausedControlProps(readOnly)}
+              className={`min-h-[44px] fine-pointer:min-h-0 min-w-[44px] fine-pointer:min-w-0 underline decoration-dotted disabled:opacity-40 disabled:cursor-not-allowed ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
               Undo
             </button>
@@ -238,6 +248,7 @@ function AutoReconciledSection({
   showTopBorder,
   characters,
   busyId,
+  readOnly,
   onReject,
   onUndo,
 }: {
@@ -249,6 +260,8 @@ function AutoReconciledSection({
   showTopBorder: boolean;
   characters: Character[];
   busyId: string | null;
+  /** R57 — the cast is read-only: reject and undo are refused by the server (R55). */
+  readOnly: boolean;
   onReject: (orphanedId: string, targetCharacterId: string) => void;
   onUndo: (orphanedId: string, characterId: string) => void;
 }) {
@@ -328,7 +341,8 @@ function AutoReconciledSection({
                   type="button"
                   disabled={busyId === orphanedId || !info.resolvedCharacterId}
                   onClick={() => info.resolvedCharacterId && onReject(orphanedId, info.resolvedCharacterId)}
-                  className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                  {...pausedControlProps(readOnly)}
+                  className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
                   Not the same character
                 </button>
@@ -337,6 +351,7 @@ function AutoReconciledSection({
                   targets={info.rejectedAgainst}
                   characters={characters}
                   busyId={busyId}
+                  readOnly={readOnly}
                   onUndo={onUndo}
                 />
               </li>
@@ -545,6 +560,11 @@ export function CastView({
      source of truth for ttsModelKey after a bulk pin or reset. */
   const storedTiers = useAppSelector(selectCastTierByCharacterId);
   const dispatch = useAppDispatch();
+  /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: what
+     writes the cast slice (voice assign, compare) is disabled; the route-backed
+     controls stay live, except the cast-identity ones the server refuses mid-run
+     (R55): the merge-suggestion accept and the orphan link / reject / undo (R57). */
+  const readOnly = useCastReadOnly();
   /* #2040 Task 17 — "not the same character" for either banner section.
      targetCharacterId is the resolvedCharacterId for an auto-reconciled row,
      or the user-picked live candidate for a needs-decision row. Writes the
@@ -557,7 +577,7 @@ export function CastView({
      as-is; the matcher it feeds ignores bookId, so a same-book edge binds
      correctly even though the action was designed for cross-book pairs). */
   async function handleRejectOrphanMatch(orphanedId: string, targetCharacterId: string) {
-    if (!bookId || !targetCharacterId) return;
+    if (!bookId || !targetCharacterId || readOnly) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       const res = await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
@@ -587,6 +607,8 @@ export function CastView({
         }),
       );
     } catch (err) {
+      /* R57 — refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return;
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
         notificationsActions.pushToast({
@@ -711,6 +733,8 @@ export function CastView({
       );
       return true;
     } catch (err) {
+      /* R57 — refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return false;
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
         notificationsActions.pushToast({
@@ -735,7 +759,7 @@ export function CastView({
      busy-flag span covers the whole undo+link sequence (F5) rather than
      dropping to `null` in between. */
   async function handleUndoOrphanRejection(orphanedId: string, targetCharacterId: string) {
-    if (!bookId) return;
+    if (!bookId || readOnly) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       await performUndoOrphanRejection(orphanedId, targetCharacterId);
@@ -769,7 +793,7 @@ export function CastView({
      flag for the WHOLE undo+link span itself, and aborts outright if the
      undo failed (see performUndoOrphanRejection's own doc comment). */
   async function handleLinkOrphanMatch(orphanedId: string, targetCharacterId: string) {
-    if (!bookId || !targetCharacterId) return;
+    if (!bookId || !targetCharacterId || readOnly) return;
     setOrphanRejectBusyId(orphanedId);
     try {
       const info = orphanedCharacterFallbacks[orphanedId];
@@ -813,6 +837,8 @@ export function CastView({
         }),
       );
     } catch (err) {
+      /* R57 — refused while an analysis runs (R55): the read-only path. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return;
       const msg = err instanceof Error ? err.message : String(err);
       dispatch(
         notificationsActions.pushToast({
@@ -998,7 +1024,7 @@ export function CastView({
       await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, 'qwen3-tts-1.7b')));
       setPinDialogOpen(false);
       qwenMembers.forEach((c) =>
-        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' })),
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' }, { routeBacked: true })),
       );
     } catch {
       dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't pin quality tier. Please try again." }));
@@ -1012,7 +1038,7 @@ export function CastView({
       await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, null)));
       setResetDialogOpen(false);
       qwenMembers.forEach((c) =>
-        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null })),
+        dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null }, { routeBacked: true })),
       );
     } catch {
       dispatch(notificationsActions.pushToast({ kind: 'error', message: "Couldn't reset quality tier. Please try again." }));
@@ -1241,15 +1267,41 @@ export function CastView({
 
   /* Tier-2b merge-suggestion handlers. Accept folds the source character
      into the target via the accept route (merge + dismiss in one call),
-     then removes the card and optimistically removes the source from the
-     local roster. Dismiss drops the card without merging. */
+     then removes the card and mirrors the route's merged cast. Dismiss drops
+     the card without merging. */
   async function handleMergeSuggestion(sourceId: string, targetId: string) {
-    if (!bookId) return;
-    await api.acceptMergeSuggestion(bookId, sourceId, targetId);
+    /* R57 — the server refuses an accept while an analysis runs (R55). */
+    if (!bookId || readOnly) return;
+    let merged: Character[] | undefined;
+    try {
+      merged = (await api.acceptMergeSuggestion(bookId, sourceId, targetId))?.characters;
+    } catch (err) {
+      /* R55 — refused while an analysis runs: the read-only path, and keep the card. */
+      if (dispatch(handleCastIdentityBusy(bookId, err))) return;
+      /* Plan 291 (C3) — a failed accept may have finished its other writes:
+         re-read the cast, and keep the card. */
+      console.error('[cast] merge-suggestion accept failed', err);
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: 'Couldn’t merge those characters. Try again.',
+          dedupeKey: `merge-suggestion-error:${bookId}:${sourceId}:${targetId}`,
+        }),
+      );
+      void dispatch(rehydrateCastAfterAnalysis(bookId));
+      return;
+    }
     setMergeSuggestions((prev) =>
       prev.filter((s) => !(s.sourceId === sourceId && s.targetId === targetId)),
     );
-    setCharacters((prev) => prev.filter((c) => c.id !== sourceId));
+    /* The accept route already saved the fold: mirror its merged cast with the
+       unpersisted `applyMerge`, as the manual merge does (#4031 M7). A persisted
+       `setCharacters` from the pre-request roster sent a stale whole-slice PUT that
+       lacked the merge's aliases and `notLinkedTo` union. Mock mode has no cast to
+       return, so it falls back to dropping the source locally (still unpersisted). */
+    dispatch(
+      castActions.applyMerge({ characters: merged ?? characters.filter((c) => c.id !== sourceId) }),
+    );
   }
 
   async function handleDismissSuggestion(sourceId: string, targetId: string) {
@@ -1270,6 +1322,11 @@ export function CastView({
 
   function handleDrop(charId: string) {
     if (!draggingVoiceId) return;
+    if (readOnly) {
+      setDraggingVoiceId(null);
+      setDropTargetCharId(null);
+      return;
+    }
     const voice = findVoice(draggingVoiceId);
     if (!voice) return;
     applyVoiceToCharacter(charId, voice);
@@ -1282,6 +1339,10 @@ export function CastView({
      as handleDrop, then clears assignment mode. */
   function handleTapAssignTarget(charId: string) {
     if (!assigningVoice) return;
+    if (readOnly) {
+      setAssigningVoice(null);
+      return;
+    }
     applyVoiceToCharacter(charId, assigningVoice);
     setAssigningVoice(null);
   }
@@ -1290,6 +1351,7 @@ export function CastView({
      pill on the active voice cancels (sets back to null); tapping it on
      a different voice swaps to that voice. */
   function handleTapAssignToggle(voice: Voice) {
+    if (readOnly) return;
     setAssigningVoice((prev) =>
       (prev?.familyKey ?? prev?.id) === (voice.familyKey ?? voice.id) ? null : voice,
     );
@@ -1308,6 +1370,7 @@ export function CastView({
     >
       <div className="lg:col-span-full -mb-2 space-y-2">
         <QwenStatusNotice />
+        <CastEditsPausedBanner />
         <StaleAudioBanner />
       </div>
       {/* Plan 81 wave 4 — sticky assignment-mode banner. Visible whenever
@@ -1649,7 +1712,8 @@ export function CastView({
                             (info.rejectedAgainst?.includes(candidateId) ?? false)
                           }
                           onClick={() => handleRejectOrphanMatch(orphanedId, candidateId)}
-                          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold"
+                          {...pausedControlProps(readOnly)}
+                          className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-amber-100 hover:bg-amber-200 disabled:opacity-40 disabled:cursor-not-allowed text-amber-900 text-xs font-semibold ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           Not the same character
                         </button>
@@ -1672,7 +1736,8 @@ export function CastView({
                           }
                           title={linkDisabledReason}
                           onClick={() => handleLinkOrphanMatch(orphanedId, candidateId)}
-                          className="min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold"
+                          {...pausedControlProps(readOnly)}
+                          className={`min-h-[44px] fine-pointer:min-h-0 px-3 py-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed text-emerald-900 text-xs font-semibold ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           Link to this character
                         </button>
@@ -1681,6 +1746,7 @@ export function CastView({
                           targets={info.rejectedAgainst}
                           characters={characters}
                           busyId={orphanRejectBusyId}
+                          readOnly={readOnly}
                           onUndo={handleUndoOrphanRejection}
                         />
                       </li>
@@ -1698,6 +1764,7 @@ export function CastView({
               showTopBorder={needsDecisionOrphans.length > 0}
               characters={characters}
               busyId={orphanRejectBusyId}
+              readOnly={readOnly}
               onReject={handleRejectOrphanMatch}
               onUndo={handleUndoOrphanRejection}
             />
@@ -1710,6 +1777,7 @@ export function CastView({
               showTopBorder={needsDecisionOrphans.length > 0 || autoReconciledCurrent.length > 0}
               characters={characters}
               busyId={orphanRejectBusyId}
+              readOnly={readOnly}
               onReject={handleRejectOrphanMatch}
               onUndo={handleUndoOrphanRejection}
             />
@@ -1759,6 +1827,7 @@ export function CastView({
                   sourceName={sourceName}
                   targetName={targetName}
                   onMerge={() => handleMergeSuggestion(s.sourceId, s.targetId)}
+                  mergeDisabled={readOnly}
                   onDismiss={() => handleDismissSuggestion(s.sourceId, s.targetId)}
                 />
               );
@@ -2256,6 +2325,7 @@ export function CastView({
               <span className="w-px h-5 bg-canvas/20 hidden sm:inline-block" />
               <button
                 onClick={() => {
+                  if (readOnly) return;
                   if (selectedCharIds.length === 2)
                     setCompareIds([selectedCharIds[0], selectedCharIds[1]]);
                 }}
@@ -2265,7 +2335,8 @@ export function CastView({
                     ? 'Compare these two cast members'
                     : 'Select exactly 2 to compare'
                 }
-                className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                {...pausedControlProps(readOnly)}
+                className={`min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed ${readOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 Compare
               </button>
@@ -2321,6 +2392,7 @@ export function CastView({
             }}
             onTapAssign={handleTapAssignToggle}
             assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
+            assignDisabled={readOnly}
             bookLanguage={bookLanguage}
             bookId={bookId ?? undefined}
             ttsModelKey={ttsModelKey}
@@ -2394,6 +2466,7 @@ export function CastView({
                   }
                 }}
                 assigningVoiceId={assigningVoice?.familyKey ?? assigningVoice?.id ?? null}
+                assignDisabled={readOnly}
                 bookLanguage={bookLanguage}
                 bookId={bookId ?? undefined}
                 ttsModelKey={ttsModelKey}

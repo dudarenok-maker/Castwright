@@ -4,8 +4,10 @@
  * best-effort handlers in the cast-identity path (see the report on PR #2284
  * for the current tally — round 2 called it seven, round 4 demoted
  * `reconcileRejectEdgesOnDisk` to a deliberate swallow, and #2295 added the
- * two authoritative `writeChecked` calls, so it is eight and this file's
- * handler is one of them). All of them were scoped for a DISK fault —
+ * two authoritative `writeChecked` calls, so it was eight and this file's
+ * handler is one of them; plan 291 deleted both `writeChecked` calls, and
+ * CLAUDE.md's cast.json lock rules hold the current list). All of them were
+ * scoped for a DISK fault —
  * EPERM/ENOSPC/an AV lock — on the
  * reasoning that "the side-table is never authoritative for identity, so
  * losing an entry degrades to today's behaviour". That reasoning is sound for
@@ -79,13 +81,12 @@ describe('clearNotLinkedEdgesForDroppedRejections — lock timeout vs disk fault
     lock.toThrow = eperm;
 
     /* Resolves — the retirement that called this must not fail because a
-       cosmetic edge cleanup hit a locked file. #2694 — the function now
-       returns the written payload (or null) rather than void, so a
-       swallowed failure resolves to `null` ("nothing was written"), not
-       `undefined`. */
+       cosmetic edge cleanup hit a locked file. Plan 291 (#4031) deleted the
+       merge base the #2694 payload return fed, so the function returns void
+       again. */
     await expect(
       clearNotLinkedEdgesForDroppedRejections(BOOK_DIR, BOOK_ID, DROPPED),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('[not-linked-edges]');
@@ -100,7 +101,7 @@ describe('clearNotLinkedEdgesForDroppedRejections — lock timeout vs disk fault
 
     await expect(
       clearNotLinkedEdgesForDroppedRejections(BOOK_DIR, BOOK_ID, DROPPED),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });

@@ -649,11 +649,14 @@ Design rationale:
   means "look at the holder first, then the rules". **WHICH WRITE the timeout
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
-  cover an authoritative write and a best-effort one at once). TWELVE sites fail
-  loud *by rethrowing into their job's or request's terminal outcome*: the six
-  best-effort `catch` blocks around identity writes, plus the two
-  AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
-  each wrapped at its own call rather than at the enclosing
+  cover an authoritative write and a best-effort one at once). NINE sites fail
+  loud *by rethrowing into their job's or request's terminal outcome*: the four
+  `catch` blocks around identity writes (three best-effort; `cast-merge.ts`'s
+  parks every write error since plan 291; plan 291 folded the
+  main-job and subset-job pairs in `analysis.ts` into two shared ones, the
+  run-start heal and the persist's retirements), plus the ONE
+  AUTHORITATIVE `persistPlannedCast` call (`runPlannedPersist`, shared by both
+  analysis persist blocks), wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
   journals, which are lineage and must stay best-effort — plus four
   `state.json` sites under the `state-json` leaf lock (#3625): finalize's duration/model/render stamp
@@ -666,12 +669,13 @@ Design rationale:
   write from ever being the silent kind. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. TWELVE handlers swallow it
+  `cast.json` and `state.json` never written at all. TEN handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
-  re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
-  subset), which a final write in the same run clobbers, so a timeout there
+  re-heals; the one plan-snapshot handler (`snapshotPlannedRoster`, shared by
+  both jobs; plan 291 retired the three interim cast.json write handlers it
+  replaces), which the same run's persist re-applies, so a timeout there
   diverges nothing (#2292); `applyReview`
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
@@ -692,7 +696,7 @@ Design rationale:
   uuids still serve the response and re-mint next time; `scan.ts`'s two lazy
   migrations (uuid mint and segments backfill), which the next scan repeats;
   and the cover background-fetch hook (`cover/store.ts`), which must never fail
-  an import. A THIRTEENTH site fails loud in a
+  an import. A TENTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
@@ -719,12 +723,13 @@ Design rationale:
   too; ENOSPC / EACCES / EROFS get a sentence that does not promise a retry)
   and is what the whole-request handlers in `book-state`,
   `chapters-restructure`, `cover`, `voice-library`, `voices`, `import`,
-  `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link` and
+  `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link`,
+  `cast-merge` and `cast-merge-suggestions` (its dismiss and accept) and
   `voice-match` (and `voice-style`'s single generate and the per-item reason in
   `cast-design`'s job) whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-one call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-five call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -732,14 +737,19 @@ Design rationale:
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
-  `cast-decline-voice-link`, `voice-match`),
-  alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
-  merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
+  `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
+  `cast-merge`, `voice-match`, `failure-taxonomy` (the persist-failure
+  sentence of `AnalysisPersistError`)),
+  alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the
+  merge-accept route's outer catch and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since
   plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  `detail` blob (that blob renders in the UI's collapsible), and which also
+  curates an `AnalysisPersistError` (an authoritative persist write that failed
+  for a non-lock reason, parked and rethrown by both jobs, #4031) to a fixed
+  prefix plus the `requestFailureMessageFs` sentence, again with no `detail`. A separate,
   lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
   leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
   so the seams above still recognise it. The raw error goes
@@ -759,13 +769,14 @@ Design rationale:
   deferred rethrow binds the CALLER too**: by the time it escapes, the work is
   applied, so a caller with follow-up writes of its own must finish them before
   letting it surface (`cast-merge-suggestions.ts`'s accept route and its
-  `dismissSuggestion`) — otherwise the skipped write just moves up one frame.
+  `removeSuggestionPairsLocked` follow-up) — otherwise the skipped write just moves up one frame.
   `server/src/workspace/cast-lock.guard.test.ts`
-  fails the build on a new unlocked site. Two allowlisted exceptions, each
-  keyed on file **and** count so a further unlocked write in either still
-  fails: `analysis.ts`'s five merge-base writes (deferred to #2015), and
+  fails the build on a new unlocked site. One allowlisted exception, keyed on
+  file **and** count so a further unlocked write in it still fails:
   `voice-override-linked.ts`'s one write, which **is** locked but through a
-  helper the deliberately-syntactic scan cannot follow. The guard is
+  helper the deliberately-syntactic scan cannot follow (`analysis.ts`'s five
+  merge-base writes are gone: every analysis-job cast.json write sits inside
+  `withCastLock`, the plan writes in `workspace/analysis-cast-io.ts`, plan 291). The guard is
   call-graph-blind by design — a new *unlocked* caller of an already-locked
   helper adds no occurrence text and passes; its header lists that and the
   other blind spots.
@@ -775,7 +786,10 @@ Design rationale:
   records the old id before the new one takes over; any path that joins on a
   `characterId` from manuscript attribution or a frozen render resolves it
   through `buildCastResolver` (`server/src/store/cast-resolve.ts`) rather than
-  a raw `.get()`. Don't add a second id matcher or a second id-history field.
+  a raw `.get()`. Don't add a second id matcher or a second id-history field. A
+  catch-all bucket's history entry (a merge of `unknown-male` / `unknown-female`) is
+  render-only: `followableHistory()` keeps it out of every matching, planning and
+  retirement read.
 
 ## Testing discipline (REQUIRED for every change)
 
@@ -889,7 +903,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, per-group counts, oldest debt, group/blocked/unconfirmed tallies) are **generated** by `npm run register:build` from the markdown register — they are not hand-edited. `npm run check:onbox-register` validates row IDs for uniqueness, that each group's `next-id` marker sits at or above the shared allocation floor (the floor gates the next id a group may mint, not the ids already in use) AND that every row ID in the group sits strictly below that same `next-id` marker (a row at or above it means the marker itself is stale), confirms each group has both a glance-table row and a body section, and that each group's table count matches its body rows — **not** the summary strip totals, which `register:build` generates. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact. It detects structural drift (rows live vs. registered) and content drift (per-row body text hash changes from baseline). It fails when the live page has rows your register lacks AND `origin/main` still has them (another lane ahead of you); when your register has rows the live page doesn't yet, that's the normal reason you're publishing, not a defect — qualified further by #2199 and #3529 (a live-page row `origin/main`'s own copy also lacks isn't reported when `origin/main`'s register has ever carried that ID on `main`'s own first-parent line (a row a merged PR's branch minted and renumbered before merging does not count; two rare cases still read as a discharge: a colliding ID that reached `main` and was discharged there while the other lane's copy is still live, and a row `main` merged and then reverted while a re-landing lane's copy is live, until that re-land merges), or when it is listed in the register's "Retired carried rows" record and `gh` confirms its PR closed unmerged and owning the row (the commit that introduced the live row, matched by its ID and title and never one `main` already contains, is one of that PR's own commits; branch names play no part), a mismatch, an undeterminable owner or a gh error failing closed — when `gh` is unavailable the entry is accepted with a warning instead; otherwise it is decided by who published the page: when the commit that stamped its `data-publish-id` (the oldest commit that introduced it) is on `origin/main` or in your own history and its live view carried the row, it is a discharge or your own dropped row and isn't reported; otherwise it is an unmerged lane's row and fails as `unmerged-lane-row`, naming its owner, and a publish id in no fetched history fails as `unknown-provenance`. A row ID another lane used for a different row — live, or already on `origin/main` and absent from your merge-base — fails as `row-id-collision`. To publish a union carrying another lane's rows, build it with `--build-union <out>` and publish that file: `--publishing <file>` accepts only that exact union, your tracked rows plus the carried rows' live blocks with the derived figures regenerated) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, per-group counts, oldest debt, group/blocked/unconfirmed tallies) are **generated** by `npm run register:build` from the markdown register — they are not hand-edited. `npm run check:onbox-register` validates row IDs for uniqueness, that each group's `next-id` marker sits at or above the shared allocation floor (the floor gates the next id a group may mint, not the ids already in use) AND that every row ID in the group sits strictly below that same `next-id` marker (a row at or above it means the marker itself is stale), confirms each group has both a glance-table row and a body section, and that each group's table count matches its body rows — **not** the summary strip totals, which `register:build` generates. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact. It detects structural drift (rows live vs. registered) and content drift (per-row body text hash changes from baseline; a published body equal to an OLDER version of that row on `origin/main`'s recent first-parent history is treated as behind main (#4105) — unless main's current body of the row also appears at or before the newest commit carrying the published body, in which case main went back to that body (v1 → v2 → v1 against a live v2) and it is a revert. Behind main passes with a non-failing advisory naming the commit the live body matches and the commits that changed the row since. A revert, a body only an unmerged lane carried, and a row that some version in the window cannot vouch for (its extraction error names the row, or names none and the row is missing from that version; a deleted file counts as "row absent", not unreadable) all stay drift, and the drift line names that commit; a version unreadable only for OTHER rows does not count. A hand-restored old body reads the same as a page that is merely behind — the advisory is the only trace of it. The mirror image fails, decided from the merge base: when this branch has not merged the current `origin/main`, any tracked row that differs from the live page and is not main's, and that main has since changed, added after the branch's base, or REMOVED (a discharge) relative to `git merge-base HEAD origin/main`, is refused — unless the live page already carries your tracked body — as `branch behind origin/main for <id>; merge it first (<why>)`; a row absent at the base and absent on main (your own new row) is never refused, and a merge base that cannot be found or read (a shallow clone, or any `--is-ancestor` answer other than 0 or 1) fails closed. The no-flag `check:onbox-register` also fails on a tracked live view whose row markup the drift check cannot read, so such a version cannot reach main). It fails when the live page has rows your register lacks AND `origin/main` still has them (another lane ahead of you); when your register has rows the live page doesn't yet, that's the normal reason you're publishing, not a defect — qualified further by #2199 and #3529 (a live-page row `origin/main`'s own copy also lacks isn't reported when `origin/main`'s register has ever carried that ID on `main`'s own first-parent line (a row a merged PR's branch minted and renumbered before merging does not count; two rare cases still read as a discharge: a colliding ID that reached `main` and was discharged there while the other lane's copy is still live, and a row `main` merged and then reverted while a re-landing lane's copy is live, until that re-land merges), or when it is listed in the register's "Retired carried rows" record and `gh` confirms its PR closed unmerged and owning the row (the commit that introduced the live row, matched by its ID and title and never one `main` already contains, is one of that PR's own commits; branch names play no part), a mismatch, an undeterminable owner or a gh error failing closed — when `gh` is unavailable the entry is accepted with a warning instead; otherwise it is decided by who published the page: when the commit that stamped its `data-publish-id` (the oldest commit that introduced it) is on `origin/main` or in your own history and its live view carried the row, it is a discharge or your own dropped row and isn't reported; otherwise it is an unmerged lane's row and fails as `unmerged-lane-row`, naming its owner, and a publish id in no fetched history fails as `unknown-provenance`. A row ID another lane used for a different row — live, or already on `origin/main` and absent from your merge-base — fails as `row-id-collision`. To publish a union carrying another lane's rows, build it with `--build-union <out>` and publish that file: `--publishing <file>` accepts only that exact union, your tracked rows plus the carried rows' live blocks with the derived figures regenerated) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 

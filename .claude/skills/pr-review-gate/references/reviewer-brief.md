@@ -1090,6 +1090,107 @@ recite:
     (here: the in-flight design's key moves only with a separation of the row,
     and anything else discards the render).
 
+86. **An age guard on a file created by a copy, where the copy keeps its
+    source's mtime** — PR #4070 pass 2 (#4037): the startup sweep deleted
+    files older than an hour by `mtimeMs`, and the mint created its temp
+    copies, backups and copied variant families with `copyFile`/`copyFileSync`.
+    On Windows a copy keeps the source's last-write time (measured: a copy of
+    a 3-day-old file reads 4320 minutes old by `mtimeMs` and 0.0 by
+    `birthtimeMs`), so a file made a moment ago read old and the guard that was
+    meant to spare a second server mid-mint would delete it. The test planted its
+    "fresh" file with the current mtime, so it could not see this. Checkable:
+    for every age guard, find how the file it reads was created; if by a copy,
+    ask whether the creator stamps the time itself (`utimes`), and require a
+    test whose source file is old. Fix at the creator, so every reader of the
+    mtime benefits, not in the one reader.
+
+87. **A client mirror of a conditional server step, inferred from a field that
+    carries the after-step value in both outcomes** — PR #4069 (#4067): the
+    decline route separates a row only when it shares its voice, but replies
+    with `voiceUuid` either way, and the client forked its local copy (rename,
+    variant drop) whenever the reply named a uuid, so a decline that moved
+    nothing dropped the row's emotion variants. The design stream repeated the
+    shape: it reads `undefined -> uuid` as a first mint, yet the server's
+    `mustSeparateOnDesign` also separates a no-uuid row carrying a decline
+    marker. Checkable: for every client mirror of a server step that runs only
+    under a condition, find the server's own outcome flag (`separated`) and
+    confirm the mirror keys on it; where the only signal is a value present in
+    both outcomes, list the server's separating conditions and test each one's
+    starting state against the mirror's inference.
+
+88. **A pre-check moved later must land before the side effects it guarded, not
+    onto a check that sits past them** — PR #4077 pass 1 (#4074): the clone
+    gate of a declined row's design ran before the design's uuid step, so it
+    counted a clone on the voice the row was leaving. The first fix deferred it
+    to `applyOverrideToCastFiles`, the write-time check that knows the new uuid.
+    That check runs after `landStagedDesign` has moved the files onto the key,
+    stamped a new base `rev` and given rows a qwen slot, so a refused design was
+    half-saved while the route said "the design was not persisted"; a redesign
+    destroyed the prior base and staled every follower's variants, and the bulk
+    run's freshness skip read the leftover slot as already designed. It is the
+    guard-shaped sibling of 37. Checkable: when a diff moves a refusal later,
+    list every write between the old and new position and what is left on disk
+    when the refusal fires; the refusal belongs after the step that supplies
+    what it needs and before the first of those writes, ideally under the lock
+    the landing already holds. Test by asserting on disk after a refusal: no new
+    file, an existing file's bytes and `rev` unchanged, no slot, no staged
+    leftovers; then a follow-up run that must not read the refusal as done.
+
+89. **A refusal in the first matcher that the fallback matcher does not
+    mirror** — PR #4023 passes 1-3 (#3954; the shape plan 291 / #4031
+    removed by making `matchFreshToPrior` the only matcher):
+    `remapFreshToPriorIds`, the first matcher, refuses a join, and
+    `mergeCore`'s name fallback then makes the same join anyway. Three times:
+    F3 (the tolerant twin-decline), P3-1 (a degraded history read skipped the
+    remap while mergeCore kept the fresh id) and P3-2 (N2's "neither join"
+    refusal for a row another fresh id's history adopts). Each time a unit
+    test at the first matcher passed while the end-to-end outcome was the join
+    it refused. Checkable: for every refusal (`continue` / `return undefined`)
+    a change adds to a matcher with a fallback downstream, find the
+    fallback's own gate for the same pair and prove it refuses too, with a
+    test through the real jobs asserting the end state (cast ids, history),
+    not the first matcher's return value. Use a fixture without the field that
+    masks the defect (P3-2's `voiceId` carried the voice across the id
+    change). A second place that compares a fresh row with a prior one is
+    itself the finding. `single-matcher.guard.test.ts` catches one only in
+    its seven listed files, or in a file that itself reads the prior through
+    the jobs' three readers; a comparator in a new file, or in one its caller
+    feeds the prior rows to, passes it, so look for that by reading.
+
+90. **A send-only-what-changed delta taken against a base that the same job's
+    earlier write already moved** — PR #4103 pass 4 (P4-1, #4031): the main
+    job's terminal ledger write sent `ledgerDelta(ledgerBeforePersist,
+    addedOnce)`. The persist itself had just written the bucket's entry as
+    `run-owned`, so the terminal `added-once` equalled the job's pre-persist
+    copy and was never sent, while `clearLedger` in the same op deleted the
+    `run-owned` entry: the row lost its R4 mark and the next run re-minted its
+    decision. Its twin is a send-everything write that re-adds what a route
+    deleted mid-run (R54: the persist wrote back a bucket decision the merge
+    route had deleted). Checkable: for every delta or full write, name its
+    base and list every write to the same file since that base was taken,
+    including the job's own and the routes it races; an entry this write
+    produced is always sent, and one it only carried is sent only if changed.
+    Test with an entry whose new value equals the stale base after an earlier
+    write moved the file, then assert on the file, not the job's copy.
+
+91. **A "matches some past version" test that ignores order, so a revert to an
+    older value reads as "behind"** — PR #4106 pass 1 (#4105): a live page whose
+    row body equalled any older `origin/main` version of it was exempted as
+    "merely behind main". The history is ordered, though, and a body main went
+    back to (v1 -> v2 -> v1 against a live v2) matches an older version too;
+    the exemption silently turned a main-side revert into an advisory. Pass 2
+    found the same blindness one level up: "is this branch behind" was inferred
+    from the same history walk (does the tracked body match some older version)
+    rather than read from where the branch diverged, so a revert and a page two
+    versions behind both slipped past it. Checkable: for every "equals one of
+    the past values" predicate, write the A -> B -> A sequence and the
+    A -> B -> C sequence and ask which side each one lands on; where the
+    question is really about a divergence point (behind, stale, already
+    merged), compute it from the point (`merge-base`) rather than from a
+    membership test over the history.
+    (Numbered 91: open PR #4103 holds 89 and 90; renumber on merge if the order
+    changes.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

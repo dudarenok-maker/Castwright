@@ -369,6 +369,7 @@ describe('plan 290 — clear (M25)', () => {
        already-analysed branch (as analysis.title-flags.test.ts does). */
     const { saveAnalysisCache } = await import('../store/analysis-cache.js');
     await saveAnalysisCache(manuscriptId, {
+      version: 2, // #4031: an unversioned cache is legacy, which the subset job refuses
       stage1: {
         characters: [
           { id: 'nova', name: 'Nova', role: 'character', color: '#abc', evidence: [{ quote: 'The plan is set.' }] },

@@ -281,8 +281,10 @@ describe('loadMockReleaseNotes (real bundled notes, lazily loaded)', () => {
     /* The retired fixture ('# v1.6.0 / - In-app upgrades.') would fail both:
        one section, and a bare 'v1.6.0' heading without the brand name. */
     expect(parsed.length).toBeGreaterThan(1);
-    expect(parsed[0].heading).toMatch(/^Castwright \d+\.\d+\.\d+/);
-    expect(parsed[0].bullets.length).toBeGreaterThan(0);
+    for (const section of parsed) expect(section.heading).toMatch(/^Castwright \d+\.\d+\.\d+/);
+    /* The top section may legally be empty: a reopened in-progress section
+       has no bullets until the first PR with a user-facing line lands. */
+    expect(parsed.some((section) => section.bullets.length > 0)).toBe(true);
   });
 });
 
@@ -295,6 +297,11 @@ describe('trimUnreleasedReleaseNotes (mid-cycle in-progress section)', () => {
     expect(out.startsWith('# Castwright 1.12.2')).toBe(true);
     expect(out).not.toContain('Unreleased bullet');
     expect(out).toContain('Older bullet');
+  });
+
+  it('drops an empty reopened in-progress section so the mock release-notes path never shows a bare heading', () => {
+    const md = '# Castwright 1.16.0\n\n# Castwright 1.15.0\n\n- Shipped bullet.\n';
+    expect(trimUnreleasedReleaseNotes(md, '1.15.0')).toBe('# Castwright 1.15.0\n\n- Shipped bullet.\n');
   });
 
   it('serves the document unchanged when the running version has no section (dev builds)', () => {
@@ -451,6 +458,36 @@ describe('mockCreateCharacter (fs-58 Unit B)', () => {
 
   it('is registered on the api object (mock surface)', () => {
     expect(typeof api.createCharacter).toBe('function');
+  });
+});
+
+/* R57 (PR #4103 pass 5b) — every cast-identity route the server refuses mid-run (R55) throws
+   with the body's `code`, so a caller can tell a `book_busy` refusal (an analysis holds the
+   book) from a failure and take the read-only path (`handleCastIdentityBusy`). */
+describe('R57: the cast-identity routes carry the refusal code', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: 'This book is busy (analysing).', code: 'book_busy' }),
+      })),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['linkOrphanMatch', () => api.linkOrphanMatch({ bookId: 'b', characterId: 'c', orphanedId: 'o' })],
+    ['rejectOrphanMatch', () => api.rejectOrphanMatch({ bookId: 'b', characterId: 'c', orphanedId: 'o' })],
+    ['undoRejectOrphanMatch', () => api.undoRejectOrphanMatch({ bookId: 'b', characterId: 'c', orphanedId: 'o' })],
+    ['unlinkAlias', () => api.unlinkAlias({ bookId: 'b', sourceCharacterId: 'c', aliasName: 'A' })],
+    ['createCharacter', () => api.createCharacter('b', { name: 'N' })],
+    ['addFromSeriesRoster', () => api.addFromSeriesRoster({ bookId: 'b', targetBookId: 'p', targetCharacterId: 'c' })],
+  ] as const)('%s throws with code book_busy and the server sentence', async (_name, call) => {
+    await expect(call()).rejects.toMatchObject({ code: 'book_busy', message: 'This book is busy (analysing).' });
   });
 });
 

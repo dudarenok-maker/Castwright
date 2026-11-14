@@ -615,6 +615,51 @@ describe('castSlice — addCharacter (POST /cast/add-from-roster response)', () 
 });
 
 describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () => {
+  it('F7: mirrors the voice the server moved the row back onto (uuid and qwen slot), keeping other engines', () => {
+    const start = baseState([
+      makeChar('wren', {
+        voiceUuid: 'u_own',
+        overrideTtsVoices: { qwen: { name: 'qwen-u_own' }, kokoro: { name: 'af_bella' } },
+      }),
+    ]);
+    const matchedFrom = { bookId: 'b1', characterId: 'wren', bookTitle: 'Book One', confidence: 1 };
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'wren',
+        matchedFrom,
+        voice: { voiceUuid: 'u_shared', qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+      }),
+    );
+    const wren = next.characters[0];
+    expect(wren.voiceUuid).toBe('u_shared');
+    expect(wren.overrideTtsVoices).toEqual({
+      kokoro: { name: 'af_bella' },
+      qwen: { name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } },
+    });
+    const legacy = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({ characterId: 'wren', matchedFrom, voice: { voiceUuid: null, qwen: null } }),
+    ).characters[0];
+    expect('voiceUuid' in legacy).toBe(false);
+    expect(legacy.overrideTtsVoices).toEqual({ kokoro: { name: 'af_bella' } });
+  });
+
+  it('F7, review pass 1: the same-book rows the server moved with it take the voice too; others do not', () => {
+    const own = { voiceUuid: 'u_own', overrideTtsVoices: { qwen: { name: 'qwen-u_own' } } };
+    const start = baseState([makeChar('wren', own), makeChar('wren_b', own), makeChar('other', own)]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'wren',
+        matchedFrom: { bookId: 'b1', characterId: 'wren', bookTitle: 'Book One', confidence: 1 },
+        voice: { voiceUuid: 'u_shared', qwen: { name: 'qwen-u_shared' }, movedCharacterIds: ['wren_b'] },
+      }),
+    );
+    expect(next.characters.map((c) => c.voiceUuid)).toEqual(['u_shared', 'u_shared', 'u_own']);
+    expect(next.characters[1].overrideTtsVoices?.qwen?.name).toBe('qwen-u_shared');
+  });
+
   it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
     const start = baseState([
       makeChar('hartwell-brennan-vale', { voiceState: 'generated' }),
@@ -1917,14 +1962,27 @@ describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => 
       } as never),
     ]);
 
-  it('a CHANGED uuid drops the qwen variants the server dropped with the fork', () => {
+  it('a CHANGED uuid drops the qwen variants and renames the slot, as the server fork did (#4067)', () => {
     const next = castSlice.reducer(
       forkedRow(),
       castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_forked' }),
     );
     expect(next.characters[0].voiceUuid).toBe('u_forked');
     expect(next.characters[0].overrideTtsVoices!.qwen!.variants).toBeUndefined();
-    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u_shared');
+    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-u_forked');
+  });
+
+  it('a CHANGED uuid leaves a libraryUuid slot’s name alone (#4067)', () => {
+    const next = castSlice.reducer(
+      baseState([
+        makeChar('wren', {
+          voiceUuid: 'u_shared',
+          overrideTtsVoices: { qwen: { name: 'qwen-lib_1', libraryUuid: 'lib_1' } },
+        } as never),
+      ]),
+      castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_forked' }),
+    );
+    expect(next.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-lib_1');
   });
 
   it('the same uuid, a first mint, or an unknown character leaves the variants alone', () => {
@@ -1943,12 +2001,43 @@ describe('castSlice — setCharacterVoiceUuid and a fork (#3992 pass 3)', () => 
       castActions.setCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_new' }),
     );
     expect(Object.keys(minted.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
+    expect(minted.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-v'); // a first mint keeps the legacy name
 
     const ghost = castSlice.reducer(
       forkedRow(),
       castActions.setCharacterVoiceUuid({ characterId: 'ghost', voiceUuid: 'x' }),
     );
     expect(ghost.characters[0].voiceUuid).toBe('u_shared');
+  });
+});
+
+describe('castSlice — forkCharacterVoiceUuid mirrors withForkedUuid (#4067)', () => {
+  const qwenRow = (qwen: Record<string, unknown>, voiceUuid?: string) =>
+    baseState([makeChar('wren', { voiceUuid, overrideTtsVoices: { qwen } } as never)]);
+
+  it('renames the slot, drops variants and takes the uuid', () => {
+    const next = castSlice.reducer(
+      qwenRow({ name: 'qwen-u_shared', variants: { angry: { name: 'qwen-u_shared__angry' } } }, 'u_shared'),
+      castActions.forkCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_fresh' }),
+    );
+    const c = next.characters[0];
+    expect(c.voiceUuid).toBe('u_fresh');
+    expect(c.overrideTtsVoices!.qwen!.name).toBe('qwen-u_fresh');
+    expect(c.overrideTtsVoices!.qwen!.variants).toBeUndefined();
+  });
+
+  it('a libraryUuid slot keeps its name; a row with no qwen slot just takes the uuid', () => {
+    const lib = castSlice.reducer(
+      qwenRow({ name: 'qwen-lib_1', libraryUuid: 'lib_1' }, 'u_shared'),
+      castActions.forkCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_fresh' }),
+    );
+    expect(lib.characters[0].overrideTtsVoices!.qwen!.name).toBe('qwen-lib_1');
+    const bare = castSlice.reducer(
+      baseState([makeChar('wren', {} as never)]),
+      castActions.forkCharacterVoiceUuid({ characterId: 'wren', voiceUuid: 'u_fresh' }),
+    );
+    expect(bare.characters[0].voiceUuid).toBe('u_fresh');
+    expect(bare.characters[0].overrideTtsVoices).toBeUndefined();
   });
 });
 
@@ -1968,6 +2057,53 @@ describe('selectCastTierByCharacterId (#1308)', () => {
   it('returns a stable reference across calls with an unchanged characters array', () => {
     const s = { cast: baseState([makeChar('marlow')]) };
     expect(selectCastTierByCharacterId(s)).toBe(selectCastTierByCharacterId(s));
+  });
+});
+
+describe('castSlice — the per-book analysis era (plan 291, #4031)', () => {
+  it('latchAnalysisEra is per book and moves the epoch; clearAnalysisEra is a no-op once the epoch moved', () => {
+    let s = castSlice.reducer(baseState([]), castActions.latchAnalysisEra({ bookId: 'A' }));
+    s = castSlice.reducer(s, castActions.latchAnalysisEra({ bookId: 'A' }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+    expect(s.analysisEra?.B).toBeUndefined();
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 1 }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 2 }));
+    expect(s.analysisEra).toEqual({});
+  });
+
+  it('the epoch is monotonic per book: a clear never restarts it (round 1, Minor 7)', () => {
+    let s = castSlice.reducer(baseState([]), castActions.latchAnalysisEra({ bookId: 'A' }));
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 1 }));
+    expect(s.analysisEra).toEqual({});
+    s = castSlice.reducer(s, castActions.latchAnalysisEra({ bookId: 'A' }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+    /* A stale clear from the first era cannot clear the second. */
+    s = castSlice.reducer(s, castActions.clearAnalysisEra({ bookId: 'A', epoch: 1 }));
+    expect(s.analysisEra).toEqual({ A: { epoch: 2 } });
+  });
+
+  it('hydrateCharacters and the book-switch resets never clear or move an era', async () => {
+    const { configureStore } = await import('@reduxjs/toolkit');
+    const { manuscriptSlice } = await import('./manuscript-slice');
+    const { chaptersSlice } = await import('./chapters-slice');
+    const { changeLogSlice } = await import('./change-log-slice');
+    const { resetBookSlices } = await import('./reset-book-slices');
+    const store = configureStore({
+      reducer: {
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+      },
+    });
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    store.dispatch(castActions.hydrateCharacters([makeChar('wren')]));
+    store.dispatch(castActions.hydrateCharacters([]));
+    /* The book switch (routes/index.tsx's resets call the same action). */
+    resetBookSlices(store.dispatch, 'B');
+    expect(store.getState().cast.analysisEra).toEqual({ A: { epoch: 2 } });
   });
 });
 
@@ -2004,5 +2140,33 @@ describe('castSlice — pruneStaleEmotionVariants (#4040)', () => {
       castActions.pruneStaleEmotionVariants([{ id: 'a', emotions: ['angry'] }]),
     );
     expect(Object.keys(next.characters[0].overrideTtsVoices!.qwen!.variants!)).toEqual(['sad']);
+  });
+});
+
+describe('castSlice — matchFactors belong to the current link only (A120 F5 review)', () => {
+  const factors = [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'same' }];
+  const linked = () =>
+    baseState([
+      makeChar('m', {
+        voiceState: 'reused',
+        matchedFrom: { bookId: 'b0', characterId: 'x', confidence: 0.9 },
+        matchFactors: factors,
+      }),
+    ]);
+
+  it('a manual link drops the previous candidate\'s factors', () => {
+    const next = castSlice.reducer(
+      linked(),
+      castActions.applyManualMatch({
+        characterId: 'm',
+        matchedFrom: { bookId: 'b1', characterId: 'y', confidence: 1 },
+      }),
+    );
+    expect(next.characters[0].matchFactors).toBeUndefined();
+  });
+
+  it('declining a match drops its factors', () => {
+    const next = castSlice.reducer(linked(), castActions.declineMatch('m'));
+    expect(next.characters[0].matchFactors).toBeUndefined();
   });
 });

@@ -222,11 +222,12 @@ export function castMergesJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'cast-merges.json');
 }
 
-/** Per-book diminutive merge SUGGESTIONS from the dedup pass — a sibling file
-    that persists across the cast.json envelope so the UI can surface "Оля +
-    Ольга — same person?" prompts without losing them on a re-analysis. Written
-    by the dedup pass (Task 10), read by the suggestions route (Task 11),
-    dismissed one-by-one by the user. */
+/** Per-book merge SUGGESTIONS (the dedup pass's diminutive pairs today) — a
+    sibling file that persists across the cast.json envelope so the UI can
+    surface "Оля + Ольга — same person?" prompts without losing them on a
+    re-analysis. Kept pair-keyed and added to by each analysis run (under the
+    cast lock), read by the suggestions route, removed on accept and dismissed
+    (durably) by the user. */
 export function castMergeSuggestionsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'cast-merge-suggestions.json');
 }

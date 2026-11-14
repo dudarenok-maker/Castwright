@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, type Middleware } from '@reduxjs/toolkit';
 import { declineMatchFlow } from './decline-match-flow';
 import { castSlice } from './cast-slice';
 import { uiSlice } from './ui-slice';
@@ -48,7 +48,7 @@ function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books'
 
 beforeEach(() => {
   vi.mocked(api.declineVoiceLink).mockReset();
-  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] });
+  vi.mocked(api.declineVoiceLink).mockResolvedValue({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] });
 });
 
 describe('declineMatchFlow (#3992)', () => {
@@ -110,7 +110,7 @@ describe('declineMatchFlow (#3992)', () => {
     const order: string[] = [];
     vi.mocked(api.declineVoiceLink).mockImplementation(async () => {
       order.push(`request saw matchedFrom=${store.getState().cast.characters[0].matchedFrom?.bookId}`);
-      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] };
+      return { declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] };
     });
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
     expect(order).toEqual(['request saw matchedFrom=book-one']);
@@ -124,7 +124,7 @@ describe('declineMatchFlow (#3992)', () => {
     vi.mocked(api.declineVoiceLink).mockImplementation(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, movedCharacterIds: [] });
+          release = () => resolve({ declinedVoiceFrom: ['book-one'], declinedVoiceUuids: [], voiceUuid: null, separated: false, movedCharacterIds: [] });
         }),
     );
     const pending = (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
@@ -147,6 +147,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: null,
+      separated: false,
       movedCharacterIds: [],
     });
     const store = makeStore([matched]);
@@ -174,6 +175,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: 'u_own',
+      separated: true,
       movedCharacterIds: [],
     });
     const store = makeStore([
@@ -194,6 +196,7 @@ describe('declineMatchFlow (#3992)', () => {
       declinedVoiceFrom: ['book-one'],
       declinedVoiceUuids: ['u_shared'],
       voiceUuid: 'u_own',
+      separated: true,
       movedCharacterIds: ['wren_b'],
     });
     const onShared = {
@@ -233,5 +236,43 @@ describe('declineMatchFlow (#3992)', () => {
     await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
     expect(store.getState().cast.characters[0].matchedFrom).toBeUndefined();
     expect(api.declineVoiceLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('declineMatchFlow — route-backed meta (plan 291, R31)', () => {
+  function recordingStore(characters: Character[]) {
+    const seen: Array<{ type: string; meta?: unknown }> = [];
+    const record: Middleware = () => (next) => (action) => {
+      seen.push(action as { type: string; meta?: unknown });
+      return next(action);
+    };
+    const store = configureStore({
+      reducer: {
+        cast: castSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        manuscript: (s: { manuscriptId: string | null } = { manuscriptId: 'm-two' }) => s,
+      },
+      preloadedState: {
+        ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: 'book-two', view: 'cast' } } as ReturnType<
+          typeof uiSlice.getInitialState
+        >,
+      },
+      middleware: (gd) => gd().concat(record),
+    });
+    store.dispatch(castSlice.actions.setCharacters(characters));
+    return { store, seen };
+  }
+
+  it('marks the decline route-backed only when the decline route recorded it', async () => {
+    const { store, seen } = recordingStore([matched]);
+    await (store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    expect(seen.find((a) => a.type === 'cast/declineMatch')?.meta).toEqual({ routeBacked: true });
+
+    /* No source book: nothing reached a route, so the decline is unsaved. */
+    const unlinked = { ...matched, matchedFrom: { bookTitle: 'Assigned', confidence: 1 } } as unknown as Character;
+    const second = recordingStore([unlinked]);
+    await (second.store.dispatch as (a: unknown) => Promise<void>)(declineMatchFlow('wren'));
+    expect(second.seen.find((a) => a.type === 'cast/declineMatch')?.meta).toBeUndefined();
   });
 });

@@ -603,7 +603,16 @@ register](docs/testing/onbox-acceptance-register.md). This exists because 38
 `npm run test:sidecar` — never in CI (`verify.yml`'s sidecar leg deliberately
 installs the lean, torch-free dependency set, so those tests report as
 skipped there). A PR that doesn't touch `server/tts-sidecar/**` is unaffected
-and needs nothing in its body.
+and needs nothing in its body. A rename out of the directory counts as touching
+it (the file list is built with `--no-renames`, so the source path shows).
+
+**One exemption (#4120):** a PR whose only sidecar change is the `__version__`
+line of `server/tts-sidecar/version.py` — the release version bump — needs no
+line either. The validator decides this from the actual `git diff -U0` hunk of
+that file (exactly one `__version__ = "<semver>"` line removed and one added, in
+one hunk), not from the filename, and fails closed: any other changed line, a
+mode change, a new or deleted file, another sidecar file in the same PR, or a
+diff it cannot read keeps the gate on.
 
 Write one of these two lines plainly (not inside backticks or a code block)
 in the PR body:
@@ -697,13 +706,32 @@ node scripts/bump-version.mjs --level minor
 #    would otherwise fail the tag at publish time; --allow-notes-divergence
 #    cuts anyway, --dry-run only reports it.)
 
-# 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
-git push origin main
+# 4. `main`'s ruleset rejects a direct push, so the bump commit goes in through
+#    a PR (the route v1.13.0, v1.14.0 and v1.15.0 took). The bump left the
+#    commit and the tag on local `main`; put the commit on a branch and PR it.
+#    The required pr-issue-link check needs the PR to close an issue, and
+#    `gh pr create` needs a --body when it is not run interactively, so file the
+#    issue first and note its number.
+gh issue create --title "Cut vX.Y.Z" --body "Version bump for vX.Y.Z." --label type:chore --label area:ops
+git push origin HEAD:refs/heads/chore/bump-vX.Y.Z
+gh pr create --base main --head chore/bump-vX.Y.Z --title "chore: bump version to X.Y.Z" --body "Closes #<issue>"
+#    Merge it with a MERGE COMMIT (gh pr merge --merge) once verify.yml is green.
+#    A bump that changes only the `__version__` line of server/tts-sidecar/version.py
+#    needs no "Sidecar acceptance:" line (the gate exempts it, #4120); any other
+#    sidecar change in the PR still does.
+
+# 5. After the merge, local `main` fast-forwards past the bump commit. Check the
+#    tag still points at the bump commit and that commit is in origin/main, THEN
+#    push the tag. The tag push fires .github/workflows/release.yml.
+git switch main
+git pull --ff-only
+git rev-parse "vX.Y.Z^{commit}"     # must be the bump commit
+git merge-base --is-ancestor "vX.Y.Z^{commit}" origin/main && echo ok
 git push origin vX.Y.Z
 
-# 5. Watch:  gh run watch   (or the Actions tab in the browser)
+# 6. Watch:  gh run watch   (or the Actions tab in the browser)
 
-# 6. Once the release is published, refresh the wiki's Release Notes section
+# 7. Once the release is published, refresh the wiki's Release Notes section
 #    (fs-68) with the new version's body, then publish docs/wiki -> the wiki repo.
 npm run wiki:release-notes
 npm run wiki:sync
@@ -763,6 +791,12 @@ tag message, which the release workflow uses as the GitHub Release body — so t
 file IS the source of truth. Its leading HTML-comment carries a
 `release-notes-next-version:` marker the bump checks against the version being
 cut (a stale or missing file fails the bump rather than shipping a placeholder).
+GitHub rejects a release body over 125,000 characters, so the bump, the
+release-notes gate and `release-body.mjs` refuse a file over that limit (the
+strictest of its UTF-16 length and UTF-8 byte length, CRLF counted as LF; no
+`--force` override) — condense the body before the cut, and archive the full
+technical changelog under `docs/release-notes/vX.Y.Z-full.md`, linked from the
+condensed body (the v1.15.0 cut does this).
 The regression plans under `docs/features/` are the long-form companion
 (reference plan / PR numbers in parens, e.g. `(#637, plan 195)`). The
 user-facing, brand-voice notes are separate — `RELEASE_NOTES.md`, shown in-app

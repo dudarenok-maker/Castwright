@@ -14,6 +14,7 @@ import { useAppSelector } from '../store';
 import { engineForModelKey } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
+import { CastEditsPausedBanner } from '../components/cast-edits-paused-banner';
 
 interface OverrideArgs {
   sourceCharacterId: string;
@@ -53,7 +54,7 @@ type Decision = 'match' | 'generate';
    voice-match payloads omitted the field). The Reuse-decision flip
    is unchanged: every eligible row still gets `decisions[id] = 'match'`
    on bulk apply regardless of confidence. */
-const SYNC_AUTO_THRESHOLD = 0.9;
+export const SYNC_AUTO_THRESHOLD = 0.9;
 
 export function ConfirmCastView({
   characters,
@@ -189,7 +190,8 @@ export function ConfirmCastView({
     <div className="relative min-h-[calc(100vh-64px)] py-6 sm:py-12 px-4 sm:px-6">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-40 pointer-events-none" />
       <div className="relative max-w-3xl mx-auto">
-        <div className="mb-4">
+        <div className="mb-4 space-y-2">
+          <CastEditsPausedBanner />
           <QwenStatusNotice />
         </div>
         <div className="text-center mb-6 sm:mb-10">

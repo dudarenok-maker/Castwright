@@ -15,7 +15,7 @@
      - status + pause + bare-resubscribe(idle) endpoints. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -223,6 +223,7 @@ let designLock: typeof import('../tts/design-lock.js');
 let qwenVoiceMod: typeof import('./qwen-voice.js');
 let ensureMod: typeof import('../tts/ensure-sidecar-loaded.js');
 let MAX_RECYCLE_RIDEOUTS: number;
+let voicesMod: typeof import('./voices.js');
 
 /* Turn VRAM sampling off so the new /health probe doesn't inflate fetch-mock call counts. */
 beforeAll(() => { process.env.CASTWRIGHT_VRAM_SAMPLE = '0'; });
@@ -254,6 +255,8 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/api/books', castDesignRouter);
   app.use('/api/books', qwenVoice.qwenVoiceRouter);
+  app.use('/api/books', (await import('./book-state.js')).bookStateRouter);
+  voicesMod = await import('./voices.js');
 });
 
 beforeEach(() => {
@@ -1963,7 +1966,7 @@ describe('cast-design persona pre-pass', () => {
     expect(mark).not.toHaveBeenCalled();
   });
 
-  it('variants-only run on a shared-GPU persona engine reports a persona-less designed character instead of dropping it', async () => {
+  it('variants-only run on a shared-GPU persona engine designs from the base json persona and reports a character with none', async () => {
     personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
@@ -1978,8 +1981,12 @@ describe('cast-design persona pre-pass', () => {
     /* quill: base voice designed, voiceStyle empty. scope:variants gives the pre-pass no base task,
        so nothing else would ever record it. marlow: designed base + persona, designs normally. */
     const quill = { id: 'quill', name: 'Quill', role: 'supporting', color: 'sky', voiceId: 'v_quill', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_quill' } } };
+    /* quill's base design stored its persona on the voice json (F4); reed has no json at all. */
+    mkdirSync(join(workspaceRoot, 'voices', 'qwen'), { recursive: true });
+    writeFileSync(join(workspaceRoot, 'voices', 'qwen', 'qwen-v_quill.json'), JSON.stringify({ instruct: 'a dry archivist' }));
+    const reed = { id: 'reed', name: 'Reed', role: 'supporting', color: 'sky', voiceId: 'v_reed', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_reed' } } };
     const marlow = { id: 'marlow', name: 'Marlow', role: 'supporting', color: 'sky', voiceId: 'v_marlow', voiceStyle: 'a quick-witted young man', overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } } };
-    writeBookOnDisk([...characters, quill, marlow]);
+    writeBookOnDisk([...characters, quill, reed, marlow]);
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
@@ -1989,24 +1996,63 @@ describe('cast-design persona pre-pass', () => {
         characterIds: [],
         variantTasks: [
           { characterId: 'quill', emotions: ['angry'] },
+          { characterId: 'reed', emotions: ['angry'] },
           { characterId: 'marlow', emotions: ['angry'] },
         ],
       });
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
-    const failed = events.filter((e) => e.type === 'character_failed' && e.characterId === 'quill');
+    const failed = events.filter((e) => e.type === 'character_failed' && e.characterId === 'reed');
     expect(failed).toHaveLength(1);
     expect(failed[0].errorReason).toBeTruthy();
+    expect(events.filter((e) => e.type === 'character_failed' && e.characterId === 'quill')).toHaveLength(0);
     expect(genSpy).not.toHaveBeenCalled(); // no lazy persona-gen on the shared card
-    expect(designSpy).toHaveBeenCalledTimes(1); // only marlow designs
+    expect(designSpy).toHaveBeenCalledTimes(2); // quill (base json persona) and marlow
+    expect(designSpy.mock.calls.find(([p]) => p.characterId === 'quill')?.[0].persona).toBe('a dry archivist');
 
     const idle = events.find((e) => e.type === 'idle');
     expect(idle?.failures).toHaveLength(1);
-    expect(idle?.failures?.[0].characterId).toBe('quill');
+    expect(idle?.failures?.[0].characterId).toBe('reed');
     // Every character is accounted for: done + skipped + failed === total === characters.
-    expect((idle?.done ?? 0) + (idle?.skipped ?? 0) + (idle?.failures?.length ?? 0)).toBe(2);
-    expect(idle?.total).toBe(2);
+    expect((idle?.done ?? 0) + (idle?.skipped ?? 0) + (idle?.failures?.length ?? 0)).toBe(3);
+    expect(idle?.total).toBe(3);
+
+    writeBookOnDisk(characters);
+  });
+
+  it('a torn base json fails only that variant task; the rest of the run still designs and ends idle', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-v_marlow__angry', url: '/v/m.mp3' });
+    mkdirSync(join(workspaceRoot, 'voices', 'qwen'), { recursive: true });
+    writeFileSync(join(workspaceRoot, 'voices', 'qwen', 'qwen-v_torn.json'), '{ "instruct": ');
+    const torn = { id: 'torn', name: 'Torn', role: 'supporting', color: 'sky', voiceId: 'v_torn', voiceStyle: '', overrideTtsVoices: { qwen: { name: 'qwen-v_torn' } } };
+    const marlow = { id: 'marlow', name: 'Marlow', role: 'supporting', color: 'sky', voiceId: 'v_marlow', voiceStyle: 'a quick-witted young man', overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } } };
+    writeBookOnDisk([...characters, torn, marlow]);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [
+          { characterId: 'torn', emotions: ['angry'] },
+          { characterId: 'marlow', emotions: ['angry'] },
+        ],
+      });
+    errSpy.mockRestore();
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'character_failed')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'character_failed')?.characterId).toBe('torn');
+    expect(designSpy).toHaveBeenCalledTimes(1);
+    expect(events.some((e) => e.type === 'idle')).toBe(true);
 
     writeBookOnDisk(characters);
   });
@@ -2336,5 +2382,185 @@ describe('cast-design — persona-write lock timeout is curated, not leaked (PR 
     /* Not escalated: the loop carried on and designed the other character. */
     expect(idle?.done).toBe(1);
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+  });
+});
+
+describe('cast-design — bulk design never overwrites a voice picked mid-synthesis (#4031 Task 10)', () => {
+  const USER_PICK = 'qwen-user-pick';
+
+  /** The whole-slice cast PUT the client makes, setting aria's qwen slot. */
+  async function userPicksVoiceForAria(): Promise<void> {
+    const cast = readCast();
+    const characters = cast.characters.map((c) =>
+      c.id === 'aria' ? { ...c, overrideTtsVoices: { qwen: { name: USER_PICK } } } : c,
+    );
+    const put = await request(app).put(`/api/books/${bookId}/state`).send({ slice: 'cast', patch: { characters } });
+    expect(put.status).toBe(200);
+  }
+
+  async function waitFor(pred: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while (!pred()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  it('a slot picked while the sidecar synthesises is kept, and the character is reported skipped', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    fetchMock.mockImplementation(async (url: unknown) => {
+      if (!String(url).includes('evict')) await gate;
+      return okSidecarResponse();
+    });
+    const run = request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY })
+      .then((r) => r);
+    await waitFor(() => sidecarDesignCalls().length === 1, 'the design call to block');
+    await userPicksVoiceForAria();
+    release();
+    const res = await run;
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const skip = events.find((e) => e.type === 'character_skipped' && e.characterId === 'aria');
+    expect(skip).toBeDefined();
+    expect(skip).not.toHaveProperty('name');
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(false);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
+    /* The landing itself declined: the staged render was discarded, never moved onto the key. */
+    const { qwenVoicePtPath } = await import('../workspace/paths.js');
+    expect(existsSync(qwenVoicePtPath('qwen-v_aria'))).toBe(false);
+  });
+
+  it('a slot picked after the landing, before the series-wide override, is kept too', async () => {
+    const real = voicesMod.applyOverrideToCastFiles;
+    vi.spyOn(voicesMod, 'applyOverrideToCastFiles').mockImplementationOnce(async (...args) => {
+      await userPicksVoiceForAria();
+      return real(...args);
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const skip = events.find((e) => e.type === 'character_skipped' && e.characterId === 'aria');
+    expect(skip).toBeDefined();
+    expect(skip).not.toHaveProperty('name');
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe(USER_PICK);
+  });
+});
+
+/* F8 (#4096), review pass 1 — the bulk job ("Design full cast") propagates a base
+   design's qwen slot series-wide only when the design core shared it, i.e. only
+   in a book whose cast is confirmed. */
+describe('F8 — Design full cast in an unconfirmed book keeps the slot in that book', () => {
+  const otherDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, 'Book Zero');
+  function writeOtherBook() {
+    mkdirSync(join(otherDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_zero', manuscriptId: 'm_b_zero', title: 'Book Zero', author: AUTHOR, series: SERIES,
+        seriesPosition: 0, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
+        chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(otherDir(), 'manuscript.txt'), 'placeholder');
+    /* The same character, linked by voiceId, never designed (no uuid, no slot). */
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: [{ id: 'aria', name: 'Aria', role: 'lead', color: 'rose', voiceId: 'v_aria' }] }),
+    );
+  }
+  const setConfirmed = (confirmed: boolean) => {
+    const p = join(bookDir, '.audiobook', 'state.json');
+    writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, 'utf8')), castConfirmed: confirmed }));
+  };
+  const otherSlot = () =>
+    JSON.parse(readFileSync(join(otherDir(), '.audiobook', 'cast.json'), 'utf8')).characters[0].overrideTtsVoices;
+  afterEach(() => rmSync(otherDir(), { recursive: true, force: true }));
+
+  it('unconfirmed: the linked row in a confirmed book takes no slot', async () => {
+    writeOtherBook();
+    setConfirmed(false);
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).filter((e) => e.type === 'character_designed').map((e) => e.characterId)).toEqual(['aria']);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+    expect(otherSlot()).toBeUndefined();
+  });
+
+  it('control: confirmed, the linked row takes the slot as before', async () => {
+    writeOtherBook();
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(200);
+    expect(otherSlot()?.qwen?.name).toBe('qwen-v_aria');
+  });
+});
+
+/* F8 (#4096), review pass 2 — the same scope for the bulk job's EMOTION variants: the
+   take propagates series-wide only when the design core shared the design (a book
+   whose cast is confirmed). */
+describe('F8 — Design full cast emotion variants follow the core\'s sharing decision', () => {
+  const marlow = {
+    id: 'marlow',
+    name: 'Marlow',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'v_marlow',
+    voiceStyle: 'a charismatic, quick-witted young man',
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
+  };
+  const otherDir = () => join(workspaceRoot, 'books', AUTHOR, SERIES, 'Book Zero');
+  /* The same character in another book of the series, on the same (legacy) base. */
+  function writeOtherBook() {
+    mkdirSync(join(otherDir(), '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(otherDir(), '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_zero', manuscriptId: 'm_b_zero', title: 'Book Zero', author: AUTHOR, series: SERIES,
+        seriesPosition: 0, isStandalone: false, manuscriptFile: 'manuscript.txt', castConfirmed: true,
+        chapters: [], language: 'en', coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(otherDir(), 'manuscript.txt'), 'placeholder');
+    writeFileSync(join(otherDir(), '.audiobook', 'cast.json'), JSON.stringify({ characters: [{ ...marlow }] }));
+  }
+  const otherSlot = () =>
+    JSON.parse(readFileSync(join(otherDir(), '.audiobook', 'cast.json'), 'utf8')).characters[0].overrideTtsVoices.qwen;
+  beforeEach(() => {
+    writeBookOnDisk([...characters, marlow]);
+    writeOtherBook();
+  });
+  afterEach(() => rmSync(otherDir(), { recursive: true, force: true }));
+  const runVariant = () =>
+    request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, scope: 'variants', characterIds: [], variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }] });
+
+  it('the core did not share the design (an unconfirmed book): the linked row in another book takes no take', async () => {
+    vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/voice-samples/qwen-v_marlow__angry.mp3',
+      seriesShared: false,
+    });
+    expect((await runVariant()).status).toBe(200);
+    expect(charById('marlow')?.overrideTtsVoices?.qwen?.variants?.angry?.name).toBe('qwen-v_marlow__angry');
+    expect(otherSlot().variants).toBeUndefined();
+  });
+
+  it('control: the core shared the design, the linked row takes the take as before', async () => {
+    vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/voice-samples/qwen-v_marlow__angry.mp3',
+      seriesShared: true,
+    });
+    expect((await runVariant()).status).toBe(200);
+    expect(otherSlot().variants?.angry?.name).toBe('qwen-v_marlow__angry');
   });
 });

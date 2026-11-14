@@ -1094,7 +1094,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
 
 export function busySentence(
   kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore',
+  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore' | 'cast-save',
 ): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
@@ -1120,11 +1120,27 @@ export function busySentence(
   if (action === 'restore') {
     return `This book is busy (${what}). Stop it or wait for it to finish, then restore the backup.`;
   }
+  /* #4031 — a whole-slice cast PUT is refused while an analysis runs. */
+  if (action === 'cast-save') {
+    return `This book is busy (${what}). Its cast is read-only until the analysis finishes, so this change was not saved.`;
+  }
   /* #3717 — reparse / replace-manuscript are refused like the movers: both
      delete cast.json and the audio/ directory under a job still writing them. */
   return action === 'reparse'
     ? `This book is busy (${what}). Stop it or wait for it to finish, then re-parse it.`
     : `This book is busy (${what}). Stop it or wait for it to finish, then replace its manuscript.`;
+}
+
+/* R55 (PR #4103 pass 5, owner ruling 2026-11-12) — a cast-identity write (one that changes
+   the roster's id set, or writes merge / `supersededBy` history) is refused while an analysis
+   job is registered for the book, the same signal the whole-slice cast PUT below uses. Call it
+   INSIDE the write's own book-op span, before any read or write: a registration takes book-op
+   (`runBookJob`), so a job cannot register between this check and the write. A write that only
+   touches voice, style or decline markers, and a suggestion dismissal, never calls it. null
+   when the write may go ahead. */
+export function castIdentityBusyRefusal(bookId: string): { error: string; code: 'book_busy' } | null {
+  const kinds = bookJobKinds(bookId);
+  return kinds.includes('analysis') ? { error: busySentence(kinds, 'cast-save'), code: 'book_busy' } : null;
 }
 
 /* #3711 — the 409 for each refusal the sanctioned movers raise. Every body is
@@ -1242,6 +1258,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const { bookDir } = book;
     switch (body.slice) {
       case 'cast': {
+        /* #4031 — while an analysis job is registered the cast is read-only: the
+           job re-reads cast.json under the lock and a whole-slice write from a
+           client holding a pre-run slice would clobber its rows. Checked inside
+           book-op (a registration cannot race it) and before any read or write,
+           so a refusal touches nothing. One slice per PUT, so this refuses the
+           whole request. */
+        const kinds = bookJobKinds(book.bookId);
+        if (kinds.includes('analysis')) {
+          return { status: 409, body: { error: busySentence(kinds, 'cast-save'), code: 'book_busy' } };
+        }
         /* #1981 — the read inside `preserveDesignedVoices` (the on-disk
            `existing` cast that feeds the clone-consent guards) and the write
            below it must be one atomic span: locking only the write would
@@ -1732,9 +1758,10 @@ async function applyReparse(
        replace-manuscript before re-analysis. For an ABSENT cast.json it is
        the newest record of the cast. For an UNPARSEABLE one it is older than
        the cast it stands in for, but readPriorCastForMerge (analysis.ts)
-       already falls back to the carryover when cast.json does not parse, so
-       keeping it matches what the next analysis would use anyway, and
-       deleting it would lose the designed voices.
+       refuses a cast.json that does not parse (or has no `characters` array)
+       and sends the user here; once this re-parse deletes it, the carryover
+       is what the next analysis reads, and deleting it would lose the
+       designed voices.
        Any OTHER read failure (EBUSY/EPERM/EACCES/EMFILE, etc. on an
        otherwise-intact cast.json) is logged and re-thrown instead of being
        silently treated as "no cast": the sibling arms have already started
@@ -1756,13 +1783,16 @@ async function applyReparse(
         console.error('[book-state] reparse: cast.json unreadable, refusing to discard it', err);
         throw err;
       });
-      if (existingCast === null) {
-        // Absent or unparseable cast.json: keep the carryover untouched (#4039).
+      // A parseable file whose `characters` is not an array (#4031: the corrupt-cast
+      // refusal sends users here) is shape-corrupt: no rows to carry, like no cast.
+      if (existingCast === null || !Array.isArray(existingCast.characters)) {
+        // Absent, unparseable or shape-corrupt cast.json: keep the carryover untouched (#4039).
         await rm(castJsonPath(bookDir), { force: true });
         return;
       }
-      const reuseRows = (existingCast.characters ?? [])
-        .filter((c) => typeof c.id === 'string')
+      const reuseRows = existingCast.characters
+        // A hand-edited row can be null or a scalar: skip it, never throw on it.
+        .filter((c) => typeof c?.id === 'string')
         .map((c) => {
           const row: Record<string, unknown> = { id: c.id, name: c.name };
           if (c.aliases !== undefined) row.aliases = c.aliases;

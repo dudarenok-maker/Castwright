@@ -280,6 +280,49 @@ export function checkBOM(text, label) {
   };
 }
 
+/* GitHub rejects a release body longer than 125,000 characters — but only at
+   the very last step (`gh release create`, after the tag is already pushed),
+   so an oversize docs/release-notes-next.md passed every earlier gate. This
+   check fails early instead. It applies to the PUBLISHED technical body only
+   (docs/release-notes-next.md / the tag annotation), never to RELEASE_NOTES.md
+   (the in-app notes, which have no such limit).
+
+   We have not observed how GitHub counts (UTF-16 units, code points, or UTF-8
+   bytes), so this enforces the STRICTEST of UTF-16 length and UTF-8 byte
+   length — a code-point count is never larger than either, so anything this
+   accepts is accepted under all three readings. This is a safety rail, not a
+   target: real bodies are condensed to about 60k. Text is measured with CRLF
+   normalised to LF, because CI publishes the LF blob while a
+   `core.autocrlf=true` checkout holds CRLF. Deliberately no --force/allowlist:
+   like the BOM and conflict-marker checks, GitHub will reject it regardless. */
+export const MAX_RELEASE_BODY_CHARS = 125000;
+
+/** Check that `label`'s text fits in a GitHub release body. */
+export function checkBodySize(text, label) {
+  const measured = String(text ?? '').replace(/\r\n/g, '\n');
+  const units = measured.length;
+  const bytes = Buffer.byteLength(measured, 'utf8');
+  if (units <= MAX_RELEASE_BODY_CHARS && bytes <= MAX_RELEASE_BODY_CHARS) {
+    return { ok: true, reason: '' };
+  }
+  const over = [
+    units > MAX_RELEASE_BODY_CHARS ? 'UTF-16 length' : null,
+    bytes > MAX_RELEASE_BODY_CHARS ? 'UTF-8 byte length' : null,
+  ]
+    .filter(Boolean)
+    .join(' and ');
+  return {
+    ok: false,
+    reason:
+      `${label} is ${units} UTF-16 characters and ${bytes} UTF-8 bytes; its ${over} is over ` +
+      `GitHub's ${MAX_RELEASE_BODY_CHARS}-character limit for a release body (the check enforces the ` +
+      `strictest measure, since how GitHub counts is unverified) — it would only be rejected at the ` +
+      `final publish step, after the tag is pushed. ` +
+      `Condense it to fit, and archive the full text under docs/release-notes/ ` +
+      `(there is no --force override for this check).`,
+  };
+}
+
 /* #2018 — unresolved git conflict markers must never reach a published
    release. Not hypothetical: a `git merge origin/main` on the branch for PR
    #2010 left three markers inside RELEASE_NOTES.md's own v1.15.0 section, and
@@ -672,6 +715,16 @@ if (isDirectlyInvoked(import.meta.url)) {
     if (!mojibakeRes.ok) {
       process.stderr.write(`[release-notes-gate] ${mojibakeRes.reason}\n`);
       process.exit(1);
+    }
+
+    // Body-size limit: only the technical file that becomes the GitHub
+    // release body, never RELEASE_NOTES.md (the in-app notes).
+    if (label === 'docs/release-notes-next.md') {
+      const sizeRes = checkBodySize(text, label);
+      if (!sizeRes.ok) {
+        process.stderr.write(`[release-notes-gate] ${sizeRes.reason}\n`);
+        process.exit(1);
+      }
     }
   }
 

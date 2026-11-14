@@ -26,7 +26,7 @@
    override (writing through to each cast.json). */
 
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import {
@@ -65,6 +65,7 @@ import {
 } from '../tts/base-voices.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { isSeparatedVoice } from '../workspace/separated-voices.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 import { listVoiceSampleFiles, sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
 import {
@@ -271,7 +272,15 @@ async function aggregateVoices(
         const bookDir = join(BOOKS_ROOT, authorName, seriesName, titleName);
         const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state || !state.castConfirmed) continue;
-        const cast = await readJson<CastJson>(castJsonPath(bookDir));
+        /* One unreadable cast.json (empty, torn) must not fail the whole library:
+           skip that book and log it. */
+        let cast: CastJson | null;
+        try {
+          cast = await readJson<CastJson>(castJsonPath(bookDir));
+        } catch (e) {
+          console.error(`[voices] skipping book ${state.bookId}: cast.json unreadable`, e);
+          continue;
+        }
         if (!cast?.characters?.length) continue;
 
         bookMeta.set(state.bookId, {
@@ -627,11 +636,17 @@ export async function hasClonedSlotAmongMatches(
   seriesFilter?: { author: string; series: string },
   otherThanEngine?: TtsEngine,
   onlyBookDir?: string,
+  /* #4067 -- when set, only rows that carry this voiceUuid count: a SET of a
+     "Don't reuse"-separated designed voice writes only those rows, so a clone on a row
+     that stayed on the earlier voice is not one the write could retarget. */
+  onlyOnVoiceUuid?: string,
 ): Promise<boolean> {
   const cloned = (c: CastCharacter): boolean =>
-    otherThanEngine
-      ? CLONE_ENGINE_LIST.some((e) => e !== otherThanEngine && hasClonedProvenance(c, e))
-      : characterHasClonedSlot(c);
+    onlyOnVoiceUuid && c.voiceUuid !== onlyOnVoiceUuid
+      ? false
+      : otherThanEngine
+        ? CLONE_ENGINE_LIST.some((e) => e !== otherThanEngine && hasClonedProvenance(c, e))
+        : characterHasClonedSlot(c);
 
   /* Mirrors forEachMatchingCastCharacter's own onlyBookDir special case
      (voices.ts:809) exactly: a caller with no series context must not fall
@@ -668,6 +683,17 @@ export async function hasClonedSlotAmongMatches(
     }
   }
   return false;
+}
+
+/* #4067 -- the uuid of a designed-voice override (`qwen-<uuid>`) when any separated-voice
+   record exists for it (separated-voices.ts: a "Don't reuse" separation, or the OwnStamp a
+   mint or isolation before Confirm writes), else undefined. Only rows holding that uuid
+   belong to such a voice; every other row matched by `voiceId` is on another one. */
+async function separatedDesignedUuid(
+  override: { engine: TtsEngine; name: string } | null,
+): Promise<string | undefined> {
+  const uuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+  return uuid && (await isSeparatedVoice(uuid)) ? uuid : undefined;
 }
 
 /* Batched sibling of hasClonedSlotAmongMatches: ONE walk of the matched
@@ -774,49 +800,83 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
       }
       seriesFilter = resolved;
     }
+    /* The checks, the write and the answer for one scope (the series, the whole
+       workspace, or one book). */
+    const apply = async (
+      filter: { author: string; series: string } | undefined,
+      onlyBookDir: string | undefined,
+    ): Promise<{ status: number; body?: unknown }> => {
+      if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, filter, undefined, onlyBookDir))) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
+              `override would silently revert it to a catalog voice. Reassign that character directly instead.`,
+          },
+        };
+      }
+      /* GATE 2 I-B1 — the SET branch's sibling refusal. The write pins
+         `ttsEngine` to the incoming engine on every matching character, so a
+         character cloned on a DIFFERENT clone-capable engine would keep its
+         marker and stop rendering it. Fail loud instead. */
+      if (
+        parsed !== null &&
+        (await hasClonedSlotAmongMatches(voiceId, filter, parsed.engine, onlyBookDir, await separatedDesignedUuid(parsed)))
+      ) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Voice "${voiceId}" has a consented cloned voice on a linked character, on a different ` +
+              `engine — switching it to ${parsed.engine} would silently stop that voice rendering. ` +
+              `Reassign that character directly instead.`,
+          },
+        };
+      }
+      const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, filter, onlyBookDir);
+      if (updated === 0 && skipped.length === 0) {
+        const where = filter
+          ? `in series "${filter.author} / ${filter.series}"`
+          : 'in any confirmed cast';
+        return { status: 404, body: { error: `No character with voiceId "${voiceId}" found ${where}.` } };
+      }
+      if (updated === 0 && skipped.length > 0) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Voice "${voiceId}" has a consented cloned voice on a linked character — ` +
+              `propagation refused. Reassign that character directly instead.`,
+            skipped,
+          },
+        };
+      }
+      if (skipped.length > 0) return { status: 200, body: { updated, skipped } };
+      return { status: 204 };
+    };
+    const respond = (out: { status: number; body?: unknown }) =>
+      out.body === undefined ? res.status(out.status).end() : res.status(out.status).json(out.body);
+    if (scope === 'series') {
+      /* Review pass 3 (E) -- a design (or Keep) in a book whose cast is not confirmed
+         is not shared with the series (F8), so the drawer's Save that follows names
+         that book alone, exactly as the design jobs do: a series write would rewrite
+         the confirmed mates' rows (their library slots and engines included).
+         Review pass 4 (🟠2) -- decided and written UNDER the book's own book-op, from
+         the handle it hands out: a folder move or a Start fresh cannot land between
+         the read that says "unconfirmed" and the write (the write used to re-create
+         the old folder from a lock-free peek). The series walk below runs only when
+         that locked read says the book is confirmed, and takes each book's op itself
+         (never nested). A Save for a book that is gone falls through to the walk. */
+      const own = await withBookOp(bookId!, async (b) =>
+        b.state.castConfirmed === true ? undefined : apply(undefined, b.bookDir),
+      );
+      if (own !== undefined && own !== BOOK_GONE) return respond(own);
+    }
     /* #3713 -- the fan-out matches mates by voice id, so a repaired one is never named: refuse the whole
        write (before any cast.json changes) when the request lacks the current repair epoch. */
     if (await refuseGatedSeriesFanOut(seriesFilter, req, res)) return;
-    if (parsed === null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter))) {
-      return res.status(409).json({
-        error:
-          `Voice "${voiceId}" has a consented cloned voice on a linked character — clearing the ` +
-          `override would silently revert it to a catalog voice. Reassign that character directly instead.`,
-      });
-    }
-    /* GATE 2 I-B1 — the SET branch's sibling refusal. The write pins
-       `ttsEngine` to the incoming engine on every matching character, so a
-       character cloned on a DIFFERENT clone-capable engine would keep its
-       marker and stop rendering it. Fail loud instead. */
-    if (parsed !== null && (await hasClonedSlotAmongMatches(voiceId, seriesFilter, parsed.engine))) {
-      return res.status(409).json({
-        error:
-          `Voice "${voiceId}" has a consented cloned voice on a linked character, on a different ` +
-          `engine — switching it to ${parsed.engine} would silently stop that voice rendering. ` +
-          `Reassign that character directly instead.`,
-      });
-    }
-    const { updated, skipped } = await applyOverrideToCastFiles(voiceId, parsed, seriesFilter);
-    if (updated === 0 && skipped.length === 0) {
-      const where = seriesFilter
-        ? `in series "${seriesFilter.author} / ${seriesFilter.series}"`
-        : 'in any confirmed cast';
-      return res
-        .status(404)
-        .json({ error: `No character with voiceId "${voiceId}" found ${where}.` });
-    }
-    if (updated === 0 && skipped.length > 0) {
-      return res.status(409).json({
-        error:
-          `Voice "${voiceId}" has a consented cloned voice on a linked character — ` +
-          `propagation refused. Reassign that character directly instead.`,
-        skipped,
-      });
-    }
-    if (skipped.length > 0) {
-      return res.status(200).json({ updated, skipped });
-    }
-    res.status(204).end();
+    return respond(await apply(seriesFilter, undefined));
   } catch (e) {
     console.error('[voices] override failed', e);
     /* #2260 FINAL ROUND (B2) — `applyOverrideToCastFiles` →
@@ -862,7 +922,7 @@ function parseOverrideField(
 export async function forEachMatchingCastCharacter(
   voiceId: string,
   seriesFilter: { author: string; series: string } | undefined,
-  mutate: (character: CastCharacter) => CastCharacter,
+  mutate: (character: CastCharacter, bookDir: string) => CastCharacter,
   /* fs-61 — when `seriesFilter` is absent, restrict the write to exactly this
      book's directory instead of the whole workspace. Every standalone book
      resolves to the same synthetic (author: X, series: "Standalones") pair,
@@ -875,6 +935,10 @@ export async function forEachMatchingCastCharacter(
      real call site. Omit only for the genuinely-global
      PUT /:voiceId/override 'workspace' scope. */
   onlyBookDir?: string,
+  /* #4062 — called with each book's directory once that book's cast.json write
+     has landed (never for a book whose write failed), so a caller can tell the
+     books it changed on disk from the ones its `mutate` only ran on. */
+  onWritten?: (bookDir: string) => void,
 ): Promise<number> {
   /* #1981 — this function is a fan-out writer: one call can touch every book
      in a series (or the whole workspace), so it's the worst place for a lost
@@ -899,7 +963,7 @@ export async function forEachMatchingCastCharacter(
         const original = cast.characters[i];
         const id = original.voiceId ?? original.id;
         if (id !== voiceId) continue;
-        const next = mutate(original);
+        const next = mutate(original, onlyBookDir);
         cast.characters[i] = next;
         dirty = true;
         /* A `mutate` that deliberately declines a character (a clone-consent
@@ -910,7 +974,10 @@ export async function forEachMatchingCastCharacter(
            harmless idempotent write, not worth a second flag). */
         if (next !== original) updated += 1;
       }
-      if (dirty) await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
+      if (dirty) {
+        await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
+        onWritten?.(onlyBookDir);
+      }
       return updated;
     });
   }
@@ -948,7 +1015,7 @@ export async function forEachMatchingCastCharacter(
               const original = cast.characters[i];
               const id = original.voiceId ?? original.id;
               if (id !== voiceId) continue;
-              const next = mutate(original);
+              const next = mutate(original, dir);
               cast.characters[i] = next;
               dirty = true;
               /* See the onlyBookDir branch above — a declined (same-reference)
@@ -957,6 +1024,7 @@ export async function forEachMatchingCastCharacter(
             }
             if (dirty) {
               await writeJsonAtomic(castJsonPath(dir), cast);
+              onWritten?.(dir);
             }
             return bookUpdated;
           });
@@ -1021,7 +1089,16 @@ export async function applyOverrideToCastFiles(
      workspace sharing the same bare character id. Only the genuinely-global
      PUT /:voiceId/override 'workspace' scope should omit both. */
   onlyBookDir?: string,
-): Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> {
+  /* #4031 -- the bulk design job's own row: a qwen slot already on it (picked
+     while the render ran) that is not the just-landed name is kept, decided here
+     under the book's lock. Siblings keep the series propagation. */
+  keepOwnSlot?: { bookDir: string; characterId: string },
+): Promise<{
+  updated: number;
+  skipped: Array<{ bookDir: string; characterId: string; reason: string }>;
+  keptOwnSlot?: true;
+}> {
+  let keptOwnSlot = false;
   const otherThanEngine = override === null ? undefined : override.engine;
   /* Which sentinel a caller gets right: forEachMatchingCastCharacter's own
      branch at voices.ts:809 only honours `onlyBookDir` when `seriesFilter`
@@ -1048,7 +1125,14 @@ export async function applyOverrideToCastFiles(
      finalizes". This IS a genuinely series-wide (or workspace-wide)
      verdict, not a per-book one — labelled accordingly rather than with
      the residual backstop's "(unknown)" sentinel below. */
-  if (await hasClonedSlotAmongMatches(voiceId, seriesFilter, otherThanEngine, onlyBookDir)) {
+  /* #4067 -- a designed-voice name that is a voice "Don't reuse" separated (separated-
+     voices.ts) belongs to the rows that moved onto that uuid and to no other: a row that
+     does not hold it (a declined book's row, with or without a uuid, and a library-assigned
+     slot included) is on another voice, however it matches by `voiceId`. Read here, once,
+     because the walk's callback is synchronous. */
+  const separatedUuid = await separatedDesignedUuid(override);
+  const designedUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+  if (await hasClonedSlotAmongMatches(voiceId, seriesFilter, otherThanEngine, onlyBookDir, separatedUuid)) {
     return {
       updated: 0,
       skipped: [{
@@ -1062,7 +1146,18 @@ export async function applyOverrideToCastFiles(
   const updated = await forEachMatchingCastCharacter(
     voiceId,
     seriesFilter,
-    (original) => {
+    (original, dir) => {
+      if (
+        keepOwnSlot &&
+        override?.engine === 'qwen' &&
+        original.id === keepOwnSlot.characterId &&
+        resolve(dir) === resolve(keepOwnSlot.bookDir) &&
+        original.overrideTtsVoices?.qwen?.name &&
+        original.overrideTtsVoices.qwen.name !== override.name
+      ) {
+        keptOwnSlot = true;
+        return original;
+      }
       /* Residual-window backstop: the walk still takes nonzero time after
          the fresh scan above passed. Immune to unrelated intermediate
          writes because it re-checks the FRESH per-book read
@@ -1080,14 +1175,15 @@ export async function applyOverrideToCastFiles(
          (`qwen-<uuid>`) that names another uuid is not meant for it: decline
          the match (same reference, not counted) instead of rewriting the earlier
          book's slot and engine. Linked rows share the uuid and still take the
-         write; a row with no uuid, or a library-assigned slot, is unchanged from
-         before. */
-      const designedUuid = override?.engine === 'qwen' ? /^qwen-(.+)$/.exec(override.name)?.[1] : undefined;
+         write; a library-assigned slot is unchanged from before, and so is a row
+         with no uuid, unless the designed uuid is a separated voice (#4067, above):
+         then only the rows that moved onto it take the write, and every other row
+         (library slot and no-uuid row included) is declined. */
       if (
         designedUuid &&
-        original.voiceUuid &&
         original.voiceUuid !== designedUuid &&
-        !original.overrideTtsVoices?.qwen?.libraryUuid
+        (separatedUuid ||
+          (original.voiceUuid && !original.overrideTtsVoices?.qwen?.libraryUuid))
       ) {
         return original;
       }
@@ -1155,7 +1251,7 @@ export async function applyOverrideToCastFiles(
      this anyway so a future invocation refreshes /speakers cleanly if the
      sidecar was bounced in between. Cheap and side-effect free. */
   if (updated > 0) invalidateBaseVoiceCache();
-  return { updated, skipped };
+  return { updated, skipped, ...(keptOwnSlot ? { keptOwnSlot: true as const } : {}) };
 }
 
 /* Set or clear the per-character Qwen quality tier (ttsModelKey) across every

@@ -44,7 +44,7 @@ import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
 import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import type { AnalysisEngine } from '../lib/model-id';
-import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { analysisActions, ANALYSIS_STREAM_LIVE_QUERY, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
@@ -486,6 +486,13 @@ export const analysisStreamMiddleware: Middleware = (store) => {
   };
 
   return (next) => (action) => {
+    /* Plan 291 (R30) — the cast gate asks whether this handle feeds a book's
+       snapshot. Answered here, never reduced. */
+    if ((action as { type?: string }).type === ANALYSIS_STREAM_LIVE_QUERY) {
+      const bookId = (action as { payload?: unknown }).payload;
+      const snap = (store.getState() as AnalysisRootState).analysis.activeStream;
+      return !!handle && !!snap && snap.bookId === bookId && snap.manuscriptId === handle.manuscriptId;
+    }
     const result = next(action);
     const a = action as { type?: string; payload?: { manuscriptId?: string } };
 

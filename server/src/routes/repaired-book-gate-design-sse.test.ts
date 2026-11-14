@@ -22,7 +22,8 @@ vi.mock('./qwen-voice.js', async (orig) => {
     designQwenVoiceForCharacter: vi.fn(
       async (p: { bookDir: string; characterId: string; seriesFilter?: { author: string; series: string } }) => {
         const voiceUuid = await actual.ensureCharacterVoiceUuid(p.bookDir, p.characterId, p.seriesFilter);
-        return { voiceId: `qwen-${voiceUuid ?? p.characterId}`, url: `/api/voice-sample/${p.characterId}.mp3`, voiceUuid };
+        /* F8 (#4096) -- the real core reports whether it shared with the series; every book here is confirmed. */
+        return { voiceId: `qwen-${voiceUuid ?? p.characterId}`, url: `/api/voice-sample/${p.characterId}.mp3`, voiceUuid, seriesShared: !!p.seriesFilter };
       },
     ),
   };

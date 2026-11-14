@@ -4,8 +4,10 @@
    two authoritative persist blocks, bound to `mergedFinal.characters`, and
    NEVER at any of the three mid-run "Cast so far" interim writes.
 
-   The hazard (already fixed once as #2086): during an interim write,
-   `buildInterimCast` has folded only the chapters analysed so far. A
+   The hazard (already fixed once as #2086): during an interim write, the
+   roster holds only the chapters analysed so far (before plan 291,
+   `buildInterimCast` folded it; now the interim snapshot writes the
+   plan-applied roster). A
    character who simply has not been reached yet is indistinguishable, at
    that moment, from one the analyzer actually dropped. Pruning a
    `supersededBy` entry against that partial roster would delete a valid
@@ -31,16 +33,23 @@
    interim write, the target is simply not-yet-reached — indistinguishable
    from dropped. The test asserts the alias survives on disk.
 
-   Mutation check performed by hand while writing this test (see the PR /
-   commit message for the exact result): temporarily binding
-   `dropSupersededTargetsNoLongerLive` to the interim roster's ids at the
-   chapter-loop interim write (this file, the block that computes
-   `mergedInterim`) turns this test red — the not-yet-reached target reads
-   as dropped and the entry is pruned out from under it. Reverted before
-   commit; production is untouched by this file. */
+   Plan 291 (#4031) re-derivation: Phase 0a no longer writes cast.json at all,
+   so a death there leaves nothing to prune against. The one pre-persist write
+   is now the Phase-0b snapshot (`writePlanSnapshot`), and the same hazard
+   applies to it: the run has not reached the authoritative persist, so a
+   target missing from its roster is still not proof of anything. The scenario
+   is therefore moved one step later - Phase 0 completes without ever
+   detecting 'boris', the Phase-0b snapshot lands, and the run is stopped at
+   its first Phase-1 call, before any persist. The alias must survive.
+
+   Mutation check performed by hand (plan 291 re-derivation): temporarily
+   calling `dropSupersededTargetsNoLongerLive` with the snapshot roster's ids
+   right after `writePlanSnapshot` in `planCastIdentity` (analysis.ts) turns
+   this test red - the absent target reads as dropped and the entry is pruned
+   out from under it. Reverted; production is untouched by this file. */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -127,10 +136,9 @@ function buildPhase0Analyzer(): Analyzer {
       chapterId: number,
     ): Promise<Stage1ChapterOutput> {
       if (chapterId === 2) {
-        // Simulated mid-run death: a crash / disconnect / rate-limit kill
-        // that ends the job partway through Phase 0a, after chapter 1's
-        // interim write already landed.
-        throw new Error('simulated mid-run analyzer failure (chapter 2)');
+        // Plan 291: chapter 2 completes with the narrator only - 'boris' is
+        // never detected, so he is absent from the Phase-0b snapshot.
+        return { characters: [chapter1Roster()[0]] };
       }
       return { characters: chapter1Roster() };
     },
@@ -142,14 +150,19 @@ function buildPhase0Analyzer(): Analyzer {
   };
 }
 
-/* Never reached (the run dies in Phase 0a before Phase 1 starts) — present
-   only so buildSelection has something type-correct to hand runMainAnalyzerJob. */
+/* Plan 291: the first Phase-1 call stops the run the way a user Stop does -
+   after the Phase-0b snapshot, before any persist. */
+let stopJob: (() => void) | undefined;
 function buildPhase1Analyzer(): Analyzer {
   return {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
-    runStage2Chapter: (): Promise<Stage2ChapterOutput> =>
-      Promise.reject(new Error('should never be reached — Phase 0a died first')),
+    runStage2Chapter: (): Promise<Stage2ChapterOutput> => {
+      stopJob?.();
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      return Promise.reject(e);
+    },
     runEmotionChapter: () => Promise.reject(new Error('not used')),
     runScriptReviewChapter: () => Promise.reject(new Error('not used')),
     runStage3Chapter: () => Promise.reject(new Error('not used')),
@@ -172,6 +185,7 @@ let clearAnalysisCache: typeof import('../store/analysis-cache.js').clearAnalysi
 let loadCastIdHistory: typeof import('../store/cast-id-history.js').loadCastIdHistory;
 let retireCharacterId: typeof import('../store/cast-id-history.js').retireCharacterId;
 let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
+let manuscriptEditsJsonPath: typeof import('../workspace/paths.js').manuscriptEditsJsonPath;
 let makeBookId: typeof import('../workspace/paths.js').makeBookId;
 
 beforeAll(async () => {
@@ -197,6 +211,7 @@ beforeAll(async () => {
   loadCastIdHistory = historyMod.loadCastIdHistory;
   retireCharacterId = historyMod.retireCharacterId;
   castJsonPath = pathsMod.castJsonPath;
+  manuscriptEditsJsonPath = pathsMod.manuscriptEditsJsonPath;
   makeBookId = pathsMod.makeBookId;
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -306,6 +321,7 @@ describe('interim-write prune prohibition — a not-yet-reached target must not 
         },
         lastDiskWriteAt: 0,
       } as unknown as AnalysisJob;
+      stopJob = () => job.controller.abort();
 
       try {
         const recordRef = getManuscript(manuscriptId);
@@ -322,17 +338,19 @@ describe('interim-write prune prohibition — a not-yet-reached target must not 
           requestedModel: undefined,
         });
 
-        // Sanity check on the fixture: the run really did die mid-Phase-0a,
-        // not complete normally or die before chapter 1. If this fails the
-        // scenario never fired and everything below would be vacuous.
+        // Sanity check on the fixture: Phase 0 completed and the run was
+        // stopped before the authoritative persist (which writes
+        // manuscript-edits.json first). If this fails the scenario never fired
+        // and everything below would be vacuous.
         const logMessages = job.replay.logs.map((l) => l.message);
-        expect(logMessages.some((m) => m.includes('Chapter 1/2 cast done'))).toBe(true);
-        expect(logMessages.some((m) => m.includes('Chapter 2/2 cast done'))).toBe(false);
+        expect(logMessages.some((m) => m.includes('Chapter 2/2 cast done'))).toBe(true);
+        expect(job.controller.signal.aborted).toBe(true);
+        expect(existsSync(manuscriptEditsJsonPath(bookDir))).toBe(false);
 
-        // Sanity check: chapter 1's interim write really did land, and
-        // 'boris' (chapter 2's character) is genuinely absent from it — the
-        // exact "not yet reached, indistinguishable from dropped" state the
-        // interim write must never prune against.
+        // Sanity check: the Phase-0b snapshot really did land, and 'boris' is
+        // genuinely absent from it - the "not in this roster, but no
+        // authoritative write has said so" state a pre-persist write must
+        // never prune against.
         const castAfterInterimWrite = JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as {
           characters: Array<{ id: string }>;
         };
@@ -341,7 +359,7 @@ describe('interim-write prune prohibition — a not-yet-reached target must not 
         expect(idsAfterInterimWrite).toContain('olga');
         expect(idsAfterInterimWrite).not.toContain('boris');
 
-        // The assertion under test: the interim write must not have pruned
+        // The assertion under test: the snapshot must not have pruned
         // the 'old-boris' -> 'boris' alias just because 'boris' wasn't in
         // the roster it wrote. It is only genuinely dead once an
         // AUTHORITATIVE write (never reached in this run) says so.
@@ -352,6 +370,7 @@ describe('interim-write prune prohibition — a not-yet-reached target must not 
         removeManuscript(manuscriptId);
         await clearAnalysisCache(manuscriptId);
         clearPhase1Selection();
+        stopJob = undefined;
         if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
         else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
         if (originalConcurrency === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;

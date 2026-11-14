@@ -178,19 +178,49 @@ describe('cast-merges store — IO round-trip', () => {
     expect(reloaded.entries[0].affected).toEqual([{ chapterId: 3, sentenceId: 4 }]);
   });
 
-  it('clearCastMerges removes the file and is a no-op when absent', async () => {
-    const { loadCastMerges, saveCastMerges, clearCastMerges, castMergesExists } =
-      await import('./cast-merges.js');
+  /* Replaces the deleted `clearCastMerges` test: Start fresh no longer removes the
+     journal (plan 291 rule 8, #4031); it clears every entry's refs and keeps the merges. */
+  it("clearAffectedRefs empties every entry's refs of every kind and keeps the merges", async () => {
+    const { loadCastMerges, saveCastMerges, clearAffectedRefs } = await import('./cast-merges.js');
+    const refs = [{ chapterId: 3, sentenceId: 4 }];
+    await saveCastMerges(bookDir, {
+      entries: (['manual', 'fold', 'dedup'] as const).map((kind) => ({
+        ts: 't',
+        kind,
+        sourceId: `${kind}-src`,
+        sourceName: kind,
+        targetId: 'b',
+        affected: refs.map((r) => ({ ...r })),
+      })),
+    });
+    await clearAffectedRefs(bookDir);
+    const after = await loadCastMerges(bookDir);
+    expect(after.entries.map((e) => [e.kind, e.sourceId, e.sourceName, e.targetId, e.ts])).toEqual([
+      ['manual', 'manual-src', 'manual', 'b', 't'],
+      ['fold', 'fold-src', 'fold', 'b', 't'],
+      ['dedup', 'dedup-src', 'dedup', 'b', 't'],
+    ]);
+    expect(after.entries.map((e) => e.affected)).toEqual([[], [], []]);
+  });
+
+  it('clearAffectedRefs writes nothing when the journal is absent or carries no refs', async () => {
+    const { loadCastMerges, saveCastMerges, clearAffectedRefs, castMergesExists } = await import(
+      './cast-merges.js'
+    );
+    const { castMergesJsonPath } = await import('../workspace/paths.js');
+    rmSync(castMergesJsonPath(bookDir), { force: true });
+    await clearAffectedRefs(bookDir);
+    expect(await castMergesExists(bookDir)).toBe(false);
     await saveCastMerges(bookDir, {
       entries: [
         { ts: 't', kind: 'manual', sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [] },
       ],
     });
-    expect(await castMergesExists(bookDir)).toBe(true);
-    await clearCastMerges(bookDir);
-    expect(await castMergesExists(bookDir)).toBe(false);
-    /* Second clear must not throw. */
-    await clearCastMerges(bookDir);
-    expect((await loadCastMerges(bookDir)).entries).toEqual([]);
+    const { statSync, utimesSync } = await import('node:fs');
+    /* Back-date the file so a rewrite cannot hide inside the clock's resolution. */
+    utimesSync(castMergesJsonPath(bookDir), 1000, 1000);
+    await clearAffectedRefs(bookDir);
+    expect(statSync(castMergesJsonPath(bookDir)).mtimeMs).toBe(1_000_000);
+    expect((await loadCastMerges(bookDir)).entries).toHaveLength(1);
   });
 });

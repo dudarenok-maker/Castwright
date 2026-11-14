@@ -883,6 +883,69 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     expect(store.getState().manuscript.title).toBeNull();
   });
 
+  it('does not wipe the slices when the user opened ANOTHER book while the re-parse was out (A120 review)', async () => {
+    const store = makePopulatedStore();
+    /* The slices now hold a different book (Y) than the one being re-parsed (b1). */
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'other-y', manuscriptId: 'mns-y', title: 'Book Y' } as any,
+        sentences: null,
+        wordCount: 10,
+        format: 'plaintext',
+      }),
+    );
+    reparseBookMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+    getLibraryMock.mockResolvedValue({
+      authors: [
+        {
+          name: 'Della Renwick',
+          series: [{ name: 'Standalones', books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })] }],
+        },
+      ],
+    });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    const { showInfo } = renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+    const reparseButtons = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+    fireEvent.click(reparseButtons[reparseButtons.length - 1]);
+    await waitFor(() => expect(showInfo).toHaveBeenCalled());
+    expect(store.getState().manuscript.bookId).toBe('other-y');
+    expect(store.getState().cast.characters).toHaveLength(24);
+  });
+
+  it('does not wipe the slices when the user opened ANOTHER book while a manuscript replace was out', async () => {
+    const store = makePopulatedStore();
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'other-y', manuscriptId: 'mns-y', title: 'Book Y' } as any,
+        sentences: null,
+        wordCount: 10,
+        format: 'plaintext',
+      }),
+    );
+    replaceManuscriptMock.mockResolvedValue({ chapterCount: 1 });
+    getLibraryMock.mockResolvedValue({
+      authors: [
+        {
+          name: 'Della Renwick',
+          series: [{ name: 'Standalones', books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })] }],
+        },
+      ],
+    });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    const { showInfo } = renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+      target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+    });
+    const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+    fireEvent.click(confirm[confirm.length - 1]);
+    await waitFor(() => expect(showInfo).toHaveBeenCalled());
+    expect(store.getState().manuscript.bookId).toBe('other-y');
+    expect(store.getState().cast.characters).toHaveLength(24);
+  });
+
   /* #3400 pass 7 — the dialog's exclude toggles (and the front-matter
      auto-suggestions it applies on "Analyse now") are keyed by chapter id,
      which a restructure of that book renumbers. */
@@ -1826,6 +1889,15 @@ describe('ConfirmRoute — analysis gaps from the server after a main result', (
     const store = makeStore();
     store.dispatch(chaptersActions.setAnalysisGap({ chapterId: 1, message: 'Old 1.' }));
     store.dispatch(chaptersActions.setAnalysisGap({ chapterId: 2, message: 'Old 2.' }));
+    /* the analysis-complete hydrate has stamped the slices with this book */
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'T' } as any,
+        sentences: null,
+        wordCount: 1,
+        format: 'plaintext',
+      }),
+    );
     getBookStateMock.mockResolvedValue({
       state: {
         bookId: 'b1',
@@ -1982,14 +2054,11 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
       </Provider>,
     );
 
-    /* The Generate H1 reads "Generating <title>" via MixedHeading.
-       Both halves render in the same heading element, so a substring
-       match against the title alone is enough. The await is required
-       because GenerationView is React.lazy now (plan 89 C5) — the
-       initial paint is the Suspense fallback. */
-    const heading = await screen.findByRole('heading', { level: 1 });
-    expect(heading.textContent).toContain('Mystery Novel');
-    expect(heading.textContent).not.toContain('the Coalfall Commission');
+    /* Ready views are gated on the slices naming the route's book (A120 run 2
+       review): while they still hold Book A the screen shows a loading state,
+       never Book A's title or rows under Book B's URL. */
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.queryByText(/the Coalfall Commission/)).toBeNull();
   });
 });
 

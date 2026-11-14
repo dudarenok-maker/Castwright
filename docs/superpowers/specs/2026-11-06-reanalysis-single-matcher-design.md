@@ -432,7 +432,10 @@ fresh then offers lines by alias match alone.
 ## Non-goals
 
 - The series linker's own cross-book matching. It now runs on `new` rows only.
-- New UI. Accept, dismiss and the display-name flip already exist.
+- New UI. Accept, dismiss and the display-name flip already exist. One
+  exception (owner, 2026-11-08, plan 291 ruling): while a re-analysis runs, and until
+  the cast has reloaded, the cast is read-only behind a banner, with its edit controls disabled, and the
+  server refuses a whole-slice cast PUT with 409 `book_busy`.
 - The analyzer prompts and chapter splitting.
 
 The Phase-1 prompt roster **does** change: it now lists prior ids, prior
@@ -497,12 +500,20 @@ the suggestions store:
     - A dismissal survives a re-analysis (reconcile included), a Start fresh,
       and a later merge of one of the two into a third character.
     - The pair is not re-suggested.
-13. **Mid-run user writes.** A merge and a dismissal made during a run survive
-    the next interim snapshot and the persist.
+13. **Mid-run user writes.** A dismissal made during a run survives the next
+    interim snapshot and the persist. A mid-run identity write (a merge, an
+    accepted suggestion, an orphan link or reject, an unlinked alias, a new
+    character) is refused with 409 `book_busy`. (Amended by plan 291, ruling
+    R55.)
 14. **Stopped run.**
     - Stopped after snapshots and never resumed: the cast is only extended,
       and a user edit made on a new row survives.
-    - Resumed: the same result as an uninterrupted run.
+    - Resumed: the same result as an uninterrupted run. This holds for both
+      jobs, including a subset resuming a subset (its stopped attempt's rows
+      are tagged in the ledger, plan 291 R35b, so the resume treats them as its own).
+      One documented exception: a stopped attempt's fold-dropped rows survive
+      a resumed SUBSET (subset never deletes by ledger, plan 291 invariant 6) until the
+      next main run removes them (plan 291 R38/R42).
 15. **Minted ids.** In the `wren`+`wren-2` roster with a forced `new`, the
     minted id is not any live, superseded, displaced or raw id, and the row's
     sentences carry it.
@@ -519,16 +530,26 @@ the suggestions store:
     - A character the fold drops and the user did not edit is gone after
       persist.
     - One the user gave a voice mid-run stays.
-20. **Deleted mid-run (rule 13).** The character stays deleted, and its lines
-    are on the narrator.
+20. **Deleted mid-run (rule 13).** The cast is read-only mid-run, so no user
+    delete reaches the run, and a merge during a registered run is refused
+    with 409 `book_busy`. The one remaining trigger is a merge whose history
+    write failed and that still reaches a run (one that runs unregistered; the
+    merge request answers 500 and the client reloads): the source stays gone,
+    and its lines are on the narrator. (Amended by plan 291, rulings R13 and
+    R55.)
 21. **Provenance (rule 12).**
     - An untagged and a `user` entry are T1.
     - An `analyzer` entry is not: a later ambiguous name gives a suggestion.
 22. **Legacy cache.** A cache without the current version is a miss, and the
     resume re-runs from the analyzer.
-23. **Mid-run merge, other files.** After a mid-run merge, the rolled
-    `manuscript-edits.json` and the cache carry the survivor id.
-24. **Drift-refused run.** It writes no suggestions.
+23. **Mid-run merge, other files.** A mid-run identity write is refused with
+    409 `book_busy`, so no file changes. A merge that still reaches a run (one
+    that runs unregistered) leaves the rolled `manuscript-edits.json` and the
+    cache carrying the survivor id, as defence in depth. (Amended by plan 291,
+    ruling R55.)
+24. **Drift-refused run.** It writes no suggestions. The ones it wrote
+    transiently at the Phase-0b snapshot are removed when drift is refused
+    (plan 291, ruling Q3/R11).
 25. **Unit tests.**
     - `matchFreshToPrior` is total and deterministic over every fixture above.
     - mergeCore contains no name comparison; it joins only by plan.

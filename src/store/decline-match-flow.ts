@@ -37,7 +37,7 @@ export function declineMatchFlow(characterId: string) {
     const openBook = { manuscriptId: state.manuscript.manuscriptId as string };
 
     let marker:
-      | { declinedVoiceFrom: string[]; declinedVoiceUuids: string[]; voiceUuid?: string | null; movedCharacterIds?: string[] }
+      | { declinedVoiceFrom: string[]; declinedVoiceUuids: string[]; voiceUuid?: string | null; separated?: boolean; movedCharacterIds?: string[] }
       | undefined;
     if (bookId && fromBookId) {
       try {
@@ -55,16 +55,22 @@ export function declineMatchFlow(characterId: string) {
       }
     }
     if (!selectIsOpenBook(getState(), openBook)) return;
-    dispatch(castActions.declineMatch(characterId));
+    /* Plan 291 (R31) — the route already saved it: a read-only cast toasts
+       nothing for it. With no source book only the reducer runs, unsaved. */
+    dispatch(castActions.declineMatch(characterId, marker ? { routeBacked: true } : undefined));
     if (marker) {
-      const { voiceUuid, movedCharacterIds, declinedVoiceFrom, declinedVoiceUuids } = marker;
+      const { voiceUuid, separated, movedCharacterIds, declinedVoiceFrom, declinedVoiceUuids } = marker;
       dispatch(castActions.setDeclinedVoice({ characterId, declinedVoiceFrom, declinedVoiceUuids }));
       /* The route may have moved the row onto a voice of its own, with the other
-         rows of this book on the same key (pass 10); the reducer drops the stale
-         variant slots when the uuid changes. */
-      if (voiceUuid) {
+         rows of this book on the same key (pass 10); the fork reducer mirrors
+         the server's rename of the qwen slot and drops its variant slots (#4067),
+         or the next whole-roster save writes the old ones back. Only when the
+         route says it moved the row: a decline that left it on the voice it
+         already owned reports that same uuid, and mirroring a fork it never made
+         would delete the row's emotion variants. */
+      if (separated && voiceUuid) {
         for (const id of [characterId, ...(movedCharacterIds ?? [])]) {
-          dispatch(castActions.setCharacterVoiceUuid({ characterId: id, voiceUuid }));
+          dispatch(castActions.forkCharacterVoiceUuid({ characterId: id, voiceUuid }));
         }
       }
     }

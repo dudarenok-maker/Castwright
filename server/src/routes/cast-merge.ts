@@ -9,12 +9,14 @@
    Touches three persisted files (atomic-rename each):
      1. cast.json                 — drop source, merge fields onto target
      2. manuscript-edits.json     — sentences[characterId=sourceId] → targetId
-     3. .audiobook/analysis-cache — stage1.characters + per-chapter sentences
+     3. .audiobook/analysis-cache — per-chapter sentences, the cached match
+                                    plan and the rule-11 ledger (ONE
+                                    `mutateAnalysisCache` op, #4031)
 
    We deliberately do NOT touch `chapterCast` (the raw per-chapter LLM
-   outputs). Those are historical record and would re-introduce the source
-   id only on a `fresh: true` re-analysis, which clears the whole cache
-   anyway. */
+   outputs) or the raw `stage1.characters` roster. Those are historical record
+   of what the analyzer saw; a resume applies the cached plan on top of them,
+   and the plan is what this merge re-targets (`retargetPlanForMerge`). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -25,12 +27,17 @@ import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { withBookLock } from '../workspace/book-lock.js';
-import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
-import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { mutateAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
-import { retireCharacterId } from '../store/cast-id-history.js';
+import { retireCharacterId, CastIdHistoryUnreadableError } from '../store/cast-id-history.js';
+import { removeSuggestionPairsLocked } from '../store/cast-merge-suggestions.js';
 import { clearNotLinkedEdgesForDroppedRejectionsLocked } from '../store/not-linked-edges.js';
+import { retargetPlanForMerge } from '../store/plan-overlay.js';
+import { unionNotLinkedTo } from '../store/cast-name-match.js';
+import type { NotSamePersonRecord } from '../store/reanalysis-types.js';
 import { normaliseForMatch } from './analysis.js';
+import { castIdentityBusyRefusal } from './book-state.js';
 import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
@@ -76,8 +83,8 @@ export interface CastMergeResult {
 
    Round 4's accept route discriminated on the error CLASS alone and dismissed
    the suggestion on both, which destroys the suggestion for a merge that never
-   happened (`dismissSuggestion` is a load-filter-write; only a fresh dedup pass
-   can put it back). Contention on `cast:<bookDir>` — the very condition #2260
+   happened (`removeSuggestionPairsLocked` is a load-filter-write; only a later analysis
+   run can put it back). Contention on `cast:<bookDir>` — the very condition #2260
    exists to surface — was enough to reach it.
 
    Stamped as an own property on the parked error rather than returned in the
@@ -94,7 +101,8 @@ export interface CastMergeResult {
    again — rather than deleting it. */
 const CAST_MERGE_APPLIED = 'castMergeApplied';
 
-/** True only for the DEFERRED lock-timeout rethrow out of `performCastMerge`,
+/** True only for the DEFERRED rethrow out of `performCastMerge` (a parked
+ *  history-write failure: a lock timeout, or since #4031 C3 any other error),
  *  i.e. the case where the merge IS fully applied on disk. False for an outer
  *  `withCastLock` acquisition expiry, where nothing was written. See the
  *  comment above for why this is an own property and why it fails closed. */
@@ -174,6 +182,19 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        anything source had already learned. Drop target.name itself (no point
        listing a name as its own alias) and dedup case-insensitively. */
     merged.aliases = mergeAliases(target, source);
+
+    /* Declines: the source's `notLinkedTo` is unioned into the target's, so a
+       person the source was declined against stays declined once it is the
+       survivor. A SAME-BOOK entry naming either of the two merging rows is
+       dropped (it would become a self-edge, or a dangling one for the id that
+       is about to retire); a same-book entry naming a THIRD row, and every
+       cross-book entry — including one whose characterId happens to equal
+       `targetId` — survives. */
+    const declines = unionNotLinkedTo(target.notLinkedTo, source.notLinkedTo ?? []).filter(
+      (e) => !namesSameBookRow(e, bookId, [sourceId, targetId]),
+    );
+    if (declines.length) merged.notLinkedTo = declines as CharacterOutput['notLinkedTo'];
+    else if (target.notLinkedTo) merged.notLinkedTo = [];
 
     /* Description: longer wins. The longer one usually carries more context. */
     if (
@@ -271,123 +292,138 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        row already rendered would otherwise orphan the instant this lands.
        Record the retirement through the same choke point every other
        id-losing path uses, so the resolver (§4.3) picks it up at render time.
+       Kind `'user'` (a deliberate merge), so a later run's matcher joins the
+       source's id onto the survivor. A fold bucket source is retired too, but
+       its entry is render-only: see R56 below.
 
-       Wrapped (Wave 2 final review, finding 4). This call sits between the
-       authoritative cast.json write above and the analysis-cache
-       reconciliation below, and was the only one of the seven retirement sites
-       left unguarded — an EPERM/ENOSPC/AV-lock here rejected the whole merge
-       with cast.json ALREADY missing sourceId while the cache still held it,
-       the exact state the comment below says must not happen, plus a 500 on a
-       half-applied merge. Kept HERE rather than moved after the cache update:
-       the position is correct (record after the authoritative write, #2040
-       Task 8 fix round 1 item 1) and moving it would not help — an unguarded
-       throw still rejects, just later. The side-table is never authoritative
-       for identity (spec §4.1), so losing an entry degrades to today's
-       behaviour while losing the merge does not. Mirrors the six analysis-path
-       sites. */
-    /* #2260 review round 3 (C2) — parked, not thrown at the catch below. See
-       that handler's own comment. */
-    let identityLockTimeout: unknown;
+       Lock order: this runs INSIDE the cast lock, and `retireCharacterId`
+       takes `cast-id-history` beneath it — `cast` -> `cast-id-history`, the
+       documented direction. Kept HERE rather than after the lock is released:
+       the position is correct (record after the authoritative cast.json
+       write, #2040 Task 8 fix round 1 item 1) and the dropped-record edge
+       cleanup below needs the roster this function already holds.
+
+       #4031 C3 — ANY failure here is PARKED, not swallowed. This used to
+       `console.warn` a non-timeout error and carry on, which reported a 200
+       for a merge whose retirement was never recorded (the id-of-record
+       divergence #2040 exists to prevent). Now the cache reconciliation and
+       the journal below still run, so disk is whole, and then the error is
+       rethrown — the request fails, the client reloads, and the half that
+       could not be written is visible rather than silent. */
+    /* The FIRST error parked wins (the history write is the one a user can act
+       on); every later step still runs. */
+    let parkedError: unknown;
+    let hasParkedError = false;
+    const park = (err: unknown): void => {
+      if (hasParkedError) return;
+      parkedError = err;
+      hasParkedError = true;
+    };
+    /* R53 (PR #4103 pass 4) and R56 (pass 5, owner rulings 2026-11-12) — a merge of a
+       fold bucket (`unknown-male` / `unknown-female`) is ONE-SHOT for later runs: the
+       bucket's lines move to the target above, and no matching, planning or retirement
+       path follows the merge afterwards. It IS retired (R56, reversing R53's "no
+       record" half), as on `main`: the chapters already rendered with the bucket's lines,
+       and with any character downgraded into it before (whose entry the retirement
+       repoints), persist the bucket id, and the history entry is what resolves them to
+       the target. The entry is render-only: `followableHistory()` keeps it out of every
+       matching, planning and retirement read, so a later run's background lines land on
+       a fresh bucket and a downgrade into the bucket lands on the bucket; the persist's
+       reclaim moves it to `displaced` once the bucket is live again, and a user delete of
+       a re-added bucket sticks (R4). Its cached plan decisions and its ledger entry go
+       with it in the cache op below. */
+    const sourceIsBucket = sourceId === MALE_BUCKET_ID || sourceId === FEMALE_BUCKET_ID;
     try {
-      const historyResult = await retireCharacterId(bookDir, sourceId, targetId);
+      const historyResult = await retireCharacterId(bookDir, sourceId, targetId, 'user');
       /* #2133/#2239 — a reject's two writes (the `rejectedPairs` entry on
          cast-id-history.json and the one-sided `notLinkedTo` edge on
          cast.json) are created together and must be destroyed together (see
          `docs/features/278-cast-character-identity.md`'s invariant of the
          same name). `retireCharacterId` reports a dropped self-loop pair but
          never touches cast.json itself — this merge already holds the cast
-         lock and has `nextCharacters` (the roster just persisted above) in
-         hand, so the cleanup uses the LOCK-FREE
-         `clearNotLinkedEdgesForDroppedRejectionsLocked` (`store/not-linked-
-         edges.ts`) — a plain in-place mutation, no fs of its own — plus a
+         lock and has `nextCharacters` in hand, so the cleanup uses the
+         LOCK-FREE `clearNotLinkedEdgesForDroppedRejectionsLocked` plus a
          second write in the SAME lock span, not a new `withCastLock` call
          (rule 1: a locked function must not call another locked function on
-         the same book). This is the third copy #2239 retired: the shared
-         module's locked-vs-lock-free pair replaces this merge's own inline
-         mutation loop, which used to hand-duplicate the logic
-         `clearNotLinkedEdgesForDroppedRejections` performs for its two
-         unlocked callers (`analysis.ts`, `cast-link-orphan.ts`). Best-effort,
-         mirroring the retirement write itself: a surviving stale edge merely
-         re-suppresses one future §4.4 name-match rather than corrupting
-         anything already on disk. */
-      if (historyResult.droppedSelfLoopRejections.length) {
-        const notLinkedChanged = clearNotLinkedEdgesForDroppedRejectionsLocked(
+         the same book).
+
+         #4031 — the same reasoning for a dropped `notSamePerson` record (a
+         dismissed pair this merge collapses): its two `notLinkedTo` edges are
+         removed together with it. BOTH clears always run (no `||`
+         short-circuit): each owns a different set of edges. */
+      const clearedRejections =
+        historyResult.droppedSelfLoopRejections.length > 0 &&
+        clearNotLinkedEdgesForDroppedRejectionsLocked(
           nextCharacters,
           bookId,
           historyResult.droppedSelfLoopRejections,
         );
-        if (notLinkedChanged) {
-          await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
-        }
+      const clearedDismissals = clearNotSamePersonEdgesLocked(
+        nextCharacters,
+        bookId,
+        historyResult.droppedNotSamePerson,
+      );
+      if (clearedRejections || clearedDismissals) {
+        await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters: nextCharacters });
       }
     } catch (historyErr) {
-      /* #2260 round 2 — the reasoning above ("the side-table is never
-         authoritative for identity, so losing an entry degrades to today's
-         behaviour") is sound for a disk fault and WRONG for a withKeyLock
-         acquisition timeout on `cast-id-history:<bookDir>`, which ordinary
-         contention can reach. Swallowing that returns 200 with cast.json
-         already missing sourceId and the retirement never recorded — the
-         identity-of-record divergence #2040 exists to prevent, silently, and
-         strictly worse than the hang the timeout replaced. Let exactly that
-         one class through; EPERM/ENOSPC/AV-lock are swallowed exactly as
-         before. See `LockAcquisitionTimeoutError` in workspace/file-lock.ts.
-
-         Round 3 (C2) — let it through, but not from HERE. Thrown at this
-         point it aborts before the analysis-cache reconciliation and the
-         cast-merges journal entry below, which recreates exactly the
-         half-applied state the wrap at the top of this block exists to
-         prevent: cast.json has sourceId folded into targetId, while the
-         cache still lists sourceId and still attributes sentences to it (so
-         the merged-away character reappears on the next resume — see the
-         cache comment immediately below) and no journal entry exists (so the
-         unlink-alias route can never undo the merge). Park it, finish both,
-         then rethrow. */
-      if (isLockAcquisitionTimeout(historyErr)) {
-        identityLockTimeout = historyErr;
+      if (historyErr instanceof CastIdHistoryUnreadableError) {
+        /* A degraded / unreadable history is not a merge failure: the
+           retirement is skipped and logged server-side (spec "Retirements are
+           skipped and logged"; the dismiss route does the same) and the merge
+           answers success. Only a real write error is parked. */
+        console.warn('[cast-merge] cast-id-history is unreadable; retirement skipped', historyErr);
       } else {
-        console.warn('[cast-merge] failed to record character-id retirement', historyErr);
+        park(historyErr);
       }
     }
 
-    /* Analysis cache update — stage1.characters AND per-chapter sentences.
-       The cache is what the route replays on resume, so leaving the source
-       in here would reintroduce the duplicate as soon as the user clicks
-       "resume" after a network blip. */
+    /* R32 — a manual merge removes ITS OWN pair's suggestion (the accept route
+       already did; the manual route left it dangling). Under the cast lock we
+       already hold; a failure is parked like every other step here. */
+    try {
+      await removeSuggestionPairsLocked(bookDir, [[sourceId, targetId]]);
+    } catch (suggestionErr) {
+      park(suggestionErr);
+    }
+
+    /* Analysis cache — ONE `mutateAnalysisCache` op (R7): the source's cached
+       takes are re-attributed to the target, the cached match plan is
+       re-targeted by `retargetPlanForMerge` (so a resume maps the source's raw
+       rows onto the survivor), and the source's rule-11 ledger entry is
+       dropped. Plan and takes must move together, so the plan is re-targeted
+       in `transform` INSIDE the op — never read-then-patched as two steps. The
+       target's own ledger entry is left alone: its fingerprint is of the job's
+       last write, so the fields this merge just changed make it read as a user
+       edit at the next persist (sticky `added-once`), which is correct.
+       `chapterCast` and the raw `stage1` roster are not touched (header). A
+       cache that does not exist is left absent (the op returns null).
+       A fold bucket source is the exception (R49, PR #4103 pass 2 P2-1): it
+       settles by its own id only, so its decisions are deleted, never
+       re-targeted, and the next persist re-plans it as its own row. A
+       re-targeted `join` would leave the bucket's raw key decided for another
+       id and the persist with an undecided roster row. */
     let cacheTouched = false;
-    const cache = await loadAnalysisCache(state.manuscriptId);
-    if (cache.stage1?.characters?.length) {
-      const before = cache.stage1.characters.length;
-      let next = cache.stage1.characters
-        .filter((c) => c.id !== sourceId)
-        .map((c) => (c.id === targetId ? merged : c));
-      /* Auto-created bucket: the cache wouldn't have known about it yet, so
-         append the merged entry so a Phase-1 cache replay sees the same
-         roster as cast.json. */
-      if (createdBucket && !next.some((c) => c.id === targetId)) {
-        next = [...next, merged];
-        cacheTouched = true;
-      }
-      if (next.length !== before) cacheTouched = true;
-      cache.stage1.characters = next;
-    }
-    if (cache.chapters) {
-      for (const [chapterId, sentences] of Object.entries(cache.chapters)) {
-        let chChanged = false;
-        const remapped = sentences.map((s) => {
-          if (s.characterId === sourceId) {
-            chChanged = true;
-            return { ...s, characterId: targetId };
-          }
-          return s;
-        });
-        if (chChanged) {
-          cache.chapters[Number(chapterId)] = remapped;
-          cacheTouched = true;
-        }
-      }
-    }
-    if (cacheTouched) {
-      await saveAnalysisCache(state.manuscriptId, cache);
+    try {
+      const cacheResult = await mutateAnalysisCache(state.manuscriptId, {
+        remapCharacterIds: { [sourceId]: targetId },
+        ledger: { [sourceId]: null },
+        transform: (c) => {
+          if (!c.matchPlan) return c;
+          if (!sourceIsBucket) return { ...c, matchPlan: retargetPlanForMerge(c.matchPlan, sourceId, targetId) };
+          const decisions = Object.fromEntries(
+            Object.entries(c.matchPlan.decisions).filter(([, d]) => (d.kind === 'join' ? d.priorId : d.id) !== sourceId),
+          );
+          return { ...c, matchPlan: { ...c.matchPlan, decisions } };
+        },
+      });
+      cacheTouched = cacheResult !== null;
+    } catch (cacheErr) {
+      /* Parked, not thrown: cast.json and manuscript-edits.json are already
+         written, so aborting here would skip the journal below and leave a
+         merge that can never be unlinked (and, via the accept route, a
+         suggestion that 404s on every retry). */
+      park(cacheErr);
     }
 
     /* srv-1 — append this merge to the deterministic lineage journal so the
@@ -433,38 +469,45 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        must perform them BEFORE letting it escape — otherwise the deferred
        rethrow just moves the skipped-write bug up one frame, which is exactly
        what it happened to do at the second caller,
-       `cast-merge-suggestions.ts`'s accept route (its `dismissSuggestion`
+       `cast-merge-suggestions.ts`'s accept route (its `removeSuggestionPairsLocked`
        never ran, so the merged-away character kept a live suggestion that
        404'd on every subsequent Accept). Both callers turn this into a 500
-       carrying the curated `LOCK_CONTENTION_REQUEST_ERROR` (round 5 — NOT the
-       error's own message, which names the lock key and hence the absolute
-       workspace path); see that route's own handler for the accept flow's
-       extra step.
+       with a curated body (`requestFailureMessageFs`: round 5 — NOT the
+       error's own message, which names the lock key or the file and hence the
+       absolute workspace path); see that route's own handler for the accept
+       flow's extra step.
 
        FINAL ROUND (B1) — the contract above is only safe for a caller that can
        tell this rethrow apart from an OUTER `withCastLock` expiry, which
        escapes the same function with the same class and NOTHING written. Stamp
        it, so "the merge is fully applied" is a fact the caller can test rather
        than an assumption it has to make. See `CAST_MERGE_APPLIED` above. */
-    if (identityLockTimeout !== undefined) {
-      if (typeof identityLockTimeout === 'object' && identityLockTimeout !== null) {
-        try {
-          Object.defineProperty(identityLockTimeout, CAST_MERGE_APPLIED, {
-            value: true,
-            enumerable: false,
-            configurable: true,
-            writable: true,
-          });
-        } catch {
-          /* Defensive — a non-extensible/frozen error here would throw a
-             TypeError that REPLACES identityLockTimeout, losing the deferred
-             rethrow's whole contract: the route would answer the generic body
-             and skip the dismiss for a merge that DID land. Unreachable today
-             (these errors are freshly constructed, never frozen); swallowing
-             keeps the original throw below intact either way. */
-        }
+    if (hasParkedError) {
+      /* #4031 C3 — the parked error is no longer only a lock timeout: any
+         failure of the history write, the pair removal or the cache write
+         lands here. A thrown non-object (never
+         produced by node or this repo) is wrapped so the marker below has
+         something to sit on. */
+      const parked =
+        typeof parkedError === 'object' && parkedError !== null
+          ? parkedError
+          : new Error(String(parkedError));
+      try {
+        Object.defineProperty(parked, CAST_MERGE_APPLIED, {
+          value: true,
+          enumerable: false,
+          configurable: true,
+          writable: true,
+        });
+      } catch {
+        /* Defensive — a non-extensible/frozen error here would throw a
+           TypeError that REPLACES the parked error, losing the deferred
+           rethrow's whole contract: the route would answer the generic body
+           and skip the dismiss for a merge that DID land. Unreachable today
+           (these errors are freshly constructed, never frozen); swallowing
+           keeps the original throw below intact either way. */
       }
-      throw identityLockTimeout;
+      throw parked;
     }
 
     return { characters: nextCharacters, sourceId };
@@ -487,10 +530,14 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   try {
     /* #3711 — book-op outermost (inside the try so its own acquisition timeout
        takes the curated-failure seam below, like every other lock timeout). */
-    const result = await withBookOp(bookId, ({ bookDir, state }) =>
-      performCastMerge({ bookId, bookDir, state, sourceId, targetId }),
-    );
+    const result = await withBookOp(bookId, async ({ bookDir, state }) => {
+      /* R55 — refused while an analysis runs, checked inside this book-op span. */
+      const busy = castIdentityBusyRefusal(bookId);
+      if (busy) return busy;
+      return performCastMerge({ bookId, bookDir, state, sourceId, targetId });
+    });
     if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
+    if ('code' in result) return res.status(409).json(result);
     return res.json(result);
   } catch (err) {
     const e = err as { status?: number; error?: string };
@@ -527,12 +574,43 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
        on app-level middleware wiring — which is precisely what went unchecked
        here. The full error, key and all, still goes to the server log. */
     console.error('[cast-merge] merge failed', err);
-    if (isLockAcquisitionTimeout(err)) {
-      return res.status(500).json({ error: LOCK_CONTENTION_REQUEST_ERROR });
-    }
-    return res.status(500).json({ error: 'Internal server error.' });
+    /* #4031 C3 — `requestFailureMessageFs` curates the lock-timeout class AND a
+       node fs error (a parked history write, EPERM/ENOSPC, whose own message
+       embeds the absolute path); anything else keeps the generic body. */
+    return res.status(500).json({ error: requestFailureMessageFs(err, 'Internal server error.') });
   }
 });
+
+/* True when `entry` is a same-book decline naming one of `ids`. A bare string
+   (a series link id) and an entry for another book are never same-book. */
+function namesSameBookRow(entry: unknown, bookId: string, ids: readonly string[]): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const e = entry as { bookId?: unknown; characterId?: unknown };
+  return e.bookId === bookId && typeof e.characterId === 'string' && ids.includes(e.characterId);
+}
+
+/* Remove the `notLinkedTo` edges a dropped `notSamePerson` record backed: on
+   each of its two rows (when still on the roster), the same-book entries
+   naming either side. In place, no fs; true when anything changed. */
+function clearNotSamePersonEdgesLocked(
+  characters: CharacterOutput[],
+  bookId: string,
+  dropped: ReadonlyArray<NotSamePersonRecord>,
+): boolean {
+  let changed = false;
+  for (const record of dropped) {
+    const pair = [record.a, record.b];
+    for (const c of characters) {
+      if (!pair.includes(c.id) || !c.notLinkedTo?.length) continue;
+      const kept = c.notLinkedTo.filter((e) => !namesSameBookRow(e, bookId, pair));
+      if (kept.length !== c.notLinkedTo.length) {
+        c.notLinkedTo = kept;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
 
 /* Build the merged aliases list. Lower-case dedup, target first, then the
    source's name, then any aliases the source had already accumulated. The

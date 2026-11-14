@@ -22,9 +22,15 @@ installTimestamps();
    server vanishing silently (it died twice on 2026-05-30 with no trace). Also
    makes a stray unhandled rejection survivable so a transient async error can't
    take down an unattended generation run. See crash-logging.ts. */
-import { installCrashHandlers, listenWithAutoRebind } from './crash-logging.js';
+import {
+  installCrashHandlers,
+  installExitLogging,
+  installShutdownSignals,
+  listenWithAutoRebind,
+} from './crash-logging.js';
 import { selectBindHost } from './bind-host.js';
 installCrashHandlers();
+installExitLogging();
 
 import { createServer as createHttpsServer } from 'node:https';
 import { createServer as createHttpServer } from 'node:http';
@@ -53,6 +59,7 @@ import { initDeviceTotalVram, getDeviceTotalVramMb } from './gpu/device-total.js
 import { rotateStatsIfDeviceChanged } from './gpu/telemetry-fingerprint.js';
 import { initVramStats } from './analyzer/model-vram-stats.js';
 import { startBackupScheduler, stopBackupScheduler } from './workspace/auto-backup.js';
+import { startRenderLease } from './gpu/render-lease.js';
 import {
   readUserSettings,
   writeUpgradeMeta,
@@ -426,6 +433,10 @@ async function main(): Promise<void> {
        process open on their own. */
     startBackupScheduler();
 
+    /* #4079 — renew the sidecar render lease only while a Quality (1.7B) render is in flight, so
+       its idle watchdog keeps the 1.7B-Base through ASR-QA gaps. Unref'd. */
+    startRenderLease();
+
     /* ops (castwright-local-hostnames) — server-owned castwright.local mDNS
        responder, start:lan only. NODE_ENV, not lanHttps, is the discriminator:
        dev:lan's server leg ALSO sets LAN_HTTPS=1 (so its Vite half can serve
@@ -654,6 +665,5 @@ function shutdown(signal: NodeJS.Signals): void {
    booted. */
 if (isDirectlyInvoked(import.meta.url)) {
   await main();
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  installShutdownSignals(shutdown);
 }

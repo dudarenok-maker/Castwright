@@ -1934,6 +1934,9 @@ git commit -m "docs(docs): record the reject-edge invariant as enforced (#2166)"
   through the same collapsing loader earlier in the same persist block, laundering the damaged
   file into a valid empty one. The verdict is now captured once, *before* those steps, and
   carried into the reconciliation on both the main and subset paths.
+- Later (plan 291, #4031): the reconcile's *backing* set gained a third source, a
+  `notSamePerson` record (a dismissed merge suggestion), row-scoped to its own pair, so a
+  dismissal's two `notLinkedTo` edges survive the heal like a reject's.
 - Follow-ups filed rather than fixed: [#2198](https://github.com/dudarenok-maker/Castwright/issues/2198)
   (multi-pair DELETE unretryable), [#2200](https://github.com/dudarenok-maker/Castwright/issues/2200)
   (per-`from` relocation under-heal), [#2201](https://github.com/dudarenok-maker/Castwright/issues/2201)

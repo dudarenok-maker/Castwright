@@ -102,7 +102,13 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
-import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
+import {
+  setActiveGenerationBooksProvider,
+  setJobEpochReader,
+  setQualityRenderCounter,
+  isAnyGenerationActive,
+} from '../gpu/active-generation-gate.js';
+import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
 import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';
 
@@ -193,7 +199,8 @@ export async function triggerScoring(ctx: {
       mismatchCount: result.mismatchCount,
     });
     /* Hardening: re-assert Qwen tier hygiene AFTER the audition pass. The
-       run-start `reconcileResidentQwenTiers` fires once; the between-chapters
+       run-start `reconcileResidentQwenTiers` fires at the start of each
+       chapter's POST; the between-chapters
        Option-B audition can transiently pull a base tier the render doesn't
        use (a legacy segments file with no stamped modelKey → the 0.6B audition
        fallback), which would then linger co-resident with the 1.7B synth (the
@@ -458,6 +465,11 @@ interface RunningJob {
       cleared, so once a chapter's wall time overlapped another render its QA
       sub-costs stay tainted for the rest of this job's life. */
   hadSibling: boolean;
+  /** #4079 — this run uses the Quality (1.7B) base tier (a Quality run, or any
+      character set to Quality): `usedQwenTiers.keep17`. Read through the
+      active-generation gate by the render lease, which only holds a tier a
+      Quality render uses. Absent/false for a Kokoro-only or standard run. */
+  usesQuality17?: boolean;
   /** Chapter ids the loop has reported chapter_complete for in this
       run. The frontend reads `runDone` as `runDoneBase + this.size`. */
   completedThisRun: Set<number>;
@@ -565,7 +577,12 @@ async function markQueueEntryAwaitingConfirmOnDisk(
   });
 }
 
+/* #4075 — monotonic count of registrations, so the gate's quiet-poll rule can
+   see a render chapter that registered and released between two polls. */
+let jobEpoch = 0;
+
 function registerJob(key: string, job: RunningJob): void {
+  jobEpoch += 1;
   /* side-11 investigation (2026-07-06) — an overnight generation was found
      asleep for ~7h after Windows entered Modern Standby mid-run. Hold the
      system awake for as long as ANYTHING is in flight, across every book —
@@ -613,9 +630,11 @@ function deregisterJob(key: string, job: RunningJob): void {
 export function __registerFakeJobForTest(
   bookId: string,
   subscribers: { send: (ev: unknown) => void; res: Response }[],
+  usesQuality17 = false,
 ): () => void {
   const key = `${bookId}::test-${Math.random().toString(36).slice(2)}`;
   const job: RunningJob = {
+    usesQuality17,
     controller: new AbortController(),
     subscribers: new Set(subscribers),
     bookId,
@@ -661,6 +680,12 @@ export function activeGenerationBooks(): string[] {
    tts/sidecar.ts. See active-generation-gate.ts's file header for the
    fail-closed contract this registration satisfies. */
 setActiveGenerationBooksProvider(activeGenerationBooks);
+setJobEpochReader(() => jobEpoch);
+setQualityRenderCounter(() => {
+  let n = 0;
+  for (const j of inFlightByChapter.values()) if (j.usesQuality17 === true) n += 1;
+  return n;
+});
 
 function broadcast(job: RunningJob, ev: unknown): void {
   /* Inject run-level aggregates into every outgoing tick (Bug E).
@@ -1164,9 +1189,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
   /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
      use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
-     vice-versa. Fires ONCE here, before any chapter synth — never per chapter —
-     so the in-use tier stays warm across the book (load price paid on chapter 1
-     only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
+     vice-versa. Runs before this POST's chapter synth (the queue dispatcher
+     sends one POST per chapter, so it re-runs per chapter; the tier target is
+     the same each time, so the in-use tier stays warm across the book — load
+     price paid on chapter 1 only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
      against the run default with the SAME elevate-only precedence
      synthesise-chapter's routeFor uses, so a character whose stored tier is
      stale/lower than the run default can't make this precompute evict the tier
@@ -1174,7 +1200,22 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      defeating the whole point of this precompute). A genuinely mixed-tier book
      still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0) {
-    await reconcileResidentQwenTiers(usedQwenTiers).catch((e) =>
+    /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
+       Kokoro here (owner decision); a run with no 1.7B is unchanged. This
+       POST has not registered its own job yet (registerJob is below), so
+       the gate sees only OTHER work: generation jobs plus an in-flight splice
+       or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
+       therefore applies to the first chapter POST of a run, and is skipped
+       while anything else is live — but two first POSTs arriving together can
+       both see nothing and both drop. Bounded cost, not a no-op: the second
+       drop can unload a Kokoro the first job just reloaded for a fallback
+       line; that line then fails and goes through the transient retry. A later
+       chapter's POST (one per chapter, sibling chapters are live) and the
+       post-score re-assert in triggerScoring must not unload a Kokoro a
+       sibling chapter's fallback line may be using. */
+    await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
+      .then((target) => reconcileResidentQwenTiers(target))
+      .catch((e) =>
       console.warn('[generation] tier reconcile skipped:', (e as Error).message),
     );
   }
@@ -1366,6 +1407,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     completedThisRun: new Set(),
     runInProgress: new Set(),
     hadSibling: false,
+    usesQuality17: usedQwenTiers.keep17,
     children: [],
   };
   registerJob(key, job);

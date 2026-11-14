@@ -40,8 +40,11 @@ import {
   learnSliceRevisions,
   landedFieldsSince,
   castWrittenSince,
+  castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
+import { CastEditsPausedStatus } from './cast-edits-paused-banner';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
@@ -1020,10 +1023,17 @@ export function Layout() {
                (the mark alone can be batched with the clear above into no change).
                A KEPT cast save is gone by now (dropped above): only a save queued,
                in flight or landed since the stamp skips, and each re-read needs a
-               fresh one, so this cannot loop. */
+               fresh one, so this cannot loop.
+               Plan 291 (#4031) — the same when the cast gate cleared the book's
+               analysis era since this read was issued: the gate's own read is
+               newer, and this one may predate the run's persist (its cast AND
+               its sentence attributions), or land on slices that moved to
+               another book meanwhile. None of it is hydrated; the re-read is
+               issued after the clear, so it is never skipped. */
             if (
               typeof readSeq === 'number' &&
-              (dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true
+              ((dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true ||
+                (dispatch(castEraClearedSince(bookId, readSeq) as never) as unknown) === true)
             ) {
               dispatch(bookMetaActions.markNeedsFullRead({ bookId }));
               setFullReadTick((t) => t + 1);
@@ -1364,6 +1374,10 @@ export function Layout() {
      at the same count re-runs it too (a bare length misses that), while an
      identity-only change does not. */
   const rosterKey = useMemo(() => characters.map((c) => c.id).sort().join('\n'), [characters]);
+  /* Plan 291 (#4031), item 13 — the match's result is a persisted cast save, so
+     it waits until the book's cast is editable. Skipped before the once-guard
+     arms, it runs once after the gate's re-hydrate releases the cast. */
+  const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
   useEffect(() => {
     if (stageKind !== 'confirm') {
       /* Clear the once-guard when leaving the confirm stage so a
@@ -1377,6 +1391,7 @@ export function Layout() {
     if (!bookId) return;
     if (characters.length === 0) return;
     if (manuscript.bookId !== bookId) return;
+    if (castReadOnly) return;
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
@@ -1399,7 +1414,7 @@ export function Layout() {
       if (!settled && voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, rosterKey, manuscript.bookId]);
+  }, [stageKind, bookId, rosterKey, manuscript.bookId, castReadOnly]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past
@@ -2387,6 +2402,8 @@ export function Layout() {
       <BuildStamp />
 
       <ToastStack />
+      {/* Plan 291 (#4031) — the one status region for the paused-edits banner. */}
+      <CastEditsPausedStatus />
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer
@@ -2425,6 +2442,13 @@ export function Layout() {
         <MatchDetailDrawer
           character={matchCharacter}
           voice={matchVoice}
+          matchedCharacterName={
+            priorRoster.find(
+              (e) =>
+                e.bookId === matchCharacter?.matchedFrom?.bookId &&
+                e.id === matchCharacter?.matchedFrom?.characterId,
+            )?.name
+          }
           onClose={() => dispatch(uiActions.setMatchDetailFor(null))}
           onConfirm={() => dispatch(uiActions.setMatchDetailFor(null))}
           onDecline={() => {
@@ -2523,7 +2547,7 @@ export function Layout() {
               }
               const targetChars = tier === 'qwen3-tts-1.7b' ? eligibleQwenMembers : qwenMembers;
               targetChars.forEach((c) =>
-                dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin })),
+                dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin }, { routeBacked: true })),
               );
               setStartGenBusy(false);
               const fallbackConfirmed = ui.startGenPrompt?.fallbackConfirmed;
@@ -2776,7 +2800,18 @@ export function Layout() {
               onMerge={
                 bookId
                   ? async (sourceId, targetId) => {
-                      const res = await api.mergeCharacters({ bookId, sourceId, targetId });
+                      let res;
+                      try {
+                        res = await api.mergeCharacters({ bookId, sourceId, targetId });
+                      } catch (err) {
+                        /* Plan 291 (C3) — a failed merge may have finished its
+                           other writes: re-read the cast. R55 — a merge refused
+                           while an analysis runs takes the read-only path instead. */
+                        if (!dispatch(handleCastIdentityBusy(bookId, err))) {
+                          void dispatch(rehydrateCastAfterAnalysis(bookId));
+                        }
+                        throw err;
+                      }
                       dispatch(castActions.applyMerge({ characters: res.characters }));
                       /* Source character has just disappeared from the cast — drop the
                drawer so React doesn't try to render a profile for a missing
@@ -2788,18 +2823,25 @@ export function Layout() {
               onLinkPrior={
                 bookId
                   ? async (sourceId, targetBookId, targetCharacterId) => {
+                      const openBook = { manuscriptId: store.getState().manuscript.manuscriptId as string };
                       const res = await api.linkPriorCharacter({
                         bookId,
                         sourceCharacterId: sourceId,
                         targetBookId,
                         targetCharacterId,
                       });
+                      /* Review pass 3 -- the cast slice holds ONE book: the link is
+                         already saved on the server, so mirror it only if that book
+                         is still the open one (else a same-id row of the book now
+                         open would take it, and its next autosave would save it). */
+                      if (!selectIsOpenBook(store.getState(), openBook)) return;
                       dispatch(
                         castActions.applyManualMatch({
                           characterId: sourceId,
                           matchedFrom: res.matchedFrom,
                           voiceId: res.voiceId,
                           profile: res.profile,
+                          voice: res.voice,
                         }),
                       );
                       /* Close so the user lands back on the confirm card and can see
@@ -2814,11 +2856,19 @@ export function Layout() {
                 bookId
                   ? async (sourceCharacterId, aliasName, destination) => {
                       if (destination.mode === 'split') {
-                        const res = await api.unlinkAlias({
-                          bookId,
-                          sourceCharacterId,
-                          aliasName,
-                        });
+                        let res;
+                        try {
+                          res = await api.unlinkAlias({
+                            bookId,
+                            sourceCharacterId,
+                            aliasName,
+                          });
+                        } catch (err) {
+                          /* R57 — a split mints a new character, which the server refuses
+                             while an analysis runs (R55): the read-only path. */
+                          dispatch(handleCastIdentityBusy(bookId, err));
+                          throw err;
+                        }
                         dispatch(
                           castActions.applyUnlinkAlias({
                             sourceCharacterId,

@@ -244,6 +244,26 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
     expect(slot?.provenance).toBe('designed');
   });
 
+  it('types the clone refusal: its failed entry carries reason clone_protected, a name-guard one does not', async () => {
+    writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
+      {
+        id: 'wren',
+        name: 'Wren',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Wren Sparrow'],
+        lines: 100,
+        voiceUuid: 'U-CLONE',
+        overrideTtsVoices: {
+          qwen: { name: 'wren-clone', libraryUuid: 'lib-clone-1', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await callLinked(bookA, 'wren', { override: { engine: 'qwen', name: 'someone-else' } });
+    const entry = res.body.failed.find((f: { bookId: string }) => f.bookId === bookA);
+    expect(entry.reason).toBe('clone_protected');
+  });
+
   it('refuses (does not write) a group SET that would replace a cloned slot', async () => {
     /* Wren in book A carries a CONSENTED clone on qwen. A linked set must
        never silently repoint a real person's voice to a different one. */

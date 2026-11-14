@@ -180,7 +180,7 @@ describe('the marker', () => {
   it('records the declined book on the row, and only that row', async () => {
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', movedCharacterIds: [] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', separated: false, movedCharacterIds: [] });
     const rows = readRows('Book Two');
     expect(rows[0].declinedVoiceFrom).toEqual([oneId]);
     expect(rows[1].declinedVoiceFrom).toBeUndefined();
@@ -239,7 +239,7 @@ describe('the separation: after a decline the row is on a voice no other book ho
     const two = readRows('Book Two')[0];
     const fresh = two.voiceUuid as string;
     expect(fresh).not.toBe('u_shared');
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], voiceUuid: fresh, movedCharacterIds: [] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], voiceUuid: fresh, separated: true, movedCharacterIds: [] });
     expect(two.overrideTtsVoices.qwen.variants).toBeUndefined();
     for (const base of ['.pt', '.json', '__1.7b.pt', '__master.wav']) {
       expect(readFileSync(voiceFile(`qwen-${fresh}${base}`)).equals(FAMILY[`qwen-u_shared${base}`])).toBe(true);
@@ -300,6 +300,43 @@ describe('the separation: after a decline the row is on a voice no other book ho
     expect(four.matchedFrom.bookId).toBe(ids['Book Three']);
     expect(readRows('Book One')[0]).toEqual(wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) }));
     familyIntact();
+  });
+
+  it('#4067: every moved row\'s stored qwen name follows its uuid to the new key; Book One and a stranger keep theirs', async () => {
+    seedShared();
+    book('Book Three', [
+      wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared') }),
+      wren({ id: 'stranger', voiceId: 'v_other', voiceUuid: 'u_shared', ...slot('u_shared') }), // another voice: stays
+    ]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three'), ...slot('u_shared') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const fresh = readRows('Book Two')[0].voiceUuid as string;
+    expect(readRows('Book Two')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book Three')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book Four')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book Three')[1].overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+    expect(readRows('Book One')[0].overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+  });
+
+  it('#4067: a legacy row (no uuid, name qwen-<voiceId>) is renamed to its new uuid key too', async () => {
+    book('Book One', [wren({ overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } })]);
+    book('Book Two', [wren({ ...linkTo('Book One'), overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const fresh = readRows('Book Two')[0].voiceUuid as string;
+    expect(readRows('Book Two')[0].overrideTtsVoices.qwen.name).toBe(`qwen-${fresh}`);
+    expect(readRows('Book One')[0].overrideTtsVoices.qwen.name).toBe('qwen-v_wren');
+  });
+
+  it('#4067: a library-assigned slot keeps its name on the fork (its key is the libraryUuid, not the row\'s uuid)', async () => {
+    seedShared({
+      overrideTtsVoices: { qwen: { name: 'qwen-u_shared', libraryUuid: 'lib_1', variants: { angry: { name: 'qwen-u_shared__angry' } } } },
+    });
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const row = readRows('Book Two')[0];
+    expect(row.voiceUuid).not.toBe('u_shared');
+    expect(row.overrideTtsVoices.qwen.name).toBe('qwen-u_shared');
+    expect(row.overrideTtsVoices.qwen.libraryUuid).toBe('lib_1');
+    expect(row.overrideTtsVoices.qwen.variants).toBeUndefined();
   });
 
   it('a branch: two rows linking to Two both move, and what links to either', async () => {
@@ -364,7 +401,7 @@ describe('the separation: after a decline the row is on a voice no other book ho
     book('Book Two', [wren({ voiceUuid: 'u_two', ...slot('u_two', ['angry']) })]);
     book('Book Three', [wren({ voiceUuid: 'u_two', ...linkTo('Book Two') })]);
     const res = await decline(twoId, 'wren', { fromBookId: oneId });
-    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', movedCharacterIds: [] });
+    expect(res.body).toEqual({ declinedVoiceFrom: [oneId], declinedVoiceUuids: [], voiceUuid: 'u_two', separated: false, movedCharacterIds: [] });
     expect(Object.keys(readRows('Book Two')[0].overrideTtsVoices.qwen.variants)).toEqual(['angry']);
     expect(voiceFiles()).toEqual([]);
   });
@@ -565,6 +602,141 @@ describe('the step lands whole or not at all', () => {
   });
 });
 
+/* F1 (A120 run 2, owner decision: "refuse while unreadable") — a decline that went
+   through with a chain member unreadable left that member (and what links to it) on
+   Book One's voice while still linked to Book Two, and a later design of it wrote
+   Book One's `.pt`. */
+describe('a chain member that cannot be read refuses the decline', () => {
+  const unchangedShared = () => {
+    expect(readRows('Book Two')[0].voiceUuid).toBe('u_shared');
+    expect(readRows('Book Two')[0].matchedFrom.bookId).toBe(oneId);
+    expect(readRows('Book Two')[0].declinedVoiceFrom).toBeUndefined();
+    expect(voiceFiles()).toEqual(Object.keys(FAMILY).sort());
+    familyIntact();
+  };
+
+  it('Book Three unreadable from the start: "try again.", nothing changes; the retry once it reads carries Three and Four', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    writeFileSync(castFile('Book Three'), '{"characters":[');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(JSON.stringify(res.body)).not.toContain(root);
+    unchangedShared();
+    expect(readRows('Book Four')[0].voiceUuid).toBe('u_shared');
+    writeFileSync(castFile('Book Three'), three);
+    const retry = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(retry.status).toBe(200);
+    expect(retry.body.separated).toBe(true);
+    const fresh = readRows('Book Two')[0].voiceUuid;
+    expect(fresh).not.toBe('u_shared');
+    expect(readRows('Book Three')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book Four')[0].voiceUuid).toBe(fresh);
+    expect(readRows('Book One')[0].voiceUuid).toBe('u_shared');
+    familyIntact();
+  });
+
+  it('Book Four (two links down) unreadable from the start refuses the same way', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    writeFileSync(castFile('Book Four'), '{"characters":[');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    unchangedShared();
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_shared');
+  });
+
+  it('a series book whose state.json cannot be read either (series unknown) refuses too', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared' })]);
+    writeFileSync(castFile('Book Three'), '{"characters":[');
+    writeFileSync(join(dirOf('Book Three'), '.audiobook', 'state.json'), '{"bookId":');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    unchangedShared();
+  });
+
+  /* Review pass 1 — a book whose state.json cannot be read but whose cast.json
+     can is judged by its rows, not refused outright. */
+  it('state.json unreadable, cast readable, no row linking into the chain: the decline still separates', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book One') })]);
+    writeFileSync(join(dirOf('Book Three'), '.audiobook', 'state.json'), '{"bookId":');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(200);
+    expect(res.body.separated).toBe(true);
+    familyIntact();
+  });
+
+  it('state.json unreadable, cast readable, a row on the voice linking to the decliner: refuses', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    writeFileSync(join(dirOf('Book Three'), '.audiobook', 'state.json'), '{"bookId":');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    unchangedShared();
+  });
+
+  it('an unreadable book of ANOTHER series cannot be in the chain: the decline still separates', async () => {
+    seedShared();
+    const dir = join(root, 'books', AUTHOR, 'Another Series', 'Elsewhere');
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'state.json'),
+      JSON.stringify({ bookId: 'b_elsewhere', title: 'Elsewhere', author: AUTHOR, series: 'Another Series', isStandalone: false, castConfirmed: true, chapters: [] }),
+    );
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), '{"characters":[');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(200);
+    expect(res.body.separated).toBe(true);
+    familyIntact();
+  });
+
+  it("a retry after a decline that left followers behind (before this rule) carries them onto the row's voice", async () => {
+    /* The field state F1 left: Two separated onto u_new, Three and Four still on
+       Book One's u_shared while linked to Two (and Four to Three). */
+    book('Book One', [wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_new', voiceState: 'generated', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], ...slot('u_new') })]);
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared', ['angry']) })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three'), ...slot('u_shared', ['angry']) }), { id: 'other', name: 'Other', role: 'supporting', color: 'sky', voiceUuid: 'u_shared', ...linkTo('Book One') }]);
+    writeFamily();
+    const files = voiceFiles();
+    const one = readFileSync(castFile('Book One'), 'utf8');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(200);
+    expect(res.body.voiceUuid).toBe('u_new');
+    expect(res.body.separated).toBe(false);
+    for (const t of ['Book Three', 'Book Four'] as const) {
+      const row = readRows(t)[0];
+      expect(row.voiceUuid, t).toBe('u_new');
+      expect(row.overrideTtsVoices.qwen.name, t).toBe('qwen-u_new');
+      expect(row.overrideTtsVoices.qwen.variants, t).toBeUndefined();
+      expect(row.matchedFrom.bookId, t).toBe(t === 'Book Three' ? twoId : ids['Book Three']);
+    }
+    expect(readRows('Book Four')[1].voiceUuid).toBe('u_shared'); // links to Book One: not Two's
+    expect(readFileSync(castFile('Book One'), 'utf8')).toBe(one);
+    expect(voiceFiles()).toEqual(files);
+    familyIntact();
+  });
+
+  it("a legacy decline's left-behind follower (no uuid, on the legacy key) is carried too", async () => {
+    book('Book One', [wren()]);
+    book('Book Two', [wren({ voiceUuid: 'u_new', declinedVoiceFrom: [oneId], declinedVoiceUuids: [] })]);
+    book('Book Three', [wren({ ...linkTo('Book Two') })]);
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(200);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
+    expect(readRows('Book One')[0].voiceUuid).toBeUndefined();
+  });
+});
+
 describe('request validation', () => {
   it('400 on a missing or self fromBookId, writing nothing', async () => {
     const before = readFileSync(castFile('Book Two'), 'utf8');
@@ -616,5 +788,285 @@ describe('cast/link-prior clears the marker for the book it links to', () => {
     writeBook('Book Two', twoId, [wren({ declinedVoiceFrom: ['another-book'] })]);
     expect((await link()).status).toBe(200);
     expect(readRows('Book Two')[0].declinedVoiceFrom).toEqual(['another-book']);
+  });
+  /* F7 (A120 run 2, owner decision: "adopt Book 1's voice") — a relink to the book
+     the row declined moved only the marker: the row kept the voice it designed
+     after the decline while `matchedFrom` named Book One, so "linked" played a
+     different voice. */
+  it("a relink to the declined book moves the row back onto Book One's voice (uuid and qwen slot, variants included); the files it leaves stay", async () => {
+    seedShared();
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const own = readRows('Book Two')[0].voiceUuid as string;
+    expect(own).not.toBe('u_shared');
+    const files = voiceFiles();
+    const res = await link();
+    expect(res.status).toBe(200);
+    const two = readRows('Book Two')[0];
+    expect(two.voiceUuid).toBe('u_shared');
+    expect(two.overrideTtsVoices.qwen).toEqual(readRows('Book One')[0].overrideTtsVoices.qwen);
+    expect('declinedVoiceFrom' in two).toBe(false);
+    expect('declinedVoiceUuids' in two).toBe(false);
+    expect(res.body.voice).toEqual({ voiceUuid: 'u_shared', qwen: readRows('Book One')[0].overrideTtsVoices.qwen, movedCharacterIds: [] });
+    expect(voiceFiles()).toEqual(files); // the copy Two was on is not deleted
+    familyIntact();
+  });
+
+  it("its followers (rows on its own voice linked to it) move onto Book One's voice with it", async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const own = readRows('Book Two')[0].voiceUuid;
+    expect(readRows('Book Four')[0].voiceUuid).toBe(own);
+    expect((await link()).status).toBe(200);
+    for (const t of ['Book Two', 'Book Three', 'Book Four'] as const) {
+      expect(readRows(t)[0].voiceUuid, t).toBe('u_shared');
+      expect(readRows(t)[0].overrideTtsVoices.qwen.name, t).toBe('qwen-u_shared');
+    }
+    expect(readRows('Book Three')[0].matchedFrom.bookId).toBe(twoId);
+  });
+
+  it("a legacy Book One (no uuid): the row drops its own uuid and takes Book One's slot, so it renders the legacy key again", async () => {
+    book('Book One', [wren({ overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } } })]);
+    book('Book Two', [wren({ voiceUuid: 'u_own', declinedVoiceFrom: [oneId], declinedVoiceUuids: [], ...slot('u_own', ['sad']) })]);
+    const res = await link();
+    expect(res.status).toBe(200);
+    const two = readRows('Book Two')[0];
+    expect('voiceUuid' in two).toBe(false);
+    expect(two.overrideTtsVoices.qwen).toEqual({ name: 'qwen-v_wren' });
+    expect(res.body.voice).toEqual({ voiceUuid: null, qwen: { name: 'qwen-v_wren' }, movedCharacterIds: [] });
+  });
+
+  it("review pass 1: the decline's same-book rows on its voice move back with it, and the response names them", async () => {
+    seedShared();
+    const rows = readRows('Book Two');
+    writeFileSync(castFile('Book Two'), JSON.stringify({ characters: [rows[0], { ...rows[0], id: 'wren_b', matchedFrom: undefined }] }));
+    const d = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(d.body.movedCharacterIds).toEqual(['wren_b']);
+    const res = await link();
+    expect(res.status).toBe(200);
+    const after = readRows('Book Two');
+    for (const r of after) {
+      expect(r.voiceUuid, r.id).toBe('u_shared');
+      expect(r.overrideTtsVoices.qwen.name, r.id).toBe('qwen-u_shared');
+    }
+    expect(res.body.voice.movedCharacterIds).toEqual(['wren_b']);
+  });
+
+  it('review pass 1: a refused relink (its follower set changed) writes nothing, not even the target\'s aliases', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    const two = readRows('Book Two');
+    writeFileSync(castFile('Book Two'), JSON.stringify({ characters: [{ ...two[0], name: 'Wren the Younger' }] }));
+    const oneBefore = readFileSync(castFile('Book One'), 'utf8');
+    const twoBefore = readFileSync(castFile('Book Two'), 'utf8');
+    beforeLocks.fn = () => book('Book Four', [wren({ voiceUuid: readRows('Book Two')[0].voiceUuid, ...linkTo('Book Two') })]);
+    const res = await link();
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book One'), 'utf8')).toBe(oneBefore);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe(twoBefore);
+  });
+
+  it('owner decision (b): a row designed before Confirm (its own uuid, still linked to Book One) adopts Book One\'s voice on a hand relink', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_one', ...slot('u_one', ['angry']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_own', ...slot('u_own'), voiceState: 'reused', ...linkTo('Book One') })]);
+    const res = await link();
+    expect(res.status).toBe(200);
+    expect(readRows('Book Two')[0].voiceUuid).toBe('u_one');
+    expect(readRows('Book Two')[0].overrideTtsVoices.qwen.variants.angry.name).toBe('qwen-u_one__angry');
+  });
+
+  it('controls: a link to a book it never declined, and a locked row, keep their own voice', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_one', ...slot('u_one') })]);
+    book('Book Two', [wren({ voiceUuid: 'u_two', ...slot('u_two'), declinedVoiceFrom: ['another-book'] })]);
+    let res = await link();
+    expect(res.status).toBe(200);
+    expect(readRows('Book Two')[0].voiceUuid).toBe('u_two');
+    expect(res.body.voice).toBeUndefined();
+    book('Book Two', [wren({ voiceUuid: 'u_two', ...slot('u_two'), voiceState: 'locked', declinedVoiceFrom: [oneId] })]);
+    res = await link();
+    expect(res.status).toBe(200);
+    expect(readRows('Book Two')[0].voiceUuid).toBe('u_two');
+    expect(readRows('Book Two')[0].overrideTtsVoices.qwen.name).toBe('qwen-u_two');
+  });
+});
+
+/* Review pass 2 — a hand relink of a row that is merely LINKED to the target book
+   (no decline) changes that row (and its same-book siblings) only: no other book's
+   row, the target book's own rows included. */
+describe('cast/link-prior of a linked row (review pass 2)', () => {
+  const linkTo2 = (t: Title, characterId: string) => ({ matchedFrom: { bookId: ids[t], characterId, bookTitle: t, confidence: 1 } });
+  const ash = (extra: Record<string, unknown> = {}) => ({ id: 'ash', name: 'Ash', role: 'supporting', color: 'sky', voiceId: 'v_ash', ...extra });
+  const linkAsh = () =>
+    request(app).post(`/api/books/${twoId}/cast/link-prior`).send({ sourceCharacterId: 'wren', targetBookId: oneId, targetCharacterId: 'ash' });
+  const linkWren = () =>
+    request(app).post(`/api/books/${twoId}/cast/link-prior`).send({ sourceCharacterId: 'wren', targetBookId: oneId, targetCharacterId: 'wren' });
+  const rowOf = (t: Title, id: string) => readRows(t).find((r) => r.id === id)!;
+
+  it('P1: a Confirm back-edge (Book One Wren links to Two) does not make Book One own Wren follow Two onto Ash voice', async () => {
+    book('Book One', [
+      wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']), ...linkTo2('Book Two', 'wren') }),
+      ash({ voiceUuid: 'u_ash', ...slot('u_ash') }),
+    ]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    const oneWren = rowOf('Book One', 'wren');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book One', 'wren')).toEqual(oneWren); // its angry slot included
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+  });
+
+  it('P2 and the re-point: Two moves onto Ash voice and slot; Book Three (linked to Two) and Book One rows are untouched', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']) }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    book('Book Three', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book Two'), ...slot('u_wren', ['angry']) })]);
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    const oneWren = rowOf('Book One', 'wren');
+    const oneAsh = rowOf('Book One', 'ash');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(three);
+    expect(rowOf('Book One', 'wren')).toEqual(oneWren);
+    expect(rowOf('Book One', 'ash').voiceUuid).toBe(oneAsh.voiceUuid);
+    expect(rowOf('Book One', 'ash').overrideTtsVoices).toEqual(oneAsh.overrideTtsVoices);
+    const two = rowOf('Book Two', 'wren');
+    expect(two.voiceUuid).toBe('u_ash');
+    expect(two.overrideTtsVoices.qwen).toEqual(oneAsh.overrideTtsVoices.qwen);
+    expect(res.body.matchedFrom.characterId).toBe('ash');
+    expect(res.body.voice.voiceUuid).toBe('u_ash');
+  });
+
+  it('a row that designed its own voice and is re-pointed to another character of the book adopts that character voice', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_own', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_own', ['angry']) })]);
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const two = rowOf('Book Two', 'wren');
+    expect(two.voiceUuid).toBe('u_ash');
+    expect(two.overrideTtsVoices.qwen.variants.sad.name).toBe('qwen-u_ash__sad');
+  });
+
+  it('owner decision A: a re-point ALWAYS adopts the new target voice, whoever else holds the old one; only the source book is written', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash') })]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren') })]);
+    book('Book Four', [wren({ voiceUuid: 'u_wren', ...slot('u_wren') })]);
+    const four = readFileSync(castFile('Book Four'), 'utf8');
+    const oneWren = rowOf('Book One', 'wren');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+    expect(res.body.voice.voiceUuid).toBe('u_ash');
+    expect(readFileSync(castFile('Book Four'), 'utf8')).toBe(four);
+    expect(rowOf('Book One', 'wren')).toEqual(oneWren);
+  });
+
+  it('Q1: Book Three links straight to Book One/Wren (not via Two); re-pointing Two to Ash still adopts, Three is untouched', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']) }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    book('Book Three', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) })]);
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(three);
+  });
+
+  it('Q2: a legacy re-point adopts although a uuid-less row of an unrelated series holds the same legacy key', async () => {
+    book('Book One', [wren({ ...slot('v_wren') }), ash({ voiceUuid: 'u_ash', ...slot('u_ash') })]);
+    book('Book Two', [wren({ voiceState: 'reused', ...linkTo('Book One'), ...slot('v_wren') })]);
+    const other = join(root, 'books', 'Someone Else', 'Other Series', 'Other Book');
+    mkdirSync(join(other, '.audiobook'), { recursive: true });
+    writeFileSync(join(other, '.audiobook', 'state.json'), JSON.stringify({ bookId: 'other-book', title: 'Other Book', author: 'Someone Else', series: 'Other Series', isStandalone: false, castConfirmed: true, chapters: [] }));
+    writeFileSync(join(other, '.audiobook', 'cast.json'), JSON.stringify({ characters: [wren({ ...slot('v_wren') })] }));
+    const otherBefore = readFileSync(join(other, '.audiobook', 'cast.json'), 'utf8');
+    const res = await linkAsh();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_ash');
+    expect(readFileSync(join(other, '.audiobook', 'cast.json'), 'utf8')).toBe(otherBefore);
+  });
+
+  it('owner decision B / Q4: a re-point moves ONLY the re-pointed row; a same-book sibling still linked to the old character keeps its voice', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_wren', ...slot('u_wren', ['angry']) }), ash({ voiceUuid: 'u_ash', ...slot('u_ash', ['sad']) })]);
+    const hartley = { id: 'wren_h', name: 'Wren Hartley', role: 'supporting', color: 'sky', voiceId: 'v_wren', voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) };
+    book('Book Two', [wren({ voiceUuid: 'u_wren', voiceState: 'reused', ...linkTo('Book One'), ...slot('u_wren', ['angry']) }), hartley]);
+    const sibling = rowOf('Book Two', 'wren');
+    const res = await request(app).post(`/api/books/${twoId}/cast/link-prior`).send({ sourceCharacterId: 'wren_h', targetBookId: oneId, targetCharacterId: 'ash' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren_h').voiceUuid).toBe('u_ash');
+    expect(rowOf('Book Two', 'wren')).toEqual(sibling);
+    expect(res.body.voice.movedCharacterIds).toEqual([]);
+  });
+
+  it('a library-assigned slot is a deliberate pick: a relink to the book it links to keeps it', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_one', ...slot('u_one') })]);
+    const lib = { overrideTtsVoices: { qwen: { name: 'qwen-lib_1', libraryUuid: 'lib_1' } } };
+    book('Book Two', [wren({ voiceUuid: 'u_two', voiceState: 'reused', ...linkTo('Book One'), ...lib })]);
+    const res = await linkWren();
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(rowOf('Book Two', 'wren').voiceUuid).toBe('u_two');
+    expect(rowOf('Book Two', 'wren').overrideTtsVoices).toEqual(lib.overrideTtsVoices);
+    expect(res.body.voice).toBeUndefined();
+  });
+
+  it('a relink that clears a decline refuses while a book of the chain cannot be read, and writes nothing', async () => {
+    seedShared();
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two') })]);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    book('Book Four', []);
+    writeFileSync(castFile('Book Four'), '{"characters":[');
+    const oneBefore = readFileSync(castFile('Book One'), 'utf8');
+    const twoBefore = readFileSync(castFile('Book Two'), 'utf8');
+    const threeBefore = readFileSync(castFile('Book Three'), 'utf8');
+    const res = await linkWren();
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book One'), 'utf8')).toBe(oneBefore);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe(twoBefore);
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(threeBefore);
+  });
+});
+
+/* Review pass 2 — P4: a repeat "Don't reuse" refuses while a book of the chain it
+   would carry cannot be read. */
+describe('a repeat decline with an unreadable chain member', () => {
+  it('Book Four (two links down, left behind) unreadable: "try again.", and Book Three is not carried alone', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_new', voiceState: 'generated', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], ...slot('u_new') })]);
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared', ['angry']) })]);
+    book('Book Four', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Three'), ...slot('u_shared', ['angry']) })]);
+    writeFamily();
+    const four = readFileSync(castFile('Book Four'), 'utf8');
+    const three = readFileSync(castFile('Book Three'), 'utf8');
+    writeFileSync(castFile('Book Four'), '{"characters":[');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book Three'), 'utf8')).toBe(three);
+    writeFileSync(castFile('Book Four'), four);
+    const retry = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(retry.status).toBe(200);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
+    expect(readRows('Book Four')[0].voiceUuid).toBe('u_new');
+  });
+
+  it('review pass 3, G / Q3: a stranded Book Three whose state.json is torn (cast.json readable) refuses the repeat decline too', async () => {
+    book('Book One', [wren({ voiceUuid: 'u_shared', ...slot('u_shared', ['angry']) })]);
+    book('Book Two', [wren({ voiceUuid: 'u_new', voiceState: 'generated', declinedVoiceFrom: [oneId], declinedVoiceUuids: ['u_shared'], ...slot('u_new') })]);
+    book('Book Three', [wren({ voiceUuid: 'u_shared', ...linkTo('Book Two'), ...slot('u_shared', ['angry']) })]);
+    writeFamily();
+    const statePath = join(dirOf('Book Three'), '.audiobook', 'state.json');
+    const state = readFileSync(statePath, 'utf8');
+    const twoBefore = readFileSync(castFile('Book Two'), 'utf8');
+    writeFileSync(statePath, '{"bookId":');
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/try again\.$/);
+    expect(readFileSync(castFile('Book Two'), 'utf8')).toBe(twoBefore);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_shared');
+    writeFileSync(statePath, state);
+    expect((await decline(twoId, 'wren', { fromBookId: oneId })).status).toBe(200);
+    expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
   });
 });

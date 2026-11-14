@@ -1831,8 +1831,13 @@ paths:
       summary: Dismiss a merge suggestion
       operationId: dismissCastMergeSuggestion
       description: |
-        Removes the matching `(sourceId, targetId)` pair from the suggestions
-        file. No-op when the pair is already absent. Does NOT perform any merge.
+        A durable "not the same person" decision. Records the pair (undirected)
+        in the book's cast-id-history, writes a `notLinkedTo` edge on each of
+        the two characters that exists, and removes the matching
+        `(sourceId, targetId)` pair from the suggestions file, so a later
+        re-analysis never re-suggests or joins it. When the history file cannot
+        be read the record is skipped (the edges and the removal still apply).
+        Does NOT perform any merge.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -1851,11 +1856,13 @@ paths:
                   description: The id of the canonical survivor.
       responses:
         '200':
-          description: Suggestion removed (or was already absent)
+          description: Dismissal recorded and suggestion removed (or was already absent)
         '400':
           description: sourceId or targetId missing
         '404':
           description: Book not found
+        '500':
+          description: The dismissal could not be written; the body carries a curated sentence with no filesystem path
 
   /api/books/{bookId}/cast/merge-suggestions/accept:
     post:
@@ -1864,8 +1871,10 @@ paths:
       description: |
         Performs the cast merge (`sourceId` folded into `targetId`, where
         `targetId` is the canonical survivor), then drops the suggestion so it
-        never resurfaces. Equivalent to calling `POST /cast/merge` followed by
-        `POST /cast/merge-suggestions/dismiss`.
+        never resurfaces. Equivalent to calling `POST /cast/merge`, then removing
+        the pair from the suggestions file. Unlike
+        `POST /cast/merge-suggestions/dismiss`, it records no "not the same
+        person" decision.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -1884,13 +1893,28 @@ paths:
                   description: The id of the canonical survivor.
       responses:
         '200':
-          description: Merge performed and suggestion removed
+          description: |
+            Merge performed and suggestion removed. Carries the merged cast, as
+            `POST /cast/merge` does, so the client mirrors the server's survivor
+            (aliases, `notLinkedTo` union) instead of saving a stale slice (#4031).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [characters]
+                properties:
+                  characters:
+                    type: array
+                    items: { $ref: '#/components/schemas/Character' }
         '400':
           description: Missing or equal sourceId/targetId
         '404':
           description: Book or character not found
         '409':
-          description: Book has no cast yet
+          description: |
+            Book has no cast yet; or `{ error, code: book_busy }` while an analysis
+            job is registered for the book (R55, #4031): a merge waits until the
+            analysis finishes. Nothing was written.
 
   /api/books/{bookId}/cast/tier:
     post:
@@ -2998,6 +3022,50 @@ paths:
                         bookDir: { type: string }
                         characterId: { type: string }
                         reason: { type: string }
+
+  /api/books/{bookId}/cast/{characterId}/voice-override-linked:
+    post:
+      summary: Write (or clear) a voice override across a character's linked series group
+      operationId: setVoiceOverrideLinked
+      description: |
+        Name/alias-aware series voice write used by the rebaseline approve
+        (plan 122). Writes the override to every member book of the
+        character's group. 207 when any book failed; the other books' writes
+        stand. A book with a consented cloned voice on a targeted row is
+        refused whole and reported with `reason: clone_protected`.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/RepairEpoch' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [override]
+              properties:
+                override:
+                  oneOf:
+                    - $ref: '#/components/schemas/BaseVoice'
+                    - type: 'null'
+      responses:
+        '200':
+          description: Written to every book in the group
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkedVoiceOverrideResponse' }
+        '207':
+          description: At least one book failed; see the failed entries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkedVoiceOverrideResponse' }
+        '400':
+          description: bookId/characterId missing or the override is malformed
+        '404':
+          description: Book or character not found
+        '409':
+          description: Source book has no cast yet, or a repaired book needs a reload (book_repaired_reload)
 
   # --- Voice library (fs-38 Wave 1) --------------------------------
   /api/voice-library:
@@ -4485,6 +4553,11 @@ paths:
             book), or `book_folder_in_use` (the folder is open in another
             program; close it and retry). No body ever carries a path.
 
+            #4031 — a whole-slice `cast` write is refused with
+            `{ error, code: book_busy }` while an analysis job is registered
+            for the book: the cast is read-only until the run ends. The check
+            runs before any read or write, so nothing is persisted. Re-read the book from disk once the run has finished.
+
             Plan 289: `stale_revision` — the request carried a `baseRevision`
             and a field the write would change has moved on disk since that
             base. Nothing was written; re-read the book. A request without
@@ -4781,7 +4854,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [declinedVoiceFrom, declinedVoiceUuids, voiceUuid, movedCharacterIds]
+                required: [declinedVoiceFrom, declinedVoiceUuids, voiceUuid, separated, movedCharacterIds]
                 properties:
                   declinedVoiceFrom:
                     type: array
@@ -4793,6 +4866,9 @@ paths:
                     type: string
                     nullable: true
                     description: The character's voiceUuid after the step (a fresh one when it was moved onto a voice of its own).
+                  separated:
+                    type: boolean
+                    description: True when the row was moved onto a voice of its own (the server renamed its qwen slot and dropped its variants); false when it already owned its voice and nothing moved. The client mirrors the fork only when true.
                   movedCharacterIds:
                     type: array
                     items: { type: string }
@@ -4809,6 +4885,113 @@ paths:
             path-free sentence; one ending "try again." means a book in the series
             was unreadable, moved or changed during the step and a retry can work.
 
+  /api/books/{bookId}/cast/link-prior:
+    post:
+      summary: Link a character to the same character in a prior book of the series (manual continuity link)
+      operationId: linkPriorCharacter
+      description: |
+        The user declares that a character in this book is the same person as one
+        in another book of the same series (same author and series, neither
+        standalone). The source character's name and aliases are added to the
+        target's aliases, the source takes the target's `voiceId` (unless its voice
+        is locked or tuned), the target's designed qwen voice is copied onto a
+        source with none, and the target's profile fills the source's gaps.
+
+        A link to a book the character had declined ("Don't reuse") clears that
+        decline. #4095 / review passes 1-3 — when it clears a decline, or links a
+        character to the book it already links to (the same character, or another
+        one of that book; designed before its book's cast was confirmed), the
+        character moves onto the target's voice: its `voiceUuid` (none when the
+        target has none) and its qwen slot, variants included. Clearing a decline
+        also moves the same-book characters on its voice and the characters in other
+        books that follow it. A re-point to a character of the book it already links
+        to always adopts the new target's voice, whoever else holds the old one, and
+        writes that character only: never a follower, a same-book sibling still
+        linked to the old character, or a character of the target book. Not for a
+        locked or tuned character, nor across a cloned voice on either side. If the
+        followers of a cleared decline changed between the plan and the locked step,
+        or a book that may hold one cannot be read, the request answers 500 with a
+        retry sentence and writes nothing.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceCharacterId, targetBookId, targetCharacterId]
+              properties:
+                sourceCharacterId: { type: string }
+                targetBookId: { type: string }
+                targetCharacterId: { type: string }
+      responses:
+        '200':
+          description: The link the client records, and what the server changed on the source character
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [matchedFrom]
+                properties:
+                  matchedFrom:
+                    type: object
+                    required: [bookId, characterId, bookTitle, confidence]
+                    properties:
+                      bookId: { type: string }
+                      characterId: { type: string }
+                      bookTitle: { type: string }
+                      confidence: { type: number }
+                  voiceId:
+                    type: string
+                    description: The voiceId the character keeps (its own when locked or tuned).
+                  profile:
+                    type: object
+                    description: Profile content merged from the target onto the source. Present only when the merge changed something.
+                    properties:
+                      evidence: { $ref: '#/components/schemas/Character/properties/evidence' }
+                      attributes: { type: array, items: { type: string } }
+                      description: { type: string }
+                      tone: { $ref: '#/components/schemas/Character/properties/tone' }
+                      gender: { $ref: '#/components/schemas/Character/properties/gender' }
+                      ageRange: { $ref: '#/components/schemas/Character/properties/ageRange' }
+                  voice:
+                    type: object
+                    description: Present only when the link moved the character onto the target's voice (#4095). The client mirrors it onto the character and onto `movedCharacterIds`.
+                    required: [voiceUuid, qwen, movedCharacterIds]
+                    properties:
+                      voiceUuid:
+                        type: string
+                        nullable: true
+                        description: The target's voiceUuid; null when it has none (the character then renders the target's legacy key).
+                      qwen:
+                        type: object
+                        nullable: true
+                        description: The target's qwen slot (the shape of a `Character.overrideTtsVoices` slot), variants included; null when it has none.
+                        required: [name]
+                        properties:
+                          name: { type: string }
+                          libraryUuid: { type: string }
+                          provenance: { type: string, enum: [designed, cloned, imported] }
+                          variants:
+                            type: object
+                            additionalProperties:
+                              type: object
+                              required: [name]
+                              properties:
+                                name: { type: string }
+                      movedCharacterIds:
+                        type: array
+                        items: { type: string }
+                        description: Other characters in the same book that were on the character's voice and moved with it.
+        '400':
+          description: A required field is missing, or the target is the same book
+        '404':
+          description: A book or character was not found, or the target is not a series-mate
+        '409':
+          description: A book has no cast on disk yet
+        '500':
+          description: The followers changed or a book could not be read while the link was being saved; a retry can work
   /api/books/{bookId}/cast/{characterId}/reject-orphan-match:
     post:
       summary: "Reject an orphaned-id reconciliation (\"not the same character\") — #2040 Task 17"
@@ -4860,7 +5043,7 @@ paths:
         '500':
           description: Failed to durably record the rejection (nothing was written), or to save the character link after the rejection landed — retry either way
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
     delete:
       summary: Undo a rejected orphaned-id reconciliation (#2092/#2089)
       operationId: undoRejectOrphanMatch
@@ -4897,7 +5080,7 @@ paths:
         '500':
           description: Failed to restore the forgotten alias entry, or to durably remove the rejection — retry
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
 
   /api/books/{bookId}/cast/{characterId}/link-orphan-match:
     post:
@@ -4944,7 +5127,7 @@ paths:
         '500':
           description: Failed to durably record the alias — retry, the write is idempotent
         '409':
-          description: Book has no cast on disk yet
+          description: "Book has no cast on disk yet; or `{ error, code: book_busy }` while an analysis job is registered for the book (R55, #4031). Nothing was written."
 
   /api/books/{bookId}/annotate-emotion:
     post:
@@ -5762,7 +5945,23 @@ components:
         previewVoiceId: { type: string, description: preview_ready only. }
         previewUrl: { type: string, description: preview_ready only. }
         persona: { type: string, description: preview_ready only — the persona text the preview was designed from. }
-        voiceUuid: { type: string, description: preview_ready / designed only. }
+        voiceUuid:
+          type: string
+          description: |
+            preview_ready / designed only, and on the `clone_protected` error when
+            the design's uuid step separated the row before the landing refused:
+            the separation persists, so the event carries the new uuid with
+            `separated: true`.
+        separated:
+          type: boolean
+          description: |
+            preview_ready / designed / error (`clone_protected` only) only. True when
+            this design first separated a declined ("Don't reuse") row onto a voice of
+            its own, which minted the
+            `voiceUuid`, renamed the row's qwen slot to `qwen-<voiceUuid>` and dropped
+            its emotion variants. The client mirrors exactly that when true; absent or
+            false, a `voiceUuid` the row had none of before is a plain first mint and
+            the slot keeps its name (#4067).
         voiceId: { type: string, description: designed only. }
         url: { type: string, description: designed only. }
         code:
@@ -7283,11 +7482,10 @@ components:
           type: string
           description: |
             Stable machine-readable warning code. Today only
-            `cast_merge_base_stale` — emitted when another route wrote
-            `cast.json` between two of this run's own merge-base writes, so the
-            analysis result was merged onto an older cast and that write may
-            have been overwritten. Replayed once per code on reconnect.
-          enum: [cast_merge_base_stale]
+            `analyzer-reasoning-overflow-nonstory` — emitted when front-matter
+            detection fell back for the whole run because the model's reasoning
+            overflowed. Replayed once per code on reconnect.
+          enum: [analyzer-reasoning-overflow-nonstory]
         message:
           type: string
           description: Human-readable advisory text.
@@ -7345,12 +7543,16 @@ components:
         `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
         `design_in_progress`, `bad_request`, `chapter_excluded`,
         `main_analysis_running`, `subset_analysis_running`,
-        `chapters_restructuring`) carry `code`
+        `chapters_restructuring`, `analysis_cache_legacy`) carry `code`
         and `message` only — `main_analysis_running` also carries
         `draining` (#3435: the late refusal check, after the stream opened).
         `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
         the chapters it ran are done, but the book still needs a main
         resume to attribute the rest; nothing was persisted as final.
+        `analysis_cache_legacy` (#4031, `/analysis/chapters` only): the
+        book's saved analysis progress predates the current cache version,
+        so a chapter re-analysis stops before writing anything; a full
+        analysis rebuilds it.
       required: [kind, code, message]
       properties:
         kind: { type: string, enum: [error] }
@@ -7985,6 +8187,36 @@ components:
             description: "Short label for the picked voice — engine-specific. Empty/placeholder when the engine doesn't publish descriptors.",
           }
 
+    LinkedVoiceOverrideResponse:
+      type: object
+      required: [canonicalVoiceId, updated, failed]
+      properties:
+        canonicalVoiceId: { type: string }
+        updated:
+          type: array
+          items:
+            type: object
+            required: [bookId, bookTitle, characterId]
+            properties:
+              bookId: { type: string }
+              bookTitle: { type: string }
+              characterId: { type: string }
+        failed:
+          type: array
+          items:
+            type: object
+            required: [bookId, bookTitle, error]
+            properties:
+              bookId: { type: string }
+              bookTitle: { type: string }
+              error: { type: string }
+              reason:
+                type: string
+                enum: [clone_protected]
+                description: >-
+                  Typed cause, additive. `clone_protected`: the book was refused because a
+                  targeted row carries a consented cloned voice. Absent for every other failure
+                  (older servers never send it; match `error` as a fallback).
     BaseVoice:
       type: object
       required: [engine, name]
@@ -9130,6 +9362,7 @@ components:
         - voice-not-designed
         - cloned-voice-broken
         - lock-contention
+        - cast-unreadable
         - language-unset
         - analyzer-request-rejected
         - analyzer-invalid-output
@@ -9306,8 +9539,8 @@ components:
             pass (cross-examine.ts), and stripThirdPartyFrontMatter. Cleared
             by steps that re-assign rather than demote (escalation,
             tagged-line recovery). NOT written by the id-remap/merge paths —
-            dedupAndPrepare, foldMinorCast, remapCjkHonorificIds,
-            remapFreshToPriorIds, performCastMerge — which also overwrite
+            dedupAndPrepare, foldMinorCast, remapCjkHonorificIds, the plan
+            overlay (applyMatchPlan), performCastMerge — which also overwrite
             characterId (to another character's id, not narrator); whether a
             re-assignment should also carry a prior is an open design
             question, #2331.
@@ -9583,6 +9816,24 @@ components:
           type: array
           items: { $ref: '#/components/schemas/GpuQueueDevice' }
           description: "Live per-device VRAM reading at response time."
+        lastTtsAutoFree:
+          nullable: true
+          description: "#4066 — the last time a voice design or a Quality (1.7B) op unloaded resident TTS models (the standard Qwen base, an on-GPU Kokoro) to free VRAM, or null. Absent on older servers. The frontend shows the 'unloaded to free VRAM' notice once per new `seq`."
+          allOf:
+            - $ref: '#/components/schemas/TtsAutoFreeNotice'
+
+    TtsAutoFreeNotice:
+      type: object
+      required: [bootId, seq, models, purpose, at]
+      properties:
+        bootId: { type: string, description: "Identifies the server process; `seq` restarts at 1 after a restart, so the frontend compares bootId + seq." }
+        seq: { type: integer, minimum: 1, description: "Monotonic per-event counter within one bootId." }
+        models:
+          type: array
+          items: { type: string }
+          description: "Display names of what was unloaded, e.g. ['Qwen 0.6B', 'Kokoro']."
+        purpose: { type: string, enum: ['voice design', 'Quality render'] }
+        at: { type: string, format: date-time }
 
     # --- Live generation throughput (dev RTF pill) -----
     ChapterThroughputRecord:

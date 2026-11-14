@@ -15,7 +15,7 @@
    the round-trip works for design fixtures and jsdom tests. */
 
 import type { Middleware } from '@reduxjs/toolkit';
-import type { CastState } from './cast-slice';
+import { castActions, type CastState } from './cast-slice';
 import type { ManuscriptState } from './manuscript-slice';
 import type { UiState } from './ui-slice';
 import type { ChangeLogState } from './change-log-slice';
@@ -24,6 +24,14 @@ import type { PutStateResponse, SliceRevision, StateSlice } from '../lib/types';
 import { api } from '../lib/api';
 import { notificationsActions } from './notifications-slice';
 import { bookMetaActions, type EditableBookMeta, type EditableBookMetaField } from './book-meta-slice';
+import type { AnalysisStreamSnapshot } from './analysis-slice';
+import {
+  CAST_READ_ONLY_DEDUPE_KEY,
+  CAST_READ_ONLY_MESSAGE,
+  requestCastRehydrate,
+  selectCastReadOnly,
+  type BookBusyState,
+} from './book-busy-slice';
 
 /* Locally-typed shape of the store the middleware reads, declared without
    importing RootState to avoid a circular type reference back through the
@@ -40,6 +48,10 @@ interface PersistableRootState {
      decoupled from the settings slice's full shape (and tests that build a
      partial root state don't have to supply it). */
   settings?: { autosaveDebounceMs?: number };
+  /* Plan 291 — the cast gate's other two legs. Optional: a hand-built store
+     without them is never read-only. */
+  bookBusy?: BookBusyState;
+  analysis?: { activeStream: AnalysisStreamSnapshot | null };
 }
 
 const DEFAULT_DEBOUNCE_MS = 500;
@@ -315,6 +327,11 @@ function savedTitleOf(s: PersistableRootState, bookId: string): string | undefin
    `lastCommitted` snapshot (#2230) claiming a save that never happened. */
 const BOOK_KEYED_RULES = new Set(['bookMeta/commitDraft']);
 
+/* Plan 291 (#4031, R3) — cast rules that mirror a write a server route has
+   already made (the alias routes write cast.json themselves). While the cast
+   is read-only they build nothing and raise no toast: the change WAS saved. */
+const ROUTE_BACKED_CAST_RULES = new Set(['cast/applyAddAlias', 'cast/applyRepointAlias']);
+
 /* Persisted action types, exported for tests only so a regression suite can
    loop over every rule (including ones added later). */
 export const PERSISTED_ACTION_TYPES = Object.keys(PERSIST_RULES);
@@ -379,7 +396,15 @@ const staleMessage = (title: string) =>
   `Your changes to "${title}" weren't saved: the book was changed elsewhere since you made them.`;
 
 const FLUSH_BOOK = 'persistence/flushBook';
-export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
+/* PR #4103 pass 1 C1 (B3) — `sendKeptCast`: the cast gate's rise flush also sends a cast
+   save kept after its transport retries ran out, and lets the server answer it (it lands
+   before the job registers, or meets the job's 409). Every other flush of a read-only
+   cast drops a kept save (`dropKeptCast`). */
+export const flushBookPersistence = (bookId: string, opts?: { sendKeptCast?: boolean }) => ({
+  type: FLUSH_BOOK,
+  payload: bookId,
+  ...(opts?.sendKeptCast ? { meta: { sendKeptCast: true } } : {}),
+});
 
 /* #3421 — forget the saves of `bookId` that were given up on. Dispatched where
    that book's slices are re-read in full (Layout's full hydrate, with
@@ -437,6 +462,18 @@ export const castWrittenSince = (bookId: string, readSeq: number) => ({
   type: CAST_WRITTEN_SINCE,
   payload: { bookId, readSeq },
 });
+/* Plan 291 (#4031, round 2) — has the cast gate cleared the book's analysis
+   era since a read stamped at `readSeq` was issued? Then the gate's own read
+   (issued once the run had ended) is newer than that read, which must not
+   be hydrated at all — Layout reads again instead: it may predate the run's
+   persist, and the cast is no longer read-only to protect it. A latch alone
+   does not count: the era still stands, and the gate re-reads after it. Not
+   a reducer action. */
+const CAST_ERA_CLEARED_SINCE = 'persistence/castEraClearedSince';
+export const castEraClearedSince = (bookId: string, readSeq: number) => ({
+  type: CAST_ERA_CLEARED_SINCE,
+  payload: { bookId, readSeq },
+});
 const LEARNED_SLICES: StateSlice[] = ['state', 'cast', 'manuscript', 'changeLog'];
 
 /* Plan 289 pass 7 (C1) — a whole-slice build is one outbox unit. */
@@ -469,6 +506,8 @@ export const persistenceMiddleware: Middleware = (store) => {
   /* Per field, the `clock` reading of the latest PUT 200 that carried it; a full
      read stamped before that teaches nothing for the field. */
   const landedAt = new Map<FlushKey, Record<string, number>>();
+  /* Plan 291 — per book, the `clock` reading at which its era was last cleared. */
+  const eraClearedAt = new Map<string, number>();
   let clock = 0;
 
   /* The token fields a unit's value carries: its own name on `state`, the
@@ -500,18 +539,32 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (flights.has(key) || !outbox.get(key)?.size) return;
     flights.set(key, run(bookId, slice));
   };
+  /* Plan 291 (#4031, round 1) — a cast save kept after transport failures
+     never lands once the book's cast is read-only: the run's rows win, and
+     the re-read after the run replaces the screen. It is dropped with the
+     read-only toast - except by the gate's rise flush (`sendKeptCast`, C1), which
+     sends it while it can still land before the job, or meet its 409. */
+  const dropKeptCast = (bookId: string): boolean => {
+    const key = flushKey(bookId, 'cast');
+    if (!selectCastReadOnly(store.getState() as PersistableRootState, bookId)) return false;
+    outbox.delete(key);
+    toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
+    return true;
+  };
   /* C7 — send the book's kept saves (idle keys), in slice order. */
-  const pumpKept = (bookId: string) => {
+  const pumpKept = (bookId: string, sendKeptCast = false) => {
     for (const slice of LEARNED_SLICES) {
       const key = flushKey(bookId, slice);
-      if (outbox.get(key)?.size && !timers.has(key) && !flights.has(key)) pump(bookId, slice);
+      if (!outbox.get(key)?.size || timers.has(key) || flights.has(key)) continue;
+      if (slice === 'cast' && !sendKeptCast && dropKeptCast(bookId)) continue;
+      pump(bookId, slice);
     }
   };
   /* Send every queued write for `bookId` now instead of at the end of its
      debounce, kept saves first. A running flight carries what is queued on its
      next attempt or its follow-up. */
-  const flushBookNow = (bookId: string) => {
-    pumpKept(bookId);
+  const flushBookNow = (bookId: string, sendKeptCast = false) => {
+    pumpKept(bookId, sendKeptCast);
     for (const slice of LEARNED_SLICES) {
       const key = flushKey(bookId, slice);
       const timer = timers.get(key);
@@ -616,6 +669,26 @@ export const persistenceMiddleware: Middleware = (store) => {
             store.dispatch(bookMetaActions.markNeedsFullRead({ bookId, refused }));
             ok = false;
           }
+        } else if (slice === 'cast' && (err as { code?: unknown } | null)?.code === 'book_busy') {
+          /* Plan 291 (#4031, item 6) — an analysis job holds the book: the
+             server wrote nothing and will refuse every cast save until it
+             ends. Drop what is queued (the cast is read-only now), toast,
+             latch the era and ask the gate to re-read once the run is over.
+             The analysis copy when the busy cache lists it, else the
+             server's own sentence. Read before the latch, which drops the
+             book's busy entry. */
+          failures = 0;
+          for (const u of Array.from(box.keys())) box.delete(u);
+          const listed =
+            (store.getState() as PersistableRootState).bookBusy?.busyByBook?.[bookId]?.includes('analysis') ?? false;
+          const raw = err instanceof Error ? err.message : String(err);
+          toast(
+            listed ? CAST_READ_ONLY_MESSAGE : raw.replace(/^Book state PUT failed \(\d+\): /, ''),
+            listed ? CAST_READ_ONLY_DEDUPE_KEY : `cast-persist-busy:${bookId}`,
+          );
+          store.dispatch(castActions.latchAnalysisEra({ bookId }));
+          store.dispatch(requestCastRehydrate(bookId));
+          ok = false;
         } else if (PUT_REFUSED_RE.test(err instanceof Error ? err.message : String(err))) {
           /* A deliberate refusal (analysis running, path collision, consent): it
              will not change on a re-send. A book-meta commit whose entries all
@@ -659,6 +732,14 @@ export const persistenceMiddleware: Middleware = (store) => {
             await new Promise<void>((resolve) => setTimeout(resolve, FLUSH_RETRY_DELAYS_MS[failures - 1]));
             continue;
           }
+          /* Plan 291 — given up while the cast is read-only: dropped, never
+             kept (see dropKeptCast). */
+          if (slice === 'cast' && selectCastReadOnly(store.getState() as PersistableRootState, bookId)) {
+            box.clear();
+            toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
+            ok = false;
+            break;
+          }
           /* Given up on (#3421): the units stay, kept for the book's next
              flush. The rollback restores a shared, book-agnostic draft, and the
              retry window lets the user open another book first, so it only runs
@@ -691,10 +772,17 @@ export const persistenceMiddleware: Middleware = (store) => {
   };
 
   return (next) => (action) => {
+    const clearing = (action as { type?: string }).type === castActions.clearAnalysisEra.type;
+    const clearBook = clearing ? (action as { payload: { bookId: string } }).payload.bookId : null;
+    const hadEra =
+      clearBook !== null && !!(store.getState() as PersistableRootState).cast?.analysisEra?.[clearBook];
     const result = next(action);
     const a = action as { type?: string; payload?: unknown };
     const type = a?.type;
     if (!type) return result;
+    if (hadEra && !(store.getState() as PersistableRootState).cast?.analysisEra?.[clearBook!]) {
+      eraClearedAt.set(clearBook!, ++clock);
+    }
 
     const after = store.getState() as PersistableRootState;
     const bookId = bookIdFromState(after);
@@ -719,6 +807,11 @@ export const persistenceMiddleware: Middleware = (store) => {
       const key = flushKey(readBook, 'cast');
       if ((outbox.get(key)?.size ?? 0) > 0 || timers.has(key) || flights.has(key)) return true;
       return Object.values(landedAt.get(key) ?? {}).some((tick) => tick > readSeq);
+    }
+
+    if (type === CAST_ERA_CLEARED_SINCE) {
+      const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
+      return (eraClearedAt.get(readBook) ?? 0) > readSeq;
     }
 
     if (type === LEARN_REVISIONS) {
@@ -791,7 +884,7 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     if (type === FLUSH_BOOK && typeof a.payload === 'string') {
       const target = a.payload;
-      flushBookNow(target);
+      flushBookNow(target, (a as { meta?: { sendKeptCast?: boolean } }).meta?.sendKeptCast === true);
       const waits = LEARNED_SLICES.flatMap((slice) => flights.get(flushKey(target, slice)) ?? []);
       return waits.length > 0
         ? Promise.all(waits).then(
@@ -818,6 +911,19 @@ export const persistenceMiddleware: Middleware = (store) => {
       console.warn(
         `[persist] dropped ${type}: slices hold book ${held}, stage is ${bookId} (#3624)`,
       );
+      return result;
+    }
+
+    /* Plan 291 (#4031), invariant 7 — while the book's cast is read-only (its
+       analysis runs, or its era is latched until a re-read), no cast rule
+       builds or queues anything. A whole-slice save would overwrite the run's
+       rows. One deduped toast says so; a mirror of a route's own write says
+       nothing (R3). The disabled controls are UX only: this is what makes it
+       correct. */
+    if (rule.slice === 'cast' && selectCastReadOnly(after, bookId)) {
+      const routeBacked =
+        ROUTE_BACKED_CAST_RULES.has(type) || (a as { meta?: { routeBacked?: boolean } }).meta?.routeBacked === true;
+      if (!routeBacked) toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
       return result;
     }
 

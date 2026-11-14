@@ -25,8 +25,9 @@ import { useEffect, useState } from 'react';
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
 import { castActions } from '../store/cast-slice';
+import { CAST_EDITS_PAUSED_TOOLTIP, useCastReadOnly } from '../components/cast-edits-paused-banner';
 import { notificationsActions } from '../store/notifications-slice';
 import { pickMergeSurvivor } from '../lib/voice-character-link';
 import type { Character, Voice } from '../lib/types';
@@ -82,12 +83,16 @@ export function DuplicateReviewModal({
   hydrationError = null,
 }: DuplicateReviewModalProps) {
   const dispatch = useAppDispatch();
+  const readOnly = useCastReadOnly();
   const [busy, setBusy] = useState<'link' | 'variant' | null>(null);
   const [error, setError] = useState<string | null>(null);
   /* Which side survives a "link" action. Default = the side
      pickMergeSurvivor picks (longer-named / substring-containing).
      'a' or 'b'. */
   const [survivor, setSurvivor] = useState<'a' | 'b'>('a');
+  /* The book the cast slice holds: a link is mirrored into it only when it is the
+     loser's (review pass 1). */
+  const openBookId = useAppSelector((s) => s.manuscript?.bookId ?? null);
 
   /* Reset modal state every time it opens with a fresh pair. */
   useEffect(() => {
@@ -112,6 +117,9 @@ export function DuplicateReviewModal({
   const winner = survivor === 'a' ? sideA : sideB;
   const loser = survivor === 'a' ? sideB : sideA;
   const canLink = !!sideA.character && !!sideB.character;
+  /* Plan 291 (#4031) — link-prior writes only the source book's cast; the open
+     book's matchedFrom arrives through the cast slice's PUT, so the link waits
+     for a re-analysis. "Different on purpose" saves through its own route. */
   const linkDisabled = !canLink || loading || busy !== null;
   const variantDisabled = !canLink || loading || busy !== null;
 
@@ -131,13 +139,19 @@ export function DuplicateReviewModal({
         targetBookId: winnerBookId,
         targetCharacterId: winnerChar.id,
       });
-      dispatch(
-        castActions.applyManualMatch({
-          characterId: loserChar.id,
-          matchedFrom: res.matchedFrom,
-          voiceId: res.voiceId,
-        }),
-      );
+      /* Review pass 1 — the cast slice holds ONE book: mirror the link only into the
+         book it was made in (the loser's), never into a same-id row of another
+         open book, which the next autosave would then write. */
+      if (openBookId !== null && openBookId === loserBookId) {
+        dispatch(
+          castActions.applyManualMatch({
+            characterId: loserChar.id,
+            matchedFrom: res.matchedFrom,
+            voiceId: res.voiceId,
+            voice: res.voice,
+          }),
+        );
+      }
       dispatch(
         notificationsActions.pushToast({
           dedupeKey: `duplicate-link-${loserChar.id}`,
@@ -282,7 +296,16 @@ export function DuplicateReviewModal({
             >
               {busy === 'variant' ? 'Saving…' : 'Different on purpose'}
             </button>
-            <PrimaryButton variant="dark" onClick={handleLink} disabled={linkDisabled}>
+            <PrimaryButton
+              variant="dark"
+              onClick={() => {
+                if (readOnly) return;
+                void handleLink();
+              }}
+              disabled={linkDisabled}
+              softDisabled={readOnly}
+              title={readOnly ? CAST_EDITS_PAUSED_TOOLTIP : undefined}
+            >
               {busy === 'link'
                 ? 'Linking…'
                 : loading

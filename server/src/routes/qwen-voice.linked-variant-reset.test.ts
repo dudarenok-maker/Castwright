@@ -33,6 +33,7 @@ const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
 /* Fails the next `times` reads of a file whose path contains `text` (an EBUSY from
    a scanner); `times: Infinity` is a persistent fault. */
 const failReadIn = vi.hoisted(() => ({ text: null as string | null, times: 0 }));
+const onRenamed = vi.hoisted(() => ({ fn: null as null | ((to: string) => void) }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const readFile = async (path: unknown, ...rest: unknown[]) => {
@@ -46,7 +47,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return (actual.readFile as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
   };
-  return { ...actual, default: { ...actual, readFile }, readFile };
+  /* Runs right after each rename lands, so a test can read a file the moment it appears. */
+  const rename = async (from: unknown, to: unknown) => {
+    await (actual.rename as (...a: unknown[]) => Promise<void>)(from, to);
+    onRenamed.fn?.(String(to));
+  };
+  return { ...actual, default: { ...actual, readFile, rename }, readFile, rename };
 });
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
@@ -431,6 +437,21 @@ describe('#4040 — a linked voice’s base redesign makes the old emotion varia
       failReadIn.text = null;
     }
     expect(JSON.parse(readFileSync(json('qwen-u_shared__angry'), 'utf8')).baseRev).toBe('r1');
+  });
+
+  it('a landed variant json carries its baseRev the moment it appears, so a copy at any point after sees it (#4040)', async () => {
+    writeFileSync(json('qwen-u_shared'), JSON.stringify({ voiceId: 'qwen-u_shared', rev: 'r1' }));
+    const seen: unknown[] = [];
+    onRenamed.fn = (to) => {
+      if (to === json('qwen-u_shared__angry')) seen.push(JSON.parse(readFileSync(to, 'utf8')).baseRev);
+    };
+    try {
+      const res = await design('Book B', { emotion: 'angry' });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    } finally {
+      onRenamed.fn = null;
+    }
+    expect(seen, 'the variant json landed without the base rev it was designed against').toEqual(['r1']);
   });
 
   it('an absent base json records no baseRev (#4040)', async () => {

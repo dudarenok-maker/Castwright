@@ -67,6 +67,20 @@ vi.mock('../store/analysis-cache.js', async () => {
       if (args[1].stage1) (globalThis as Record<string, unknown> & { __overflow_spend_test_stage1_saved?: () => void }).__overflow_spend_test_stage1_saved?.();
       return actual.saveAnalysisCache(...args);
     },
+    /* #4031 Task 19 - the main job saves through field-scoped patches; the same hooks see the
+       cache a patch wrote (after the write: the patch is applied inside the cache op). */
+    mutateAnalysisCache: async (...args: Parameters<typeof actual.mutateAnalysisCache>) => {
+      const written = await actual.mutateAnalysisCache(...args);
+      if (written) {
+        const g = globalThis as Record<string, unknown> & {
+          __overflow_spend_test_save_hook?: (c: typeof written) => void | Promise<void>;
+          __overflow_spend_test_stage1_saved?: () => void;
+        };
+        await g.__overflow_spend_test_save_hook?.(structuredClone(written));
+        if (written.stage1) g.__overflow_spend_test_stage1_saved?.();
+      }
+      return written;
+    },
   };
 });
 
@@ -231,6 +245,7 @@ async function seedBook(
        chapter and fills chapterCast, so the coverage gate past it passes. */
     const { saveAnalysisCache } = await import('../store/analysis-cache.js');
     await saveAnalysisCache(manuscriptId, {
+      version: 2,
       chapters: {},
       stage1: {
         characters: [novaCharacter()],
@@ -959,7 +974,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
     const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
     const { runMainAnalyzerJob } = await import('./analysis.js');
-    await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+    await saveAnalysisCache(seed.manuscriptId, { version: 2, ...seedCache } as never);
     const castCalls: number[] = [];
     const stage2Calls: number[] = [];
     const failedSaves: number[][] = [];
@@ -2012,7 +2027,7 @@ describe('the subset result gate: S8 and S14 end resume_required on an unfinishe
     const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
     const { runSubsetAnalyzerJob, runMainAnalyzerJob } = await import('./analysis.js');
     const { castJsonPath, manuscriptEditsJsonPath, stateJsonPath } = await import('../workspace/paths.js');
-    await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+    await saveAnalysisCache(seed.manuscriptId, { version: 2, ...seedCache } as never);
     const record = getManuscript(seed.manuscriptId)!;
     const stage2Calls: number[][] = [];
     const phase1 = (calls: number[]) =>

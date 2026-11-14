@@ -29,6 +29,8 @@ let lastSynthArgs: {
   bookLanguage?: string;
 } | null = null;
 let synthesiseImpl: (args: unknown) => Promise<unknown>;
+/* Every call the mocked run-start `reconcileResidentQwenTiers` received (#4066). */
+const reconcileCalls: unknown[][] = [];
 vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
   return {
@@ -48,7 +50,10 @@ vi.mock('../tts/index.js', async (importOriginal) => {
    doesn't try to reach :9000 for the Kokoro fallback warm. */
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
-  reconcileResidentQwenTiers: async () => undefined,
+  reconcileResidentQwenTiers: async (...args: unknown[]) => {
+    reconcileCalls.push(args);
+    return undefined;
+  },
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
      consumer) is a no-op here. */
   SIDECAR_ENGINES: new Set(),
@@ -187,6 +192,18 @@ beforeEach(async () => {
   });
 });
 
+/* generation.ts fires `void markQueueEntryDoneOnDisk(...)` (queue prune of a
+   rendered entry) without awaiting it, so it can still be queued behind the
+   queue mutex when the SSE stream closes. A later test's `beforeEach` rewrites
+   the queue file under the SAME entry id, and the straggler then prunes THAT
+   entry (the flake that left `readRuEntry()` undefined in the fs-60 PARKS
+   test). The straggler enqueues synchronously on the mutex, so a no-op task
+   queued behind it resolves only after it has run. */
+afterEach(async () => {
+  const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+  await serializeQueueMutation(async () => undefined);
+});
+
 /** POST a generation stream and collect the full SSE body text + resolve when
     the stream closes. */
 async function runStream(extraBody: Record<string, unknown> = {}): Promise<string> {
@@ -260,6 +277,136 @@ describe('per-chapter loud Qwen→Kokoro fallback gate', () => {
     }
     expect(text).not.toContain('chapter_awaiting_fallback_confirm');
     expect(synthCalled).toBe(true);
+  }, 10_000);
+});
+
+describe('#4066 run-start reconcile on a Quality chapter render', () => {
+  beforeEach(async () => {
+    reconcileCalls.length = 0;
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(async () => ({ kokoroLoaded: true, devices: { kokoro: 'cuda' } }));
+  });
+  afterEach(async () => {
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(null);
+  });
+
+  it('a Quality (1.7B) run unloads an on-GPU Kokoro at start', async () => {
+    await runStream({ modelKey: 'qwen3-tts-1.7b' });
+    expect(reconcileCalls.length).toBeGreaterThan(0);
+    expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true, keepKokoro: false });
+  }, 10_000);
+
+  it('keeps Kokoro when a sibling generation is already in flight (one POST per chapter — Kokoro may be mid-line)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const okResult = {
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 1,
+      segments: [{ characterId: 'wren', sentenceIds: [1] }],
+    };
+    synthesiseImpl = async () => {
+      await gate;
+      return okResult;
+    };
+    /* First chapter POST: parks inside synth, so its job stays registered. */
+    const first = runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+    try {
+      await vi.waitFor(() => expect(synthCalled).toBe(true));
+      expect(reconcileCalls[0]![0]).toMatchObject({ keepKokoro: false }); // nothing else was running
+      reconcileCalls.length = 0;
+
+      /* Sibling POST arrives mid-render. */
+      synthesiseImpl = async () => okResult;
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true });
+      expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+    } finally {
+      release();
+      await first;
+    }
+  }, 15_000);
+
+  it('keeps Kokoro while a QA repair or splice is running (invisible to generation\'s own job map)', async () => {
+    const { registerSplice } = await import('./chapter-job-coordination.js');
+    /* A repair registers through the same `registerSplice` as a splice, on any book. */
+    const release = registerSplice('some-other-book', 7, new AbortController());
+    try {
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true });
+      expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('keys the drop on the tier the cast will LOAD, not the run default: a Standard run whose only Qwen character is set to Quality drops Kokoro', async () => {
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const { readFileSync } = await import('node:fs');
+    const original = readFileSync(castPath, 'utf8');
+    writeFileSync(
+      castPath,
+      JSON.stringify({
+        characters: [{ id: 'wren', name: 'Wren', ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' }],
+      }),
+    );
+    try {
+      await runStream({ modelKey: 'qwen3-tts-0.6b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep06: false, keep17: true, keepKokoro: false });
+    } finally {
+      writeFileSync(castPath, original);
+    }
+  }, 10_000);
+
+  it('a Standard (0.6B) run never touches Kokoro', async () => {
+    await runStream({ modelKey: 'qwen3-tts-0.6b' });
+    expect(reconcileCalls.length).toBeGreaterThan(0);
+    expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+  }, 10_000);
+});
+
+describe('#4079 a real chapter render feeds the render-lease gate only when it uses the Quality tier', () => {
+  /* Runs one POST that parks inside synth, samples the gate while the job is
+     registered, then lets it finish and samples again. */
+  async function qualityActiveWhileRendering(modelKey: string): Promise<[boolean, boolean]> {
+    const { isQualityRenderKnownActive } = await import('../gpu/active-generation-gate.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    synthesiseImpl = async () => {
+      await gate;
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [{ characterId: 'wren', sentenceIds: [1] }],
+      };
+    };
+    const run = runStream({ modelKey, fallbackConfirmed: true });
+    let during = false;
+    try {
+      await vi.waitFor(() => expect(synthCalled).toBe(true));
+      during = isQualityRenderKnownActive();
+    } finally {
+      release();
+      await run;
+    }
+    return [during, isQualityRenderKnownActive()];
+  }
+
+  it('a Standard-only cast takes no lease while its job is registered', async () => {
+    expect(await qualityActiveWhileRendering('qwen3-tts-0.6b')).toEqual([false, false]);
+  }, 10_000);
+
+  it('a Quality (1.7B) cast makes the gate true while registered, and false once released', async () => {
+    expect(await qualityActiveWhileRendering('qwen3-tts-1.7b')).toEqual([true, false]);
   }, 10_000);
 });
 

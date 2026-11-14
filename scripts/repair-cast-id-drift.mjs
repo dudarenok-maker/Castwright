@@ -381,9 +381,9 @@ export function buildNameIndex(entries, normaliseFn) {
 /** Tier A (spec §4.2): find the single live cast character whose normalised
  *  display name equals `normaliseFn(candidateName)`. Returns `undefined` on
  *  no match OR a tie (more than one live character shares the normalised
- *  name) — the same "a tie means stop" rule `buildCastResolver` and
- *  `remapFreshToPriorIds` both already apply; this function must not
- *  reintroduce a looser one. */
+ *  name) — the same "a tie means stop" rule `buildCastResolver` applies (and
+ *  `remapFreshToPriorIds` applied, until plan 291 deleted it); this function
+ *  must not reintroduce a looser one. */
 export function resolveTierAName(candidateName, liveCast, normaliseFn) {
   if (!candidateName) return undefined;
   const target = normaliseFn(candidateName);

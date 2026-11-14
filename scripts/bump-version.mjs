@@ -30,6 +30,7 @@ import {
   checkMojibake,
   checkConflictMarkers,
   checkBOM,
+  checkBodySize,
   stripBOM,
   formatHonouredEcho,
 } from './release-notes-gate.mjs';
@@ -236,6 +237,27 @@ export function execGit(args, options) {
   return execFileSync('git', args, { windowsHide: true, ...options, env: scrubGitEnv(options?.env) });
 }
 
+export function releaseNextSteps(branch, newTag) {
+  const bumpBranch = `chore/bump-${newTag}`;
+  const version = newTag.replace(/^v/, '');
+  return [
+    `     main's ruleset rejects a direct push, so the bump commit goes in through a PR,`,
+    `     and the required pr-issue-link check needs that PR to close an issue.`,
+    `     1. gh issue create --title "Cut ${newTag}" --body "Version bump for ${newTag}." --label type:chore --label area:ops`,
+    `        (note the issue number it prints)`,
+    `     2. git push origin HEAD:refs/heads/${bumpBranch}`,
+    `        gh pr create --base ${branch} --head ${bumpBranch} --title "chore: bump version to ${version}" --body "Closes #<issue>"`,
+    `     3. Merge it with a MERGE COMMIT (gh pr merge --merge) once verify.yml is green.`,
+    `        (A version-only bump of server/tts-sidecar/version.py needs no "Sidecar acceptance:" line.)`,
+    `     4. git switch ${branch} && git pull --ff-only   (local ${branch} fast-forwards past the bump commit)`,
+    `        Verify the tag still points at the bump commit and that it reached origin/${branch}:`,
+    `          git rev-parse "${newTag}^{commit}"`,
+    `          git merge-base --is-ancestor "${newTag}^{commit}" origin/${branch} && echo in origin/${branch}`,
+    `     5. git push origin ${newTag}`,
+    `     6. Watch .github/workflows/release.yml — the tag push triggers it.`,
+  ];
+}
+
 function git(args, opts = {}) {
   return execGit(args, {
     cwd: repoRoot,
@@ -439,7 +461,19 @@ async function main() {
   }
   // Default to the canonical in-repo notes so a release can't ship a silent
   // placeholder body (the refusal is enforced after the cheap pre-flights).
-  args.notesFile = resolveNotesFile(args.notesFile, existsSync);
+  // The default is a path WITHIN THE REPO, so it is looked up (and, once
+  // chosen, read) against `repoRoot` — not the invocation cwd — or a run from
+  // a subdirectory finds nothing and later crashes on `resolve(null)`.
+  // `defaulted` (not a string compare after the fact) tells an operator who
+  // typed `--notes-file docs/release-notes-next.md` from a subdirectory — whose
+  // cwd file is theirs to name — apart from the default, which lives at the root.
+  // `args.notesFile` stays the operator-facing label; `notesPath` is what's read.
+  const defaulted = !args.notesFile;
+  args.notesFile = resolveNotesFile(args.notesFile, (p) =>
+    existsSync(p === DEFAULT_NOTES_FILE ? resolve(repoRoot, p) : p),
+  );
+  const notesSrc =
+    defaulted && args.notesFile === DEFAULT_NOTES_FILE ? resolve(repoRoot, DEFAULT_NOTES_FILE) : args.notesFile;
 
   // #2170 (decided 2026-08-06, superseding the #2168-review heads-up below) —
   // release.yml's release-body.mjs sources the PUBLISHED GitHub release body
@@ -470,8 +504,11 @@ async function main() {
   // itself is intentionally left resolved against the invocation cwd (see
   // the `--notes-file does not exist` pre-flight above, which does the same)
   // — an operator's notes file legitimately lives wherever they're standing.
-  if (args.notesFile !== DEFAULT_NOTES_FILE && existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))) {
-    const explicitText = readFileSync(resolve(args.notesFile), 'utf8');
+  if (
+    resolve(notesSrc ?? '') !==resolve(repoRoot, DEFAULT_NOTES_FILE) &&
+    existsSync(resolve(repoRoot, DEFAULT_NOTES_FILE))
+  ) {
+    const explicitText = readFileSync(resolve(notesSrc), 'utf8');
     const defaultText = readFileSync(resolve(repoRoot, DEFAULT_NOTES_FILE), 'utf8');
     // Finding 5 — the tag annotation is built from buildTagMessage(explicitText),
     // which strips a defensive BOM (see buildTagMessage's own doc comment);
@@ -491,7 +528,7 @@ async function main() {
         `pushed. Align the two files, or pass --allow-notes-divergence to cut anyway (the ` +
         `publish job WILL FAIL unless you fix it before pushing the tag).`;
       // Finding 4 — every other CONDITIONAL pre-flight in main() reports
-      // rather than dies under --dry-run (the four that die unconditionally
+      // rather than dies under --dry-run (the five that die unconditionally
       // each carry their own comment explaining why — no legitimate reason
       // for a conflict marker or a BOM to ship, ever). A dry run creates no
       // tag, so refusing here protects nothing while destroying the preview;
@@ -629,7 +666,7 @@ async function main() {
   // Catches the "release-notes-next.md still holds the last release" trap —
   // a stale marker would otherwise become the GitHub release body verbatim.
   if (args.notesFile) {
-    const notesFileText = readFileSync(resolve(args.notesFile), 'utf8');
+    const notesFileText = readFileSync(resolve(notesSrc), 'utf8');
     const stale = staleNotesVersion(notesFileText, newVersion);
     if (stale) {
       if (args.force) info(`[WARN] notes-file gate (--force): ${args.notesFile} declares ${stale}, cutting ${newVersion}`);
@@ -670,6 +707,13 @@ async function main() {
       else if (args.dryRun) info(`[DRY-RUN][WARN] mojibake gate: ${mojibakeCheck.reason}`);
       else die(`Mojibake gate: ${mojibakeCheck.reason}`);
     }
+
+    // Pre-flight 6d: this file becomes the GitHub release body, which GitHub
+    // rejects over 125,000 characters — but only at the final publish step,
+    // after the tag is pushed. Same unconditional posture as 6a/6c: no
+    // --force, no --dry-run downgrade (GitHub rejects it regardless).
+    const sizeCheck = checkBodySize(notesFileText, args.notesFile);
+    if (!sizeCheck.ok) die(sizeCheck.reason);
   }
 
   const gateOn = !args.skipCrossOs;
@@ -772,16 +816,14 @@ async function main() {
   // `--cleanup=verbatim` and the BOM strip are both load-bearing.
   info('[STEP] git tag ...');
   if (args.notesFile) {
-    createAnnotatedTag({ repoRoot, newTag, notesFile: args.notesFile });
+    createAnnotatedTag({ repoRoot, newTag, notesFile: notesSrc });
   } else {
     git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Castwright ${newTag}`]);
   }
 
   info('');
   info(`[OK] Bump complete${gateOn ? ' (cross-OS verified)' : ''}. Next steps:`);
-  info(`     1. git push origin ${branch}`);
-  info(`     2. git push origin ${newTag}`);
-  info(`     3. Watch .github/workflows/release.yml — the tag push triggers it.`);
+  for (const line of releaseNextSteps(branch, newTag)) info(line);
   if (!args.notesFile) {
     info('');
     info(`[NOTE] Tag annotation is a placeholder. To replace with real notes BEFORE pushing:`);

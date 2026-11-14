@@ -101,7 +101,7 @@ castDeclineVoiceLinkRouter.post(
               dirs,
               plan.followers,
               (dir, cast) => writeJsonAtomic(castJsonPath(dir), cast),
-              { fromBookId },
+              { fromBookId, plannedStranded: plan.stranded },
             ),
           );
         });
@@ -118,6 +118,8 @@ castDeclineVoiceLinkRouter.post(
             declinedVoiceFrom: out.row.declinedVoiceFrom ?? [fromBookId],
             declinedVoiceUuids: out.row.declinedVoiceUuids ?? [],
             voiceUuid: out.voiceUuid ?? null,
+            /* Whether the row actually moved: the client mirrors the fork (rename + variant drop) only then. */
+            separated: out.separated,
             /* Other rows of this book that moved with it, for the client to mirror. */
             movedCharacterIds: out.movedSameBook,
           },

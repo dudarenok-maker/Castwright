@@ -632,7 +632,7 @@ class _FakeStepQwen(main.QwenEngine):
     def maybe_free_idle_design(self, ttl_seconds):
         return True
 
-    def maybe_free_idle_base17(self, ttl_seconds):
+    def maybe_free_idle_base17(self, ttl_seconds, reason="idle watchdog"):
         return True
 
 

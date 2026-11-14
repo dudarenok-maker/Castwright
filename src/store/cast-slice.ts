@@ -11,6 +11,24 @@ type OverrideVoiceSlot = NonNullable<Character['overrideTtsVoices']>[string];
    order). Mirrors the server's union (merge-analysis-cast.ts) so a manually-
    added or reuse-unioned alias isn't dropped when an analyser snapshot or a
    cast-merge response carries a sparser set (srv-13). */
+/* #4031 M7 — the same for `notLinkedTo`: a merge unions the source's declines onto
+   the survivor, so the route's list is a superset the local one must not mask.
+   Entries are deduplicated by value. */
+function unionNotLinked<T>(a?: T[], b?: T[]): T[] | undefined {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const list of [a, b]) {
+    if (!Array.isArray(list)) continue;
+    for (const e of list) {
+      const key = JSON.stringify(e);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(e);
+    }
+  }
+  return out.length ? out : undefined;
+}
+
 function unionAliases(a?: string[], b?: string[]): string[] | undefined {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -117,6 +135,43 @@ export interface CastState {
       the same reason as its sibling — selectors read it through a `?? {}`
       guard. */
   orphanedCharacterFallbacks?: Record<string, OrphanedCharacterFallback>;
+  /** Plan 291 (#4031) — bookId → the analysis era latched for that book. A
+      book with an era is read-only (store/cast-gate.ts) until a disk re-read
+      issued after its analysis ended clears it. Per book, so a book switch
+      never moves one book's era onto another, and `hydrateCharacters` never
+      touches it. `epoch` moves on every latch, so a re-read issued before the
+      latest analysis apply does not clear it. Optional like its siblings. */
+  analysisEra?: Record<string, { epoch: number }>;
+  /** The last epoch issued per book. A clear never resets it, so a new era
+      never reuses an epoch a stale re-read might still hold. */
+  analysisEraSeq?: Record<string, number>;
+}
+
+/** Plan 291 (#4031, R5) — `mergeCharacters`' meta: `fromAnalysis` marks an
+    analysis snapshot apply, which latches the era of `bookId` (else of the
+    book the active analysis stream names, else of the open book). */
+export interface CastApplyMeta {
+  fromAnalysis?: boolean;
+  bookId?: string | null;
+}
+
+/** Plan 291 (#4031, R31) — `declineMatch`'s meta: `routeBacked` when the
+    decline route already recorded it (decline-match-flow.ts), so a read-only
+    cast raises no "that change wasn't saved" toast for it. The same meta rides
+    `updateCharacter` / `setCharacters` where they mirror a route's result. */
+export interface CastDeclineMeta {
+  routeBacked?: boolean;
+}
+
+/* #4067 — the client half of the server's `withForkedUuid` (qwen-voice.ts): the
+   row takes the new uuid, loses its qwen `variants`, and its qwen slot name
+   follows to `qwen-<uuid>` unless a `libraryUuid` keys it. Runs on an Immer draft. */
+function forkRow(c: Character, voiceUuid: string): void {
+  c.voiceUuid = voiceUuid;
+  const qwen = c.overrideTtsVoices?.qwen;
+  if (!qwen) return;
+  delete qwen.variants;
+  if (qwen.name && !qwen.libraryUuid) qwen.name = `qwen-${voiceUuid}`;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -129,14 +184,20 @@ const initialState: CastState = {
   characters: [],
   renderedFallbackByCharacter: {},
   orphanedCharacterFallbacks: {},
+  analysisEra: {},
+  analysisEraSeq: {},
 };
 
 export const castSlice = createSlice({
   name: 'cast',
   initialState,
   reducers: {
-    setCharacters: (s, a: PayloadAction<Character[]>) => {
-      s.characters = a.payload;
+    setCharacters: {
+      reducer: (s, a: PayloadAction<Character[], string, CastDeclineMeta | undefined>) => {
+        s.characters = a.payload;
+      },
+      /* `meta.routeBacked`: a route already saved this change (plan 291, I1). */
+      prepare: (characters: Character[], meta?: CastDeclineMeta) => ({ payload: characters, meta }),
     },
     /* Same state change as `setCharacters`, but a distinct action type the
        persistence middleware does not persist — for seeding the roster FROM
@@ -144,6 +205,22 @@ export const castSlice = createSlice({
        back to the server (#3395 pass 4). */
     hydrateCharacters: (s, a: PayloadAction<Character[]>) => {
       s.characters = a.payload;
+    },
+    /* Plan 291 (#4031) — latch `bookId`'s analysis era, or move its epoch.
+       Dispatched by the cast gate on an analysis apply, a running snapshot,
+       another tab's snapshot or a busy reply listing `analysis`, and by the
+       persistence middleware on a cast PUT answered 409 `book_busy`. */
+    latchAnalysisEra: (s, a: PayloadAction<{ bookId: string }>) => {
+      const seq = (s.analysisEraSeq ??= {});
+      const epoch = Math.max(seq[a.payload.bookId] ?? 0, s.analysisEra?.[a.payload.bookId]?.epoch ?? 0) + 1;
+      seq[a.payload.bookId] = epoch;
+      (s.analysisEra ??= {})[a.payload.bookId] = { epoch };
+    },
+    /* Clear `bookId`'s era, unless its epoch moved since the re-read that
+       clears it was issued. */
+    clearAnalysisEra: (s, a: PayloadAction<{ bookId: string; epoch: number }>) => {
+      const era = s.analysisEra?.[a.payload.bookId];
+      if (era && era.epoch === a.payload.epoch) delete s.analysisEra![a.payload.bookId];
     },
     /* fe-16 — overwrite the per-character render fallback map from the
        book-state GET. Hydrated alongside setCharacters on book open; the empty
@@ -160,13 +237,17 @@ export const castSlice = createSlice({
     ) => {
       s.orphanedCharacterFallbacks = a.payload ?? {};
     },
-    declineMatch: (s, a: PayloadAction<string>) => {
-      const c = s.characters.find((x) => x.id === a.payload);
-      if (c) {
-        c.matchedFrom = undefined;
-        /* Declining a link never drops a lock/tune the user set (#3842). */
-        if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
-      }
+    declineMatch: {
+      reducer: (s, a: PayloadAction<string, string, CastDeclineMeta | undefined>) => {
+        const c = s.characters.find((x) => x.id === a.payload);
+        if (c) {
+          c.matchedFrom = undefined;
+          c.matchFactors = undefined;
+          /* Declining a link never drops a lock/tune the user set (#3842). */
+          if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') c.voiceState = 'generated';
+        }
+      },
+      prepare: (characterId: string, meta?: CastDeclineMeta) => ({ payload: characterId, meta }),
     },
     /* #3992 — mirror the "Don't reuse" marker the decline route returned, so
        applyVoiceMatches' own filter (which reads it) works in the session where
@@ -192,9 +273,13 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === a.payload);
       if (c) c.voiceState = 'locked';
     },
-    updateCharacter: (s, a: PayloadAction<Character>) => {
-      const next = a.payload;
-      s.characters = s.characters.map((c) => (c.id === next.id ? { ...c, ...next } : c));
+    updateCharacter: {
+      reducer: (s, a: PayloadAction<Character, string, CastDeclineMeta | undefined>) => {
+        const next = a.payload;
+        s.characters = s.characters.map((c) => (c.id === next.id ? { ...c, ...next } : c));
+      },
+      /* `meta.routeBacked`: a route already saved this change (plan 291, I1). */
+      prepare: (character: Character, meta?: CastDeclineMeta) => ({ payload: character, meta }),
     },
     /* Plan 108 — set a character's Gemini-generated voice-design persona
        ("voice style"). The server persists it to cast.json; this reducer
@@ -300,13 +385,38 @@ export const castSlice = createSlice({
       const { characterId, voiceUuid } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
-      /* #3992 — a CHANGED uuid is a fork: the server dropped the row's qwen
-         `variants` with it (their `<uuid>__<emotion>` files belong to the old
-         uuid), so the autosave spreads must not write the stale slots back. */
-      if (c.voiceUuid && c.voiceUuid !== voiceUuid && c.overrideTtsVoices?.qwen?.variants) {
-        delete c.overrideTtsVoices.qwen.variants;
+      /* #3992 — a CHANGED uuid is a fork (the design-time separation of a
+         declined row): the server dropped the row's qwen `variants` with it
+         (their `<uuid>__<emotion>` files belong to the old uuid) and renamed its
+         slot, so the autosave spreads must not write either back (#4067). A first
+         mint (no uuid before) is not a fork by this test: the server keeps the
+         legacy name. A row with no uuid that the design DID separate is not
+         visible here; the design stream says so (`separated`) and dispatches
+         forkCharacterVoiceUuid instead. */
+      if (c.voiceUuid && c.voiceUuid !== voiceUuid) {
+        forkRow(c, voiceUuid);
+        return;
       }
       c.voiceUuid = voiceUuid;
+    },
+    /* #4067 — mirror of the server's `withForkedUuid`
+       (server/src/routes/qwen-voice.ts), which the decline route and a design's
+       separation of a declined row both apply: a row moved onto a voice of its own
+       takes the new uuid, loses its qwen `variants` whether or not it had a uuid
+       before (a legacy row has none, so setCharacterVoiceUuid's changed-uuid test
+       misses it), and its qwen slot name follows to `qwen-<uuid>`, the key the
+       base family was copied to. A slot with a `libraryUuid` is keyed by that, so
+       its name stays. Local-only, no persist rule. Dispatched by the decline flow
+       and by the design stream when the server reports `separated`; a plain first
+       mint goes through setCharacterVoiceUuid, which keeps the legacy name. */
+    forkCharacterVoiceUuid: (
+      s,
+      a: PayloadAction<{ characterId: string; voiceUuid: string }>,
+    ) => {
+      const { characterId, voiceUuid } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      forkRow(c, voiceUuid);
     },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
        badge + count update live (the DELETE route already removed it from
@@ -365,63 +475,71 @@ export const castSlice = createSlice({
        definition, just had a voice generated for them — default the field
        so the Cast view's Status column renders the green "Generated" pill
        instead of nothing. */
-    hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
-      const { characters } = a.payload;
-      if (!characters?.length) return;
-      /* Overlay the existing slice's voice-design fields onto the freshly-analysed
-         roster, matched by id — the SAME preservation mergeCharacters already does
-         for live Phase-0a snapshots (#518). The analysis-complete payload that lands
-         on /confirm carries voice continuity only for characters matched against
-         OTHER books in the series (the series-reuse pass); a character DESIGNED IN
-         THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
-         arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
-         "No voice designed yet" for Berrin/Sela/Quill even though cast.json on disk
-         still held the voice. Existing-wins ONLY when the existing entry has the
-         field, so a fresh reuse link stamped this run still flows through. */
-      const byId = new Map(s.characters.map((c) => [c.id, c]));
-      s.characters = characters.map((inc) => {
-        const existing = byId.get(inc.id);
-        if (!existing) return inc.voiceState ? inc : { ...inc, voiceState: 'generated' };
-        return {
-          ...inc,
-          voiceId: existing.voiceId ?? inc.voiceId,
-          matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
-          /* matchFactors is voice-match-only — the analyzer payload never carries
-             it, so there is no incoming value to fall back to; just keep ours. */
-          matchFactors: existing.matchFactors,
-          voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
-          overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
-          ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
-          voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
-          notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
-          aliases: unionAliases(existing.aliases, inc.aliases),
-        };
-      });
+    hydrateFromAnalysis: {
+      reducer: (s, a: PayloadAction<AnalyseResponse, string, CastApplyMeta | undefined>) => {
+        const { characters } = a.payload;
+        if (!characters?.length) return;
+        /* Overlay the existing slice's voice-design fields onto the freshly-analysed
+           roster, matched by id — the SAME preservation mergeCharacters already does
+           for live Phase-0a snapshots (#518). The analysis-complete payload that lands
+           on /confirm carries voice continuity only for characters matched against
+           OTHER books in the series (the series-reuse pass); a character DESIGNED IN
+           THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
+           arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
+           "No voice designed yet" for Berrin/Sela/Quill even though cast.json on disk
+           still held the voice. Existing-wins ONLY when the existing entry has the
+           field, so a fresh reuse link stamped this run still flows through. */
+        const byId = new Map(s.characters.map((c) => [c.id, c]));
+        s.characters = characters.map((inc) => {
+          const existing = byId.get(inc.id);
+          if (!existing) return inc.voiceState ? inc : { ...inc, voiceState: 'generated' };
+          return {
+            ...inc,
+            voiceId: existing.voiceId ?? inc.voiceId,
+            matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
+            /* matchFactors is voice-match-only — the analyzer payload never carries
+               it, so there is no incoming value to fall back to; just keep ours. */
+            matchFactors: existing.matchFactors,
+            voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
+            overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
+            ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
+            voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
+            notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+            aliases: unionAliases(existing.aliases, inc.aliases),
+          };
+        });
+      },
+      prepare: (response: AnalyseResponse, meta?: CastApplyMeta) => ({ payload: response, meta }),
     },
     /* Live cast-update events from Phase 0a (per-chapter cast detection).
        Each event carries the running roster snapshot — upsert by id so
        user-locked voiceId / matchedFrom on existing entries survive a
        mid-analysis snapshot replacing them. New characters land at the
        end of the array in roster discovery order. */
-    mergeCharacters: (s, a: PayloadAction<Character[]>) => {
-      const incoming = a.payload;
-      if (!incoming?.length) return;
-      const byId = new Map(s.characters.map((c) => [c.id, c]));
-      const next: Character[] = [];
-      const seen = new Set<string>();
-      for (const inc of incoming) {
-        next.push(overlaySnapshotEntry(byId.get(inc.id), inc));
-        seen.add(inc.id);
-      }
-      /* Carry forward any locally-known characters the snapshot omitted.
-         REQUIRED for the generation-time SUBSET path (generation.tsx feeds
-         a single re-analysed chapter's characters here), which is a genuine
-         delta — dropping the untouched rows would wipe the rest of the cast.
-         The full-roster analysis live view uses `replaceLiveRoster` instead. */
-      for (const c of s.characters) {
-        if (!seen.has(c.id)) next.push(c);
-      }
-      s.characters = next;
+    /* Plan 291 — the meta's `fromAnalysis` marks it as an analysis apply
+       (all four generation.tsx sites). */
+    mergeCharacters: {
+      reducer: (s, a: PayloadAction<Character[], string, CastApplyMeta | undefined>) => {
+        const incoming = a.payload;
+        if (!incoming?.length) return;
+        const byId = new Map(s.characters.map((c) => [c.id, c]));
+        const next: Character[] = [];
+        const seen = new Set<string>();
+        for (const inc of incoming) {
+          next.push(overlaySnapshotEntry(byId.get(inc.id), inc));
+          seen.add(inc.id);
+        }
+        /* Carry forward any locally-known characters the snapshot omitted.
+           REQUIRED for the generation-time SUBSET path (generation.tsx feeds
+           a single re-analysed chapter's characters here), which is a genuine
+           delta — dropping the untouched rows would wipe the rest of the cast.
+           The full-roster analysis live view uses `replaceLiveRoster` instead. */
+        for (const c of s.characters) {
+          if (!seen.has(c.id)) next.push(c);
+        }
+        s.characters = next;
+      },
+      prepare: (characters: Character[], meta?: CastApplyMeta) => ({ payload: characters, meta }),
     },
     /* Full-roster snapshot from Phase-0a live cast detection (analysis view).
        Unlike `mergeCharacters`, this REPLACES the roster with the snapshot —
@@ -435,11 +553,14 @@ export const castSlice = createSlice({
        later event. Voice / design fields are still preserved by id-match for
        any surviving row (#518 / srv-13). No-op on an empty snapshot so a stray
        empty event can't wipe a populated roster. */
-    replaceLiveRoster: (s, a: PayloadAction<Character[]>) => {
-      const incoming = a.payload;
-      if (!incoming?.length) return;
-      const byId = new Map(s.characters.map((c) => [c.id, c]));
-      s.characters = incoming.map((inc) => overlaySnapshotEntry(byId.get(inc.id), inc));
+    replaceLiveRoster: {
+      reducer: (s, a: PayloadAction<Character[], string, CastApplyMeta | undefined>) => {
+        const incoming = a.payload;
+        if (!incoming?.length) return;
+        const byId = new Map(s.characters.map((c) => [c.id, c]));
+        s.characters = incoming.map((inc) => overlaySnapshotEntry(byId.get(inc.id), inc));
+      },
+      prepare: (characters: Character[], meta?: CastApplyMeta) => ({ payload: characters, meta }),
     },
     /* From POST /api/books/:bookId/cast/merge — replaces the local cast
        with the server's merged list. The server is authoritative because
@@ -466,7 +587,7 @@ export const castSlice = createSlice({
           overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
           ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
           voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
-          notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+          notLinkedTo: unionNotLinked(existing.notLinkedTo, inc.notLinkedTo),
           aliases: unionAliases(existing.aliases, inc.aliases),
         };
       });
@@ -616,15 +737,37 @@ export const castSlice = createSlice({
           gender?: Character['gender'];
           ageRange?: Character['ageRange'];
         };
+        /* F7 — the server moved the row back onto the voice of the book it had
+           declined: mirror its uuid (null: none) and qwen slot (null: none), so the
+           autosave this action triggers writes them, not the voice it left. */
+        voice?: {
+          voiceUuid: string | null;
+          qwen: NonNullable<Character['overrideTtsVoices']>['qwen'] | null;
+          /* Review pass 1 — same-book rows on its voice that moved with it. */
+          movedCharacterIds?: string[];
+        };
       }>,
     ) => {
-      const { characterId, matchedFrom, voiceId, profile } = a.payload;
+      const { characterId, matchedFrom, voiceId, profile, voice } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
         c.matchedFrom = matchedFrom;
+        /* the factors belonged to the previous candidate */
+        c.matchFactors = undefined;
         c.voiceId = voiceId ?? c.voiceId;
         c.voiceState = 'reused';
+      }
+      if (voice) {
+        const moved = new Set(voice.movedCharacterIds ?? []);
+        for (const row of s.characters) {
+          if (row !== c && !moved.has(row.id)) continue;
+          if (voice.voiceUuid) row.voiceUuid = voice.voiceUuid;
+          else delete row.voiceUuid;
+          const { qwen: _left, ...otherSlots } = row.overrideTtsVoices ?? {};
+          void _left;
+          row.overrideTtsVoices = voice.qwen ? { ...otherSlots, qwen: voice.qwen } : otherSlots;
+        }
       }
       if (profile) {
         if (profile.evidence !== undefined) c.evidence = profile.evidence;
