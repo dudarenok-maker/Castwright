@@ -486,6 +486,80 @@ describe('persistPlannedCast', () => {
     expect(edits.sentences[1]).toMatchObject({ characterId: 'char-narrator', priorCharacterId: 'bob' });
   });
 
+  it('D1: a drift-refused persist appends the narrator row the cast lacks and nothing else (#4100)', async () => {
+    const alice = row('alice', 'Alice', { voice: 'va' });
+    writeCast([alice]);
+    const ledger = {} as RunAddedLedger;
+    const out = await persistPlannedCast(
+      persistArgs({
+        plan: planOf(join('narrator', 'narrator'), join('alice', 'alice')),
+        roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+        sentences: sentences('narrator', 'narrator', 'alice', 'alice'),
+        ledger,
+        driftRefused: true,
+      }),
+    );
+    const cast = readCast();
+    expect(cast).toHaveLength(2);
+    expect(cast[0]).toEqual(alice);
+    expect(cast[1]).toMatchObject({ id: 'narrator', lines: 2, scenes: 1 });
+    expect(out.ledger).toBe(ledger);
+    expect(out.retirements).toEqual([]);
+    const edits = JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'));
+    expect(edits.sentences.slice(0, 2)).toEqual([
+      expect.objectContaining({ characterId: 'narrator' }),
+      expect.objectContaining({ characterId: 'narrator' }),
+    ]);
+    expect(edits.sentences[0]).not.toHaveProperty('priorCharacterId');
+    expect(edits.sentences[1]).not.toHaveProperty('priorCharacterId');
+  });
+
+  it('D2: a drift-refused persist with a narrator row already present leaves cast.json byte-for-byte alone', async () => {
+    writeCast([row('narrator', 'Narrator'), row('alice', 'Alice')]);
+    const before = readFileSync(castJsonPath(bookDir), 'utf8');
+    await persistPlannedCast(
+      persistArgs({
+        plan: planOf(join('narrator', 'narrator'), join('alice', 'alice')),
+        roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+        sentences: sentences('narrator', 'narrator', 'alice', 'alice'),
+        driftRefused: true,
+      }),
+    );
+    expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
+  });
+
+  it('D3: a drift-refused persist re-creates a char-narrator row under its own id', async () => {
+    writeCast([row('alice', 'Alice')]);
+    await persistPlannedCast(
+      persistArgs({
+        plan: planOf(join('narrator', 'char-narrator', 'narrator'), join('alice', 'alice')),
+        roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+        sentences: sentences('narrator', 'narrator', 'alice', 'alice'),
+        driftRefused: true,
+      }),
+    );
+    expect(ids(readCast())).toEqual(['alice', 'char-narrator']);
+    const edits = JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'));
+    expect(edits.sentences.slice(0, 2).map((s: { characterId: string }) => s.characterId)).toEqual([
+      'char-narrator',
+      'char-narrator',
+    ]);
+  });
+
+  it('D4: a drift-refused persist never appends a non-narrator new row', async () => {
+    writeCast([row('narrator', 'Narrator')]);
+    const before = readFileSync(castJsonPath(bookDir), 'utf8');
+    await persistPlannedCast(
+      persistArgs({
+        plan: planOf(join('narrator', 'narrator'), fresh('zed')),
+        roster: roster(row('narrator', 'Narrator'), row('zed', 'Zed')),
+        sentences: sentences('narrator', 'zed'),
+        driftRefused: true,
+      }),
+    );
+    expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(before);
+  });
+
   it('a bucket row created after Phase 0b persists without a throw', async () => {
     writeCast([row('alice', 'Alice')]);
     const out = await persistPlannedCast(

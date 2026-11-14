@@ -453,7 +453,8 @@ export type PersistOutcomeError = Error & { persistOutcome?: PersistOutcome };
        cast.json;
     5. write manuscript-edits.json under the `book` lock, nested;
     6. reconcile the suggestions.
-    `driftRefused`: only step 5 runs (cast.json is left byte-for-byte alone) and
+    `driftRefused`: only step 5 runs (cast.json is left byte-for-byte alone, except that a
+    missing narrator row the overlay re-created is appended, #4100) and
     the run's added suggestion pairs are removed. `roster` is the PLAN-APPLIED
     roster (R29). `mainLedger` (R2) is the other job's ledger, refreshed for every
     row this write touches. */
@@ -575,13 +576,25 @@ export async function persistPlannedCast(a: {
     sentences = rerouteDeletedTargets(sentences, new Set(ov.deletedTargets), narratorId);
 
     const carried = new Set(ov.carriedForward.map((c) => c.id));
-    const finalChars = (a.driftRefused ? current : (ov.characters as Rows)).map((c) => {
-      if (a.driftRefused || carried.has(c.id) || sentences.length === 0) return c;
+    // A drift-refused persist leaves cast.json alone except for one thing (#4100): when the
+    // re-read cast holds no narrator-id row and the overlay produced one, that row is appended.
+    const recreated = a.driftRefused
+      ? (ov.characters as Rows).find((c) => isNarratorId(c.id) && !currentIds.has(c.id))
+      : undefined;
+    const countLines = (c: Rows[number]): Rows[number] => {
       const mine = sentences.filter((s) => s.characterId === c.id);
       return { ...c, lines: mine.length, scenes: new Set(mine.map((s) => s.chapterId)).size };
-    });
+    };
+    const finalChars = a.driftRefused
+      ? recreated
+        ? [...current, countLines(recreated)]
+        : current
+      : (ov.characters as Rows).map((c) => (carried.has(c.id) || sentences.length === 0 ? c : countLines(c)));
 
     const retirements: Retirement[] = [];
+    if (a.driftRefused && recreated) {
+      await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });
+    }
     if (!a.driftRefused) {
       if (!sameJson(finalChars, current)) {
         await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });
