@@ -2,7 +2,7 @@ import type { LanguageConventions } from './types.js';
 import type { NameIndex } from './name-matcher.js';
 import { findRosterName } from './name-matcher.js';
 
-/* Opt-in, conservative recovery for DEGRADED manuscripts — where a source
+/* Conservative recovery for DEGRADED manuscripts — where a source
    conversion (most commonly a Calibre TXT→EPUB) collapsed many dialogue turns
    into a single <p>, so dash-dialogue no longer opens a line and the parser's
    paragraph-start detection can't see it.
@@ -42,8 +42,9 @@ import { findRosterName } from './name-matcher.js';
 
    The inserted break makes the turn a line-starting dash, which the existing
    parseChapterStructure / parseDashParagraph machinery then handles normally
-   (interior spans, anchoring, windows). Default OFF — a caller must opt in, so
-   every existing corpus/test is byte-identical unless recovery is requested. */
+   (interior spans, anchoring, windows). Recovery runs by default (callers can pass
+   recoverMidParagraphTurns: false); the length-preserving split is what makes
+   that safe, since no span offset moves. */
 
 const DASH = String.raw`(?:&mdash;|&ndash;|[-–—])`;
 
@@ -121,11 +122,13 @@ export function splitEvidencedInteriorTurns(body: string, index: NameIndex): str
        run by default without the aligner/model seeing shifted offsets even when
        the whole pipeline is fed the original body. A dash with no whitespace
        before it (rare) is skipped rather than risking a length change. */
-    const chars = [...line];
+    /* Cuts are UTF-16 offsets (from m.index), so index the string by UTF-16 unit,
+       never a [...line] code-point array (astral chars would skew the offsets). */
+    let fixed = line;
     for (const c of cuts) {
-      if (c > 0 && /\s/u.test(chars[c - 1])) chars[c - 1] = '\n';
+      if (c > 0 && /\s/u.test(fixed[c - 1])) fixed = fixed.slice(0, c - 1) + '\n' + fixed.slice(c);
     }
-    out.push(chars.join(''));
+    out.push(fixed);
   }
   return changed ? out.join('\n') : body;
 }
