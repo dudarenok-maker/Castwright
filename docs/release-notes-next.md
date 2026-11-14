@@ -36,3 +36,7 @@ history at cut time.
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
+
+## 🐛 Fixes
+
+- **Paragraph recovery now applies its split points in UTF-16 space, so an emoji or other astral character no longer shifts them** (#4165). In a dash-dialogue book where a source conversion collapsed several turns into one paragraph, an astral character earlier in the paragraph made recovery either miss a later turn or place the break one character too far right. The split stays length-preserving (each replaced unit is the whitespace immediately before the dash), and lines with no astral characters come out byte-identical to before.
