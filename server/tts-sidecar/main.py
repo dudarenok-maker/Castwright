@@ -6141,7 +6141,12 @@ def _own_resident_tier(
     not); `weights_mb` is the footprint measured at load, else the fallback.
     A mint (`op == "mint"`, #4102) with the base resident PROTECTS it on that
     card with NO credit (`("qwen.base17", 0, card)`); its warm booking comes
-    from `_own_resident_warm_mb`. design_voice evicts the base itself."""
+    from `_own_resident_warm_mb`. design_voice evicts the base itself.
+    A resident GPU ASR model (#4102) is protected on its card with NO credit
+    (`("asr", 0, card)`); the `asr.warm` booking covers it."""
+    if engine == "asr":
+        card = _is_resident("asr")
+        return ("asr", 0, card) if card is not None else (None, 0, None)
     op = (cfg or {}).get("op")
     if op == "design":
         return (None, 0, None)
