@@ -133,3 +133,53 @@ def test_a6_resolver_returns_the_resident_card_with_no_credit(monkeypatch):
     asr = FakeEngine("cuda:0", 400)
     _wire(monkeypatch, asr, None, {0: 6000})
     assert main._own_resident_tier("asr", None, {}) == ("asr", 0, "cuda:0")
+
+
+# --- GPU SPK (ECAPA) -------------------------------------------------------
+
+
+def _admit_spk(pc):
+    async def body():
+        async with pc.reservation("spk", None, {}, cpu_capable=False, heavy=False) as adm:
+            return adm
+
+    return asyncio.run(body())
+
+
+def _spk_peak(pc):
+    return pc.footprints.peak_mb("spk", None, {}, True)
+
+
+def test_s1_resident_spk_is_protected_when_its_booking_does_not_fit(monkeypatch):
+    spk = FakeEngine("cuda:0", 300)
+    pc = _wire(monkeypatch, None, spk, {0: 750})  # free 450 with SPK loaded
+    adm = _admit_spk(pc)
+    assert adm == {"noCapacity": {"neededMb": _spk_peak(pc), "deviceKey": "cuda:0"}}
+    assert spk.evictions == 0
+
+
+def test_s2_other_models_still_make_room_but_spk_is_kept(monkeypatch):
+    asr = FakeEngine("cuda:0", 400)
+    spk = FakeEngine("cuda:0", 300)
+    pc = _wire(monkeypatch, asr, spk, {0: 1150})  # free 450 with both loaded
+    adm = _admit_spk(pc)
+    assert adm == {"device": "cuda:0"}
+    assert asr.evictions == 1
+    assert spk.evictions == 0
+
+
+def test_s3_ladder_targets_the_card_spk_is_resident_on(monkeypatch):
+    asr = FakeEngine("cuda:1", 400)
+    spk = FakeEngine("cuda:1", 300)
+    pc = _wire(monkeypatch, asr, spk, {0: 6000, 1: 1150})  # cuda:1 free 450
+    assert _admit_spk(pc) == {"device": "cuda:1"}
+    assert asr.evictions == 1
+    assert spk.evictions == 0
+
+
+def test_s4_spk_resolver_returns_the_resident_card_with_no_credit(monkeypatch):
+    spk = FakeEngine("cuda:0", 300)
+    _wire(monkeypatch, None, spk, {0: 6000})
+    assert main._own_resident_tier("spk", None, {}) == ("spk", 0, "cuda:0")
+    spk.resident = False
+    assert main._own_resident_tier("spk", None, {}) == (None, 0, None)

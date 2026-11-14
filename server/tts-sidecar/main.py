@@ -6142,11 +6142,11 @@ def _own_resident_tier(
     A mint (`op == "mint"`, #4102) with the base resident PROTECTS it on that
     card with NO credit (`("qwen.base17", 0, card)`); its warm booking comes
     from `_own_resident_warm_mb`. design_voice evicts the base itself.
-    A resident GPU ASR model (#4102) is protected on its card with NO credit
-    (`("asr", 0, card)`); the `asr.warm` booking covers it."""
-    if engine == "asr":
-        card = _is_resident("asr")
-        return ("asr", 0, card) if card is not None else (None, 0, None)
+    A resident GPU ASR or SPK (ECAPA) model (#4102) is protected on its card
+    with NO credit (`("asr"|"spk", 0, card)`); the warm booking covers it."""
+    if engine in ("asr", "spk"):
+        card = _is_resident(engine)
+        return (engine, 0, card) if card is not None else (None, 0, None)
     op = (cfg or {}).get("op")
     if op == "design":
         return (None, 0, None)
