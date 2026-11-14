@@ -20,6 +20,7 @@ vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
 
 let server: http.Server;
 let requests = 0;
+let urls: string[] = [];
 const sockets = new Set<import('node:net').Socket>();
 const prevBase = process.env.GOOGLE_GEMINI_BASE_URL;
 
@@ -27,6 +28,7 @@ beforeAll(async () => {
   // Accepts the request and never responds.
   server = http.createServer((req) => {
     requests += 1;
+    urls.push(req.url ?? '');
     req.resume();
   });
   server.on('connection', (s) => {
@@ -39,6 +41,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requests = 0;
+  urls = [];
 });
 
 afterAll(async () => {
@@ -59,6 +62,14 @@ describe('GeminiTtsProvider.synthesize local bound (#3724)', () => {
     expect(requests).toBe(1);
     expect(elapsed).toBeGreaterThanOrEqual(CEILING_MS - 50);
     expect(elapsed).toBeLessThan(CEILING_MS + 2_000);
+  }, 5_000);
+
+  /* @google/genai 3.0 defaults to v1, which has no speech output — the TTS client must pin v1beta. */
+  it('sends the synth request to /v1beta/', async () => {
+    const provider = selectTtsProvider('gemini-2.5-flash');
+    await provider.synthesize({ ...INPUT }).catch(() => undefined);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toMatch(/^\/v1beta\/models\/.+:generateContent/);
   }, 5_000);
 
   it("rejects promptly when the caller's abort signal fires", async () => {
