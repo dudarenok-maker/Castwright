@@ -481,6 +481,19 @@ snapshot.
       `handleCastIdentityBusy` latches the era only for the stage's book. P6-2: an
       Add-character form already open when the cast turns read-only pauses its create submit
       and keeps its input; the create handler has no read-only early return.
+27. **The manuscript slice joins the read-only era** (owner, 2026-11-13, #4098, option (a)).
+    - The server refuses `PUT /state {slice:'manuscript'}` with 409 `book_busy` while an analysis
+      is registered: the same predicate as the cast slice, checked first, before the patch is
+      validated.
+    - The client builds no manuscript save while `selectCastReadOnly` holds, and takes the cast
+      409 path for a manuscript 409 (`manuscript/applyChapterRestructure` is route-backed and
+      silent).
+    - The era's post-run re-read (`rehydrateCastAfterAnalysis`) also hydrates the manuscript from
+      the same read. No new query: no manuscript save can land between its flush and its read
+      while the era stands.
+    - No banner and no disabled manuscript controls; the toast only.
+    - Consequence: the #4098 manuscript window (a mid-run edit to an untouched chapter reverted
+      by the persist) is unreachable for a registered job.
 
 ---
 

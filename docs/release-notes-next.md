@@ -36,3 +36,7 @@ history at cut time.
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
+
+## 🐛 Fixes
+
+- **A manuscript edit made while an analysis runs is no longer silently reverted.** `PUT /api/books/{bookId}/state` with the `manuscript` slice is refused with 409 `book_busy` while an analysis job is registered (it used to be accepted, then overwritten by the run's persist); the client holds manuscript saves during the run with the read-only toast and re-reads the manuscript when the run ends (#4098).

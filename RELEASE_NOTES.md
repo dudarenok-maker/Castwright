@@ -1,5 +1,7 @@
 # Castwright 1.16.0
 
+- **Manuscript edits made while a book is re-analysed are no longer silently undone.** Castwright now tells you the manuscript is read-only until the analysis finishes, and shows you the finished result when it does.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**
