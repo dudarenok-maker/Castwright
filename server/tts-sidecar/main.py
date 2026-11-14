@@ -4471,9 +4471,8 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # it. The technique ACTIVE in shipped code for `asr.warm` is this
     # child's device-wide delta — NOT the pre-#3036 `_observed_mb`
     # fall-through (structurally 0 for a CTranslate2 engine, #2930/
-    # #3012) and not #3265's `_own_process_used_mb` (kept in the
-    # codebase, tested, no longer called from production; deleting it is
-    # a separate human decision). A real fix still needs a CTranslate2-
+    # #3012) and not #3265's `_own_process_used_mb` (retired from
+    # production by #3266 and deleted in #3336). A real fix still needs a CTranslate2-
     # side memory query or driver-level per-process accounting this
     # box's WDDM does not provide; tracked onward via #3036/#3267.
     "asr.warm": 128,
@@ -5261,75 +5260,6 @@ class PlacementController:
             return None
 
     @staticmethod
-    def _own_process_used_mb(device_key: Optional[str]) -> Optional[int]:
-        """#3036 — THIS process's own VRAM usage on `device_key`, in MB, via
-        NVML's per-process accounting. Every entry
-        `nvmlDeviceGetComputeRunningProcesses` returns carries a `pid` AND a
-        `usedGpuMemory`; filtering that list to `os.getpid()`'s own entry and
-        diffing two readings across a resident ASR forward (see
-        `reservation()`'s `finally`) is the `asr.warm` measurement the
-        torch-allocator peak structurally cannot provide: CTranslate2
-        (faster-whisper's backend) never routes ANY of its CUDA work —
-        weights or per-forward activations alike — through PyTorch's caching
-        allocator (#2930/#3012, docs/testing/onbox-e12-results/
-        step-1-rework-run.md).
-
-        Unlike `_foreign_pid_holds_device` below — the SAME NVML call used
-        for the opposite purpose, enumerating FOREIGN pids — no foreign-PID
-        or concurrent-traffic guard is needed here: a per-process reading
-        cannot be contaminated by other processes' allocations at all. That
-        immunity is precisely why this technique exists, where the device-wide
-        `_device_free_mb` delta (#2094) proved too noisy for `asr.warm`
-        (#2682).
-
-        Returns `Optional[int]`, never 0-on-failure, for the same reason
-        `_device_free_mb` returns None rather than 0: `record()`'s `<= 0`
-        guard must not be able to mistake "couldn't measure" for "measured
-        zero". `None` on: a non-CUDA/`rocm:` device_key (NVML covers NVIDIA
-        only, same as `_foreign_pid_holds_device`), unimportable `pynvml`,
-        any NVML error, no entry for our own PID, or an entry whose
-        `usedGpuMemory` is falsy/None. The last two are known Windows WDDM
-        edge cases of per-process accounting (the field is documented as
-        potentially unavailable), not faults to raise on — whether THIS box
-        yields usable own-process numbers at all is exactly what #3265's
-        on-box run exists to find out. Never raises: same
-        `nvmlInit`/try/`finally: nvmlShutdown`/broad-except shape as
-        `_foreign_pid_holds_device`.
-
-        #3265's answer to that last question was NO: on this 4070-Laptop box
-        WDDM reports `usedGpuMemory=None` for our own PID even with hundreds
-        of MB of live CUDA memory, so every delta this fed was discarded.
-        #3266 therefore rewired `reservation()`'s warm-ASR branch to
-        `_device_free_mb`, so THIS method is no longer called from production
-        code. It is kept, tested and working, deliberately: deleting it is a
-        separate human decision, explicitly out of #3266's scope. See
-        docs/testing/onbox-3036-results/step-1-nvml.md for the evidence."""
-        if not device_key or not device_key.startswith("cuda:"):
-            return None
-        pynvml = _load_pynvml()
-        if pynvml is None:
-            return None
-        try:
-            index = int(device_key.split(":", 1)[1])
-            pynvml.nvmlInit()
-            try:
-                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-                procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
-            finally:
-                pynvml.nvmlShutdown()
-            own_pid = os.getpid()
-            for proc in procs:
-                if getattr(proc, "pid", None) != own_pid:
-                    continue
-                used = getattr(proc, "usedGpuMemory", None)
-                if not used:
-                    return None
-                return int(used // 1_048_576)
-            return None
-        except Exception:
-            return None
-
-    @staticmethod
     def _foreign_pid_holds_device(device_key: Optional[str]) -> Optional[bool]:
         """#2094 — per-process VRAM attribution via NVML, closing the
         cold-bucket gap the two existing guards leave open: Guard 1
@@ -5682,9 +5612,8 @@ class PlacementController:
                 # DELTA, the warm sibling of the cold block above and now
                 # measured by the SAME technique with the SAME guard set.
                 # Child 1 (#3265) built this branch on the `_own_process_used_mb`
-                # NVML per-process delta instead; that method stays in the
-                # codebase, tested and working, but is no longer called from
-                # here — on this box Windows' WDDM driver returns
+                # NVML per-process delta instead; that method was retired
+                # here and deleted in #3336 — on this box Windows' WDDM driver returns
                 # `usedGpuMemory=None` for OUR OWN PID even with hundreds of MB
                 # of live CUDA allocations, so every warm sample was discarded
                 # and `asr.warm` could never move off its seed
