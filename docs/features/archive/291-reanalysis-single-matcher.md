@@ -353,6 +353,7 @@ snapshot.
    during a registered run is refused with 409 `book_busy`, so the trigger needs a run that runs
    unregistered. Rule 13 is therefore defensive; its A20 tests use `failNextRetirement` and assert
    the merge request reported failure. Spec acceptance 20 is amended to match (rulings R13, R55).
+   Since R58 the narrator is never a rule-13 target.
 10. **R11 — drift-refused suggestions.** The plan wins (ruling Q3). Suggestions written transiently
     at the Phase-0b snapshot are removed when a run is drift-refused, so the run leaves none behind.
     Spec acceptance 24 is amended.
@@ -481,6 +482,32 @@ snapshot.
       `handleCastIdentityBusy` latches the era only for the stage's book. P6-2: an
       Add-character form already open when the cast turns read-only pauses its create submit
       and keeps its input; the create handler has no read-only early return.
+27. **R58 — the narrator is exempt from rule 13** (owner, 2026-11-13, #4100).
+    - Persist only: `overlayPlanOntoCast` (`server/src/store/plan-overlay.ts`) never calls
+      `gone(...)` for a narrator roster row (an id in `NARRATOR_CHARACTER_IDS`, tested with
+      `isNarratorId`), in both the join branch whose target is missing and the run-row branch
+      whose row is gone. Snapshot mode is unchanged: a deleted narrator still goes gone there, and
+      the same run's persist re-creates it. The narrator is never in `deletedTargets` or
+      `unresolved`, under any history status.
+    - It lands on the first narrator-id row of the re-read cast as an ordinary non-fresh write, so
+      a second narrator row is never created. With none, a fresh row is added under the join's
+      narrator `priorId`, else the roster row's own id, through the overlay's existing fresh
+      path: `lines`/`scenes` start at 0 until the persist recounts them, and the ledger entry
+      is `run-owned` with this write's fingerprint (an `added-once` entry going back to
+      `run-owned` is accepted).
+    - No user-owned field is restored from anywhere (no voice): `cast-id-history.json` holds ids
+      only, and restoring from the start-of-run cast would revert the foreign write beyond the
+      row's existence. Degraded history is included: a narrator merged into another character
+      mid-run while the history is unreadable comes back as its own row.
+    - `persistPlannedCast` (`server/src/workspace/analysis-cast-io.ts`) sends a narrator-id
+      speaker with no live target to the narrator row the overlay wrote, so its lines stay on it.
+      A drift-refused persist leaves `cast.json` alone except that it appends that row when the
+      re-read cast holds no narrator-id row; the ledgers stay as passed in.
+    - No new lock and no new I/O: the overlay stays pure, and the whole read, decide and write
+      stays inside the persist's existing `withCastLock`.
+    - Pinned by the `#4100` cases in `server/src/store/plan-overlay.test.ts`,
+      `server/src/workspace/analysis-cast-io.test.ts` and
+      `server/src/routes/analysis.single-matcher.test.ts`.
 
 ---
 

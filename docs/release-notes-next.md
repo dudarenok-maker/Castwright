@@ -33,6 +33,10 @@ PR-by-PR as the v1.16.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🎭 Cast and re-analysis
+
+- **A re-analysis no longer leaves a book without a narrator row when `cast.json` was rewritten during the run** (a first-upload job that was never registered, a tab without an analysis era, a hand edit on disk): the persist re-creates the narrator from the run's roster (no voice restored) and keeps its lines on it, drift-refused persists included. Every other row deleted mid-run still stays deleted (rule 13). (#4100)
+
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
