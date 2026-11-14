@@ -332,6 +332,10 @@ const BOOK_KEYED_RULES = new Set(['bookMeta/commitDraft']);
    is read-only they build nothing and raise no toast: the change WAS saved. */
 const ROUTE_BACKED_CAST_RULES = new Set(['cast/applyAddAlias', 'cast/applyRepointAlias']);
 
+/* #4098 — the restructure route already rewrote `manuscript-edits.json`; while the
+   manuscript is read-only the remap builds nothing and raises no toast. */
+const ROUTE_BACKED_MANUSCRIPT_RULES = new Set(['manuscript/applyChapterRestructure']);
+
 /* Persisted action types, exported for tests only so a regression suite can
    loop over every rule (including ones added later). */
 export const PERSISTED_ACTION_TYPES = Object.keys(PERSIST_RULES);
@@ -543,9 +547,10 @@ export const persistenceMiddleware: Middleware = (store) => {
      never lands once the book's cast is read-only: the run's rows win, and
      the re-read after the run replaces the screen. It is dropped with the
      read-only toast - except by the gate's rise flush (`sendKeptCast`, C1), which
-     sends it while it can still land before the job, or meet its 409. */
-  const dropKeptCast = (bookId: string): boolean => {
-    const key = flushKey(bookId, 'cast');
+     sends it while it can still land before the job, or meet its 409. #4098 —
+     the same holds for a kept manuscript save (`slice` picks the key). */
+  const dropKeptCast = (bookId: string, slice: 'cast' | 'manuscript'): boolean => {
+    const key = flushKey(bookId, slice);
     if (!selectCastReadOnly(store.getState() as PersistableRootState, bookId)) return false;
     outbox.delete(key);
     toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
@@ -556,7 +561,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     for (const slice of LEARNED_SLICES) {
       const key = flushKey(bookId, slice);
       if (!outbox.get(key)?.size || timers.has(key) || flights.has(key)) continue;
-      if (slice === 'cast' && !sendKeptCast && dropKeptCast(bookId)) continue;
+      if ((slice === 'cast' || slice === 'manuscript') && !sendKeptCast && dropKeptCast(bookId, slice)) continue;
       pump(bookId, slice);
     }
   };
@@ -669,14 +674,17 @@ export const persistenceMiddleware: Middleware = (store) => {
             store.dispatch(bookMetaActions.markNeedsFullRead({ bookId, refused }));
             ok = false;
           }
-        } else if (slice === 'cast' && (err as { code?: unknown } | null)?.code === 'book_busy') {
+        } else if (
+          (slice === 'cast' || slice === 'manuscript') &&
+          (err as { code?: unknown } | null)?.code === 'book_busy'
+        ) {
           /* Plan 291 (#4031, item 6) — an analysis job holds the book: the
              server wrote nothing and will refuse every cast save until it
              ends. Drop what is queued (the cast is read-only now), toast,
              latch the era and ask the gate to re-read once the run is over.
              The analysis copy when the busy cache lists it, else the
              server's own sentence. Read before the latch, which drops the
-             book's busy entry. */
+             book's busy entry. #4098 - a manuscript PUT takes this same path. */
           failures = 0;
           for (const u of Array.from(box.keys())) box.delete(u);
           const listed =
@@ -684,7 +692,7 @@ export const persistenceMiddleware: Middleware = (store) => {
           const raw = err instanceof Error ? err.message : String(err);
           toast(
             listed ? CAST_READ_ONLY_MESSAGE : raw.replace(/^Book state PUT failed \(\d+\): /, ''),
-            listed ? CAST_READ_ONLY_DEDUPE_KEY : `cast-persist-busy:${bookId}`,
+            listed ? CAST_READ_ONLY_DEDUPE_KEY : `${slice}-persist-busy:${bookId}`,
           );
           store.dispatch(castActions.latchAnalysisEra({ bookId }));
           store.dispatch(requestCastRehydrate(bookId));
@@ -919,10 +927,13 @@ export const persistenceMiddleware: Middleware = (store) => {
        builds or queues anything. A whole-slice save would overwrite the run's
        rows. One deduped toast says so; a mirror of a route's own write says
        nothing (R3). The disabled controls are UX only: this is what makes it
-       correct. */
-    if (rule.slice === 'cast' && selectCastReadOnly(after, bookId)) {
+       correct. #4098 - the manuscript is read-only under the same predicate (both
+       jobs rewrite `manuscript-edits.json` wholesale at their persist). */
+    if ((rule.slice === 'cast' || rule.slice === 'manuscript') && selectCastReadOnly(after, bookId)) {
       const routeBacked =
-        ROUTE_BACKED_CAST_RULES.has(type) || (a as { meta?: { routeBacked?: boolean } }).meta?.routeBacked === true;
+        ROUTE_BACKED_CAST_RULES.has(type) ||
+        ROUTE_BACKED_MANUSCRIPT_RULES.has(type) ||
+        (a as { meta?: { routeBacked?: boolean } }).meta?.routeBacked === true;
       if (!routeBacked) toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
       return result;
     }

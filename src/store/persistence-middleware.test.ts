@@ -2235,7 +2235,7 @@ describe('re-sent saves carry their base revision (plan 289)', () => {
        when a plain edit rode along in the same window. */
     it('a plain manuscript edit made after a bulk reassignment keeps the bulk toast on a refusal', async () => {
       const { disk, store, restore } = setup({ sentences: sentences(), mergedAwayKeys: [] });
-      disk.refuseNext('book_busy', (_id, req) => req.slice === 'manuscript');
+      disk.refuseNext('book_path_taken', (_id, req) => req.slice === 'manuscript');
       store.dispatch(
         manuscriptActions.setSentencesCharacterBulk({
           keys: [{ chapterId: 1, sentenceId: 1 }],
@@ -2833,13 +2833,92 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     expect(toastsOf(store)).toHaveLength(0);
   });
 
-  it('a manuscript rule still saves while the cast is read-only', async () => {
+  it('a manuscript rule builds nothing while the book is read-only and raises the one read-only toast (#4098)', async () => {
     const store = makeStore(readOnly());
     const mw = persistenceMiddleware(store)(vi.fn((x) => x));
     mw({ type: 'manuscript/setSentenceCharacter' });
     await advance(600);
+    expect(putBookState).not.toHaveBeenCalled();
+    const toasts = toastsOf(store);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ dedupeKey: 'cast-read-only' });
+    /* Control: not read-only, the same action sends one manuscript PUT. */
+    putBookState.mockReset();
+    const free = makeStore(baseState());
+    const mw2 = persistenceMiddleware(free)(vi.fn((x) => x));
+    mw2({ type: 'manuscript/setSentenceCharacter' });
+    await advance(600);
     expect(putBookState).toHaveBeenCalledTimes(1);
     expect(putBookState.mock.calls[0][1].slice).toBe('manuscript');
+  });
+
+  it('the chapter-restructure mirror is silent while read-only (#4098)', async () => {
+    const store = makeStore(readOnly());
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    mw({ type: 'manuscript/applyChapterRestructure' });
+    await advance(5000);
+    expect(putBookState).not.toHaveBeenCalled();
+    expect(toastsOf(store)).toHaveLength(0);
+  });
+
+  it('a 409 book_busy manuscript PUT toasts, latches the era and starts one re-hydrate (#4098)', async () => {
+    const sentence = 'This book is busy (analysis). Its manuscript is read-only until the analysis finishes, so this change was not saved.';
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const listed of [true, false]) {
+      putBookState.mockReset();
+      rejectCapped(Object.assign(new Error(`Book state PUT failed (409): ${sentence}`), { code: 'book_busy' }));
+      const state: Record<string, unknown> = baseState();
+      const store = makeStore(state);
+      const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+      mw({ type: 'manuscript/setSentenceCharacter' });
+      if (listed) state.bookBusy = { busyByBook: { 'book-1': ['analysis'] } };
+      mw(flushBookPersistence('book-1'));
+      await advance(20000);
+      expect(putBookState).toHaveBeenCalledTimes(1);
+      const toasts = toastsOf(store);
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].dedupeKey).toBe(listed ? 'cast-read-only' : 'manuscript-persist-busy:book-1');
+      expect(toasts[0].message).toBe(listed ? "Re-analysis running — that change wasn't saved" : sentence);
+      const acts = dispatched(store);
+      expect(acts.filter((a) => a?.type === castActions.latchAnalysisEra.type)).toEqual([
+        castActions.latchAnalysisEra({ bookId: 'book-1' }),
+      ]);
+      expect(acts.filter((a) => a?.type === 'bookBusy/requestCastRehydrate')).toEqual([
+        { type: 'bookBusy/requestCastRehydrate', payload: 'book-1' },
+      ]);
+    }
+    err.mockRestore();
+  });
+
+  it.each([
+    ['a later non-rise flush drops it with the toast', false],
+    ["the gate's rise flush (sendKeptCast) still sends it once", true],
+  ])('a kept manuscript save while read-only: %s (#4098)', async (_name, rise) => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(600);
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    state.cast = { characters: [{ id: 'halloran' }], analysisEra: { 'book-1': { epoch: 1 } } };
+    mw(flushBookPersistence('book-1', rise ? { sendKeptCast: true } : undefined));
+    await advance(20000);
+    if (rise) {
+      expect(putBookState).toHaveBeenCalledTimes(1);
+      expect(putBookState.mock.calls[0][1].slice).toBe('manuscript');
+    } else {
+      expect(putBookState).not.toHaveBeenCalled();
+      expect(toastsOf(store).map((t: { dedupeKey?: string }) => t.dedupeKey)).toContain('cast-read-only');
+      mw(flushBookPersistence('book-1'));
+      await advance(20000);
+      expect(putBookState).not.toHaveBeenCalled();
+    }
+    err.mockRestore();
   });
 
   it.each([
