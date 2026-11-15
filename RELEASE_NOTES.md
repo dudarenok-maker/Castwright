@@ -3,7 +3,7 @@
 **What's new in 1.16.0**
 
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
-- **Script Review suggestions now apply on lines with rare CJK characters** instead of being skipped.
+- **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
 - **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
 
 # Castwright 1.15.0

@@ -268,4 +268,33 @@ describe('projectToChars (stripTags option)', () => {
       projectToChars(chapterText, units),
     );
   });
+
+  it('(m) #4219: an astral char that NFC rewrites (U+2F800) does not shift later spans or drop units', () => {
+    const chapterText = 'Он сказал \u{2F800} и ушёл. Она ответила.';
+    const units = [
+      { text: 'Он сказал \u{2F800} и ушёл.', speakerId: 'a' },
+      { text: ' Она ответила.', speakerId: 'b' },
+    ];
+    const result = projectToChars(chapterText, units);
+    expect(result.dropped).toBe(0);
+    // U+2F800 is 2 UTF-16 units; span ends are original-text offsets.
+    expect(result.spans).toEqual([
+      { start: 0, end: 20, speakerId: 'a' },
+      { start: 20, end: 34, speakerId: 'b' },
+    ]);
+  });
+
+  it('(n) control: a BMP char NFC rewrites (U+4E3D) projects with exact spans', () => {
+    const chapterText = 'Он сказал 丽 и ушёл. Она ответила.';
+    const units = [
+      { text: 'Он сказал 丽 и ушёл.', speakerId: 'a' },
+      { text: ' Она ответила.', speakerId: 'b' },
+    ];
+    const result = projectToChars(chapterText, units);
+    expect(result.dropped).toBe(0);
+    expect(result.spans).toEqual([
+      { start: 0, end: 19, speakerId: 'a' },
+      { start: 19, end: 33, speakerId: 'b' },
+    ]);
+  });
 });
