@@ -488,7 +488,7 @@ for (;;) keep.push(new Array(1e5).fill(i++));
           dir,
           shape,
         ],
-        { cwd: serverDir, env, encoding: 'utf8', timeout: 60_000 },
+        { cwd: serverDir, env, encoding: 'utf8', timeout: 60_000, windowsHide: true },
       );
       const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')) : [];
       const reports = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8'));
