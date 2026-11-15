@@ -11,7 +11,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import {
   REPORT_EXCLUSION_FLAGS,
   withReportExclusionNodeOptions,
@@ -94,4 +98,71 @@ test('the CLI spawns exactly what devServerCommand builds, with the process env'
   assert.match(code, /devServerCommand\(serverDir, process\.env\)/);
   assert.match(code, /spawn\(file, args, \{ \.\.\.options, windowsHide: true \}\)/);
   assert.equal(code.match(/\bspawn\(/g)?.length, 1, 'one spawn, so the pin covers it');
+});
+
+// The pins above are textual and the helpers are tested alone, so run the REAL
+// launcher end to end: copy dev-server.mjs + scripts/lib/ into a temp root with
+// a fake `tsx` (server/node_modules/tsx, exports ./cli) that records its argv
+// and NODE_OPTIONS and exits with a chosen code. This is what catches an env
+// override between devServerCommand and the child (e.g. `options.env = ...`).
+function runDevServerAgainstFakeTsx({ exitCode, nodeOptions }) {
+  const root = mkdtempSync(join(tmpdir(), 'dev-server-fixture-'));
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    mkdirSync(join(root, 'scripts'), { recursive: true });
+    cpSync(join(here, '..', 'dev-server.mjs'), join(root, 'scripts', 'dev-server.mjs'));
+    cpSync(join(here, '..', 'lib'), join(root, 'scripts', 'lib'), { recursive: true });
+    const tsx = join(root, 'server', 'node_modules', 'tsx');
+    mkdirSync(tsx, { recursive: true });
+    writeFileSync(join(root, 'server', 'package.json'), '{"name":"fixture-server"}');
+    writeFileSync(
+      join(tsx, 'package.json'),
+      JSON.stringify({ name: 'tsx', version: '0.0.0', exports: { './cli': './cli.mjs' } }),
+    );
+    writeFileSync(
+      join(tsx, 'cli.mjs'),
+      `import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(join(root, 'record.json'))},
+  JSON.stringify({ argv: process.argv.slice(2), nodeOptions: process.env.NODE_OPTIONS, cwd: process.cwd() }));
+process.exit(${exitCode});`,
+    );
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
+    if (nodeOptions !== undefined) env.NODE_OPTIONS = nodeOptions;
+    const result = spawnSync(process.execPath, [join(root, 'scripts', 'dev-server.mjs')], {
+      env,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 30_000,
+    });
+    return { result, record: JSON.parse(readFileSync(join(root, 'record.json'), 'utf8')), root };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('the real launcher hands tsx the flags on argv and in NODE_OPTIONS, and passes its exit code through', () => {
+  const { result, record, root } = runDevServerAgainstFakeTsx({ exitCode: 7 });
+  assert.equal(result.status, 7, result.stderr);
+  assert.deepEqual(record.argv, [
+    'watch',
+    '--include=.env',
+    '--report-exclude-env',
+    '--report-exclude-network',
+    'src/index.ts',
+  ]);
+  assert.equal(record.nodeOptions, '--report-exclude-env --report-exclude-network');
+  assert.ok(record.cwd.toLowerCase().endsWith('server'), `tsx ran in ${record.cwd} (${root})`);
+});
+
+test('the real launcher appends to the caller\'s NODE_OPTIONS and exits 0 when tsx does', () => {
+  const { result, record } = runDevServerAgainstFakeTsx({
+    exitCode: 0,
+    nodeOptions: '--max-old-space-size=512',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    record.nodeOptions,
+    '--max-old-space-size=512 --report-exclude-env --report-exclude-network',
+  );
 });
