@@ -12,10 +12,11 @@
 export const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'];
 
 /** A copy of `env` whose NODE_OPTIONS ends with every REPORT_EXCLUSION_FLAGS
- *  entry it did not already carry. Appends, never clobbers; idempotent. */
+ *  entry. Always appends, never clobbers and never tries to detect an existing
+ *  flag: a whitespace split can't tell a flag from text inside a quoted value
+ *  or see a later `--no-` negation, and node takes the last occurrence of a
+ *  repeated boolean flag, so a duplicate is harmless. */
 export function withReportExclusionNodeOptions(env) {
   const current = (env.NODE_OPTIONS ?? '').trim();
-  const have = new Set(current.split(/\s+/).filter(Boolean));
-  const missing = REPORT_EXCLUSION_FLAGS.filter((f) => !have.has(f));
-  return { ...env, NODE_OPTIONS: [current, ...missing].filter(Boolean).join(' ') };
+  return { ...env, NODE_OPTIONS: [current, ...REPORT_EXCLUSION_FLAGS].filter(Boolean).join(' ') };
 }

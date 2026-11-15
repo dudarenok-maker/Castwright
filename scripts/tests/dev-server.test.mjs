@@ -32,11 +32,27 @@ test('withReportExclusionNodeOptions appends to an existing NODE_OPTIONS, never 
   );
 });
 
-test('withReportExclusionNodeOptions is idempotent and adds only a missing flag', () => {
-  const once = withReportExclusionNodeOptions({ NODE_OPTIONS: '--inspect' });
-  assert.deepEqual(withReportExclusionNodeOptions(once), once);
+test('withReportExclusionNodeOptions always appends both flags, last one wins', () => {
+  // A whitespace split cannot tell a flag from text inside a quoted value, or
+  // see a later negation, so it never skips: node takes the last occurrence.
+  const quoted = withReportExclusionNodeOptions({
+    NODE_OPTIONS: '--max-old-space-size=512 --title "cw --report-exclude-env p5"',
+  });
+  assert.equal(
+    quoted.NODE_OPTIONS,
+    '--max-old-space-size=512 --title "cw --report-exclude-env p5" --report-exclude-env --report-exclude-network',
+  );
+  const negated = withReportExclusionNodeOptions({
+    NODE_OPTIONS: '--report-exclude-env --no-report-exclude-env',
+  });
+  assert.ok(
+    negated.NODE_OPTIONS.endsWith('--no-report-exclude-env --report-exclude-env --report-exclude-network'),
+  );
   const partial = withReportExclusionNodeOptions({ NODE_OPTIONS: '--report-exclude-env' });
-  assert.equal(partial.NODE_OPTIONS, '--report-exclude-env --report-exclude-network');
+  assert.equal(
+    partial.NODE_OPTIONS,
+    '--report-exclude-env --report-exclude-env --report-exclude-network',
+  );
 });
 
 test('withReportExclusionNodeOptions does not mutate its input', () => {
