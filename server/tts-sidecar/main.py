@@ -4872,6 +4872,7 @@ class PlacementController:
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
         reclaim: Optional[Callable[[str], bool]] = None,
         own_resident_tier: Optional[Callable[[str, Optional[str], Optional[dict]], tuple[Optional[str], int, Optional[str]]]] = None,
+        any_model_resident: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.probe = probe
         # #4079 — `(evict_step_name, weights_mb, card)` for the request's OWN tier
@@ -4896,6 +4897,12 @@ class PlacementController:
         self.reserve_mb = reserve_mb if reserve_mb is not None else (lambda: int(os.environ.get("GPU_RESERVE_MB", 500)))
         self.idle_evict_steps = idle_evict_steps if idle_evict_steps is not None else (lambda device_key, engine: [])
         self.is_resident = is_resident if is_resident is not None else (lambda engine: None)
+        # #4163 — gates the learned sample: True = an op admitted now is WARM and
+        # records nothing. Default reuses `is_resident` so test doubles keep meaning.
+        self.any_model_resident = (
+            any_model_resident if any_model_resident is not None
+            else (lambda engine: self.is_resident(engine) is not None)
+        )
         # #1976 — injectable so tests can assert call count / sequence a fake
         # probe against without a real allocator; see `_reclaim_stranded_cache`.
         self.reclaim = reclaim if reclaim is not None else _reclaim_device_cache
@@ -5185,37 +5192,44 @@ class PlacementController:
         return {"noCapacity": {"neededMb": max(peak - credit_mb, 0), "deviceKey": device_key}}
 
     @staticmethod
-    def _observed_mb(device_key: Optional[str]) -> int:
-        """Best-effort peak VRAM observed for the just-finished op, used to
-        ratchet FootprintTable's learned estimate. Guarded: returns 0 when
-        torch/CUDA isn't available (unit tests, cpu-only boxes) or the
-        device wasn't a CUDA one."""
+    def _observed_mb(device_key: Optional[str], baseline_mb: Optional[int] = None) -> int:
+        """Best-effort VRAM THIS op added, used to ratchet FootprintTable's
+        learned estimate (#4163): `max_memory_allocated - baseline_mb`, floored
+        at 0. The baseline is the memory already allocated on the card when the
+        op started, so the sample is the op's own increment, not everything
+        torch holds. Returns 0 (a discarded sample, `record` drops <= 0) when
+        torch/CUDA isn't available, the device wasn't a CUDA one, on any
+        exception, or when `baseline_mb is None` (unreadable or a warm op)."""
         if not device_key or not device_key.startswith(("cuda:", "rocm:")):
+            return 0
+        if baseline_mb is None:
             return 0
         try:
             import torch  # type: ignore
 
             index = int(device_key.split(":", 1)[1])
-            return int(torch.cuda.max_memory_allocated(index) // 1_048_576)
+            return max(int(torch.cuda.max_memory_allocated(index) // 1_048_576) - baseline_mb, 0)
         except Exception:
             return 0
 
     @staticmethod
-    def _reset_peak_mb(device_key: Optional[str]) -> None:
+    def _reset_peak_mb(device_key: Optional[str]) -> Optional[int]:
         """Resets CUDA's peak-allocated counter for `device_key` right before
-        an op starts, so the paired `_observed_mb` read at release reflects
-        THIS op's peak rather than the process-lifetime high-water mark.
-        Guarded like `_observed_mb`: no-op when torch/CUDA isn't available or
-        the device isn't a CUDA one."""
+        an op starts and returns the baseline (#4163): the memory already
+        allocated on the card at that instant, in MB, read AFTER the reset.
+        The paired `_observed_mb` subtracts it, so the sample is the op's own
+        increment. Returns None for a non-CUDA/ROCm key, when torch is
+        missing, or on any exception (None = discard the sample)."""
         if not device_key or not device_key.startswith(("cuda:", "rocm:")):
-            return
+            return None
         try:
             import torch  # type: ignore
 
             index = int(device_key.split(":", 1)[1])
             torch.cuda.reset_peak_memory_stats(index)
+            return int(torch.cuda.memory_allocated(index) // 1_048_576)
         except Exception:
-            pass
+            return None
 
     @staticmethod
     def _device_free_mb(device_key: Optional[str]) -> Optional[int]:
@@ -5385,12 +5399,15 @@ class PlacementController:
         heavy: bool,
         pinned: Optional[str],
         preferred: Optional[str] = None,
-    ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool, Optional[int], Optional[str]]:
+    ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool, Optional[int], Optional[str], Optional[int]]:
         """The probe -> try_hold -> evict -> resolve body of `reservation()`
         (plan 273, T4) — extracted so `reservation()` can run it under
         `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
         the lock. Returns `(admission, held, resident, mem_before_mb,
-        foreign_before, warm_before_mb)`; `held` is the ledger token
+        foreign_before, warm_before_mb, protected_step, peak_baseline_mb)`
+        (#4163: `peak_baseline_mb` is the per-reservation torch baseline, None
+        when unreadable or the op is warm, meaning "discard the sample");
+        `held` is the ledger token
         `reservation()` must release on exit, or None (cpu / noCapacity —
         nothing was held).
         `resident` (#2094) is whether `engine` was already loaded BEFORE this
@@ -5515,15 +5532,25 @@ class PlacementController:
                     )
 
         mem_before_mb: Optional[int] = None
+        peak_baseline_mb: Optional[int] = None
         foreign_before = False
         warm_before_mb: Optional[int] = None
         if held is not None:
             admission: dict = {"device": held[0]}
-            # Device-wide reset, not scoped to this op — a concurrent op on the
-            # same device can truncate the measurement window. Acceptable: it
-            # only ever UNDER-estimates the peak (never over-reserves), and the
-            # reserve cushion + p95 windowing absorb the noise.
-            self._reset_peak_mb(held[0])
+            # Device-wide reset, not scoped to this op. #4163 — the learned
+            # sample is this op's OWN increment above `peak_baseline_mb`, and
+            # only for a COLD op (no model of this engine present at admission,
+            # read under `_admit_lock` right before the reset). A warm op's
+            # baseline is voided (None -> sample discarded). Residuals NOT
+            # fixed here: (1) torch's peak counter is per device and process,
+            # so a concurrent op on the same card can truncate this op's window
+            # with its own reset or inflate it with its own increment; (2) a
+            # model another op loads or frees during the window is attributed
+            # to this op's sample. The reserve cushion + p95 windowing absorb
+            # the noise.
+            peak_baseline_mb = self._reset_peak_mb(held[0])
+            if engine != "asr" and self.any_model_resident(engine):
+                peak_baseline_mb = None
             # #2094 review — ASR-specific: snapshot device-wide free VRAM here,
             # at the SAME point `_reset_peak_mb` brackets from, so `reservation()`
             # can pair it with an after-snapshot into a delta. See
@@ -5581,7 +5608,10 @@ class PlacementController:
             # `try`.
             protected_step = protect
             self._protected_steps[protect] = self._protected_steps.get(protect, 0) + 1
-        return admission, held, resident is not None, mem_before_mb, foreign_before, warm_before_mb, protected_step
+        return (
+            admission, held, resident is not None, mem_before_mb, foreign_before, warm_before_mb, protected_step,
+            peak_baseline_mb,
+        )
 
     @asynccontextmanager
     async def reservation(
@@ -5627,6 +5657,7 @@ class PlacementController:
         async with self._admit_lock:
             (
                 admission, held, resident, mem_before_mb, foreign_before, warm_before_mb, protected_step,
+                peak_baseline_mb,
             ) = await self._resolve_admission(engine, model, cfg, cpu_capable, heavy, pinned, preferred)
         try:
             yield admission
@@ -5773,13 +5804,16 @@ class PlacementController:
                 # the torch-allocator peak stays out: #2930/#3012 proved it
                 # reads structurally 0 for a CTranslate2-backed engine,
                 # pinning the learned estimate at its seed forever); every
-                # other engine keeps the torch-allocator peak.
+                # other engine keeps the torch-allocator peak — #4163: taken
+                # ABOVE this reservation's own baseline (`peak_baseline_mb`),
+                # and only for a cold op; a warm op's baseline is None, so it
+                # records nothing).
                 if engine == "asr" and not resident:
                     observed_mb = asr_observed_mb
                 elif engine == "asr" and resident:
                     observed_mb = asr_warm_mb
                 else:
-                    observed_mb = self._observed_mb(device_key)
+                    observed_mb = self._observed_mb(device_key, peak_baseline_mb)
                 self.footprints.record(engine, model, cfg, observed_mb or 0, resident)
 
 
@@ -5962,6 +5996,36 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
     return _report_rocm_device_key(f"{fam}:{idx if idx is not None else 0}")
 
 
+def _engine_any_model_resident(engine_id: str) -> bool:
+    """#4163 — True when ANY model of `engine_id` is present (or in flight), so
+    an op admitted now is a WARM op and must not learn a footprint sample.
+
+    Deliberately NOT `_is_resident`: for Qwen that reaches only the 0.6B via
+    `_engine_actual_card` (`_model`/`_kokoro`/`_base`/`_tts`), so a 1.7B synth
+    beside a resident 1.7B-Base would read as cold; and Qwen ops free sibling
+    Qwen models mid-op (`design_voice` unloads the 1.7B-Base, `mint_variant`
+    the VoiceDesign), so a "cold" op beside a resident sibling would learn its
+    peak minus the freed sibling. Qwen therefore uses the same four terms as
+    `_qwen_resident_device_key` WITHOUT its device-family gate (an in-flight
+    design whose `_device` has not resolved yet still counts). Any exception,
+    or a non-`QwenEngine` object, returns True: unknown residency discards the
+    sample rather than learning it."""
+    try:
+        if engine_id == "qwen":
+            qwen = ENGINES.get("qwen")
+            if not isinstance(qwen, QwenEngine):
+                return True
+            return bool(
+                qwen._base is not None
+                or qwen._base17 is not None
+                or qwen._design is not None
+                or qwen._design_in_flight.busy
+            )
+        return _is_resident(engine_id) is not None
+    except Exception:
+        return True
+
+
 def _same_card(resident: Optional[str], target: str) -> bool:
     """True when a resident engine's device string sits on the same card as
     `target` (a probed device key from `_worst_device_key`/`_device_key` --
@@ -6142,6 +6206,7 @@ _placement = PlacementController(
     idle_evict_steps=_idle_evict_steps,
     is_resident=_is_resident,
     own_resident_tier=_own_resident_tier,
+    any_model_resident=_engine_any_model_resident,
 )
 
 
