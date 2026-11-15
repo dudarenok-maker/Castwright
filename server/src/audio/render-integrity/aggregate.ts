@@ -344,6 +344,8 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
   if (row.bandMethod === undefined) return false;
   // #3518: a row blended from real anchors of another tier (or of unknown/mixed tier, or a legacy
   // row with no record) is rebuilt, never reused.
+  // Recurring cost: a row blending anchors of another tier never becomes usable (its stamp stays at the
+  // anchors' tier), so it is re-rendered on every scoring pass until the off-tier chapter is regenerated.
   if (!auditionAnchorsMatchTier(row)) return false;
   // A legacy row that recorded no language while the book now has one is a mismatch
   // -> rebuild once, then it records the language and stabilises.
@@ -932,9 +934,14 @@ export async function scoreBook(
            snapshot whose two keys differ proves the chapter holds this character's lines at BOTH tiers:
            this anchor's tier is unknown (-> no stamp -> the row is dropped / not reused). Known residual:
            a later same-tier partial write makes the keys agree again while the earlier off-tier lines
-           remain; only a per-segment tier stamp at finalize closes that. */
+           remain; only a per-segment tier stamp at finalize closes that. The chapter-level `modelKey`
+           is deliberately NOT a fallback: a partial write rewrites it to its own tier and carries an
+           untouched character's snapshot forward unchanged, so for a snapshot with no key of its own
+           (written before 2026-07-06) — or no snapshot at all — it no longer describes that character's
+           takes. Such an anchor is unknown-tier, and the pre-2026-07-06 chapters' in-book reference is
+           dropped until the chapter is regenerated. */
         const bothKeysDisagree = anchorSnap?.renderedModelKey != null && anchorSnap.modelKey != null && anchorSnap.renderedModelKey !== anchorSnap.modelKey;
-        anchorTiersByChar.get(rowCharId)!.add(bothKeysDisagree ? undefined : (anchorSnap?.renderedModelKey ?? anchorSnap?.modelKey ?? cd.modelKey));
+        anchorTiersByChar.get(rowCharId)!.add(bothKeysDisagree ? undefined : (anchorSnap?.renderedModelKey ?? anchorSnap?.modelKey));
       }
     }
   }
