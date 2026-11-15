@@ -522,3 +522,23 @@ test('serverChildEnv sets the dirs even when the launcher env had neither', () =
   assert.equal(env.APP_LOG_DIR, '/r/logs');
   assert.equal(env.APP_RUN_DIR, '/r/.run');
 });
+
+// #4054: the two serverChildEnv cases above test the helper alone, so pin the
+// spawn itself too: it must hand the child serverChildEnv's env and start node
+// with both report-exclusion flags (the server leaves fatal reports off
+// without them). Comments are stripped first so a commented-out call can't pass.
+import { readFileSync } from 'node:fs';
+
+test('the server spawn passes serverChildEnv and both report-exclusion flags', () => {
+  const src = readFileSync(new URL('../start-app-prod.mjs', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.match(
+    code,
+    /^const REPORT_EXCLUSION_FLAGS = \['--report-exclude-env', '--report-exclude-network'\];$/m,
+  );
+  assert.match(
+    code,
+    /const child = spawn\(process\.execPath, \[\.\.\.REPORT_EXCLUSION_FLAGS, 'dist\/index\.js'\], \{\s*cwd: serverDir,\s*env: serverChildEnv\(process\.env, \{ logDir, runDir \}\),/,
+  );
+  assert.equal(code.match(/\bspawn\(/g)?.length, 1, 'one server spawn, so the pin covers it');
+});
