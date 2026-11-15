@@ -38,6 +38,8 @@ import {
   readCentroids,
   writeCentroids,
   IN_BOOK_MIXED_TIER,
+  AUDITION_NO_ANCHORS,
+  auditionAnchorsMatchTier,
   type CharacterCentroid,
   type AuditionVoiceRef,
 } from './centroids-io.js';
@@ -268,6 +270,8 @@ interface CharacterReference {
   inBookVoiceName?: string;
   /** #3518 — the tier an 'in-book' reference's pooled anchors were rendered at; see CharacterCentroid. */
   inBookModelKey?: string;
+  /** #3518 — the tier of the real anchors blended into an 'audition' reference (or none); see CharacterCentroid. */
+  auditionAnchorModelKey?: string;
   /** A36 fix — band-computation method used ('synthetic-sigma' = post-fix,
    *  or 'percentile' = original/pre-fix). Carried on persisted 'audition' rows
    *  so pre-fix rows can be detected and rebuilt with the new logic. */
@@ -320,7 +324,7 @@ function inBookModelKeyOf(tiers: ReadonlySet<string | undefined>): string | unde
 }
 
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
-  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, inBookVoiceName: row.inBookVoiceName, bandMethod: row.bandMethod };
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, inBookVoiceName: row.inBookVoiceName, auditionAnchorModelKey: row.auditionAnchorModelKey, bandMethod: row.bandMethod };
 }
 
 /** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
@@ -338,6 +342,9 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
   // percentile-derived to sigma-derived bands. Once rebuilt, rows carry bandMethod
   // and can be reused on subsequent passes.
   if (row.bandMethod === undefined) return false;
+  // #3518: a row blended from real anchors of another tier (or of unknown/mixed tier, or a legacy
+  // row with no record) is rebuilt, never reused.
+  if (!auditionAnchorsMatchTier(row)) return false;
   // A legacy row that recorded no language while the book now has one is a mismatch
   // -> rebuild once, then it records the language and stabilises.
   return sameVoiceIdentity(r, voiceInfo);
@@ -423,6 +430,11 @@ async function resolveCharacterReference(
   if (audition === null) return { status: 'transient-failure' };
   if (audition.kind === 'too-short') return { status: 'too-short', ref: tooShortRefFor(voiceInfo) };
 
+  /* #3518 — the real anchors blended into this audition carry their own render tier, not the
+     current voice's: record it (the same stamp an in-book row gets, from the same helper). A
+     synthetic-only pool (no anchors, or the bimodal fallback that dropped them) has none. */
+  const auditionAnchorModelKey = audition.syntheticOnly ? AUDITION_NO_ANCHORS : inBookModelKey;
+
   const centroidArr = Array.from(audition.centroid);
   const cosines = audition.embeddings
     .map((v) => cosineToCentroid(Array.from(v), centroidArr))
@@ -454,7 +466,7 @@ async function resolveCharacterReference(
   // pools that matched the tight-pool condition, percentile for the fallback or
   // non-synthetic cases). Pre-fix rows lack this field entirely, allowing us to
   // detect and rebuild them with the current band-computation logic.
-  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: auditionVoiceOf(voiceInfo) } };
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: auditionVoiceOf(voiceInfo), ...(auditionAnchorModelKey !== undefined ? { auditionAnchorModelKey } : {}) } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────
@@ -915,7 +927,14 @@ export async function scoreBook(
         /* #3518 — the tier THIS anchor's chapter rendered the character at (the same chain the
            audition's render key uses, minus its 0.6B default: an unrecorded tier stays unknown). */
         const anchorSnap = cd.snapshots[rowCharId];
-        anchorTiersByChar.get(rowCharId)!.add(anchorSnap?.renderedModelKey ?? anchorSnap?.modelKey ?? cd.modelKey);
+        /* A partial write (qa-repair, splice / Fix audio) keeps `renderedModelKey` frozen at the full
+           render's tier while re-recording lines at another one (finalize-chapter-write.ts), so a
+           snapshot whose two keys differ proves the chapter holds this character's lines at BOTH tiers:
+           this anchor's tier is unknown (-> no stamp -> the row is dropped / not reused). Known residual:
+           a later same-tier partial write makes the keys agree again while the earlier off-tier lines
+           remain; only a per-segment tier stamp at finalize closes that. */
+        const bothKeysDisagree = anchorSnap?.renderedModelKey != null && anchorSnap.modelKey != null && anchorSnap.renderedModelKey !== anchorSnap.modelKey;
+        anchorTiersByChar.get(rowCharId)!.add(bothKeysDisagree ? undefined : (anchorSnap?.renderedModelKey ?? anchorSnap?.modelKey ?? cd.modelKey));
       }
     }
   }

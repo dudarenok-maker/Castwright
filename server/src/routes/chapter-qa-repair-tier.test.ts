@@ -126,7 +126,7 @@ async function runCase(c: Case) {
     castor: {
       characterId: 'castor', centroid: unitVec(), cleanMean: 0.7, pSevere: 0.45, pBand: 0.6, referenceKind: c.rowKind,
       ...(c.rowKind === 'audition'
-        ? { bandMethod: 'synthetic-sigma', auditionVoice: { voiceName: 'qwen-b', modelKey: c.rowTier } }
+        ? { bandMethod: 'synthetic-sigma', auditionAnchorModelKey: 'none', auditionVoice: { voiceName: 'qwen-b', modelKey: c.rowTier } }
         : { inBookVoiceName: 'qwen-b', ...(c.rowTier ? { inBookModelKey: c.rowTier } : {}) }),
     },
   }));

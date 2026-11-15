@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { auditionCentroidUsableForCurrent, IN_BOOK_MIXED_TIER, type CharacterCentroid } from './centroids-io.js';
+import { auditionCentroidUsableForCurrent, AUDITION_NO_ANCHORS, IN_BOOK_MIXED_TIER, type CharacterCentroid } from './centroids-io.js';
 
 const base = { characterId: 'c', centroid: [1], cleanMean: 0.9, pSevere: 0.5, pBand: 0.6 };
 
-const audition = (voiceName: string, modelKey: string): CharacterCentroid => ({
+/** `anchorKey` defaults to "fresh renders only"; pass `null` for a legacy row with no record. */
+const audition = (voiceName: string, modelKey: string, anchorKey: string | null = AUDITION_NO_ANCHORS): CharacterCentroid => ({
   ...base,
   referenceKind: 'audition',
   auditionVoice: { voiceName, modelKey },
+  ...(anchorKey != null ? { auditionAnchorModelKey: anchorKey } : {}),
 });
 
 const inBook = (inBookVoiceName?: string, inBookModelKey?: string): CharacterCentroid => ({
@@ -30,6 +32,19 @@ describe('auditionCentroidUsableForCurrent (#3518 tier rule)', () => {
 
   it('A3: audition row with no current model key is unusable', () => {
     expect(auditionCentroidUsableForCurrent(audition('v', T06), 'v', undefined)).toBe(false);
+  });
+
+  it('A4: audition blended from real anchors at the same tier is usable', () => {
+    expect(auditionCentroidUsableForCurrent(audition('v', T17, T17), 'v', T17)).toBe(true);
+  });
+
+  it('A5: audition blended from real anchors at another tier (or mixed) is unusable', () => {
+    expect(auditionCentroidUsableForCurrent(audition('v', T17, T06), 'v', T17)).toBe(false);
+    expect(auditionCentroidUsableForCurrent(audition('v', T17, IN_BOOK_MIXED_TIER), 'v', T17)).toBe(false);
+  });
+
+  it('A6: legacy audition row with no anchor-tier record fails closed', () => {
+    expect(auditionCentroidUsableForCurrent(audition('v', T06, null), 'v', T06)).toBe(false);
   });
 
   it('B1: in-book row whose anchors share the current tier is usable', () => {

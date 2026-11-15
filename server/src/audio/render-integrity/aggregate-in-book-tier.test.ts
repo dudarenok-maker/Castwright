@@ -43,6 +43,8 @@ interface Tier {
   /** snapshot.renderedModelKey */ rendered?: string;
   /** snapshot.modelKey */ snap?: string;
   /** segments-file modelKey */ chapter?: string;
+  /** voice the lines were rendered in (default: the current cast voice, 'qwen-new') */ voice?: string;
+  /** per-segment renderedFallbackEngine (default: none) */ fallback?: string;
 }
 
 const unit = () => Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
@@ -57,11 +59,11 @@ async function writeChapter(dir: string, slug: string, chapterId: number, tier: 
     JSON.stringify({
       chapterId,
       ...(tier.chapter ? { modelKey: tier.chapter } : {}),
-      segments: rows.map((r) => ({ characterId: 'thurid', sentenceIds: r.sentenceIds, renderedFallbackEngine: null, voiceName: 'qwen-new' })),
+      segments: rows.map((r) => ({ characterId: 'thurid', sentenceIds: r.sentenceIds, renderedFallbackEngine: tier.fallback ?? null, voiceName: tier.voice ?? 'qwen-new' })),
       characterSnapshots: {
         thurid: {
           voiceEngine: 'qwen',
-          resolvedVoiceName: 'qwen-new',
+          resolvedVoiceName: tier.voice ?? 'qwen-new',
           ...(tier.snap ? { modelKey: tier.snap } : {}),
           ...(tier.rendered ? { renderedModelKey: tier.rendered } : {}),
         },
@@ -107,8 +109,13 @@ describe('scoreBook stamps the pooled anchors tier on the in-book row (#3518)', 
     expect(row.inBookModelKey).toBeUndefined();
   });
 
-  it('precedence per anchor: renderedModelKey wins over snapshot.modelKey (frozen full-render tier)', async () => {
+  it('a snapshot whose renderedModelKey and modelKey differ (partial write at another tier) is an unknown-tier anchor', async () => {
     const row = await inBookRow([{ rendered: T06, snap: T17 }, { rendered: T06, snap: T17 }]);
+    expect(row.inBookModelKey).toBeUndefined();
+  });
+
+  it('precedence per anchor: renderedModelKey wins over the chapter modelKey when the snapshot has no modelKey', async () => {
+    const row = await inBookRow([{ rendered: T06, chapter: T17 }, { rendered: T06, chapter: T17 }]);
     expect(row.inBookModelKey).toBe(T06);
   });
 
@@ -120,6 +127,17 @@ describe('scoreBook stamps the pooled anchors tier on the in-book row (#3518)', 
   it('falls back to the chapter modelKey when the snapshot carries none', async () => {
     const row = await inBookRow([{ chapter: T06 }, { chapter: T06 }]);
     expect(row.inBookModelKey).toBe(T06);
+  });
+
+  /* The stamp covers exactly the POOLED anchors: a line the pool filters out must not leak its tier. */
+  it('an old-voice line at another tier is not pooled, so it does not touch the stamp', async () => {
+    const row = await inBookRow([{ snap: T17 }, { snap: T06, voice: 'qwen-old' }]);
+    expect(row.inBookModelKey).toBe(T17);
+  });
+
+  it('a per-segment fallback line at another tier is not pooled, so it does not touch the stamp', async () => {
+    const row = await inBookRow([{ snap: T17 }, { snap: T06, fallback: 'kokoro' }]);
+    expect(row.inBookModelKey).toBe(T17);
   });
 });
 
