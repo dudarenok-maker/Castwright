@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const landed: string[][] = [];
+const landedData: unknown[] = [];
 let writeNo = 0;
 let verifyDelays: number[] = [];
 let verifyNo = 0;
@@ -48,6 +49,7 @@ vi.mock('./state-io.js', async () => {
       const n = writeNo++;
       await new Promise((r) => setTimeout(r, n === 0 ? 30 : 1));
       landed.push(data.sentences);
+      landedData.push(data);
     },
   };
 });
@@ -56,6 +58,7 @@ const { rollManuscriptEdits } = await import('./edits-roll.js');
 
 afterEach(() => {
   landed.length = 0;
+  landedData.length = 0;
   writeNo = 0;
   verifyNo = 0;
   verifyDelays = [];
@@ -192,5 +195,47 @@ describe('rollManuscriptEdits re-reads under the book lock (#4031)', () => {
     verifiedDir = seedEdits([s(1, 'olga'), s(9, 'olga')]);
     await rollManuscriptEdits(opts, () => [s(1, 'x'), s(2, 'x')], 'book-4031-e');
     expect(landed).toEqual([[s(1, 'x'), s(2, 'x')]]);
+  });
+});
+
+describe('rollManuscriptEdits keeps merge tombstones (#4155)', () => {
+  type T = { chapterId: number; id: number; characterId: string; text: string };
+  const t = (chapterId: number, id: number, text: string): T => ({ chapterId, id, characterId: 'olga', text });
+  const identity = (ss: any[]): any[] => ss;
+  const seed = (data: unknown): string => {
+    const dir = tmpBook();
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(join(dir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(data));
+    return dir;
+  };
+
+  it('R1: the chapter it rolls folds the tombstoned sentence and the keys ride along', async () => {
+    verifiedDir = seed({ sentences: [t(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+    await rollManuscriptEdits(opts, () => [t(1, 1, 'A.'), t(1, 2, 'B.')], 'book-4155-a', identity);
+    expect(landedData).toEqual([{ sentences: [t(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] }]);
+  });
+
+  it("R2: another chapter's tombstones ride along and its sentences are untouched", async () => {
+    verifiedDir = seed({ sentences: [t(1, 1, 'A.'), t(2, 1, 'X.')], mergedAwayKeys: ['2:2'] });
+    await rollManuscriptEdits(opts, () => [t(1, 1, 'A2.')], 'book-4155-b', identity);
+    expect(landedData).toEqual([{ sentences: [t(1, 1, 'A2.'), t(2, 1, 'X.')], mergedAwayKeys: ['2:2'] }]);
+  });
+
+  it('R3: the fallback seed folds too', async () => {
+    verifiedDir = seed({ sentences: [t(1, 1, 'A.')], mergedAwayKeys: ['2:2'] });
+    await rollManuscriptEdits(opts, () => [t(3, 1, 'Z.')], 'book-4155-c', identity, () => [
+      t(2, 1, 'B.'),
+      t(2, 2, 'C.'),
+    ]);
+    expect(landedData).toEqual([
+      { sentences: [t(1, 1, 'A.'), t(2, 1, 'B. C.'), t(3, 1, 'Z.')], mergedAwayKeys: ['2:2'] },
+    ]);
+  });
+
+  it('R4: a file with no mergedAwayKeys gets none written', async () => {
+    verifiedDir = seed({ sentences: [t(1, 1, 'A.')] });
+    await rollManuscriptEdits(opts, () => [t(1, 1, 'A2.')], 'book-4155-d', identity);
+    expect(landedData).toHaveLength(1);
+    expect(landedData[0]).not.toHaveProperty('mergedAwayKeys');
   });
 });

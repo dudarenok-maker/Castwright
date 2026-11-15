@@ -628,6 +628,88 @@ describe('persistPlannedCast', () => {
     );
     expect(out.mainLedger?.alice).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(readCast()[0]) });
   });
+
+  describe('#4155 merge tombstones survive a re-analysis persist', () => {
+    type S = Record<string, unknown>;
+    const sen = (id: number, chapterId: number, text: string, extra: S = {}): any => ({
+      id,
+      chapterId,
+      characterId: 'olga',
+      text,
+      ...extra,
+    });
+    const writeEdits = (data: unknown): void =>
+      writeFileSync(manuscriptEditsJsonPath(bookDir), typeof data === 'string' ? data : JSON.stringify(data));
+    const readEdits = (): { sentences: S[]; mergedAwayKeys?: string[] } =>
+      JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'));
+
+    it('#4155 P1: a merge on disk survives; the survivor keeps its merged text and the line count follows', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+      const out = await persistPlannedCast(
+        persistArgs({
+          sentences: [sen(1, 1, 'A.', { instruct: 'softly', vocalization: true }), sen(2, 1, 'B.'), sen(3, 1, 'C.')],
+        }),
+      );
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2']);
+      expect(edits.sentences.map((x) => x.id)).toEqual([1, 3]);
+      expect(edits.sentences[0].text).toBe('A. B.');
+      expect(edits.sentences[0]).not.toHaveProperty('instruct');
+      expect(edits.sentences[0]).not.toHaveProperty('vocalization');
+      expect(out.sentences).toEqual(edits.sentences);
+      expect(readCast().find((r) => r.id === 'olga')?.lines).toBe(2);
+    });
+
+    it('#4155 P2: a promote-to-title tombstone drops the sentence and leaves the others untouched', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits({ sentences: [sen(2, 1, 'B.')], mergedAwayKeys: ['1:1'] });
+      await persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'Title words.'), sen(2, 1, 'B.')] }));
+      const edits = readEdits();
+      expect(edits.sentences).toEqual([sen(2, 1, 'B.')]);
+      expect(edits.mergedAwayKeys).toEqual(['1:1']);
+    });
+
+    it('#4155 P3: a tombstone only folds within its own chapter', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits({ sentences: [sen(1, 2, 'C. D.')], mergedAwayKeys: ['2:2'] });
+      await persistPlannedCast(
+        persistArgs({ sentences: [sen(1, 1, 'A.'), sen(2, 1, 'B.'), sen(1, 2, 'C.'), sen(2, 2, 'D.')] }),
+      );
+      expect(readEdits().sentences).toEqual([sen(1, 1, 'A.'), sen(2, 1, 'B.'), sen(1, 2, 'C. D.')]);
+    });
+
+    it('#4155 P4: a drift-refused persist carries the tombstones too and leaves cast.json alone', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+      await persistPlannedCast(
+        persistArgs({
+          sentences: [sen(1, 1, 'A.', { instruct: 'softly', vocalization: true }), sen(2, 1, 'B.'), sen(3, 1, 'C.')],
+          driftRefused: true,
+        }),
+      );
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2']);
+      expect(edits.sentences.map((x) => x.id)).toEqual([1, 3]);
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
+    });
+
+    it('#4155 P5: an unreadable edits file fails the persist closed and writes nothing', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits('{ not json');
+      const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
+      await expect(persistPlannedCast(persistArgs())).rejects.toThrow();
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
+      expect(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')).toBe('{ not json');
+    });
+
+    it('#4155 P6: with no edits file on disk no mergedAwayKeys key is invented', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      await persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'A.')] }));
+      expect(Object.keys(readEdits())).toEqual(['sentences']);
+    });
+  });
 });
 
 describe('fix round 1 (#4031 Task 8 review)', () => {
