@@ -3,7 +3,7 @@
 **What's new in 1.16.0**
 
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
-- **Opus books show their progress again.** Reopening an Opus book now shows the chapters you've already made as done, and a chapter that only has an earlier take left over is no longer marked finished.
+- **Opus books show their progress.** Reopening an Opus book now shows the chapters you've already made as done, the Library card counts them too, and a chapter that only has an earlier take left over is no longer marked finished.
 
 # Castwright 1.15.0
 

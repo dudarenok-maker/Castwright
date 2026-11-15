@@ -694,6 +694,50 @@ describe('voices_pending status', () => {
     const b = (await flatten()).find((x) => x.title === 'Done Book')!;
     expect(b.status).toBe('complete');
   });
+
+  /* #4166: the card's completedChapters counts chapters with a LIVE take (the
+     book-state finder), not files matching an extension list. */
+  it('an Opus book with both chapters as .ogg → complete, 2/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Opus Done Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'od-1' }, { id: 2, slug: 'od-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'od-1.ogg'), '');
+    writeFileSync(join(audioRoot, 'od-2.ogg'), '');
+    const b = (await flatten()).find((x) => x.title === 'Opus Done Book')!;
+    expect(b.status).toBe('complete');
+    expect(b.completedChapters).toBe(2);
+    expect(b.chapterCount).toBe(2);
+  });
+
+  it('a preserved .previous.mp3 beside a live take does not count as a second chapter → generating, 1/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Previous Overcount Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'po-1' }, { id: 2, slug: 'po-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'po-1.mp3'), '');
+    writeFileSync(join(audioRoot, 'po-1.previous.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Previous Overcount Book')!;
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(1);
+  });
+
+  it('a chapter with only a .previous.mp3 is not complete', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Previous Only Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'pv-1' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'pv-1.previous.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Previous Only Book')!;
+    expect(b.status).toBe('voices_pending');
+    expect(b.completedChapters).toBe(0);
+  });
 });
 
 /* plan 287 spec 2.2 — the library's analysis rule is `analysisCompleteFor`

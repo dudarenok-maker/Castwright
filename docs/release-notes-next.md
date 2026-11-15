@@ -43,7 +43,7 @@ history at cut time.
 
 ## 🔊 Generation quality & engine health
 
-- **`completedSlugs` in the book-state GET now counts a chapter only when its live take exists.** It used a `.mp3/.m4a/.opus` regex plus `startsWith(slug)`, so Opus (`.ogg`) books never showed a chapter as done and a lone `<slug>.previous.mp3` counted as done; it now asks `chapterAudioExists` (the same live-take finder exports use), which also stops `ch-1` matching `ch-10.mp3`. Covered by `server/src/routes/book-state.completed-slugs.test.ts` (#4166).
+- **Reopening an Opus book no longer shows every chapter as unmade, and a chapter with only an earlier take no longer shows as done.** The book-state GET's `completedSlugs` used a `.mp3/.m4a/.opus` regex plus `startsWith(slug)`, so Opus (`.ogg`) books never showed a chapter as done and a lone `<slug>.previous.mp3` counted as done; it now asks `chapterAudioExists` (the same live-take finder exports use), which also stops `ch-1` matching `ch-10.mp3`. The library scan's `completedChapters` had the same regex and counted files rather than chapters, so a fully rendered Opus book sat at "Voices pending, 0/2" on its Library card; it now counts non-excluded chapters with a live take. Covered by `server/src/routes/book-state.completed-slugs.test.ts` and `server/src/workspace/scan.test.ts` (#4166).
 
 ## 🧪 Test gates
 
