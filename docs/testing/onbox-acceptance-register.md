@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**79 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**80 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
+> **Last change: 2026-11-13 (#4163), 79 → 80.** Row **A126** (a cold model load learns its own weights, a warm op learns nothing: the per-op VRAM footprint fix) added. Group A 44 → 45. `next-id` bumped A124 → A127 in the same change; A124 and A125 are reserved for #4054's and #4102's rows. Row is owed; not run here.
+>
+> **Previous change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
 > amended (plan 291 R57): the drawer's merge and downgrade are disabled mid-run, so the
 > refused-merge observation now comes from a second device or a tab opened before the run. No
 > row added or removed; `next-id` unchanged. Merged with `main`'s row **A123** (#4054): the
@@ -1942,7 +1944,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A124 -->
+<!-- next-id: A127 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6624,6 +6626,18 @@ The automated tests stub the process-handle wait and pin the exit-code wording, 
 - **A standalone sidecar is untouched.** In a terminal with `SIDECAR_PARENT_PID` cleared (`Remove-Item Env:SIDECAR_PARENT_PID`), start the sidecar alone (`npm run tts:sidecar`, no server). That terminal has `parent watch off`, it keeps running, and a server that then starts and adopts it does not change that: stopping the server leaves the sidecar running.
 
 *Needs:* the GPU box on Windows with the real sidecar. *Criteria:* this row. Clears when each bullet is recorded with the log line it produced.
+
+### A126 · A cold model load learns its own weights, and a warm op learns nothing ([#4163](https://github.com/dudarenok-maker/Castwright/issues/4163)) · **single 8 GB card, real Qwen sidecar with the 1.7B-Base installed**
+
+Child 1's pytest proves the arithmetic and the cold-only predicate with a fake `torch` and stand-in engines. It does not prove that real CUDA counters on a real card behave that way with several engines in one process, that the cold-only gate fires on the real engines (in particular Qwen's four models), that warm ops really leave a key's samples alone, or that the cold-learned bookings still fit a cold reload. Only a real GPU and a real sidecar show these. The observable surface is `GET /debug/memory`, whose `footprints` block has per-key `seed_mb`, `learned_mb` (0 below 5 samples) and `sample_count`; `learned_mb` is the p95 of the last 64 samples. `POST /load` and `POST /unload` take `{"engine": "qwen" | "coqui" | "kokoro"}`; `/unload` also takes `"model":"1.7b"` to drop the 1.7B-Base, and `/unload qwen` without it leaves the 1.7B-Base resident. Before every cold-load step, confirm on `GET /health` that `qwen_loaded`, `qwen_base17_loaded` and `qwen_design_resident` are all false.
+
+- **A cold load counts its own weights, and only cold loads record.** Start a fresh sidecar with nothing loaded on the GPU. Note `nvidia-smi` used memory, run `POST /load {"engine":"qwen"}`, and note it again. Run four more `POST /unload {"engine":"qwen"}` / `POST /load {"engine":"qwen"}` cycles, reading `GET /debug/memory` after each one. Observe: `footprints.qwen.sample_count` rises by exactly 1 per cold load and ends at 5; `learned_mb` is at least 75% of the first load's `nvidia-smi` rise (that rise also counts the CUDA context, so somewhat below it is expected) and is not near 0. Record both figures.
+- **Warm ops record nothing.** With the 0.6B loaded from bullet 1, render a standard chapter of at least 25 lines. Observe: `footprints.qwen.sample_count` and `learned_mb` are exactly as bullet 1 left them. Then render a Quality chapter of at least 25 lines. After the first line, the 1.7B-Base and the 0.6B are both resident. Observe: `footprints["qwen.1.7b"].sample_count` is 0, because the 0.6B was already resident when the first Quality line was admitted (before #4163 it would be at least 25). Record both counts. Finish with `POST /unload {"engine":"qwen","model":"1.7b"}`, because `/unload qwen` without a model leaves the 1.7B-Base resident.
+- **A cold load beside another engine excludes that engine.** `POST /load {"engine":"coqui"}`, and note the `nvidia-smi` rise. Then `POST /unload {"engine":"qwen"}` (confirm that `GET /health` shows `qwen_loaded`, `qwen_base17_loaded` and `qwen_design_resident` all false) and `POST /load {"engine":"qwen"}`. Observe: `footprints.qwen.sample_count` goes up by 1, and `learned_mb` does not rise by more than 10% over bullet 1's figure. It must not rise by anything near Coqui's rise. Record both figures.
+- **A cold reload after a long warm run still fits.** Render another standard chapter of at least 25 lines, `POST /unload {"engine":"qwen"}` (with the same `/health` check as bullet 3), then render one more standard line. Observe: the reload completes with no `CUDA out of memory` in `logs/tts.err.log` and no `noCapacity` answer. Record the `nvidia-smi` peak during the reload and the `footprints.qwen.learned_mb` it booked against. If it fails, record that figure and the error.
+- **The mint key learns only from a mint with no Qwen model present (the #4102 interaction).** Restart the sidecar, so that no Qwen model is loaded (check `/health` as in bullet 3). Mint one variant of a previously designed voice (`POST /qwen/mint-variant`). Note the `nvidia-smi` rise, then read `footprints["qwen.1.7b.mint"].sample_count` (expect 1). Mint a second variant immediately, with the 1.7B-Base still resident. Observe: `sample_count` is still 1. Record the first mint's `nvidia-smi` rise. It should be close to the 0.6B plus the 1.7B-Base weights plus activations (about 5654 MB per `main.py:12449-12450`). #4102 subtracts the 1.7B-Base weights from exactly this figure, so a rise well below it means the mint booking is under-sized: say so in the row result.
+
+*Needs:* a single 8 GB card with a real Qwen sidecar and the 1.7B-Base installed, `nvidia-smi`, and a designed voice for the mint. *Criteria:* this row. Clears when each bullet's figures are recorded.
 
 ## Group B — local Ollama analyzer only
 

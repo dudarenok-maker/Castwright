@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">79</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">80</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->44<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->45<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">44 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">45 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -918,6 +918,20 @@
         <li><strong>A standalone sidecar is untouched.</strong> In a terminal with <code>SIDECAR_PARENT_PID</code> cleared (<code>Remove-Item Env:SIDECAR_PARENT_PID</code>), start the sidecar alone (<code>npm run tts:sidecar</code>, no server). That terminal has <code>parent watch off</code>, it keeps running, and a server that then starts and adopts it does not change that: stopping the server leaves the sidecar running.</li>
         </ul>
         <p class="src">the GPU box on Windows with the real sidecar &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4054">#4054</a> &#183; criteria in this row</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A126</span><span class="iname">A cold model load learns its own weights, and a warm op learns nothing</span><span class="risk">single 8 GB card, real Qwen sidecar with the 1.7B-Base installed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Child 1&#39;s pytest proves the arithmetic and the cold-only predicate with a fake <code>torch</code> and stand-in engines. It does not prove that real CUDA counters on a real card behave that way with several engines in one process, that the cold-only gate fires on the real engines (in particular Qwen&#39;s four models), that warm ops really leave a key&#39;s samples alone, or that the cold-learned bookings still fit a cold reload. Only a real GPU and a real sidecar show these. The observable surface is <code>GET /debug/memory</code>, whose <code>footprints</code> block has per-key <code>seed_mb</code>, <code>learned_mb</code> (0 below 5 samples) and <code>sample_count</code>; <code>learned_mb</code> is the p95 of the last 64 samples. <code>POST /load</code> and <code>POST /unload</code> take <code>{"engine": "qwen" | "coqui" | "kokoro"}</code>; <code>/unload</code> also takes <code>"model":"1.7b"</code> to drop the 1.7B-Base, and <code>/unload qwen</code> without it leaves the 1.7B-Base resident. Before every cold-load step, confirm on <code>GET /health</code> that <code>qwen_loaded</code>, <code>qwen_base17_loaded</code> and <code>qwen_design_resident</code> are all false.</p>
+        <ul>
+        <li><strong>A cold load counts its own weights, and only cold loads record.</strong> Start a fresh sidecar with nothing loaded on the GPU. Note <code>nvidia-smi</code> used memory, run <code>POST /load {"engine":"qwen"}</code>, and note it again. Run four more <code>POST /unload {"engine":"qwen"}</code> / <code>POST /load {"engine":"qwen"}</code> cycles, reading <code>GET /debug/memory</code> after each one. Observe: <code>footprints.qwen.sample_count</code> rises by exactly 1 per cold load and ends at 5; <code>learned_mb</code> is at least 75% of the first load&#39;s <code>nvidia-smi</code> rise (that rise also counts the CUDA context, so somewhat below it is expected) and is not near 0. Record both figures.</li>
+        <li><strong>Warm ops record nothing.</strong> With the 0.6B loaded from bullet 1, render a standard chapter of at least 25 lines. Observe: <code>footprints.qwen.sample_count</code> and <code>learned_mb</code> are exactly as bullet 1 left them. Then render a Quality chapter of at least 25 lines. After the first line, the 1.7B-Base and the 0.6B are both resident. Observe: <code>footprints["qwen.1.7b"].sample_count</code> is 0, because the 0.6B was already resident when the first Quality line was admitted (before #4163 it would be at least 25). Record both counts. Finish with <code>POST /unload {"engine":"qwen","model":"1.7b"}</code>, because <code>/unload qwen</code> without a model leaves the 1.7B-Base resident.</li>
+        <li><strong>A cold load beside another engine excludes that engine.</strong> <code>POST /load {"engine":"coqui"}</code>, and note the <code>nvidia-smi</code> rise. Then <code>POST /unload {"engine":"qwen"}</code> (confirm that <code>GET /health</code> shows <code>qwen_loaded</code>, <code>qwen_base17_loaded</code> and <code>qwen_design_resident</code> all false) and <code>POST /load {"engine":"qwen"}</code>. Observe: <code>footprints.qwen.sample_count</code> goes up by 1, and <code>learned_mb</code> does not rise by more than 10% over bullet 1&#39;s figure. It must not rise by anything near Coqui&#39;s rise. Record both figures.</li>
+        <li><strong>A cold reload after a long warm run still fits.</strong> Render another standard chapter of at least 25 lines, <code>POST /unload {"engine":"qwen"}</code> (with the same <code>/health</code> check as bullet 3), then render one more standard line. Observe: the reload completes with no <code>CUDA out of memory</code> in <code>logs/tts.err.log</code> and no <code>noCapacity</code> answer. Record the <code>nvidia-smi</code> peak during the reload and the <code>footprints.qwen.learned_mb</code> it booked against. If it fails, record that figure and the error.</li>
+        <li><strong>The mint key learns only from a mint with no Qwen model present (the #4102 interaction).</strong> Restart the sidecar, so that no Qwen model is loaded (check <code>/health</code> as in bullet 3). Mint one variant of a previously designed voice (<code>POST /qwen/mint-variant</code>). Note the <code>nvidia-smi</code> rise, then read <code>footprints["qwen.1.7b.mint"].sample_count</code> (expect 1). Mint a second variant immediately, with the 1.7B-Base still resident. Observe: <code>sample_count</code> is still 1. Record the first mint&#39;s <code>nvidia-smi</code> rise. It should be close to the 0.6B plus the 1.7B-Base weights plus activations (about 5654 MB per <code>main.py:12449-12450</code>). #4102 subtracts the 1.7B-Base weights from exactly this figure, so a rise well below it means the mint booking is under-sized: say so in the row result.</li>
+        </ul>
+        <p class="src">a single 8 GB card with a real Qwen sidecar &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4163">#4163</a> &#183; criteria in this row</p>
       </div>
     </details>
 
