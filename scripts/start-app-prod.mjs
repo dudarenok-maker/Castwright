@@ -39,6 +39,15 @@ const pkgVersion = JSON.parse(
   readFileSync(resolve(repoRoot, 'package.json'), 'utf8'),
 ).version;
 
+/** Env for the server child. APP_LOG_DIR / APP_RUN_DIR are passed as the
+ *  launcher's already-resolved absolute dirs: the child runs with cwd=server/,
+ *  so a relative value would resolve against server/ there but against the repo
+ *  root here, splitting server.log from node-reports/ (#4054). Exported for
+ *  unit testing. */
+export function serverChildEnv(baseEnv, { logDir, runDir }) {
+  return { ...baseEnv, NODE_ENV: 'production', APP_LOG_DIR: logDir, APP_RUN_DIR: runDir };
+}
+
 /** The one-line Castwright startup banner. Exported for unit testing. */
 export function bannerLine(version) {
   return `Castwright v${version} — Any book, performed by a full cast.`;
@@ -512,7 +521,7 @@ async function main() {
      launcher and the console window that double-clicked the .bat. */
   const child = spawn(process.execPath, ['dist/index.js'], {
     cwd: serverDir,
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: serverChildEnv(process.env, { logDir, runDir }),
     stdio: ['ignore', outLog, errLog],
     detached: true,
     windowsHide: true,

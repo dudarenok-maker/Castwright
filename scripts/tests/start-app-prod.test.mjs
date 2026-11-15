@@ -500,3 +500,25 @@ test('formatBuildManifestLine falls back to a clear message when the manifest is
     '[BUILD] unknown — build-manifest.json missing, run "npm run build" to populate it',
   );
 });
+
+// #4054: the launcher resolves a relative APP_LOG_DIR / APP_RUN_DIR against the
+// repo root, but the server child runs with cwd=server/ and would resolve the
+// same string against server/ — splitting server.log from node-reports/.
+import { serverChildEnv } from '../start-app-prod.mjs';
+
+test('serverChildEnv hands the child the launcher-resolved absolute log and run dirs', () => {
+  const env = serverChildEnv(
+    { APP_LOG_DIR: 'rel/logs', APP_RUN_DIR: 'rel/run', KEEP: '1' },
+    { logDir: '/abs/rel/logs', runDir: '/abs/rel/run' },
+  );
+  assert.equal(env.APP_LOG_DIR, '/abs/rel/logs');
+  assert.equal(env.APP_RUN_DIR, '/abs/rel/run');
+  assert.equal(env.NODE_ENV, 'production');
+  assert.equal(env.KEEP, '1');
+});
+
+test('serverChildEnv sets the dirs even when the launcher env had neither', () => {
+  const env = serverChildEnv({}, { logDir: '/r/logs', runDir: '/r/.run' });
+  assert.equal(env.APP_LOG_DIR, '/r/logs');
+  assert.equal(env.APP_RUN_DIR, '/r/.run');
+});
