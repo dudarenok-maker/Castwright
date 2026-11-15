@@ -33,6 +33,10 @@ PR-by-PR as the v1.16.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🔊 Generation quality & engine health
+
+- **A chapter render that fails after its audio was encoded no longer leaves a chapter-sized temp file in the book's audio folder.** `finalizeChapterAudioWrite` wrote `<slug>.<ext>.tmp-<pid>-<ts>` before its fallible steps and only renamed it at the end, so any throw in between (embeddings or segments write, preserve, rename) leaked the file. The exported function is now a wrapper that removes the temp file on any exit before a successful rename, logs and swallows a failed removal, and rethrows the original error. Covered by `finalize-chapter-write.tmp-cleanup.test.ts`. Temp files leaked by earlier failures are not swept; that is #3456's boot sweep, not this fix (#4167).
+
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
