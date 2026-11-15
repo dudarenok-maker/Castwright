@@ -436,7 +436,7 @@ Two things distinguish the Coqui step from the others:
    refused, which matters on cards large enough to hold both. A credited
    refusal reports `neededMb = peak - weights` on the credited card, so Node's
    analyzer/endpoint levers compare against that card's raw free memory.
-   Mint, GPU ASR and GPU SPK are not covered (#4102).
+   The same protection now covers a mint (protected, booking its cold peak minus the resident 1.7B-Base weights, no credit), GPU ASR and GPU SPK (protected, restricted to the resident card, booking `asr.warm` / `spk.warm`) (#4102).
 2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
    `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
    registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)

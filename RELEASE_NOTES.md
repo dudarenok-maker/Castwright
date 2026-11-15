@@ -1,5 +1,9 @@
 # Castwright 1.16.0
 
+**Speech engines and your graphics card**
+
+- **Emotion takes no longer reload the high-quality voice.** Making several emotion takes in a row keeps the higher-quality voice model loaded instead of unloading and reloading it for each one, and speech checks running on your graphics card keep their own model when memory is tight.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**
