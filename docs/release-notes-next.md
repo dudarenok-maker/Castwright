@@ -35,7 +35,7 @@ history at cut time.
 
 ## 🔊 Generation quality & engine health
 
-- **A chapter render that fails after its audio was encoded no longer leaves a chapter-sized temp file in the book's audio folder.** `finalizeChapterAudioWrite` wrote `<slug>.<ext>.tmp-<pid>-<ts>` before its fallible steps and only renamed it at the end, so any throw in between (embeddings or segments write, preserve, rename) leaked the file. The exported function is now a wrapper that removes the temp file on any exit before a successful rename, logs and swallows a failed removal, and rethrows the original error. Covered by `finalize-chapter-write.tmp-cleanup.test.ts`. Temp files leaked by earlier failures are not swept; that is #3456's boot sweep, not this fix (#4167).
+- **A chapter render that fails after its audio was encoded no longer leaves a chapter-sized temp file in the book's audio folder.** `finalizeChapterAudioWrite` wrote `<slug>.<ext>.tmp-<pid>-<ts>` before its fallible steps and only renamed it at the end, so any throw in between (the temp write itself, embeddings or segments write, the rename) leaked the file. The exported function is now a wrapper that removes the temp file on any exit before a successful rename, logs and swallows a failed removal, and rethrows the original error. Covered by `finalize-chapter-write.tmp-cleanup.test.ts`. Temp files leaked by earlier failures are not swept; that is #3456's boot sweep, not this fix (#4211, closes #4167).
 
 ## ⚙️ Setup, prerequisites & dependencies
 

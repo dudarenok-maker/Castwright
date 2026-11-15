@@ -13,12 +13,17 @@ const failEmbeddingsWrite = { on: false };
 const failRm = { on: false };
 const failRename = { on: false };
 const failStateWrite = { on: false };
+const failAudioWrite = { on: false };
+/* Counts embeddings write attempts so a case can assert WHERE it failed (a mock
+   filter that is too broad would otherwise silently trip an earlier exit). */
+const embeddingsCalls = { n: 0 };
 
 vi.mock('./render-integrity/embeddings-io.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('./render-integrity/embeddings-io.js')>();
   return {
     ...real,
     writeEmbeddings: vi.fn(async (...args: Parameters<typeof real.writeEmbeddings>) => {
+      embeddingsCalls.n += 1;
       if (failEmbeddingsWrite.on) throw new Error('EPERM: injected embeddings write failure');
       return real.writeEmbeddings(...args);
     }),
@@ -44,8 +49,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (failRm.on && String(args[0]).includes('.tmp-')) throw new Error('EPERM: injected rm failure');
       return real.rm(...args);
     }),
+    writeFile: vi.fn(async (...args: Parameters<typeof real.writeFile>) => {
+      if (failAudioWrite.on && String(args[0]).includes(`${SLUG}.mp3.tmp-`)) {
+        // A part-way write: a few bytes reach the temp path, then the disk fills.
+        await real.writeFile(args[0], Buffer.from('partial'));
+        throw new Error('ENOSPC: injected audio temp write failure');
+      }
+      return real.writeFile(...args);
+    }),
     rename: vi.fn(async (...args: Parameters<typeof real.rename>) => {
-      if (failRename.on && String(args[0]).includes('.tmp-')) throw new Error('EPERM: injected rename failure');
+      if (failRename.on && String(args[0]).includes(`${SLUG}.mp3.tmp-`)) throw new Error('EPERM: injected audio rename failure');
       return real.rename(...args);
     }),
   };
@@ -77,6 +90,8 @@ beforeEach(async () => {
   failRm.on = false;
   failRename.on = false;
   failStateWrite.on = false;
+  failAudioWrite.on = false;
+  embeddingsCalls.n = 0;
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-tmp-cleanup-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   const { makeBookId, castJsonPath } = await import('../workspace/paths.js');
@@ -150,6 +165,7 @@ describe('finalizeChapterAudioWrite temp audio cleanup (#4167)', () => {
     const { finalizeChapterAudioWrite } = await import('./finalize-chapter-write.js');
     failEmbeddingsWrite.on = true;
     await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/injected embeddings write failure/);
+    expect(embeddingsCalls.n).toBeGreaterThan(0);
     expect(leftovers()).toEqual([]);
     expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(false);
   });
@@ -189,14 +205,28 @@ describe('finalizeChapterAudioWrite temp audio cleanup (#4167)', () => {
     expect(result).toHaveProperty('audioEngines');
   });
 
-  it('T4: a failing rename also removes the temp file', async () => {
+  it('T4: a failing audio rename (after the segments write) also removes the temp file', async () => {
     const { finalizeChapterAudioWrite } = await import('./finalize-chapter-write.js');
     failRename.on = true;
-    await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/injected rename failure/);
+    await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/injected audio rename failure/);
+    // Where it failed: past the embeddings write and the segments write, at the audio rename.
+    expect(embeddingsCalls.n).toBeGreaterThan(0);
+    expect(existsSync(join(audioRoot, `${SLUG}.segments.json`))).toBe(true);
+    expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(false);
     expect(leftovers()).toEqual([]);
   });
 
-  it('T5: a throw AFTER the rename leaves the live audio alone (tmp.path was cleared)', async () => {
+  it('T6: a temp write that fails part-way (ENOSPC) removes the partial file and rethrows', async () => {
+    const { finalizeChapterAudioWrite } = await import('./finalize-chapter-write.js');
+    failAudioWrite.on = true;
+    await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/ENOSPC: injected audio temp write failure/);
+    // Where it failed: at the temp write, before any later write ran.
+    expect(embeddingsCalls.n).toBe(0);
+    expect(existsSync(join(audioRoot, `${SLUG}.segments.json`))).toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('T5: a throw AFTER the rename leaves the live audio in place and no leftovers', async () => {
     const { finalizeChapterAudioWrite } = await import('./finalize-chapter-write.js');
     failStateWrite.on = true;
     await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/injected state write failure/);
