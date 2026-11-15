@@ -26,7 +26,8 @@ export interface RollSnapshot {
 }
 
 /* Without `resolveIds` the roll writes `buildRunning()` as the whole file, as
-   before (no production caller; both analysis routes pass `resolveIds`). With it (#4031) `buildRunning` returns only the
+   before (no production caller; both analysis routes pass `resolveIds`), except that it
+   too keeps the file's merge tombstones and folds them in (#4155). With it (#4031) `buildRunning` returns only the
    chapters this job produced (a bare sentence array owns the chapters it has
    sentences for; a `RollSnapshot` names them); the roll re-reads the file under
    the `book` lock and replaces just those, so chapters it did not produce — and
@@ -51,12 +52,21 @@ export async function rollManuscriptEdits(
        also holds the freshest snapshot. */
     const roll = async (): Promise<void> => {
       const path = manuscriptEditsJsonPath(bookDir);
+      /* The plain branch reads BEFORE it builds its snapshot, so the snapshot and the
+         queue position stay one synchronous step (see above). */
+      const plainOnDisk = resolveIds
+        ? undefined
+        : await readJson<{ mergedAwayKeys?: unknown }>(path);
       const built = buildRunning();
       const snap: RollSnapshot = Array.isArray(built)
         ? { sentences: built, chapterIds: [...new Set((built as RollSentence[]).map((x) => x.chapterId))] }
         : built;
       if (!resolveIds) {
-        await writeJsonAtomicOrdered(path, { sentences: snap.sentences });
+        const keys = tombstoneKeys(plainOnDisk);
+        await writeJsonAtomicOrdered(path, {
+          sentences: keys ? applyMergeTombstones(snap.sentences as never[], keys) : snap.sentences,
+          ...(keys ? { mergedAwayKeys: keys } : {}),
+        });
         return;
       }
       const ownRun = await resolveIds(snap.sentences as RollSentence[]);
@@ -66,12 +76,9 @@ export async function rollManuscriptEdits(
       if (onDisk && !Array.isArray(onDisk.sentences)) {
         throw new Error('manuscript-edits.json has no sentences array');
       }
-      const mergedAwayKeys = onDisk?.mergedAwayKeys;
-      if (mergedAwayKeys !== undefined && !(Array.isArray(mergedAwayKeys) && mergedAwayKeys.every((k) => typeof k === 'string'))) {
-        throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
-      }
+      const mergedAwayKeys = tombstoneKeys(onDisk);
       const fold = (xs: RollSentence[]): RollSentence[] =>
-        mergedAwayKeys ? (applyMergeTombstones(xs as never[], mergedAwayKeys as string[]) as RollSentence[]) : xs;
+        mergedAwayKeys ? (applyMergeTombstones(xs as never[], mergedAwayKeys) as RollSentence[]) : xs;
       const own = fold(ownRun);
       const have = (onDisk?.sentences as RollSentence[] | undefined) ?? [];
       const drop = new Set(snap.dropChapterIds ?? []);
@@ -94,6 +101,15 @@ export async function rollManuscriptEdits(
     if (bookId) await withBookLock(bookId, roll);
     else await roll();
   });
+}
+
+/* The file's merge tombstones; absent is none, a malformed field throws before anything is written. */
+function tombstoneKeys(onDisk: { mergedAwayKeys?: unknown } | null | undefined): string[] | undefined {
+  const keys = onDisk?.mergedAwayKeys;
+  if (keys !== undefined && !(Array.isArray(keys) && keys.every((k) => typeof k === 'string'))) {
+    throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
+  }
+  return keys as string[] | undefined;
 }
 
 /* `incoming` replaces the file's sentences of the chapters in `owned` (and of any chapter

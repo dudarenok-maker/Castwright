@@ -232,6 +232,12 @@ describe('rollManuscriptEdits keeps merge tombstones (#4155)', () => {
     ]);
   });
 
+  it('R5: without resolveIds the keys ride along and fold the wholesale snapshot too', async () => {
+    verifiedDir = seed({ sentences: [t(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+    await rollManuscriptEdits(opts, () => [t(1, 1, 'A.'), t(1, 2, 'B.')], 'book-4155-e');
+    expect(landedData).toEqual([{ sentences: [t(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] }]);
+  });
+
   it('R4: a file with no mergedAwayKeys gets none written', async () => {
     verifiedDir = seed({ sentences: [t(1, 1, 'A.')] });
     await rollManuscriptEdits(opts, () => [t(1, 1, 'A2.')], 'book-4155-d', identity);
