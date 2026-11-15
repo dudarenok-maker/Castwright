@@ -108,6 +108,7 @@ const StatsView = lazy(() =>
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { chapterSlug, FRONT_MATTER_WORD_THRESHOLD } from '../lib/chapter-heuristics';
+import { parseChapterParam } from '../lib/chapter-param';
 import type { Character, Stage, View } from '../lib/types';
 
 const VALID_VIEWS: View[] = [
@@ -965,9 +966,7 @@ export function ReadyRoute() {
   const { bookId = '', view: rawView } = useParams<{ bookId: string; view: string }>();
   const [searchParams] = useSearchParams();
   const view: View = (VALID_VIEWS as string[]).includes(rawView ?? '') ? (rawView as View) : 'cast';
-  const chapterStr = searchParams.get('chapter');
-  const currentChapterId =
-    chapterStr != null && !Number.isNaN(parseInt(chapterStr, 10)) ? parseInt(chapterStr, 10) : 3;
+  const currentChapterId = parseChapterParam(searchParams.get('chapter')) ?? 3;
   const openProfileId = searchParams.get('profile');
 
   useHydrateStage({ kind: 'ready', bookId, view, currentChapterId, openProfileId }, [
