@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --include=.env src/index.ts",
+    "dev": "node ../scripts/dev-server.mjs",
     "build": "tsc -p .",
-    "start": "node dist/index.js",
+    "start": "node --report-exclude-env --report-exclude-network dist/index.js",
     "typecheck": "tsc --noEmit -p .",
     "pretest": "node ../scripts/preflight-ffmpeg.cjs",
     "audit": "node ../scripts/check-audit.mjs --omit-dev",

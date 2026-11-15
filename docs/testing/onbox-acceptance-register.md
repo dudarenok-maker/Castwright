@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**79 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**80 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
+> **Last change: 2026-11-13 (#4054), 79 → 80.** Row **A124** (the next silent server death leaves its evidence: the boot line under each launcher, then the exit-code line, the server log tail and any diagnostic report posted on #4054) added. Group A 44 → 45. `next-id` bumped A124 → A125 in the same change. Row is owed; not run here.
+
+> **Previous change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
 > amended (plan 291 R57): the drawer's merge and downgrade are disabled mid-run, so the
 > refused-merge observation now comes from a second device or a tab opened before the run. No
 > row added or removed; `next-id` unchanged. Merged with `main`'s row **A123** (#4054): the
@@ -1942,7 +1944,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A124 -->
+<!-- next-id: A125 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6624,6 +6626,20 @@ The automated tests stub the process-handle wait and pin the exit-code wording, 
 - **A standalone sidecar is untouched.** In a terminal with `SIDECAR_PARENT_PID` cleared (`Remove-Item Env:SIDECAR_PARENT_PID`), start the sidecar alone (`npm run tts:sidecar`, no server). That terminal has `parent watch off`, it keeps running, and a server that then starts and adopts it does not change that: stopping the server leaves the sidecar running.
 
 *Needs:* the GPU box on Windows with the real sidecar. *Criteria:* this row. Clears when each bullet is recorded with the log line it produced.
+
+### A124 · The next silent server death leaves its evidence ([#4054](https://github.com/dudarenok-maker/Castwright/issues/4054)) · **the GPU box (Windows), any launcher**
+
+Since #4054 the server turns on Node's diagnostic report on a fatal error as the first step of its boot. It creates `logs/node-reports/` (`<APP_LOG_DIR>/node-reports/` when that is set) and logs where it writes. Row A123 owes the sidecar's exit-code line. The automated tests pin the settings and the boot wiring. Only a real silent death shows what evidence it actually leaves. A report is written only for a V8 fatal error (out of memory, a failed internal assertion), never for a native crash such as 0xC0000409 or 0xC0000005. So an empty folder after a death is evidence too: read it together with the exit code.
+
+- **The boot line, under each launcher.** Start the app with `npm start`, then `npm run dev`, then `npm run start:lan`, stopping each before the next. Each server logs `[server] diagnostic report on a fatal error -> <path>\node-reports` once at boot: in `logs/server.log` under `npm start` and `npm run start:lan`, in the terminal under `npm run dev`. The folder exists afterwards. A line `[server] diagnostic reports on a fatal error are OFF: node was not started with --report-exclude-env --report-exclude-network ...` instead means that launcher lost the flags: record it as a failure. Record the line from each launcher.
+- **On the next silent server death** (the server stops answering, and its log has no stack and no `[server] process exit` line), before restarting anything, post a comment on #4054 with:
+  1. the sidecar's line from `logs/tts.err.log`, `server pid=<pid> exited with code <n> = 0x<8 hex digits> (<meaning>)`, or the words "no exit-code line";
+  2. the last 50 lines of the server's output (`logs/server.log` and `logs/server.err.log`, or the `npm run dev` terminal);
+  3. every `report.*.json` in `logs/node-reports/` whose name's date and time fall within a minute of the death, or the words "no report". Every launcher starts node with `--report-exclude-env --report-exclude-network`, and the server leaves reports off without them. A Worker started with its own `execArgv` reads that and `NODE_OPTIONS`, not node's command line, and under `npm start` / `npm run dev` tsx's esbuild runs one, so the dev launcher also passes both flags in `NODE_OPTIONS` (`scripts/dev-server.mjs`). So a report should hold no environment variables and no network interface list, `workers[]` included. Check that before attaching: `Select-String -SimpleMatch -Pattern environmentVariables,networkInterfaces -Path <file>` must print nothing. It searches the whole file, `workers[]` included. If it prints anything, do not attach the file; say so on #4054 instead. The report still holds `header.host` (the machine name), the `cwd` and the command line, whose paths include the Windows username, the CPU model, and the address of every open socket: each `libuv[]` handle's `localEndpoint` and `remoteEndpoint`, whose `host`, `ip4` and `ip6` can be the box's LAN address or its public IPv6 address. List those with `Select-String -SimpleMatch -Pattern localEndpoint,remoteEndpoint -Context 0,4 -Path <file>`: every block it prints with a `host`, `ip4` or `ip6` value must be redacted (a `null` endpoint has nothing to redact). Open the file and replace each of those values, and the other items above, with `"<redacted>"` before attaching it as a file to the public issue;
+  4. the launcher in use and what was in flight (the request, any other session or lane active on the box).
+- **Then keep the evidence.** Copy the files above to a folder outside any worktree before tearing anything down.
+
+*Needs:* the GPU box on Windows with the real sidecar (the exit-code line comes from it). *Criteria:* this row. Clears when the boot-line bullet is recorded for all three launchers AND either a silent death's evidence is posted on #4054, or the repo owner closes #4054.
 
 ## Group B — local Ollama analyzer only
 
