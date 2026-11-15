@@ -1087,6 +1087,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           pSevere: 0.45,
           pBand: 0.6,
           referenceKind: 'in-book',
+          inBookModelKey: 'kokoro-v1',
         },
       }),
     );
@@ -1245,6 +1246,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           /* The OLD voice the audition centroid was built from — the character
              has since been reassigned to 'castor-alden-B'. */
           auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+          auditionAnchorModelKey: 'none', // #3518 — fresh renders only; a legacy row with no record is dropped
         },
       }),
     );
@@ -1396,6 +1398,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           referenceKind: 'audition',
           // The audition centroid was recorded under the OLD voice 'castor-alden-A'.
           auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+          auditionAnchorModelKey: 'none', // #3518 — fresh renders only; a legacy row with no record is dropped
         },
       }),
     );
@@ -1570,6 +1573,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
              currently resolves to — this is what makes it USABLE (the #3449
              fix's KEPT path, not the DROP path). */
           auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+          auditionAnchorModelKey: 'none', // #3518 — fresh renders only; a legacy row with no record is dropped
         },
       }),
     );
@@ -1742,6 +1746,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           pBand: 0.6,
           referenceKind: 'in-book',
           ...(inBookVoiceName === undefined ? {} : { inBookVoiceName }),
+          inBookModelKey: engineModelKey,
         },
       }),
     );

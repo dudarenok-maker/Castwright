@@ -102,7 +102,7 @@ async function scaffold(seg1Silent: boolean, drift = false) {
   }));
   const row = (characterId: string, sid: number, segmentIndex: number) => ({ characterId, sentenceIds: [sid], verdict: 'voice-mismatch', cosine: 0.3, severity: 'severe', fixable: true, expectedEngine: 'kokoro', renderedEngine: 'kokoro', referenceKind: 'audition', windowed: false, segmentIndex });
   writeFileSync(join(audioRoot, `${SLUG}.render-integrity.json`), JSON.stringify([row('hero', 10, 0), row(key, 20, 1)]));
-  const cent = (characterId: string, voiceName: string) => ({ characterId, centroid: unitVec(), cleanMean: 0.7, pSevere: 0.45, pBand: 0.6, referenceKind: 'audition', bandMethod: 'synthetic-sigma', auditionVoice: { voiceName, modelKey: 'kokoro-v1' } });
+  const cent = (characterId: string, voiceName: string) => ({ characterId, centroid: unitVec(), cleanMean: 0.7, pSevere: 0.45, pBand: 0.6, referenceKind: 'audition', bandMethod: 'synthetic-sigma', auditionAnchorModelKey: 'none', auditionVoice: { voiceName, modelKey: 'kokoro-v1' } });
   writeFileSync(join(audioRoot, 'render-integrity.centroids.json'), JSON.stringify({ hero: cent('hero', 'hero-voice'), [key]: cent(key, 'mairin-voice') }));
   // AFTER the render: mairin renamed to mairin-oakes (voice unchanged).
   writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [

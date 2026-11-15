@@ -13,6 +13,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, 
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import yauzl from 'yauzl';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 import {
   classifyVenvState,
   readStamp,
@@ -227,7 +228,9 @@ export function createApplySteps(
   opts: { venvDir: string; log?: (m: string) => void },
   deps: ApplyStepDeps = {},
 ): ApplySteps {
-  const runFn = deps.run ?? run;
+  const runFn =
+    deps.run ??
+    refuseUnderVitest(run, 'createApplySteps: real spawn refused under vitest (#3712); inject deps.run');
   const markerDel = deps.markerDel ?? applyOrtMarkerDelete;
   const markerWrite = deps.markerWrite ?? applyOrtMarkerWrite;
   const npm = isWin() ? 'npm.cmd' : 'npm';
@@ -258,8 +261,8 @@ export function createApplySteps(
     exists: existsSync,
     extract: extractRelease,
     npmCi: async (releaseDir) => {
-      await run(npm, ['ci'], releaseDir);
-      await run(npm, ['ci'], join(releaseDir, 'server'));
+      await runFn(npm, ['ci'], releaseDir);
+      await runFn(npm, ['ci'], join(releaseDir, 'server'));
     },
     // Install the engine deps for the effective profile into the shared venv,
     // reading the CANDIDATE release's requirements/scripts: ROCm torch pre-install
@@ -320,7 +323,7 @@ export function createApplySteps(
       const { renameSync } = await import('node:fs');
       renameSync(tmp, pointer);
     },
-    spawnRestarter: ({ installRoot, releaseDir, oldPid }) => {
+    spawnRestarter: refuseUnderVitest(({ installRoot, releaseDir, oldPid }) => {
       // The restarter ships inside the just-extracted release; it runs the
       // STABLE installRoot/launch.mjs once the old server exits.
       const inRelease = join(releaseDir, 'scripts', 'restart-after-upgrade.mjs');
@@ -339,7 +342,7 @@ export function createApplySteps(
         windowsHide: true,
       });
       child.unref();
-    },
+    }, 'createApplySteps: real spawn refused under vitest (#3712); the restarter is never run in tests'),
     log: opts.log,
   };
 }
