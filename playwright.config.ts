@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { resolvePlaywrightPort } from './scripts/lib/playwright-port.mjs';
 
 /**
  * Playwright config — browser-level regression net.
@@ -13,7 +14,7 @@ import { defineConfig, devices } from '@playwright/test';
  * worktrees running e2e don't collide on :5174 either — see
  * scripts/wt-new.mjs for the per-worktree port-offset story.
  */
-const playwrightPort = Number(process.env.PLAYWRIGHT_PORT ?? 5174);
+const playwrightPort = resolvePlaywrightPort(__dirname);
 const baseURL = `http://127.0.0.1:${playwrightPort}`;
 
 export default defineConfig({

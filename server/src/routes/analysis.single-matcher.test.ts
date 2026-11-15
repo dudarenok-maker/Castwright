@@ -2886,18 +2886,13 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     else process.env.STAGE2_COVERAGE_RETRIES = orig;
     try {
       /* Carry 8 (fix round 1, I3): every test's book ends with the narrator's cast count equal to
-         its edits count (0 when the narrator speaks none). The narrator-deleted carry opts out:
-         its end state (no narrator row) is pinned in the test itself. */
-      if (!narratorRowDeleted) {
-        for (const b of books) expect(linesById(b.bookDir).narrator ?? 0, `narrator lines (${kind})`).toBe(editLinesOrEmpty(b).narrator ?? 0);
-      }
+         its edits count (0 when the narrator speaks none). */
+      for (const b of books) expect(linesById(b.bookDir).narrator ?? 0, `narrator lines (${kind})`).toBe(editLinesOrEmpty(b).narrator ?? 0);
     } finally {
-      narratorRowDeleted = false;
       for (const b of books.splice(0)) await cleanupBook(b);
       for (const d of siblings.splice(0)) rmSync(d, { recursive: true, force: true });
     }
   });
-  let narratorRowDeleted = false;
   const siblings: string[] = [];
 
   const fr = (id: string, name: string, extra: Record<string, unknown> = {}): CharacterOutput =>
@@ -3455,9 +3450,8 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
 
-  it("carry (Task 8): a narrator row deleted mid-run leaves the run's narrator sentences on 'narrator'", async () => {
-    const b = seed([{ ...NARR }, pr(PRIOR_ID, 'Wren')]);
-    narratorRowDeleted = true;
+  it("#4100: a narrator row deleted mid-run is re-created and keeps the run's narrator lines", async () => {
+    const b = seed([{ ...NARR, overrideTtsVoices: { kokoro: { name: 'bm_george' } } }, pr(PRIOR_ID, 'Wren')]);
     const m = midRun('phase1', () => deleteRow(b, 'narrator'));
     const events = await go(b, {
       roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
@@ -3471,16 +3465,62 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
     for (const s of edits) expect(s.characterId).toBe('narrator');
     for (const s of cacheTakes(b)) expect(s.characterId).toBe('narrator');
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
-    /* The end state TODAY, stated so that it flips visibly when the narrator rule-13 exemption is
-       decided (an open design question): the narrator row is gone (rule 13 treats the user's delete
-       as a delete), and every narrator line is marked as rerouted from 'narrator' itself. */
-    expect(ids(readCast(b.bookDir))).toEqual([PRIOR_ID]);
-    for (const s of edits) expect(s.priorCharacterId).toBe('narrator');
+    /* The narrator is exempt from rule 13 (#4100): the row is re-created, nothing is restored onto
+       it (no voice), and the run's narrator lines stay on it, not marked as rerouted. */
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['narrator', PRIOR_ID].sort());
+    expect(row(b, 'narrator')).not.toHaveProperty('overrideTtsVoices');
+    for (const s of edits) expect(s.priorCharacterId).toBeUndefined();
     expect(cacheTakes(b)).toHaveLength(3);
-    for (const s of cacheTakes(b)) expect(s.priorCharacterId).toBe('narrator');
+    for (const s of cacheTakes(b)) expect(s.priorCharacterId).toBeUndefined();
     expect(editLines(b)).toEqual({ narrator: 3 });
-    expect(linesById(b.bookDir)).toEqual({ [PRIOR_ID]: 0 });
+    expect(linesById(b.bookDir).narrator).toBe(3);
     expect(readSuggestions(b.bookDir)).toEqual([]);
+  });
+
+  it('#4100: a narrator row this run added and a foreign write wiped is re-created', async () => {
+    const b = seed([pr('anna', 'Anna')]);
+    const m = midRun('phase1', async () => {
+      expect(row(b, 'narrator')).toBeDefined();
+      await deleteRow(b, 'narrator');
+    });
+    const events = await go(b, {
+      roster: [NARR, fr('anna', 'Anna')],
+      speakerId: two('anna', 'narrator'),
+    });
+    await m.result();
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    expect(ids(readCast(b.bookDir)).sort()).toEqual(['anna', 'narrator']);
+    for (const s of readEdits(b.bookDir).filter((e) => e.characterId === 'narrator')) {
+      expect(s.priorCharacterId).toBeUndefined();
+    }
+    expect(linesById(b.bookDir).narrator).toBe(editLines(b).narrator);
+  });
+
+  it('#4100: a wiped char-narrator row is re-created under its own id', async () => {
+    const b = seed([{ ...NARR, id: 'char-narrator' }, pr(PRIOR_ID, 'Wren')]);
+    const m = midRun('phase1', () => deleteRow(b, 'char-narrator'));
+    const events = await go(b, {
+      roster: [NARR, fr(FRESH_ID, 'Wren Ashby')],
+      speakerId: 'narrator',
+    });
+    await m.result();
+    expect(errCode(events)).toBeUndefined();
+    expect(done(events)).toBe(true);
+    const cast = ids(readCast(b.bookDir));
+    expect(cast).toContain('char-narrator');
+    expect(cast).not.toContain('narrator');
+    const edits = readEdits(b.bookDir);
+    expect(edits.length).toBeGreaterThan(0);
+    for (const s of edits) {
+      expect(s.characterId).toBe('char-narrator');
+      expect(s.priorCharacterId).toBeUndefined();
+    }
+    expect(linesById(b.bookDir)['char-narrator']).toBe(edits.length);
+    for (const s of cacheTakes(b)) {
+      expect(s.characterId).toBe('narrator');
+      expect(s.priorCharacterId).toBeUndefined();
+    }
   });
 
   /* ---- Review Focus 2 and 3 ---- */

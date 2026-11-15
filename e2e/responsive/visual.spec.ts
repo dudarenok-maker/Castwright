@@ -6,7 +6,8 @@
  * `e2e/{platform}/responsive/visual.spec.ts/{projectName}/<name>.png`
  * (snapshotPathTemplate in playwright.config.ts). First run blesses;
  * subsequent runs diff against the committed baseline and fail if the
- * page drifts beyond `maxDiffPixelRatio: 0.01` (~1% of pixels).
+ * page drifts beyond `maxDiffPixelRatio: 0.05` (~5% of pixels; only the
+ * clipped top-bar gate below is held to 1%).
  *
  * Stages captured (light + dark theme each):
  *   1. library — cold boot, mock fixture library
@@ -32,17 +33,20 @@
  * directive below pins one worker for the whole describe block so the
  * 14 baselines don't race the other 80+ specs locally.
  *
- * Visuals run ONLY in the new `verify:visual` step (see package.json),
- * not in the parallel `test:e2e` battery — see archive/37-e2e-playwright.md.
+ * Visuals run ONLY via `npm run test:e2e:visual` (chromium, see
+ * package.json), not in the parallel `test:e2e` battery, and are skipped by
+ * `test:e2e:mobile` — see archive/37-e2e-playwright.md.
  *
- * To regenerate after an intentional visual change:
- *   npm run verify:visual -- --update-snapshots
- *   # or for a specific project:
- *   npx playwright test --project=mobile-chrome --update-snapshots e2e/responsive/visual.spec.ts
+ * To regenerate after an intentional visual change, use `=all`: a bare
+ * `--update-snapshots` is the `changed` preset, which rewrites only baselines
+ * that already fail, so a stale one inside the 5% gate is left behind.
+ *   npm run test:e2e:visual -- --update-snapshots=all
+ *   # mobile + tablet have no npm script; invoke playwright directly:
+ *   npx playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1 --update-snapshots=all
  *
  * Pairs with docs/features/archive/37-e2e-playwright.md "Visual baselines". */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { goToAnalysing, goToConfirm, waitForConfirmViewReady, waitForListenViewReady } from '../helpers';
@@ -61,19 +65,19 @@ const BASELINE_DIR = resolve(process.cwd(), 'e2e', process.platform, 'responsive
    pre-creates this directory before invoking playwright, so the skip
    doesn't fire on the initial Linux regen run. For local regen on an
    un-blessed platform: `mkdir -p e2e/<platform>/responsive/visual.spec.ts`
-   first, then `npm run verify:visual -- --update-snapshots`.
+   first, then `npm run test:e2e:visual -- --update-snapshots=all`.
    (Playwright's worker `process.argv` does NOT include the CLI's
    `--update-snapshots` flag — checking it here was tried in PR #178
    and silently no-op'd; the mkdir bootstrap is the supported pathway.) */
 const SKIP_REASON =
   `No visual baselines committed for ${process.platform}. ` +
-  `Run \`npm run verify:visual -- --update-snapshots\` to bless on this platform.`;
+  `Run \`npm run test:e2e:visual -- --update-snapshots=all\` to bless on this platform.`;
 
 /* Plan 37 (visual baselines) — pin all visual specs to one worker. The 14
    captures share a Vite dev server with the other 80+ specs locally;
    parallel-worker contention caused sub-pixel font drift past the
    1% maxDiffPixelRatio threshold. Serial mode eliminates the race.
-   The new `verify:visual` step in package.json also runs --workers=1,
+   The `test:e2e:visual` script in package.json also runs --workers=1,
    so this directive is belt-and-suspenders for direct invocations. */
 test.describe.configure({ mode: 'serial' });
 
@@ -96,6 +100,17 @@ const VISUAL_DIFF_OPTS = { maxDiffPixelRatio: 0.05 } as const;
    clipped ~64px <header>, so a 1% tolerance on the element screenshot catches
    it. See docs/superpowers/specs/2026-06-20-visual-diff-sensitivity-design.md. */
 const TOPBAR_DIFF_RATIO = 0.01;
+
+/* #4192 — the version pill changes every release, and the Status pill's label
+   is fixed per route under mocks (summarizeStatus in src/components/top-bar.tsx)
+   but can still change when that copy is reworded, so both are masked in the
+   top-bar baselines. The mask hides a pill's text, not its width: a label-length
+   change still moves the box. Only the two pills are covered (not the header),
+   so the #925 repaint gate still sees the header background. */
+const topbarMask = (page: Page) => [
+  page.getByTestId('version-pill'),
+  page.getByTestId('status-pill'),
+];
 
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
@@ -175,6 +190,7 @@ test.describe('visual baselines', () => {
     await page.waitForTimeout(300);
     await expect(page.getByRole('banner')).toHaveScreenshot('topbar.png', {
       maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+      mask: topbarMask(page),
     });
   });
 
@@ -197,6 +213,7 @@ test.describe('visual baselines', () => {
     try {
       await expect(page.getByRole('banner')).toHaveScreenshot('topbar.png', {
         maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+        mask: topbarMask(page),
       });
     } catch {
       threw = true;
@@ -270,7 +287,7 @@ test.describe('visual baselines (stats)', () => {
  * one-frame light flash.
  *
  * Same regenerate command as the light pass:
- *   npm run test:e2e:visual -- --update-snapshots
+ *   npm run test:e2e:visual -- --update-snapshots=all
  */
 test.describe('visual baselines (dark theme)', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
@@ -349,6 +366,7 @@ test.describe('visual baselines (dark theme)', () => {
     await page.waitForTimeout(300);
     await expect(page.getByRole('banner')).toHaveScreenshot('topbar-dark.png', {
       maxDiffPixelRatio: TOPBAR_DIFF_RATIO,
+      mask: topbarMask(page),
     });
   });
 });
