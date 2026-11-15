@@ -76,7 +76,7 @@ export interface CharacterCentroid {
    *  any pooled anchor's tier is unknown (an anchor whose chapter snapshot carries two different keys,
    *  i.e. a partial write re-recorded some of the character's lines off the frozen full-render tier,
    *  counts as unknown; so does one whose snapshot carries no key of its own — a chapter written before
-   *  2026-07-06 — since the chapter-level key is rewritten by any partial write and is not trusted), on 'audition'/'too-short' rows, and on a row written before
+   *  2026-07-06 — since the chapter-level key is rewritten by any partial write and is not trusted here; but finalize's freeze seed can still carry that key onto a legacy snapshot, a residual tracked in #4225), on 'audition'/'too-short' rows, and on a row written before
    *  this field existed. Absent / mixed means "no single tier": qa-repair drops the row. */
   inBookModelKey?: string;
   /** #3518 — on an 'audition' row, the tier of the REAL anchors blended into it (same uniform /
