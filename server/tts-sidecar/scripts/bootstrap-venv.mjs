@@ -151,7 +151,14 @@ function writeFallbackMarker(venvDir, requested, effective, reason) {
 export function installForProfile(
   venvPy,
   profile,
-  runPip = (a) => pipOk(venvPy, a),
+  runPip = (a) => {
+    // #3712: plain-node script, so it cannot import server's refuseUnderVitest
+    // (.ts); same call-time rule, inlined. A test must inject runPip.
+    if (process.env.VITEST) {
+      throw new Error('installForProfile: real pip install refused under vitest (#3712); inject runPip');
+    }
+    return pipOk(venvPy, a);
+  },
   platform = process.platform,
   venvDir = null,
   marker = REAL_MARKER,

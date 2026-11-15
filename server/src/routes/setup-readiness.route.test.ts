@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,9 +25,17 @@ vi.mock('../tts/mp3.js', () => ({
   encodePcmToAudio: vi.fn().mockResolvedValue(Buffer.from([0xff])),
 }));
 
+/* #3712: the readiness probe must never run a real Python lookup. */
+vi.mock('../tts/python-discovery.js', () => ({ findPython312: () => null }));
+
 import { setupReadinessRouter } from './setup-readiness.js';
+import { _resetPythonProbeCacheForTests } from './setup-diagnosis.js';
 
 let audioDir: string;
+
+beforeEach(() => {
+  _resetPythonProbeCacheForTests();
+});
 
 beforeAll(() => {
   audioDir = mkdtempSync(join(tmpdir(), 'castwright-smoke-test-'));
