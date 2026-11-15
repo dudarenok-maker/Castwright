@@ -12,6 +12,7 @@ import type { EmbeddingRow } from './render-integrity/embeddings-io.js';
 const failEmbeddingsWrite = { on: false };
 const failRm = { on: false };
 const failRename = { on: false };
+const failStateWrite = { on: false };
 
 vi.mock('./render-integrity/embeddings-io.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('./render-integrity/embeddings-io.js')>();
@@ -20,6 +21,17 @@ vi.mock('./render-integrity/embeddings-io.js', async (importOriginal) => {
     writeEmbeddings: vi.fn(async (...args: Parameters<typeof real.writeEmbeddings>) => {
       if (failEmbeddingsWrite.on) throw new Error('EPERM: injected embeddings write failure');
       return real.writeEmbeddings(...args);
+    }),
+  };
+});
+
+vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+  return {
+    ...real,
+    writeStateJsonAtomic: vi.fn(async (...args: Parameters<typeof real.writeStateJsonAtomic>) => {
+      if (failStateWrite.on) throw new Error('EPERM: injected state write failure');
+      return real.writeStateJsonAtomic(...args);
     }),
   };
 });
@@ -64,6 +76,7 @@ beforeEach(async () => {
   failEmbeddingsWrite.on = false;
   failRm.on = false;
   failRename.on = false;
+  failStateWrite.on = false;
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-tmp-cleanup-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   const { makeBookId, castJsonPath } = await import('../workspace/paths.js');
@@ -180,6 +193,14 @@ describe('finalizeChapterAudioWrite temp audio cleanup (#4167)', () => {
     const { finalizeChapterAudioWrite } = await import('./finalize-chapter-write.js');
     failRename.on = true;
     await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/injected rename failure/);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('T5: a throw AFTER the rename leaves the live audio alone (tmp.path was cleared)', async () => {
+    const { finalizeChapterAudioWrite } = await import('./finalize-chapter-write.js');
+    failStateWrite.on = true;
+    await expect(finalizeChapterAudioWrite(baseInput())).rejects.toThrow(/injected state write failure/);
+    expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
     expect(leftovers()).toEqual([]);
   });
 });
