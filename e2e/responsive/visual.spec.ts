@@ -97,10 +97,12 @@ const VISUAL_DIFF_OPTS = { maxDiffPixelRatio: 0.05 } as const;
    it. See docs/superpowers/specs/2026-06-20-visual-diff-sensitivity-design.md. */
 const TOPBAR_DIFF_RATIO = 0.01;
 
-/* #4192 — the version pill changes every release and the Status pill's label
-   tracks live app state, so both are masked in the top-bar baselines. Only the
-   two pills are covered (not the header), so the #925 repaint gate still sees
-   the header background. */
+/* #4192 — the version pill changes every release, and the Status pill's label
+   is fixed per route under mocks (summarizeStatus in src/components/top-bar.tsx)
+   but can still change when that copy is reworded, so both are masked in the
+   top-bar baselines. The mask hides a pill's text, not its width: a label-length
+   change still moves the box. Only the two pills are covered (not the header),
+   so the #925 repaint gate still sees the header background. */
 const topbarMask = (page: Page) => [
   page.getByTestId('version-pill'),
   page.getByTestId('status-pill'),
