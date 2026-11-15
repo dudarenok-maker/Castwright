@@ -13,10 +13,12 @@ import {
   mkdirSync,
   statSync,
   existsSync,
+  readdirSync,
+  renameSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import sharp from 'sharp';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
@@ -27,6 +29,37 @@ import {
   ExportIncompleteError,
 } from './build-m4b.js';
 import type { BookStateJson } from '../workspace/scan.js';
+
+/* Seams for the #4223 snapshot tests. Both default to pass-through, so every
+   other test in this file runs against the real child_process / fs. */
+const seams = vi.hoisted(() => ({
+  onSpawn: null as null | ((cmd: string) => void),
+  linkFails: false,
+}));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: ((cmd: string, ...rest: unknown[]) => {
+      seams.onSpawn?.(cmd);
+      return (actual.spawn as (...a: unknown[]) => unknown)(cmd, ...rest);
+    }) as typeof actual.spawn,
+  };
+});
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    link: ((...a: Parameters<typeof actual.link>) => {
+      if (seams.linkFails) {
+        return Promise.reject(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
+      }
+      return actual.link(...a);
+    }) as typeof actual.link,
+  };
+});
 
 const toolsPresent = (() => {
   try {
@@ -528,6 +561,77 @@ describeIfTools('buildM4b', () => {
     const tags = ffprobeJson(out).format.tags ?? {};
     expect(tags.grouping).toBe('The Coalfall Saga');
     expect(tags.disc).toBe('2');
+  });
+});
+
+describeIfTools('buildM4b chapter-audio snapshot (#4223)', () => {
+  let tmpRoot: string;
+  let bookDir: string;
+  let outPath: string;
+
+  beforeEach(async () => {
+    seams.onSpawn = null;
+    seams.linkFails = false;
+    tmpRoot = mkdtempSync(join(tmpdir(), 'build-m4b-snap-'));
+    bookDir = join(tmpRoot, 'book');
+    mkdirSync(join(bookDir, 'audio'), { recursive: true });
+    outPath = join(tmpRoot, 'out.m4b');
+    for (const slug of ['01-chapter-1', '02-chapter-2', '04-chapter-3']) {
+      const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+      writeFileSync(join(bookDir, 'audio', `${slug}.mp3`), mp3);
+    }
+  });
+
+  afterAll(() => {
+    seams.onSpawn = null;
+    seams.linkFails = false;
+  });
+
+  const stagingLeft = () => readdirSync(tmpRoot).filter((n) => n.includes('.staging-'));
+
+  it('chapter marks match the audio that was concatenated when a live file is swapped after the probe', async () => {
+    /* A committing render replaces the live file (new file renamed over the
+       old path) with audio 5x longer, right as the concat ffmpeg spawns —
+       i.e. after every probe. */
+    const longer = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 1.0), 24_000, { quality: 9 });
+    let swapped = false;
+    seams.onSpawn = (cmd) => {
+      if (cmd !== 'ffmpeg' || swapped) return;
+      swapped = true;
+      const tmp = join(bookDir, 'audio', '01-chapter-1.mp3.new');
+      writeFileSync(tmp, longer);
+      renameSync(tmp, join(bookDir, 'audio', '01-chapter-1.mp3'));
+    };
+
+    await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(swapped).toBe(true);
+
+    const probe = ffprobeJson(outPath);
+    const lastEnd = Math.max(...probe.chapters.map((c) => Number(c.end_time)));
+    expect(Math.abs(Number(probe.format.duration) - lastEnd)).toBeLessThan(0.15);
+  });
+
+  it('still builds when hard-linking is impossible (copy fallback)', async () => {
+    seams.linkFails = true;
+    const result = await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(result.chapterCount).toBe(3);
+    expect(statSync(outPath).size).toBeGreaterThan(0);
+  });
+
+  it('leaves no staging dir or snapshot behind on success', async () => {
+    await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  it('leaves no staging dir or snapshot behind when the export fails after snapshotting', async () => {
+    const ac = new AbortController();
+    seams.onSpawn = (cmd) => {
+      if (cmd === 'ffprobe') ac.abort();
+    };
+    await expect(
+      buildM4b({ bookDir, state: makeState(), outPath, signal: ac.signal }),
+    ).rejects.toThrow();
+    expect(stagingLeft()).toEqual([]);
   });
 });
 

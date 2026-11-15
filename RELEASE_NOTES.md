@@ -4,6 +4,7 @@
 
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
+- **An audiobook (.m4b) exported while a chapter was being re-rendered keeps its chapter markers in the right place.**
 
 # Castwright 1.15.0
 
