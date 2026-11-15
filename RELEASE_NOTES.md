@@ -1,6 +1,6 @@
 # Castwright 1.16.0
 
-- **Fix audio no longer judges a new take by the wrong yardstick.** When it re-records a line at a different voice quality than the line was made at, it leaves the line for you to check instead of comparing it against the old quality's sound and guessing.
+- **Re-recording a flagged chapter now matches each voice to a reference made at the same quality.** With Auto-fix voice mismatches on, the chapter's "Re-record the flagged lines" button only compares a new take against a stored voice reference recorded at the same voice quality. Where the reference doesn't match, or predates this update, those lines stay flagged for you instead of being re-recorded against the wrong sound.
 
 # Castwright 1.15.0
 
