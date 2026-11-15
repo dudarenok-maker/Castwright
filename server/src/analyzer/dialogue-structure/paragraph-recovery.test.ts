@@ -10,7 +10,7 @@ const spansOf = (paras: ReturnType<typeof parseChapterStructure>) => paras.flatM
 const speechOf = (paras: ReturnType<typeof parseChapterStructure>) =>
   spansOf(paras).filter((s) => s.kind === 'speech');
 
-describe('paragraph-recovery — splitEvidencedInteriorTurns (opt-in, conservative)', () => {
+describe('paragraph-recovery — splitEvidencedInteriorTurns (on by default, conservative)', () => {
   it('splits a genuine interior turn that carries a verb tag', () => {
     const body = 'Он вошёл. — Привет, — сказал Антон.';
     const out = splitEvidencedInteriorTurns(body, idx);
@@ -86,8 +86,9 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (opt-in, conservati
     // later verb-tagged turn recovers
     expect(speech).toHaveLength(1);
     expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
-    // slice the TRANSFORMED body (recovery re-keys offsets), not the original —
-    // robust when the pre-dash whitespace width differs from a single space.
+    // slice the TRANSFORMED body (recovery is length-preserving, so offsets
+    // match the original body too), not the original — kept on the transformed body
+    // as the recovered text is what the parser saw.
     const transformed = splitEvidencedInteriorTurns(body, idx);
     expect(transformed.slice(speech[0].start, speech[0].end)).toContain('Привет');
   });
@@ -131,5 +132,47 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (opt-in, conservati
       (s) => s.kind === 'speech',
     ).length;
     expect(withRecovery).toBe(without); // zero fabrication/regression on intact structure
+  });
+
+  describe('cut offsets are applied in UTF-16 space (astral characters)', () => {
+    it('U1 one astral char before the cut still splits, length preserved', () => {
+      const body = 'Он вошёл 😀. — Привет, — сказал Антон.';
+      const out = splitEvidencedInteriorTurns(body, idx);
+      expect(out).toBe('Он вошёл 😀.\n— Привет, — сказал Антон.');
+      expect(out.length).toBe(body.length);
+    });
+
+    it('U2 two astral chars before the cut put the break before the dash', () => {
+      const body = 'Он вошёл 😀😀. — Привет, — сказал Антон.';
+      const out = splitEvidencedInteriorTurns(body, idx);
+      expect(out).toBe('Он вошёл 😀😀.\n— Привет, — сказал Антон.');
+      expect(out.length).toBe(body.length);
+    });
+
+    it('U3 astral char then two evidenced turns splits both', () => {
+      const body = 'Он вошёл 😀. — Привет, — сказал Антон. — Пока, — сказала Ольга.';
+      const out = splitEvidencedInteriorTurns(body, idx);
+      expect(out).toBe('Он вошёл 😀.\n— Привет, — сказал Антон.\n— Пока, — сказала Ольга.');
+      expect(out.length).toBe(body.length);
+    });
+
+    it('U4 no astral chars stays byte-identical to the pre-fix output', () => {
+      const body = 'Он вошёл. — Привет, — сказал Антон. — Пока, — сказала Ольга.';
+      const out = splitEvidencedInteriorTurns(body, idx);
+      expect(out).toBe('Он вошёл.\n— Привет, — сказал Антон.\n— Пока, — сказала Ольга.');
+      expect(out.length).toBe(body.length);
+    });
+
+    it('U6 astral char BETWEEN two cuts splits both at the right offsets', () => {
+      const body = 'Он вошёл. — Привет, — сказал Антон 😀. — Пока, — сказала Ольга.';
+      const out = splitEvidencedInteriorTurns(body, idx);
+      expect(out).toBe('Он вошёл.\n— Привет, — сказал Антон 😀.\n— Пока, — сказала Ольга.');
+      expect(out.length).toBe(body.length);
+    });
+
+    it('U5 non-whitespace before the dash is still skipped', () => {
+      const body = 'Он вошёл 😀.— Привет, — сказал Антон.';
+      expect(splitEvidencedInteriorTurns(body, idx)).toBe(body);
+    });
   });
 });
