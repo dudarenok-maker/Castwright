@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from 'react-redux';
-import { useOutletContext } from 'react-router';
+import { useOutletContext, useSearchParams } from 'react-router';
 import { helpHrefForFailureCode } from '../lib/router';
 import { MANIFESTO } from '../lib/brand';
 import {
@@ -389,12 +389,18 @@ export function GenerationView({
      is set by the queue modal's "Jump to chapter" affordance (modal pushes
      #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
      into view here so the user lands at the right card instead of the
-     top of the chapter list. */
+     top of the chapter list. #4199 — the stage defaults a chapterless URL
+     to chapter 3 (the Manuscript view relies on that), so only scroll when
+     the URL itself names a chapter; a plain load stays at the top. Reading
+     `?chapter=` here (not the stage) also keeps an explicit `?chapter=3`
+     scrolling, which the stage alone can't tell from the default. */
   const currentChapterId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
   );
+  const [searchParams] = useSearchParams();
+  const chapterNamedInUrl = searchParams.get('chapter') != null;
   useEffect(() => {
-    if (currentChapterId == null) return;
+    if (currentChapterId == null || !chapterNamedInUrl) return;
     const el = document.getElementById(`chapter-${currentChapterId}`);
     if (!el) return;
     /* Defer a frame so any layout shift from view-switch settles before
@@ -403,7 +409,7 @@ export function GenerationView({
     requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [currentChapterId]);
+  }, [currentChapterId, chapterNamedInUrl]);
   /* Default analyzer engine used by the subset retry below (un-exclude
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */

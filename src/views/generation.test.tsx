@@ -32,9 +32,12 @@ import type { ComponentProps } from 'react';
    invokes the hook itself so existing assertions against `loadSidecar` /
    `unloadAnalyzer` / `getSidecarHealth` keep firing through the hook the
    way they did when the state lived inline on the view. */
-function HostedGenerationView(props: ComponentProps<typeof GenerationView>) {
+function HostedGenerationView({
+  initialEntry,
+  ...props
+}: ComponentProps<typeof GenerationView> & { initialEntry?: string }) {
   return (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntry ? [initialEntry] : undefined}>
       <Routes>
         <Route element={<HostedOutlet />}>
           <Route path="*" element={<UnwrappedGenerationView {...props} />} />
@@ -254,6 +257,58 @@ function renderView() {
   );
   return { ...utils, store };
 }
+
+describe('GenerationView — scrolls to a chapter only when the URL names one (#4199)', () => {
+  const chs: Chapter[] = [1, 2, 3, 5].map((id) => ({ ...chapter2, id, title: `Chapter ${id}` }));
+  const scrollSpy = vi.fn();
+  beforeEach(() => {
+    scrollSpy.mockReset();
+    Element.prototype.scrollIntoView = scrollSpy;
+    /* Run the deferred frame synchronously so the assertion needn't race it. */
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+  function renderAt(entry: string, stageChapterId: number) {
+    const store = makeStore();
+    store.dispatch(chaptersSlice.actions.setChapters(chs));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(stageChapterId));
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          initialEntry={entry}
+          chapters={chs}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+  it('does not scroll on a plain load (stage defaults to chapter 3, URL names none)', () => {
+    renderAt('/books/b1/generate', 3);
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+  it('scrolls to the named chapter on ?chapter=5', () => {
+    renderAt('/books/b1/generate?chapter=5', 5);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
+  });
+  it('still scrolls on an explicit ?chapter=3 (the default id, but named in the URL)', () => {
+    renderAt('/books/b1/generate?chapter=3', 3);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-3'));
+  });
+});
 
 describe('GenerationView — prosody toggle removed (#1100)', () => {
   it('does not render the live-expressive-delivery prosody toggle', () => {
