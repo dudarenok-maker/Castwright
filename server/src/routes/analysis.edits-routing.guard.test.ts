@@ -4,6 +4,10 @@
    test (on success each roll has finished before the terminal write), yet
    re-opens the stale-snapshot-lands-last race this change closed.
 
+   READS are exempt (#4155): the persist's tombstone read runs under the `book`
+   lock, and every queued write is awaited under that same lock, so none is
+   pending when it reads — the lock orders it, not the queue.
+
    Deliberately syntactic: it classifies each `manuscriptEditsJsonPath(` site by
    the text around it. A site that reaches the path through an intermediate
    variable other than `editsPath` is reported rather than guessed at, so the
@@ -29,6 +33,7 @@ function unorderedEditsSites(src: string): string[] {
     const lineStart = src.lastIndexOf('\n', at) + 1;
     const before = src.slice(lineStart, at);
     const after = src.slice(at, at + 250);
+    if (/\breadJson(?:<[^\n]*>)?\($/.test(before)) continue;
     const ordered = /\bwriteJsonAtomicOrdered\($/.test(before);
     const queuedRm =
       /\bconst editsPath = $/.test(before) &&
@@ -57,7 +62,13 @@ describe('analysis.ts manuscript-edits.json writers stay ordered (#3427)', () =>
 
   it("the planned persist's manuscript-edits.json write (workspace/analysis-cast-io.ts) is on the ordered queue", () => {
     const io = readFileSync(join(__dirname, '..', 'workspace', 'analysis-cast-io.ts'), 'utf8');
-    expect([...io.matchAll(SITE_RE)].length).toBe(1);
+    // One write (the persist's) and one read (the tombstone read, ordered by the `book` lock).
+    const sites = [...io.matchAll(SITE_RE)];
+    const reads = sites.filter((m) =>
+      /\breadJson(?:<[^\n]*>)?\($/.test(io.slice(io.lastIndexOf('\n', m.index ?? 0) + 1, m.index ?? 0)),
+    );
+    expect(sites.length - reads.length).toBe(1);
+    expect(reads.length).toBe(1);
     expect(unorderedEditsSites(io)).toEqual([]);
   });
 
@@ -66,5 +77,12 @@ describe('analysis.ts manuscript-edits.json writers stay ordered (#3427)', () =>
     const bareRm = 'const editsPath = manuscriptEditsJsonPath(dir);\nawait rm(editsPath, { force: true });';
     expect(unorderedEditsSites(plain)).toHaveLength(1);
     expect(unorderedEditsSites(bareRm)).toHaveLength(1);
+  });
+
+  it('the classifier exempts a read but still flags a read-then-write helper (probe)', () => {
+    const read = 'const onDisk = await readJson<{ sentences?: unknown }>(manuscriptEditsJsonPath(dir));';
+    const readThenWrite = 'await readJsonThenWrite(manuscriptEditsJsonPath(dir), x);';
+    expect(unorderedEditsSites(read)).toEqual([]);
+    expect(unorderedEditsSites(readThenWrite)).toHaveLength(1);
   });
 });
