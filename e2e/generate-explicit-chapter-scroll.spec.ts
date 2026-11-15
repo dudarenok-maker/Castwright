@@ -3,8 +3,8 @@
  * ReadyRoute defaults a chapterless URL to chapter 3 and stageToHash omits
  * `?chapter=3`, so the plan-102 scroll effect used to smooth-scroll
  * `#chapter-3` into view on every plain load (settling at scrollY ~500-740).
- * A plain load must stay at the top; an explicit `?chapter=<id>` (the queue
- * modal's "Jump to chapter") must still scroll. */
+ * A plain load must stay at the top; a `?chapter=<id>` in the URL (id other
+ * than 3, e.g. from `stageToHash` or a shared link) must still scroll. */
 
 import { test, expect } from '@playwright/test';
 
@@ -23,6 +23,6 @@ test.describe('Generate view chapter scroll (#4199)', () => {
   test('an explicit ?chapter=<later chapter> scrolls to it', async ({ page }) => {
     await page.goto('/#/books/sb/generate?chapter=8');
     await expect(page.locator('#chapter-8')).toBeAttached();
-    await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 10_000 }).toBeGreaterThan(0);
+    await expect(page.locator('#chapter-8')).toBeInViewport({ timeout: 10_000 });
   });
 });

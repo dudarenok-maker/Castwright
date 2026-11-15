@@ -3,6 +3,7 @@ import { useStore } from 'react-redux';
 import { useOutletContext, useSearchParams } from 'react-router';
 import { helpHrefForFailureCode } from '../lib/router';
 import { MANIFESTO } from '../lib/brand';
+import { parseChapterParam } from '../lib/chapter-param';
 import {
   IconPlay,
   IconPause,
@@ -391,14 +392,17 @@ export function GenerationView({
      chapter row into view here so the user lands at the right card
      instead of the top of the chapter list. #4199 — the stage defaults a chapterless URL
      to chapter 3 (the Manuscript view relies on that), so only scroll when
-     the URL itself names a chapter; a plain load stays at the top. Reading
-     `?chapter=` here (not the stage) also keeps an explicit `?chapter=3`
-     scrolling, which the stage alone can't tell from the default. */
+     the URL itself names a chapter (a number, as `ReadyRoute` parses it; a
+     malformed value falls back to 3 there and must not scroll); a plain load
+     stays at the top. Reading `?chapter=` here (not the stage) lets a
+     `?chapter=3` set or edited while this view is mounted scroll, which the
+     stage alone can't tell from the default. A cold `?chapter=3` link never
+     does: Layout's Redux→URL sync drops it before this view mounts. */
   const currentChapterId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
   );
   const [searchParams] = useSearchParams();
-  const chapterNamedInUrl = searchParams.get('chapter') != null;
+  const chapterNamedInUrl = parseChapterParam(searchParams.get('chapter')) != null;
   useEffect(() => {
     if (currentChapterId == null || !chapterNamedInUrl) return;
     const el = document.getElementById(`chapter-${currentChapterId}`);
