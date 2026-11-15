@@ -4,6 +4,7 @@
 
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **Opus books show their progress.** Reopening an Opus book now shows the chapters you've already made as done, the Library card counts them too, and a chapter that only has an earlier take left over is no longer marked finished.
+- **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
 
 # Castwright 1.15.0
 
