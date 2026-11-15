@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
+import { MemoryRouter, Outlet, Routes, Route, useNavigate } from 'react-router';
 import { chaptersSlice, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice, uiActions } from '../store/ui-slice';
@@ -32,9 +32,12 @@ import type { ComponentProps } from 'react';
    invokes the hook itself so existing assertions against `loadSidecar` /
    `unloadAnalyzer` / `getSidecarHealth` keep firing through the hook the
    way they did when the state lived inline on the view. */
-function HostedGenerationView(props: ComponentProps<typeof GenerationView>) {
+function HostedGenerationView({
+  initialEntry,
+  ...props
+}: ComponentProps<typeof GenerationView> & { initialEntry?: string }) {
   return (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntry ? [initialEntry] : undefined}>
       <Routes>
         <Route element={<HostedOutlet />}>
           <Route path="*" element={<UnwrappedGenerationView {...props} />} />
@@ -254,6 +257,116 @@ function renderView() {
   );
   return { ...utils, store };
 }
+
+describe('GenerationView — scrolls to a chapter only when the URL names one (#4199)', () => {
+  const chs: Chapter[] = [1, 2, 3, 5].map((id) => ({ ...chapter2, id, title: `Chapter ${id}` }));
+  const scrollSpy = vi.fn();
+  beforeEach(() => {
+    scrollSpy.mockReset();
+    Element.prototype.scrollIntoView = scrollSpy;
+    /* Run the deferred frame synchronously so the assertion needn't race it. */
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+  function renderAt(entry: string, stageChapterId: number) {
+    const store = makeStore();
+    store.dispatch(chaptersSlice.actions.setChapters(chs));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(stageChapterId));
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          initialEntry={entry}
+          chapters={chs}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+  it('does not scroll on a plain load (stage defaults to chapter 3, URL names none)', () => {
+    renderAt('/books/b1/generate', 3);
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+  it('scrolls to the named chapter on ?chapter=5', () => {
+    renderAt('/books/b1/generate?chapter=5', 5);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
+  });
+  /* Mounts the view in a MemoryRouter whose navigate() the test can call, to
+     edit the URL in place while Generate stays mounted (a cold `?chapter=3`
+     link scrolls only when hydrating it leaves the persisted `ui.stage`
+     unchanged; otherwise Layout drops the param before the view mounts). */
+  function renderMounted(entry: string, stageChapterId: number) {
+    const store = makeStore();
+    store.dispatch(chaptersSlice.actions.setChapters(chs));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(stageChapterId));
+    let navigateTo: (to: string) => void = () => {};
+    function NavGrab() {
+      const navigate = useNavigate();
+      navigateTo = (to) => navigate(to);
+      return null;
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[entry]}>
+          <NavGrab />
+          <Routes>
+            <Route element={<HostedOutlet />}>
+              <Route
+                path="*"
+                element={
+                  <UnwrappedGenerationView
+                    chapters={chs}
+                    characters={characters}
+                    paused
+                    title="the Coalfall Commission"
+                    bookId="b1"
+                    modelKey="coqui-xtts-v2"
+                    onRegenerate={() => {}}
+                    onRegenerateBook={() => {}}
+                    onRegenerateCharacterInChapter={() => {}}
+                    onPreview={() => {}}
+                  />
+                }
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    return { store, navigateTo: (to: string) => act(() => navigateTo(to)) };
+  }
+  it('scrolls when ?chapter=3 is set in place on a mounted view (the default id, but named in the URL)', () => {
+    const { navigateTo } = renderMounted('/books/b1/generate', 3);
+    expect(scrollSpy).not.toHaveBeenCalled();
+    navigateTo('/books/b1/generate?chapter=3');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-3'));
+  });
+  it('does not scroll to chapter 3 when a mounted ?chapter=5 is edited in place to a malformed value', () => {
+    const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    scrollSpy.mockClear();
+    navigateTo('/books/b1/generate?chapter=abc');
+    /* ReadyRoute reads a non-numeric ?chapter= as absent and falls back to 3. */
+    act(() => {
+      store.dispatch(uiSlice.actions.setCurrentChapterId(3));
+    });
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+});
 
 describe('GenerationView — prosody toggle removed (#1100)', () => {
   it('does not render the live-expressive-delivery prosody toggle', () => {
@@ -4515,12 +4628,6 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       return { promise, resolve, reject };
     }
     const flush = () => act(() => new Promise((r) => setTimeout(r, 0)));
-    /* A ready stage carries currentChapterId, which the mounted view scrolls
-       to on a later animation frame; jsdom has no scrollIntoView. Left in
-       place after the test, since that frame can fire after it ends. */
-    beforeEach(() => {
-      Element.prototype.scrollIntoView = vi.fn();
-    });
     /* Book B opened (its Generate view), hydrated with its own rows: chapter 1
        carries a gap, chapter 3 is included or excluded per test. */
     function openBookB(store: ReturnType<typeof makeIncludeStore>, ch3IsExcluded: boolean) {

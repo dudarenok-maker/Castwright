@@ -33,6 +33,18 @@ PR-by-PR as the v1.16.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🎭 Cast and re-analysis
+
+- **A re-analysis no longer leaves a book without a narrator row when `cast.json` was rewritten during the run** (a first-upload job that was never registered, a tab without an analysis era, a hand edit on disk): the persist re-creates the narrator from the run's roster (no voice restored) and keeps its lines on it, drift-refused persists included. Every other row deleted mid-run still stays deleted (rule 13). (#4196)
+
+## ⚙️ Setup, prerequisites & dependencies
+
+- **Dependabot root-npm-group refresh: 14 updates landed, no majors, no advisories** (#4065). Runtime: `@reduxjs/toolkit` 2.13.0→2.14.0 (faster `createAction`/`createReducer` dispatch path; pulls `immer` 11.1.8→11.2.9; its RTK Query, listener-middleware and entity-adapter fixes don't reach the app, which uses none of them and has no direct `immer` import), `react-redux` 9.3.0→9.3.1 (`connect` and `Provider` server-state fixes; the app uses the hooks API with a client-only `<Provider>`), `react-router` 8.5.0→8.5.1 (SSR, router `lazy`, fetcher and `<Form>` fixes; the app is a plain `createHashRouter` with `React.lazy` views and none of those) and `@tanstack/react-virtual` 3.14.22→3.14.26 (`virtual-core` 3.19.7→3.19.11 computes `getOffsetForIndex` from current measurements, which reaches `scrollToIndex` over measured rows in `src/views/manuscript.tsx`; covered by `e2e/manuscript-virtualisation.spec.ts`). Dev-only: `@playwright/test` 1.64.1→1.65.0 (Chromium 156→158, **every dev box needs `npx playwright install chromium` again** before `npm run test:e2e`), `vitest` 5.0.5→5.1.0, `@vitejs/plugin-react` 6.1.2→6.2.1, `tailwindcss`/`@tailwindcss/vite` 4.3.3→4.3.4 (production CSS rule-for-rule equivalent), `lightningcss` 1.32→1.33, `vite` 8.3.5→8.3.6 (dev-server hardening: `.wasm` outside `server.fs` is refused and served HTML attributes are escaped, which reaches the LAN dev server), `postcss` 8.5.31→8.5.32, `typescript-eslint` 8.72.0→8.72.1 (still supports `typescript<6.1.0`), `globals` and `@types/node`. No Node `engines` changes, no new install scripts, and no `overrides` or waivers touched.
+
+## 🐛 Other fixes
+
+- **The Generate view no longer scrolls to chapter 3 on every plain load** (#4210, closes #4199). `ReadyRoute` defaults a chapterless URL to chapter 3 and `stageToHash` omits `?chapter=3`, so the plan-102 scroll effect smooth-scrolled `#chapter-3` into view on every load of `#/books/<id>/generate`. `GenerationView` now scrolls only when the URL itself carries a numeric `?chapter=` (read via `useSearchParams` and parsed the way `ReadyRoute` parses it, so a malformed value no longer lands on chapter 3). It scrolls when the URL names a chapter other than 3 at mount, and when `?chapter=` is set or edited, including to 3, while Generate is mounted; a cold `?chapter=3` link scrolls only when hydrating it leaves the persisted `ui.stage` unchanged; otherwise Layout's URL sync drops `?chapter=3` before the view mounts. In-app the param comes from `stageToHash` when the stage's chapter isn't 3, otherwise from a typed or shared URL; the chapter-3 stage default, the router grammar and the Manuscript view are unchanged. Covered by `src/views/generation.test.tsx` and `e2e/generate-explicit-chapter-scroll.spec.ts`.
+
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
@@ -40,3 +52,7 @@ history at cut time.
 ## 🩺 Diagnostics
 
 - **The server now writes a Node diagnostic report when it dies of a V8 fatal error,** into `logs/node-reports/` (`<APP_LOG_DIR>/node-reports/` when set), with Node's default timestamp-and-pid file name. It is enabled in-process at the start of boot, so every launcher gets it (`npm start`, `npm run dev`, `dev:lan`, `start:lan`, `start:prod`), and the boot logs `[server] diagnostic report on a fatal error -> <dir>` (or an `OFF` line if the folder can't be created; boot continues). Evidence capture for the unexplained silent server deaths; a native crash (0xC0000409) writes no report, so read the folder together with the sidecar's exit-code line. On-box row A124. (#4054)
+
+## 📦 Dependencies
+
+- **Dependabot server-npm group refresh: 9 updates landed, two majors** (#4121). Runtime: `@google/genai` 2.30.0→3.0.0, `entities` 8.1.0→9.0.0, `openai` 7.43.0→7.54.0, `express-rate-limit` 8.7.1→8.7.4, `cookie` 2.0.1→2.0.2, `undici` 8.12.3→8.12.4. Dev-only: `vitest` 5.0.5→5.1.0, `@types/node` 26.6.5→26.6.6, `supertest` 7.3.1→7.3.2. `@google/genai` 3.0 flips the Gemini Developer API default from `v1beta` to `v1`, and `v1` has no speech output (`speechConfig` / `responseModalities: AUDIO`), so every `new GoogleGenAI` (Gemini TTS, the analyzer transport, the model catalog) now pins `apiVersion: GEMINI_API_VERSION` (`'v1beta'`, exported from `analyzer/catalog/gemini-catalog.ts`); `analyzer/gemini-api-version.test.ts` and `tts/gemini.timeout.test.ts` assert the request path against a real-SDK local endpoint.

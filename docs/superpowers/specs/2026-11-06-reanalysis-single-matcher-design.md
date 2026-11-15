@@ -77,7 +77,10 @@ one function. Every later step works in the prior cast's id space.
     *Provenance*).
 13. **A character the user deletes mid-run stays deleted** (owner,
     2026-11-06). Lines the run had matched to it go to the narrator and show in
-    attribution review.
+    attribution review. The narrator is exempt (owner, 2026-11-13, #4100): every persist, a
+    drift-refused one included, leaves a narrator row in the cast, re-created from the run's
+    roster when a write made during the run removed it, so "their lines go to the narrator"
+    always has a row to land on.
 
 ## Design
 
@@ -279,7 +282,8 @@ come from the plan.
     to its survivor.
   - **A plan target the user deleted mid-run** (gone, and not superseded)
     stays deleted, per rule 13. Its rows are not re-added, and its lines go to
-    the narrator.
+    the narrator. The one exception is the narrator itself (#4100): at persist its row is
+    re-created if it is gone, and its lines stay on it.
   - A `new` row is added only once. After that the snapshot overlays it like
     any other row and never re-adds it, so a user delete sticks.
 - **The run tracks what it added.** The job keeps, in memory, the ids it added
@@ -535,8 +539,8 @@ the suggestions store:
     with 409 `book_busy`. The one remaining trigger is a merge whose history
     write failed and that still reaches a run (one that runs unregistered; the
     merge request answers 500 and the client reloads): the source stays gone,
-    and its lines are on the narrator. (Amended by plan 291, rulings R13 and
-    R55.)
+    and its lines are on the narrator. The narrator is never left without a row: a persist
+    re-creates it. (Amended by plan 291, rulings R13, R55 and R58.)
 21. **Provenance (rule 12).**
     - An untagged and a `user` entry are T1.
     - An `analyzer` entry is not: a later ambiguous name gives a suggestion.
