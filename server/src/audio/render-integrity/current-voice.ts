@@ -1,6 +1,7 @@
 /**
  * #3524 / #3518 — the ONE place a character's CURRENT cast.json voice AND model key are derived from an engine,
- * shared by `scoreBook` (aggregate.ts) and the qa-repair route (chapter-qa-repair.ts).
+ * shared by `scoreBook` (aggregate.ts, which builds the audition row's `modelKey` with `currentCastModelKey`)
+ * and the qa-repair route (chapter-qa-repair.ts).
  *
  * The two callers share the derivation, but not the input: qa-repair passes the engine its
  * request re-records in; `scoreBook` resolves "the engine actually rendered" — the

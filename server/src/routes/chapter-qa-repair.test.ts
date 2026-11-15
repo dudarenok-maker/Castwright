@@ -1087,6 +1087,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           pSevere: 0.45,
           pBand: 0.6,
           referenceKind: 'in-book',
+          inBookModelKey: 'kokoro-v1',
         },
       }),
     );
@@ -1742,6 +1743,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           pBand: 0.6,
           referenceKind: 'in-book',
           ...(inBookVoiceName === undefined ? {} : { inBookVoiceName }),
+          inBookModelKey: engineModelKey,
         },
       }),
     );

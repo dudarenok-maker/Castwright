@@ -37,6 +37,7 @@ import { writeAttempted, attemptedPath, mergeVerdictRows, type VerdictRow } from
 import {
   readCentroids,
   writeCentroids,
+  IN_BOOK_MIXED_TIER,
   type CharacterCentroid,
   type AuditionVoiceRef,
 } from './centroids-io.js';
@@ -52,9 +53,8 @@ import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } f
 import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io.js';
 import { canonicalModelKeyForEngine, engineForModelKey, type TtsEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
-import { currentCastVoiceName, currentCharacterEngine } from './current-voice.js';
+import { currentCastModelKey, currentCastVoiceName, currentCharacterEngine } from './current-voice.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
-import { resolveCharacterQwenTier } from '../../tts/per-character-engine.js';
 import { buildCastResolver } from '../../store/cast-resolve.js';
 import { loadCastIdHistory } from '../../store/cast-id-history.js';
 
@@ -266,6 +266,8 @@ interface CharacterReference {
   /** #3524 — the cast.json voice an 'in-book' reference's anchors were filtered
    *  to. Set only when the character had a current voice; see CharacterCentroid. */
   inBookVoiceName?: string;
+  /** #3518 — the tier an 'in-book' reference's pooled anchors were rendered at; see CharacterCentroid. */
+  inBookModelKey?: string;
   /** A36 fix — band-computation method used ('synthetic-sigma' = post-fix,
    *  or 'percentile' = original/pre-fix). Carried on persisted 'audition' rows
    *  so pre-fix rows can be detected and rebuilt with the new logic. */
@@ -307,6 +309,14 @@ function auditionVoiceOf(voiceInfo: AuditionCharacter): AuditionVoiceRef {
  *  must equal the current voice's language. */
 function sameVoiceIdentity(recorded: AuditionVoiceRef | undefined, voiceInfo: AuditionCharacter): boolean {
   return recorded != null && recorded.voiceName === voiceInfo.voiceName && recorded.modelKey === voiceInfo.modelKey && recorded.cloned === voiceInfo.cloned && recorded.language === voiceInfo.language;
+}
+
+/** #3518 — the `inBookModelKey` stamp for a pool of anchors: the one tier they all share,
+ *  `IN_BOOK_MIXED_TIER` when they span several, `undefined` when any anchor's tier is unknown
+ *  (fail closed — qa-repair drops a row with no concrete key). */
+function inBookModelKeyOf(tiers: ReadonlySet<string | undefined>): string | undefined {
+  if (tiers.has(undefined) || tiers.size === 0) return undefined;
+  return tiers.size === 1 ? [...tiers][0] : IN_BOOK_MIXED_TIER;
 }
 
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
@@ -359,6 +369,7 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
  * @param anchorVecs  Anchor-eligible embedding vectors collected from the book.
  * @param inBookVoiceName  #3524 — the current cast voice `anchorVecs` were filtered to
  *                    (undefined = no current voice, unfiltered); recorded on an in-book ref.
+ * @param inBookModelKey  #3518 — the tier `anchorVecs` were rendered at (see `inBookModelKeyOf`); recorded on an in-book ref.
  * @param voiceInfo   Optional voice info for Option-B (absent when no snapshot).
  * @param persisted   This character's prior-run row from centroids.json, if any.
  * @param auditionOpts  Test-only synth/embed fn overrides, forwarded to auditionCentroid.
@@ -368,6 +379,7 @@ async function resolveCharacterReference(
   voiceInfo: AuditionCharacter | undefined,
   persisted: CharacterCentroid | undefined,
   inBookVoiceName: string | undefined,
+  inBookModelKey: string | undefined,
   auditionOpts?: Pick<AuditionCentroidOpts, 'synthFn' | 'embedFn'>,
 ): Promise<ReferenceOutcome> {
   const result = buildCentroid(anchorVecs);
@@ -380,7 +392,7 @@ async function resolveCharacterReference(
     const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
     const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
     const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book', ...(inBookVoiceName !== undefined ? { inBookVoiceName } : {}) } };
+    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book', ...(inBookVoiceName !== undefined ? { inBookVoiceName } : {}), ...(inBookModelKey !== undefined ? { inBookModelKey } : {}) } };
   }
 
   if (persisted?.referenceKind === 'too-short' && !persisted.noCurrentVoiceReference && (!voiceInfo || sameVoiceIdentity(persisted.auditionVoice, voiceInfo))) {
@@ -868,7 +880,12 @@ export async function scoreBook(
   const anchorVecsByChar = new Map<string, Float32Array[]>();
   // #3524 — characters with a current voice that have at least one rendered line in it.
   const hasCurrentVoiceLine = new Set<string>();
-  for (const charId of stochasticChars) anchorVecsByChar.set(charId, []);
+  // #3518 — the distinct render tiers of the anchors pooled above (`undefined` = an anchor of unknown tier).
+  const anchorTiersByChar = new Map<string, Set<string | undefined>>();
+  for (const charId of stochasticChars) {
+    anchorVecsByChar.set(charId, []);
+    anchorTiersByChar.set(charId, new Set());
+  }
 
   for (const cd of chapterData) {
     for (const row of cd.embRows) {
@@ -895,6 +912,10 @@ export async function scoreBook(
           if (lineVoiceOf(seg, cd.snapshots, rowCharId) !== currentVoice) continue;
         }
         anchorVecsByChar.get(rowCharId)!.push(row.vec);
+        /* #3518 — the tier THIS anchor's chapter rendered the character at (the same chain the
+           audition's render key uses, minus its 0.6B default: an unrecorded tier stays unknown). */
+        const anchorSnap = cd.snapshots[rowCharId];
+        anchorTiersByChar.get(rowCharId)!.add(anchorSnap?.renderedModelKey ?? anchorSnap?.modelKey ?? cd.modelKey);
       }
     }
   }
@@ -915,13 +936,15 @@ export async function scoreBook(
     /* Tier: a Qwen audition renders at the tier the render itself stamps — the
        character's elevate-only pin over the run key (for a character the run rendered),
        else the key of the snapshot that supplied the stamped engine, else the old snapshot's —
-       via the same resolveCharacterQwenTier buildCharacterSnapshots uses, so a 1.7B
+       via currentCastModelKey (the same formula buildCharacterSnapshots stamps), so a 1.7B
        pin is never auditioned on the 0.6B base (8 GB OOM; non-comparable speaker space). */
-    const baseKey = canonicalModelKeyForEngine(
-      engine,
+    const modelKey = currentCastModelKey(
+      castChar,
+      defaultEngineFor(charId),
       (runRenderedChars.has(charId) ? opts?.runModelKey : undefined) ?? stampedByChar.get(charId)?.modelKey ?? info.modelKey,
+      bookLanguage,
     );
-    const modelKey = engine === 'qwen' ? resolveCharacterQwenTier(castChar, baseKey) : baseKey;
+    if (!modelKey) continue;
     if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
       voiceInfoByChar.set(charId, {
         ...info,
@@ -1051,6 +1074,7 @@ export async function scoreBook(
       voiceInfoByChar.get(charId),
       persisted,
       currentVoiceFor(charId),
+      inBookModelKeyOf(anchorTiersByChar.get(charId)!),
       { synthFn: opts?.__testSynthFn, embedFn: opts?.__testEmbedFn },
     );
 

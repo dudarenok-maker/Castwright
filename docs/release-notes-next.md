@@ -43,7 +43,7 @@ history at cut time.
 
 ## 🔧 Fixes
 
-- **qa-repair no longer scores a re-recorded line against a reference voice recorded at a different Qwen quality tier.** It now derives each character's current model key from the cast plus the requested tier (`currentCastModelKey`, the same formula as the render's per-character stamp) and drops an `audition` centroid recorded at another tier, and an `in-book` centroid whose chapter last rendered the character at another tier, so a 1.7B re-render is never scored against a 0.6B reference (or the reverse); a dropped character is treated as "no reference" (#3518)
+- **qa-repair no longer scores a re-recorded line against a reference voice recorded at a different Qwen quality tier.** It now derives each character's current model key from the cast plus the requested tier (`currentCastModelKey`, the same formula as the render's per-character stamp) and drops an `audition` centroid recorded at another tier. `scoreBook` now stamps the tier its pooled anchors were rendered at on each `in-book` centroid (`inBookModelKey`: the one key they share, or `mixed`), and qa-repair keeps that row only when the stamp equals the current key; a mixed-tier row, a row with an unknown-tier anchor and a row written before the stamp (rebuilt, with a stamp, on the next scoring pass) are dropped. A dropped character is treated as "no reference"; the audition row's model key now comes from `currentCastModelKey` too (#3518)
 
 ## 📦 Dependencies
 

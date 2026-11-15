@@ -228,6 +228,7 @@ function writeCentroidFixture() {
         pSevere: 0.45,
         pBand: 0.60,
         referenceKind: 'in-book',
+        inBookModelKey: 'kokoro-v1',
       },
     }),
   );

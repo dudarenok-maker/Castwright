@@ -458,9 +458,12 @@ chapterQaRepairRouter.post(
          the run key, the same way the voice is — currentCastModelKey(c, engine,
          modelKey), never the snapshot — so a Qwen tier change (per-character
          elevation or a repair at another tier) drops the old tier's audition
-         centroid (#3518). An in-book row records no model key, so its tier is the
-         character's last full render of this chapter
-         (`renderedModelKey ?? modelKey ?? segFile.modelKey`). After this filter a
+         centroid (#3518). An in-book row is pooled from anchors in EVERY chapter, so
+         it carries the tier scoreBook stamped on it (`inBookModelKey`: the one
+         key all its anchors share, or "mixed"); it is kept only when that
+         equals the current key, and a mixed, absent (a row from before the
+         stamp) or unknown-tier row is dropped — never inferred from this
+         chapter's snapshot. After this filter a
          filtered-out character behaves exactly like "no
          centroid" at every downstream `centroids?.[charId]` site. An in-book row is
          kept only when it recorded no `inBookVoiceName` (legacy) or that name
@@ -473,9 +476,7 @@ chapterQaRepairRouter.post(
             const current = castResolver.resolve(charId)?.character;
             const currentVoiceName = current ? currentCastVoiceName(current, engine) : undefined;
             const currentModelKey = current ? currentCastModelKey(current, engine, modelKey) : undefined;
-            const snap = segFile.characterSnapshots?.[charId];
-            const inBookRenderModelKey = snap?.renderedModelKey ?? snap?.modelKey ?? segFile.modelKey;
-            return auditionCentroidUsableForCurrent(row, currentVoiceName, currentModelKey, inBookRenderModelKey);
+            return auditionCentroidUsableForCurrent(row, currentVoiceName, currentModelKey);
           }),
         );
       /* #3362 pass-4 fix (🟠D / owner design b) — centroids/verdict rows are

@@ -71,6 +71,11 @@ export interface CharacterCentroid {
    *  had a current voice; absent on 'audition'/'too-short' rows and on legacy rows. Lets the
    *  qa-repair route tell when the in-book reference has gone stale after a voice change. */
   inBookVoiceName?: string;
+  /** #3518 — the Qwen/TTS tier the anchors pooled into an 'in-book' row were rendered at: the one
+   *  model key when every pooled anchor shares it, `IN_BOOK_MIXED_TIER` when they differ. Absent when
+   *  any pooled anchor's tier is unknown, on 'audition'/'too-short' rows, and on a row written before
+   *  this field existed. Absent / mixed means "no single tier": qa-repair drops the row. */
+  inBookModelKey?: string;
   /** #3524 — marker on a 'too-short' row written for a character that has a current cast voice
    *  but NO rendered line in it yet (reassigned before any re-render, or rendered only on a
    *  fallback engine). It is a conclusive "nothing to check yet", not a reference: it takes the
@@ -87,6 +92,10 @@ export interface CharacterCentroid {
    *  band-computation logic. Only present on 'audition' referenceKind rows. */
   bandMethod?: 'percentile' | 'synthetic-sigma';
 }
+
+/** #3518 — `inBookModelKey` value for an in-book row whose pooled anchors span more than one tier.
+ *  Never equal to a real model key, so a comparison against the current key can only fail. */
+export const IN_BOOK_MIXED_TIER = 'mixed';
 
 const CENTROIDS_FILENAME = 'render-integrity.centroids.json';
 
@@ -131,11 +140,12 @@ export async function readCentroids(
  *  the field once a line is rendered in the current voice and `scoreBook` runs) or when that name equals the character's
  *  current voice; a recorded name that differs (or a missing current voice) means the
  *  anchors came from a voice the character no longer has and the row is dropped
- *  (#3524, settles #3517's in-book half). An in-book row records no model key, so its
- *  tier is proxied by `inBookRenderModelKey`, the tier the character's lines in this
- *  chapter were last fully rendered at: when that and `currentModelKey` are BOTH known and
- *  differ the row is dropped (#3518); when either is unknown the row is judged on the
- *  voice rule alone. An 'audition' row is
+ *  (#3524, settles #3517's in-book half). An in-book row is ALSO usable only when its
+ *  recorded `inBookModelKey` (the tier every anchor pooled into it was rendered at, stamped
+ *  by scoreBook) EXACTLY equals `currentModelKey` (#3518). A `mixed` stamp, an absent stamp
+ *  (an anchor of unknown tier, or a row written before the stamp existed — fail closed, not
+ *  grandfathered) and an unknown current key all drop the row; the next scoreBook pass
+ *  rebuilds it with a stamp. An 'audition' row is
  *  usable ONLY when it recorded a voice identity AND that identity matches the
  *  character's current resolved voice/model — otherwise it is a stale reference
  *  (possibly for a voice the character no longer is) and must not be scored against.
@@ -149,12 +159,9 @@ export function auditionCentroidUsableForCurrent(
   row: CharacterCentroid,
   currentVoiceName: string | undefined,
   currentModelKey: string | undefined,
-  inBookRenderModelKey?: string,
 ): boolean {
   if (row.referenceKind === 'in-book') {
-    if (inBookRenderModelKey != null && currentModelKey != null && inBookRenderModelKey !== currentModelKey) {
-      return false;
-    }
+    if (row.inBookModelKey == null || currentModelKey == null || row.inBookModelKey !== currentModelKey) return false;
     return row.inBookVoiceName == null || row.inBookVoiceName === currentVoiceName;
   }
   if (row.referenceKind !== 'audition') return false; // incl. 'too-short'

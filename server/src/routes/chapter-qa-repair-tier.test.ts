@@ -2,7 +2,7 @@
    Qwen tier against the model key the character will CURRENTLY re-render under
    (cast + requested tier, elevate-only per-character pin), never against the
    previous render's snapshot. An 'audition' row recorded at another tier, and an
-   'in-book' row whose chapter was last rendered at another tier, are dropped
+   'in-book' row whose pooled anchors' stamped tier (inBookModelKey) differs, is mixed or is missing, are dropped
    ("no centroid" -> acoustic-only candidate skipped, reported in stillSuspect). */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -85,8 +85,8 @@ interface Case {
   pin?: string;                 // per-character ttsModelKey
   oldTier: string;              // segments.json modelKey + snapshot modelKey
   rowKind: 'audition' | 'in-book';
-  rowTier?: string;             // audition row's recorded modelKey
-  renderedModelKey?: string;    // snapshot.renderedModelKey (in-book proxy)
+  rowTier?: string;             // audition row's auditionVoice.modelKey / in-book row's inBookModelKey stamp (absent = legacy row)
+  renderedModelKey?: string;    // snapshot.renderedModelKey (must NOT influence the in-book decision)
   snapModelKey?: string;        // snapshot.modelKey when it differs from oldTier (a partial write rebuilds it)
   noSnapshot?: boolean;         // omit characterSnapshots entirely
   requestKey: string;
@@ -127,7 +127,7 @@ async function runCase(c: Case) {
       characterId: 'castor', centroid: unitVec(), cleanMean: 0.7, pSevere: 0.45, pBand: 0.6, referenceKind: c.rowKind,
       ...(c.rowKind === 'audition'
         ? { bandMethod: 'synthetic-sigma', auditionVoice: { voiceName: 'qwen-b', modelKey: c.rowTier } }
-        : { inBookVoiceName: 'qwen-b' }),
+        : { inBookVoiceName: 'qwen-b', ...(c.rowTier ? { inBookModelKey: c.rowTier } : {}) }),
     },
   }));
   writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [character] }));
@@ -188,34 +188,46 @@ describe('#3518 qa-repair centroid filter — Qwen tier', () => {
     expect(done.repaired).toContain(0);
   });
 
-  it('T5 in-book tier mismatch: in-book row dropped when the chapter was last rendered at 0.6B but the request is 1.7B', async () => {
-    const done = await runCase({ oldTier: T06, rowKind: 'in-book', renderedModelKey: T06, requestKey: T17, embed: 'high' });
+  /* In-book rows carry the tier of the anchors scoreBook pooled (inBookModelKey); the route compares
+     the CURRENT key to it and never infers a tier from this chapter's snapshot. */
+  it('T5 in-book tier mismatch: row stamped 0.6B is dropped when the request is 1.7B', async () => {
+    const done = await runCase({ oldTier: T06, rowKind: 'in-book', rowTier: T06, requestKey: T17, embed: 'high' });
     expect(synthesiseChapter).not.toHaveBeenCalled();
     expect(done.stillSuspect).toContain(0);
   });
 
-  it('T6 in-book same tier: in-book row kept and repaired', async () => {
-    const done = await runCase({ oldTier: T06, rowKind: 'in-book', renderedModelKey: T06, requestKey: T06, embed: 'high' });
+  it('T6 in-book same tier: row stamped 0.6B is kept and repaired at 0.6B', async () => {
+    const done = await runCase({ oldTier: T06, rowKind: 'in-book', rowTier: T06, requestKey: T06, embed: 'high' });
     expect(synthesiseChapter).toHaveBeenCalled();
     expect(done.repaired).toContain(0);
   });
 
-  /* Precedence of the in-book tier: snapshot.renderedModelKey > snapshot.modelKey > segments-file modelKey.
-     A partial write rebuilds snapshot.modelKey but keeps renderedModelKey frozen at the full render. */
-  it('T7 second repair at 1.7B after a first one: snapshot.modelKey=1.7B but renderedModelKey=0.6B, in-book row dropped', async () => {
-    const done = await runCase({ oldTier: T17, snapModelKey: T17, rowKind: 'in-book', renderedModelKey: T06, requestKey: T17, embed: 'high' });
+  it('T7 the review repro: ch10 was re-rendered at 1.7B (snapshot says 1.7B) but the pooled row is 0.6B-stamped, so it is dropped', async () => {
+    const done = await runCase({ oldTier: T17, snapModelKey: T17, renderedModelKey: T17, rowKind: 'in-book', rowTier: T06, requestKey: T17, embed: 'high' });
     expect(synthesiseChapter).not.toHaveBeenCalled();
     expect(done.stillSuspect).toContain(0);
   });
 
-  it('T8 no snapshot: falls back to the segments-file modelKey; a mismatching request drops the in-book row', async () => {
-    const done = await runCase({ oldTier: T06, noSnapshot: true, rowKind: 'in-book', requestKey: T17, embed: 'high' });
+  it('T7b a mixed-tier row is dropped even though this chapter\'s snapshot matches the request', async () => {
+    const done = await runCase({ oldTier: T17, snapModelKey: T17, renderedModelKey: T17, rowKind: 'in-book', rowTier: 'mixed', requestKey: T17, embed: 'high' });
     expect(synthesiseChapter).not.toHaveBeenCalled();
     expect(done.stillSuspect).toContain(0);
   });
 
-  it('T9 no snapshot: segments-file modelKey equal to the request keeps the in-book row', async () => {
-    const done = await runCase({ oldTier: T06, noSnapshot: true, rowKind: 'in-book', requestKey: T06, embed: 'high' });
+  it('T8 the mirror case: a row stamped 1.7B is kept at 1.7B although this chapter was last rendered at 0.6B', async () => {
+    const done = await runCase({ oldTier: T06, renderedModelKey: T06, rowKind: 'in-book', rowTier: T17, requestKey: T17, embed: 'high' });
+    expect(synthesiseChapter).toHaveBeenCalled();
+    expect(done.repaired).toContain(0);
+  });
+
+  it('T9 legacy in-book row with no tier stamp is dropped (fail closed) even when everything else reads 0.6B', async () => {
+    const done = await runCase({ oldTier: T06, renderedModelKey: T06, rowKind: 'in-book', requestKey: T06, embed: 'high' });
+    expect(synthesiseChapter).not.toHaveBeenCalled();
+    expect(done.stillSuspect).toContain(0);
+  });
+
+  it('T10 no snapshot at all: a stamped row matching the request is still kept (the route reads no snapshot for it)', async () => {
+    const done = await runCase({ oldTier: T06, noSnapshot: true, rowKind: 'in-book', rowTier: T06, requestKey: T06, embed: 'high' });
     expect(synthesiseChapter).toHaveBeenCalled();
     expect(done.repaired).toContain(0);
   });
