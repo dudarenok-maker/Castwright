@@ -446,12 +446,15 @@ export type PersistOutcomeError = Error & { persistOutcome?: PersistOutcome };
        overlay never meets an undecided row;
     3. re-resolve every plan target through the current history (exact | history);
     4. overlay (`persist`), remap this run's sentences (narrator -> the prior
-       narrator id, a merged-away target -> its survivor, a re-mint -> its new id),
+       narrator id, a merged-away target -> its survivor, a re-mint -> its new id;
+       a narrator-id speaker with no live target -> the narrator row the overlay
+       wrote, #4100: the narrator is exempt from rule 13),
        reroute lines of a deleted target to the book's narrator, recount, write
        cast.json;
     5. write manuscript-edits.json under the `book` lock, nested;
     6. reconcile the suggestions.
-    `driftRefused`: only step 5 runs (cast.json is left byte-for-byte alone) and
+    `driftRefused`: only step 5 runs (cast.json is left byte-for-byte alone, except that a
+    missing narrator row the overlay re-created is appended, #4100) and
     the run's added suggestion pairs are removed. `roster` is the PLAN-APPLIED
     roster (R29). `mainLedger` (R2) is the other job's ledger, refreshed for every
     row this write touches. */
@@ -559,25 +562,39 @@ export async function persistPlannedCast(a: {
     // #4103 pass 1 O1; a legacy fold-bucket key is not followed at all, R53).
     const currentIds = new Set(current.map((r) => r.id));
     const addedNow = new Set(ov.characters.map((c) => c.id).filter((id) => !currentIds.has(id)));
+    const narratorId = ov.characters.map((c) => c.id).find(isNarratorId) ?? 'narrator';
     const toFinal: Record<string, string> = {};
     for (const id of new Set(sentences.map((s) => s.characterId))) {
       if (addedNow.has(id)) continue;
       const d = isNarratorId(id) ? plan.decisions[id] : undefined;
       const target = d?.kind === 'join' ? resolve(d.priorId) : resolve(id);
       if (target && target !== id) toFinal[id] = target;
+      // A narrator-id speaker with no live target goes to the narrator row the overlay wrote (#4100).
+      else if (!target && isNarratorId(id) && narratorId !== id) toFinal[id] = narratorId;
     }
     sentences = remapSentenceIds(sentences, toFinal);
-    const narratorId = ov.characters.map((c) => c.id).find(isNarratorId) ?? 'narrator';
     sentences = rerouteDeletedTargets(sentences, new Set(ov.deletedTargets), narratorId);
 
     const carried = new Set(ov.carriedForward.map((c) => c.id));
-    const finalChars = (a.driftRefused ? current : (ov.characters as Rows)).map((c) => {
-      if (a.driftRefused || carried.has(c.id) || sentences.length === 0) return c;
+    // A drift-refused persist leaves cast.json alone except for one thing (#4100): when the
+    // re-read cast holds no narrator-id row and the overlay produced one, that row is appended.
+    const recreated = a.driftRefused
+      ? (ov.characters as Rows).find((c) => isNarratorId(c.id) && !currentIds.has(c.id))
+      : undefined;
+    const countLines = (c: Rows[number]): Rows[number] => {
       const mine = sentences.filter((s) => s.characterId === c.id);
       return { ...c, lines: mine.length, scenes: new Set(mine.map((s) => s.chapterId)).size };
-    });
+    };
+    const finalChars = a.driftRefused
+      ? recreated
+        ? [...current, countLines(recreated)]
+        : current
+      : (ov.characters as Rows).map((c) => (carried.has(c.id) || sentences.length === 0 ? c : countLines(c)));
 
     const retirements: Retirement[] = [];
+    if (a.driftRefused && recreated) {
+      await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });
+    }
     if (!a.driftRefused) {
       if (!sameJson(finalChars, current)) {
         await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });

@@ -483,6 +483,67 @@ describe('overlayPlanOntoCast: a gone run row (R4)', () => {
   });
 });
 
+describe('overlayPlanOntoCast: the narrator is exempt from rule 13 at persist (#4100)', () => {
+  const narr: Row = { id: 'narrator', name: 'Narrator', lines: 3, voiceStyle: 'folk' };
+  const wren: PriorRow = { id: 'w2', name: 'Wren' };
+  const none = (): string | null => null;
+
+  it('U1 joined, gone: the narrator row is re-added, never gone', () => {
+    const r = overlay({ current: [wren], roster: [narr], plan: planOf(join('narrator', 'narrator')), resolve: none, mode: 'persist' });
+    expect(r.characters.map((c) => c.id)).toEqual(['w2', 'narrator']);
+    const row = r.characters[1];
+    expect(row).toEqual({ id: 'narrator', name: 'Narrator', lines: 3, scenes: 0, voiceStyle: 'folk' });
+    expect(r.deletedTargets).toEqual([]);
+    expect(r.unresolved).toEqual([]);
+    expect(r.ledger.narrator).toEqual({ state: 'run-owned', fp: fp(row) });
+  });
+
+  it('U2 char-narrator: the added row keeps the join priorId', () => {
+    const r = overlay({ current: [wren], roster: [narr], plan: planOf(join('narrator', 'char-narrator', 'narrator')), resolve: none, mode: 'persist' });
+    expect(r.characters.map((c) => c.id)).toEqual(['w2', 'char-narrator']);
+  });
+
+  it('U3 run-added, gone: re-added and ledgered run-owned', () => {
+    for (const ledger of [{ narrator: { state: 'added-once' } }, { narrator: { state: 'run-owned', fp: 'x' } }] as RunAddedLedger[]) {
+      const r = overlay({ current: [wren], roster: [narr], plan: planOf(nw('narrator')), ledger, resolve: none, mode: 'persist' });
+      expect(r.characters.map((c) => c.id)).toEqual(['w2', 'narrator']);
+      expect(r.deletedTargets).toEqual([]);
+      expect(r.ledger.narrator?.state).toBe('run-owned');
+    }
+  });
+
+  it('U4 degraded history: re-added and never unresolved', () => {
+    const r = overlay({ current: [wren], roster: [narr], plan: planOf(join('narrator', 'narrator')), resolve: none, historyStatus: 'degraded', mode: 'persist' });
+    expect(r.characters.map((c) => c.id)).toEqual(['w2', 'narrator']);
+    expect(r.unresolved).toEqual([]);
+  });
+
+  it('U5 another narrator row exists: the group lands on it, no second row', () => {
+    const r = overlay({
+      current: [{ id: 'char-narrator', name: 'Teller', voice: 'nv' }], roster: [narr],
+      plan: planOf(join('narrator', 'narrator')), resolve: none, mode: 'persist',
+    });
+    expect(r.characters.map((c) => c.id)).toEqual(['char-narrator']);
+    expect(r.characters[0]).toMatchObject({ name: 'Teller', voice: 'nv', lines: 3 });
+    expect(r.deletedTargets).toEqual([]);
+  });
+
+  it('U6 snapshot mode is unchanged: the narrator still goes gone', () => {
+    const r = overlay({ current: [wren], roster: [narr], plan: planOf(join('narrator', 'narrator')), resolve: none, mode: 'snapshot' });
+    expect(r.characters.map((c) => c.id)).toEqual(['w2']);
+    expect(r.deletedTargets).toEqual(['narrator']);
+  });
+
+  it('U7 rule 13 is intact for non-narrator rows', () => {
+    const r = overlay({
+      current: [{ id: 'narrator', name: 'Narrator' }], roster: [narr, { id: 'bob', name: 'Bob', lines: 1 }],
+      plan: planOf(join('narrator', 'narrator'), join('bob', 'bob')), resolve: (id) => (id === 'bob' ? null : id), mode: 'persist',
+    });
+    expect(r.deletedTargets).toEqual(['bob']);
+    expect(r.characters.map((c) => c.id)).toEqual(['narrator']);
+  });
+});
+
 describe('retargetPlanForMerge', () => {
   it("item 12: retargetPlanForMerge copies the target's new decision", () => {
     const plan = planOf(nw('s', 's-n1', { suggest: ['q'] }), nw('t', 't-n1', { suggest: ['p'], inheritedDeclines: [{ bookId: 'b9', characterId: 'x' }] }), join('j', 'prior'));
