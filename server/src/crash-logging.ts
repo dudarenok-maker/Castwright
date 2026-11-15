@@ -205,8 +205,13 @@ export function installExitLogging(hooks: ExitLoggingHooks = {}): void {
 }
 
 export interface FatalErrorReportHooks {
-  /** Default `process.report`. Only these two fields are written; `filename` is never touched. */
-  report?: { reportOnFatalError: boolean; directory: string };
+  /** Default `process.report`. Only these four fields are written; `filename` is never touched. */
+  report?: {
+    reportOnFatalError: boolean;
+    directory: string;
+    excludeEnv: boolean;
+    excludeNetwork: boolean;
+  };
   /** Default `fs.mkdirSync(dir, { recursive: true })`. */
   mkdir?: (dir: string) => void;
   /** Default `console.log`. */
@@ -220,9 +225,13 @@ export interface FatalErrorReportHooks {
  *  on a native 0xC0000409 / 0xC0000005 — the sidecar's exit-code line covers
  *  those. The filename is left at Node's default (timestamp + pid) on purpose,
  *  so the next fatal error cannot overwrite an earlier report. Node does not
- *  create a missing report directory, hence the mkdir first. Never throws. */
+ *  create a missing report directory, hence the mkdir first. The report is
+ *  meant to be attached to a public issue, so the environment (GEMINI_API_KEY,
+ *  LAN_AUTH_TOKEN, ...) and the network interfaces (IP/MAC) are left out of
+ *  it; the native stack, the JS stack and the heap stats stay. Never throws. */
 export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHooks = {}): boolean {
-  const report = hooks.report ?? process.report;
+  // `excludeNetwork` exists in Node >= 22.0 (engines is >= 22.22.0) but is missing from @types/node.
+  const report = hooks.report ?? (process.report as unknown as NonNullable<FatalErrorReportHooks['report']>);
   const mkdir = hooks.mkdir ?? ((d: string) => void fs.mkdirSync(d, { recursive: true }));
   const log = hooks.log ?? ((msg: string) => console.log(msg));
   try {
@@ -236,6 +245,8 @@ export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHook
   }
   report.directory = dir;
   report.reportOnFatalError = true;
+  report.excludeEnv = true;
+  report.excludeNetwork = true;
   log(`[server] diagnostic report on a fatal error -> ${dir}`);
   return true;
 }

@@ -6635,7 +6635,7 @@ Since #4054 the server turns on Node's diagnostic report on a fatal error as the
 - **On the next silent server death** (the server stops answering, and its log has no stack and no `[server] process exit` line), before restarting anything, post a comment on #4054 with:
   1. the sidecar's line from `logs/tts.err.log`, `server pid=<pid> exited with code <n> = 0x<8 hex digits> (<meaning>)`, or the words "no exit-code line";
   2. the last 50 lines of the server's output (`logs/server.log` and `logs/server.err.log`, or the `npm run dev` terminal);
-  3. every `report.*.json` in `logs/node-reports/` whose name's date and time fall within a minute of the death, attached as a file, or the words "no report";
+  3. every `report.*.json` in `logs/node-reports/` whose name's date and time fall within a minute of the death, or the words "no report". The report leaves out the environment variables and network interfaces (Node's `excludeEnv` and `excludeNetwork`), but it still holds the `cwd` and the command line, whose paths include the Windows username, and the CPU model. Open it and redact those before attaching it as a file to the public issue;
   4. the launcher in use and what was in flight (the request, any other session or lane active on the box).
 - **Then keep the evidence.** Copy the files above to a folder outside any worktree before tearing anything down.
 

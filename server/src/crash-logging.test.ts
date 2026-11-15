@@ -324,7 +324,7 @@ describe('installShutdownSignals (#4054)', () => {
 
 describe('enableFatalErrorReports (#4054)', () => {
   it('R1 enables: creates the dir, then sets directory and reportOnFatalError', () => {
-    const report = { reportOnFatalError: false, directory: '' };
+    const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
     const mkdir = vi.fn();
     const log = vi.fn();
     expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log })).toBe(true);
@@ -332,6 +332,9 @@ describe('enableFatalErrorReports (#4054)', () => {
     expect(mkdir).toHaveBeenCalledWith('X/node-reports');
     expect(report.directory).toBe('X/node-reports');
     expect(report.reportOnFatalError).toBe(true);
+    // The report is attached to a public issue: no env vars (API keys, LAN token), no interfaces.
+    expect(report.excludeEnv).toBe(true);
+    expect(report.excludeNetwork).toBe(true);
     const line = String(log.mock.calls[0][0]);
     expect(line).toContain('diagnostic report on a fatal error');
     expect(line).toContain('X/node-reports');
@@ -360,7 +363,14 @@ describe('enableFatalErrorReports (#4054)', () => {
       reportOnFatalError: process.report.reportOnFatalError,
       directory: process.report.directory,
       filename: process.report.filename,
+      excludeEnv: process.report.excludeEnv,
+      excludeNetwork: (process.report as unknown as { excludeNetwork: boolean }).excludeNetwork,
     };
+    const sentinelKey = 'CW_4054_SENTINEL';
+    const sentinel = ['cw4054', 'secret', String(process.pid)].join('-');
+    const hadKey = Object.prototype.hasOwnProperty.call(process.env, sentinelKey);
+    const savedKey = process.env[sentinelKey];
+    process.env[sentinelKey] = sentinel;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-4054-'));
     const dir = path.join(root, 'node-reports');
     try {
@@ -370,10 +380,20 @@ describe('enableFatalErrorReports (#4054)', () => {
       expect(process.report.directory).toBe(dir);
       expect(process.report.reportOnFatalError).toBe(true);
       expect(process.report.filename).toBe(saved.filename);
+      // getReport() honours the same flags a fatal-error report does.
+      const text = JSON.stringify(process.report.getReport());
+      expect(text).not.toContain(sentinel);
+      const parsed = JSON.parse(text) as { header: Record<string, unknown> } & Record<string, unknown>;
+      expect(parsed.environmentVariables).toBeUndefined();
+      expect(parsed.header.networkInterfaces).toBeUndefined();
     } finally {
       process.report.reportOnFatalError = saved.reportOnFatalError;
       process.report.directory = saved.directory;
       process.report.filename = saved.filename;
+      process.report.excludeEnv = saved.excludeEnv;
+      (process.report as unknown as { excludeNetwork: boolean }).excludeNetwork = saved.excludeNetwork;
+      if (hadKey) process.env[sentinelKey] = savedKey;
+      else delete process.env[sentinelKey];
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

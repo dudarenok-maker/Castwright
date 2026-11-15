@@ -930,7 +930,7 @@
           <ol>
           <li>the sidecar&#39;s line from <code>logs/tts.err.log</code>, <code>server pid=&lt;pid&gt; exited with code &lt;n&gt; = 0x&lt;8 hex digits&gt; (&lt;meaning&gt;)</code>, or the words &quot;no exit-code line&quot;;</li>
           <li>the last 50 lines of the server&#39;s output (<code>logs/server.log</code> and <code>logs/server.err.log</code>, or the <code>npm run dev</code> terminal);</li>
-          <li>every <code>report.*.json</code> in <code>logs/node-reports/</code> whose name&#39;s date and time fall within a minute of the death, attached as a file, or the words &quot;no report&quot;;</li>
+          <li>every <code>report.*.json</code> in <code>logs/node-reports/</code> whose name&#39;s date and time fall within a minute of the death, or the words &quot;no report&quot;. The report leaves out the environment variables and network interfaces (Node&#39;s <code>excludeEnv</code> and <code>excludeNetwork</code>), but it still holds the <code>cwd</code> and the command line, whose paths include the Windows username, and the CPU model. Open it and redact those before attaching it as a file to the public issue;</li>
           <li>the launcher in use and what was in flight (the request, any other session or lane active on the box).</li>
           </ol></li>
         <li><strong>Then keep the evidence.</strong> Copy the files above to a folder outside any worktree before tearing anything down.</li>
