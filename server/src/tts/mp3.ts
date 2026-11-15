@@ -681,8 +681,8 @@ export async function writeChapterPeaksFile(
     await rename(tmp, peaksPath);
   } catch (err) {
     /* Clean up the temp file on terminal failure (matches writeJsonAtomic
-       in workspace/state-io.ts). Swallow unlink errors — the rename
-       failure is the real one to surface. */
+       in workspace/state-io.ts). Swallow unlink errors — the write or
+       rename failure is the real one to surface. */
     await unlink(tmp).catch(() => {});
     throw err;
   }

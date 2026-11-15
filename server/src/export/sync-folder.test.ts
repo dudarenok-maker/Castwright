@@ -19,7 +19,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, copyFile: fsMock.copyFile };
 });
 
-/* A copyFile that writes a partial destination, then fails ENOSPC. */
+/* A copyFile that writes a partial destination, then fails ENOSPC. A real
+   fs.copyFile unlinks its own partial destination, so this simulates the
+   case where that cleanup does not happen (defensive cleanup, #4218). */
 function failCopyPartWay() {
   fsMock.copyFile.mockImplementationOnce(async (_src: unknown, dest: unknown) => {
     writeFileSync(String(dest), 'par');
@@ -102,8 +104,8 @@ describe('writeToSyncFolder', () => {
   it('wraps the error with a Drive hint when destDir looks like a Drive for Desktop mount', async () => {
     const dest = join(tmpRoot, 'My Drive', 'Audiobooks');
     /* Source missing -> copyFile throws ENOENT before rename even runs.
-       The wrapper only kicks in on the rename branch, so we craft a
-       failure inside rename by writing to a path whose parent is a file
+       The wrapper covers both the copy and the rename branch; to hit
+       the rename branch we craft a failure inside rename by writing to a path whose parent is a file
        (EEXIST/ENOTDIR depending on platform). Easiest: write to a path
        under a dest-dir that we then rm in a child invocation. We just
        assert that on a successful rename inside a "My Drive"-shaped
@@ -151,6 +153,44 @@ describe('writeToSyncFolder — Drive hint wrapping', () => {
       );
     } finally {
       rmSync(driveTmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['My Drive', /Google Drive for Desktop/i],
+    ['OneDrive', /OneDrive folder/i],
+  ])('wraps a copy failure under a %s path with the hint, keeping code and cause (#4218)', async (dir, hint) => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-copyhint-test-'));
+    try {
+      const src = join(root, 'src.bin');
+      writeFileSync(src, Buffer.from('x'.repeat(32)));
+      failCopyPartWay();
+      const err = await writeToSyncFolder(src, join(root, dir, 'Audiobooks'), 'audiobook.zip').catch(
+        (e: unknown) => e,
+      );
+      expect((err as Error).message).toMatch(hint);
+      expect((err as { code?: string }).code).toBe('ENOSPC');
+      expect(((err as { cause?: { code?: string } }).cause ?? {}).code).toBe('ENOSPC');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wraps a folder-copy failure under a Drive path with the hint, keeping code and cause (#4218)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-copyhint-dir-test-'));
+    try {
+      const srcDir = join(root, 'staging');
+      mkdirSync(srcDir, { recursive: true });
+      writeFileSync(join(srcDir, '01.mp3'), 'x');
+      failCopyPartWay();
+      const err = await writeFolderToSyncFolder(srcDir, join(root, 'My Drive'), 'Book').catch(
+        (e: unknown) => e,
+      );
+      expect((err as Error).message).toMatch(/Google Drive for Desktop/i);
+      expect((err as { code?: string }).code).toBe('ENOSPC');
+      expect(((err as { cause?: { code?: string } }).cause ?? {}).code).toBe('ENOSPC');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

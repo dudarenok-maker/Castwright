@@ -46,11 +46,12 @@ export async function writeToSyncFolder(
     await copyFile(srcPath, tmpPath);
     await renameWithRetry(tmpPath, finalPath);
   } catch (e) {
-    /* Cleanup the tmp on terminal failure — including a copy that failed
-       part-way (ENOSPC) and left a partial file —
-       leaving `.tmp-<pid>-<ts>`
-       droppings inside a user's synced folder is the kind of thing they
-       notice and complain about. */
+    /* Cleanup the tmp on terminal failure (defensive for a copy that
+       fails part-way, e.g. ENOSPC, in case the platform's own cleanup
+       does not run) — leaving `.tmp-<pid>-<ts>` droppings inside a
+       user's synced folder is the kind of thing they notice and
+       complain about. A copy failure also gets the Drive / OneDrive
+       hint below, same as a rename failure. */
     await unlink(tmpPath).catch(() => {});
     throw wrapWithSyncHint(e, destDir);
   }

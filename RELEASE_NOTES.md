@@ -3,7 +3,7 @@
 **What's new in 1.16.0**
 
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
-- **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, copies one to your sync folder, or saves a cover or a chapter's loudness data, the half-written file is cleaned up instead of lingering.
+- **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, a cover, or a chapter's loudness or waveform data, the half-written file is cleaned up instead of lingering.
 - **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
 
 # Castwright 1.15.0
