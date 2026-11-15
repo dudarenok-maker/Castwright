@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 44 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 45 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**79 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**80 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
+> **Last change: 2026-11-13 (#4102), 79 → 80.** Row **A125** (a mint, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 44 → 45. `next-id` bumped A124 → A126 in the same change; A124 is reserved for #4054's row. Row is owed; not run here.
+>
+> **Previous change: 2026-11-12 (#4031, PR #4103 pass 5b), owed count unchanged.** Row **B109**
 > amended (plan 291 R57): the drawer's merge and downgrade are disabled mid-run, so the
 > refused-merge observation now comes from a second device or a tab opened before the run. No
 > row added or removed; `next-id` unchanged. Merged with `main`'s row **A123** (#4054): the
@@ -1942,7 +1944,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A124 -->
+<!-- next-id: A126 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6624,6 +6626,17 @@ The automated tests stub the process-handle wait and pin the exit-code wording, 
 - **A standalone sidecar is untouched.** In a terminal with `SIDECAR_PARENT_PID` cleared (`Remove-Item Env:SIDECAR_PARENT_PID`), start the sidecar alone (`npm run tts:sidecar`, no server). That terminal has `parent watch off`, it keeps running, and a server that then starts and adopts it does not change that: stopping the server leaves the sidecar running.
 
 *Needs:* the GPU box on Windows with the real sidecar. *Criteria:* this row. Clears when each bullet is recorded with the log line it produced.
+
+### A125 · A model the admission is for is not evicted by its own admission ([#4102](https://github.com/dudarenok-maker/Castwright/issues/4102)) · **single 8 GB card, real Qwen sidecar with the 1.7B-Base installed; GPU ASR / GPU speaker check for bullets 3-4**
+
+The automated tests prove the admission decisions with a fake probe and fake engines: a mint, a GPU ASR op and a GPU speaker op never run the idle-evict step for the model they are about to use, and a resident model books only its warm amount. They cannot show that the decisions are safe on real VRAM. In particular the mint's warm booking (the cold `qwen.1.7b.mint` peak minus the resident 1.7B-Base weights, about 2244-2744 MB on an 8 GB card) assumes the rest of a real mint (the 0.6B base plus decode) fits beside the resident base without a CUDA out-of-memory. Only a real GPU, a real Qwen sidecar and a real mint show that. Sidecar logs are in `logs/tts.err.log`.
+
+- **Back-to-back mints keep the 1.7B-Base.** On a fresh sidecar, render one Quality line so the 1.7B-Base is resident, then mint three emotion takes in a row for one designed voice. `logs/tts.err.log` has no `Qwen 1.7B-Base unloaded (evicted for admission).` and no second `Qwen 1.7B-Base loaded.` between the takes; each take completes; there is no CUDA out-of-memory and no `noCapacity`. Record the peak `nvidia-smi` used memory (MB) during a take.
+- **A tight card refuses the mint without unloading the base.** With the 1.7B-Base resident and the card otherwise filled (for example Kokoro and the 0.6B base loaded on the GPU), start a mint. It either completes or is refused for capacity (a `noCapacity` 503). Afterwards `GET /health` still reports the 1.7B-Base loaded and the log has no `Qwen 1.7B-Base unloaded (evicted for admission).` line. Record which outcome you saw and the `neededMb` of a refusal.
+- **GPU ASR keeps its model.** Set `ASR_DEVICE=cuda` (Settings, Content-QA device; changing it restarts the sidecar) and `SEG_ASR_ENABLED=true` (ASR QA enabled), then render a chapter. `Whisper ASR model unloaded.` never appears within a few seconds before a `Loading Whisper ASR model=... device=cuda` line during the render. A single load line at the first QA check is expected; record how many load lines the render logged.
+- **GPU speaker check keeps its model.** Set `SPK_DEVICE=cuda` (Settings, Voice-QA device; restarts the sidecar) with the speaker check on (`qa.speaker.enabled`), then render a chapter with two or more voices. `ECAPA speaker model unloaded.` never appears during the render (the sidecar has no ECAPA load log line, so confirm residency with `nvidia-smi`: the sidecar's used memory does not drop and re-rise by about 200 MB between checks). `ECAPA speaker model freed after >Ns idle (watchdog).` after the render is the idle watchdog and is fine.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4. *Criteria:* this row. Clears when each bullet is recorded with the log line or number it produced.
 
 ## Group B — local Ollama analyzer only
 
