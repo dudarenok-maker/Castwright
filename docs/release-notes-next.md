@@ -33,6 +33,10 @@ PR-by-PR as the v1.16.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🔊 Generation quality & engine health
+
+- **A chapter render that fails after its audio was encoded no longer leaves a chapter-sized temp file in the book's audio folder.** `finalizeChapterAudioWrite` wrote `<slug>.<ext>.tmp-<pid>-<ts>` before its fallible steps and only renamed it at the end, so any throw in between (the temp write itself, embeddings or segments write, the rename) leaked the file. The exported function is now a wrapper that removes the temp file on any exit before a successful rename, logs and swallows a failed removal, and rethrows the original error. Covered by `finalize-chapter-write.tmp-cleanup.test.ts`. Temp files leaked by earlier failures are not swept; that is #3456's boot sweep, not this fix (#4211, closes #4167).
+
 ## 🎭 Cast and re-analysis
 
 - **A re-analysis no longer leaves a book without a narrator row when `cast.json` was rewritten during the run** (a first-upload job that was never registered, a tab without an analysis era, a hand edit on disk): the persist re-creates the narrator from the run's roster (no voice restored) and keeps its lines on it, drift-refused persists included. Every other row deleted mid-run still stays deleted (rule 13). (#4196)
@@ -46,6 +50,8 @@ history at cut time.
 - **The Generate view no longer scrolls to chapter 3 on every plain load** (#4210, closes #4199). `ReadyRoute` defaults a chapterless URL to chapter 3 and `stageToHash` omits `?chapter=3`, so the plan-102 scroll effect smooth-scrolled `#chapter-3` into view on every load of `#/books/<id>/generate`. `GenerationView` now scrolls only when the URL itself carries a numeric `?chapter=` (read via `useSearchParams` and parsed the way `ReadyRoute` parses it, so a malformed value no longer lands on chapter 3). It scrolls when the URL names a chapter other than 3 at mount, and when `?chapter=` is set or edited, including to 3, while Generate is mounted; a cold `?chapter=3` link scrolls only when hydrating it leaves the persisted `ui.stage` unchanged; otherwise Layout's URL sync drops `?chapter=3` before the view mounts. In-app the param comes from `stageToHash` when the stage's chapter isn't 3, otherwise from a typed or shared URL; the chapter-3 stage default, the router grammar and the Manuscript view are unchanged. Covered by `src/views/generation.test.tsx` and `e2e/generate-explicit-chapter-scroll.spec.ts`.
 
 - **Sentence merges survive re-analysis.** The analysis persist and per-chapter roll now carry `manuscript-edits.json`'s `mergedAwayKeys` (fs-58) forward, read under the `book` lock, and fold a tombstoned sentence in a take that predates the merge back into its survivor instead of writing it back; an unreadable edits file now fails the persist rather than being overwritten. The cast-merge route also keeps the tombstones. (#4213, closes #4155)
+
+- **Paragraph recovery now applies its split points in UTF-16 space, so an emoji or other astral character no longer shifts them** (#4204, closes #4165). In a dash-dialogue book where a source conversion collapsed several turns into one paragraph, each astral character (outside the BMP, such as an emoji; ★ ♥ © are single UTF-16 units and were never affected) earlier in the paragraph shifted every later split point one character right. A single one made recovery miss the turn; two placed the break one character too far right; more moved it further, and the parser then fabricated an unanchored speech span. The split stays length-preserving (each replaced unit is the whitespace immediately before the dash), and lines with no astral characters come out byte-identical to before.
 
 ## 🧪 Test gates
 

@@ -2,7 +2,9 @@
 
 **What's new in 1.16.0**
 
+- **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
+- **The right voice on dialogue in books with emoji.** In Russian, Spanish and French dash-dialogue books where several turns were run together into one paragraph, an emoji earlier in the paragraph no longer gives a line the wrong voice. Ordinary symbols like ★, ♥ and © were never the problem.
 - **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
 - **Merged sentences stay merged.** Joining two sentences in the manuscript, or removing a sentence you turned into a chapter title, now survives a re-analysis and merging two characters, instead of quietly coming back on the next reload.
 

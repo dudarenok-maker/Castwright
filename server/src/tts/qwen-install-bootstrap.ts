@@ -33,6 +33,7 @@
 
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 import { detectQwenInstallStateOnDisk } from './qwen-install-detect.js';
 import { resolveVenvRuntimeProfile } from './spawn-sidecar.js';
 import { restoreOrtRuntime, type OrtRestoreOutcome } from './ort-restore.js';
@@ -109,7 +110,12 @@ export class QwenInstallBootstrap {
 
   constructor(opts: QwenInstallOptions) {
     this.repoRoot = opts.repoRoot;
-    this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as QwenSpawnFn);
+    this.spawnFn =
+      opts.spawnFn ??
+      refuseUnderVitest(
+        realSpawn as unknown as QwenSpawnFn,
+        'QwenInstallBootstrap: real spawn refused under vitest (#3712); inject spawnFn',
+      );
     this.detectFn = opts.detectFn ?? (() => detectQwenInstallStateOnDisk(this.repoRoot));
     this.installArgs = opts.installArgs ?? [];
     this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;
