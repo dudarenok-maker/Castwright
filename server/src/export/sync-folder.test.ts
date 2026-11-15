@@ -7,8 +7,25 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeToSyncFolder, writeFolderToSyncFolder } from './sync-folder.js';
+
+/* Pass-through spy on node:fs/promises.copyFile so a test can inject a
+   part-way copy failure (#4218); every other test sees the real function. */
+const fsMock = vi.hoisted(() => ({ copyFile: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  fsMock.copyFile.mockImplementation(actual.copyFile as never);
+  return { ...actual, copyFile: fsMock.copyFile };
+});
+
+/* A copyFile that writes a partial destination, then fails ENOSPC. */
+function failCopyPartWay() {
+  fsMock.copyFile.mockImplementationOnce(async (_src: unknown, dest: unknown) => {
+    writeFileSync(String(dest), 'par');
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  });
+}
 
 describe('writeToSyncFolder', () => {
   let tmpRoot: string;
@@ -53,6 +70,16 @@ describe('writeToSyncFolder', () => {
     await writeToSyncFolder(srcPath, dest, 'audiobook.zip');
     const stragglers = readdirSync(dest).filter((n) => n.includes('.tmp-'));
     expect(stragglers).toEqual([]);
+  });
+
+  it('removes the partial .tmp- file when the copy fails part-way, and rethrows (#4218)', async () => {
+    const dest = join(tmpRoot, 'sync');
+    failCopyPartWay();
+    await expect(writeToSyncFolder(srcPath, dest, 'audiobook.zip')).rejects.toMatchObject({
+      code: 'ENOSPC',
+    });
+    expect(readdirSync(dest).filter((n) => n.includes('.tmp-'))).toEqual([]);
+    expect(existsSync(join(dest, 'audiobook.zip'))).toBe(false);
   });
 
   it('keeps a path-traversal filename contained under the destination (CodeQL path-injection)', async () => {
@@ -191,6 +218,16 @@ describe('writeFolderToSyncFolder', () => {
     const result = await writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission');
     expect(result.copied).toBe(2);
     expect(existsSync(join(result.syncPath, 'README.txt'))).toBe(false);
+  });
+
+  it('removes the partial .tmp- file when a copy fails part-way, and rethrows (#4218)', async () => {
+    const destDir = join(tmpRoot, 'sync');
+    failCopyPartWay();
+    await expect(
+      writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission'),
+    ).rejects.toMatchObject({ code: 'ENOSPC' });
+    const target = join(destDir, 'The Coalfall Commission');
+    expect(readdirSync(target).filter((n) => n.includes('.tmp-'))).toEqual([]);
   });
 
   it('keeps a path-traversal book sub-folder contained under destDir (CodeQL path-injection)', async () => {
