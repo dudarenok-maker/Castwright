@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -32,12 +32,20 @@ function fakeChild(code: number) {
   return child;
 }
 
+const tmpDirs: string[] = [];
+const makeRoot = () => {
+  const d = mkdtempSync(join(tmpdir(), 'vb-'));
+  tmpDirs.push(d);
+  return d;
+};
+
 beforeEach(() => {
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockClear();
 });
 afterEach(() => {
   _resetVenvBootstrap();
+  for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 describe('VenvBootstrap never reaches a real spawn / Python lookup under vitest', () => {
@@ -47,7 +55,7 @@ describe('VenvBootstrap never reaches a real spawn / Python lookup under vitest'
 
   it('G1: default spawnFn is refused', async () => {
     const b = new VenvBootstrap({
-      repoRoot: mkdtempSync(join(tmpdir(), 'vb-')),
+      repoRoot: makeRoot(),
       detectVenvFn: () => false,
       findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
     });
@@ -61,10 +69,10 @@ describe('VenvBootstrap never reaches a real spawn / Python lookup under vitest'
 
   it('G2: default findPythonFn is refused', () => {
     const b = new VenvBootstrap({
-      repoRoot: mkdtempSync(join(tmpdir(), 'vb-')),
+      repoRoot: makeRoot(),
       detectVenvFn: () => false,
     });
-    expect(() => b.detect()).toThrow(/real Python lookup refused under vitest/);
+    expect(() => b.detect()).toThrow(/^VenvBootstrap: real Python lookup refused under vitest/);
     expect(spawnSync).toHaveBeenCalledTimes(0);
   });
 
@@ -80,7 +88,7 @@ describe('VenvBootstrap never reaches a real spawn / Python lookup under vitest'
       body = (await request(app).get(`/api/setup/venv/bootstrap/${res.body.id}`)).body;
       if (body.status !== 'error') throw new Error('not yet');
     });
-    expect(body.error).toMatch(/real Python lookup refused under vitest/);
+    expect(body.error).toMatch(/^VenvBootstrap: real Python lookup refused under vitest/);
     expect(spawn).toHaveBeenCalledTimes(0);
     expect(spawnSync).toHaveBeenCalledTimes(0);
   });
@@ -92,7 +100,7 @@ describe('VenvBootstrap never reaches a real spawn / Python lookup under vitest'
       return fakeChild(0) as never;
     });
     const b = new VenvBootstrap({
-      repoRoot: mkdtempSync(join(tmpdir(), 'vb-')),
+      repoRoot: makeRoot(),
       detectVenvFn: () => present,
       findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
       spawnFn,
