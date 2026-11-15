@@ -571,6 +571,13 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
   const controller = jobControllers.get(job.id);
   controller?.abort();
 
+  /* Wait for the build to unwind before answering: the builders drop their
+     own staging dir / partial file in a `finally`, and replying 204 first
+     let a client observe a cancelled export while those were still on disk.
+     Never rejects (the POST's `.catch` backstop); a no-op when the job is
+     not in flight (e.g. rehydrated from a manifest). */
+  await jobPromises.get(job.id);
+
   /* Best-effort manifest write so a server restart sees the cancelled
      state. If the disk write fails (the staging dir might already be
      gone), the in-memory state is still authoritative. */

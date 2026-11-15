@@ -35,6 +35,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 const seams = vi.hoisted(() => ({
   onSpawn: null as null | ((cmd: string) => void),
   linkFails: false,
+  onLink: null as null | (() => void),
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -53,6 +54,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...actual,
     link: ((...a: Parameters<typeof actual.link>) => {
+      seams.onLink?.();
       if (seams.linkFails) {
         return Promise.reject(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
       }
@@ -585,6 +587,7 @@ describeIfTools('buildM4b chapter-audio snapshot (#4223)', () => {
   afterAll(() => {
     seams.onSpawn = null;
     seams.linkFails = false;
+    seams.onLink = null;
   });
 
   const stagingLeft = () => readdirSync(tmpRoot).filter((n) => n.includes('.staging-'));
@@ -631,6 +634,17 @@ describeIfTools('buildM4b chapter-audio snapshot (#4223)', () => {
     await expect(
       buildM4b({ bookDir, state: makeState(), outPath, signal: ac.signal }),
     ).rejects.toThrow();
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  it('leaves no staging dir or snapshot behind when the export is aborted mid-snapshot', async () => {
+    const ac = new AbortController();
+    seams.onSpawn = null;
+    seams.onLink = () => ac.abort();
+    await expect(
+      buildM4b({ bookDir, state: makeState(), outPath, signal: ac.signal }),
+    ).rejects.toThrow();
+    seams.onLink = null;
     expect(stagingLeft()).toEqual([]);
   });
 });
