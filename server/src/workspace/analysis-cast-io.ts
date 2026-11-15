@@ -9,8 +9,9 @@
    (`staleReuseLinkKeys`), the dedup/fold/model calls all happen before the
    caller gets here.
 
-   Lock order: `cast` -> `book` (the persist's manuscript-edits write nests
-   `withBookLock` inside `withCastLock`; no `book` holder takes `cast`). No
+   Lock order: `cast` -> `book` (the persist's `book` span, which covers the
+   merge-tombstone read, the recount, the cast.json write and the manuscript-edits
+   write, nests `withBookLock` inside `withCastLock`; no `book` holder takes `cast`). No
    function here nests `withCastLock`, and none records a retirement: the
    persist RETURNS them and the caller records them after this lock is
    released (`cast` -> `cast-id-history` is allowed, but the history write is
@@ -32,6 +33,7 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { withCastLock } from './cast-lock.js';
 import { withBookLock } from './book-lock.js';
+import { applyMergeTombstones } from './merge-tombstones.js';
 import { ABSENT, UNREADABLE, readJsonWithStatus } from './cast-fingerprint.js';
 import { PriorCastUnreadableError } from './prior-cast-error.js';
 import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link.js';
@@ -447,9 +449,10 @@ export type PersistOutcomeError = Error & { persistOutcome?: PersistOutcome };
     3. re-resolve every plan target through the current history (exact | history);
     4. overlay (`persist`), remap this run's sentences (narrator -> the prior
        narrator id, a merged-away target -> its survivor, a re-mint -> its new id),
-       reroute lines of a deleted target to the book's narrator, recount, write
-       cast.json;
-    5. write manuscript-edits.json under the `book` lock, nested;
+       reroute lines of a deleted target to the book's narrator;
+    5. under the `book` lock, nested: read the merge tombstones from
+       manuscript-edits.json and fold them into the run's sentences, recount,
+       write cast.json, then write manuscript-edits.json (tombstones carried);
     6. reconcile the suggestions.
     `driftRefused`: only step 5 runs (cast.json is left byte-for-byte alone) and
     the run's added suggestion pairs are removed. `roster` is the PLAN-APPLIED
@@ -570,53 +573,69 @@ export async function persistPlannedCast(a: {
     const narratorId = ov.characters.map((c) => c.id).find(isNarratorId) ?? 'narrator';
     sentences = rerouteDeletedTargets(sentences, new Set(ov.deletedTargets), narratorId);
 
-    const carried = new Set(ov.carriedForward.map((c) => c.id));
-    const finalChars = (a.driftRefused ? current : (ov.characters as Rows)).map((c) => {
-      if (a.driftRefused || carried.has(c.id) || sentences.length === 0) return c;
-      const mine = sentences.filter((s) => s.characterId === c.id);
-      return { ...c, lines: mine.length, scenes: new Set(mine.map((s) => s.chapterId)).size };
-    });
-
+    /* The `book` lock opens BEFORE the recount: the tombstone fold changes the
+       sentences `lines`/`scenes` are counted from, so the read, the fold, the
+       cast.json write and the edits write are one span (cast -> book). */
     const retirements: Retirement[] = [];
-    if (!a.driftRefused) {
-      if (!sameJson(finalChars, current)) {
-        await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });
-      }
-      const live = new Set([...current.map((r) => r.id), ...finalChars.map((r) => r.id)]);
-      const seen = new Set<string>();
-      const candidates: Retirement[] = [];
-      for (const d of Object.values(plan.decisions)) {
-        // The narrator join is structural ('narrator' -> the prior narrator id), never a retirement.
-        if (d.kind !== 'join' || d.rawId === d.priorId || isNarratorId(d.rawId)) continue;
-        if (live.has(d.rawId) || seen.has(d.rawId) || Object.hasOwn(history.supersededBy, d.rawId)) continue;
-        const to = resolve(d.priorId);
-        if (!to || to === d.rawId) continue;
-        seen.add(d.rawId);
-        candidates.push({ from: d.rawId, to });
-      }
-      if (history.status === 'degraded') {
-        // Spec: with an unreadable history, retirements are skipped and logged.
-        if (candidates.length) {
-          console.warn(
-            `[analysis] ${candidates.length} character-id retirement(s) skipped - cast-id-history.json could not be read`,
-          );
-        }
-      } else {
-        retirements.push(...candidates);
-      }
-    }
-
     /* A failed edits write must not discard what the caller needs after cast.json
        has landed (retirements, ledger, idMap): park it, finish the suggestions step,
        and rethrow it carrying the outcome (`persistOutcome`). */
     let editsErr: unknown = null;
-    const writeEdits = (): Promise<void> =>
-      writeJsonAtomicOrdered(manuscriptEditsJsonPath(a.bookDir), { sentences });
-    try {
-      await (a.bookId ? withBookLock(a.bookId, writeEdits) : writeEdits());
-    } catch (err) {
-      editsErr = err ?? new Error('manuscript-edits.json write failed');
-    }
+    const writeSpan = async (): Promise<Rows> => {
+      // Absent = no tombstones; an unreadable or malformed file throws before anything is written.
+      const onDisk = await readJson<{ mergedAwayKeys?: unknown }>(manuscriptEditsJsonPath(a.bookDir));
+      const mergedAwayKeys = onDisk?.mergedAwayKeys;
+      if (mergedAwayKeys !== undefined && !(Array.isArray(mergedAwayKeys) && mergedAwayKeys.every((k) => typeof k === 'string'))) {
+        throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
+      }
+      if (mergedAwayKeys) sentences = applyMergeTombstones(sentences, mergedAwayKeys as string[]);
+
+      const carried = new Set(ov.carriedForward.map((c) => c.id));
+      const finalChars = (a.driftRefused ? current : (ov.characters as Rows)).map((c) => {
+        if (a.driftRefused || carried.has(c.id) || sentences.length === 0) return c;
+        const mine = sentences.filter((s) => s.characterId === c.id);
+        return { ...c, lines: mine.length, scenes: new Set(mine.map((s) => s.chapterId)).size };
+      });
+
+      if (!a.driftRefused) {
+        if (!sameJson(finalChars, current)) {
+          await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });
+        }
+        const live = new Set([...current.map((r) => r.id), ...finalChars.map((r) => r.id)]);
+        const seen = new Set<string>();
+        const candidates: Retirement[] = [];
+        for (const d of Object.values(plan.decisions)) {
+          // The narrator join is structural ('narrator' -> the prior narrator id), never a retirement.
+          if (d.kind !== 'join' || d.rawId === d.priorId || isNarratorId(d.rawId)) continue;
+          if (live.has(d.rawId) || seen.has(d.rawId) || Object.hasOwn(history.supersededBy, d.rawId)) continue;
+          const to = resolve(d.priorId);
+          if (!to || to === d.rawId) continue;
+          seen.add(d.rawId);
+          candidates.push({ from: d.rawId, to });
+        }
+        if (history.status === 'degraded') {
+          // Spec: with an unreadable history, retirements are skipped and logged.
+          if (candidates.length) {
+            console.warn(
+              `[analysis] ${candidates.length} character-id retirement(s) skipped - cast-id-history.json could not be read`,
+            );
+          }
+        } else {
+          retirements.push(...candidates);
+        }
+      }
+
+      try {
+        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(a.bookDir), {
+          sentences,
+          ...(mergedAwayKeys ? { mergedAwayKeys } : {}),
+        });
+      } catch (err) {
+        editsErr = err ?? new Error('manuscript-edits.json write failed');
+      }
+      return finalChars;
+    };
+    const finalChars = await (a.bookId ? withBookLock(a.bookId, writeSpan) : writeSpan());
 
     try {
       if (a.driftRefused) {

@@ -10,6 +10,7 @@ import { join as pathJoin } from 'node:path';
 const hooks = vi.hoisted(() => ({
   castFault: null as unknown,
   fingerprintFault: false,
+  editsWriteFault: null as Error | null,
   castDepth: 0,
   maxCastDepth: 0,
   bookLockCastDepths: [] as number[],
@@ -42,6 +43,17 @@ vi.mock('./cast-fingerprint.js', async (importOriginal) => {
       hooks.fingerprintFault
         ? { value: null, status: actual.UNREADABLE }
         : actual.readJsonWithStatus(path),
+  };
+});
+
+vi.mock('./ordered-write.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./ordered-write.js')>();
+  return {
+    ...actual,
+    writeJsonAtomicOrdered: async (path: string, value: unknown) => {
+      if (hooks.editsWriteFault && path.endsWith('manuscript-edits.json')) throw hooks.editsWriteFault;
+      return actual.writeJsonAtomicOrdered(path, value);
+    },
   };
 });
 
@@ -141,6 +153,7 @@ beforeEach(() => {
   mkdirSync(pathJoin(bookDir, '.audiobook'), { recursive: true });
   hooks.castFault = null;
   hooks.fingerprintFault = false;
+  hooks.editsWriteFault = null;
   hooks.castDepth = 0;
   hooks.maxCastDepth = 0;
   hooks.bookLockCastDepths = [];
@@ -877,7 +890,7 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
 
   it('Minor 1: an edits-write failure after cast.json landed still hands the caller the outcome', async () => {
     writeCast([row('olga', 'Ольга')]);
-    mkdirSync(manuscriptEditsJsonPath(bookDir)); // a directory where the file goes: the write fails
+    hooks.editsWriteFault = new Error('edits write failed'); // hits the write only; the tombstone read succeeds
     const err = await persistPlannedCast(
       persistArgs({
         plan: planOf(join('olya', 'olga', 'name')),
@@ -892,6 +905,7 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
     expect(err?.persistOutcome?.retirements).toEqual([{ from: 'olya', to: 'olga' }]);
     expect(err?.persistOutcome?.written).not.toBeNull();
     expect(readCast()[0].aliases).toEqual(['Оля']);
+    expect(existsSync(manuscriptEditsJsonPath(bookDir))).toBe(false);
   });
 
   it('Minor 2: a degraded history records no retirements, and says so server-side', async () => {
