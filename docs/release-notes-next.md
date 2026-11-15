@@ -36,3 +36,7 @@ history at cut time.
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
+
+## 🐛 Fixes
+
+- **Sentence merges survive re-analysis.** The analysis persist and per-chapter roll now carry `manuscript-edits.json`'s `mergedAwayKeys` (fs-58) forward, read under the `book` lock, and fold a tombstoned sentence in a take that predates the merge back into its survivor instead of writing it back; an unreadable edits file now fails the persist rather than being overwritten. The cast-merge route also keeps the tombstones. (#4155)

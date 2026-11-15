@@ -1,5 +1,9 @@
 # Castwright 1.16.0
 
+**What's new in 1.16.0**
+
+- **Merged sentences stay merged.** Joining two sentences in the manuscript, or removing a sentence you turned into a chapter title, now survives a re-analysis and merging two characters, instead of quietly coming back on the next reload.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**
