@@ -1,15 +1,133 @@
 ---
 status: draft
-revision: 4 (assumption-checker pass 3 on PR #4189 folded, 2026-11-15, around the owner's binding decisions E1-E4; revision 3 folded passes A and 1 around D1-D4; revision 2 folded the manual check F1-F24, V2-V4, D)
+revision: 5 (assumption-checker pass 4 on PR #4189 folded, 2026-11-15, around the owner's binding decisions E5-E6; revision 4 folded pass 3 around E1-E4; revision 3 folded passes A and 1 around D1-D4; revision 2 folded the manual check F1-F24, V2-V4, D)
 issue: 3456
-refs: [3400, 3397, 3457, 3704, 3711, 3717, 3774, 4166, 4167, 4206]
-verified-at: c16da893 (the only server changes since a9918640 are analysis.ts, plan-overlay.ts and analysis-cast-io.ts, none cited for a take path; no other cited server file changed since 3792b84b)
-decisions: OD1-OD8 accepted by the owner 2026-11-14; D1-D4 binding 2026-11-15; E1-E4 binding 2026-11-15; the items under "Decisions made in revision 3" and "Decisions made in revision 4" are owed owner confirmation
+refs: [3400, 3397, 3457, 3704, 3711, 3717, 3774, 4166, 4167, 4204, 4206, 4211, 4224]
+verified-at: 1e295990 (of the cited server files, only finalize-chapter-write.ts changed since c16da893, by #4211's temp-file cleanup; its anchors are shifted to match. #4206 and #4224 are still open at 1e295990)
+decisions: OD1-OD8 accepted by the owner 2026-11-14; D1-D4, E1-E4 and E5-E6 binding 2026-11-15; the items under "Decisions made in revision 3", "Decisions made in revision 4" and "Decisions made in revision 5" are owed owner confirmation
 ---
 
 # Chapter take lifecycle: who owns a chapter's live and `.previous` audio (#3456)
 
+## Revision 5 changelog
+
+`assumption-checker` pass 4 ran on revision 4 at head `2b5f887b` (PR #4189 comment "Assumption-checker
+pass 4"). It returned 0 Critical, 4 Significant (B1–B4), six Minors (B5–B10), six
+contradictions/gaps and three questions. The owner answered the first two on 2026-11-15 as E5 and
+E6 (binding, quoted under "Owner decisions"). The third was a design question that this revision
+settles itself (R5-1 to R5-5). Every anchor was re-checked against `origin/main` (`1e295990`). Since
+`c16da893`:
+- **#4211** (merged) makes finalize remove its temp audio file on a failure before the rename.
+  Finalize's anchors move by about 20 lines, and N5 is now fixed.
+- **#4204** (merged) touches no file this spec cites.
+- **#4206** is still open.
+- **#4224** (open) makes the m4b export hard-link chapter snapshots into a staging directory, so its
+  ffmpeg no longer opens the live chapter names. Once it merges, D4's ffmpeg-holder cases should
+  shrink to the clip cut and the MP3 zip and folder exports. Whether NTFS lets a live name be
+  renamed while ffmpeg holds a hard link to the same file is unverified, so row Q checks it. The
+  design does not depend on it (OD7, R-f).
+
+| Finding (pass 4) | Resolution in revision 5 |
+|---|---|
+| **B1 (S): a relabel group cannot be resumed from inside.** `stage` has no "partly staged" branch; `land` has no "temp gone, target present" branch, so a re-run quarantines freshly landed takes | **R5-1.** Every relabel group is now idempotent **per part**, not just at group boundaries. The journal lists each source's present parts. In `stage`, `drop` and `clear-stale-previous` a part is done when its source name is free and its journal-unique target holds it. A copy found at a vacated source name is foreign and is quarantined. That presence test is sound inside these groups because nothing lands on a slug before `land`. The `takeId` check reads whichever copy of the source's segments exists, at `from` or at `temp`. `land` gains "temp absent, target present → already landed", and that branch checks `takeId` on the segments part. A part that is absent under every name is recorded as lost and does not block replay. Fault injection now stops between two parts of one source in every group (§5.A Restructure, Tests). |
+| **B2 (S): the scan heal re-fills a merged chapter's cleared take fields from the pre-merge take while a relabel is stuck**, and fill-only then makes that permanent | **R5-2.** `healTakeFields` skips any slug that a journal names: a per-slug journal for it, or a book journal whose plan touches it. That covers `backfillAudioModelKeysFromSegments` → `persistHealPatches`, in `withBookOp`'s resolve and on the library-scan paths. The check runs inside the heal's `book` lock, and the restructure writes its journal under that same lock (§4.4). |
+| **B3 (S): after a parked stamp, the review entry is invisible and gets dropped; `takeId` matching would make the `audioTakeId` mirror a decision input** | **E6.** The A/B review entry is recorded **only after a successful stamp**. When the stamp is parked, no entry is recorded, and the chapter's old entry, which no longer describes the live and previous pair, is dropped. The journal stays at `installed` and carries everything replay needs to record the entry later. Replay records it right after its own stamp lands, so Restore appears once replay lands the stamp. `entryMatchesChapter` keeps matching against `state.json`'s `audioRenderedAt`, which a fail-loud stamp writes. It now also accepts the entry's recorded previous render time. The retry tables compare the **live segments'** `takeId`, which the module reads under book-op. `audioTakeId` is never read for a decision, so its mirror stamp stays swallowed. R4-7's "Restore is available" is corrected (§5.A Commit steps 3 and 7, Retry recognition, State-write sites). |
+| **B4 (S): E3's wait cannot be observed for queue-driven renders**: one POST per chapter, and `inFlightByBook` empties between chapters | **E5.** A splice- or QA-repair-triggered pass runs whenever it fires. It no longer waits, and there is no `afterRenders` mark and no synth-job exit hook. It always runs with the **full-cast `keep`** (`computeUsedQwenTiers`), which pass 4 confirmed closes A5's tier eviction on its own. A merged re-run ORs its triggers' `keep` sets, so any pass a partial trigger contributes to runs with at least the full cast. The E3 test is restated to pin the full-cast `keep`, with a mutation that swaps in `result.usedQwenTiers` and must fail. `chapter-job-coordination.ts` leaves the blast radius. R3-4 and R4-9 are restated (§5.A Scoring). |
+| B5 (m): R4-10's retry can land an older listen-progress autosave after a newer one | **R5-6.** A listen-progress write that carries no `listenedAt` takes its ordering time from when the server **received** it, before the first acquisition. A retried attempt applies srv-34's existing compare-and-set against that time (`book-state.ts:2813-2825`). So an older write's retry never overwrites a newer record, `markers` included. The client is unchanged. Listen-stats is a commutative max-merge and needs nothing. A partial job now requests scoring outside its commit span, so the registration retry never nests in book-op (§5.A Span length, Scoring). |
+| B6 (m): the bundle overwrite of a target with no `bookId` runs without book-op, so `replaceTakesFromBundle` would have no handle | **R5-7.** That branch (`scan-import-folder.ts:570`) gets an `UnaddressedBookHandle`, minted inside its `withBookPathClaim`. Both unaddressed kinds register their directory in a process-local set. A module entry point given a `BookHandle` whose directory is in that set answers `book_busy`. That closes the window after the bundle's freshly minted id lands in `state.json`. The `withBookOp` branch (`:571`) threads its handle through `commitOverwrite` (§5.A Fence). |
+| B7 (m): one segments read cannot be "the same population `loadSegmentsFiles` uses" | **One read, two filters.** Phase 1 reads each chapter's segments once. The join takes every file that parses, as `readSegmentsFile` does today. The engine classifier takes the subset with a numeric `chapterId`, through `loadSegmentsFiles`'s own predicate, extracted so both use one function. The `qa-report.ts` contract and the ABA close both hold, because the two filters see the same bytes (§5.A Scoring). |
+| B8 (m): guard rule 3 has no binding resolver in `guard-scan.ts`; the plant misses the template-literal hop and non-first-argument writers | Phase 1 step 7 now budgets a same-function `const` resolver in `test-utils/guard-scan.ts`, with its own unit tests. Rule 3 follows three hop kinds: `join`/`resolve`, a template literal whose head is a tracked binding, and a `const` alias. Each mutation call has a per-call table of path arguments. `rename`, `renameWithRetry`, `copyFile` and `cp` use arguments 0 and 1. `writeChapterLufsFile` uses argument 1 and `writeChapterPeaksFile` argument 2. The rest use argument 0. The mutation check plants three shapes, and each must fail: the two-`join` rename, finalize's template-literal temp write (`:242-244`), and a peaks write through argument 2 (§5.A Guard, Tests). |
+| B9 (m): the replay stamp's fail-loud row has callers with nothing to fail into | Split. Replay at an entry point that has a terminal outcome is fail-loud. Replay at the boot fsck (fire-and-forget, `index.ts:545-551`) and in R4-2's background `reconcileBook` retries is **swallow-and-log**: the journal stays, and the next entry point repeats it. The table now counts four new fail-loud sites, one moved, and four new swallow sites (§5.A State-write sites). |
+| B10 (m): R4-4 lets the PUT move a chapter to a free slug, orphaning its take | **R5-8.** A chapter the PUT matches on disk (by `uuid`, else `id`) must keep its disk slug. Only an unmatched chapter may carry a new slug, and only one that no disk chapter holds and that has no take on disk. Anything else answers 409 `slug_bound` (§4.3, R4-4 restated). |
+| Most dangerous assumption: a stuck book journal bricks the book | **R5-3, R5-4, R5-5.** A stuck journal blocks **only the slugs it names** (R5-3). Every entry point on a named slug answers `take_repair_pending` with a fixed sentence that names the remedy. A render fails such a chapter before synthesis, not at the watchdog with the wrong diagnosis (R5-4). The escape is defined: a lost or foreign part no longer blocks, every entry point and every boot retry, and only a file the OS refuses to move keeps a slug blocked. Whole-book writers resolve or refuse a pending journal before they swap state (R5-5). |
+| Gap: R4-1: `findChapterAudio` returns its first hit | The module probes all three extensions itself, with the finder's per-extension probe. `findChapterAudio` stays the readers' first-hit finder. Until step 0 resolves an ambiguous slug, exports read the first hit in `EXT_PROBE_ORDER` (§4.2). |
+| Gap: the relabel journal carries the whole `hintsPrior` | `hintsPrior` is dropped at the first cursor rewrite after `state-landed`, so it is written at most twice (§5.A Restructure). |
+| Gap: a parked edits failure feeds the cache rebuild stale sentences; "covered by the GET-side reconciliation" is unsupported | Partly settled. When the edits write is parked, the cache rebuild is **skipped**, so it never rebuilds from pre-restructure ids against a renumbered state. The "covered" claim is withdrawn. The remaining edits/cache gap is the same one `main` has after a crash in that window. It is listed under Remaining and in §8.3 as owing a design pass (§5.A Restructure). |
+| Gap: whole-state writers judge a relabel journal against a state they just swapped | R5-5. Backup restore and the bundle overwrite replay every pending journal **before** they swap `state.json`, in the same span. A replay that fails refuses the operation with `take_repair_pending`. The reparse/replace wipe removes the journals together with the takes, which is what the user asked for. |
+| Gap: the re-run's `afterRenders` | Moot: E5 removes `afterRenders`. |
+| Gap: R4-7 and the caller's own writes; client auto-retry | On the `take_details_pending` path the take committed, so generation's follow-ups still run before the terminal frame: `afterChapterFinalized` (the attempted marker and the scoring trigger) and the queue-entry mark. A Retry, whether the user or a client queue starts it, is an ordinary re-render whose step 0 replay runs first, so whether the client auto-retries does not change the outcome (R4-7 restated). |
+| Gap: whether a failed `reconcileBook` blocks unrelated slugs | No (R5-3). |
+| Questions 1–3 | Q1 answered by E5, Q2 by E6, Q3 by R5-1 to R5-5 (§8.1). |
+
+## Decisions made in revision 5 (owner to confirm)
+
+E5 and E6 left these open. Pass 4 said revision 5 could settle B1 and B2 without the owner. Each
+item takes the narrowest option that is safe.
+
+- **R5-1 (per-part relabel idempotence).** The relabel journal lists each source's present parts,
+  live and previous, in `COMPANION_SUFFIXES` order. Replay decides each part from what is on disk:
+  - **`stage`** (from → temp), **`drop`** (slug → `.discard-<jid>.drop.*`) and
+    **`clear-stale-previous`** (→ `.discard-<jid>.stale.*`):
+    - source present, target absent → rename;
+    - source absent, target present → done;
+    - both present → the copy at the source name is foreign, because nothing in the protocol
+      refills a vacated name. It is quarantined, and the part is done;
+    - both absent → the part is lost: log it, record it in the journal, and continue.
+
+    This presence test is sound inside these three groups. Their targets are journal-unique, and no
+    take lands on any slug before `land`, so a vacated slug name cannot be refilled.
+  - **The `takeId` check** reads the source's segments at `from` or at `temp`, whichever exists.
+    When the copy at `from` carries another `takeId`, the take at `from` is not the one planned.
+    Every part of that source still at `from` is quarantined, and those parts are recorded as lost.
+    Parts already at `temp` carry on.
+  - **`land`** (temp → target):
+    - temp present, target absent → rename;
+    - temp absent, target present → done, if the target's segments carry the source's `takeId` (the
+      segments part is checked; the other parts follow it);
+    - temp present, target present → the occupant is outside the plan: quarantine it, then rename.
+      Two sources never share a target, so a part this journal landed can never be an occupant;
+    - both absent → lost, as above.
+  - A lost part leaves an incomplete take: no audio means the chapter reads unrendered, and no
+    segments means it is unindexed (§4.2). It never blocks the book.
+- **R5-2 (the heal skips journal-named slugs).** `healTakeFields`, which serves
+  `backfillAudioModelKeysFromSegments` → `persistHealPatches` in `withBookOp`'s resolve and on the
+  library-scan paths, contributes no patch for a slug that a journal names. That is either a per-slug
+  journal file for it, or a book journal whose plan names it as a `from`, a `to`, a `drop` or a
+  `clearStalePrevious`. The check is made in the locked merge, under `book`. The restructure writes
+  its journal while it holds `book`, so a heal either runs before the restructure (and its fields are
+  then recomputed by the restructure's own state write) or sees the journal. The unlocked first pass
+  also skips the slug, so it does not report a fill it will not make. The fields stay absent until
+  the journal clears, and the next heal fills them from the take that is live then.
+- **R5-3 (scope of a stuck journal).** A journal that fails replay blocks only the slugs it names.
+  For a book journal, those are the slugs it names as defined in R5-2. For a per-slug journal, it is
+  its own slug.
+  - An entry point attempts a book journal's replay only when one of its slugs is among them, or
+    when it is a book-wide operation (a new restructure, backup restore, the bundle overwrite, the
+    boot fsck).
+  - An entry point on other slugs proceeds and logs the stuck journal once per span.
+  - Scoring skips named slugs, as a CAS skip that does not re-arm.
+  - A new restructure is refused while a book journal is stuck, because it needs the whole map.
+- **R5-4 (what the user sees).** Each entry point on a named slug answers 409 `take_repair_pending`
+  with one fixed, path-free sentence: "Some of this chapter's audio files could not be moved into
+  place. If another program is using the book's folder, close it; Castwright finishes the move
+  automatically." No new UI is added; the sentence reaches the existing error surfaces.
+  - **A render** checks at its chapter-start span (the `startTakeId` span, §4.1). A named slug fails
+    that chapter `chapter_failed` with the same code and sentence, **before** synthesis. A book
+    journal that becomes stuck during the render fails commit step 0 the same way. It is not
+    retryable cause 3, so the watchdog's "audio file in use" sentence is never the diagnosis.
+  - **The escape.** Lost parts and foreign copies do not block (R5-1). Every entry point on a named
+    slug, R4-2's background retries and every boot retry the replay. Only a file that the OS refuses
+    to rename, under every name and in every retry, keeps a slug blocked. Quarantine is a rename too,
+    so no software path can move such a file. Removing the cause (closing the holder, restoring the
+    folder's permissions) is the user's action, and the next entry point finishes. The boot fsck logs
+    each stuck journal with its book and slugs on every boot.
+- **R5-5 (whole-book writers and a pending journal).** Backup restore and the bundle overwrite run
+  `reconcileBook` and `reconcileSlug` for every slug **before** they swap `state.json`, inside the
+  same book-op (or unaddressed) span. A replay that fails refuses the operation with
+  `take_repair_pending`, and nothing is swapped. The reparse/replace wipe removes the journals with
+  the takes: it discards every take on purpose, and `.orphaned/` stays (R4-5).
+- **R5-6 (listen-progress ordering under retry).** See the B5 row. A write without `listenedAt`
+  is ordered by its receive time on its retried attempts. A first attempt is unchanged.
+- **R5-7 (the no-`bookId` bundle overwrite).** See the B6 row. The module accepts an
+  `UnaddressedBookHandle` from exactly two callers, the fsck's walker and this branch. A second
+  unaddressed handle for a directory already in the set is refused: the fsck skips the book for
+  this boot, and the overwrite answers `book_busy`.
+- **R5-8 (PUT slug binding, restated).** See the B10 row.
+
 ## Revision 4 changelog
+
+Kept for history. Where revision 5 changed a resolution (A3's review record, A5's wait, R4-4, R4-7,
+R4-8, R4-9, R4-10, and the replay stamp's class), the revision 5 changelog above wins.
 
 `assumption-checker` pass 3 ran on revision 3 at head `aeb162a2` (PR #4189 comment "Assumption-checker
 pass 3"). It returned 0 Critical, 5 Significant (A1–A5), nine Minors (A6–A14), seven
@@ -30,7 +148,7 @@ contradictions/gaps and three owner questions. The owner answered all three on 2
 | A9 (m): `TAKE_STATE_FIELDS` isn't the single list (restructure's `duration`, the scan heal, the PUT's `slug`) | §4.3 corrected. The list is the single **membership** list. Restructure's carry is a per-field rule over it: `duration` always, as today; the rest only for unchanged content. The scan heal becomes the module's `healTakeFields`: the one sanctioned book-op-less take-field writer, fill-absent only, never `audioTakeId`. The PUT can no longer rebind a chapter to another slug's takes (decision R4-4). |
 | A10 (m): `liveStaging` assumes one server process | Stated as a precondition. book-op is process-local too, so a second process already breaks every lock in the order. Listed under Remaining. |
 | A11 (m): a transient step-0 failure sweeps a healthy render | Step 0 is a **third retryable cause**: any failure before step 3 writes the commit's own journal keeps the staged set (§5.A Retries). |
-| A12 (m): three anchors past end-of-file | Corrected: `book-jobs.ts:50-56`, `atomic-rename.ts:22-26`. `previous-audio.ts:128` is gone; R-k's variable-suffix sites are `chapter-audio-file.ts:57`, `rewrite-chapter-slugs.ts:105-106`, `previous-audio.ts:51`, finalize `:196` and `book-state.ts:2413`. |
+| A12 (m): three anchors past end-of-file | Corrected: `book-jobs.ts:50-56`, `atomic-rename.ts:22-26`. `previous-audio.ts:128` is gone; R-k's variable-suffix sites are `chapter-audio-file.ts:57`, `rewrite-chapter-slugs.ts:105-106`, `previous-audio.ts:51`, finalize `:217` and `book-state.ts:2413`. |
 | A13 (m): Phase 1 schedules R3-5 before `restoreTake` exists | Phase 1 keeps fsck case 1 (with real extensions). The journalled promotion replaces it in Phase 3 (§7). |
 | A14 (m): `replaceTakesFromBundle` lock placement | It runs **after** the overwrite's `withStateJsonLock` rename loop returns, still under the claim and book-op, and before the `finally`'s record drops. A failure is parked, so those drops still run (§5.A Ownership). |
 | Gap: "exactly one" vs "two or more → yes" | §4.2: a live take exists ⇔ **at least one** live audio file exists. Two or more is ambiguous and resolved at step 0. |
@@ -62,9 +180,11 @@ E1–E4 left these open. Each takes the option most consistent with them.
 - **R4-3 (Accept on the no-live-take shape).** Step 0's promotion runs first. Accept then meets the
   restored take and takes its converge row: the entry is removed, `rejected` is recorded, and the
   answer is 409 `revision_gone`. The `live_audio_missing` pre-check is removed.
-- **R4-4 (PUT slug binding).** On PUT `/state`, an incoming chapter's `slug` must be either the slug
-  the same chapter (matched by `uuid`, else by `id`) holds on disk, or a slug that no disk chapter
-  holds and that has no take on disk. Otherwise the PUT answers 409 `slug_bound`. Slugs move only
+- **R4-4 (PUT slug binding). Restated by R5-8.** On PUT `/state`, a chapter that matches a disk
+  chapter (by `uuid`, else by `id`) must carry that chapter's disk slug. Only an unmatched chapter
+  may carry another slug, and only one that no disk chapter holds and that has no take on disk.
+  Otherwise the PUT answers 409 `slug_bound`. Revision 4 also let a matched chapter move to a free
+  slug, which left its take at the old slug bound to nothing (pass 4, B10). Slugs now move only
   through restructure, which moves the files with them. No in-app caller sends `chapters` on this
   slice (`book-state.ts:1503`).
 - **R4-5 (`.orphaned/` and the reparse wipe).** The reparse/replace wipe removes every entry of
@@ -72,19 +192,27 @@ E1–E4 left these open. Each takes the option most consistent with them.
 - **R4-6 (verdict format).** The verdict file stays a bare array, with no `takeId`. The scoring CAS
   and the carry-forward read the live segments' `takeId`, so a verdict id would be a field nothing
   reads.
-- **R4-7 (Retry after R3-7).** The `chapter_failed` frame carries the code `take_details_pending`
-  and R3-7's sentence. The parked rethrow has already recorded the review entry, so Restore is
-  available. A Retry is an ordinary re-render: as on `main`, it discards the take that was previous
+- **R4-7 (Retry after R3-7). Corrected by E6.** The `chapter_failed` frame carries the code
+  `take_details_pending` and R3-7's sentence. Revision 4 said the review entry was already
+  recorded, so Restore was available. That was false (pass 4, B3). Under E6 the entry is recorded
+  only after a successful stamp, so **Restore appears once replay lands the stamp**. The first replay
+  is the failing job's own catch-path `reconcileSlug`, so a transient failure shows Restore almost at
+  once. A persistent one shows it at the first later entry point whose replay lands. Before the
+  terminal frame, generation still runs its own follow-ups, because the take committed:
+  `afterChapterFinalized` (the attempted marker and the scoring trigger) and the queue-entry mark. A
+  Retry, whether the user or a client queue starts it, is an ordinary re-render. Its step 0 replay
+  runs first, and may record the entry. Then, as on `main`, it discards the take that was previous
   when it commits.
-- **R4-8 (fsck on an unaddressed book).** `withBookOpAtDir` passes a `BookHandle` or an
-  `UnaddressedBookHandle`. The module accepts the latter only from the fsck's walker. That keeps
-  today's case-1 recovery for books with no `bookId`.
-- **R4-9 (synth jobs for E3).** "Any render of the book" means any job that synthesises for it:
-  generation (`inFlightByBook`) and splice/QA repair (`chapter-job-coordination.ts`'s registry).
-  Splices and QA repairs load Qwen tiers too.
+- **R4-8 (fsck on an unaddressed book). Widened by R5-7.** `withBookOpAtDir` passes a `BookHandle`
+  or an `UnaddressedBookHandle`. The module accepts the latter from the fsck's walker and from the
+  bundle overwrite's no-`bookId` branch, and from nowhere else. That keeps today's case-1 recovery
+  for books with no `bookId`.
+- **R4-9 (synth jobs for E3). Withdrawn by E5.** No partial trigger waits any more, so no synth-job
+  registry is read and no exit hook exists.
 - **R4-10 (waiter retry bound).** The listen-progress/listen-stats PUTs and `runBookJob`'s
   registration retry a **pre-entry** book-op timeout up to twice more: three 10 s acquisitions, 30 s
-  in all. Past that they answer the existing curated `lock_contention` sentence.
+  in all. Past that they answer the existing curated `lock_contention` sentence. R5-6 orders a
+  retried listen-progress write by its receive time.
 
 ## Revision 3 changelog
 
@@ -145,10 +273,10 @@ D1–D4 left these open. Each takes the option most consistent with them.
 - **R3-3 (scoring triggers).** `triggerScoring` replaces "drop while in flight" with one coalesced
   re-run per book. A pass that drops a chapter on a CAS mismatch also requests the re-run.
   Revision 4 specifies the ctx merge and bounds the re-arm (§5.A Scoring).
-- **R3-4 (OD4 visibility). Restated by E3.** Splice and QA repair trigger scoring after a commit.
-  That bounds how long re-synthesised sentences read unscored. It is a behaviour change from
-  `main`, where splice never re-scores. The pass **waits** while any synth job of the book runs, and
-  then runs with the full-cast `keep` (R4-9).
+- **R3-4 (OD4 visibility). Restated by E3, then by E5.** Splice and QA repair trigger scoring after
+  a commit. That bounds how long re-synthesised sentences read unscored. It is a behaviour change
+  from `main`, where splice never re-scores. The pass runs whenever it fires, with the full-cast
+  `keep` (E5). Revision 4's wait (E3, R4-9) is withdrawn.
 - **R3-5 (no-live-take shape).** The previous take is promoted automatically, through a journalled
   `restoreTake`, when there is no live audio, the chapter is not excluded, and no journal exists
   for the slug. This keeps today's fsck-case-1 outcome without its unjournalled renames, instead
@@ -204,11 +332,23 @@ D1–D4 left these open. Each takes the option most consistent with them.
 >   claim is fixed.
 > - **E3.** R3-4 changes: a splice- or QA-repair-triggered scoring pass **waits** while any render
 >   of the book is running. It runs no tier reconcile beside a sibling render, then runs with the
->   normal full-cast `keep` set.
+>   normal full-cast `keep` set. *(Restated by E5: the wait is withdrawn.)*
 > - **E4.** Guard rule 3 drops its claim to catch variable-suffix and zip-relative writers. They are
 >   listed as known blind spots, consistent with `state-json-lock.guard.test.ts`'s own header. The
 >   guard keeps whatever it can genuinely catch. Its mutation check uses a realistic
 >   extracted-variable shape, not a planted literal.
+>
+> **Binding 2026-11-15 (E5–E6), after assumption-checker pass 4:**
+> - **E5 (answers pass 4's B4 / Q1).** Restate E3. A splice- or QA-repair-triggered scoring pass runs
+>   whenever it fires. It no longer waits for "no render running", because that cannot be observed
+>   for queue-driven renders: the queue makes one POST per chapter, and `inFlightByBook` empties
+>   between chapters. It always runs with the **full-cast `keep`** set, which pass 4 confirmed closes
+>   A5's tier eviction on its own. The wait and the new exit-hook callback are dropped. E3's test is
+>   restated to pin the full-cast `keep`, which is what actually protects.
+> - **E6 (answers pass 4's B3 / Q2).** The A/B review entry is recorded **only after a successful
+>   stamp**, and Restore appears once replay lands the stamp. `audioTakeId` stays a mirror, not a
+>   decision input, so its mirror stamp may stay swallowed. R4-7's "Restore is available" claim is
+>   fixed. The journal carries what replay needs to record the entry later.
 >
 > The `assumption-checker` gate is owed again on this revision before any implementation chain is
 > filed. Row Q's OneDrive cells must run on the box before Phase 2 (the NTFS cells are recorded,
@@ -237,10 +377,13 @@ Three options are costed in §5. **Accepted: Option A.**
 step fails?**
 - **The take stays committed.** Once the `installed` phase is journalled, the new take **is** the
   chapter. No rollback, ever.
-- **The failure is loud, and deferred (E2).** A failed `state.json` stamp is **parked**. The review
-  record and the discard cleanup still run, and then the parked error rethrows into the job's
-  terminal outcome (R3-7). The journal is **not** unlinked, so it stays at `installed`, and the next
-  `reconcileSlug` re-runs the stamp, the review record and the cleanup. The first such run is the
+- **The failure is loud, and deferred (E2, E6).** A failed `state.json` stamp is **parked**. The
+  discard cleanup still runs, and then the parked error rethrows into the job's terminal outcome
+  (R3-7). The review record does **not** run after a failed stamp (E6): an entry recorded over a
+  stale `state.json` is invisible to every read and is dropped at the next revisions write
+  (`revisions-store.ts:199-203,290-308`). The journal is **not** unlinked, so it stays at
+  `installed`, and the next `reconcileSlug` re-runs the stamp, then the review record, then the
+  cleanup. The first such run is the
   failing job's own catch path. It is idempotent: the stamp is a pure function of the live
   `segments.json`, and the review entry is keyed by `takeId`.
 - **The review record stays best-effort**, as plan 285 decided. It surfaces as
@@ -270,7 +413,7 @@ Smaller decisions:
 |---|---|---|
 | OD5 | Which files and fields belong to a take | §4.3: seven sibling files, plus `TAKE_STATE_FIELDS` in `state.json` |
 | OD6 | What excluding a chapter does to its takes | Drop the previous take, every live sibling, the take fields, and the pending entry. When the previous take is the **only** copy (§4.2), quarantine it instead of deleting it (F16). |
-| OD7 (F20) | How export is fenced | **Reject** (and `restore-unrecorded`) refuse `book_busy` while an export runs. **Accept is not refused**: it renames only the previous take away, which no ffmpeg export reads (the portable bundle skips `.previous.`, `build-portable-book.ts:149`), and a Node stream does not block a rename-away (probe, §5.A Windows). A render's commit during an export **waits** under D4 while ffmpeg holds the live file. The ffmpeg holders are the m4b builder and, through `applyId3v24Tags` (`export/id3-tags.ts:61-98`), the MP3 zip (`build-mp3-zip.ts:257`) and MP3 folder (`build-mp3-folder.ts:116`) exports (revision 4). |
+| OD7 (F20) | How export is fenced | **Reject** (and `restore-unrecorded`) refuse `book_busy` while an export runs. **Accept is not refused**: it renames only the previous take away, which no ffmpeg export reads (the portable bundle skips `.previous.`, `build-portable-book.ts:149`), and a Node stream does not block a rename-away (probe, §5.A Windows). A render's commit during an export **waits** under D4 while ffmpeg holds the live file. The ffmpeg holders are the m4b builder and, through `applyId3v24Tags` (`export/id3-tags.ts:61-98`), the MP3 zip (`build-mp3-zip.ts:257`) and MP3 folder (`build-mp3-folder.ts:116`) exports (revision 4). PR #4224 (open at `1e295990`) hard-links the m4b's chapter snapshots into staging, so once it merges the m4b's ffmpeg opens the links rather than the live names. Whether a rename-away of the live name then succeeds on NTFS while ffmpeg holds another link to the same file is not verified here, so row Q checks it. Nothing in this design depends on it (revision 5). |
 | OD8 | What migration does with a file it cannot place | Quarantine to `audio/.orphaned/`; never delete, never overwrite (F6) |
 
 ## 1. Why now, and what changed since the issue was filed
@@ -310,23 +453,23 @@ The remaining question is therefore narrower. **The things left to fence are:**
 The take files also need **one naming scheme**, a **defined fidelity**, a **defined "live take"**,
 and a **recovery rule that does not guess**.
 
-## 2. Inventory at `3792b84b` (unchanged at `c16da893`)
+## 2. Inventory at `3792b84b` (re-checked at `1e295990`: only finalize moved, by #4211)
 
 ### 2.1 The files
 
 | File | Written by | Moved by preserve? | Restructure |
 |---|---|---|---|
-| `<slug>.{mp3,m4a,ogg}` (live) | finalize `:753`; bundle overwrite | yes, always **to `.previous.mp3`** (`preserve-previous-audio.ts:38`) | moved/deleted |
-| `<slug>.segments.json` | finalize `:752`; restructure metadata rewrite; bundle overwrite | yes | moved/deleted |
-| `<slug>.peaks.json` | finalize `:755`; bundle overwrite | **no** | moved/deleted |
-| `<slug>.lufs.json` | finalize `:274` (**before** preserve) | **no** | moved/deleted |
-| `<slug>.embeddings.json` | finalize `:675`/`:744` (**before** preserve); QA repair Edit 6b (`chapter-qa-repair.ts:864`) | **no** | moved/deleted |
+| `<slug>.{mp3,m4a,ogg}` (live) | finalize `:775`; bundle overwrite | yes, always **to `.previous.mp3`** (`preserve-previous-audio.ts:38`) | moved/deleted |
+| `<slug>.segments.json` | finalize `:774`; restructure metadata rewrite; bundle overwrite | yes | moved/deleted |
+| `<slug>.peaks.json` | finalize `:778`; bundle overwrite | **no** | moved/deleted |
+| `<slug>.lufs.json` | finalize `:296` (**before** preserve) | **no** | moved/deleted |
+| `<slug>.embeddings.json` | finalize `:697`/`:766` (**before** preserve); QA repair Edit 6b (`chapter-qa-repair.ts:864`) | **no** | moved/deleted |
 | `<slug>.render-integrity.json` | scoring (`aggregate.ts:1022`, per character via `mergeVerdictRows`, `verdicts-io.ts:42-58`); QA repair Edit 6b `writeVerdicts` (`chapter-qa-repair.ts:~870-899`) | **no** | moved/deleted |
 | `<slug>.render-integrity-attempted.json` | `writeAttempted` in generation (`generation.ts:295`) and scoring (`aggregate.ts:638`); existence-only | **no** | moved/deleted |
 | `<slug>.previous.mp3`, `.previous.segments.json` | preserve | — | moved/deleted |
 | `<slug>.previous.peaks.json` / `.previous.lufs.json` | **nothing** (always absent) | — | listed, never present |
-| `<slug>.<ext>.tmp-<pid>-<ts>` | finalize `:221-222` | — | **leaked on a throw** (#4167) |
-| `state.json` chapter: `duration`, `audioModelKey`, `audioEngines`, `audioRenderedAt`, `audioQa` | finalize `:766-792`; backup restore (whole file); PUT `/state` (carried, `chapter-uuid.ts:121-170`) | **no** | `duration` carried **unconditionally** (`restructure.ts:394`); the other four only when the content is unchanged (`restructure.ts:409-416`) |
+| `<slug>.<ext>.tmp-<pid>-<ts>` | finalize `:242-244` | — | removed on a throw before the rename since #4211 (`:188-206`); a crash still leaves it (#4167) |
+| `state.json` chapter: `duration`, `audioModelKey`, `audioEngines`, `audioRenderedAt`, `audioQa` | finalize `:789-815`; backup restore (whole file); PUT `/state` (carried, `chapter-uuid.ts:121-170`) | **no** | `duration` carried **unconditionally** (`restructure.ts:394`); the other four only when the content is unchanged (`restructure.ts:409-416`) |
 
 Scoring does **not** write embeddings (V3). Embeddings are written only by finalize and QA repair.
 Book-level scoring files (centroids, pending-attempts) are not take parts (§4.3).
@@ -335,7 +478,7 @@ Book-level scoring files (centroids, pending-attempts) are not take parts (§4.3
 
 | # | Writer | Where | Locks today | Races |
 |---|---|---|---|---|
-| W1 | **Finalize** | `audio/finalize-chapter-write.ts:188-807` | None for the files. `state-json` for the stamp (`:766`). `revisions` in `applyReview` (`:798`). Its caller is a `render` job (no book-op). | Lufs and embeddings are written before preserve (H4). If `:753` fails, the **new** segments (`:752`) sit next to the old audio or none (H6). It interleaves with reject (H9), with a second finalize (N9), and with the fsck (N8). |
+| W1 | **Finalize** | `audio/finalize-chapter-write.ts:188-831` | None for the files. `state-json` for the stamp (`:789`). `revisions` in `applyReview` (`:821`). Its caller is a `render` job (no book-op). | Lufs and embeddings are written before preserve (H4). If `:775` fails, the **new** segments (`:774`) sit next to the old audio or none (H6). It interleaves with reject (H9), with a second finalize (N9), and with the fsck (N8). |
 | W2 | **Generation** | `routes/generation.ts:858` (`runBookJob`); calls W1 at `:1996` | No book-op; abort-based displacement keyed `${bookId}::X` / `::*` (`:513-515`) | Finalize gets no signal. Bails at `:1957` (before assembly) and `:2044` (after finalize) only (H8). The watchdog releases the token while an abort-ignoring body can still run (`:2225-2243`) (N15). A `*` job's `abortInFlightSplice(bookId, null)` (`:1383`) is a no-op (`chapter-job-coordination.ts:54`) (H16 → OD2). `::*` and `::X` jobs don't displace each other (`:1318-1319`, `:1379-1383`) (N9). |
 | W3 | **Splice** | `routes/chapter-splice.ts:174`; calls W1 at `:555` | No book-op; `registerSplice` at `:336` | Reads segments (`:185`) before it registers; the last abort check is `:526` (H7). Never triggers scoring (`:589-600`). |
 | W4 | **QA repair** | `routes/chapter-qa-repair.ts:143`; calls W1 at `:804` | No book-op; registers at `:333` | Reads **and decodes** the audio (`:150-163`) before it registers (H7). **Edit 6b** writes embeddings (`:864`) and verdicts (`:~870-899`) **after** finalize returns, outside any fence (F4). Never triggers scoring (`:906-919`). |
@@ -368,10 +511,10 @@ are the ones with a named hazard. The others are listed in the blast radius (§5
 | R-h | Clip | `routes/clip.ts:73,93-104`; **ffmpeg** `-c copy` holder | R-a window; blocks rename-away of the live file (EBUSY, probe) (N4) |
 | R-i | Portable export | `build-portable-book.ts:141-157` | Its filter (`startsWith(slug.)` + an audio extension) would ship staged `.next-*`/`.discard-*` files (F15) |
 | R-j | QA report, cast-audio-currency | `audio/qa-report.ts`, `store/cast-audio-currency.ts` | After a reject, `state` describes the rejected take (H3/F2) |
-| R-k | Variable-suffix builders | `workspace/chapter-audio-file.ts:57`, `rewrite-chapter-slugs.ts:105-106` (`suffixPath`), `previous-audio.ts:51`, `finalize-chapter-write.ts:196`, `routes/book-state.ts:2413` | Build `<slug>.<suffix>` from a runtime suffix. The guard sees finalize's shape (same-function `const` chain from `audioDir`) but not the others (a parameter root, a helper's return, an array iterated in a loop). They fold into the module in Phase 1, so they are removed, not guarded (§5.A Guard) |
+| R-k | Variable-suffix builders | `workspace/chapter-audio-file.ts:57`, `rewrite-chapter-slugs.ts:105-106` (`suffixPath`), `previous-audio.ts:51`, `finalize-chapter-write.ts:217`, `routes/book-state.ts:2413` | Build `<slug>.<suffix>` from a runtime suffix. The guard sees finalize's shape (same-function `const` chain from `audioDir`) but not the others (a parameter root, a helper's return, an array iterated in a loop). They fold into the module in Phase 1, so they are removed, not guarded (§5.A Guard) |
 | R-l | Library scan `completedChapters` | `workspace/scan.ts:749-752` | Counts **files** matching `/\.(mp3\|m4a\|opus)$/i`: it misses `.ogg`, and counts `.previous.mp3`, and would count a staged `.next-*.mp3`. PR #4206 makes it count non-excluded chapters with `chapterAudioExists`. It then uses the module's live-take predicate, like R-d |
 
-## 3. Hazards, verified at `3792b84b` (unchanged at `c16da893`)
+## 3. Hazards, verified at `3792b84b` (re-checked at `1e295990`)
 
 Status key: **P** present, **F** fixed, **Pt** partly fixed, **N** newly found.
 
@@ -380,9 +523,9 @@ Status key: **P** present, **F** fixed, **Pt** partly fixed, **N** newly found.
 | H1 | Reject unlinks the live take before renaming the previous one in | P (mitigated by the `live_audio_missing` pre-check, `revision-ops.ts:92`) | `previous-audio.ts:45-55` |
 | H2 | Reject swallows a failed segments rename | P | `previous-audio.ts:58` |
 | H3 | Reject restores audio and segments only; state fields and sidecars stay with the rejected take | P | `previous-audio.ts:39-61` |
-| H4 | New lufs and embeddings are written before preserve | P | finalize `:274`, `:675`, `:744` vs `:751` |
+| H4 | New lufs and embeddings are written before preserve | P | finalize `:296`, `:697`, `:766` vs `:773` |
 | H5 | Unlocked `state.json` writers | **F** (#3700/#3625) | guard `state-json-lock.guard.test.ts` |
-| H6 | A failed finalize rename leaves no live audio | P, **worse**: the new segments are already live (`:752`), the tmp file leaks (#4167), there is no stamp | `:751-753` |
+| H6 | A failed finalize rename leaves no live audio | P, **worse**: the new segments are already live (`:774`), the tmp file is now removed (#4211), there is no stamp | `:773-775` |
 | H7 | Splice and QA repair read before they register | P | splice `:185` vs `:336`; QA repair `:150-163` vs `:333` |
 | H8 | Stalled or displaced generation still commits | **Pt** (#3711) | `:1957`, `:2044`; finalize takes no signal |
 | H9 | No exclusion between accept/reject and running jobs | **Pt** (#3711: no job can *start* during either) | `generation.ts:661` sees generation only; accept checks nothing |
@@ -401,11 +544,11 @@ Status key: **P** present, **F** fixed, **Pt** partly fixed, **N** newly found.
 | N1 | **The fsck resurrects an excluded chapter's audio** | N | Exclude leaves `.previous.mp3`; fsck case 1 never reads `state.json` |
 | N2 | A pending entry survives exclude; Reject restores audio onto an excluded chapter | N | — |
 | N3 | `completedSlugs` misses `.ogg` and counts a lone `.previous.mp3` | N; **filed and queued as #4166** | `book-state.ts:785-788` |
-| N4 | **Windows, verified on NTFS by pass 1's probe.** An ffmpeg reader of the live file (m4b build, clip cut) makes rename-away fail EBUSY, rename-onto fail EPERM, and unlink fail EBUSY. A Node `openSync` holder makes rename-onto fail EPERM only. Preserve swallows its failure, so today a commit during an export can leave old audio + new segments, or **two live files** on a format switch. | N, NTFS confirmed; OneDrive owed (row Q) | probe (PR #4189, pass 1); `preserve-previous-audio.ts:42-51`; finalize `:752-753` |
-| N5 | Finalize tmp leaked on a throw | N; **filed and queued as #4167** | `:221-222` |
+| N4 | **Windows, verified on NTFS by pass 1's probe.** An ffmpeg reader of the live file (m4b build, clip cut) makes rename-away fail EBUSY, rename-onto fail EPERM, and unlink fail EBUSY. A Node `openSync` holder makes rename-onto fail EPERM only. Preserve swallows its failure, so today a commit during an export can leave old audio + new segments, or **two live files** on a format switch. | N, NTFS confirmed; OneDrive owed (row Q) | probe (PR #4189, pass 1); `preserve-previous-audio.ts:42-51`; finalize `:774-775` |
+| N5 | Finalize tmp leaked on a throw | **F** (#4167, fixed by #4211; a crash still leaves it, and the sweep unlinks it) | `:188-206,242-244` |
 | N6 | `splice_complete`/QA-repair completion always send `hasPreviousAudio: true` | N (minor) | `chapter-splice.ts:596`, `chapter-qa-repair.ts:915` |
 | N7 | Scoring files verdicts and attempted markers under whichever take is live; QA repair's Edit 6b writes embeddings and verdicts after finalize, unfenced | N | `aggregate.ts:602,638,643,1022`; `chapter-qa-repair.ts:864,~870-899` |
-| N8 | The fsck runs alongside requests. Between finalize's segments write (`:752`) and its audio install (`:753`), live audio is absent, so case 1 promotes `.previous.mp3` **and renames `.previous.segments.json` over the new segments**. | N | `fsck-orphan-audio.ts:89-96` |
+| N8 | The fsck runs alongside requests. Between finalize's segments write (`:774`) and its audio install (`:775`), live audio is absent, so case 1 promotes `.previous.mp3` **and renames `.previous.segments.json` over the new segments**. | N | `fsck-orphan-audio.ts:89-96` |
 | N9 | Two renders of one chapter (`::*` and `::X`, which don't displace each other) interleave, and the second commit discards the user's pre-render take | N | `generation.ts:513-515,1318-1319,1379-1383` |
 | N10 | `revision-op` is redundant: its only holders (`revision-ops.ts:58`, `chapter-audio.ts:429`) are inside `withBookOp` | N (observation, confirmed by pass A) | — |
 | N11 | Bundle overwrite leaves a mixed take: the bundle's audio/segments/peaks beside the local lufs, embeddings, verdicts and previous take | N | `scan-import-folder.ts:15-19,518-535` |
@@ -458,7 +601,9 @@ the read sits after registration.
 **Where a full render reads `startTakeId` (R3-1).** At chapter start, after OD2's per-chapter splice
 abort, generation opens one short span, calls `ensureTakeIdentity` and reads the live take's id
 (or `null` when there is no live take). So R3-1 also fires for a chapter whose take was id-less
-when the render started.
+when the render started. The same span runs the chapter's journal replay. If a stuck journal names
+the chapter's slug, the chapter fails `take_repair_pending` here, before any synthesis is spent on
+it (R5-4).
 
 Restructure carries `audioTakeId` across a rename with the other take fields. Staging, discard and
 journal **file names use `takeId` or a fresh journal id, never a timestamp.**
@@ -474,6 +619,10 @@ The module exports one predicate. Every entry point, the fsck, `completedSlugs` 
   two differ on a case-insensitive filesystem (NTFS, APFS by default): there the probe also sees
   `<slug>.MP3`, a regex would not, and exports would disagree with the module. PR #4206 uses the
   finder for `completedSlugs` and `completedChapters`.
+  `findChapterAudio` returns its **first** hit (`chapter-audio-file.ts:47-63`), so it cannot report
+  two. The module therefore runs the finder's per-extension probe for all three extensions itself
+  (revision 5). `findChapterAudio` stays the readers' first-hit finder. Until step 0 resolves an
+  ambiguous slug, exports read the first hit in `EXT_PROBE_ORDER`.
   `<slug>.next-<id>.mp3`, `.discard-*`, `.previous.*` and `*.tmp-*` are never probed, so they never
   count.
 - **A live take exists ⇔ at least one live audio file exists.** Segments and sidecars do not make a
@@ -525,8 +674,12 @@ rule, the rule is stated over the list, never as a second list:
 - **`stampStateFromLiveTake`** sets every member it can derive.
 - **`chapter-uuid.ts`'s `SERVER_OWNED_CHAPTER_FIELDS`** becomes `TAKE_STATE_FIELDS`. Today it is
   exactly the first five members (`chapter-uuid.ts:121-127`), so adding `audioTakeId` closes N13.
-- **The PUT's `slug`** is not a take field, but it is what binds a chapter to its take files. R4-4
-  stops the PUT rebinding it (`chapter-uuid.ts:147` passes every other field through).
+- **The PUT's `slug`** is not a take field, but it is what binds a chapter to its take files. R4-4,
+  as restated by R5-8, stops the PUT changing a matched chapter's slug at all
+  (`chapter-uuid.ts:147` passes every other field through). A free target slug is refused too: it
+  would leave the chapter's take at its old slug, bound to nothing, and its server-owned fields
+  would drop, because `carryServerOwnedChapterFields` matches on `id` and `slug`
+  (`chapter-uuid.ts:149-170`).
 - **Restructure's carry** is a rule over the list, and keeps today's behaviour: `duration` is
   carried unconditionally (`restructure.ts:394`); every other member, `audioTakeId` included, is
   carried only when the content is unchanged (`restructure.ts:409-416`).
@@ -543,7 +696,7 @@ rule, the rule is stated over the list, never as a second list:
 | `state.json` field | Derived from |
 |---|---|
 | `duration` | `formatDuration(durationSec)` |
-| `audioModelKey` | `effectiveAudioModelKey(engineBreakdownFromSnapshots(characterSnapshots), modelKey)`, exactly as finalize does (`:652-653`), **never the raw `modelKey`** |
+| `audioModelKey` | `effectiveAudioModelKey(engineBreakdownFromSnapshots(characterSnapshots), modelKey)`, exactly as finalize does (`:674-675`), **never the raw `modelKey`** |
 | `audioEngines` | the same breakdown |
 | `audioRenderedAt` | `synthesizedAt` |
 | `audioQa` | `qa` |
@@ -551,7 +704,7 @@ rule, the rule is stated over the list, never as a second list:
 
 `stampStateFromLiveTake(handle, slug)` runs inside `book` → `state-json` and sets every field it
 derives. A field the segments file lacks is left as it is. A **commit's** stamp also clears
-`generationState*` in the same write, as finalize does today (`:781-784`). The commit journal
+`generationState*` in the same write, as finalize does today (`:804-807`). The commit journal
 records `clearGenerationState: true`, so a replayed commit stamp clears them too (R3-7).
 
 **`healTakeFields(bookDir, patches)`** is the scan heal, moved into the module (A9). It is the
@@ -560,11 +713,33 @@ That is safe because of how it writes, which is today's `persistHealPatches` (`s
 unchanged:
 - it runs under `book` → `state-json`;
 - it re-derives from the live segments under the lock;
-- it fills only absent members, never `audioTakeId`.
+- it fills only absent members, never `audioTakeId`;
+- **it skips every slug a journal names (R5-2, revision 5).**
 
 A commit's stamp serialises with it on `book`. A heal that lands before the stamp is overwritten by
 it. A heal that lands after the stamp finds nothing absent. Its callers (`scan.ts:807,1345`) are
 unchanged, and it stays on CLAUDE.md's swallow list ("segments backfill").
+
+**Why the skip is needed (pass 4, B2).** Revision 4 said a heal is always followed by a stamp, and
+that is not true while a journal is open:
+- The heal runs inside every `withBookOp` resolve, before the callback and so before any entry
+  point's replay (`book-op-lock.ts:262,424`, `scan.ts:1302-1345`). It also runs on the unlocked
+  library-scan paths (`scan.ts:821,1124`).
+- A merge's surviving chapter keeps its slug with `contentChanged: true`. The restructure drops its
+  take fields (`restructure.ts:409-416`) and emits a delete on that slug (`:450-452`). Under E1 the
+  delete runs in the `drop` group, after `stage`.
+- While a relabel is stuck at `stage`, the pre-merge take still sits at the slug. A heal there would
+  fill the merged chapter's fields from that take. Once replay drops the take, nothing corrects
+  them: the heal is fill-only, and a dropped take is never stamped.
+- `main` avoids this because restructure holds `book` across both its state write and its audio ops
+  (`chapters-restructure.ts:331`). `persistHealPatches`'s own comment names this merge shape
+  (`scan.ts:1207-1211`). E1's journal outlives that span.
+
+So the heal contributes no patch for a slug that a per-slug journal names, or that a book journal
+names as a `from`, a `to`, a `drop` or a `clearStalePrevious`. The check is made in the locked merge
+under `book`. The restructure writes its journal while it holds `book`, so the heal sees either the
+pre-restructure state, which the restructure's own state write then recomputes, or the journal. The
+same skip covers a commit or restore journal whose install a replay may still roll back.
 
 The stamp is a pure function of the live `segments.json`, so running it twice is the same as
 running it once. It is used by:
@@ -589,6 +764,19 @@ running it once. It is used by:
 Each entry point takes a live `BookHandle`, and each starts with `reconcileBook` (book journals),
 then `reconcileSlug` and `ensureTakeIdentity` for each slug it touches.
 
+**A stuck journal blocks only the slugs it names (R5-3, revision 5).** A book journal names the slugs
+it lists as a `from`, a `to`, a `drop` or a `clearStalePrevious`. A per-slug journal names its own
+slug. `reconcileBook` attempts a book journal only when the entry point touches one of the slugs it
+names, or is book-wide: a new restructure, backup restore, the bundle overwrite, the boot fsck.
+- When the replay fails, an entry point on a named slug answers 409 `take_repair_pending` with
+  R5-4's fixed sentence.
+- An entry point on other slugs proceeds, and logs the stuck journal once per span.
+- A new restructure is refused while a book journal is stuck, because it needs the whole map.
+- Scoring skips named slugs, as a CAS skip that does not re-arm.
+
+Revision 4 had every entry point fail on any failed book replay. That turned one locked file into an
+unrenderable book (pass 4, most dangerous assumption).
+
 | Entry point | Replaces or serves |
 |---|---|
 | `commitTake` | finalize's preserve and install |
@@ -609,7 +797,9 @@ then `reconcileSlug` and `ensureTakeIdentity` for each slug it touches.
 - The reparse/replace wipe of `audio/` stays where it is, on an **allowlist**. It is a
   whole-directory removal under book-op with no job registered, and it touches no single take. It
   removes every entry of `audio/` **except `.orphaned/`** (R4-5). Today it is
-  `rm(ad, { recursive: true })` (`book-state.ts:1828`), which would take `.orphaned/` with it.
+  `rm(ad, { recursive: true })` (`book-state.ts:1828`), which would take `.orphaned/` with it. The
+  wipe also removes every journal and every relabel temp name with the takes (R5-5). It discards
+  every take on purpose, so there is nothing for a journal to finish.
 - The bundle overwrite's generic rename loop **excludes `audio/`**, and a test pins that. The
   module installs each bundle chapter as a whole live take: it mints a `takeId` when the bundle's
   segments lack one, stamps state, and replaces that slug's local live and previous takes whole.
@@ -622,6 +812,23 @@ then `reconcileSlug` and `ensureTakeIdentity` for each slug it touches.
     timeout.
   - **A failure is parked.** The remaining chapters are still installed, the `finally` still runs,
     and then the error rethrows into the import's outcome.
+  - **A pending journal is resolved first (R5-5).** Before the rename loop swaps `state.json`, the
+    overwrite runs `reconcileBook` and `reconcileSlug` for every slug, in the same span. A replay that
+    fails refuses the import with `take_repair_pending`, and nothing is swapped. Backup restore does
+    the same before it restores `state.json`. Otherwise a relabel journal would be judged against a
+    state that the writer just swapped in (pass 4): at cursor `planned`, its `plannedSlugs` test
+    would roll the hints back over a restored state; past `state-landed`, its audio would move to
+    slugs that the restored state does not name.
+  - **Handles (R5-7).** The `withBookOp` branch (`scan-import-folder.ts:571`) threads its handle
+    through `commitOverwrite`; today its callback ignores the handle. The branch for a target with
+    no `bookId` (`:570`) runs under `withBookPathClaim` only, because no `/:bookId` route can reach
+    that book. It mints an `UnaddressedBookHandle` inside the claim. Once the bundle's `state.json`
+    lands, though, the book carries a freshly minted id (`:490`), and a route that learned the id
+    from a library listing could reach it while the claim is still held. So both unaddressed kinds
+    (the fsck's and this one) register their directory in a process-local set until they return. A
+    module entry point given a `BookHandle` whose directory is in that set answers `book_busy`. A
+    second unaddressed handle for a directory already in the set is refused: the fsck skips the book
+    for this boot, and the overwrite answers `book_busy`.
 - The PUT `/state` (W15) owns no take files. It is covered by `TAKE_STATE_FIELDS`, and by R4-4 for
   the slug binding.
 
@@ -642,9 +849,28 @@ shapes below and lists the rest as blind spots. It fails on:
    - each matched as a bare call or as a member call (`fs.rm`, `fsp.rename`);
 3. any mutation call outside the module whose path argument is rooted at `audioDir(…)` or an
    `audio/` literal, **either inline or through `const` bindings in the same function**, followed
-   transitively. Finalize's shape is the realistic one: `audioRoot = audioDir(bookDir)` then
-   `audioPath = join(audioRoot, …)` (`:194-196`), then `rename(…, audioPath)` (`:753`). Rule 3 sees
-   it whatever the suffix, because it follows the root, not the suffix.
+   transitively. Rule 3 sees such a write whatever the suffix, because it follows the root, not the
+   suffix.
+   - **The resolver is new code (revision 5).** `test-utils/guard-scan.ts` today exposes literal
+     and comment range detection and file collection only, with no scope or binding resolution
+     (`:1-60,144-226`). Phase 1 step 7 adds a same-function `const` resolver to it, with its own unit
+     tests.
+   - **Hop kinds.** A binding is tracked when its initialiser is:
+     - a root;
+     - a `join`/`resolve` call with a tracked argument;
+     - a template literal whose head expression is tracked;
+     - another tracked `const` (an alias).
+   - **Path arguments, per call.** `rename`, `renameWithRetry`, `copyFile` and `cp` use arguments 0
+     and 1. `writeChapterLufsFile(payload, path)` uses argument 1, and
+     `writeChapterPeaksFile(pcm, sampleRate, path)` argument 2. Every other mutation call uses
+     argument 0.
+   - **Finalize has all three hop kinds**, and it is the realistic shape:
+     - `audioRoot = audioDir(bookDir)`, then `audioPath = join(audioRoot, …)` (`:215-217`), then
+       `rename(…, audioPath)` (`:775`);
+     - `tmpAudio = \`${audioPath}.tmp-…\`` (`:242`), then `writeFile(tmpAudio, …)` (`:244`), the
+       #4167 site;
+     - `writeChapterLufsFile(payload, lufsPath)` (`:296`) and
+       `writeChapterPeaksFile(pcm, sampleRate, peaksPath)` (`:778`).
 
 **Blind spots**, listed in the guard's header in the shape of `state-json-lock.guard.test.ts`'s
 "FALSE NEGATIVES":
@@ -679,8 +905,10 @@ guarded.
 - **The fsck's handle (R4-8).** `withBookOpAtDir` (`book-op-lock.ts:475-490`) hands its callback a
   directory today, and runs unlocked for a book with no `bookId`. It changes to hand over a handle in
   both branches: book-op's `BookHandle` when the book resolves, and an `UnaddressedBookHandle`
-  otherwise. The module accepts the unaddressed kind only from the fsck's walker. No `/:bookId`
-  route can reach such a book, so nothing else can touch it while the walker runs.
+  otherwise. The module accepts the unaddressed kind from the fsck's walker and from the bundle
+  overwrite's no-`bookId` branch only (R5-7). No `/:bookId` route can reach such a book until it
+  gains an id. The process-local set of unaddressed directories (Ownership, above) refuses the one
+  route that could reach it after the bundle's id lands, and refuses a second unaddressed holder.
 - **A long job** opens `withBookOp` only at its own commit site, around `commitTake`. It holds no
   book-op of its own, so this is not nesting.
 - **Scoring:** `scoreBook` is a shared function, so it never calls `withBookOp`. Its caller
@@ -710,7 +938,11 @@ are passed to `commitTake`, which applies them at step 4.
 
 0. `reconcileBook`, `reconcileSlug(slug)`, `ensureTakeIdentity(slug)`: replay any leftover
    journal (F8), resolve an ambiguous or no-live-take shape (§4.2, §6.1), and sweep orphans. A
-   failure here is retryable (cause 3 below): the commit has moved nothing yet.
+   failure here is retryable (cause 3 below): the commit has moved nothing yet. **The exception
+   (R5-4):** a stuck book journal that names this slug is not cause 3. Retrying it until the
+   watchdog fires would report "the audio file is in use", which is the wrong diagnosis. The commit
+   sweeps its staged set and ends the chapter `take_repair_pending`. A render normally meets this
+   earlier, at its chapter-start span, before synthesis (§4.1).
 1. Refuse if `signal.aborted` (H8).
 2. CAS, partial writers only (OD2): the live `segments.json`'s `takeId` must equal `base`. A
    mismatch sweeps the staged set and returns `changed`.
@@ -719,17 +951,27 @@ are passed to `commitTake`, which applies them at step 4.
    {op:'commit', phase:'discard', newTakeId, liveTakeId, prevTakeId, keepPrevious, parts,
     chapter:{id, slug, uuid}, clearGenerationState:true,
     review: undefined | null | {characterId, triggeredBy},
-    preserved, oldDuration, newDuration}
+    preserved, oldDuration, newDuration,
+    entry: {takeId, renderedAt, previousTakeId, previousRenderedAt} | null}
    ```
    - It lists only the parts **present** on disk at this moment, so no rename ever targets an
      absent optional part.
-   - **The review inputs (A3)** are what `applyReview` reads today (`finalize-chapter-write.ts:816-858`):
+   - **The review inputs (A3)** are what `applyReview` reads today (`finalize-chapter-write.ts:839-881`):
      - `review` is finalize's `input.review`: absent means "leave the review state alone", `null`
        means "drop the pending entry", and an object means "record one when `preserved`";
      - `oldDuration` is the pre-stamp `state.json` duration, read in this span;
      - `preserved` is true when a live take becomes previous at step 5.
+   - **The entry's identity stamps (E6, revision 5)** are fixed here, because a replay may run long
+     after the job's memory is gone, and by then step 5 has moved the parts they come from:
+     - `takeId` is `newTakeId`, and `renderedAt` is the new segments' `synthesizedAt`. That is what
+       the stamp writes into `audioRenderedAt`.
+     - `previousTakeId` and `previousRenderedAt` belong to whichever take becomes previous: the live
+       take under `preserved`, or the existing previous take under `keepPrevious` (R3-1).
+     - `entry` is `null` when nothing becomes previous.
 
-     So replay can redo the review record without the job's memory or the pre-stamp state.
+     The entry's `chapterUuid` comes from `chapter`. Its `ChapterRef` list is read from `state.json`
+     when the entry is recorded, after the stamp, not from a pre-stamp snapshot. So replay can
+     record the entry without the job's memory or the pre-stamp state.
 4. **Choose what becomes previous.** The previous take stays, and the live take is discarded
    instead, in one case. **R3-1, for a full render:** the live `takeId` ≠ `startTakeId`, and the
    existing previous take's `takeId` = `startTakeId`. Another render committed meanwhile, and the
@@ -758,13 +1000,27 @@ are passed to `commitTake`, which applies them at step 4.
 7. `phase:'installed'`, journalled. **From here the take is committed (D2).** The remaining steps
    run in order, and each one that fails **parks** its error (E2, the CLAUDE.md deferred rethrow):
    - `stampStateFromLiveTake`, plus the `generationState*` clear. On failure the error is parked.
-   - Record or drop the review entry from the journal's `review` inputs, best-effort (OD3). It keeps
-     its deliberate swallow: an error surfaces only as `reviewOutcome: 'failed'`. The entry id is
-     derived from `newTakeId` (`revision:<chapterId>:<newTakeId>`), so recording it twice is a
-     no-op.
+   - **Only if the stamp succeeded (E6):** record or drop the review entry from the journal's
+     `review` and `entry` inputs, best-effort (OD3). It keeps its deliberate swallow: an error
+     surfaces only as `reviewOutcome: 'failed'`. The entry id is derived from `newTakeId`
+     (`revision:<chapterId>:<newTakeId>`), so recording it twice is a no-op.
+     - **Why not before the stamp.** `entryMatchesChapter` honours a stamped entry only while
+       `audioRenderedAt` equals the entry's `renderedAt` (`revisions-store.ts:199-203`), and every
+       `ChapterRef` is built from `state.json` (`:252-257,284-307`). An entry recorded over a failed
+       stamp would be invisible to every read and op, and dropped at the next revisions write
+       (`:290-308`). That includes a sibling's `recordPending`, which passes its own pre-stamp
+       snapshot (`finalize-chapter-write.ts:789-821`).
+     - **When the stamp is parked**, no entry is recorded, and the step reports
+       `reviewOutcome: 'none'`. The chapter's old pending entry, if any, is still **dropped**
+       (best-effort, same swallow). Its two takes are no longer the live and previous pair, so no op
+       on it can be right. In Phase 2, before Phase 3's retry tables exist, `main`'s Accept would
+       otherwise discard the wrong take. Dropping it is a `revisions.json` write and does not depend
+       on `state.json`. Replay stamps first, then records the new entry. **Restore appears once
+       replay lands the stamp.**
 8. `phase:'cleanup'`: unlink the `.discard-<jid>.*` set. Then unlink the journal, **only if the
    stamp succeeded**. A parked stamp error leaves the journal at `installed`, so the next
-   `reconcileSlug` re-runs the stamp. Last of all, rethrow the parked error, if any.
+   `reconcileSlug` re-runs the stamp and then records the entry. Last of all, rethrow the parked
+   error, if any.
 
 **Failure handling.**
 - **Before `installed`:** roll back from the journal, in reverse order, inside the same span:
@@ -777,29 +1033,35 @@ are passed to `commitTake`, which applies them at step 4.
     `segments.json` `takeId` = `newTakeId`, or a journal for `newTakeId` at `installed` or later.
     When it is true, the catch skips the `generationState: 'failed'` stamp
     (`generation.ts:2369`), runs one `reconcileSlug` in a fresh span, and ends the job
-    `chapter_failed` with code `take_details_pending` and R3-7's sentence (R4-7).
+    `chapter_failed` with code `take_details_pending` and R3-7's sentence (R4-7). The take
+    committed, and a deferred rethrow binds the caller too. So before that terminal frame,
+    generation still runs `afterChapterFinalized` (the attempted marker and the scoring trigger,
+    after the span) and the queue-entry mark (`generation.ts:2042-2072`), as a successful commit
+    would.
   - **Splice and QA repair** do the same with their own terminal frames.
   - The fail-loud and swallow classification of every new `state.json` write site is in the
     table below. It replaces revision 3's "the fail-loud count is unchanged", which was false.
 
 **State-write sites (A3).** CLAUDE.md lists each site where a lock timeout out of a `state.json`
 write either fails loud (rethrown into a terminal outcome) or is swallowed on purpose. This design
-moves one site and adds six:
+moves one site and adds eight (revision 5 splits the replay row):
 
 | Site | Class | Why |
 |---|---|---|
-| `commitTake` step 7 stamp (moved from finalize's `:766`) | **fail-loud**, deferred | D2. Parked, rethrown after review and cleanup; the journal keeps it owed |
+| `commitTake` step 7 stamp (moved from finalize's `:789`) | **fail-loud**, deferred | D2. Parked, rethrown after cleanup; the review record waits for a successful stamp (E6); the journal keeps both owed |
 | `restoreTake` `stamp` phase (Reject, `restore-unrecorded`) | **fail-loud**, deferred | New: today's reject does not stamp. Parked, rethrown after cleanup of the discard set; the journal stays at `stamp` |
-| journal replay's stamp (commit and restore roll-forward, R3-5's promotion) | **fail-loud** to the entry point that ran the replay | The journal stays. At a commit's step 0 this is retryable cause 3. A quick op answers its curated 500 |
+| journal replay's stamp (commit and restore roll-forward, R3-5's promotion), at an entry point that has a terminal outcome | **fail-loud** to that entry point | The journal stays. At a commit's step 0 this is retryable cause 3. A quick op answers its curated 500 |
+| journal replay's stamp at the **boot fsck** (fire-and-forget, `index.ts:545-551`) | **swallow** (logged), revision 5 | Nothing to fail into. The journal stays, and the next entry point on the slug repeats the replay |
+| journal replay's stamp in **R4-2's background `reconcileBook` retries** | **swallow** (logged), revision 5 | The request already answered its fixed 500. The journal stays, and the next attempt or entry point repeats it |
 | `reconcileBookTakes` (backup restore, R3-9) | **fail-loud**, deferred | Otherwise restored take fields describe absent audio (N12). Parked across chapters, rethrown after the last |
 | `replaceTakesFromBundle` stamp (R3-8) | **fail-loud**, deferred | As above, under the import's claim; the `finally` still runs |
-| `ensureTakeIdentity`'s mirror stamp | **swallow** (logged) | It writes only derived mirrors. Every entry point repeats it, and no decision reads `audioTakeId` (the CAS reads segments). Same reasoning as `scan.ts`'s lazy migrations |
+| `ensureTakeIdentity`'s mirror stamp | **swallow** (logged) | It writes only derived mirrors. Every entry point repeats it. No decision reads `audioTakeId` (E6): the CAS and the Accept/Reject retry tables read the live segments' `takeId` under book-op, and `entryMatchesChapter` reads `audioRenderedAt`, which only fail-loud stamps write. Same reasoning as `scan.ts`'s lazy migrations |
 | migration's legacy-reject re-stamp (§6.1 step 5) | **swallow** (logged) | The shape persists until it succeeds, so the next entry point repeats it |
 | `dropAllTakes`'s take-field clear | not new | It rides exclude's existing `state.json` write, which keeps its class |
 
 `healTakeFields` keeps the scan heal's place on the swallow list. Phase 2 updates CLAUDE.md's two
 enumerations, and the counts in them, to match this table: four new fail-loud sites, one moved, and
-two new swallow sites.
+four new swallow sites (revision 5 adds the fsck and background replay rows).
 
 **Retries and the watchdog (F18; D4).**
 - **The three retryable causes**, all of which keep the staged set:
@@ -810,7 +1072,8 @@ two new swallow sites.
   3. **Any failure before step 3 writes this commit's journal (A11).** That covers a `state-json`
      timeout inside step 0 (`ensureTakeIdentity`'s stamp, or a leftover journal's replay stamp), or
      a held file met by step 0's promotion. Nothing of this commit has moved yet. Replay is
-     idempotent, so re-running step 0 is safe.
+     idempotent, so re-running step 0 is safe. A stuck book journal that names the slug is the one
+     step-0 failure that is **not** retried (R5-4, step 0).
 
   A failure at step 7 is not retried: the take is committed, and the error is parked and rethrown
   (above).
@@ -843,11 +1106,13 @@ two new swallow sites.
   the boot fsck, where `liveStaging` is empty.
 
 **Journal rules (F8; D2).**
-- **Every entry point replays first** (`reconcileBook`, then `reconcileSlug`).
+- **Every entry point replays first** (`reconcileBook`, then `reconcileSlug`), scoped as R5-3 says
+  (Ownership, above).
 - **Replay** looks at a journal's `op` and `phase`, and at what is on disk:
   - **a commit** (or a bundle `replace`), before `installed`: roll back. From `installed` on: roll
-    forward (the stamp with its `generationState*` clear, the review record from the journal's
-    inputs, then cleanup), parking errors as step 7 does.
+    forward (the stamp with its `generationState*` clear; then, only once the stamp has succeeded,
+    the review record from the journal's `review` and `entry` inputs (E6); then cleanup), parking
+    errors as step 7 does.
   - **a restore**: as in the reject table below.
   - **a relabel**: resume at its cursor (Restructure, below). Never roll back once `state.json` has
     landed (E1).
@@ -856,8 +1121,9 @@ two new swallow sites.
   and the target present, it is done". That presence test is sound **only** because every name such
   a journal moves between is either journal-unique (`.next-<takeId>`, `.discard-<jid>`) or the
   slug's own live or previous name, which nothing else can take while book-op is held. A relabel
-  moves takes between **different chapters'** slugs, so the presence test is not sound there. A
-  relabel uses a cursor instead (A1). The stamp is a pure function of the live segments, and the
+  moves takes between **different chapters'** slugs, so the presence test is not sound **across**
+  its groups. A relabel uses a cursor across groups (A1), and a per-part test **inside** the group
+  the cursor names, where the presence test is sound again (R5-1, Restructure below). The stamp is a pure function of the live segments, and the
   review entry is keyed by `takeId`. Nothing counts.
 - **More than one journal for a slug** should be impossible under book-op. If it happens, the entry
   point refuses with a fixed 500, and the fsck quarantines the extra journals to `audio/.orphaned/`
@@ -898,9 +1164,25 @@ the existing `renderedAt`. Reject compares the live `takeId`:
 | A | the audio step is already done: commits `rejected` |
 | anything else | `revision_gone` |
 
-`entryMatchesChapter` matches on `takeId ∈ {B, A}` when the entry carries one, and on
-`renderedAt` otherwise. Legacy entries with no stamps are unchanged. **`revision-op` is retired**
-(N10).
+Both tables read the **live segments'** `takeId`, inside the module under book-op. They never read
+`state.json`'s `audioTakeId` mirror (E6).
+
+**Matching (E6, revision 5).** Revision 4 widened `entryMatchesChapter` to `takeId ∈ {B, A}`, but
+named no chapter-side source. Revisions-store builds every `ChapterRef` from `state.json`, so the
+only cheap source was the `audioTakeId` mirror, which would have made the mirror a decision input
+(pass 4, B3). Instead:
+- Recorded entries also carry `previousRenderedAt`, A's `synthesizedAt`, from the commit journal's
+  `entry` (step 3).
+- `entryMatchesChapter` matches when `chapter.audioRenderedAt` is the entry's `renderedAt` **or**
+  its `previousRenderedAt`. An entry without `previousRenderedAt` matches on `renderedAt` alone, as
+  today.
+- `audioRenderedAt` is already today's decision input, and only fail-loud stamps write it.
+- The widening keeps H17's retry visible. Reject's `stamp` phase writes A's `synthesizedAt` into
+  `audioRenderedAt`. If its `revisions.json` write then fails, the entry must still match, so that
+  the retry meets the "A → commits `rejected`" row instead of `revision_not_found`.
+- A take with neither time (a later render C) does not match, so a stale entry stays invisible.
+
+Legacy entries with no stamps are unchanged. **`revision-op` is retired** (N10).
 
 **Exclude** (`dropAllTakes`, OD6, F16):
 - journal `op:'drop'`; it moves the live take, the previous take and every sidecar to the discard
@@ -937,11 +1219,18 @@ The journal is written before step 1.
 {op:'relabel', jid, cursor,
  plannedSlugs: {<uuid or id>: <new slug>},           // decides "did state.json land?"
  hintsPrior: {existed, content} | null,              // the rollback window's only artifact
- stage: [{from, to, temp, takeId, prevTakeId, newChapterId, newChapterTitle}],
- drop: [<slug>], clearStalePrevious: [<slug>]}
+ stage: [{from, to, temp, takeId, prevTakeId, parts, newChapterId, newChapterTitle}],
+ drop: [{slug, parts}], clearStalePrevious: [{slug, parts}],
+ lost: [{slug, part}]}                                // R5-1: parts absent under every name
 ```
 - `temp` is `<from>.relabel-<jid>-<k>`, unique to the journal.
 - `takeId`/`prevTakeId` are each source's live and previous `takeId`.
+- `parts` lists the parts present on disk when the plan is made, live and previous, in
+  `COMPANION_SUFFIXES` order (revision 5). Replay decides each one by itself (R5-1, below), as the
+  commit journal's `parts` do.
+- **`hintsPrior` is dropped** at the first cursor rewrite after `state-landed` (revision 5). It
+  holds the whole prior `manuscript-hints.json`, every chapter body, so it is written at most twice.
+  Nothing after `state-landed` can roll the hints back.
 - `relabelTakes`' step 0 (`reconcileBook`, then `ensureTakeIdentity` for every chapter with a take)
   runs **before** the restructure's `withStateJsonLock` closure (`:386`), under book-op → gate →
   `book`. The ids therefore exist before the closure. Inside the closure, the journal write is a
@@ -962,14 +1251,40 @@ restructure, not one per file. Revision 4 folds today's Phases 0 and 1b into one
 after `stage`. With every source at its temp name and nothing landed yet, a drop can only meet a
 slug's old occupant, which is what Phase 0's ordering existed to guarantee.
 
-*Replay resumes at the cursor and never re-runs a finished group.* Inside the group it resumed,
-re-running is safe, because of where that group sits:
-- **`stage`, `drop`, `clear-stale-previous`:** no take has landed on any slug yet, so each slug
-  holds only its old occupant. Before staging a source, the file at `from` must carry the
-  journal's `takeId` for it. A mismatch is a fault: stop, and keep the journal.
-- **`land`:** each temp name is unique to this journal, so "temp present, target absent → rename"
-  is sound. A target that is occupied holds something outside the plan. It is quarantined to
-  `.orphaned/` (never overwritten), and the land proceeds.
+*Replay resumes at the cursor and never re-runs a finished group.* The cursor is rewritten only when
+a group completes, so a crash or a failed rename normally stops **inside** a group, between two
+parts of one source. Revision 4 argued that a re-run was safe only at group boundaries (pass 4,
+B1): a source half-moved in `stage` failed its own `takeId` check, and a finished `land` re-run
+quarantined every chapter's freshly landed take. Revision 5 makes every group idempotent **per
+part** (R5-1):
+- **`stage` (from → temp), `drop` (slug → `.discard-<jid>.drop.*`), `clear-stale-previous`
+  (→ `.discard-<jid>.stale.*`).** For each listed part:
+
+  | Source name | Target name | Replay does |
+  |---|---|---|
+  | present | absent | rename |
+  | absent | present | done |
+  | present | present | the copy at the source name is foreign (nothing in the protocol refills a vacated name): quarantine it; done |
+  | absent | absent | lost: append to `lost`, log, continue |
+
+  The presence test is sound here. Every target is journal-unique, and no take lands on any slug
+  before `land`, so a slug name this group vacated cannot be refilled.
+  - **The `takeId` check** reads the source's segments wherever they are: at `from`, or at `temp`
+    once they have moved. When the copy at `from` carries another `takeId`, the take at `from` is
+    not the one planned. Every part of that source still at `from` is quarantined and recorded as
+    lost. Parts already at `temp` carry on.
+- **`land` (temp → target).** For each listed part:
+
+  | Temp | Target | Replay does |
+  |---|---|---|
+  | present | absent | rename |
+  | absent | present | already landed: done. The segments part also checks that the target's `takeId` is the source's. On a mismatch the target holds something foreign: it is quarantined, and the source's segments part is recorded as lost |
+  | present | present | the occupant is outside the plan: quarantine it to `.orphaned/` (never overwritten), then rename. Two sources never share a target, so a part this journal landed can never be the occupant |
+  | absent | absent | lost, as above |
+
+  So a crash after the last land rename and before the cursor write re-runs `land` as a no-op.
+- **A lost part never blocks.** It leaves an incomplete take: with no audio the chapter reads
+  unrendered, and with no segments it is unindexed (§4.2). `lost` is logged at `cleanup`.
 - **`metadata`:** each rewrite sets fixed values. It runs only on a target whose segments `takeId`
   (or previous `takeId`) is the source's recorded one, so a replay never rewrites another chapter's
   metadata.
@@ -1002,18 +1317,29 @@ as today. A crash in the window is undone the same way by replay.
     cursor, with the journal kept. The restructure answers 500 with the fixed sentence "The
     chapters were changed, but some audio files are in use; they will be moved into place
     automatically."
-  - The route then schedules the background `reconcileBook` retries of R4-2.
+  - The route then schedules the background `reconcileBook` retries of R4-2. Their replay stamp is
+    a swallow site (State-write sites).
+  - Until the journal finishes, it blocks only the slugs it names (R5-3). An entry point on one of
+    them answers `take_repair_pending` (R5-4).
   - The pending-entry reconcile and the cache rebuild keep their best-effort catches, and still run
     after a parked audio failure.
+  - **A parked edits write skips the cache rebuild (revision 5).** `refreshCacheFromEdits` reads
+    `editsPath` from disk in `replace` mode (`store/analysis-cache-rebuild.ts:57-72,107-119`). After
+    a failed edits write it would rebuild the cache from the pre-restructure, old-id sentences
+    against a renumbered state, a second case of a later write depending on a parked one. The cache
+    is left as it is, which is the state `main` leaves after a crash in the same window (Remaining).
 - **After a crash.** Replay finishes the audio from the cursor. The relabel journal does not redo
   the edits write: its payload is every sentence. The cache and the ManuscriptRecord are derived.
   - A restart rehydrates the record from the hints, which landed before `state.json`.
-  - A crash between the state write and the edits write leaves today's gap. That gap is covered by
-    the GET-side edits/cache reconciliation (`book-state.ts:598-606`). The restructure's own comment
-    cites it at a stale `book-state.ts:166-185`; Phase 4 corrects that comment when it rewrites the
-    ordering.
-  - Pending entries are not reconciled by replay. A server-recorded entry carries `takeId`s, so
-    `entryMatchesChapter` refuses it on the wrong chapter.
+  - A crash between the state write and the edits write leaves today's gap. Revision 4 said the
+    GET-side edits/cache reconciliation (`book-state.ts:598-606`) covered it. It does not: that
+    reconciliation drops edits by sentence-id range, not by chapter renumbering (pass 4). The claim
+    is withdrawn, and the gap is listed under Remaining as pre-existing and owing a design pass
+    (§8.3). The restructure's own comment cites the reconciliation at a stale
+    `book-state.ts:166-185`; Phase 4 corrects that comment when it rewrites the ordering.
+  - Pending entries are not reconciled by replay. A server-recorded entry carries `chapterUuid` and
+    its render times, so `entryMatchesChapter` refuses it on the wrong chapter
+    (`revisions-store.ts:199-203`, widened as in Retry recognition).
 
 *Also:*
 - The rename covers every take suffix, with previous for all three extensions. Drops use
@@ -1021,7 +1347,7 @@ as today. A crash in the window is undone the same way by replay.
 - `buildAudioOps` also tests `chapterAudioExists` and the presence of a previous take (H11
   residual).
 
-**Scoring** (`commitScoring`, F23; R3-3; E3).
+**Scoring** (`commitScoring`, F23; R3-3; E5).
 - **Ids exist before the pass reads.** The pass's caller first opens one span through its `commit`
   callback and runs `ensureTakeIdentity` for every chapter. So a legacy book's first pass reads
   embeddings and segments that already carry ids. Revision 3 minted them inside `commitScoring`,
@@ -1031,10 +1357,23 @@ as today. A crash in the window is undone the same way by replay.
   engine classification (`:682`). Commits do not abort scoring, and Reject is allowed during it
   (`revision-ops.ts:141` checks generation only). So the three reads can come from different
   takes.
-  - Phase 1 now reads each chapter's `segments.json` **once**, for every chapter that has one. That
-    is the same population `loadSegmentsFiles` gives the classifier, so its shared contract with
-    `qa-report.ts` holds.
-  - The per-chapter join and `resolveConfiguredEngineByChar` both use that one read.
+  - Phase 1 now reads each chapter's `segments.json` **once**. Revision 4 called that one read "the
+    same population `loadSegmentsFiles` uses", which was not true (pass 4, B7). The two reads apply
+    different filters today:
+    - `loadSegmentsFiles` keeps a file that `readdir` lists, that `readJson` parses, and whose
+      `chapterId` is a number (`audio/segments-io.ts:201-221`);
+    - phase 1's `readSegmentsFile` keeps any file that `readFile` and `JSON.parse` accept, with no
+      `chapterId` check (`aggregate.ts:451-459`).
+  - **One read, two filters (revision 5).** The read is a single `readFile` plus parse per chapter.
+    The per-chapter join consumes every file that parses, as `readSegmentsFile` does today. The
+    engine classifier (`resolveConfiguredEngineByChar`) consumes the subset whose `chapterId` is a
+    number, through `loadSegmentsFiles`'s own predicate, extracted so that both use one function.
+    - So the classifier's population is exactly `loadSegmentsFiles`'s, and the shared contract with
+      `qa-report.ts` that `aggregate.ts:669-681` protects holds. Chapters whose segments lack a
+      `chapterId` are still scored.
+    - The two filters see the same bytes, so the ABA close below holds for both.
+    - The one difference from `readdir` presence is a differently cased file name on a
+      case-insensitive filesystem, which the read finds as the finder does (R4-1).
   - **A chapter is scored only when its embeddings `takeId` equals that segments `takeId`.** That
     id is the chapter's scored id, the CAS token.
   - A chapter whose two ids differ (stale or legacy embeddings, or a commit between the two reads)
@@ -1063,22 +1402,30 @@ as today. A crash in the window is undone the same way by replay.
   - **Re-arm bound.** A mid-pass CAS mismatch requests a re-run only when the pass was **not**
     itself a mismatch-requested re-run. A chain of passes therefore re-arms on mismatch at most
     once. New triggers always re-arm.
-- **Partial-job triggers wait for renders (E3, R4-9).** After a successful commit, splice and QA
-  repair request scoring with `source: 'partial'`. They do it from their exit path, after they have
-  deregistered, so a job never waits on itself.
-  - A partial trigger **never starts a pass, or a tier reconcile, while any synth job of the book
-    is in flight**: generation (`isGenerationActive`, `generation.ts:661`) or another splice or QA
-    repair (`chapter-job-coordination.ts`). It is merged into the pending re-run and marked
-    `afterRenders`.
-  - When the book's last synth job exits, its exit path starts the pending pass, if one is still
-    pending and none is in flight.
-  - That pass's `keep` is the book's **full-cast** tier set, computed as a render computes it at run
-    start: `computeUsedQwenTiers(cast.characters, engine, modelKey)` (`generation.ts:1019-1021`).
-    It is never `result.usedQwenTiers` (`:215`). The post-audition `reconcileResidentQwenTiers`
-    (`tts/ensure-sidecar-loaded.ts:236` onward) therefore never runs beside a sibling render, and
-    never evicts a tier the cast uses.
-  - A partial trigger merged into a pass that a **render** started rides that pass and its run's
-    `keep`, which is today's behaviour for render triggers.
+- **Partial-job triggers run at once, with the full-cast `keep` (E5).** After a successful commit,
+  splice and QA repair request scoring with `source: 'partial'`. They do it from their exit path,
+  after they have deregistered and **outside any commit span**. `runBookJob`'s registration takes
+  book-op itself, so requesting it inside a span would nest.
+  - **No wait.** The pass starts whenever `triggerScoring` would start one: at once, or as the
+    merged pending re-run when a pass is already in flight. Revision 4 made it wait while any synth
+    job of the book ran (E3, R4-9). Pass 4 showed that this cannot be observed for a queue-driven
+    render (B4). The queue makes one POST per chapter (`generation.ts:387-391,497-503,1192-1193`),
+    and `deregisterJob` empties `inFlightByBook` between chapters (`:610-619`), so the wait fired in
+    every gap. There is therefore no `afterRenders` mark, no synth-job exit hook, and no per-book
+    reader of `chapter-job-coordination.ts`.
+  - **What protects the render is the `keep`.** A partial trigger's `keep` is the book's
+    **full-cast** tier set, computed as a render computes it at run start:
+    `computeUsedQwenTiers(cast.characters, engine, modelKey)` when Qwen is in use
+    (`generation.ts:1019-1021`), and no tiers otherwise. It is never `result.usedQwenTiers`, the
+    resume route's fallback at `:215`. The post-audition `reconcileResidentQwenTiers`
+    (`:215-216`; `tts/ensure-sidecar-loaded.ts:236` onward) only evicts tiers **outside** its
+    target. With the full cast as the target, it never evicts a tier that any chapter of the book,
+    in flight or queued, renders with. That closes A5's eviction on its own, as pass 4 confirmed.
+  - **Merging keeps the guarantee.** The merge ORs `keep` field-wise (above), so any pass a partial
+    trigger contributes to runs with at least the full cast. A render's own trigger already passes
+    its run's full-cast `keep` (`ctx.keep`, `:207-215`).
+  - **What remains:** auditions can still run beside a sibling chapter's synthesis, as a render's
+    own between-chapter scoring pass already does on `main`. E5 accepts that.
 
 **Readers.**
 - They stay lock-free, through the module's accessors. Each part changes by an atomic rename, so
@@ -1147,6 +1494,20 @@ What the protocol does with each:
   `lock_contention` sentence. A timeout from inside the span is not retried. A dropped autosave is
   still repeated by the client's next tick. These are sequential re-acquisitions, never a nested
   `withBookOp`.
+  - **Ordering under retry (R5-6, revision 5).** `withKeyLock` is a FIFO chain, but a waiter that
+    times out re-enqueues at the **tail** (`file-lock.ts:279-286,305-351`). Two listen-progress
+    autosaves queued behind a long span can therefore land out of order. The web client sends no
+    `listenedAt` (`src/lib/api.ts:2780-2785`), so its writes are last-write-wins by landing order,
+    `markers` included (`book-state.ts:2813-2848`). Today the older write simply fails; with a retry
+    it could overwrite the newer one. So a write without `listenedAt` takes its ordering time from
+    when the server **received** it, before the first acquisition. Its retried attempts apply
+    srv-34's existing compare-and-set against that time (`book-state.ts:2818-2825`), exactly as if
+    the caller had sent `listenedAt`. An older write's retry then finds a stored `updatedAt` at or
+    after its own and returns the stored record. A first attempt is unchanged, and the client
+    changes nothing. Listen-stats is a commutative max-merge (`:2920-2924`), so it needs no rule.
+  - **Registration retry and render exit.** `drainChildren` holds each render's token until
+    scoring's registration resolves (`generation.ts:2500-2505`), so with the retry a render's exit
+    can stretch by up to 30 s. That holds a token, not a span, so nothing else waits on it.
 - **What remains.** A waiter queued behind more than 30 s of commits still gets `lock_contention`.
   Row Q measures real commit spans and waiter outcomes on OneDrive.
 - **Absent parts are skipped**, never retried: the journal lists only the present parts (step 3),
@@ -1165,18 +1526,23 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   is pre-existing on `main`, and is reported separately rather than fixed here;
 - **one server process per workspace** is assumed and not enforced (A10). That is the same
   precondition book-op already has;
-- **a crash between restructure's state write and its edits write** leaves today's edits/cache gap,
-  covered by the GET-side reconciliation (§5.A Restructure).
+- **a crash, or a parked failure, between restructure's state write and its edits write** leaves
+  `manuscript-edits.json` keyed to the pre-restructure chapters. This is pre-existing on `main`, and
+  it is **not** covered by the GET-side reconciliation, which drops edits by sentence-id range
+  (revision 5 withdraws revision 4's claim). The design keeps it from spreading: a parked edits
+  write skips the cache rebuild (§5.A Restructure). Closing it owes a design pass (§8.3);
+- **a file the OS refuses to rename under every name** keeps the slugs a stuck journal names
+  blocked, and only those, until the user removes the cause (R5-3, R5-4).
 
-**Blast radius (F24; corrected).** About **62–68 non-test server files**, plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`:
+**Blast radius (F24; corrected).** About **62–68 non-test server files**, plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`. Revision 5 drops `chapter-job-coordination.ts` again (E5: no exit hook) and adds `test-utils/guard-scan.ts` (rule 3's resolver). Its other changes land in files already listed: `audio/segments-io.ts` (the shared classifier predicate), `routes/chapters-restructure.ts` (no cache rebuild after a parked edits write) and `import/scan-import-folder.ts` (the handles, R5-7):
 
 | Area | Files |
 |---|---|
 | New | `workspace/chapter-take.ts`, `workspace/chapter-take.guard.test.ts` |
 | Folded in / removed | `workspace/preserve-previous-audio.ts`, `audio/previous-audio.ts`, `audio/rewrite-chapter-slugs.ts`, the take-name builder in `workspace/chapter-audio-file.ts` |
-| Finalize and callers | `audio/finalize-chapter-write.ts`, `routes/generation.ts` (commit site, signal, `committing`, `stallPhase`, failure-stamp check, `writeAttempted`, OD2 per-chapter abort, `startTakeId` span, `triggerScoring`'s merged re-run, re-arm bound and `afterRenders` wait), `routes/chapter-splice.ts`, `routes/chapter-qa-repair.ts` (registration-first base read, Edit 6b staged as rows and patches, exit-path scoring trigger), `routes/chapter-job-coordination.ts` (the synth-job exit hook E3 waits on) |
-| Waiter retries (E2) | `workspace/book-jobs.ts` (registration retry), `routes/book-state.ts` (listen-progress and listen-stats PUT retry) |
-| Revisions | `routes/revision-ops.ts`, `routes/chapter-audio.ts`, `workspace/revisions-store.ts` (`takeId`/`previousTakeId`, `entryMatchesChapter`, retire `revisionOpLockKey`) |
+| Finalize and callers | `audio/finalize-chapter-write.ts`, `routes/generation.ts` (commit site, signal, `committing`, `stallPhase`, failure-stamp check, `writeAttempted`, OD2 per-chapter abort, `startTakeId` span and its `take_repair_pending` check, `triggerScoring`'s merged re-run, re-arm bound and the partial trigger's full-cast `keep`), `routes/chapter-splice.ts`, `routes/chapter-qa-repair.ts` (registration-first base read, Edit 6b staged as rows and patches, exit-path scoring trigger) |
+| Waiter retries (E2) | `workspace/book-jobs.ts` (registration retry), `routes/book-state.ts` (listen-progress and listen-stats PUT retry; listen-progress receive-time ordering, R5-6) |
+| Revisions | `routes/revision-ops.ts`, `routes/chapter-audio.ts`, `workspace/revisions-store.ts` (`takeId`/`previousTakeId`/`previousRenderedAt`, `entryMatchesChapter` on `audioRenderedAt ∈ {renderedAt, previousRenderedAt}`, retire `revisionOpLockKey`) |
 | Restructure | `routes/chapters-restructure.ts` (relabel journal, ordering), `workspace/restructure.ts` (`buildAudioOps`; carry list from `TAKE_STATE_FIELDS`) |
 | Book state, exclude, fsck, scan | `routes/book-state.ts` (exclude, `completedSlugs`, `chapterLufs`, the reparse wipe keeping `.orphaned/`, the PUT's slug-binding check), `workspace/fsck-orphan-audio.ts`, `workspace/book-op-lock.ts` (`withBookOpAtDir` hands over a handle), `workspace/scan.ts` (types, `completedChapters`, `deriveSegmentsHeal` via `deriveTakeFields`, `persistHealPatches` → `healTakeFields`) |
 | Whole-book writers (D3) | `import/scan-import-folder.ts`, `routes/backup.ts`, `workspace/auto-backup.ts`, `workspace/chapter-uuid.ts` |
@@ -1190,7 +1556,8 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
 **Tests (F22).**
 - **Fault injection over the module**, parameterised over **every take part, the previous take's
   parts included**, and over every phase of the commit, restore, accept, drop and relabel
-  journals. Each injected failure leaves each take whole on disk, and replay converges. Running the
+  journals, **and, inside each relabel group, every boundary between two parts of one source**
+  (revision 5). Each injected failure leaves each take whole on disk, and replay converges. Running the
   replay twice equals running it once.
 - **Race tests:**
   - **positive control (D1): a splice prepared after Accept commits;**
@@ -1201,12 +1568,23 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   - splice CAS mismatch;
   - commit after abort;
   - watchdog during a commit, and between retry spans;
-  - the failure stamp after a commit, with the stamp itself failing (D2/E2): the review entry is
-    still recorded, the discard set is still unlinked, the journal is **kept** at `installed`, the
-    error rethrows last, no `failed` stamp is written, and replay fixes state, including the
-    `generationState*` clear;
+  - the failure stamp after a commit, with the stamp itself failing (D2/E2/E6): **no** review entry
+    is recorded, the chapter's old pending entry is dropped, the discard set is still unlinked, the
+    journal is **kept** at `installed`, the error rethrows last, and no `failed` stamp is written.
+    Then a replay whose stamp lands fixes state, including the `generationState*` clear, and
+    **then** records the entry. The entry is visible to the revisions read view (Restore is
+    offered), and a sibling's `recordPending` afterwards does not drop it;
   - a crash after `installed` and before the review record: replay records the entry from the
-    journal's `review` inputs, and a second replay leaves exactly one entry;
+    journal's `review` and `entry` inputs after its stamp, and a second replay leaves exactly one
+    entry;
+  - **matching without the mirror (E6):** with `audioTakeId` deliberately left stale (its swallowed
+    mirror stamp failed), Accept and Reject still pick the right table row, because both read the
+    live segments' `takeId`. A Reject whose audio step and stamp landed but whose `revisions.json`
+    write failed is retried and commits `rejected`, matched through `previousRenderedAt`. The
+    negative control: a later render C makes the entry invisible;
+  - **listen-progress under retry (R5-6):** two autosaves with no `listenedAt` queue behind a span
+    longer than 10 s; the older one's retry lands after the newer one and leaves the newer record,
+    `markers` included;
   - scoring CAS against a splice landing mid-pass (the carry-forward keeps scoring's rows);
   - **scoring ABA (A6):** a splice commit C lands between a pass's embeddings and segments reads,
     then a Reject restores A. The chapter is skipped (embeddings `takeId` ≠ segments `takeId`) and
@@ -1214,10 +1592,14 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   - a dropped scoring trigger re-runs with the merged `justFinalizedSlugs` and OR-ed `keep` (R3-3);
     a persistent embeddings/segments mismatch does not re-arm; a mismatch-requested re-run does not
     re-arm again;
-  - **E3:** a Fix-audio during a render queue requests scoring, and no pass and no
-    `reconcileResidentQwenTiers` call happens until the render's last job exits; the pass then runs
-    with the full-cast `keep`. The positive control: with no render running, the pass starts at the
-    splice's exit;
+  - **E5 (restates the E3 test):** the cast uses Qwen tiers X and Y. A render queue is rendering a
+    chapter in tier Y, and a Fix-audio whose re-synthesised segments use only tier X requests
+    scoring. The pass starts at the splice's exit, without waiting. Its
+    `reconcileResidentQwenTiers` call receives a `keep` that includes **both** X and Y, so Y is not
+    evicted. The mutation that must fail: swap the partial trigger's `keep` for
+    `result.usedQwenTiers` (X only). Also: the same partial trigger, merged into a pending re-run
+    with a render trigger, still reconciles with both tiers kept. Revision 4's "no pass until the
+    render's last job exits" test passed vacuously per chapter (pass 4, B4) and is removed;
   - a legacy book's first pass scores (ids minted before the read).
 - **Relabel (E1):** a "Chapter N" merge interrupted after each cursor group, then replayed twice,
   ends with every chapter's own take at its new slug. The regression case is a crash after `land`
@@ -1225,6 +1607,28 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   write restores the prior hints and leaves the audio untouched; an audio failure after the state
   write answers the fixed 500, parks, still rebuilds the cache, and the background `reconcileBook`
   finishes; a crash at cursor `planned` after the state write is detected from `plannedSlugs`.
+  - **A stop between two parts of one source (R5-1, revision 5)**, in every group: in `stage`,
+    after a source's segments reached `temp` and before its peaks moved; in `drop` and
+    `clear-stale-previous`, after the first part moved; in `land`, after one part landed and before
+    the next. Each is replayed twice. Each ends with every chapter's own take whole at its new slug,
+    nothing quarantined, and `lost` empty.
+  - **A crash after the last `land` rename and before the cursor write:** the re-run of `land` is a
+    no-op, and no landed take is quarantined.
+  - **Foreign and lost parts:** a part deleted under every name is recorded in `lost`, and replay
+    finishes; a copy at `from` that carries another `takeId` is quarantined, and replay finishes.
+  - **The heal skip (R5-2):** a "Chapter N" merge stuck at `stage` with the pre-merge take still at
+    the survivor's slug. A `withBookOp` resolve, and a library scan, leave the merged chapter's take
+    fields absent. After replay drops the take, they are still absent. The mutation that must fail:
+    remove the skip, and the fields fill from the pre-merge take.
+  - **Scope (R5-3/R5-4):** with a book journal stuck on an injected persistent `EACCES`, a render of
+    an untouched chapter commits; a render of a named chapter fails before synthesis with
+    `take_repair_pending` (never the watchdog's "in use" sentence); Accept on a named chapter
+    answers the same; a new restructure is refused; once the injected fault is lifted, the next
+    entry point finishes the journal.
+  - **Whole-book writers (R5-5):** a backup restore and a bundle overwrite over a book with a pending
+    relabel journal finish the journal before they swap `state.json`, and refuse with
+    `take_repair_pending` when the replay fails, swapping nothing.
+  - **A parked edits write** skips the cache rebuild.
 - **Windows-shaped tests:** an injected EBUSY/EPERM at step 5 keeps the staged set and retries; an
   exhausted wait reports the sentence and sweeps; a Node-held live file commits; a step-0
   `state-json` timeout keeps the staged set (A11).
@@ -1232,25 +1636,42 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   quarantined; orphan parts are not quarantined while a journal names the slug; `completedSlugs` and
   `completedChapters` ignore `.next-*`.
 - **Live-take predicate (R4-1):** on a case-insensitive filesystem `<slug>.MP3` is live, and the
-  module, `completedSlugs` and `findChapterAudio` agree.
+  module, `completedSlugs` and `findChapterAudio` agree. With both `<slug>.mp3` and `<slug>.m4a`
+  present, the module reports two live files while `findChapterAudio` returns the mp3.
 - **Lazy minting:** an id-less book imported after boot gets ids at its first splice; a legacy
   chapter's first `::*`/`::X` interleave keeps the pre-render take (R3-1 with `startTakeId` minted at
   chapter start).
 - **Whole-book writers:** a bundle overwrite leaves no mixed take, and its stamp is not taken inside
   the rename loop's `state-json` lock; a backup restore re-derives the take fields; the PUT drops a
   client `audioTakeId` and refuses a slug rebinding with 409 `slug_bound` (R4-4); the reparse wipe
-  keeps `.orphaned/` (R4-5).
+  keeps `.orphaned/` (R4-5) and removes the journals with the takes (R5-5).
 - **No deadline (E2):** a commit under a slow injected rename (several seconds per part) commits.
   A listen-progress PUT queued behind it retries its acquisition and lands. The negative control: it
   answers `lock_contention` only after its third timeout.
 - **Format coverage:** m4a and ogg books through commit → reject → accept → relabel → drop → fsck.
 - **Migration** fixtures for every §6.1 rule.
-- **The guard test** (E4), with a mutation check per rule. Rule 3's mutation plants **finalize's real
-  shape**, two `const` hops with a runtime extension
-  (`` const audioRoot = audioDir(bookDir); const p = join(audioRoot, `${slug}.${ext}`); await rename(t, p) ``),
-  in a non-module file, and it must fail. A second, pinned case plants the same write with
-  `audioRoot` as a function **parameter**, and asserts the guard passes it: the documented blind
-  spot. If a later improvement starts catching it, the pin flips and the header is updated.
+- **The guard test** (E4), with a mutation check per rule. Rule 3's mutation check plants each of
+  **finalize's three hop kinds** (revision 5, B8) in a non-module file, and each plant must fail:
+  1. two `join` hops into `rename`'s **second** argument
+     (`` const audioRoot = audioDir(bookDir); const p = join(audioRoot, `${slug}.${ext}`); await rename(t, p) ``);
+  2. a template-literal hop into `writeFile`, finalize's temp write at `:242-244`
+     (`` const tmp = `${p}.tmp-${pid}`; await writeFile(tmp, buf) ``);
+  3. a writer whose path is **not** the first argument (`await writeChapterPeaksFile(pcm, sr, p)`).
+
+  An implementation that follows only `join`, or only arguments 0–1, fails plant 2 or plant 3. A
+  further, pinned case plants the first shape with `audioRoot` as a function **parameter**, and
+  asserts that the guard passes it: the documented blind spot. If a later improvement starts
+  catching it, the pin flips and the header is updated. The resolver in `guard-scan.ts` has its own
+  unit tests.
+- **Bundle overwrite with no `bookId` (R5-7):** the overwrite installs takes through an
+  `UnaddressedBookHandle`; a `/:bookId` write to the freshly minted id while the overwrite runs
+  answers `book_busy`; the fsck skips a directory the overwrite holds.
+- **PUT slug binding (R5-8):** a matched chapter that moves to a free slug answers 409
+  `slug_bound`; a new chapter on a free slug with no take is accepted.
+- **Replay-stamp classes (B9):** a replay stamp that fails at the boot fsck and in R4-2's background
+  retries is logged and keeps the journal; at a quick op it answers the curated 500.
+- **One segments read (B7):** a chapter whose segments lack a numeric `chapterId` is still scored,
+  and is absent from the classifier's population, which equals `loadSegmentsFiles`'s.
 - **e2e:** the A/B player on an m4a book in mock mode.
 
 ### Option B: per-chapter manifest and generation counter
@@ -1413,14 +1834,17 @@ book.
 3. Preserve, restore and the fsck use real extensions. **Fsck case 1 stays**, now with the real
    extension, until Phase 3 step 1 replaces it with the journalled promotion (A13).
    `revisions-store`'s existence check goes through the module. `withBookOpAtDir` hands its callback
-   a handle (R4-8). The reparse wipe keeps `.orphaned/` (R4-5).
+   a handle (R4-8), and the process-local set of unaddressed directories lands with it (R5-7). The
+   reparse wipe keeps `.orphaned/` (R4-5).
 4. A-side routes for every extension, with the right mime type; the meta URL uses `urlSuffix`.
    OpenAPI, types, client and mocks.
 5. Lazy migration (§6.1 steps 1–5) at the module's entry points and the fsck. Fixture tests for
    every rule. Step 6 lands in Phase 3.
 6. `TAKE_STATE_FIELDS` wired into `chapter-uuid.ts` (W15) and restructure's carry rule, and the PUT's
-   slug-binding check (R4-4).
+   slug-binding check (R4-4, as restated by R5-8).
 7. The guard test (rules 1–3, E4), with its read-only allowlist emptied as the steps above land.
+   Rule 3 needs a same-function `const` resolver in `test-utils/guard-scan.ts`, which is new code
+   with its own unit tests, and the three-plant mutation check (B8).
 8. e2e: m4a A/B.
 
 **Phase 2: commit protocol.** PR at `high` review depth. Row Q's OneDrive cells must be recorded
@@ -1430,42 +1854,54 @@ first.
 2. `commitTake`: the journal with its review inputs, role-tagged discards (no unlink before
    cleanup), the interim only-copy rule (step 4), R3-1, the commit-time OD4 carry-forward (Edit 6b patches applied), the
    live-audio-first ordering, and the parked rethrow after `installed` with the journal kept on a
-   failed stamp (E2); `reconcileSlug`, `reconcileBook` and the sweep.
+   failed stamp (E2); the review record only after a successful stamp, from the journal's `entry`
+   (E6); `reconcileSlug`, `reconcileBook` and the sweep; `healTakeFields`' skip of journal-named
+   slugs (R5-2); `take_repair_pending` for a stuck per-slug journal (R5-3, R5-4).
 3. Generation:
    - the commit site, signal, `committing` and `stallPhase = 'commit'`;
    - the bounded between-span retry with the `entered` flag and all three causes;
    - `takeCommitted` in the failure-stamp path, and R3-7's terminal frame with
-     `take_details_pending` (R4-7);
+     `take_details_pending` (R4-7), with `afterChapterFinalized` and the queue-entry mark still run
+     before it;
    - `afterChapterFinalized` after the span;
-   - OD2's per-chapter splice abort, and the `startTakeId` span.
+   - OD2's per-chapter splice abort, and the `startTakeId` span with its stuck-journal check
+     (R5-4).
 4. Splice and QA repair: registration-first base read, base tokens, the CAS-mismatch sentence, N6
-   driven by the commit result, and the exit-path scoring request (E3's wait lands in Phase 3).
-5. The bundle overwrite through `replaceTakesFromBundle`, placed after the rename loop (R3-8, A14);
-   backup restore through `reconcileBookTakes` (R3-9).
+   driven by the commit result, and the exit-path scoring request outside the span, **with the
+   full-cast `keep`** (E5). It lands with the request, so no phase ships a partial trigger with a
+   narrower `keep`.
+5. The bundle overwrite through `replaceTakesFromBundle`, placed after the rename loop (R3-8, A14),
+   with both of its branches' handles (R5-7); backup restore through `reconcileBookTakes` (R3-9);
+   both resolve a pending journal before they swap `state.json` (R5-5).
 6. The waiter retries (R4-10): `runBookJob`'s registration, and the listen-progress and listen-stats
-   PUTs.
+   PUTs, with listen-progress's receive-time ordering (R5-6).
 7. Lock-order comments, and the CLAUDE.md lock-order sentence and the fail-loud and swallow
-   enumerations (State-write sites table).
+   enumerations (State-write sites table: four new fail-loud, one moved, four new swallow).
 
 **Phase 3: fidelity, retry recognition, scoring.**
 1. `restoreTake` with its journal phases, and R3-5's promotion (§6.1 step 6), which replaces fsck
    case 1; `acceptTake` with the live-token table, and the `live_audio_missing` pre-check removed
    (R4-3), and commit step 4's interim only-copy rule removed; entries gain
-   `takeId`/`previousTakeId`; `entryMatchesChapter` widens.
+   `takeId`/`previousTakeId`/`previousRenderedAt`; `entryMatchesChapter` widens to
+   `audioRenderedAt ∈ {renderedAt, previousRenderedAt}`, and the Accept/Reject tables read the live
+   segments' `takeId` (E6).
 2. Retire `revision-op`: `revisionOpLockKey`, the two holders, the comments in `cast-lock.ts:40`
    and `book-op-lock.ts:17-18`, and the tests that cite it (`book-op.single-book-routes.test.ts:468`,
    `revision-ops.test.ts:542,574-578`, `chapter-audio.test.ts:603`), each replaced by an assertion
    on book-op.
 3. `commitScoring`: the pre-read `ensureTakeIdentity` span; one segments read per chapter, with
-   the embeddings/segments `takeId` check; one span per character write, with a per-chapter CAS on
+   two filters over it (B7) and the embeddings/segments `takeId` check; one span per character write, with a per-chapter CAS on
    the live segments `takeId`; the `commit` callback from `triggerScoring` and the resume route; the
-   merged re-run and its re-arm bound; E3's `afterRenders` wait with the full-cast `keep`.
+   merged re-run and its re-arm bound; named slugs of a stuck journal skipped (R5-3).
    `generation.ts:295` goes through it.
 
 **Phase 4: remaining fences.**
 1. `dropAllTakes` for exclude (OD6, the take-field clear) and for restructure delete ops;
    `relabelTakes` with the cursor journal, the pre-state rollback window over hints only, forward-only
-   replay, the parked rethrow and R4-2's background retries (E1); `buildAudioOps` checks presence;
+   replay, the parked rethrow and R4-2's background retries (E1); per-part idempotence with `lost`
+   (R5-1); `hintsPrior` dropped after `state-landed`; book-journal scope, the
+   `take_repair_pending` answers and the restructure refusal (R5-3, R5-4); no cache rebuild after a
+   parked edits write; `buildAudioOps` checks presence;
    the restructure's stale `book-state.ts:166-185` comment corrected.
 2. Reject and `restore-unrecorded` refuse `book_busy` during an export (OD7).
 3. On-box register rows on all three surfaces:
@@ -1474,6 +1910,8 @@ first.
      - the same three columns on a **OneDrive-mounted** workspace, with each holder (ffmpeg export
        read, ffmpeg clip cut, Node read stream, none);
      - real commit-span timings (no deadline, E2), to check the 30 s waiter retry bound (R4-10);
+     - once PR #4224 has merged: whether a live name can be renamed away while the m4b's ffmpeg
+       holds a hard link to the same file;
      - waiter outcomes (autosave, job registration) while an export holds a live file and while a
        slow commit runs.
    - **An m4a book on real hardware:** render → splice → reject → accept, with the files listed
@@ -1487,13 +1925,16 @@ Each PR carries:
 
 ## 8. Questions
 
-### 8.1 Owed questions from all three passes, answered
+### 8.1 Owed questions from all four passes, answered
 
 | Question | Answer |
 |---|---|
 | May a relabel ever roll back once `state.json` has landed? If so, which of hints, edits, the ManuscriptRecord and the analysis cache revert with it? (pass 3, Q1) | No (E1): forward only, from a step cursor plus each source's `takeId`. Only the journal and `manuscript-hints.json` are in the pre-state rollback window. Edits, the record and the cache are written after `state.json`, so they roll forward (§5.A Restructure). |
 | Should a commit that has staged every part ever be abandoned for being slow? (pass 3, Q2) | No (E2): no deadline. The waiters that cannot wait retry their acquisition (R4-10). Steps after `installed` park and rethrow last. The journal carries the review inputs (§5.A Commit). |
-| What does a splice- or QA-repair-triggered scoring pass do about Qwen tiers? (pass 3, Q3) | It waits while any synth job of the book runs, then runs with the full-cast `keep` (E3, R4-9; §5.A Scoring). |
+| Does "a render of the book" mean a registered chapter POST or the whole render queue? Which signal should scoring read? (pass 4, Q1) | Neither (E5): the partial trigger no longer waits for renders, so it reads no signal. It runs with the full-cast `keep`, which is what protects a render (§5.A Scoring). |
+| After a parked stamp, may the A/B entry be visible before `state.json` catches up? Is `audioTakeId` a decision input? (pass 4, Q2) | No, and no (E6). The entry is recorded only after a successful stamp, and Restore appears once replay lands it. `entryMatchesChapter` reads `audioRenderedAt`, the retry tables read the live segments' `takeId`, and the `audioTakeId` mirror stays swallowed (§5.A Commit, Retry recognition). |
+| What makes a relabel group "done" for one source, and what may run against a slug that an unfinished journal names? (pass 4, Q3) | Per-part tests inside each group, including `land`'s "temp absent, target present" branch (R5-1). The scan heal skips journal-named slugs (R5-2). A stuck journal blocks only the slugs it names, and answers `take_repair_pending` there (R5-3, R5-4). Whole-book writers resolve it first or refuse (R5-5). |
+| What does a splice- or QA-repair-triggered scoring pass do about Qwen tiers? (pass 3, Q3) | Revision 4: it waited while any synth job of the book ran, then ran with the full-cast `keep` (E3, R4-9). Revision 5: no wait; the full-cast `keep` alone (E5). |
 | Where does the canonical `takeSeq` live, and what exact equality does the commit test? Should Accept bump it? (A1, 1-1) | Nowhere: it is dropped (D1). The commit tests `live segments.takeId === base`. Accept bumps nothing. |
 | A failed stamp after `installed`: swallow or rethrow? Which source decides "committed"? (A2) | Rethrow (D2). The journal at `installed` or later, or the live segments' `takeId`, decides; never `state.json` (`takeCommitted`). |
 | Must the module own every whole-book and whole-state writer, and every book of any age, with minting and liveness enforced at its own entry points? (A3, 1-3) | Yes (D3): W13–W15 go through module entry points; `ensureTakeIdentity` and the §4.2 predicate run at every entry point. (Revision 3 also claimed that guard rule 3 sees zip-relative and variable-suffix writers. E4 withdraws that claim: they are listed blind spots, and every such site on `main` folds into the module.) |
@@ -1508,7 +1949,17 @@ Each PR carries:
 - **ffprobe tolerance:** the header estimate usually falls through to mtime, so it is replaced by a
   full decode (§6.1 step 2).
 
-### 8.3 Still open (on-box)
+### 8.3 Still open
+
+- **The edits/cache gap after restructure's state write (design pass owed).** A crash, or a parked
+  failure, between restructure's `state.json` write and its `manuscript-edits.json` write leaves
+  the saved sentences keyed to the pre-restructure chapters. `main` has the same gap after a crash
+  there, and the GET-side reconciliation does not close it (§5.A Restructure). The decision owed is
+  which behaviour is right: replaying the edits rewrite from a journal (its payload is every
+  sentence), marking the saved sentences stale, or discarding them. Revision 5 only keeps the cache
+  rebuild from compounding it.
+
+### 8.4 Still open (on-box)
 
 - **Row Q, OneDrive cells and timings** (§7 Phase 4). If OneDrive also blocks a rename-away under a
   Node holder, a commit would also wait during playback. The retry path covers it, but OD7 would
