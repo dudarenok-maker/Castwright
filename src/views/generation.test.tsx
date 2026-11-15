@@ -305,8 +305,8 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
   });
   /* Mounts the view in a MemoryRouter whose navigate() the test can call, to
      edit the URL in place while Generate stays mounted (a cold `?chapter=3`
-     link is canonicalised away by Layout before the view mounts, so the
-     in-place edit is the reachable way an explicit `?chapter=3` scrolls). */
+     link scrolls only when hydrating it leaves the persisted `ui.stage`
+     unchanged; otherwise Layout drops the param before the view mounts). */
   function renderMounted(entry: string, stageChapterId: number) {
     const store = makeStore();
     store.dispatch(chaptersSlice.actions.setChapters(chs));

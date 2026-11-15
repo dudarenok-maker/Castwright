@@ -396,8 +396,9 @@ export function GenerationView({
      malformed value falls back to 3 there and must not scroll); a plain load
      stays at the top. Reading `?chapter=` here (not the stage) lets a
      `?chapter=3` set or edited while this view is mounted scroll, which the
-     stage alone can't tell from the default. A cold `?chapter=3` link never
-     does: Layout's Redux→URL sync drops it before this view mounts. */
+     stage alone can't tell from the default. A cold `?chapter=3` link scrolls
+     only when hydrating it leaves the persisted `ui.stage` unchanged;
+     otherwise Layout's Redux→URL sync drops it before this view mounts. */
   const currentChapterId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
   );
