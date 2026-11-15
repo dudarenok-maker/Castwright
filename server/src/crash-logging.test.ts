@@ -5,10 +5,12 @@
  * can't kill a long generation run. A plain EventEmitter stands in for `process`
  * so the test drives the handlers without touching the real process. */
 import { describe, it, expect, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs, { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   formatCrash,
   enableFatalErrorReports,
@@ -19,6 +21,9 @@ import {
   listenWithAutoRebind,
   formatRebindExhausted,
 } from './crash-logging.js';
+
+/** #4054: the per-process flags every launcher passes node so a fatal report carries no env or interfaces. */
+const LAUNCHER_FLAGS = ['--report-exclude-env', '--report-exclude-network'] as const;
 
 describe('formatCrash', () => {
   it('includes the kind and the Error stack', () => {
@@ -323,11 +328,14 @@ describe('installShutdownSignals (#4054)', () => {
 });
 
 describe('enableFatalErrorReports (#4054)', () => {
+  // What every launcher passes node (start-app-prod.mjs, server/package.json, pinokio start.js).
+  const flags = { execArgv: [...LAUNCHER_FLAGS], nodeOptions: '' };
+
   it('R1 enables: creates the dir, then sets directory and reportOnFatalError', () => {
     const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
     const mkdir = vi.fn();
     const log = vi.fn();
-    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log })).toBe(true);
+    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log, ...flags })).toBe(true);
     expect(mkdir).toHaveBeenCalledTimes(1);
     expect(mkdir).toHaveBeenCalledWith('X/node-reports');
     expect(report.directory).toBe('X/node-reports');
@@ -348,7 +356,7 @@ describe('enableFatalErrorReports (#4054)', () => {
     const log = vi.fn();
     let result: boolean | undefined;
     expect(() => {
-      result = enableFatalErrorReports('X/node-reports', { report, mkdir, log });
+      result = enableFatalErrorReports('X/node-reports', { report, mkdir, log, ...flags });
     }).not.toThrow();
     expect(result).toBe(false);
     expect(report.reportOnFatalError).toBe(false);
@@ -376,12 +384,13 @@ describe('enableFatalErrorReports (#4054)', () => {
     const dir = path.join(root, 'logs', 'node-reports');
     try {
       expect(fs.existsSync(path.dirname(dir))).toBe(false);
-      expect(enableFatalErrorReports(dir, { log: vi.fn() })).toBe(true);
+      expect(enableFatalErrorReports(dir, { log: vi.fn(), ...flags })).toBe(true);
       expect(fs.existsSync(dir)).toBe(true);
       expect(process.report.directory).toBe(dir);
       expect(process.report.reportOnFatalError).toBe(true);
       expect(process.report.filename).toBe(saved.filename);
-      // getReport() honours the same flags a fatal-error report does.
+      // getReport() always has an Environment, so it shows only the per-Environment setters.
+      // A young-generation OOM has none and ignores them; R6 covers that path with a real OOM.
       const text = JSON.stringify(process.report.getReport());
       expect(text).not.toContain(sentinel);
       const parsed = JSON.parse(text) as { header: Record<string, unknown> } & Record<string, unknown>;
@@ -397,6 +406,153 @@ describe('enableFatalErrorReports (#4054)', () => {
       else delete process.env[sentinelKey];
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ['neither flag', [], ''],
+    ['only --report-exclude-env', ['--report-exclude-env'], ''],
+    ['only --report-exclude-network', [], '--report-exclude-network'],
+    ['a flag negated later', [...LAUNCHER_FLAGS, '--no-report-exclude-env'], ''],
+  ])('R5 fails closed without both per-process flags (%s): reports stay OFF', (_name, execArgv, nodeOptions) => {
+    const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
+    const mkdir = vi.fn();
+    const log = vi.fn();
+    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log, execArgv, nodeOptions })).toBe(false);
+    expect(report.reportOnFatalError).toBe(false);
+    expect(report.directory).toBe('');
+    expect(mkdir).not.toHaveBeenCalled();
+    const line = String(log.mock.calls[0][0]);
+    expect(line).toContain('OFF');
+    expect(line).toContain('--report-exclude-env --report-exclude-network');
+  });
+
+  it('R5 accepts the flags from NODE_OPTIONS, or split across it and execArgv', () => {
+    const cases: Array<[string[], string]> = [
+      [[], '--max-old-space-size=4096 --report-exclude-env  --report-exclude-network'],
+      [['--report-exclude-network'], '--report-exclude-env'],
+    ];
+    for (const [execArgv, nodeOptions] of cases) {
+      const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
+      expect(
+        enableFatalErrorReports('X/node-reports', { report, mkdir: vi.fn(), log: vi.fn(), execArgv, nodeOptions }),
+      ).toBe(true);
+      expect(report.reportOnFatalError).toBe(true);
+    }
+  });
+});
+
+/* #4054 pass 2 — a young-generation OOM (many small retained objects) has no
+ * Environment, so the per-Environment excludeEnv/excludeNetwork setters do not
+ * reach its report; a worker's sub-report has its own Environment and ignores
+ * the main thread's setters too. Only the per-process flags close both, so
+ * these spawn a real heap exhaustion through the real enableFatalErrorReports. */
+describe('enableFatalErrorReports under a real fatal OOM (#4054)', () => {
+  const serverDir = fileURLToPath(new URL('..', import.meta.url));
+  const crashLogging = fileURLToPath(new URL('./crash-logging.ts', import.meta.url));
+  const sentinelKey = 'CW_4054_SENTINEL';
+  const sentinel = ['cw4054', 'fatal', 'secret'].join('-');
+  // `small`: many small objects, the young-generation OOM. `large`: big arrays,
+  // an old-generation OOM, which has an Environment and so lists the worker.
+  const CHILD = `
+const { pathToFileURL } = await import('node:url');
+const { Worker } = await import('node:worker_threads');
+const [, , modPath, dir, shape] = process.argv;
+const mod = await import(pathToFileURL(modPath).href);
+mod.enableFatalErrorReports(dir);
+const w = new Worker('setInterval(() => {}, 1000);', { eval: true });
+await new Promise((r) => w.once('online', r));
+const keep = [];
+let i = 0;
+if (shape === 'small') for (;;) keep.push({ a: i++, s: 'x' + i });
+for (;;) keep.push(new Array(1e5).fill(i++));
+`;
+
+  function runOom(shape: 'small' | 'large', extraFlags: readonly string[]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-4054-oom-'));
+    const script = path.join(root, 'child.mjs');
+    const dir = path.join(root, 'reports');
+    fs.writeFileSync(script, CHILD);
+    const env: NodeJS.ProcessEnv = { ...process.env, [sentinelKey]: sentinel };
+    delete env.NODE_OPTIONS;
+    try {
+      const res = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          ...extraFlags,
+          '--max-old-space-size=16',
+          '--max-semi-space-size=16',
+          script,
+          crashLogging,
+          dir,
+          shape,
+        ],
+        { cwd: serverDir, env, encoding: 'utf8', timeout: 60_000 },
+      );
+      const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')) : [];
+      const reports = files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8'));
+      return { stdout: res.stdout, stderr: res.stderr, reports };
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  function allKeys(value: unknown, out: string[] = []): string[] {
+    if (Array.isArray(value)) for (const v of value) allKeys(v, out);
+    else if (value && typeof value === 'object')
+      for (const [k, v] of Object.entries(value)) {
+        out.push(k);
+        allKeys(v, out);
+      }
+    return out;
+  }
+
+  it.each(['small', 'large'] as const)(
+    'R6 with the launcher flags, a %s-object OOM writes a report with no env and no interfaces anywhere',
+    (shape) => {
+      const { stderr, reports } = runOom(shape, LAUNCHER_FLAGS);
+      expect(stderr).toMatch(/heap out of memory/);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).not.toContain(sentinel);
+      const parsed = JSON.parse(reports[0]) as { workers: unknown[] };
+      if (shape === 'large') expect(parsed.workers).toHaveLength(1); // the worker's sub-report is checked too
+      const keys = allKeys(parsed);
+      expect(keys).toContain('javascriptStack');
+      expect(keys).not.toContain('environmentVariables');
+      expect(keys).not.toContain('networkInterfaces');
+    },
+    30_000,
+  );
+
+  it('R6 without the flags, a small-object OOM writes no report at all and says why at boot', () => {
+    const { stdout, stderr, reports } = runOom('small', []);
+    expect(stderr).toMatch(/heap out of memory/);
+    expect(reports).toEqual([]);
+    expect(stdout).toContain('diagnostic reports on a fatal error are OFF');
+  }, 30_000);
+});
+
+describe('launchers pass the report-exclusion flags (#4054)', () => {
+  const flagsBefore = (cmd: string, entry: string) =>
+    expect(cmd).toMatch(new RegExp(`--report-exclude-env --report-exclude-network ${entry.replace('.', '\\.')}$`));
+
+  it('server/package.json dev (npm start, dev, dev:lan) and start', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    flagsBefore(pkg.scripts.dev, 'src/index.ts');
+    expect(pkg.scripts.dev).toMatch(/^tsx watch /);
+    flagsBefore(pkg.scripts.start, 'dist/index.js');
+    expect(pkg.scripts.start).toMatch(/^node /);
+  });
+
+  it("Pinokio's start.js", () => {
+    const src = readFileSync(new URL('../../pinokio-scripts/start.js', import.meta.url), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    expect(code).toContain(
+      "message: 'cd server && node --report-exclude-env --report-exclude-network dist/index.js',",
+    );
   });
 });
 

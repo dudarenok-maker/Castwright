@@ -48,6 +48,11 @@ export function serverChildEnv(baseEnv, { logDir, runDir }) {
   return { ...baseEnv, NODE_ENV: 'production', APP_LOG_DIR: logDir, APP_RUN_DIR: runDir };
 }
 
+/** Per-process node flags for the server child: they keep the environment and
+ *  the network interfaces out of every fatal-error report, which the server's
+ *  enableFatalErrorReports refuses to turn on without (#4054). */
+const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'];
+
 /** The one-line Castwright startup banner. Exported for unit testing. */
 export function bannerLine(version) {
   return `Castwright v${version} — Any book, performed by a full cast.`;
@@ -519,7 +524,7 @@ async function main() {
      (it's cwd-relative) — so prod gets the same WORKSPACE_DIR / analyzer / GPU
      tuning the dev server reads. detached + unref so the server outlives this
      launcher and the console window that double-clicked the .bat. */
-  const child = spawn(process.execPath, ['dist/index.js'], {
+  const child = spawn(process.execPath, [...REPORT_EXCLUSION_FLAGS, 'dist/index.js'], {
     cwd: serverDir,
     env: serverChildEnv(process.env, { logDir, runDir }),
     stdio: ['ignore', outLog, errLog],

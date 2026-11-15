@@ -216,24 +216,52 @@ export interface FatalErrorReportHooks {
   mkdir?: (dir: string) => void;
   /** Default `console.log`. */
   log?: (msg: string) => void;
+  /** Default `process.execArgv`. */
+  execArgv?: readonly string[];
+  /** Default `process.env.NODE_OPTIONS`. */
+  nodeOptions?: string;
 }
+
+/** The per-process node flags that keep the environment and the network
+ *  interfaces out of EVERY fatal-error report. Every launcher passes them
+ *  (scripts/start-app-prod.mjs, server/package.json, pinokio-scripts/start.js). */
+const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'] as const;
 
 /** #4054's evidence capture: turn on Node's diagnostic report for a V8 fatal
  *  error. It is the in-process equivalent of `--report-on-fatalerror
- *  --report-directory=<dir>`, so every launcher gets it with no flag change.
- *  It writes only on a V8 fatal error (OOM, a failed internal assertion), never
- *  on a native 0xC0000409 / 0xC0000005 — the sidecar's exit-code line covers
- *  those. The filename is left at Node's default (timestamp + pid) on purpose,
- *  so the next fatal error cannot overwrite an earlier report. Node does not
- *  create a missing report directory, hence the mkdir first. The report is
- *  meant to be attached to a public issue, so the environment (GEMINI_API_KEY,
- *  LAN_AUTH_TOKEN, ...) and the network interfaces (IP/MAC) are left out of
- *  it; the native stack, the JS stack and the heap stats stay. Never throws. */
+ *  --report-directory=<dir>`. It writes only on a V8 fatal error (OOM, a
+ *  failed internal assertion), never on a native 0xC0000409 / 0xC0000005 — the
+ *  sidecar's exit-code line covers those. The filename is left at Node's
+ *  default (timestamp + pid) on purpose, so the next fatal error cannot
+ *  overwrite an earlier report. Node does not create a missing report
+ *  directory, hence the mkdir first.
+ *
+ *  The report is meant to be attached to a public issue, so it must never
+ *  carry the environment (GEMINI_API_KEY, LAN_AUTH_TOKEN, ...) or the network
+ *  interfaces (IP/MAC). The runtime `excludeEnv`/`excludeNetwork` setters are
+ *  per-Environment, and a young-generation OOM has no Environment, nor does a
+ *  worker's sub-report use the main thread's: Node then falls back to the
+ *  per-process flags. So this fails closed — reports stay OFF, with a boot
+ *  line saying why, unless both REPORT_EXCLUSION_FLAGS are in `execArgv` or
+ *  `NODE_OPTIONS`. The setters stay as belt-and-braces. With the flags, the
+ *  native stack, the JS stack and the heap stats stay; `header.host` (the
+ *  machine name) is still in it. Never throws. */
 export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHooks = {}): boolean {
   // `excludeNetwork` exists in Node >= 22.0 (engines is >= 22.22.0) but is missing from @types/node.
   const report = hooks.report ?? (process.report as unknown as NonNullable<FatalErrorReportHooks['report']>);
   const mkdir = hooks.mkdir ?? ((d: string) => void fs.mkdirSync(d, { recursive: true }));
   const log = hooks.log ?? ((msg: string) => console.log(msg));
+  const given = [
+    ...(hooks.execArgv ?? process.execArgv),
+    ...(hooks.nodeOptions ?? process.env.NODE_OPTIONS ?? '').split(/\s+/),
+  ];
+  // A later `--no-<flag>` turns it back off, so its presence counts as missing.
+  if (!REPORT_EXCLUSION_FLAGS.every((f) => given.includes(f) && !given.includes(f.replace('--', '--no-')))) {
+    log(
+      `[server] diagnostic reports on a fatal error are OFF: node was not started with ${REPORT_EXCLUSION_FLAGS.join(' ')}, so a report could carry the environment and the network interfaces`,
+    );
+    return false;
+  }
   try {
     mkdir(dir);
   } catch (err) {
