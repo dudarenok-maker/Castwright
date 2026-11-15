@@ -125,6 +125,8 @@ export const MANIFEST = {
     // Runtime scripts the deployer invokes (start:prod / stop:prod and the
     // preflight that npm run dev triggers — useful diagnostic).
     'scripts/start-app-prod.mjs',
+    // #4054 — server/package.json `dev` runs it (npm run dev / dev:mock).
+    'scripts/dev-server.mjs',
     'scripts/stop-app.mjs',
     'scripts/stop-app.ps1',
     'scripts/preflight-ffmpeg.cjs',
