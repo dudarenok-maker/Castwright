@@ -16,7 +16,7 @@ import { redactKnownSecrets } from '../redact.js';
 /* #3084 A9 — through the leaf gate. */
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { geminiRateLimiter } from '../rate-limit.js';
-import { warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
+import { GEMINI_API_VERSION, warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
 import { geminiRequestThinks, reasoningWireFragment, type ReasoningLevel } from '../reasoning.js';
 import { GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from '../capacity.js';
 import {
@@ -199,7 +199,7 @@ export class GeminiTransport implements ChatTransport {
   private readonly requestCeilingMs: number | undefined;
 
   constructor(opts: GeminiTransportOptions) {
-    this.client = (opts.client as unknown as GoogleGenAI) ?? new GoogleGenAI({ apiKey: opts.apiKey });
+    this.client = (opts.client as unknown as GoogleGenAI) ?? new GoogleGenAI({ apiKey: opts.apiKey, apiVersion: GEMINI_API_VERSION });
     this.apiKey = opts.apiKey;
     this.model = opts.model;
     this.requestCeilingMs = opts.requestCeilingMs;
