@@ -3,6 +3,7 @@
 
 import { withVerifiedBookDir, type WithVerifiedBookDirOpts } from './book-dir-guard.js';
 import { withBookLock } from './book-lock.js';
+import { applyMergeTombstones } from './merge-tombstones.js';
 import { manuscriptEditsJsonPath } from './paths.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { readJson } from './state-io.js';
@@ -25,11 +26,13 @@ export interface RollSnapshot {
 }
 
 /* Without `resolveIds` the roll writes `buildRunning()` as the whole file, as
-   before (the subset job). With it (#4031) `buildRunning` returns only the
+   before (no production caller; both analysis routes pass `resolveIds`). With it (#4031) `buildRunning` returns only the
    chapters this job produced (a bare sentence array owns the chapters it has
    sentences for; a `RollSnapshot` names them); the roll re-reads the file under
    the `book` lock and replaces just those, so chapters it did not produce — and
-   a merge's remap of them — stay as the file has them. */
+   a merge's remap of them — stay as the file has them. The `resolveIds` form
+   also carries the file's merge tombstones and folds them into the run's own
+   sentences (#4155). */
 export async function rollManuscriptEdits(
   opts: WithVerifiedBookDirOpts,
   buildRunning: () => unknown[] | RollSnapshot,
@@ -56,23 +59,31 @@ export async function rollManuscriptEdits(
         await writeJsonAtomicOrdered(path, { sentences: snap.sentences });
         return;
       }
-      const own = await resolveIds(snap.sentences as RollSentence[]);
+      const ownRun = await resolveIds(snap.sentences as RollSentence[]);
       /* Absent is empty; an unreadable or malformed file throws, so a transient
          read fault is never written over as "no other chapters". */
-      const onDisk = await readJson<{ sentences?: unknown }>(path);
+      const onDisk = await readJson<{ sentences?: unknown; mergedAwayKeys?: unknown }>(path);
       if (onDisk && !Array.isArray(onDisk.sentences)) {
         throw new Error('manuscript-edits.json has no sentences array');
       }
+      const mergedAwayKeys = onDisk?.mergedAwayKeys;
+      if (mergedAwayKeys !== undefined && !(Array.isArray(mergedAwayKeys) && mergedAwayKeys.every((k) => typeof k === 'string'))) {
+        throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
+      }
+      const fold = (xs: RollSentence[]): RollSentence[] =>
+        mergedAwayKeys ? (applyMergeTombstones(xs as never[], mergedAwayKeys as string[]) as RollSentence[]) : xs;
+      const own = fold(ownRun);
       const have = (onDisk?.sentences as RollSentence[] | undefined) ?? [];
       const drop = new Set(snap.dropChapterIds ?? []);
       const present = new Set([...have.map((x) => x.chapterId), ...snap.chapterIds]);
-      const seed = fallback ? await resolveIds(fallback() as RollSentence[]) : [];
+      const seed = fallback ? fold(await resolveIds(fallback() as RollSentence[])) : [];
       await writeJsonAtomicOrdered(path, {
         sentences: replaceChapters(
           have.filter((x) => !drop.has(x.chapterId)),
           new Set(snap.chapterIds),
           [...own, ...seed.filter((x) => !present.has(x.chapterId) && !drop.has(x.chapterId))],
         ),
+        ...(mergedAwayKeys ? { mergedAwayKeys } : {}),
       });
     };
     /* #3784 — the write is `book`-locked, shared with the slice PUT's manuscript

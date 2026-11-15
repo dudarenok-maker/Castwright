@@ -191,7 +191,7 @@ describe('rollManuscriptEdits re-reads under the book lock (#4031)', () => {
     expect(landed).toEqual([[s(1, 'x'), s(2, 'olga'), s(4, 'x')]]);
   });
 
-  it('without resolveIds a roll still writes its snapshot wholesale (the subset job)', async () => {
+  it('without resolveIds a roll still writes its snapshot wholesale', async () => {
     verifiedDir = seedEdits([s(1, 'olga'), s(9, 'olga')]);
     await rollManuscriptEdits(opts, () => [s(1, 'x'), s(2, 'x')], 'book-4031-e');
     expect(landed).toEqual([[s(1, 'x'), s(2, 'x')]]);
