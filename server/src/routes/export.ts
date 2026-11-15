@@ -737,9 +737,12 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
    builder registers every chapter up front and can finish after DELETE has
    already flipped the job to `cancelled`. Checked before each step that makes
    the artifact visible (rename into place, sync-folder copy, `done`) so a
-   cancelled job ends cancelled with nothing left behind — DELETE no longer
+   cancelled job ends cancelled and drops its own artifact — DELETE no longer
    waits for the build, so its own artifact cleanup can run before the file
-   exists. Drops `artifact` (the file or, for mp3-folder, the folder) first. */
+   exists. Drops `artifact` (the file or, for mp3-folder, the folder) first.
+   One exception: an export cancelled after its sync-folder copy leaves that
+   copy (single-file and mp3-folder alike), because the copy is renamed over
+   the previous export's flat-named one (#4228). */
 async function bailIfCancelled(
   signal: AbortSignal,
   artifact?: { path: string; folder?: boolean },
@@ -860,16 +863,22 @@ async function runExportJob(
         const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
         const synced = await writeToSyncFolder(outPath, authoredSyncDir, job.filename);
         job.syncPath = synced.syncPath;
-        if (signal.aborted) {
-          await unlink(synced.syncPath).catch(() => {});
-          job.syncPath = null;
-          await bailIfCancelled(signal, { path: outPath });
-        }
+        /* The sync copy is renamed over the flat `<syncFolder>/<author>/<filename>`
+           name, where the previous completed export's copy lives, so it is left
+           in place — same as the mp3-folder branch (#4228). */
+        await bailIfCancelled(signal, { path: outPath });
       }
       job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     }
     job.status = 'done';
     job.completedAt = new Date().toISOString();
+    /* Publish `done` to the jobs map in the same synchronous step as the last
+       cancel check, before any await: DELETE edits the map's copy, so until
+       this runs a DELETE landing during the revoke below would read
+       `in_progress`, unlink the finished artifact, and the `finally` would
+       then write `done` + `downloadUrl` back over it. After this, a DELETE
+       sees `done` and is a no-op. */
+    jobs.set(job.id, { ...job });
     /* Plan 79 — clobber-newest-wins on disk PLUS revoke any older
        manifest for the same (book, format). Together they keep the
        queue de-duped: one row per format, always pointing at the
@@ -886,7 +895,10 @@ async function runExportJob(
       if (job.status !== 'cancelled') {
         job.status = 'cancelled';
         job.completedAt = new Date().toISOString();
-        job.errorReason = (e as Error)?.message || 'Cancelled.';
+        /* Only DELETE aborts the controller, so an aborted signal means the
+           user cancelled; its own status flip landed on the jobs map's copy,
+           not on this object. */
+        job.errorReason = signal.aborted ? 'Cancelled by user.' : (e as Error)?.message || 'Cancelled.';
       }
     } else {
       job.status = 'failed';

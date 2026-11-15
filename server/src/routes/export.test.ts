@@ -421,15 +421,20 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       expect(quick.ms).toBeLessThan(buildMs / 2);
 
       await awaitInFlightJobs();
+      /* The abort listener stops the build itself: without it the cancelled
+         job keeps writing for the whole build. */
+      expect(Date.now() - t1).toBeLessThan(buildMs / 2);
 
       const mem = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
       expect(mem.body.status).toBe('cancelled');
       expect(mem.body.downloadUrl).toBeNull();
+      expect(mem.body.errorReason).toBe('Cancelled by user.');
       const manifest = JSON.parse(
         readFileSync(join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`), 'utf8'),
-      ) as { status: string; downloadUrl: string | null };
+      ) as { status: string; downloadUrl: string | null; errorReason: string };
       expect(manifest.status).toBe('cancelled');
       expect(manifest.downloadUrl).toBeNull();
+      expect(manifest.errorReason).toBe('Cancelled by user.');
       expect(existsSync(join(exportsDir, filename))).toBe(false);
       expect(readdirSync(exportsDir).filter((n) => n.includes(exportId))).toEqual([]);
     } finally {
