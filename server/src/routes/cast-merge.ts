@@ -53,6 +53,8 @@ interface CastFile {
 
 interface EditsFile {
   sentences?: SentenceOutput[];
+  /* fs-58 sentence-merge tombstones — carried verbatim (#4155). */
+  mergedAwayKeys?: string[];
 }
 
 interface MergeBody {
@@ -255,7 +257,10 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
         });
         if (changed > 0) {
           touched = true;
-          await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: after });
+          await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), {
+            sentences: after,
+            ...(edits.mergedAwayKeys ? { mergedAwayKeys: edits.mergedAwayKeys } : {}),
+          });
         }
       }
       return { touched, after, rewritten };
