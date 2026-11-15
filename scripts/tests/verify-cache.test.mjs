@@ -22,6 +22,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { walk } from '../lib/module-graph.mjs';
+import { computeScopes } from '../ci-scope.mjs';
 import {
   composeInputHash,
   decide,
@@ -767,6 +768,33 @@ test('stepTouchedByDiff: index.html is in scope for test:e2e', () => {
 
 test('stepTouchedByDiff: index.html is in scope for test:e2e:visual', () => {
   assert.equal(stepTouchedByDiff(stepByName['test:e2e:visual'], ['index.html']), true);
+});
+
+// playwright.config.ts imports scripts/lib/playwright-port.mjs at runtime
+// (#4207), so a helper-only diff must still run e2e (ci-scope.mjs derives
+// step_test_e2e / step_test_e2e_visual from this same STEPS[] entry).
+test('stepTouchedByDiff: the playwright-port helper is in scope for test:e2e and test:e2e:visual', () => {
+  const diff = ['scripts/lib/playwright-port.mjs'];
+  assert.equal(stepTouchedByDiff(stepByName['test:e2e'], diff), true);
+  assert.equal(stepTouchedByDiff(stepByName['test:e2e:visual'], diff), true);
+});
+
+test('computeScopes: a playwright-port helper-only diff puts both e2e steps in scope', () => {
+  const s = computeScopes(['scripts/lib/playwright-port.mjs'], { eventName: 'pull_request' });
+  assert.equal(s.step_test_e2e, true);
+  assert.equal(s.step_test_e2e_visual, true);
+});
+
+// playwright-port.test.mjs copies playwright.config.ts at RUNTIME and loads it
+// under Playwright -- no module-graph edge -- so a config-only diff (exactly
+// the shape that could reintroduce process.cwd()) must still select test:hooks.
+test('stepTouchedByDiff: a playwright.config.ts diff matches test:hooks (playwright-port.test.mjs loads it at runtime)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['playwright.config.ts']), true);
+});
+
+test('computeScopes: a playwright.config.ts-only diff puts test:hooks in scope', () => {
+  const s = computeScopes(['playwright.config.ts'], { eventName: 'pull_request' });
+  assert.equal(s.step_test_hooks, true);
 });
 
 test('stepTouchedByDiff: editing the prebuild doc-sync script invalidates the build cache (issue #1223)', () => {
