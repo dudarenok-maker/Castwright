@@ -33,7 +33,7 @@ function unorderedEditsSites(src: string): string[] {
     const lineStart = src.lastIndexOf('\n', at) + 1;
     const before = src.slice(lineStart, at);
     const after = src.slice(at, at + 250);
-    if (/\breadJson(?:<[^\n]*>)?\($/.test(before)) continue;
+    if (/\breadJson(?:<[^\n()]*>)?\($/.test(before)) continue;
     const ordered = /\bwriteJsonAtomicOrdered\($/.test(before);
     const queuedRm =
       /\bconst editsPath = $/.test(before) &&
@@ -65,7 +65,7 @@ describe('analysis.ts manuscript-edits.json writers stay ordered (#3427)', () =>
     // One write (the persist's) and one read (the tombstone read, ordered by the `book` lock).
     const sites = [...io.matchAll(SITE_RE)];
     const reads = sites.filter((m) =>
-      /\breadJson(?:<[^\n]*>)?\($/.test(io.slice(io.lastIndexOf('\n', m.index ?? 0) + 1, m.index ?? 0)),
+      /\breadJson(?:<[^\n()]*>)?\($/.test(io.slice(io.lastIndexOf('\n', m.index ?? 0) + 1, m.index ?? 0)),
     );
     expect(sites.length - reads.length).toBe(1);
     expect(reads.length).toBe(1);
@@ -84,5 +84,11 @@ describe('analysis.ts manuscript-edits.json writers stay ordered (#3427)', () =>
     const readThenWrite = 'await readJsonThenWrite(manuscriptEditsJsonPath(dir), x);';
     expect(unorderedEditsSites(read)).toEqual([]);
     expect(unorderedEditsSites(readThenWrite)).toHaveLength(1);
+  });
+
+  it('a read earlier on the line does not exempt a later write on it (probe)', () => {
+    const readThenPlainWrite =
+      'const a = await readJson<A>(p); await updateJson<B>(manuscriptEditsJsonPath(dir), f);';
+    expect(unorderedEditsSites(readThenPlainWrite)).toHaveLength(1);
   });
 });
