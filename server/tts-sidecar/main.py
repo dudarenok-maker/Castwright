@@ -4478,6 +4478,10 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # box's WDDM does not provide; tracked onward via #3036/#3267.
     "asr.warm": 128,
     "spk": 200,
+    # #4102 - a RESIDENT ECAPA forward's incremental cost, not the cold-load
+    # peak. Unmeasured conservative prior mirroring `asr.warm`; NOT learned
+    # (see `reservation()`: a resident SPK observation is dropped).
+    "spk.warm": 128,
 }
 
 # A wide Qwen batch (large tokenBudget) has a higher true decode peak than the
@@ -4566,6 +4570,10 @@ class FootprintTable:
         # contamination question) leak contamination into — the cold-load pool.
         if engine == "asr" and resident:
             return "asr.warm"
+        # #4102 - same split for SPK (ECAPA): a resident model books only its
+        # incremental forward cost ("spk.warm"), not the cold-load "spk" seed.
+        if engine == "spk" and resident:
+            return "spk.warm"
         return engine
 
     @staticmethod
@@ -5786,6 +5794,14 @@ class PlacementController:
                     observed_mb = asr_observed_mb
                 elif engine == "asr" and resident:
                     observed_mb = asr_warm_mb
+                elif engine == "spk" and resident:
+                    # #4102 - do NOT learn a resident SPK sample: `_observed_mb`
+                    # reads the torch allocator peak since the reset, which
+                    # still counts every tensor already resident on the card
+                    # (the ECAPA weights included). Five such samples would
+                    # replace the 128 MB "spk.warm" seed with a figure at or
+                    # above the cold one. The seed stays authoritative.
+                    observed_mb = None
                 else:
                     observed_mb = self._observed_mb(device_key)
                 self.footprints.record(engine, model, cfg, observed_mb or 0, resident)

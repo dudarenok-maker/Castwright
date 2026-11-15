@@ -219,6 +219,10 @@ guard set above against a same-process sibling reservation (e.g. a Kokoro
 inside the measurement window, which none of the four guards can see on its
 own.
 
+A resident GPU speaker model (SPK / ECAPA) books `spk.warm` (128 MB, unmeasured,
+not learned because the torch allocator peak already includes the resident
+weights) instead of the 200 MB cold `spk` seed (#4102).
+
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->
@@ -229,6 +233,7 @@ own.
 <!-- footprint:asr.warm=128 -->
 <!-- footprint:asr.large=2560 -->
 <!-- footprint:spk=200 -->
+<!-- footprint:spk.warm=128 -->
 
 **Load/unload path.** `POST /api/sidecar/load` (Node proxy
 `server/src/routes/sidecar-health.ts:325`, 90s budget) and `POST

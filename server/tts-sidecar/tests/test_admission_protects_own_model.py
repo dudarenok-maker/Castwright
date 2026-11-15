@@ -183,3 +183,28 @@ def test_s4_spk_resolver_returns_the_resident_card_with_no_credit(monkeypatch):
     assert main._own_resident_tier("spk", None, {}) == ("spk", 0, "cuda:0")
     spk.resident = False
     assert main._own_resident_tier("spk", None, {}) == (None, 0, None)
+
+
+def _idle_asr():
+    # `FootprintTable.snapshot()` reads `ASR._model_name`; keep a non-resident stand-in.
+    asr = FakeEngine("cuda:0", 400, resident=False)
+    asr._model_name = "base"
+    return asr
+
+
+def test_s5_resident_spk_observation_is_not_learned(monkeypatch):
+    # #4102: a resident SPK op's torch-allocator peak already includes the
+    # resident ECAPA weights, so recording it would drag "spk.warm" back up.
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 500))
+    spk = FakeEngine("cuda:0", 300)
+    pc = _wire(monkeypatch, _idle_asr(), spk, {0: 6000})
+    assert _admit_spk(pc) == {"device": "cuda:0"}
+    assert pc.footprints.snapshot()["spk.warm"]["sample_count"] == 0
+
+
+def test_s6_cold_spk_observation_is_still_learned(monkeypatch):
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 500))
+    spk = FakeEngine("cuda:0", 300, resident=False)
+    pc = _wire(monkeypatch, _idle_asr(), spk, {0: 6000})
+    assert _admit_spk(pc) == {"device": "cuda:0"}
+    assert pc.footprints.snapshot()["spk"]["sample_count"] == 1
