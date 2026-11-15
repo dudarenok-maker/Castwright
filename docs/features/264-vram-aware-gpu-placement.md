@@ -307,6 +307,17 @@ OOM — see the status header:
   > well under the ~6659 headroom — so the interim conservative 7168 design seed
   > was dropped back to 6144. Refutes the review's "design might exceed 6144 →
   > OOM" concern with a real number.
+  >
+  > **Follow-up #4163 CLOSED.** The #1737 reset alone left everything already
+  > allocated on the card inside the peak, so that note's "that op's own peak"
+  > was not yet true: a learned footprint absorbed co-resident engines' weights.
+  > Each reservation now subtracts the `memory_allocated` it read at the reset,
+  > and a sample is learned only from a cold op (the engine had no model
+  > resident at admission; for Qwen, none of its four models), because warm ops
+  > share the cold op's key and would collapse its p95 to activations only.
+  > Residual: torch's peak counter is per device, so an overlapping op on the
+  > same card can still truncate or inflate a sample. Coverage:
+  > `tests/test_op_own_footprint.py`.
 - **`persona-gpu-plan.ts`'s `unloadResidentSidecar` + `GpuBusyForPersonaError`
   are now dead code** (the reverse-evict was removed); deletion candidates.
 - **`engine-vram-cost.ts` is provably dead** (its registry weights are deleted) —

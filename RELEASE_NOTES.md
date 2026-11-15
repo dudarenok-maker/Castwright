@@ -1,5 +1,9 @@
 # Castwright 1.16.0
 
+**Speech engines and your graphics card**
+
+- **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.
+
 # Castwright 1.15.0
 
 **What's new in 1.15.0**

@@ -33,6 +33,10 @@ PR-by-PR as the v1.16.0 cycle progresses — do not reconstruct from git
 history at cut time.
 -->
 
+## 🔊 Generation quality & engine health
+
+- **Learned VRAM footprints count only a cold load's own allocation (#4163).** `_reset_peak_mb` reset the CUDA peak to the memory already allocated. As a result, `_observed_mb` learned every tensor resident on the card, other engines' weights included, as the op's footprint, and the learned bookings for `qwen*`, `coqui`, `kokoro` and `spk` drifted up whenever another engine was co-resident. Each reservation now records `memory_allocated` at the reset as its own baseline and learns `max_memory_allocated - baseline` (floored at 0; no baseline, no sample). It does this only when the engine had no model resident at admission (for Qwen, none of its four models; new `any_model_resident` predicate). Warm ops record nothing, so warm synths can no longer shrink the cold-load booking that shares their key, and co-resident engines can no longer inflate it. `kokoro` (onnxruntime, invisible to torch) now stays on its seed. Residual: torch's peak counter is per device, so an overlapping op on the same card can still truncate or inflate a sample. ASR (device-wide free delta, #3266) is unchanged. Learned values are held in memory only, so nothing is migrated; the over-booking has been present since learned footprints shipped, so it affected v1.15.0.
+
 ## 🧪 Test gates
 
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
