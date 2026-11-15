@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   encodePcmToAudio,
   writeChapterLufsFile,
@@ -16,6 +16,28 @@ import {
   type ChapterPeaksFile,
 } from './mp3.js';
 import { BIN_COUNT } from '../audio/compute-peaks.js';
+
+/* Pass-through spy on node:fs/promises.writeFile so a test can inject a
+   part-way write failure (#4218); every other test sees the real function. */
+const fsMock = vi.hoisted(() => ({ writeFile: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  fsMock.writeFile.mockImplementation(actual.writeFile as never);
+  return { ...actual, writeFile: fsMock.writeFile };
+});
+
+/* Make the next `.tmp-*` write create a partial file and then fail with ENOSPC;
+   returns the error so a test can assert it is the one that propagates. */
+async function failTmpWriteWithEnospc(): Promise<{ enospc: Error; restore: () => void }> {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const enospc = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  fsMock.writeFile.mockImplementation(async (p: string, ...rest: unknown[]) => {
+    if (!String(p).includes('.tmp-')) return (actual.writeFile as (...a: unknown[]) => Promise<void>)(p, ...rest);
+    await actual.writeFile(p, 'partial');
+    throw enospc;
+  });
+  return { enospc, restore: () => fsMock.writeFile.mockImplementation(actual.writeFile as never) };
+}
 
 const ffmpegPresent = (() => {
   try {
@@ -220,6 +242,23 @@ describe('writeChapterPeaksFile', () => {
     }
   });
 
+  it('unlinks the partial temp file and rethrows the original error when the temp write fails (#4218)', async () => {
+    const dir = workDir();
+    const { enospc, restore } = await failTmpWriteWithEnospc();
+    try {
+      const audioDir = join(dir, 'audio');
+      const peaksPath = join(audioDir, 'ch-enospc.peaks.json');
+      await expect(writeChapterPeaksFile(sinePcm(24_000, 0.1), 24_000, peaksPath)).rejects.toBe(
+        enospc,
+      );
+      expect(existsSync(peaksPath)).toBe(false);
+      expect(readdirSync(audioDir).filter((e) => e.includes('.tmp-'))).toEqual([]);
+    } finally {
+      restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('silent PCM yields an all-zero peaks array (no NaN serialized)', async () => {
     const dir = workDir();
     try {
@@ -282,6 +321,26 @@ describe('writeChapterLufsFile', () => {
       expect(entries.filter((e) => e.includes('.tmp-'))).toEqual([]);
       expect(entries).toContain('ch-clean.lufs.json');
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('unlinks the partial temp file and rethrows the original error when the temp write fails (#4218)', async () => {
+    const dir = workDir();
+    const { enospc, restore } = await failTmpWriteWithEnospc();
+    try {
+      const audioDir = join(dir, 'audio');
+      const lufsPath = join(audioDir, 'ch-enospc.lufs.json');
+      await expect(
+        writeChapterLufsFile(
+          { i: -16, lra: 11, tp: -1.5, target: -16, twoPass: false, measuredAt: 'now' },
+          lufsPath,
+        ),
+      ).rejects.toBe(enospc);
+      expect(existsSync(lufsPath)).toBe(false);
+      expect(readdirSync(audioDir).filter((e) => e.includes('.tmp-'))).toEqual([]);
+    } finally {
+      restore();
       rmSync(dir, { recursive: true, force: true });
     }
   });

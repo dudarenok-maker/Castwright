@@ -466,7 +466,7 @@ export interface BookStateResponse {
   /** Set when revisions.json exists but could not be read; `revisions` is
       `null` in that case. The server's fixed, path-free sentence (OD2). */
   revisionsError?: string;
-  /** Slugs of chapters that already have an audio file on disk. */
+  /** Slugs of chapters whose live audio take (<slug>.mp3, .m4a or .ogg) exists on disk. A preserved earlier take (<slug>.previous.*) does not count. */
   completedSlugs: string[];
   /** Plan 289 — opaque per-field revision tokens of the four PUT /state
       slices, computed server-side from the raw files. Echoed back as

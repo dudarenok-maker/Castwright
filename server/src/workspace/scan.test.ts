@@ -44,7 +44,7 @@ function bookSkeleton(
   title: string,
   opts: {
     castConfirmed?: boolean;
-    chapters?: Array<{ id: number; slug: string; generationState?: 'failed' }>;
+    chapters?: Array<{ id: number; slug: string; generationState?: 'failed'; excluded?: boolean }>;
     language?: string | null;
   } = {},
 ) {
@@ -72,6 +72,7 @@ function bookSkeleton(
         title: `Chapter ${c.id}`,
         slug: c.slug,
         ...(c.generationState ? { generationState: c.generationState } : {}),
+        ...(c.excluded ? { excluded: true } : {}),
       })),
       coverGradient: ['#000', '#fff'],
       language: opts.language,
@@ -693,6 +694,78 @@ describe('voices_pending status', () => {
     writeFileSync(join(audioRoot, 'db-1.mp3'), '');
     const b = (await flatten()).find((x) => x.title === 'Done Book')!;
     expect(b.status).toBe('complete');
+  });
+
+  /* #4166: the card's completedChapters counts chapters with a LIVE take (the
+     book-state finder), not files matching an extension list. */
+  it('an Opus book with both chapters as .ogg → complete, 2/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Opus Done Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'od-1' }, { id: 2, slug: 'od-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'od-1.ogg'), '');
+    writeFileSync(join(audioRoot, 'od-2.ogg'), '');
+    const b = (await flatten()).find((x) => x.title === 'Opus Done Book')!;
+    expect(b.status).toBe('complete');
+    expect(b.completedChapters).toBe(2);
+    expect(b.chapterCount).toBe(2);
+  });
+
+  it('a preserved .previous.mp3 beside a live take does not count as a second chapter → generating, 1/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Previous Overcount Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'po-1' }, { id: 2, slug: 'po-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'po-1.mp3'), '');
+    writeFileSync(join(audioRoot, 'po-1.previous.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Previous Overcount Book')!;
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(1);
+  });
+
+  it('a chapter with only a .previous.mp3 is not complete', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Previous Only Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'pv-1' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'pv-1.previous.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Previous Only Book')!;
+    expect(b.status).toBe('voices_pending');
+    expect(b.completedChapters).toBe(0);
+  });
+
+  it('counts chapters, not files: an excluded chapter whose take is still on disk is not counted → generating, 1/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Excluded Take Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'xt-1', excluded: true }, { id: 2, slug: 'xt-2' }, { id: 3, slug: 'xt-3' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2, 3]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'xt-1.mp3'), '');
+    writeFileSync(join(audioRoot, 'xt-2.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Excluded Take Book')!;
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(1);
+  });
+
+  it('counts chapters, not files: a chapter with both .mp3 and .ogg counts once → generating, 1/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Two Formats Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'tf-1' }, { id: 2, slug: 'tf-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'tf-1.mp3'), '');
+    writeFileSync(join(audioRoot, 'tf-1.ogg'), '');
+    const b = (await flatten()).find((x) => x.title === 'Two Formats Book')!;
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(1);
   });
 });
 
