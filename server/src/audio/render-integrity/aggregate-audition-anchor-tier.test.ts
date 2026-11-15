@@ -31,7 +31,7 @@ const T17 = 'qwen3-tts-1.7b';
 const unit = () => Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
 
 /** A book whose single chapter holds `lines` 'thurid' lines rendered at T06; thurid is pinned to `pin` (if any). */
-async function bookWithLines(lines: number, pin?: string) {
+async function bookWithLines(lines: number, pin?: string, snapshot: Record<string, unknown> = { modelKey: T06 }) {
   const dir = mkdtempSync(join(tmpdir(), 'audition-anchor-tier-'));
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
   mkdirSync(join(dir, 'audio'), { recursive: true });
@@ -47,7 +47,7 @@ async function bookWithLines(lines: number, pin?: string) {
       chapterId: 1,
       modelKey: T06,
       segments: rows.map((r) => ({ characterId: 'thurid', sentenceIds: r.sentenceIds, renderedFallbackEngine: null, voiceName: 'qwen-new' })),
-      characterSnapshots: { thurid: { voiceEngine: 'qwen', modelKey: T06, resolvedVoiceName: 'qwen-new' } },
+      characterSnapshots: { thurid: { voiceEngine: 'qwen', ...snapshot, resolvedVoiceName: 'qwen-new' } },
     }),
   );
   return dir;
@@ -72,6 +72,17 @@ describe('audition rows record the tier of the real anchors blended into them (#
     const row = (await readCentroids(dir))!['thurid'];
     expect(row.auditionAnchorModelKey).toBe(T06);
     expect(auditionCentroidUsableForCurrent(row, 'qwen-new', T06)).toBe(true);
+  });
+
+  it('an audition that blends an unknown-tier anchor (split-key snapshot) gets NO stamp and is unusable (P3-3)', async () => {
+    mode.synthOnly = false;
+    const dir = await bookWithLines(8, undefined, { modelKey: T17, renderedModelKey: T06 });
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.referenceKind).toBe('audition');
+    expect(row.auditionAnchorModelKey).toBeUndefined();
+    expect(auditionCentroidUsableForCurrent(row, 'qwen-new', T06)).toBe(false);
+    expect(auditionCentroidUsableForCurrent(row, 'qwen-new', T17)).toBe(false);
   });
 
   it('a synthetic-only audition (no real anchors blended) is usable at the voice tier', async () => {

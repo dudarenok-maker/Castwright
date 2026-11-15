@@ -124,9 +124,9 @@ describe('scoreBook stamps the pooled anchors tier on the in-book row (#3518)', 
     expect(row.inBookModelKey).toBe(T17);
   });
 
-  it('falls back to the chapter modelKey when the snapshot carries none', async () => {
+  it('does NOT fall back to the chapter modelKey when the snapshot carries none: the anchor is unknown-tier (P3-1)', async () => {
     const row = await inBookRow([{ chapter: T06 }, { chapter: T06 }]);
-    expect(row.inBookModelKey).toBe(T06);
+    expect(row.inBookModelKey).toBeUndefined();
   });
 
   /* The stamp covers exactly the POOLED anchors: a line the pool filters out must not leak its tier. */
