@@ -126,7 +126,10 @@ async function defaultDetectOllama(spawnFn: SpawnFn): Promise<string | null> {
     let proc: ChildProcess;
     try {
       proc = spawnFn('ollama', ['-v'], { windowsHide: true });
-    } catch {
+    } catch (err) {
+      /* A refuseUnderVitest refusal (#3712) must surface, not read as "not
+         installed"; any other sync spawn throw still means not installed. */
+      if (err instanceof Error && /refused under vitest/.test(err.message)) throw err;
       resolve(null);
       return;
     }

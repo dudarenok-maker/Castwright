@@ -1,7 +1,7 @@
 /* Guard (#3712): Ollama's InstallBootstrap must refuse its DEFAULT real spawn
-   and real download under vitest. The default detector swallows a spawn throw
-   as "not installed", so guarding spawnFn alone would let start() go on to a
-   real installer download; httpFn is guarded too. child_process is mocked and
+   and real download under vitest. The default detector rethrows the spawn
+   refusal (any other sync spawn throw still reads as "not installed"), so
+   detect() and start() fail loudly; httpFn is guarded too. child_process is mocked and
    fetch is spied so even a red run touches no process and no network. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -36,14 +36,25 @@ afterEach(() => {
 const base = () => ({ getPlatform: () => 'linux' as const, getArch: () => 'x64', downloadDir: dir });
 
 describe('Ollama InstallBootstrap refuses real spawn and download under vitest (#3712)', () => {
-  it('O1: default detect reports not installed without spawning', async () => {
+  it('O1: default detect rejects with the spawn refusal instead of reading as not installed', async () => {
     const b = new InstallBootstrap(base());
-    expect(await b.detect()).toEqual({ installed: false, version: null });
+    await expect(b.detect()).rejects.toThrow(/real spawn refused under vitest/);
     expect(spawn).toHaveBeenCalledTimes(0);
   });
 
-  it('O2: default install errors on the refused download, no spawn, no fetch', async () => {
+  it('O2: default install errors on the refused spawn probe, no spawn, no fetch', async () => {
     const b = new InstallBootstrap(base());
+    const job = b.start();
+    await vi.waitFor(() => {
+      if (b.getJob(job.id)?.status !== 'error') throw new Error('not yet in error');
+    });
+    expect(b.getJob(job.id)!.error).toContain('real spawn refused under vitest');
+    expect(spawn).toHaveBeenCalledTimes(0);
+    expect(fetchSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it('O2b: default httpFn is refused once an injected detector reports not installed', async () => {
+    const b = new InstallBootstrap({ ...base(), detectOllama: () => Promise.resolve(null) });
     const job = b.start();
     await vi.waitFor(() => {
       if (b.getJob(job.id)?.status !== 'error') throw new Error('not yet in error');
