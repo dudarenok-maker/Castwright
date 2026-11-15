@@ -785,6 +785,18 @@ test('computeScopes: a playwright-port helper-only diff puts both e2e steps in s
   assert.equal(s.step_test_e2e_visual, true);
 });
 
+// playwright-port.test.mjs copies playwright.config.ts at RUNTIME and loads it
+// under Playwright -- no module-graph edge -- so a config-only diff (exactly
+// the shape that could reintroduce process.cwd()) must still select test:hooks.
+test('stepTouchedByDiff: a playwright.config.ts diff matches test:hooks (playwright-port.test.mjs loads it at runtime)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['playwright.config.ts']), true);
+});
+
+test('computeScopes: a playwright.config.ts-only diff puts test:hooks in scope', () => {
+  const s = computeScopes(['playwright.config.ts'], { eventName: 'pull_request' });
+  assert.equal(s.step_test_hooks, true);
+});
+
 test('stepTouchedByDiff: editing the prebuild doc-sync script invalidates the build cache (issue #1223)', () => {
   const diff = ['scripts/sync-docs-to-public.mjs'];
   assert.equal(stepTouchedByDiff(stepByName['build'], diff), true);

@@ -396,6 +396,11 @@ export const STEPS = [
         // printed test:hooks [cached] locally and skipped its CI leg too.
         // Same #1847 runtime-read trap as fixtures/** above.
         '.gitignore',
+        // playwright-port.test.mjs (#4207) copies playwright.config.ts and
+        // loads it under Playwright at RUNTIME — no module-graph edge, so a
+        // config-only diff (e.g. reintroducing process.cwd()) printed
+        // test:hooks [cached] and skipped its CI leg. Same #1847 trap.
+        'playwright.config.ts',
       ],
       includeLockfiles: ['root'],
     },

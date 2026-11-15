@@ -81,6 +81,10 @@ test('playwright.config.ts resolves the port from its own directory, not the cwd
       join(a, 'scripts', 'lib', 'playwright-port.mjs'),
     );
     writeFileSync(join(a, 'e2e', 'global-teardown.ts'), 'export default async () => {};\n');
+    // Pin the copy to CommonJS: with no package.json of its own it inherits
+    // the nearest one above os.tmpdir(), and a {"type":"module"} there loads
+    // it as ESM, which ignores NODE_PATH.
+    writeFileSync(join(a, 'package.json'), '{"type":"commonjs"}\n');
     writeFileSync(join(a, '.env.local'), 'PLAYWRIGHT_PORT=5391\n');
     writeFileSync(join(b, '.env.local'), 'PLAYWRIGHT_PORT=5392\n');
     const env = { ...process.env, NODE_PATH: join(repo, 'node_modules') };
@@ -97,7 +101,14 @@ test('playwright.config.ts resolves the port from its own directory, not the cwd
       ],
       { cwd: b, env, encoding: 'utf8', windowsHide: true },
     );
-    const config = JSON.parse(r.stdout).config;
+    let config;
+    try {
+      config = JSON.parse(r.stdout).config;
+    } catch (e) {
+      assert.fail(
+        `playwright --list output was not JSON (${e.message})\nstdout: ${r.stdout}\nstderr: ${r.stderr}`,
+      );
+    }
     assert.match(config.webServer.url, /:5391$/);
     assert.match(config.webServer.command, /--port 5391\b/);
   } finally {
