@@ -517,6 +517,17 @@ test('serverChildEnv hands the child the launcher-resolved absolute log and run 
   assert.equal(env.KEEP, '1');
 });
 
+// #4054 pass 4: a Worker parses NODE_OPTIONS, not the parent's command line, so
+// the child also gets both flags there (appended, never clobbering the user's).
+test('serverChildEnv appends the report-exclusion flags to NODE_OPTIONS', () => {
+  const env = serverChildEnv({ NODE_OPTIONS: '--max-old-space-size=8192' }, { logDir: '/l', runDir: '/r' });
+  assert.equal(env.NODE_OPTIONS, '--max-old-space-size=8192 --report-exclude-env --report-exclude-network');
+  assert.equal(
+    serverChildEnv({}, { logDir: '/l', runDir: '/r' }).NODE_OPTIONS,
+    '--report-exclude-env --report-exclude-network',
+  );
+});
+
 test('serverChildEnv sets the dirs even when the launcher env had neither', () => {
   const env = serverChildEnv({}, { logDir: '/r/logs', runDir: '/r/.run' });
   assert.equal(env.APP_LOG_DIR, '/r/logs');
@@ -534,7 +545,7 @@ test('the server spawn passes serverChildEnv and both report-exclusion flags', (
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
   assert.match(
     code,
-    /^const REPORT_EXCLUSION_FLAGS = \['--report-exclude-env', '--report-exclude-network'\];$/m,
+    /^import \{ REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions \} from '\.\/lib\/report-exclusion\.mjs';$/m,
   );
   assert.match(
     code,

@@ -98,6 +98,8 @@ export const MANIFEST = {
     'scripts/lib/sidecar-sweep-port.psm1',
     'scripts/lib/prevent-sleep.ps1',
     'scripts/lib/prevent-sleep.psm1',
+    // #4054 — start-app-prod.mjs imports it for the server child's NODE_OPTIONS.
+    'scripts/lib/report-exclusion.mjs',
 
     // Frontend source + pre-built bundle
     'src/**',

@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync, realpathS
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions } from './lib/report-exclusion.mjs';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
@@ -43,15 +44,17 @@ const pkgVersion = JSON.parse(
  *  launcher's already-resolved absolute dirs: the child runs with cwd=server/,
  *  so a relative value would resolve against server/ there but against the repo
  *  root here, splitting server.log from node-reports/ (#4054). Exported for
- *  unit testing. */
+ *  unit testing. NODE_OPTIONS also gets the report-exclusion flags, appended:
+ *  the prod server starts no Worker today, but a Worker reads NODE_OPTIONS, not
+ *  the parent's command line, so a future one stays covered (#4054). */
 export function serverChildEnv(baseEnv, { logDir, runDir }) {
-  return { ...baseEnv, NODE_ENV: 'production', APP_LOG_DIR: logDir, APP_RUN_DIR: runDir };
+  return {
+    ...withReportExclusionNodeOptions(baseEnv),
+    NODE_ENV: 'production',
+    APP_LOG_DIR: logDir,
+    APP_RUN_DIR: runDir,
+  };
 }
-
-/** Per-process node flags for the server child: they keep the environment and
- *  the network interfaces out of every fatal-error report, which the server's
- *  enableFatalErrorReports refuses to turn on without (#4054). */
-const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'];
 
 /** The one-line Castwright startup banner. Exported for unit testing. */
 export function bannerLine(version) {

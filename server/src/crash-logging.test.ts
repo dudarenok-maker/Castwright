@@ -331,18 +331,26 @@ describe('enableFatalErrorReports (#4054)', () => {
   // process.report as node leaves it when started with LAUNCHER_FLAGS (start-app-prod.mjs, server/package.json, pinokio start.js).
   const flagged = () => ({ reportOnFatalError: false, directory: '', excludeEnv: true, excludeNetwork: true });
 
-  it('R1 enables: creates the dir, then sets directory and reportOnFatalError', () => {
+  it('R1 enables: creates the dir, then writes only directory and then reportOnFatalError', () => {
     const report = flagged();
-    const mkdir = vi.fn();
+    const writes: [string, unknown][] = [];
+    const mkdir = vi.fn(() => void writes.push(['mkdir', 'X/node-reports']));
+    const recorded = new Proxy(report, {
+      set(target, key, value) {
+        writes.push([String(key), value]);
+        return Reflect.set(target, key, value);
+      },
+    });
     const log = vi.fn();
-    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log })).toBe(true);
-    expect(mkdir).toHaveBeenCalledTimes(1);
+    expect(enableFatalErrorReports('X/node-reports', { report: recorded, mkdir, log })).toBe(true);
     expect(mkdir).toHaveBeenCalledWith('X/node-reports');
-    expect(report.directory).toBe('X/node-reports');
-    expect(report.reportOnFatalError).toBe(true);
-    // The report is attached to a public issue: no env vars (API keys, LAN token), no interfaces.
-    expect(report.excludeEnv).toBe(true);
-    expect(report.excludeNetwork).toBe(true);
+    // The folder first, the directory before the switch (so no report can go to the old one),
+    // and nothing else: not `filename`, and not the exclusion fields, which are only read.
+    expect(writes).toEqual([
+      ['mkdir', 'X/node-reports'],
+      ['directory', 'X/node-reports'],
+      ['reportOnFatalError', true],
+    ]);
     const line = String(log.mock.calls[0][0]);
     expect(line).toContain('diagnostic report on a fatal error');
     expect(line).toContain('X/node-reports');
@@ -435,11 +443,19 @@ describe('enableFatalErrorReports (#4054)', () => {
 /* #4054 pass 2 — a young-generation OOM (many small retained objects) has no
  * Environment, so the per-Environment excludeEnv/excludeNetwork setters do not
  * reach its report; a worker's sub-report has its own Environment and ignores
- * the main thread's setters too. Only the per-process flags close both, so
- * these spawn a real heap exhaustion through the real enableFatalErrorReports. */
+ * the main thread's setters too. Only the per-process options close both, so
+ * these spawn a real heap exhaustion through the real enableFatalErrorReports.
+ *
+ * Pass 4 — the child's Worker is esbuild's shape (`execArgv: []`, which tsx's
+ * esbuild sync API starts in dev). A Worker parses its own execArgv plus the
+ * NODE_OPTIONS in its env, never the parent's command line, so the dev
+ * launcher's NODE_OPTIONS (scripts/lib/report-exclusion.mjs) is what keeps its
+ * sub-report clean. TSX_DISABLE_CACHE=1 makes every child transform cold, so the
+ * result never depends on test order or on tsx's on-disk cache. */
 describe('enableFatalErrorReports under a real fatal OOM (#4054)', () => {
   const serverDir = fileURLToPath(new URL('..', import.meta.url));
   const crashLogging = fileURLToPath(new URL('./crash-logging.ts', import.meta.url));
+  const reportExclusion = new URL('../../scripts/lib/report-exclusion.mjs', import.meta.url).href;
   const sentinelKey = 'CW_4054_SENTINEL';
   const sentinel = ['cw4054', 'fatal', 'secret'].join('-');
   // `small`: many small objects, the young-generation OOM. `large`: big arrays,
@@ -452,7 +468,7 @@ const mod = await import(pathToFileURL(modPath).href);
 // What load-env.ts does with a NODE_OPTIONS line in server/.env: too late for node to parse.
 if (runtimeNodeOptions) process.env.NODE_OPTIONS = runtimeNodeOptions;
 mod.enableFatalErrorReports(dir);
-const w = new Worker('setInterval(() => {}, 1000);', { eval: true });
+const w = new Worker('setInterval(() => {}, 1000);', { eval: true, execArgv: [] });
 await new Promise((r) => w.once('online', r));
 const keep = [];
 let i = 0;
@@ -460,13 +476,26 @@ if (shape === 'small') for (;;) keep.push({ a: i++, s: 'x' + i });
 for (;;) keep.push(new Array(1e5).fill(i++));
 `;
 
-  function runOom(shape: 'small' | 'large', extraFlags: readonly string[], runtimeNodeOptions = '') {
+  /** The NODE_OPTIONS the dev launcher starts node with (from an env that had none). */
+  async function devNodeOptions(): Promise<string> {
+    const { withReportExclusionNodeOptions } = (await import(reportExclusion)) as {
+      withReportExclusionNodeOptions: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+    };
+    return withReportExclusionNodeOptions({}).NODE_OPTIONS ?? '';
+  }
+
+  function runOom(
+    shape: 'small' | 'large',
+    extraFlags: readonly string[],
+    { nodeOptions = '', runtimeNodeOptions = '' }: { nodeOptions?: string; runtimeNodeOptions?: string } = {},
+  ) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-4054-oom-'));
     const script = path.join(root, 'child.mjs');
     const dir = path.join(root, 'reports');
     fs.writeFileSync(script, CHILD);
-    const env: NodeJS.ProcessEnv = { ...process.env, [sentinelKey]: sentinel };
+    const env: NodeJS.ProcessEnv = { ...process.env, [sentinelKey]: sentinel, TSX_DISABLE_CACHE: '1' };
     delete env.NODE_OPTIONS;
+    if (nodeOptions) env.NODE_OPTIONS = nodeOptions;
     try {
       const res = spawnSync(
         process.execPath,
@@ -502,17 +531,47 @@ for (;;) keep.push(new Array(1e5).fill(i++));
     return out;
   }
 
-  it.each(['small', 'large'] as const)(
-    'R6 with the launcher flags, a %s-object OOM writes a report with no env and no interfaces anywhere',
-    (shape) => {
-      const { stderr, reports } = runOom(shape, LAUNCHER_FLAGS);
+  type Report = { workers: unknown[] } & Record<string, unknown>;
+
+  /** Up to five runs of runOom, until one leaves a whole report that took the GC path the shape
+   *  is meant to prove: `large` an old-generation OOM (workers listed), `small` a young-generation
+   *  one (none). Seen on Windows / Node 24.15: a 16 MiB OOM sometimes dies mid-write (0xC0000409:
+   *  about 1 in 80 dev-shape `large` runs, 3 in 20 of the control's) and leaves a report cut off
+   *  at 16 KiB, before workers[]; and about 1 in 80 `small` runs dies on the old-generation path.
+   *  Returns every report text seen, rejected ones included, so a caller can check them all. */
+  function runOomUntilWhole(
+    shape: 'small' | 'large',
+    extraFlags: readonly string[],
+    opts: { nodeOptions?: string } = {},
+  ): { stdout: string; texts: string[]; parsed: Report } {
+    const texts: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { stdout, stderr, reports } = runOom(shape, extraFlags, opts);
       expect(stderr).toMatch(/heap out of memory/);
       expect(reports).toHaveLength(1);
-      expect(reports[0]).not.toContain(sentinel);
-      const parsed = JSON.parse(reports[0]) as { workers: unknown[] };
-      // The child runs a live Worker: `large` has an Environment, so its sub-report is listed and
-      // checked too; `small` must list none, the sign it took the no-Environment young-generation path.
-      expect(parsed.workers).toHaveLength(shape === 'large' ? 1 : 0);
+      texts.push(reports[0]);
+      let parsed: Report;
+      try {
+        parsed = JSON.parse(reports[0]) as Report;
+      } catch {
+        continue; // cut off mid-write: run it again
+      }
+      if ((parsed.workers.length > 0) === (shape === 'large')) return { stdout, texts, parsed };
+    }
+    throw new Error(`five runs in a row left no whole ${shape}-shape report`);
+  }
+
+  it.each(['small', 'large'] as const)(
+    'R6 launched like the dev launcher (flags + its NODE_OPTIONS), a %s-object OOM writes a report with no env and no interfaces anywhere',
+    async (shape) => {
+      const nodeOptions = await devNodeOptions();
+      const { texts, parsed } = runOomUntilWhole(shape, LAUNCHER_FLAGS, { nodeOptions });
+      for (const text of texts) expect(text).not.toContain(sentinel);
+      // `large` has an Environment, so the live workers' sub-reports are listed and checked too
+      // (ours, plus tsx's esbuild worker on a cold transform); `small` lists none, the sign it
+      // took the no-Environment young-generation path (runOomUntilWhole only accepts that).
+      if (shape === 'large') expect(parsed.workers.length).toBeGreaterThan(0);
+      else expect(parsed.workers).toHaveLength(0);
       const keys = allKeys(parsed);
       expect(keys).toContain('javascriptStack');
       expect(keys).not.toContain('environmentVariables');
@@ -520,6 +579,16 @@ for (;;) keep.push(new Array(1e5).fill(i++));
     },
     30_000,
   );
+
+  // The control for the case above: the pass-3 head's shape (flags on the command line only).
+  // If this ever stops leaking, the case above no longer proves NODE_OPTIONS is what cleans it.
+  it('R6 control: with the flags on the command line only, an execArgv:[] worker leaks the env into a large-object OOM report', () => {
+    const { stdout, parsed } = runOomUntilWhole('large', LAUNCHER_FLAGS);
+    expect(stdout).toContain('diagnostic report on a fatal error ->');
+    expect(parsed.environmentVariables).toBeUndefined();
+    expect(JSON.stringify(parsed.workers)).toContain(sentinel);
+    expect(allKeys(parsed.workers)).toContain('environmentVariables');
+  }, 30_000);
 
   it('R6 without the flags, a small-object OOM writes no report at all and says why at boot', () => {
     const { stdout, stderr, reports } = runOom('small', []);
@@ -529,7 +598,7 @@ for (;;) keep.push(new Array(1e5).fill(i++));
   }, 30_000);
 
   it('R6 T3 flags only in a NODE_OPTIONS set at runtime (a server/.env line): reports stay OFF', () => {
-    const { stdout, stderr, reports } = runOom('small', [], LAUNCHER_FLAGS.join(' '));
+    const { stdout, stderr, reports } = runOom('small', [], { runtimeNodeOptions: LAUNCHER_FLAGS.join(' ') });
     expect(stderr).toMatch(/heap out of memory/);
     expect(reports).toEqual([]);
     expect(reports.join('')).not.toContain(sentinel);
@@ -541,14 +610,19 @@ describe('launchers pass the report-exclusion flags (#4054)', () => {
   const flagsBefore = (cmd: string, entry: string) =>
     expect(cmd).toMatch(new RegExp(`--report-exclude-env --report-exclude-network ${entry.replace('.', '\\.')}$`));
 
-  it('server/package.json dev (npm start, dev, dev:lan) and start', () => {
+  it('server/package.json start, and dev (npm start, dev, dev:mock, dev:lan) through the NODE_OPTIONS wrapper', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
       scripts: Record<string, string>;
     };
-    flagsBefore(pkg.scripts.dev, 'src/index.ts');
-    expect(pkg.scripts.dev).toMatch(/^tsx watch /);
     flagsBefore(pkg.scripts.start, 'dist/index.js');
     expect(pkg.scripts.start).toMatch(/^node /);
+    // dev goes through scripts/dev-server.mjs, which starts tsx with the flags on its
+    // command line AND in NODE_OPTIONS (tsx's esbuild Worker reads only the latter).
+    expect(pkg.scripts.dev).toBe('node ../scripts/dev-server.mjs');
+    const src = readFileSync(new URL('../../scripts/dev-server.mjs', import.meta.url), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    expect(code).toMatch(/env: withReportExclusionNodeOptions\(baseEnv\)/);
+    expect(code).toMatch(/'watch',\s*'--include=\.env',\s*\.\.\.REPORT_EXCLUSION_FLAGS,\s*'src\/index\.ts'/);
   });
 
   it("Pinokio's start.js", () => {

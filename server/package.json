@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --include=.env --report-exclude-env --report-exclude-network src/index.ts",
+    "dev": "node ../scripts/dev-server.mjs",
     "build": "tsc -p .",
     "start": "node --report-exclude-env --report-exclude-network dist/index.js",
     "typecheck": "tsc --noEmit -p .",

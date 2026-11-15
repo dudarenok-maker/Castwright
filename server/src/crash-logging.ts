@@ -205,7 +205,8 @@ export function installExitLogging(hooks: ExitLoggingHooks = {}): void {
 }
 
 export interface FatalErrorReportHooks {
-  /** Default `process.report`. Only these four fields are written; `filename` is never touched. */
+  /** Default `process.report`. Only `directory` and `reportOnFatalError` are written (the
+   *  exclusion fields are read); `filename` is never touched. */
   report?: {
     reportOnFatalError: boolean;
     directory: string;
@@ -219,12 +220,17 @@ export interface FatalErrorReportHooks {
 }
 
 /** The per-process node flags that keep the environment and the network
- *  interface list out of the main thread's fatal-error reports, and out of the
- *  sub-report of every worker that inherits `execArgv` (a Worker started with
- *  its own `execArgv` parses its options from that instead). Socket addresses
- *  (`libuv[]` `localEndpoint`/`remoteEndpoint`) stay in a report either way.
- *  Every launcher passes them (scripts/start-app-prod.mjs, server/package.json,
- *  pinokio-scripts/start.js). */
+ *  interface list out of a fatal-error report. On node's command line they
+ *  cover the main thread and every worker that inherits `execArgv`. A Worker
+ *  started with its own `execArgv` parses that plus the `NODE_OPTIONS` in its
+ *  env instead, never the parent's command line, and tsx/esbuild start one in
+ *  dev (esbuild's sync API runs in a Worker with `execArgv: []`). So every
+ *  launcher passes them on the command line (scripts/start-app-prod.mjs,
+ *  server/package.json `start`, pinokio-scripts/start.js, scripts/dev-server.mjs),
+ *  and the dev launcher and start-app-prod.mjs also put them in the child's
+ *  `NODE_OPTIONS` (scripts/lib/report-exclusion.mjs). The prod server starts no
+ *  Worker today. Socket addresses (`libuv[]` `localEndpoint`/`remoteEndpoint`)
+ *  stay in a report either way. */
 const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'] as const;
 
 /** #4054's evidence capture: turn on Node's diagnostic report for a V8 fatal
@@ -241,21 +247,24 @@ const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-networ
  *  interface list (each interface's IP/MAC). The runtime
  *  `excludeEnv`/`excludeNetwork` setters are per-Environment, and a
  *  young-generation OOM has no Environment, nor does a worker's sub-report use
- *  the main thread's: Node then falls back to the per-process flags. So this
- *  fails closed — reports stay OFF, with a boot line saying why, unless node
- *  itself parsed both REPORT_EXCLUSION_FLAGS (on its command line or in a
- *  `NODE_OPTIONS` it started with). That is read from `process.report` before
- *  the setters write it, never from the `NODE_OPTIONS` text: load-env.ts can
- *  set that from server/.env after node has parsed its options. The setters
- *  stay as belt-and-braces. With the flags, the native stack, the JS stack and
- *  the heap stats stay; `header.host` (the machine name) and the socket
- *  addresses in `libuv[]` are still in it. Never throws. */
+ *  the main thread's: Node then falls back to the per-process options (a
+ *  worker's own; see REPORT_EXCLUSION_FLAGS). So this sets neither and fails
+ *  closed — reports stay OFF, with a boot line saying why, unless node itself
+ *  parsed both REPORT_EXCLUSION_FLAGS (on its command line or in a
+ *  `NODE_OPTIONS` it started with). That is read from `process.report`, never
+ *  from the `NODE_OPTIONS` text: load-env.ts can set that from server/.env
+ *  after node has parsed its options. It covers the main thread only; a
+ *  worker's sub-report is clean only if that worker parsed the flags too,
+ *  which is why the launchers also pass them in `NODE_OPTIONS`. With the
+ *  flags, the native stack, the JS stack and the heap stats stay; `header.host`
+ *  (the machine name) and the socket addresses in `libuv[]` are still in it.
+ *  Never throws. */
 export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHooks = {}): boolean {
   // `excludeNetwork` exists in Node >= 22.0 (engines is >= 22.22.0) but is missing from @types/node.
   const report = hooks.report ?? (process.report as unknown as NonNullable<FatalErrorReportHooks['report']>);
   const mkdir = hooks.mkdir ?? ((d: string) => void fs.mkdirSync(d, { recursive: true }));
   const log = hooks.log ?? ((msg: string) => console.log(msg));
-  // Before the setters below run, these hold what node parsed at startup.
+  // Nothing in the server writes these, so they hold what node parsed at startup.
   if (!(report.excludeEnv && report.excludeNetwork)) {
     log(
       `[server] diagnostic reports on a fatal error are OFF: node was not started with ${REPORT_EXCLUSION_FLAGS.join(' ')}, so a report could carry the environment and the network interfaces`,
@@ -273,8 +282,6 @@ export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHook
   }
   report.directory = dir;
   report.reportOnFatalError = true;
-  report.excludeEnv = true;
-  report.excludeNetwork = true;
   log(`[server] diagnostic report on a fatal error -> ${dir}`);
   return true;
 }
