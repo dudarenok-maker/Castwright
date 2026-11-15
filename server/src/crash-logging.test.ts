@@ -372,9 +372,10 @@ describe('enableFatalErrorReports (#4054)', () => {
     const savedKey = process.env[sentinelKey];
     process.env[sentinelKey] = sentinel;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-4054-'));
-    const dir = path.join(root, 'node-reports');
+    // The parent is missing too (a fresh clone has no logs/ yet), so a non-recursive mkdir fails.
+    const dir = path.join(root, 'logs', 'node-reports');
     try {
-      expect(fs.existsSync(dir)).toBe(false);
+      expect(fs.existsSync(path.dirname(dir))).toBe(false);
       expect(enableFatalErrorReports(dir, { log: vi.fn() })).toBe(true);
       expect(fs.existsSync(dir)).toBe(true);
       expect(process.report.directory).toBe(dir);
@@ -411,14 +412,11 @@ describe('index.ts wiring (#4054)', () => {
   it('R4 enables fatal-error reports as the first statement of main(), never at module scope', () => {
     const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-    const call = code.match(
-      /^\s*enableFatalErrorReports\(resolve\(resolveLogDir\(repoRoot\), 'node-reports'\)\);$/m,
+    // Anchored to main()'s opening brace: a gate or an early return before the call fails it.
+    expect(code).toMatch(
+      /async function main\(\): Promise<void> \{\s*enableFatalErrorReports\(resolve\(resolveLogDir\(repoRoot\), 'node-reports'\)\);\s*ensureWorkspace\(\);/,
     );
-    expect(call).not.toBeNull();
     const mainAt = code.indexOf('async function main(): Promise<void> {');
-    expect(mainAt).toBeGreaterThan(-1);
-    expect(call!.index!).toBeGreaterThan(mainAt);
-    expect(call!.index!).toBeLessThan(code.indexOf('ensureWorkspace();', mainAt));
     expect(code.slice(0, mainAt)).not.toContain('enableFatalErrorReports(');
   });
 });
