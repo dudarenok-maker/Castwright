@@ -86,8 +86,9 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (on by default, con
     // later verb-tagged turn recovers
     expect(speech).toHaveLength(1);
     expect(speech[0].speaker).toEqual({ characterId: 'anton', source: 'tag-name' });
-    // slice the TRANSFORMED body (recovery re-keys offsets), not the original —
-    // robust when the pre-dash whitespace width differs from a single space.
+    // slice the TRANSFORMED body (recovery is length-preserving, so offsets
+    // match the original body too), not the original — kept on the transformed body
+    // as the recovered text is what the parser saw.
     const transformed = splitEvidencedInteriorTurns(body, idx);
     expect(transformed.slice(speech[0].start, speech[0].end)).toContain('Привет');
   });
@@ -159,6 +160,13 @@ describe('paragraph-recovery — splitEvidencedInteriorTurns (on by default, con
       const body = 'Он вошёл. — Привет, — сказал Антон. — Пока, — сказала Ольга.';
       const out = splitEvidencedInteriorTurns(body, idx);
       expect(out).toBe('Он вошёл.\n— Привет, — сказал Антон.\n— Пока, — сказала Ольга.');
+      expect(out.length).toBe(body.length);
+    });
+
+    it('U6 astral char BETWEEN two cuts splits both at the right offsets', () => {
+      const body = 'Он вошёл. — Привет, — сказал Антон 😀. — Пока, — сказала Ольга.';
+      const out = splitEvidencedInteriorTurns(body, idx);
+      expect(out).toBe('Он вошёл.\n— Привет, — сказал Антон 😀.\n— Пока, — сказала Ольга.');
       expect(out.length).toBe(body.length);
     });
 

@@ -124,11 +124,11 @@ export function splitEvidencedInteriorTurns(body: string, index: NameIndex): str
        before it (rare) is skipped rather than risking a length change. */
     /* Cuts are UTF-16 offsets (from m.index), so index the string by UTF-16 unit,
        never a [...line] code-point array (astral chars would skew the offsets). */
-    let fixed = line;
+    const units = line.split('');
     for (const c of cuts) {
-      if (c > 0 && /\s/u.test(fixed[c - 1])) fixed = fixed.slice(0, c - 1) + '\n' + fixed.slice(c);
+      if (c > 0 && /\s/u.test(units[c - 1])) units[c - 1] = '\n';
     }
-    out.push(fixed);
+    out.push(units.join(''));
   }
   return changed ? out.join('\n') : body;
 }
