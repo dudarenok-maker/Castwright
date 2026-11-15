@@ -13,6 +13,7 @@ import {
   writeFileSync,
   existsSync,
   readFileSync,
+  renameSync,
   statSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -321,6 +322,11 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     const del = await request(app).delete(`/api/books/${bookId}/exports/${exportId}`);
     expect(del.status).toBe(204);
 
+    /* DELETE answers without waiting for the build to unwind (it must not
+       hold book-op through an unabortable build), so drain the job's own
+       `finally` before looking at what it left on disk. */
+    await awaitInFlightJobs();
+
     /* Subsequent GET reports cancelled. Allow a couple of poll ticks in
        case runExportJob's finally hasn't flushed yet — the DELETE
        handler synchronously flips the status, so the first GET should
@@ -346,6 +352,92 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     const remaining = existsSync(exportsDir) ? readdirSync(exportsDir) : [];
     expect(remaining.filter((n: string) => n.includes(exportId))).toEqual([]);
   }, 15_000);
+
+  /* #4223 — a zip builder registers every chapter in milliseconds and then
+     only awaits its write stream, so a cancel landing after that point used
+     to be invisible to it: the job resolved, was reported `done`, and the
+     DELETE then unlinked the artifact the job had just renamed into place
+     (status `done` in memory, `cancelled` in the manifest, no file). This
+     cancels mid-pump (the partial file is already growing, so every chapter
+     is registered) and asserts the in-memory status, the manifest and the
+     artifact agree on `cancelled`. It also asserts DELETE does not wait for
+     the build: the answer lands in a fraction of an uncancelled build's time
+     and a same-book quick write fired alongside it is not parked behind it
+     under book-op. */
+  it('DELETE of a zip export cancelled after its chapters registered ends cancelled everywhere, without holding book-op', async () => {
+    const slugs = ['01-chapter-one', '02-chapter-two'];
+    const mp3s = slugs.map((s) => join(audioRoot, `${s}.mp3`));
+    const parked = mp3s.map((p) => `${p}.parked`);
+    const m4as = slugs.map((s) => join(audioRoot, `${s}.m4a`));
+    mp3s.forEach((p, i) => renameSync(p, parked[i]));
+    const big = Buffer.alloc(150 * 1024 * 1024);
+    m4as.forEach((p) => writeFileSync(p, big));
+    try {
+      const t0 = Date.now();
+      const control = await request(app)
+        .post(`/api/books/${bookId}/exports`)
+        .send({ format: 'aac-m4a-zip', destination: 'download' });
+      expect(control.status).toBe(201);
+      await waitForDone(control.body.id as string);
+      const buildMs = Date.now() - t0;
+      /* The artifact name is flat per (book, format), so clear the control's
+         artifact: the cancelled job's own must be the only thing checked. */
+      rmSync(join(bookDir, 'exports'), { recursive: true, force: true });
+
+      const create = await request(app)
+        .post(`/api/books/${bookId}/exports`)
+        .send({ format: 'aac-m4a-zip', destination: 'download' });
+      expect(create.status).toBe(201);
+      const exportId = create.body.id as string;
+      const filename = create.body.filename as string;
+      const exportsDir = join(bookDir, 'exports');
+
+      /* Wait until the pump is demonstrably running: the partial file is
+         growing, so the chapters are registered and only the write remains. */
+      const partialBytes = () =>
+        existsSync(exportsDir)
+          ? readdirSync(exportsDir)
+              .filter((n) => n.includes(`.partial-${exportId}`))
+              .reduce((a, n) => a + statSync(join(exportsDir, n)).size, 0)
+          : 0;
+      for (let i = 0; i < 400 && partialBytes() < 16 * 1024 * 1024; i++) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(partialBytes()).toBeGreaterThanOrEqual(16 * 1024 * 1024);
+
+      const t1 = Date.now();
+      const [del, quick] = await Promise.all([
+        request(app)
+          .delete(`/api/books/${bookId}/exports/${exportId}`)
+          .then((r) => ({ status: r.status, ms: Date.now() - t1 })),
+        /* A same-book quick write taking book-op alongside the cancel. */
+        request(app)
+          .delete(`/api/books/${bookId}/exports/no-such-export`)
+          .then((r) => ({ status: r.status, ms: Date.now() - t1 })),
+      ]);
+      expect(del.status).toBe(204);
+      expect(quick.status).toBe(404);
+      expect(del.ms).toBeLessThan(buildMs / 2);
+      expect(quick.ms).toBeLessThan(buildMs / 2);
+
+      await awaitInFlightJobs();
+
+      const mem = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
+      expect(mem.body.status).toBe('cancelled');
+      expect(mem.body.downloadUrl).toBeNull();
+      const manifest = JSON.parse(
+        readFileSync(join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`), 'utf8'),
+      ) as { status: string; downloadUrl: string | null };
+      expect(manifest.status).toBe('cancelled');
+      expect(manifest.downloadUrl).toBeNull();
+      expect(existsSync(join(exportsDir, filename))).toBe(false);
+      expect(readdirSync(exportsDir).filter((n) => n.includes(exportId))).toEqual([]);
+    } finally {
+      await awaitInFlightJobs();
+      m4as.forEach((p) => rmSync(p, { force: true }));
+      parked.forEach((p, i) => renameSync(p, mp3s[i]));
+    }
+  }, 60_000);
 
   it('DELETE is idempotent on already-terminal jobs', async () => {
     const create = await request(app)

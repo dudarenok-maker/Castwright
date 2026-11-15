@@ -98,7 +98,7 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
        — see the pipeline's own doc comment for why an earlier version's
        attempt to also destroy the in-flight read stream on abort didn't
        hold up and was removed. */
-    const pipeline = createZipWritePipeline(outPath, zip);
+    const pipeline = createZipWritePipeline(outPath, zip, signal);
 
     /* Every chapter read stream we hand yazl owns its file handle (closed on
        stream end/error/destroy). Tracked so a failure — abort, rejectBuild,

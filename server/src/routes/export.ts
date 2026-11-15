@@ -571,13 +571,6 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
   const controller = jobControllers.get(job.id);
   controller?.abort();
 
-  /* Wait for the build to unwind before answering: the builders drop their
-     own staging dir / partial file in a `finally`, and replying 204 first
-     let a client observe a cancelled export while those were still on disk.
-     Never rejects (the POST's `.catch` backstop); a no-op when the job is
-     not in flight (e.g. rehydrated from a manifest). */
-  await jobPromises.get(job.id);
-
   /* Best-effort manifest write so a server restart sees the cancelled
      state. If the disk write fails (the staging dir might already be
      gone), the in-memory state is still authoritative. */
@@ -740,6 +733,24 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
   return out;
 }
 
+/* A builder that resolves does not mean the export is still wanted: a zip
+   builder registers every chapter up front and can finish after DELETE has
+   already flipped the job to `cancelled`. Checked before each step that makes
+   the artifact visible (rename into place, sync-folder copy, `done`) so a
+   cancelled job ends cancelled with nothing left behind — DELETE no longer
+   waits for the build, so its own artifact cleanup can run before the file
+   exists. Drops `artifact` (the file or, for mp3-folder, the folder) first. */
+async function bailIfCancelled(
+  signal: AbortSignal,
+  artifact?: { path: string; folder?: boolean },
+): Promise<void> {
+  if (!signal.aborted) return;
+  if (artifact) {
+    await rm(artifact.path, { recursive: artifact.folder === true, force: true }).catch(() => {});
+  }
+  signal.throwIfAborted();
+}
+
 async function runExportJob(
   job: BookExportJob,
   bookDir: string,
@@ -767,6 +778,7 @@ async function runExportJob(
       });
       job.sizeBytes = folderResult.totalBytes;
       job.progress = 1;
+      await bailIfCancelled(signal, { path: outPath, folder: true });
 
       if (syncFolder) {
         /* fs-54 — author-level nesting, applied to every sync-folder
@@ -778,6 +790,7 @@ async function runExportJob(
         const bookSubfolder = sanitiseForZip(state.title);
         const synced = await writeFolderToSyncFolder(outPath, authoredSyncDir, bookSubfolder);
         job.syncPath = synced.syncPath;
+        await bailIfCancelled(signal, { path: outPath, folder: true });
       }
       /* No downloadUrl for folder exports — the route-layer guard
          already refuses the format + download combo, so leaving the
@@ -831,7 +844,9 @@ async function runExportJob(
         if (job.format === 'captions') {
           job.warning = (result as { warning?: string }).warning ?? null;
         }
+        await bailIfCancelled(signal, { path: buildPath });
         await renameWithRetry(buildPath, outPath);
+        await bailIfCancelled(signal, { path: outPath });
       } catch (e) {
         /* On any failure (including cancel) the partial file is dropped
            so a `<bookDir>/exports/` listing never shows half-baked
@@ -845,6 +860,11 @@ async function runExportJob(
         const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
         const synced = await writeToSyncFolder(outPath, authoredSyncDir, job.filename);
         job.syncPath = synced.syncPath;
+        if (signal.aborted) {
+          await unlink(synced.syncPath).catch(() => {});
+          job.syncPath = null;
+          await bailIfCancelled(signal, { path: outPath });
+        }
       }
       job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     }

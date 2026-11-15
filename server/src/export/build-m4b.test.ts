@@ -614,6 +614,36 @@ describeIfTools('buildM4b chapter-audio snapshot (#4223)', () => {
     expect(Math.abs(Number(probe.format.duration) - lastEnd)).toBeLessThan(0.15);
   });
 
+  it('chapter marks match the audio that was concatenated when a live file is swapped before the probe', async () => {
+    /* The mirror image of the swap above: the replacement lands right as the
+       FIRST ffprobe spawns, i.e. between the snapshot and the probes. Marks
+       derived by probing the live path would then come from the new take
+       while the concat still carries the snapshot's old audio. */
+    const longer = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 1.0), 24_000, { quality: 9 });
+    let swapped = false;
+    seams.onSpawn = (cmd) => {
+      if (cmd !== 'ffprobe' || swapped) return;
+      swapped = true;
+      const tmp = join(bookDir, 'audio', '01-chapter-1.mp3.new');
+      writeFileSync(tmp, longer);
+      renameSync(tmp, join(bookDir, 'audio', '01-chapter-1.mp3'));
+    };
+
+    await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(swapped).toBe(true);
+
+    const probe = ffprobeJson(outPath);
+    /* Each snapshot is 0.2 s. Marks probed from the swapped live file would
+       put chapter 2 at 1.0 s (the muxer then drops or clamps the marks past
+       the audio's end, so the last end alone cannot show it). */
+    expect(probe.chapters).toHaveLength(3);
+    probe.chapters.forEach((c, i) => {
+      expect(Math.abs(Number(c.start_time) - i * 0.2)).toBeLessThan(0.15);
+    });
+    const lastEnd = Math.max(...probe.chapters.map((c) => Number(c.end_time)));
+    expect(Math.abs(Number(probe.format.duration) - lastEnd)).toBeLessThan(0.15);
+  });
+
   it('still builds when hard-linking is impossible (copy fallback)', async () => {
     seams.linkFails = true;
     const result = await buildM4b({ bookDir, state: makeState(), outPath });
