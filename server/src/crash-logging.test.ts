@@ -341,7 +341,7 @@ describe('enableFatalErrorReports (#4054)', () => {
   });
 
   it('R2 a folder that cannot be made: logs OFF, returns false, leaves report untouched', () => {
-    const report = { reportOnFatalError: false, directory: '' };
+    const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
     const mkdir = vi.fn(() => {
       throw Object.assign(new Error('denied'), { code: 'EACCES' });
     });
