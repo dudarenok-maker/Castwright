@@ -328,14 +328,14 @@ describe('installShutdownSignals (#4054)', () => {
 });
 
 describe('enableFatalErrorReports (#4054)', () => {
-  // What every launcher passes node (start-app-prod.mjs, server/package.json, pinokio start.js).
-  const flags = { execArgv: [...LAUNCHER_FLAGS], nodeOptions: '' };
+  // process.report as node leaves it when started with LAUNCHER_FLAGS (start-app-prod.mjs, server/package.json, pinokio start.js).
+  const flagged = () => ({ reportOnFatalError: false, directory: '', excludeEnv: true, excludeNetwork: true });
 
   it('R1 enables: creates the dir, then sets directory and reportOnFatalError', () => {
-    const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
+    const report = flagged();
     const mkdir = vi.fn();
     const log = vi.fn();
-    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log, ...flags })).toBe(true);
+    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log })).toBe(true);
     expect(mkdir).toHaveBeenCalledTimes(1);
     expect(mkdir).toHaveBeenCalledWith('X/node-reports');
     expect(report.directory).toBe('X/node-reports');
@@ -349,14 +349,14 @@ describe('enableFatalErrorReports (#4054)', () => {
   });
 
   it('R2 a folder that cannot be made: logs OFF, returns false, leaves report untouched', () => {
-    const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
+    const report = flagged();
     const mkdir = vi.fn(() => {
       throw Object.assign(new Error('denied'), { code: 'EACCES' });
     });
     const log = vi.fn();
     let result: boolean | undefined;
     expect(() => {
-      result = enableFatalErrorReports('X/node-reports', { report, mkdir, log, ...flags });
+      result = enableFatalErrorReports('X/node-reports', { report, mkdir, log });
     }).not.toThrow();
     expect(result).toBe(false);
     expect(report.reportOnFatalError).toBe(false);
@@ -383,8 +383,11 @@ describe('enableFatalErrorReports (#4054)', () => {
     // The parent is missing too (a fresh clone has no logs/ yet), so a non-recursive mkdir fails.
     const dir = path.join(root, 'logs', 'node-reports');
     try {
+      // This vitest worker runs without LAUNCHER_FLAGS; stand in for them (restored below).
+      process.report.excludeEnv = true;
+      (process.report as unknown as { excludeNetwork: boolean }).excludeNetwork = true;
       expect(fs.existsSync(path.dirname(dir))).toBe(false);
-      expect(enableFatalErrorReports(dir, { log: vi.fn(), ...flags })).toBe(true);
+      expect(enableFatalErrorReports(dir, { log: vi.fn() })).toBe(true);
       expect(fs.existsSync(dir)).toBe(true);
       expect(process.report.directory).toBe(dir);
       expect(process.report.reportOnFatalError).toBe(true);
@@ -409,36 +412,24 @@ describe('enableFatalErrorReports (#4054)', () => {
   });
 
   it.each([
-    ['neither flag', [], ''],
-    ['only --report-exclude-env', ['--report-exclude-env'], ''],
-    ['only --report-exclude-network', [], '--report-exclude-network'],
-    ['a flag negated later', [...LAUNCHER_FLAGS, '--no-report-exclude-env'], ''],
-  ])('R5 fails closed without both per-process flags (%s): reports stay OFF', (_name, execArgv, nodeOptions) => {
-    const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
-    const mkdir = vi.fn();
-    const log = vi.fn();
-    expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log, execArgv, nodeOptions })).toBe(false);
-    expect(report.reportOnFatalError).toBe(false);
-    expect(report.directory).toBe('');
-    expect(mkdir).not.toHaveBeenCalled();
-    const line = String(log.mock.calls[0][0]);
-    expect(line).toContain('OFF');
-    expect(line).toContain('--report-exclude-env --report-exclude-network');
-  });
-
-  it('R5 accepts the flags from NODE_OPTIONS, or split across it and execArgv', () => {
-    const cases: Array<[string[], string]> = [
-      [[], '--max-old-space-size=4096 --report-exclude-env  --report-exclude-network'],
-      [['--report-exclude-network'], '--report-exclude-env'],
-    ];
-    for (const [execArgv, nodeOptions] of cases) {
-      const report = { reportOnFatalError: false, directory: '', excludeEnv: false, excludeNetwork: false };
-      expect(
-        enableFatalErrorReports('X/node-reports', { report, mkdir: vi.fn(), log: vi.fn(), execArgv, nodeOptions }),
-      ).toBe(true);
-      expect(report.reportOnFatalError).toBe(true);
-    }
-  });
+    ['neither flag', false, false],
+    ['only --report-exclude-env', true, false],
+    ['only --report-exclude-network', false, true],
+  ])(
+    'R5 fails closed unless node itself parsed both flags (%s): reports stay OFF',
+    (_name, excludeEnv, excludeNetwork) => {
+      const report = { reportOnFatalError: false, directory: '', excludeEnv, excludeNetwork };
+      const mkdir = vi.fn();
+      const log = vi.fn();
+      expect(enableFatalErrorReports('X/node-reports', { report, mkdir, log })).toBe(false);
+      expect(report.reportOnFatalError).toBe(false);
+      expect(report.directory).toBe('');
+      expect(mkdir).not.toHaveBeenCalled();
+      const line = String(log.mock.calls[0][0]);
+      expect(line).toContain('OFF');
+      expect(line).toContain('--report-exclude-env --report-exclude-network');
+    },
+  );
 });
 
 /* #4054 pass 2 — a young-generation OOM (many small retained objects) has no
@@ -456,8 +447,10 @@ describe('enableFatalErrorReports under a real fatal OOM (#4054)', () => {
   const CHILD = `
 const { pathToFileURL } = await import('node:url');
 const { Worker } = await import('node:worker_threads');
-const [, , modPath, dir, shape] = process.argv;
+const [, , modPath, dir, shape, runtimeNodeOptions] = process.argv;
 const mod = await import(pathToFileURL(modPath).href);
+// What load-env.ts does with a NODE_OPTIONS line in server/.env: too late for node to parse.
+if (runtimeNodeOptions) process.env.NODE_OPTIONS = runtimeNodeOptions;
 mod.enableFatalErrorReports(dir);
 const w = new Worker('setInterval(() => {}, 1000);', { eval: true });
 await new Promise((r) => w.once('online', r));
@@ -467,7 +460,7 @@ if (shape === 'small') for (;;) keep.push({ a: i++, s: 'x' + i });
 for (;;) keep.push(new Array(1e5).fill(i++));
 `;
 
-  function runOom(shape: 'small' | 'large', extraFlags: readonly string[]) {
+  function runOom(shape: 'small' | 'large', extraFlags: readonly string[], runtimeNodeOptions = '') {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-4054-oom-'));
     const script = path.join(root, 'child.mjs');
     const dir = path.join(root, 'reports');
@@ -487,6 +480,7 @@ for (;;) keep.push(new Array(1e5).fill(i++));
           crashLogging,
           dir,
           shape,
+          runtimeNodeOptions,
         ],
         { cwd: serverDir, env, encoding: 'utf8', timeout: 60_000, windowsHide: true },
       );
@@ -516,7 +510,9 @@ for (;;) keep.push(new Array(1e5).fill(i++));
       expect(reports).toHaveLength(1);
       expect(reports[0]).not.toContain(sentinel);
       const parsed = JSON.parse(reports[0]) as { workers: unknown[] };
-      if (shape === 'large') expect(parsed.workers).toHaveLength(1); // the worker's sub-report is checked too
+      // The child runs a live Worker: `large` has an Environment, so its sub-report is listed and
+      // checked too; `small` must list none, the sign it took the no-Environment young-generation path.
+      expect(parsed.workers).toHaveLength(shape === 'large' ? 1 : 0);
       const keys = allKeys(parsed);
       expect(keys).toContain('javascriptStack');
       expect(keys).not.toContain('environmentVariables');
@@ -529,6 +525,14 @@ for (;;) keep.push(new Array(1e5).fill(i++));
     const { stdout, stderr, reports } = runOom('small', []);
     expect(stderr).toMatch(/heap out of memory/);
     expect(reports).toEqual([]);
+    expect(stdout).toContain('diagnostic reports on a fatal error are OFF');
+  }, 30_000);
+
+  it('R6 T3 flags only in a NODE_OPTIONS set at runtime (a server/.env line): reports stay OFF', () => {
+    const { stdout, stderr, reports } = runOom('small', [], LAUNCHER_FLAGS.join(' '));
+    expect(stderr).toMatch(/heap out of memory/);
+    expect(reports).toEqual([]);
+    expect(reports.join('')).not.toContain(sentinel);
     expect(stdout).toContain('diagnostic reports on a fatal error are OFF');
   }, 30_000);
 });

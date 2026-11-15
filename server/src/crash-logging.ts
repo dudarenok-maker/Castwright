@@ -216,15 +216,15 @@ export interface FatalErrorReportHooks {
   mkdir?: (dir: string) => void;
   /** Default `console.log`. */
   log?: (msg: string) => void;
-  /** Default `process.execArgv`. */
-  execArgv?: readonly string[];
-  /** Default `process.env.NODE_OPTIONS`. */
-  nodeOptions?: string;
 }
 
 /** The per-process node flags that keep the environment and the network
- *  interfaces out of EVERY fatal-error report. Every launcher passes them
- *  (scripts/start-app-prod.mjs, server/package.json, pinokio-scripts/start.js). */
+ *  interface list out of the main thread's fatal-error reports, and out of the
+ *  sub-report of every worker that inherits `execArgv` (a Worker started with
+ *  its own `execArgv` parses its options from that instead). Socket addresses
+ *  (`libuv[]` `localEndpoint`/`remoteEndpoint`) stay in a report either way.
+ *  Every launcher passes them (scripts/start-app-prod.mjs, server/package.json,
+ *  pinokio-scripts/start.js). */
 const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'] as const;
 
 /** #4054's evidence capture: turn on Node's diagnostic report for a V8 fatal
@@ -238,25 +238,25 @@ const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-networ
  *
  *  The report is meant to be attached to a public issue, so it must never
  *  carry the environment (GEMINI_API_KEY, LAN_AUTH_TOKEN, ...) or the network
- *  interfaces (IP/MAC). The runtime `excludeEnv`/`excludeNetwork` setters are
- *  per-Environment, and a young-generation OOM has no Environment, nor does a
- *  worker's sub-report use the main thread's: Node then falls back to the
- *  per-process flags. So this fails closed — reports stay OFF, with a boot
- *  line saying why, unless both REPORT_EXCLUSION_FLAGS are in `execArgv` or
- *  `NODE_OPTIONS`. The setters stay as belt-and-braces. With the flags, the
- *  native stack, the JS stack and the heap stats stay; `header.host` (the
- *  machine name) is still in it. Never throws. */
+ *  interface list (each interface's IP/MAC). The runtime
+ *  `excludeEnv`/`excludeNetwork` setters are per-Environment, and a
+ *  young-generation OOM has no Environment, nor does a worker's sub-report use
+ *  the main thread's: Node then falls back to the per-process flags. So this
+ *  fails closed — reports stay OFF, with a boot line saying why, unless node
+ *  itself parsed both REPORT_EXCLUSION_FLAGS (on its command line or in a
+ *  `NODE_OPTIONS` it started with). That is read from `process.report` before
+ *  the setters write it, never from the `NODE_OPTIONS` text: load-env.ts can
+ *  set that from server/.env after node has parsed its options. The setters
+ *  stay as belt-and-braces. With the flags, the native stack, the JS stack and
+ *  the heap stats stay; `header.host` (the machine name) and the socket
+ *  addresses in `libuv[]` are still in it. Never throws. */
 export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHooks = {}): boolean {
   // `excludeNetwork` exists in Node >= 22.0 (engines is >= 22.22.0) but is missing from @types/node.
   const report = hooks.report ?? (process.report as unknown as NonNullable<FatalErrorReportHooks['report']>);
   const mkdir = hooks.mkdir ?? ((d: string) => void fs.mkdirSync(d, { recursive: true }));
   const log = hooks.log ?? ((msg: string) => console.log(msg));
-  const given = [
-    ...(hooks.execArgv ?? process.execArgv),
-    ...(hooks.nodeOptions ?? process.env.NODE_OPTIONS ?? '').split(/\s+/),
-  ];
-  // A later `--no-<flag>` turns it back off, so its presence counts as missing.
-  if (!REPORT_EXCLUSION_FLAGS.every((f) => given.includes(f) && !given.includes(f.replace('--', '--no-')))) {
+  // Before the setters below run, these hold what node parsed at startup.
+  if (!(report.excludeEnv && report.excludeNetwork)) {
     log(
       `[server] diagnostic reports on a fatal error are OFF: node was not started with ${REPORT_EXCLUSION_FLAGS.join(' ')}, so a report could carry the environment and the network interfaces`,
     );
