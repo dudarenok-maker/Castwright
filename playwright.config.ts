@@ -14,7 +14,7 @@ import { resolvePlaywrightPort } from './scripts/lib/playwright-port.mjs';
  * worktrees running e2e don't collide on :5174 either — see
  * scripts/wt-new.mjs for the per-worktree port-offset story.
  */
-const playwrightPort = resolvePlaywrightPort(process.cwd());
+const playwrightPort = resolvePlaywrightPort(__dirname);
 const baseURL = `http://127.0.0.1:${playwrightPort}`;
 
 export default defineConfig({

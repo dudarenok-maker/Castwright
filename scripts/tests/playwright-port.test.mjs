@@ -5,9 +5,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { resolvePlaywrightPort } from '../lib/playwright-port.mjs';
 
 function withDir(body, fn) {
@@ -42,4 +44,64 @@ test('.env.local without PLAYWRIGHT_PORT falls back to 5174', () => {
   withDir('VITE_PORT=5363\n', (dir) => {
     assert.equal(resolvePlaywrightPort(dir, {}), 5174);
   });
+});
+
+for (const bad of ['', '  ', 'abc', '0', '70000']) {
+  test(`an invalid env value ${JSON.stringify(bad)} throws naming the source`, () => {
+    assert.throws(
+      () => resolvePlaywrightPort(tmpdir(), { PLAYWRIGHT_PORT: bad }),
+      (e) => /environment variable/.test(e.message) && e.message.includes(JSON.stringify(bad)),
+    );
+  });
+}
+
+test('an invalid .env.local value throws naming the file', () => {
+  withDir('PLAYWRIGHT_PORT=\n', (dir) => {
+    assert.throws(
+      () => resolvePlaywrightPort(dir, {}),
+      (e) => e.message.includes(join(dir, '.env.local')) && e.message.includes('""'),
+    );
+  });
+});
+
+// The config itself, not just the helper: load a COPY of playwright.config.ts
+// from dir A while running Playwright from dir B (each with its own
+// .env.local) and assert the webServer carries A's port. Red if the config
+// reads process.cwd() (B) or ignores .env.local altogether (5174).
+test('playwright.config.ts resolves the port from its own directory, not the cwd', () => {
+  const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const a = mkdtempSync(join(tmpdir(), 'pw-cfg-a-'));
+  const b = mkdtempSync(join(tmpdir(), 'pw-cfg-b-'));
+  try {
+    mkdirSync(join(a, 'scripts', 'lib'), { recursive: true });
+    mkdirSync(join(a, 'e2e'));
+    copyFileSync(join(repo, 'playwright.config.ts'), join(a, 'playwright.config.ts'));
+    copyFileSync(
+      join(repo, 'scripts', 'lib', 'playwright-port.mjs'),
+      join(a, 'scripts', 'lib', 'playwright-port.mjs'),
+    );
+    writeFileSync(join(a, 'e2e', 'global-teardown.ts'), 'export default async () => {};\n');
+    writeFileSync(join(a, '.env.local'), 'PLAYWRIGHT_PORT=5391\n');
+    writeFileSync(join(b, '.env.local'), 'PLAYWRIGHT_PORT=5392\n');
+    const env = { ...process.env, NODE_PATH: join(repo, 'node_modules') };
+    delete env.PLAYWRIGHT_PORT;
+    const r = spawnSync(
+      process.execPath,
+      [
+        join(repo, 'node_modules', '@playwright', 'test', 'cli.js'),
+        'test',
+        '--list',
+        '--reporter=json',
+        '-c',
+        join(a, 'playwright.config.ts'),
+      ],
+      { cwd: b, env, encoding: 'utf8', windowsHide: true },
+    );
+    const config = JSON.parse(r.stdout).config;
+    assert.match(config.webServer.url, /:5391$/);
+    assert.match(config.webServer.command, /--port 5391\b/);
+  } finally {
+    rmSync(a, { recursive: true, force: true });
+    rmSync(b, { recursive: true, force: true });
+  }
 });
