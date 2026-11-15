@@ -11,6 +11,7 @@ import childProcess, { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { runPipeline, STEPS } from '../verify-cache.mjs';
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
+import { waitForExit } from '../restart-after-upgrade.mjs';
 
 // Track temporary directories created by mkTmp() so we can clean them up after all tests.
 const createdDirs = [];
@@ -130,13 +131,29 @@ export const STEP_BUDGET_PAST_LAUNCH_MS = 5_000;
 // 15s-capped taskkill/census call in the kill path); a survivor is recorded and
 // killed, which also lets the call return promptly instead of after ~300s.
 export const SURVIVOR_GRACE_MS = 20_000;
-export function pidAlive(pid) {
+// /proc/<pid>/stat is "<pid> (<comm>) <state> ..." and comm may itself hold
+// spaces or parens, so the state is the first field after the LAST ')'.
+function readProcStat(pid) {
+  try {
+    return readFileSync(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    return null; // no procfs (macOS/Windows) or the pid is already gone
+  }
+}
+
+// #4193: a SIGKILLed process is a zombie until its parent (here a re-parented
+// orphan, so init/systemd) reaps it, and kill(pid, 0) succeeds on a zombie. The
+// stderr pipe closes at exit, before the reap, so 'close' can fire and the
+// survivor check run while the dead fixture is still a zombie. A zombie is dead.
+export function pidAlive(pid, { readStat = readProcStat } = {}) {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (e) {
     return e.code !== 'ESRCH';
   }
+  const stat = readStat(pid);
+  const state = stat ? stat.slice(stat.lastIndexOf(')') + 1).trim().charAt(0) : '';
+  return state !== 'Z';
 }
 
 // null unless the file holds a real pid: a read landing between the fixture's
@@ -169,7 +186,7 @@ export function armSurvivorWatch(dir, afterMs = STEP_BUDGET_PAST_LAUNCH_MS + SUR
 // Proves the fixture was running (pid marker exists) before the kill and that
 // the WHOLE tree went down (no survivor, recorded pid dead), then checks the
 // bound. Always best-effort kills a leftover so a failing run leaves no orphan.
-export function assertHangFixtureKilled(dir, elapsed, watch) {
+export async function assertHangFixtureKilled(dir, elapsed, watch) {
   watch.disarm();
   const pid = readHangPid(dir);
   try {
@@ -183,7 +200,9 @@ export function assertHangFixtureKilled(dir, elapsed, watch) {
       `fixture survived the kill (partial kill): pid ${watch.survivorPid} was still alive ${SURVIVOR_GRACE_MS}ms after the budget fired — the tree kill missed a descendant (call returned after ${elapsed}ms)`,
     );
     assert.ok(
-      !pidAlive(pid),
+      // Bounded: a real survivor stays alive well past the reap latency, so a
+      // bound generous for the reap still fails a genuinely partial kill.
+      await waitForExit({ pid, timeoutMs: 5_000, intervalMs: 50, isAlive: pidAlive }),
       `fixture survived the kill (partial kill): pid ${pid} is still alive after the call returned (took ${elapsed}ms)`,
     );
     assert.ok(

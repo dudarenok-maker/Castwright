@@ -2,6 +2,7 @@
 
 **What's new in 1.16.0**
 
+- **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **Dialogue breaks land in the right place in books with emoji.** In books where several dialogue turns were run together into one paragraph, an emoji or symbol earlier in the paragraph no longer causes a later turn to be missed or split in the wrong spot.
 
 # Castwright 1.15.0

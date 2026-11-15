@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useStore } from 'react-redux';
-import { useOutletContext } from 'react-router';
+import { useOutletContext, useSearchParams } from 'react-router';
 import { helpHrefForFailureCode } from '../lib/router';
 import { MANIFESTO } from '../lib/brand';
+import { parseChapterParam } from '../lib/chapter-param';
 import {
   IconPlay,
   IconPause,
@@ -385,16 +386,26 @@ export function GenerationView({
      reconcile-driven path never writes a queue entry) so the pill doesn't read
      0 / vanish while a book is visibly generating. */
   const activityCount = useAppSelector(selectGenerationActivityCount);
-  /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
-     is set by the queue modal's "Jump to chapter" affordance (modal pushes
-     #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
-     into view here so the user lands at the right card instead of the
-     top of the chapter list. */
+  /* Plan 102 — Generate view scroll consumer. `?chapter=<id>` reaches this URL
+     via `stageToHash` (stage chapter isn't 3, e.g. picked in Manuscript
+     then switched to Generate) or a typed/shared URL; we scroll the
+     chapter row into view here so the user lands at the right card
+     instead of the top of the chapter list. #4199 — the stage defaults a chapterless URL
+     to chapter 3 (the Manuscript view relies on that), so only scroll when
+     the URL itself names a chapter (a number, as `ReadyRoute` parses it; a
+     malformed value falls back to 3 there and must not scroll); a plain load
+     stays at the top. Reading `?chapter=` here (not the stage) lets a
+     `?chapter=3` set or edited while this view is mounted scroll, which the
+     stage alone can't tell from the default. A cold `?chapter=3` link scrolls
+     only when hydrating it leaves the persisted `ui.stage` unchanged;
+     otherwise Layout's Redux→URL sync drops it before this view mounts. */
   const currentChapterId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
   );
+  const [searchParams] = useSearchParams();
+  const chapterNamedInUrl = parseChapterParam(searchParams.get('chapter')) != null;
   useEffect(() => {
-    if (currentChapterId == null) return;
+    if (currentChapterId == null || !chapterNamedInUrl) return;
     const el = document.getElementById(`chapter-${currentChapterId}`);
     if (!el) return;
     /* Defer a frame so any layout shift from view-switch settles before
@@ -403,7 +414,7 @@ export function GenerationView({
     requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [currentChapterId]);
+  }, [currentChapterId, chapterNamedInUrl]);
   /* Default analyzer engine used by the subset retry below (un-exclude
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
