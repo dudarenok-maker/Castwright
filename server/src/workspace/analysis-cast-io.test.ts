@@ -76,6 +76,7 @@ import {
   writePlanSnapshot,
 } from './analysis-cast-io.js';
 import { LockAcquisitionTimeoutError } from './file-lock.js';
+import { withBookLock } from './book-lock.js';
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
 import { castIdHistoryPath, loadCastIdHistoryWithStatus } from '../store/cast-id-history.js';
 import { loadStoredSuggestions } from '../store/cast-merge-suggestions.js';
@@ -868,6 +869,50 @@ describe('persistPlannedCast', () => {
       writeCast([row('olga', 'Ольга')]);
       await persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'A.')] }));
       expect(Object.keys(readEdits())).toEqual(['sentences']);
+    });
+
+    it('#4155 P7: the tombstone read is inside the book lock (a merge landing while the persist waits is seen)', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      let held!: () => void;
+      let release!: () => void;
+      const acquired = new Promise<void>((r) => (held = r));
+      const gate = new Promise<void>((r) => (release = r));
+      // The holder is its own async context (the lock is re-entrant within one), so the persist,
+      // started from outside it, really waits.
+      const holder = withBookLock(BOOK_ID, async () => {
+        held();
+        await gate;
+      });
+      await acquired;
+      const persisting = persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'A.'), sen(2, 1, 'B.')] }));
+      // Let the persist run up to its wait on the book lock.
+      await new Promise((r) => setTimeout(r, 50));
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+      release();
+      await holder;
+      await persisting;
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2']);
+      expect(edits.sentences.map((x) => x.id)).toEqual([1]);
+      expect(readCast().find((r) => r.id === 'olga')?.lines).toBe(1);
+    });
+
+    it('#4155 P8: a drift-refused persist recounts a re-created narrator on the FOLDED sentences', async () => {
+      writeCast([row('alice', 'Alice')]);
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2', '2:1'] });
+      const nar = (id: number, chapterId: number, text: string): any => sen(id, chapterId, text, { characterId: 'narrator' });
+      await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('narrator', 'narrator'), join('alice', 'alice')),
+          roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+          sentences: [nar(1, 1, 'A.'), nar(2, 1, 'B.'), nar(1, 2, 'D.'), sen(3, 1, 'C.', { characterId: 'alice' })],
+          driftRefused: true,
+        }),
+      );
+      expect(readCast().find((r) => r.id === 'narrator')).toMatchObject({ lines: 1, scenes: 1 });
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2', '2:1']);
+      expect(edits.sentences.map((x) => `${x.chapterId}:${x.id}:${x.text}`)).toEqual(['1:1:A. B.', '1:3:C.']);
     });
   });
 });
