@@ -23,6 +23,7 @@
 
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
 import {
   detectWhisperInstallStateOnDisk,
   type WhisperInstallState,
@@ -102,7 +103,12 @@ export class WhisperInstallBootstrap {
 
   constructor(opts: WhisperInstallOptions) {
     this.repoRoot = opts.repoRoot;
-    this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as WhisperSpawnFn);
+    this.spawnFn =
+      opts.spawnFn ??
+      refuseUnderVitest(
+        realSpawn as unknown as WhisperSpawnFn,
+        'WhisperInstallBootstrap: real spawn refused under vitest (#3712); inject spawnFn',
+      );
     this.detectFn = opts.detectFn ?? (() => detectWhisperInstallStateOnDisk(this.repoRoot));
     this.installArgsOverride = opts.installArgs;
     this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;

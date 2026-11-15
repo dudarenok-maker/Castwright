@@ -10,6 +10,7 @@ import { join as pathJoin } from 'node:path';
 const hooks = vi.hoisted(() => ({
   castFault: null as unknown,
   fingerprintFault: false,
+  editsWriteFault: null as Error | null,
   castDepth: 0,
   maxCastDepth: 0,
   bookLockCastDepths: [] as number[],
@@ -45,6 +46,17 @@ vi.mock('./cast-fingerprint.js', async (importOriginal) => {
   };
 });
 
+vi.mock('./ordered-write.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./ordered-write.js')>();
+  return {
+    ...actual,
+    writeJsonAtomicOrdered: async (path: string, value: unknown) => {
+      if (hooks.editsWriteFault && path.endsWith('manuscript-edits.json')) throw hooks.editsWriteFault;
+      return actual.writeJsonAtomicOrdered(path, value);
+    },
+  };
+});
+
 vi.mock('./book-lock.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./book-lock.js')>();
   return {
@@ -64,6 +76,7 @@ import {
   writePlanSnapshot,
 } from './analysis-cast-io.js';
 import { LockAcquisitionTimeoutError } from './file-lock.js';
+import { withBookLock } from './book-lock.js';
 import { castJsonPath, castReuseCarryoverJsonPath, manuscriptEditsJsonPath } from './paths.js';
 import { castIdHistoryPath, loadCastIdHistoryWithStatus } from '../store/cast-id-history.js';
 import { loadStoredSuggestions } from '../store/cast-merge-suggestions.js';
@@ -141,6 +154,7 @@ beforeEach(() => {
   mkdirSync(pathJoin(bookDir, '.audiobook'), { recursive: true });
   hooks.castFault = null;
   hooks.fingerprintFault = false;
+  hooks.editsWriteFault = null;
   hooks.castDepth = 0;
   hooks.maxCastDepth = 0;
   hooks.bookLockCastDepths = [];
@@ -775,6 +789,145 @@ describe('persistPlannedCast', () => {
     );
     expect(out.mainLedger?.alice).toEqual({ state: 'run-owned', fp: userOwnedFingerprint(readCast()[0]) });
   });
+
+  describe('#4155 merge tombstones survive a re-analysis persist', () => {
+    type S = Record<string, unknown>;
+    const sen = (id: number, chapterId: number, text: string, extra: S = {}): any => ({
+      id,
+      chapterId,
+      characterId: 'olga',
+      text,
+      ...extra,
+    });
+    const writeEdits = (data: unknown): void =>
+      writeFileSync(manuscriptEditsJsonPath(bookDir), typeof data === 'string' ? data : JSON.stringify(data));
+    const readEdits = (): { sentences: S[]; mergedAwayKeys?: string[] } =>
+      JSON.parse(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8'));
+
+    it('#4155 P1: a merge on disk survives; the survivor keeps its merged text and the line count follows', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+      const out = await persistPlannedCast(
+        persistArgs({
+          sentences: [sen(1, 1, 'A.', { instruct: 'softly', vocalization: true }), sen(2, 1, 'B.'), sen(3, 1, 'C.')],
+        }),
+      );
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2']);
+      expect(edits.sentences.map((x) => x.id)).toEqual([1, 3]);
+      expect(edits.sentences[0].text).toBe('A. B.');
+      expect(edits.sentences[0]).not.toHaveProperty('instruct');
+      expect(edits.sentences[0]).not.toHaveProperty('vocalization');
+      expect(out.sentences).toEqual(edits.sentences);
+      expect(readCast().find((r) => r.id === 'olga')?.lines).toBe(2);
+    });
+
+    it('#4155 P2: a promote-to-title tombstone drops the sentence and leaves the others untouched', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits({ sentences: [sen(2, 1, 'B.')], mergedAwayKeys: ['1:1'] });
+      await persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'Title words.'), sen(2, 1, 'B.')] }));
+      const edits = readEdits();
+      expect(edits.sentences).toEqual([sen(2, 1, 'B.')]);
+      expect(edits.mergedAwayKeys).toEqual(['1:1']);
+    });
+
+    it('#4155 P3: a tombstone only folds within its own chapter', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits({ sentences: [sen(1, 2, 'C. D.')], mergedAwayKeys: ['2:2'] });
+      await persistPlannedCast(
+        persistArgs({ sentences: [sen(1, 1, 'A.'), sen(2, 1, 'B.'), sen(1, 2, 'C.'), sen(2, 2, 'D.')] }),
+      );
+      expect(readEdits().sentences).toEqual([sen(1, 1, 'A.'), sen(2, 1, 'B.'), sen(1, 2, 'C. D.')]);
+    });
+
+    it('#4155 P4: a drift-refused persist carries the tombstones too and leaves cast.json alone', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+      await persistPlannedCast(
+        persistArgs({
+          sentences: [sen(1, 1, 'A.', { instruct: 'softly', vocalization: true }), sen(2, 1, 'B.'), sen(3, 1, 'C.')],
+          driftRefused: true,
+        }),
+      );
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2']);
+      expect(edits.sentences.map((x) => x.id)).toEqual([1, 3]);
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
+    });
+
+    it('#4155 P5: an unreadable edits file fails the persist closed and writes nothing', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      writeEdits('{ not json');
+      const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
+      await expect(persistPlannedCast(persistArgs())).rejects.toThrow();
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
+      expect(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')).toBe('{ not json');
+    });
+
+    it.each([
+      ['a non-array', 'nope'],
+      ['a non-string entry', ['1:2', 7]],
+    ])('#4155 P5b: %s mergedAwayKeys fails the persist closed and writes nothing', async (_n, bad) => {
+      writeCast([row('olga', 'Ольга')]);
+      const raw = JSON.stringify({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: bad });
+      writeEdits(raw);
+      const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
+      await expect(persistPlannedCast(persistArgs())).rejects.toThrow(/malformed mergedAwayKeys/);
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
+      expect(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')).toBe(raw);
+    });
+
+    it('#4155 P6: with no edits file on disk no mergedAwayKeys key is invented', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      await persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'A.')] }));
+      expect(Object.keys(readEdits())).toEqual(['sentences']);
+    });
+
+    it('#4155 P7: the tombstone read is inside the book lock (a merge landing while the persist waits is seen)', async () => {
+      writeCast([row('olga', 'Ольга')]);
+      let held!: () => void;
+      let release!: () => void;
+      const acquired = new Promise<void>((r) => (held = r));
+      const gate = new Promise<void>((r) => (release = r));
+      // The holder is its own async context (the lock is re-entrant within one), so the persist,
+      // started from outside it, really waits.
+      const holder = withBookLock(BOOK_ID, async () => {
+        held();
+        await gate;
+      });
+      await acquired;
+      const persisting = persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'A.'), sen(2, 1, 'B.')] }));
+      // Let the persist run up to its wait on the book lock.
+      await new Promise((r) => setTimeout(r, 50));
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] });
+      release();
+      await holder;
+      await persisting;
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2']);
+      expect(edits.sentences.map((x) => x.id)).toEqual([1]);
+      expect(readCast().find((r) => r.id === 'olga')?.lines).toBe(1);
+    });
+
+    it('#4155 P8: a drift-refused persist recounts a re-created narrator on the FOLDED sentences', async () => {
+      writeCast([row('alice', 'Alice')]);
+      writeEdits({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: ['1:2', '2:1'] });
+      const nar = (id: number, chapterId: number, text: string): any => sen(id, chapterId, text, { characterId: 'narrator' });
+      await persistPlannedCast(
+        persistArgs({
+          plan: planOf(join('narrator', 'narrator'), join('alice', 'alice')),
+          roster: roster(row('narrator', 'Narrator'), row('alice', 'Alice')),
+          sentences: [nar(1, 1, 'A.'), nar(2, 1, 'B.'), nar(1, 2, 'D.'), sen(3, 1, 'C.', { characterId: 'alice' })],
+          driftRefused: true,
+        }),
+      );
+      expect(readCast().find((r) => r.id === 'narrator')).toMatchObject({ lines: 1, scenes: 1 });
+      const edits = readEdits();
+      expect(edits.mergedAwayKeys).toEqual(['1:2', '2:1']);
+      expect(edits.sentences.map((x) => `${x.chapterId}:${x.id}:${x.text}`)).toEqual(['1:1:A. B.', '1:3:C.']);
+    });
+  });
 });
 
 describe('fix round 1 (#4031 Task 8 review)', () => {
@@ -942,7 +1095,7 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
 
   it('Minor 1: an edits-write failure after cast.json landed still hands the caller the outcome', async () => {
     writeCast([row('olga', 'Ольга')]);
-    mkdirSync(manuscriptEditsJsonPath(bookDir)); // a directory where the file goes: the write fails
+    hooks.editsWriteFault = new Error('edits write failed'); // hits the write only; the tombstone read succeeds
     const err = await persistPlannedCast(
       persistArgs({
         plan: planOf(join('olya', 'olga', 'name')),
@@ -957,6 +1110,7 @@ describe('fix round 1 (#4031 Task 8 review)', () => {
     expect(err?.persistOutcome?.retirements).toEqual([{ from: 'olya', to: 'olga' }]);
     expect(err?.persistOutcome?.written).not.toBeNull();
     expect(readCast()[0].aliases).toEqual(['Оля']);
+    expect(existsSync(manuscriptEditsJsonPath(bookDir))).toBe(false);
   });
 
   it('Minor 2: a degraded history records no retirements, and says so server-side', async () => {
