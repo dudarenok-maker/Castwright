@@ -1703,7 +1703,9 @@ function plannedPersistArgs(a: {
      (`PersistOutcomeError`): returned as `outcome` + `editsWriteErr`, so the caller still
      records the retirements and the cache patch, then hands the error to
      `catch (persistErr)` (server-side only: an fs error names an absolute path). A
-     drift-refused persist wrote no cast.json, so its edits failure is just rethrown;
+     drift-refused persist's caller discards the outcome (it records no retirements or
+     cache patch), so its edits failure is just rethrown — its one cast.json write, the
+     narrator row a refused overlay may append (#4100), is not carried back;
    - any other throw wrote nothing and is rethrown.
    #4031 R48 — the caller parks every one of these (`parkPersistFailure`) rather than
    letting `catch (persistErr)` report success over an unwritten book. */
@@ -8489,7 +8491,8 @@ export async function runMainAnalyzerJob(
              (the demoted sentences, so the disk stays consistent) and keeps none of its
              suggestions — the persist removes the pairs its snapshots added, a stopped
              run's included (the cache holds them across a resume). cast.json is left
-             byte-for-byte alone. */
+             byte-for-byte alone, except that a missing narrator row the overlay re-created
+             is appended (#4100). */
           const refused = await runPlannedPersist(persistArgs(true));
           if (refused.lockTimeout !== undefined) persistLockTimeout = refused.lockTimeout;
         } else {
@@ -10619,8 +10622,9 @@ export async function runSubsetAnalyzerJob(
             1,
             `Attribution drift exceeded threshold (${subsetReconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
-          /* The refused run writes only manuscript-edits.json and removes the pairs its
-             own snapshots added; cast.json is left byte-for-byte alone. */
+          /* The refused run writes manuscript-edits.json and removes the pairs its own
+             snapshots added; cast.json is left byte-for-byte alone, except that a missing
+             narrator row the overlay re-created is appended (#4100). */
           const refused = await runPlannedPersist(persistArgs(true));
           if (refused.lockTimeout !== undefined) persistLockTimeout = refused.lockTimeout;
         } else {
