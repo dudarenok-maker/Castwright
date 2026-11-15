@@ -2,7 +2,7 @@
 
 **What's new in 1.16.0**
 
-- **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3. Jumping to a chapter from the queue still takes you straight to it.
+- **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 
 # Castwright 1.15.0
 

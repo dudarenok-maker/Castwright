@@ -385,11 +385,11 @@ export function GenerationView({
      reconcile-driven path never writes a queue entry) so the pill doesn't read
      0 / vanish while a book is visibly generating. */
   const activityCount = useAppSelector(selectGenerationActivityCount);
-  /* Plan 102 — Generate view scroll consumer. ui.stage.currentChapterId
-     is set by the queue modal's "Jump to chapter" affordance (modal pushes
-     #/books/<bookId>/generate?chapter=<id>); we scroll the chapter row
-     into view here so the user lands at the right card instead of the
-     top of the chapter list. #4199 — the stage defaults a chapterless URL
+  /* Plan 102 — Generate view scroll consumer. `?chapter=<id>` reaches this URL
+     via `stageToHash` (stage chapter isn't 3, e.g. picked in Manuscript
+     then switched to Generate) or a typed/shared URL; we scroll the
+     chapter row into view here so the user lands at the right card
+     instead of the top of the chapter list. #4199 — the stage defaults a chapterless URL
      to chapter 3 (the Manuscript view relies on that), so only scroll when
      the URL itself names a chapter; a plain load stays at the top. Reading
      `?chapter=` here (not the stage) also keeps an explicit `?chapter=3`

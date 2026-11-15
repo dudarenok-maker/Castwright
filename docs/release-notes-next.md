@@ -39,7 +39,7 @@ history at cut time.
 
 ## 🐛 Fixes
 
-- **The Generate view no longer scrolls to chapter 3 on every plain load** (#4199). `ReadyRoute` defaults a chapterless URL to chapter 3 and `stageToHash` omits `?chapter=3`, so the plan-102 scroll effect smooth-scrolled `#chapter-3` into view on every load of `#/books/<id>/generate`. `GenerationView` now scrolls only when the URL itself carries `?chapter=` (read via `useSearchParams`, so an explicit `?chapter=3` still scrolls); the chapter-3 stage default, the router grammar and the Manuscript view are unchanged. Covered by `src/views/generation.test.tsx` and `e2e/generate-explicit-chapter-scroll.spec.ts`.
+- **The Generate view no longer scrolls to chapter 3 on every plain load** (#4199). `ReadyRoute` defaults a chapterless URL to chapter 3 and `stageToHash` omits `?chapter=3`, so the plan-102 scroll effect smooth-scrolled `#chapter-3` into view on every load of `#/books/<id>/generate`. `GenerationView` now scrolls only when the URL itself carries `?chapter=` (read via `useSearchParams`, so an explicit `?chapter=3` still scrolls; in-app that param comes from `stageToHash` when the stage's chapter isn't 3, otherwise from a typed or shared URL); the chapter-3 stage default, the router grammar and the Manuscript view are unchanged. Covered by `src/views/generation.test.tsx` and `e2e/generate-explicit-chapter-scroll.spec.ts`.
 
 ## 🧪 Test gates
 

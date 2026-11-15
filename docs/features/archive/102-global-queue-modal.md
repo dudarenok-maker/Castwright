@@ -8,7 +8,7 @@ owner: null
 
 > Status: active (Round 1 of 1; six waves — see `~/.claude/plans/a-large-piece-of-refactored-bird.md` for the wave decomposition)
 > Key files: `src/store/queue-slice.ts` (Wave 2b), `src/store/queue-thunks.ts` (Wave 2b), `src/store/generation-stream-middleware.ts` (Wave 2b — rewrite), `src/modals/queue-modal.tsx` (Wave 3), `src/components/queue-entry-row.tsx` (Wave 3), `server/src/workspace/queue-io.ts` (Wave 2a), `server/src/routes/queue.ts` (Wave 2a), `server/src/routes/generation.ts` (Wave 2a — `resume_from` ack)
-> URL surface: Modal mounted globally in `src/components/layout.tsx`; clicking a queue entry pushes `#/books/<bookId>/generate?chapter=<chapterId>` and the Generate view scroll consumer reacts to `currentChapterId` — but only when the URL names a chapter (#4199); a plain load stays at the top.
+> URL surface: Modal mounted globally in `src/components/layout.tsx`; clicking a queue entry pushes `#/books/<bookId>/generate?chapter=<chapterId>` and the Generate view scroll consumer reacts to `currentChapterId` — but only when the URL names a chapter (#4199); a plain load stays at the top. **Correction (#4199):** the queue modal no longer pushes this URL; today `?chapter=` reaches Generate via `stageToHash` (stage chapter isn't 3) or a typed/shared URL.
 > OpenAPI ops: `GET /api/queue`, `POST /api/queue/enqueue`, `POST /api/queue/reorder`, `POST /api/queue/pause`, `DELETE /api/queue/{entryId}` + new `resume_from` SSE event on `POST /api/books/{bookId}/generation`.
 
 ## Benefit / Rationale
