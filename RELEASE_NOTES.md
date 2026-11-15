@@ -3,6 +3,7 @@
 **What's new in 1.16.0**
 
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the half-finished audio it was writing instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
+- **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 
 # Castwright 1.15.0
 
