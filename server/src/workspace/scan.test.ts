@@ -44,7 +44,7 @@ function bookSkeleton(
   title: string,
   opts: {
     castConfirmed?: boolean;
-    chapters?: Array<{ id: number; slug: string; generationState?: 'failed' }>;
+    chapters?: Array<{ id: number; slug: string; generationState?: 'failed'; excluded?: boolean }>;
     language?: string | null;
   } = {},
 ) {
@@ -72,6 +72,7 @@ function bookSkeleton(
         title: `Chapter ${c.id}`,
         slug: c.slug,
         ...(c.generationState ? { generationState: c.generationState } : {}),
+        ...(c.excluded ? { excluded: true } : {}),
       })),
       coverGradient: ['#000', '#fff'],
       language: opts.language,
@@ -737,6 +738,34 @@ describe('voices_pending status', () => {
     const b = (await flatten()).find((x) => x.title === 'Previous Only Book')!;
     expect(b.status).toBe('voices_pending');
     expect(b.completedChapters).toBe(0);
+  });
+
+  it('counts chapters, not files: an excluded chapter whose take is still on disk is not counted → generating, 1/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Excluded Take Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'xt-1', excluded: true }, { id: 2, slug: 'xt-2' }, { id: 3, slug: 'xt-3' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2, 3]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'xt-1.mp3'), '');
+    writeFileSync(join(audioRoot, 'xt-2.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'Excluded Take Book')!;
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(1);
+  });
+
+  it('counts chapters, not files: a chapter with both .mp3 and .ogg counts once → generating, 1/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('Two Formats Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'tf-1' }, { id: 2, slug: 'tf-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'tf-1.mp3'), '');
+    writeFileSync(join(audioRoot, 'tf-1.ogg'), '');
+    const b = (await flatten()).find((x) => x.title === 'Two Formats Book')!;
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(1);
   });
 });
 
