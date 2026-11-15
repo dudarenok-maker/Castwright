@@ -865,6 +865,19 @@ describe('persistPlannedCast', () => {
       expect(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')).toBe('{ not json');
     });
 
+    it.each([
+      ['a non-array', 'nope'],
+      ['a non-string entry', ['1:2', 7]],
+    ])('#4155 P5b: %s mergedAwayKeys fails the persist closed and writes nothing', async (_n, bad) => {
+      writeCast([row('olga', 'Ольга')]);
+      const raw = JSON.stringify({ sentences: [sen(1, 1, 'A. B.')], mergedAwayKeys: bad });
+      writeEdits(raw);
+      const castBefore = readFileSync(castJsonPath(bookDir), 'utf8');
+      await expect(persistPlannedCast(persistArgs())).rejects.toThrow(/malformed mergedAwayKeys/);
+      expect(readFileSync(castJsonPath(bookDir), 'utf8')).toBe(castBefore);
+      expect(readFileSync(manuscriptEditsJsonPath(bookDir), 'utf8')).toBe(raw);
+    });
+
     it('#4155 P6: with no edits file on disk no mergedAwayKeys key is invented', async () => {
       writeCast([row('olga', 'Ольга')]);
       await persistPlannedCast(persistArgs({ sentences: [sen(1, 1, 'A.')] }));

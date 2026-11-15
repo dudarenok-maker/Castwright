@@ -238,6 +238,28 @@ describe('rollManuscriptEdits keeps merge tombstones (#4155)', () => {
     expect(landedData).toEqual([{ sentences: [t(1, 1, 'A. B.')], mergedAwayKeys: ['1:2'] }]);
   });
 
+  it.each([
+    ['a non-array', 'nope'],
+    ['a non-string entry', ['1:2', 7]],
+  ])('R6: %s mergedAwayKeys refuses the roll and writes nothing (both branches)', async (_n, bad) => {
+    verifiedDir = seed({ sentences: [t(1, 1, 'A.')], mergedAwayKeys: bad });
+    await expect(
+      rollManuscriptEdits(opts, () => [t(1, 1, 'A2.')], 'book-4155-f', identity),
+    ).rejects.toThrow(/malformed mergedAwayKeys/);
+    await expect(rollManuscriptEdits(opts, () => [t(1, 1, 'A2.')], 'book-4155-g')).rejects.toThrow(
+      /malformed mergedAwayKeys/,
+    );
+    expect(landedData).toEqual([]);
+  });
+
+  it('R7: an unreadable file refuses the plain (no resolveIds) roll and writes nothing', async () => {
+    verifiedDir = tmpBook();
+    mkdirSync(join(verifiedDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(verifiedDir, '.audiobook', 'manuscript-edits.json'), '{ not json');
+    await expect(rollManuscriptEdits(opts, () => [t(1, 1, 'A.')], 'book-4155-h')).rejects.toThrow();
+    expect(landedData).toEqual([]);
+  });
+
   it('R4: a file with no mergedAwayKeys gets none written', async () => {
     verifiedDir = seed({ sentences: [t(1, 1, 'A.')] });
     await rollManuscriptEdits(opts, () => [t(1, 1, 'A2.')], 'book-4155-d', identity);

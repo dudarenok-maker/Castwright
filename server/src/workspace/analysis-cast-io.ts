@@ -33,7 +33,7 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { withCastLock } from './cast-lock.js';
 import { withBookLock } from './book-lock.js';
-import { applyMergeTombstones } from './merge-tombstones.js';
+import { applyMergeTombstones, tombstoneKeys } from './merge-tombstones.js';
 import { ABSENT, UNREADABLE, readJsonWithStatus } from './cast-fingerprint.js';
 import { PriorCastUnreadableError } from './prior-cast-error.js';
 import { applyStaleLinkPrune, type LinkableCharacter } from './series-reuse-link.js';
@@ -590,11 +590,8 @@ export async function persistPlannedCast(a: {
     const writeSpan = async (): Promise<Rows> => {
       // Absent = no tombstones; an unreadable or malformed file throws before anything is written.
       const onDisk = await readJson<{ mergedAwayKeys?: unknown }>(manuscriptEditsJsonPath(a.bookDir));
-      const mergedAwayKeys = onDisk?.mergedAwayKeys;
-      if (mergedAwayKeys !== undefined && !(Array.isArray(mergedAwayKeys) && mergedAwayKeys.every((k) => typeof k === 'string'))) {
-        throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
-      }
-      if (mergedAwayKeys) sentences = applyMergeTombstones(sentences, mergedAwayKeys as string[]);
+      const mergedAwayKeys = tombstoneKeys(onDisk);
+      if (mergedAwayKeys) sentences = applyMergeTombstones(sentences, mergedAwayKeys);
 
       const carried = new Set(ov.carriedForward.map((c) => c.id));
       // A drift-refused persist leaves cast.json alone except for one thing (#4100): when the

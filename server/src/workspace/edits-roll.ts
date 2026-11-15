@@ -3,7 +3,7 @@
 
 import { withVerifiedBookDir, type WithVerifiedBookDirOpts } from './book-dir-guard.js';
 import { withBookLock } from './book-lock.js';
-import { applyMergeTombstones } from './merge-tombstones.js';
+import { applyMergeTombstones, tombstoneKeys } from './merge-tombstones.js';
 import { manuscriptEditsJsonPath } from './paths.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { readJson } from './state-io.js';
@@ -101,15 +101,6 @@ export async function rollManuscriptEdits(
     if (bookId) await withBookLock(bookId, roll);
     else await roll();
   });
-}
-
-/* The file's merge tombstones; absent is none, a malformed field throws before anything is written. */
-function tombstoneKeys(onDisk: { mergedAwayKeys?: unknown } | null | undefined): string[] | undefined {
-  const keys = onDisk?.mergedAwayKeys;
-  if (keys !== undefined && !(Array.isArray(keys) && keys.every((k) => typeof k === 'string'))) {
-    throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
-  }
-  return keys as string[] | undefined;
 }
 
 /* `incoming` replaces the file's sentences of the chapters in `owned` (and of any chapter

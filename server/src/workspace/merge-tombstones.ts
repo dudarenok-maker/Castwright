@@ -21,6 +21,15 @@
  * back from disk. Leaf module with no imports so it cannot close an import
  * cycle. Pure: the input array and its objects are never mutated. */
 
+/* The file's merge tombstones; absent is none, a malformed field throws before anything is written. */
+export function tombstoneKeys(onDisk: { mergedAwayKeys?: unknown } | null | undefined): string[] | undefined {
+  const keys = onDisk?.mergedAwayKeys;
+  if (keys !== undefined && !(Array.isArray(keys) && keys.every((k) => typeof k === 'string'))) {
+    throw new Error('manuscript-edits.json has a malformed mergedAwayKeys');
+  }
+  return keys as string[] | undefined;
+}
+
 export function applyMergeTombstones<
   S extends { chapterId: number; id: number; text: string; instruct?: unknown; vocalization?: unknown },
 >(sentences: readonly S[], keys: readonly string[]): S[] {
