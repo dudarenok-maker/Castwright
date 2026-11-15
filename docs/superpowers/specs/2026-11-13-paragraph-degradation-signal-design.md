@@ -3,10 +3,10 @@ status: draft
 issue: 2254
 refs: [2253, 2267, 2275, 2306, 2320, 4165, 4217]
 date: 2026-11-13
-revision: 5 (owner decisions on the PR #4184 assumption-checker pass 4, 2026-11-15)
-decisions: owner decisions 1–9 of 2026-11-15 are binding and are written in below (1–3 drove revision 3, 4–6 revision 4, 7–9 revision 5); the items under "Decisions made in revision 5" (and the surviving ones from revisions 3 and 4) are owed owner confirmation
-gate: assumption-checker pass 4 on revision 4 did not clear it; revision 5 needs a fresh pass before decomposition
-verified-at: 1e295990 (origin/main, 2026-11-15)
+revision: 6 (owner decision 10 on the PR #4184 assumption-checker pass 5, 2026-11-15)
+decisions: owner decisions 1–10 of 2026-11-15 are binding and are written in below (1–3 drove revision 3, 4–6 revision 4, 7–9 revision 5, 10 revision 6; decision 10 drops the twin experiment, and the parts of decisions 4, 5, 7 and 8 that served only the twin lapse with it); the items under "Decisions made in revision 6" (and the surviving ones from revisions 3–5) are owed owner confirmation
+gate: assumption-checker pass 5 on revision 5 did not clear it; revision 6 needs a fresh pass before decomposition
+verified-at: 25c65c0a (origin/main, 2026-11-16)
 ---
 
 # Paragraph-degradation signal: surfacing it, and proving what it costs (#2254)
@@ -14,12 +14,13 @@ verified-at: 1e295990 (origin/main, 2026-11-15)
 Filename when committed:
 `docs/superpowers/specs/2026-11-13-paragraph-degradation-signal-design.md`.
 Design thread only. No code is written here. Verified against `main` @
-`1e295990` (revision 4 was verified @ `c16da893`, revision 3 @ `a9918640`,
-revision 2 @ `3792b84b`). Between `c16da893` and `1e295990` the only anchored
-file that changed is `dialogue-structure/paragraph-recovery.ts` (#4165 merged,
-which also removed the stale "opt-in / Default OFF" comments, see §1.5); its
-anchors below are updated, and every other anchor reads the same at
-`1e295990`. Paths under
+`25c65c0a` (revision 5 was verified @ `1e295990`, revision 4 @ `c16da893`,
+revision 3 @ `a9918640`, revision 2 @ `3792b84b`). Between `1e295990` and
+`25c65c0a` four anchored files changed: `routes/book-state.ts` lost two lines
+above `GET /state` (its anchors below move by −2), `workspace/scan.ts` gained
+one import line (+1), and `openapi.yaml` and `src/lib/types.ts` changed one
+description line each in place (no anchor moves). Every other anchor reads the
+same at `25c65c0a`. Paths under
 `attribution-eval/` mean `server/src/analyzer/attribution-eval/`; paths under
 `dialogue-structure/` mean `server/src/analyzer/dialogue-structure/`.
 
@@ -29,7 +30,91 @@ into the import/analysis surfacing so a degraded book is flagged") is that
 instruction. It covers the user-facing surface designed here and nothing
 beyond it.
 
-## Revision 5 changelog
+## Revision 6 changelog
+
+"AC5" is the PR #4184 comment headed "Assumption-checker pass 5 (head
+4c5bc2c7…)". It found 0 Critical, 4 Significant and 9 Minor, and gave a
+separate value verdict: the Ночной дозор half answers blocker 1, and the twin
+half is not worth running unconditionally. The owner answered its first
+question on 2026-11-15 by dropping the twin; that answer is **owner
+decision 10** below. Each AC5 finding, and whether it was **resolved by
+removal** (it existed only for the twin) or **fixed in place**:
+
+| # | Finding | Resolution |
+|---|---|---|
+| S1 | The power table and R5-12 score one merged capture, but the recorded verdict needs M and M2 to agree; at the owner's 9000-char budget a true zero effect is recorded *not degrading* only 14–50% of the time | **Resolved by removal** (owner decision 10). The twin, its power table and R5-12 are gone |
+| S2 | Stage 2 carries the previous chunk's last speaker and two paragraphs across every seam (`stage2-chunk.ts:465-473`), so clean chunks are not independent clusters and the bootstrap SE runs low | **Resolved by removal.** No bootstrap is left. The Ночной дозор verdicts come from hand-checks of sentences sampled from one capture, and §4.4 states that they describe that raw take of those chapters, nothing wider (R6-1, R6-2) |
+| S3 | The cost table quoted the 2026-08-12/13 run, whose 16 GB model spilled over PCIe and is no longer on the box | **Fixed in place.** Re-based on the 2026-09-05 run (`qwen38-cw-iq3-80k`, phase 1 ≈ 3 h 18 m for the whole book, `onbox-wave11-group-c-results/step-2-c2c3c4-run.md:29-31`). The Ночной дозор step is now an estimated ≈ 1–2 h of wall-clock, with a measured ceiling of ≈ 3 h 18 m, and the table says which figure is which (§4.4 "On-box cost") |
+| S4 | One rule over four statistics feeding two recorded verdicts, with no rule for combining them; a 5 pp bar cannot see a several-fold rise in the small confident-disagreement base | The four twin statistics are **removed**. **Fixed in place** for what remains: 1A and 1C each record one verdict, each with its combining rule, and the 1C bar is a count sized to a 30-judgement sample, not a percentage (R6-1, R6-2, §4.4 "Verdicts") |
+| M-1 | The table's "clean chunks" column counts clusters the bootstrap drops | **Resolved by removal** |
+| M-2 | `onStages` carries no flag, so "not flagged" cannot be read; the bucket is not the flag | **Fixed in place.** Phase 5 adds a fourth `onStages` field, `flags`, a clone of `examined.flags` (`cross-examine.ts:47`), and the confident filter reads it by sentence index (R6-4) |
+| M-3 | A fail-loud check that runs after the captures throws away hours of capture | **Fixed in place.** The runner saves each chapter's capture before any check runs, and measures from the saved files; a failed check is fixed and re-run with `--from-captures`, with no model (R6-5) |
+| M-4 | `isSceneSeparatorUnit` is a closure inside `splitBodyIntoChunks`, not an export | **Resolved by removal** (the degrade script is gone) |
+| M-5 | The 20% continuation cut misses an 80-column hard wrap (16.4%); Markdown is untested | **Fixed in place.** The cut is now 5%. Both committed ru fixtures, hard-wrapped at 60–120 columns, score 6.3–50.6%; unwrapped, or one paragraph per line, they score 0%. The scanner's tests add wrapped `.txt` and `.md` fixtures (R6-7) |
+| M-6 | Notice A's second sentence says "lines"; its third names a cause; `DASH` also admits an ASCII hyphen | **Fixed in place.** A's second sentence now reads "Each of those places would usually start a new paragraph", and the cause sentence is deleted; the voice-pass constraints now forbid both. §2 names the ASCII-hyphen match as a calibration risk, not construction (R6-10, §2, §3.1) |
+| M-7 | Classes (a) and (c) can both hold for one sentence | **Fixed in place.** Class (c) is judged on the sentence's **imported** paragraph (the recovery-off parse). Recovery never splits a paragraph that opens with a dash (`paragraph-recovery.ts:100`), so (a) and (c) are now disjoint. The precedence (a) > (b) > (c) > (d) makes the classification total regardless (R6-6) |
+| M-8 | A CRLF `.txt` collapses each chapter to one chunk | **Resolved by removal.** The hand-exported twin `.txt` is gone. The runner's only input is the scanner's dump of the hydrated body, the very string analysis reads, so the runner applies no normalisation of its own (§4.4 step 2) |
+| M-9 | `assertHintsPairWithState` throws, and its result depends on the current titles | **Fixed in place.** B calls it in a `try`/`catch` of `HintsOutOfSyncError` only, on every request after the memo lookup, and never memoises it; a route test changes only `state.json`'s title state under a cached record and sees the key follow (R6-8, §3.2) |
+| Q1 | Run the twin unconditionally, behind a pilot, or not at all | **Owner decision 10: not at all.** A pilot-first design is recorded under "Out of scope" (§5) |
+| Q2, Q3 | The bootstrap unit under carry; the bar for `cM − cN` | **Resolved by removal.** Q3's small-base concern carries over to the Ночной дозор confident count, which now has a count bar (R6-2) |
+| R5 grades | AC5's safe / gap / weak / unsafe grading of R5-1 … R5-13 | R5-1, R5-2, R5-4, R5-5, R5-10 and R5-12 lapse with the twin. R5-3 gains R6-4 and R6-5; R5-7 gains R6-8; R5-9's cut is replaced by R6-7. The rest stand |
+| CI | `check:register-citations` fails: the spec cited a Group B row ID that does not exist yet | Every citation now reads "a new Group B register row (ID allocated at implementation)", or "the new register row" after first use. The check passes locally |
+
+## Decisions made in revision 6 (owner to confirm)
+
+These are choices owner decision 10 did not settle. Each one is the option
+most consistent with it.
+
+- **R6-1 · 1A records one verdict, decided by its hand-check.** The exact
+  counts say how many sentences recovery changes, but not whether each change
+  is better or worse; only the hand-check says that. So the verdict uses the
+  hand-check alone: a two-sided exact sign test of improvements against
+  regressions, ignoring neutrals, at p < 0.05. The counts give the scale
+  beside it (§4.4 "Verdicts").
+- **R6-2 · 1C records one verdict, on a count of wrong judgements.** The
+  confident decisions are meant to be right, so the base rate of wrong ones
+  is small, and 30 judgements cannot carry a percentage bar: even zero wrong
+  in 30 leaves an exact 95% upper bound of about 12%. The verdict
+  is therefore a count: two or more judged wrong means the harm is present,
+  because one wrong judgement can be a slip of the judge. A stratified
+  estimate of the total gives the scale (§4.4 "Verdicts").
+- **R6-3 · How the verdicts close blocker 1.** 1A answers the owner's
+  2026-08-13 question directly. *Improves* keeps the issue's effect claim;
+  *changes no speaker* or *no clear direction* downgrades it to a
+  metric/acceptance improvement, the owner's own alternative; *makes them
+  worse* downgrades it and files design work on recovery's evidence rule.
+  1C is recorded beside it as the residual harm (§4.4).
+- **R6-4 · `onStages` exposes the flags.** It gains `flags`, a clone of
+  `examined.flags`, in the engine branch. The confident filter's "not
+  flagged" is "the index is not in `flags`". Today every decision at ≥ 0.9 is
+  unflagged, so this changes no count. It keeps R5-3's future-proofing
+  conjunct readable.
+- **R6-5 · Captures are saved before anything checks them.** The runner
+  writes each chapter's capture to the scratch directory as soon as it
+  returns, and the measurement reads only the saved files. Any fail-loud
+  check, such as R5-3's unknown reason, therefore costs a re-run with
+  `--from-captures`, never a re-capture.
+- **R6-6 · Class (c) is judged on the imported paragraph; precedence is
+  (a) > (b) > (c) > (d).** Judging (c) on the recovery-off parse matches its
+  purpose (a paragraph that was dash-open in the imported text) and makes it
+  disjoint from (a) by construction. The precedence settles any case the
+  definitions miss, so two implementations cannot disagree.
+- **R6-7 · The line-wrap cut is 5%.** On the committed fixtures, every wrap
+  width from 60 to 120 columns clears it (6.3% at the narrowest margin), and
+  every unwrapped shape scores 0%. A wrap wider than 120 columns leaves most
+  dialogue paragraphs on one line, so the measure barely under-reads it.
+- **R6-8 · B's pairing check runs per request.** `assertHintsPairWithState`
+  depends on the current titles and `titleOverridden`, which change without
+  replacing the hydrated record, so it runs after the memo lookup on every
+  request, inside a `try`/`catch` of `HintsOutOfSyncError` only.
+- **R6-9 · Phase 6 is withdrawn, and the phase numbers are kept.** Its two
+  changes to `computeAttributionMeasurement` served only the twin. Keeping
+  the numbers keeps every earlier changelog's phase references valid.
+- **R6-10 · Notice A loses its cause sentence and says "places".** This is
+  the shortest wording that stays true by construction; the voice pass may
+  rephrase within the constraints in §3.1.
+
+## Revision 5 changelog (history)
 
 "AC4" is the PR #4184 comment headed "Assumption-checker pass 4 (head
 b682b582…)". The owner answered its three questions on 2026-11-15; those
@@ -57,10 +142,13 @@ script is committed. Each AC4 finding and where it is resolved:
 | M-j | The on-box cost is never stated | Stated per step (§4.4 "On-box cost"), as an upper bound at the run sheet's whole-analysis rate |
 | Q1–Q3 | The three questions | Owner decisions 7, 8 and 9 |
 
-## Decisions made in revision 5 (owner to confirm)
+## Decisions made in revision 5 (owner to confirm; R5-1, R5-2, R5-4, R5-5, R5-10 and R5-12 lapsed with the twin; R5-3, R5-7 and R5-9 amended by revision 6)
 
 These are choices owner decisions 7–9 did not settle. Each one is the option
-most consistent with them.
+most consistent with them. Owner decision 10 drops the twin, so the six
+decisions that served only it lapse; R5-3 gains R6-4 and R6-5, R5-7 gains
+R6-8, and R5-9's cut is replaced by R6-7. The text below is as revision 5
+wrote it.
 
 - **R5-1 · The bootstrap is not stratified by chapter.** It resamples clean
   chunks from the whole book's pool. A short chapter can have one or two
@@ -148,7 +236,7 @@ resolved:
 | S3 | The replay lacks the deduplicated roster; live-vs-replay mixes two code paths | `onStages` gains the deduplicated `stage1` the engine used, and the post-recovery `paras` and `alignment`. 1A now compares **two replays** (recovery on vs off), and the recovery-on replay must reproduce live `deterministic` exactly, or that chapter's 1A is void (§4.3 "1A engine replay") |
 | S4 | Ночной дозор's 1A/1C measures miss hidden turns; the chapter pick favours the least-merged chapters | 1A on Ночной дозор is **per model sentence** (one raw, so both arms share one sentence list), over **turn sentences** defined from the text, not from spans (§4.3). Chapters are picked by **hidden-turn count** (sum of mid-paragraph turn openers), not dash-opening turns (§4.4 step 2) |
 | S5 | "Much of the dialogue … for each speaker" is not implied by a max-in-one-paragraph measure; "cannot occur in clean text" is a calibration property | Revision 4 shipped "a paragraph with ten or more **lines of dialogue run together**": A added "where each line would usually start its own paragraph", and B had no "usually". That counted openers as lines, and B lost the hedge (AC4 S3). **Superseded by owner decision 9 (revision 5):** both now say "ten or more places where a line of dialogue begins mid-paragraph", with "usually" (§3.1, §3.2). §2 and Decision 4 state "cannot occur in clean text" and the uk/bg extension as **calibration results** (#2267 §2.1), not constructions |
-| S6 | B110 step 1 can't tell a false positive from an extractor-made merge | **Owner decision 6.** "Clean" is judged on the **imported** text. A #4217 (F4) merge counts as a true positive. The scanner shows the owner the worst imported paragraph and reports each book's #4217 exposure (§4.4 step 1) |
+| S6 | The register row's step 1 can't tell a false positive from an extractor-made merge | **Owner decision 6.** "Clean" is judged on the **imported** text. A #4217 (F4) merge counts as a true positive. The scanner shows the owner the worst imported paragraph and reports each book's #4217 exposure (§4.4 step 1) |
 | M1 | The `runStructureEngine` span includes escalation; its return can't carry `conventions`/`rosterIds`; no zero-change proof | The extraction is now exactly name index → parse → windows → align → crossExamine (`analysis.ts:3714-3728`). It returns `{ examined, paras, alignment, rosterIds }`. The gate, `detSnapshot`, escalation, `structureReport`, the else-branch and `annotateSceneBreaks` stay in `attributeChapterStage2`. A characterisation test pins byte-identical output for four inputs before the extraction (§4.2) |
 | M2 | Anchors moved +2 at `c16da893` | All anchors re-read at `c16da893` (header) |
 | M3 | The harness differs from production (capacity, model, escalation budget, dedup constraints, roles, callback names) | Each is either matched or stated in a table (§4.3 "Harness vs production") |
@@ -164,10 +252,11 @@ resolved:
 | Row 18 | uk/bg "stays true" is a calibration property | S5 |
 | Q1–Q3 | The three questions | Owner decisions 4, 5 and 6 |
 
-## Decisions made in revision 4 (owner to confirm; R4-3, R4-4, R4-5 and R4-7 amended by revision 5)
+## Decisions made in revision 4 (owner to confirm; R4-3, R4-4, R4-5 and R4-7 amended by revision 5; R4-2, R4-3, R4-5 and R4-6 lapsed with the twin in revision 6)
 
 These are choices owner decisions 4–6 did not settle. Each one is the option
-most consistent with them. Revision 5 amends four of them without reopening
+most consistent with them. Owner decision 10 (revision 6) drops the twin, so
+R4-2, R4-3, R4-5 and R4-6 lapse; R4-1, R4-4, R4-7 and R4-8 stand. Revision 5 amends four of them without reopening
 them: R4-3 gains its predicate, its run base and its separator rule (R5-6,
 R5-10) and a corrected rationale (owner decision 8); R4-4 uses
 `dialogueOpen` (R5-6); R4-5's floor is now in chunks as well as turns
@@ -240,7 +329,7 @@ and where it is resolved (line anchors in this history table are as of
 | 3 | Confident mis-correction in dash-open paragraphs (`tag-correct` 0.9, `narration-confirm` 0.95) is unmeasured, and it is the #2253 harm class | AC1 | **Owner decision 1.** Blocker 1 now measures post-engine harm on the merged twin directly, with a dedicated confident-wrong count (§4.1 part 1C, §4.4) |
 | 4 | "Only unrecovered turns keep low confidence" is false | AC1 | Decision 2's rationale is rewritten: it no longer depends on any confidence claim (§Owner decisions 2) |
 | 5 | The source claim blames the file for merges Castwright's own extractor makes (`stripHtml` breaks only on `</p>`, `<br>` and `<hr>`) | AC1 | The wording now claims only that the **imported text** runs dialogue together. It names no cause and suggests "a different copy or format" (§3.1, §3.2). Changing the extractor is filed as F4, which needs a design pass (§1.5) |
-| 6 | Phase 2 (26-book false-positive check) is not agent work | AC1, AC2 | **Owner decision 3.** It is now step 1 of the owner-run register row B110. Agents build only the scanner (Phase 7). The threshold ships as **provisional** and no UI phase waits on the check (§2, §4.4, §5) |
+| 6 | Phase 2 (26-book false-positive check) is not agent work | AC1, AC2 | **Owner decision 3.** It is now step 1 of the owner-run new Group B register row (ID allocated at implementation). Agents build only the scanner (Phase 7). The threshold ships as **provisional** and no UI phase waits on the check (§2, §4.4, §5) |
 | 7 | Threshold 10 is uncalibrated; the Phase-2 gate is circular; the residual threshold is never measured; no PDF/MOBI sources were checked | AC1 | Provisional label, stated limit (§2). The residual measure is gone with Decision 2 (ii). The scanner covers every `parseManuscript` format and reports format per book (§4.4 step 1) |
 | 8 | No fallback when no clean, dialogue-dense ru book exists | AC1, AC2 | **Owner decision 3.** The threshold stays provisional, calibrated on the authored fixtures. The twin-based parts of blocker 1 record a third verdict, *inconclusive*, and the Ночной дозор parts still run (§4.4, §4.5) |
 | 9 | 1B's verdict rule has no statistical power (5 pp is about 1 SE at ~100 turns) | AC1 | The rule now pools spans across the 3 chapters (≥ 300 turns, already required) and uses a paired, chapter-stratified bootstrap. It needs both a 95% CI lower bound above 0 and a ≥ 5 pp effect. When the reference is underpowered or absent, the verdict is *inconclusive*, never *source/metric only* (§4.4) |
@@ -267,7 +356,7 @@ and where it is resolved (line anchors in this history table are as of
 | 30 | Phase 2's corpus is not enumerated, so an agent cannot run it | AC1 minor | It is owner-run now. The scanner takes a directory, and the run sheet lists the books by title (§4.4 step 1) |
 | 31 | Questions owed (AC1 1–3, AC2 1–3) | AC1, AC2 | Q1 (raw source): owner decision 1. Q2 (what "speakers" means): owner decision 2. Q3 (who runs 2 and 9; no clean book): owner decision 3. AC1 Q3 (post-engine harm; "couldn't check"): owner decisions 1 and 2 |
 
-## Decisions made in revision 3 (owner to confirm; R3-1, R3-2 and R3-6 superseded by revision 4)
+## Decisions made in revision 3 (owner to confirm; R3-1, R3-2 and R3-6 superseded by revision 4; R3-4 lapsed with the twin in revision 6)
 
 These are choices the binding owner decisions did not settle. Each one is the
 option most consistent with them.
@@ -314,11 +403,12 @@ option most consistent with them.
 > 2026-11-15). Decision 6 is unchanged in group and is reasoned again below.
 > Decision 3's threshold is now provisional (owner decision 3 of 2026-11-15).
 > Owner decisions 4–6 of 2026-11-15 (revision 4) settle how blocker 1 is
-> measured and how B110 step 1 judges "clean"; owner decisions 7–9
-> (revision 5) settle the bootstrap unit, the confident count and the notice
-> wording. They are written into §3–§4 and listed at the end of this section.
+> measured and how the register row's step 1 judges "clean"; owner decisions
+> 7–9 (revision 5) settle the bootstrap unit, the confident count and the
+> notice wording; owner decision 10 (revision 6) drops the twin experiment.
+> They are written into §3–§4 and listed at the end of this section.
 > (The numbered list below is the 2026-11-13 set, cited as "Decision N";
-> "owner decision N" means the 2026-11-15 set, 1–9.)
+> "owner decision N" means the 2026-11-15 set, 1–10.)
 
 1. **Surfaces.**
    - Options: **A** a notice on the confirm view at import · **B** a
@@ -365,8 +455,8 @@ option most consistent with them.
      0.54–0.93 on 14 Russian EPUBs where recovery restored about 0 turns.
    - Legibility's threshold of 10 rests on one real clean ru book plus three
      authored texts (#2267 §2.2). It ships as **provisional** (owner decision,
-     2026-11-15) until register row B110 step 1 records the library scan, and
-     §2 states the limit.
+     2026-11-15) until step 1 of a new Group B register row (ID allocated at
+     implementation) records the library scan, and §2 states the limit.
 4. **Languages.**
    - Options: ru only · ru/es/fr.
    - *ru only for the user notice.* es and fr are **uncalibrated**:
@@ -387,15 +477,15 @@ option most consistent with them.
      construction:** they also open each turn with a dash, which makes ten
      mid-paragraph turn openers as unusual as in Russian, but no uk/bg book
      was measured. Their false-positive rate sits under Decision 3's
-     provisional label. The B110 scan reports detected and declared language
+     provisional label. The register row's scan reports detected and declared language
      per book, so a non-ru breach shows up and is the first calibration
      evidence for it.
 5. **`assessParagraphStructure`** (no production caller).
    - Options: delete it with its test · keep it as an offline-study export.
    - *Delete*, through report-fix-record. It is a pre-existing dead-code
      finding either way.
-6. **Register group: B** (local Ollama analyzer, no TTS). The ID is the
-   **next free Group B id at merge time** (`B110` at `c16da893`). AC1 asked
+6. **Register group: B** (local Ollama analyzer, no TTS). The row is a new
+   Group B register row (ID allocated at implementation, in Phase 8). AC1 asked
    whether this belongs in Group C ("one *Ночной дозор* re-analysis session").
    It does not. The procedure runs chapters live through the attribution-eval
    harness from a pinned roster, and never re-analyses a whole book.
@@ -419,7 +509,7 @@ option most consistent with them.
   `tag-correct`) and dash turns recovery leaves unsplit (`narration-confirm`).
   The degrade script also produces dash-opening merged paragraphs, not only
   folds into the preceding narration.
-- **6 · In B110 step 1, "clean" is judged on the imported text.** An EPUB
+- **6 · In the register row's step 1, "clean" is judged on the imported text.** An EPUB
   whose `<div>` paragraphs Castwright's extractor merged (#4217) counts as a
   **true positive**, because the notice's claim is about the imported text.
   The scanner reports which books #4217 affects.
@@ -446,7 +536,26 @@ option most consistent with them.
   by construction. **Both** notices carry the "usually" hedge §2 relies on.
   The revision-4 changelog's S5 row describes what actually ships.
 
-## 1 · What actually shipped (verified @ `c16da893`)
+**Owner decision 10 (2026-11-15, revision 6; binding):**
+
+- **10 · Drop the twin experiment.** Blocker 1 closes on the Ночной дозор
+  half: 1A's exact counts plus the two hand-checks. That answers the owner's
+  2026-08-13 wording ("confirm it is fixing a user-facing problem"). Withdrawn,
+  with every phase, test, register-row step and acceptance criterion that
+  existed only for them: revision 5's §4.4 steps 3–7; the clean/merged twin
+  (C1, C2, M, M2); the degrade script and R4-3; the cluster bootstrap and its
+  floor; the power table and R5-12; and the 1B/1C twin verdicts. A merge-cost
+  number for clean books is **out of scope**. If it is ever wanted, it is a
+  separate future design that starts behind a pilot: capture C1 and C2 first,
+  project the detectable effect from their measured noise, and only then
+  spend M and M2 (§5 "Out of scope").
+- **What lapses with it.** Owner decision 4 (1C against the clean twin) and
+  owner decision 7 (the bootstrap unit) lapse entirely. Owner decision 5
+  stands for 1A and 1C on Ночной дозор; its sentence about the degrade script
+  lapses. Owner decision 8 stands, except its sentence about R4-3's
+  rationale.
+
+## 1 · What actually shipped (verified @ `25c65c0a`)
 
 ### 1.1 The intake signal: computed nowhere in production
 
@@ -495,7 +604,7 @@ openapi, or used by the client. Nothing runs it at all.
 - It is computed at analysis start and printed to stdout as
   `[analysis:structure] ch=N scope=book merged=K`. Only the book-level maximum
   is persisted (`state.json` → `analysisProvenance.maxMergedTurnsInParagraph`;
-  type in `workspace/scan.ts:327`).
+  type in `workspace/scan.ts:328`).
 - It reaches the client only inside the permissive `state` blob. The
   hand-written client `BookStateJson`/`BookStateResponse`
   (`src/lib/types.ts:361`, `:455`) has no such field, and nothing reads it.
@@ -517,11 +626,14 @@ openapi, or used by the client. Nothing runs it at all.
    (`night-watch-reanalysis-onbox-acceptance.md` §4).
 
    What is still open:
-   - **(a)** Does recovery change post-crossExamine speakers?
-   - **(b)** Does merged paragraphing degrade the *model's raw* attribution?
-   - **(c)** Does merging change the final answer, and where do the engine's
-     confident disagreements sit? (Revision 3 from AC1; restated by owner
-     decision 4.)
+   - **(a)** Does recovery change post-crossExamine speakers, and for the
+     better?
+   - **(c)** Where do the engine's confident decisions sit in merged text,
+     and are they right? (Revision 3 from AC1.)
+   - Revision 5's **(b)**, whether merged paragraphing degrades the *model's
+     raw* attribution, and its question of how much merging changes the final
+     answer against a clean copy, needed the twin. Owner decision 10 puts both
+     out of scope.
 2. **The measure is wrong** (Decision 3).
 3. **Stale "opt-in / Default OFF" comments: fixed on `main`.** At `c16da893`
    the `paragraph-recovery.ts` header (line 5) and `:45`, and the suite title
@@ -534,9 +646,8 @@ openapi, or used by the client. Nothing runs it at all.
    went 1928 → 2122 (+194, exactly #2320's recovered spans). That is because
    `attribution-health.ts:171` parses with recovery on. Narrator-share
    comparisons that cross #2320 compare different span sets. §4 therefore
-   never compares span-based figures across structures: the twin pairs on the
-   clean body's span set, where recovery has nothing to split (a gate checks
-   it, R4-2), and Ночной дозор's 1A pairs per model sentence (R4-4).
+   never compares span-based figures across structures: Ночной дозор's 1A
+   pairs per model sentence (R4-4).
 5. Already corrected in the thread, repeated so nobody re-opens them:
    - the parser splits on `\n`, not `\n\n`;
    - the ru-dash fixture is not derived from this book;
@@ -564,13 +675,14 @@ openapi, or used by the client. Nothing runs it at all.
   #4217):** which block closers become paragraph breaks, and how existing
   books are migrated or pinned to the old extraction. Until then, Decision 2's
   wording keeps the notices true for these merges, and owner decision 6 makes
-  them true positives in B110.
+  them true positives in the register row's scan.
 
 ## 2 · Measure and threshold
 
 - **Phase 1** adds to `legibility.ts`:
   - `MERGED_TURNS_DEGRADED = 10`, with a comment marking it **provisional**
-    and naming register row B110 as the calibration that will confirm it;
+    and naming the new Group B register row (ID allocated at
+    implementation) as the calibration that will confirm it;
   - `isParagraphDegraded(body, language): boolean | undefined`.
     It returns `undefined` when the language is null, not in
     `NOTICE_LANGUAGES`, or has no conventions: not measured, never `false`
@@ -589,14 +701,18 @@ openapi, or used by the client. Nothing runs it at all.
   comment naming its source of truth.
 - **What is true by construction, and what is calibration.** By construction:
   the flag means that **one** paragraph of the imported text contains **ten
-  or more** places where a sentence ends and a dash plus a capital letter
-  follows. The notices claim exactly that count, as "ten or more places where
-  a line of dialogue begins mid-paragraph" (owner decision 9, §3.1, §3.2),
-  and nothing about speakers, lines or who merged it. They count **places**,
-  not lines: a resumption after a tag (`— А, — сказал он. — Б.`) is one
+  or more** places where a sentence ends and a dash (an em dash, an en dash
+  or an ASCII hyphen, `legibility.ts:3`) plus a capital letter follows. The
+  notices claim exactly that count, as "ten or more places where a line of
+  dialogue begins mid-paragraph" (owner decision 9, §3.1, §3.2), and nothing
+  about speakers, lines, cause or who merged it. They count **places**, not
+  lines: a resumption after a tag (`— А, — сказал он. — Б.`) is one
   speaker's line but two places, and the wording stays true for it. "A line
   of dialogue" names the mid-paragraph dash by its ru convention (it opens
-  direct speech, or resumes it). By **calibration**, not
+  direct speech, or resumes it), not by the regex: a hyphen used as a dash
+  before a capital (`1999 г. - Москва`) matches too. That is rare in prose,
+  and it sits under the provisional label with the rest of the
+  calibration. By **calibration**, not
   construction: that such a paragraph is merged dialogue. The legibility
   design says so itself ("false positives are sparse and merges are dense …
   the property the whole design now rests on", #2267 §2.1). Russian
@@ -607,7 +723,7 @@ openapi, or used by the client. Nothing runs it at all.
 - **The threshold is provisional** (owner decision 3, 2026-11-15). It is
   calibrated on one real clean ru book plus the authored fixtures. The
   library-wide false-positive scan is step 1 of the owner-run register row
-  B110 (§4.4). It is **not** a merge gate for any UI phase: per CLAUDE.md,
+  (§4.4). It is **not** a merge gate for any UI phase: per CLAUDE.md,
   owed acceptance converts into a row. A breach on a book the owner judges
   clean **on its imported text** (owner decision 6) is recorded on the row,
   and the threshold decision it forces goes to the owner. If no clean,
@@ -668,13 +784,14 @@ openapi, or used by the client. Nothing runs it at all.
 **Wording** (claims only what the measure counts, owner decision 9; final
 pass through `castwright-voice`, which may rephrase but must keep "a
 paragraph", "ten or more", "places", "mid-paragraph", "imported text" and
-"usually", and must not turn places into lines):
+"usually", must not turn places into lines, and must not name a cause,
+R6-10):
 
 > **Heads-up:** in 5 chapters (Chapter 4, Chapter 5, Chapter 6 and 2 more),
 > the imported text has a paragraph with ten or more places where a line of
-> dialogue begins mid-paragraph. Each of those lines would usually start its
-> own paragraph. This often happens when a book is converted between formats.
-> A different copy or format of this book may give a better result.
+> dialogue begins mid-paragraph. Each of those places would usually start a
+> new paragraph. A different copy or format of this book may give a better
+> result.
 
 "Ten or more places where a line of dialogue begins mid-paragraph" is the
 plain-words reading of "ten or more sentence-end + dash + capital openers in
@@ -686,8 +803,8 @@ Castwright's own extractor did the merge (F4, #4217).
 **Mobile/touch:**
 - Static text, nothing interactive, so no 44 px obligations.
 - At 375 px the box (`-mt-2 px-4 py-2.5 text-xs` padding, three titles) runs
-  to about **10–11 lines** (revision 5's wording is one short sentence
-  longer). That is acceptable inside the scrolling confirm
+  to about **9–10 lines** (revision 6 drops revision 5's cause sentence).
+  That is acceptable inside the scrolling confirm
   form, and the three-title cap keeps it there.
 
 **Tests:**
@@ -714,9 +831,9 @@ Castwright's own extractor did the merge (F4, #4217).
 **Data path:**
 
 1. `server/src/routes/book-state.ts` `GET /state`. It already calls
-   `getOrHydrateManuscript(state.manuscriptId)` (`:845`).
+   `getOrHydrateManuscript(state.manuscriptId)` (`:843`).
    - Language comes from `bookStateLanguageOrNull(state)`
-     (`workspace/scan.ts:402`). The display variant must not be used,
+     (`workspace/scan.ts:403`). The display variant must not be used,
      because an unset language has to mean "not measured".
    - For each chapter of a `NOTICE_LANGUAGES` book, compute
      `isParagraphDegraded(body, language)` on the hydrated body. There is no
@@ -736,12 +853,20 @@ Castwright's own extractor did the merge (F4, #4217).
      (`:771`) passes a position whose parse title was synthesized
      (`Chapter N`, stored as `null`) or whose state title the user
      overrode, so a mispairing confined to such positions still emits.
+   - **How the pairing check is called (R6-8).** `assertHintsPairWithState`
+     returns `void` and throws `HintsOutOfSyncError` (`:787-796`), so B wraps
+     the call in a `try`/`catch` that catches that class only and omits the
+     key. It runs on **every request**, after the memo lookup, and is never
+     memoised: its result depends on the current state's titles and
+     `titleOverridden` (`:775`), which a rename or a title override changes
+     without replacing the hydrated record.
    - **Memoised per hydrated record:** a module-level
      `WeakMap<ManuscriptRecord, { language: string; ids: number[] }>`. The
      cached `ids` are **unfiltered** (every chapter the record holds).
      Exclusion is applied per request from the current state, so the memo's
      correctness does not depend on the exclude toggle replacing the record
-     (it does today, `book-state.ts:2394-2401`). `getOrHydrateManuscript`
+     (it does today, `book-state.ts:2392-2399`). The pairing check above is
+     likewise per request. `getOrHydrateManuscript`
      returns the same object until a put or remove replaces it
      (`store/manuscripts.ts:107-128`), so a replaced record recomputes and the
      old entry is garbage-collected. A request whose language differs from
@@ -775,7 +900,10 @@ hover-only content (touch-equivalence rule).
   record → key absent; excluded chapters omitted, **including after an
   exclude toggle on the same cached record** (the filter is per request);
   `parse`-hinted chapter-count mismatch → key absent; `parse`-hinted
-  same-count record whose parse titles don't pair → key absent; **two requests on one
+  same-count record whose parse titles don't pair → key absent; that same
+  **cached** record after `state.json` alone changes so the titles pair (the
+  mismatched chapter's `titleOverridden` set) → key present on the next
+  request, and back again (the check is per request); **two requests on one
   record compute once** (a spy on `isParagraphDegraded`); a replaced record
   recomputes;
 - slice test;
@@ -797,22 +925,23 @@ mid-run. **Not recommended** as the deliverable.
 
 | Part | Question | Model? | Settled by |
 |---|---|---|---|
-| **1A** | With the model's raw take held fixed, does recovery change **post-crossExamine** speakers? | No (two engine replays over one live raw take, R4-1) | committed test (§4.2) + Ночной дозор (§4.4 step 2) + twin (step 6) |
-| **1B** | Does merged paragraphing degrade the model's **raw** attribution? | Yes | clean/merged twin, live (§4.4 steps 3–7), on `onStages.raw` |
-| **1C** | **Does merging change the final answer?** Merged twin's `final` vs clean twin's `final`, paired per span, against a clean-vs-clean noise term (owner decision 4); plus the engine's confident disagreements, by where they sit (owner decision 5) | Yes | twin (§4.4 steps 6–7) + Ночной дозор hand-check (step 2) |
+| **1A** | With the model's raw take held fixed, does recovery change **post-crossExamine** speakers, and for the better? | No for the counts (two engine replays over one live raw take, R4-1); one live capture per chapter | committed test (§4.2) + Ночной дозор counts and hand-check (§4.4 step 2) |
+| **1C** | In merged text, **where do the engine's confident decisions sit, and are they right?** The #2253 harm class: unflagged, high-confidence speakers, by class (owner decisions 5 and 8) | Yes (the same capture) | Ночной дозор counts and hand-check (§4.4 step 2) |
 
-1C is the owner's direct question and the #2253 harm class. It measures
-whether the user gets a **different** answer from a merged copy than from a
-clean one. It is **not** an accuracy measure: where the clean twin is itself
-wrong, a change can be an improvement. The confident-disagreement counts and
-the Ночной дозор hand-check are where direction is judged.
+**Not measured here (owner decision 10):** revision 5's 1B (does merging
+degrade the model's raw attribution?) and its twin half of 1C (how much does
+merging change the final answer against a clean copy?). Both needed a
+clean/merged twin. A merge-cost number for clean books is out of scope (§5).
+1A and 1C describe **one** merged book, *Ночной дозор*, as it is in the
+library. They say what recovery does to it and whether its confident output
+is right; they do not say what merging costs a book that was clean.
 
 **Stated limits:**
 - **1A stops at crossExamine** (AC3 M6). Escalation needs a model, and only
   a live run escalates. How much escalation compensates for recovery-off
-  flags is therefore not measured. Escalation's own effect within each live
-  arm (`final` vs `deterministic`) is reported.
-- **Script review** (channel 3 in §1.2) is out of 1A–1C scope. It is an
+  flags is therefore not measured. Escalation's own effect within the live
+  capture (`final` vs `deterministic`) is reported.
+- **Script review** (channel 3 in §1.2) is out of 1A and 1C scope. It is an
   opt-in, later pass with its own model call, and attributing its effect to
   recovery would need a second A/B run. The harness's `review` option exists
   if a later round wants that.
@@ -836,8 +965,7 @@ that.
   - recovery off: **expected** `narration-confirm` at 0.95, unflagged
     (`cross-examine.ts:274`). Off, the turn is an **unsplit dash turn inside
     a narration-open paragraph**, which is class (b) of the 1C confident
-    count (§4.3). (Revision 3 said this while the count only looked at
-    dash-open paragraphs; owner decision 5 removes that contradiction.)
+    count (§4.3).
   - The implementer runs the arm first and pins what it observes. If the
     off outcome is not confident-wrong, that is reported back to the design
     thread before the test is committed, not edited to pass.
@@ -868,11 +996,15 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
   `paras` and `rosterIds`), `structureReport` (`:3769`, which reads
   `conventions.language`), the log line, the `applyNarratorDefault`
   else-branch (`:3783-3792`) and `annotateSceneBreaks` (`:3799`).
-- **`onStages` gains three fields** (additive; only the harness passes
+- **`onStages` gains four fields** (additive; only the harness passes
   `onStages`): `stage1`, the deduplicated roster the engine used; and, in the
-  engine branch only, `paras` and `alignment`, cloned when crossExamine
-  returns. That is what §4.3's replay and classification need without
-  re-deriving anything.
+  engine branch only, `paras`, `alignment` and `flags` (R6-4), cloned when
+  crossExamine returns. `flags` is `examined.flags`
+  (`Array<{ index, reason }>`, `cross-examine.ts:47`, filled at `:392`), the
+  only per-sentence flag marker: a `reasons` entry's `bucket` is not the flag
+  (`alt-correct-flag` and `narration-demote:first` are bucket `corrected` and
+  flagged, `:166`, `:278-284`). That is what §4.3's replay and classification
+  need without re-deriving anything.
 - **Zero-behaviour-change proof.** Before the extraction, and before the
   `onStages` additions, the Phase-5 agent commits a characterisation test
   that records `attributeChapterStage2`'s `sentences`, `structureReport` and
@@ -880,11 +1012,12 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
   for four inputs: engine on; `flagOnly` (alignment below the 80% floor);
   knob off; and a language with no conventions. The comparison is deep
   equality (`toEqual`), not byte identity. It keeps comparing only those
-  fields after the three new fields land, so the additions cannot fail it. A
+  fields after the four new fields land, so the additions cannot fail it. A
   separate assertion in the same file pins the new fields: `stage1` in all
-  four inputs, equal to the deduplicated roster; `paras` and `alignment` for
-  engine-on and `flagOnly` (both run the engine branch), absent for knob-off
-  and no-conventions. The existing tests stay green.
+  four inputs, equal to the deduplicated roster; `paras`, `alignment` and
+  `flags` for engine-on and `flagOnly` (both run the engine branch; `flags`
+  equals the returned `examined.flags`), absent for knob-off and
+  no-conventions. The existing tests stay green.
 
 ### 4.3 The measuring instruments
 
@@ -897,25 +1030,24 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
   - `raw`, cloned before the engine runs (`analysis.ts:3698`);
   - `deterministic`, after crossExamine and before escalation (`:3729`);
   - `reasons`, aligned 1:1 to `deterministic`;
-  - and, after Phase 5, `stage1`, `paras` and `alignment`.
+  - and, after Phase 5, `stage1`, `paras`, `alignment` and `flags`.
 
   The return value is the final, post-escalation take. Escalation changes ids
   on flagged lines in place and never the sentence count, so `final[i]`,
   `deterministic[i]` and `reasons[i]` describe the same sentence.
 - **Phase 7 extracts, it does not copy.** It pulls the body of `evalFixture`
   up to and including the `attributeChapterStage2` call into an exported
-  `captureChapterStages(opts) → { raw, deterministic, final, reasons, stage1,
-  paras, alignment, structureReport, chunks }`. `evalFixture` calls it, and
-  its scoring stays byte-identical (`run-eval.test.ts` stays green).
+  `captureChapterStages(opts) → { raw, deterministic, final, reasons, flags,
+  stage1, paras, alignment, structureReport, chunks }`. `evalFixture` calls
+  it, and its scoring stays byte-identical (`run-eval.test.ts` stays green).
   `captureChapterStages` takes a plain `chapterText` and roster, so no
   `LabelledChapter` truth is needed. It also takes an optional
   `structureOptions`, an explicit `capacity`, and an optional shared
   `structureBudget` (below).
-- **Roster:** pinned per book, built with `buildRosterSnapshot`
+- **Roster:** pinned for the book, built with `buildRosterSnapshot`
   (`attribution-eval/capture.ts:63`) from the library book's `cast.json`.
   This is plan 265's own roster-pinning, which prevents id drift between
-  arms. For the twin, every arm uses the **same** pinned roster file, built
-  once from the reference book's cast.
+  chapters.
 
 **Harness vs production** (AC3 M3). Each difference is matched or stated:
 
@@ -923,15 +1055,15 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
 |---|---|---|---|
 | Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model and passes it in |
 | Model | the owner's configured analyzer | `qwen3.5:9b` unless `EVAL_QWEN_MODEL` is set (`run-eval-cli.ts:91`) | **Matched.** The runner takes a required `--model` with no default, and the run sheet records it |
-| Escalation budget | one `structureBudget` per **book**, shared across chapters (`:7645`, `maxWindowsPerBook`) | none, so each chapter gets a fresh per-book default (`:3744-3746`) | **Matched.** The runner passes one shared budget object per **arm**, across that arm's chapters |
-| Dedup constraints | plan 291's `planConstraints` for a plan-applied roster; `undefined` for a first analysis's rolling roster (`:7642`) | none | **Stated.** The harness has no plan, so it passes none, which is production's first-analysis shape. Every arm is the same |
-| Roster roles | `cast.json` roles | `rosterToStage1` sets every role to `'character'` (`run-eval.ts:85-97`) | **Stated.** Kept, because changing it would change `evalFixture` scoring. Every arm is the same |
+| Escalation budget | one `structureBudget` per **book**, shared across chapters (`:7645`, `maxWindowsPerBook`) | none, so each chapter gets a fresh per-book default (`:3744-3746`) | **Matched.** The runner passes one shared budget object across the book's captured chapters |
+| Dedup constraints | plan 291's `planConstraints` for a plan-applied roster; `undefined` for a first analysis's rolling roster (`:7642`) | none | **Stated.** The harness has no plan, so it passes none, which is production's first-analysis shape |
+| Roster roles | `cast.json` roles | `rosterToStage1` sets every role to `'character'` (`run-eval.ts:85-97`) | **Stated.** Kept, because changing it would change `evalFixture` scoring |
 | Eval-rate wrapper | `attributeChapterStage2WithEval` (`:3904-3918`) | direct call | **Stated.** It only folds sub-calls into one eval-rate record; no attribution effect |
 | Coverage guard | on | on | Same. The `STAGE2_COVERAGE_RETRIES=0` fixture trick is for body-blind mocks and is **not** used here |
 | Escalation mode | owner default `'local'` (`registry.ts:1323-1331`) | config | Same; the prerequisites pin it |
 
-Absolute shares are therefore the harness's. Every cross-arm comparison is
-between arms that share all of the above.
+Absolute shares are therefore the harness's. 1A compares two replays of one
+capture, so none of these differences enters it.
 
 - **Chunking (the 9000-char note).** Stage 2 splits a chapter over
   `analyzer.stage2.chunkCharBudget` (default 9000, lower for local engines:
@@ -939,17 +1071,13 @@ between arms that share all of the above.
   blank-line boundaries only (`stage2-chunk.ts:142` `splitBodyIntoChunks`,
   which is lossless). A merged paragraph is never split and becomes its own
   chunk, and the sentence-split fallback applies if it truncates
-  (`stage2-chunk.ts:196` `splitParagraphIntoSentences`). The merged twin is
-  therefore chunked differently from the clean twin. That is part of what a
-  merged book costs in production, so it is **measured, not removed**:
-  - `captureChapterStages` threads counters through `attributeChapterStage2`'s
-    `onChunk`, `onCoverageRetry`, `onCoverageExhausted` and
-    `onDeterministicSplit` callbacks (`analysis.ts:3584-3594`) and returns
-    them as `chunks`;
-  - every arm's report states chunk count, coverage retries and
-    deterministic splits per chapter;
-  - the **clean** arm's chunk boundaries also define the bootstrap's
-    clusters (§4.4, owner decision 7).
+  (`stage2-chunk.ts:196` `splitParagraphIntoSentences`). That is part of what
+  a merged book costs in production, so it is **reported**:
+  `captureChapterStages` threads counters through `attributeChapterStage2`'s
+  `onChunk`, `onCoverageRetry`, `onCoverageExhausted` and
+  `onDeterministicSplit` callbacks (`analysis.ts:3584-3594`) and returns them
+  as `chunks`, and the report states chunk count, coverage retries and
+  deterministic splits per chapter.
 
 **1A engine replay (R4-1):** for each captured chapter, the runner calls
 `runStructureEngine` three times over the **same** captured `raw`, with the
@@ -971,176 +1099,98 @@ its text matches the language's `conventions.dialogueOpen` (ru:
 from the text, so it includes the hidden turns that sit inside a narration
 span and add no speech span to any span set (AC3 S4).
 
-**Measurement (Phase 6, a server change):**
-- `computeAttributionMeasurement` (`store/attribution-health.ts:139`) already
-  takes explicit `bodies` and `sentences` (input type `:86-108`). It gains
-  two optional inputs. Both defaults keep library behaviour unchanged:
-  - `recoverMidParagraphTurns?: boolean` (default `true`), passed to its
-    `parseChapterStructure` call (`:171`);
-  - `emitSpans?: boolean` (default `false`). When true, the result carries
-    `spans: SpanRecord[]`, one per **`speech`** span, in body order (R5-5;
-    tag spans get no record, because nothing here compares them and the
-    module classifies them only for `tagNarratorSpan`, `:202-209`):
-
-    ```
-    SpanRecord = {
-      chapterId, start, end,
-      dashOpenedPara: boolean,
-      value: { kind: 'id', id }
-           | { kind: 'split', hasOrphan: boolean }
-           | { kind: 'unattributed' }
-           | { kind: 'orphan', id },
-      narrator: boolean,           // value is an id in NARRATOR_CHARACTER_IDS
-      sentenceIndices: number[],   // into the input `sentences` array, ascending
-    }
-    ```
-
-    The values come from the classification the function already performs
-    (`:227-253`: `unattributedSpeech`, `splitSpeech`, `orphanSpoken`, the
-    resolved id). `hasOrphan` is the existing `sawOrphan` flag, so a split
-    span that also counts in `orphanSpoken` (the R-9C5 overlap) is visible in
-    one record. It adds **no** new predicate, which honours the module header
-    (`:21-24`). The aggregate fields are unchanged.
-- **How a span is compared across arms:** two arms agree on a span when
-  their `value`s are equal (same kind and, where present, same id). A split,
-  an unattributed or an orphan span therefore disagrees with a resolved id,
-  and two unattributed spans agree. Each arm's report also states its
-  `split`, `unattributed` and `orphan` counts, so a disagreement driven by
-  alignment shape is visible.
-- The runner calls it in-process with:
-  - the **reference** body: the clean body for the twin, or Ночной дозор's
-    own hydrated body;
-  - the arm's sentences (`raw` or `final`);
-  - the captured deduplicated `stage1` as the roster, never `roster: []` as
-    `attribution-health-io.ts:220` does for the library;
-  - as `cast`, the reference book's `cast.json` characters, the same file the
-    pinned roster was built from (§4.3 "Roster"). The resolver uses it to
-    tell `id` from `orphan` and to set `narrator`, so every arm resolves
-    against one cast. `history` is omitted (no id is retired inside a run),
-    and `cacheHasOriginField` is `true` (the sentences are live, D18-aware
-    output);
-  - `recoverMidParagraphTurns` left at its default (on), plus `emitSpans`.
-
-  **Why the merged arm's sentences land on the clean spans** (AC4 M-d). The
-  aligner does not map offsets; it searches the body for each sentence's
-  **normalised** text, collapsing whitespace runs to one space
-  (`aligner.ts:126`, `:584`). The twin differs from the clean body only in
-  whitespace (each removed separator becomes the same number of spaces, §4.4
-  step 4), so a merged-arm sentence normalises to text that also occurs in
-  the clean body, and aligns there. Equal body lengths are a gate on the
-  degrade script, not the alignment mechanism. A merged-arm sentence that
-  does not align leaves its span `unattributed`, which counts as a
-  disagreement and shows in that arm's counts. Recovery is length-preserving
-  (§1.2), so it moves no span.
-- Server unit tests in `attribution-health.test.ts`: the same body and
-  sentences with the switch off yield the pre-#2320 span count (no recovered
-  spans); `emitSpans` records reproduce every aggregate field exactly:
-  `unattributed` = `unattributedSpeech`, `split` = `splitSpeech`,
-  `orphan` + (`split` with `hasOrphan`) = `orphanSpoken`, `narrator` = the
-  narrator-id total, and the record count = `spokenTotal`; and with
-  `emitSpans` off, the output is unchanged.
-
-**Comparing model quality (1B):** compare `raw` with `raw` across arms, never
-post-engine output. Post-engine output mixes in the engine's corrections, and
-those differ by structure by design. 1C reports post-engine output
-explicitly.
-
-**1C confident disagreements (owner decisions 4, 5 and 8).** The merged
-arm's `SpanRecord`s come from measuring M's `final` sentences against the
-clean body; `final[i]`, `deterministic[i]` and `reasons[i]` describe the same
-sentence `i`. A merged-arm span counts when all of these hold:
-- its `value` disagrees with the clean twin's `final` (C1) on the reference
-  span set. A `split` span disagrees but is counted under "split", never
-  here;
-- **every** sentence `i` in its `sentenceIndices` passes the next three
-  conjuncts (R5-4). One flagged sentence means the user sees a flag on that
-  span, so it is not a confident disagreement;
-- sentence `i`'s `deterministic` confidence is ≥ 0.9 and it is **not
-  flagged** (R5-3). At `1e295990` that is exactly five reasons, all
-  unflagged: `tag-confirm:<id>` (0.95, `cross-examine.ts:130`),
-  `tag-correct:<id>` (0.9, `:144`), `tag-span-narrator` (0.9, `:261`),
-  `narration-confirm` (0.95, `:274`) and `narration-demote` (0.9, `:286`).
-  The last two differ in a way that matters: `narration-confirm` is the
-  **model** saying narrator, while `narration-demote` is the **engine**
-  overriding the model to narrator, the #2253 rewrite itself. It still
-  happens in merged text wherever #2253's rescue (`isConventionRescue`,
-  `:236-239`) does not fire: a model sentence that merged narration with a
-  turn (`Антон обернулся. — Ты кто?`), or a dash line the model gave to
-  `unknown-male`/`unknown-female`. From the second sentence of such a run
-  on, the result is `narration-demote` at 0.9, unflagged (`:276-286`; the
-  run's first sentence is `narration-demote:first`, flagged at ≤ 0.5). The
-  runner checks every passing decision's reason against these five
-  (prefix match for the two `:<id>` forms, exact for the rest) and **fails
-  the run** on any other, so a reason added later gets a class decision
-  instead of a silent default;
-- sentence `i`'s `final` id equals its `deterministic` id, so escalation
-  left the engine's decision standing. For these five reasons the conjunct
-  is vacuous today, because escalation rewrites only flagged lines
+**1C confident decisions (owner decisions 5 and 8).** A sentence `i` of the
+live capture counts when all of these hold:
+- it is a turn sentence;
+- its `deterministic` confidence is ≥ 0.9 and `i` is **not** in `flags`
+  (R5-3, R6-4). At `25c65c0a` that is exactly five reasons, all unflagged:
+  `tag-confirm:<id>` (0.95, `cross-examine.ts:130`), `tag-correct:<id>`
+  (0.9, `:144`), `tag-span-narrator` (0.9, `:261`), `narration-confirm`
+  (0.95, `:274`) and `narration-demote` (0.9, `:286`). The last two differ in
+  a way that matters: `narration-confirm` is the **model** saying narrator,
+  while `narration-demote` is the **engine** overriding the model to
+  narrator, the #2253 rewrite itself. It still happens in merged text
+  wherever #2253's rescue (`isConventionRescue`, `:236-239`) does not fire: a
+  model sentence that merged narration with a turn (`Антон обернулся. — Ты
+  кто?`), or a dash line the model gave to `unknown-male`/`unknown-female`.
+  From the second sentence of such a run on, the result is
+  `narration-demote` at 0.9, unflagged (`:276-286`; the run's first sentence
+  is `narration-demote:first`, flagged at ≤ 0.5). The measurement checks
+  every passing decision's reason against these five (prefix match for the
+  two `:<id>` forms, exact for the rest) and **fails** on any other, so a
+  reason added later gets a class decision instead of a silent default. It
+  fails after the capture is saved (R6-5), so the fix costs no model time;
+- its `final` id equals its `deterministic` id, so escalation left the
+  engine's decision standing. For these five reasons the conjunct is vacuous
+  today, because escalation rewrites only flagged lines
   (`escalation.ts:277-296`, AC4 M-b). It stays as a guard against that
   changing.
 
-Each counted span is then **classified** by where its lowest-index sentence
-sits in the merged arm's own post-recovery structure (`paras`, `alignment`
-from `onStages`). A span whose sentences fall in different classes is
-counted in that class **and** in a separate **mixed** tally:
+Each counted sentence is then **classified**, in this order of precedence
+(R6-6); a sentence takes the first class it meets:
 - **(a) recovery-split line:** the sentence aligns into a line whose start
   offset is not a line start in the recovery-off parse of the same body
-  (exact, because recovery is length-preserving). This is tag anchoring
-  across a split-out line (`parser.ts:74-78`), scored
+  (exact, because recovery is length-preserving, §1.2). This is tag
+  anchoring across a split-out line (`parser.ts:74-78`), scored
   `tag-correct`/`tag-confirm`;
 - **(b) unsplit dash turn:** a turn sentence aligned only to `narration`
   spans in a narration-open paragraph, which recovery left unsplit
   (`parser.ts:717-729`), scored `narration-confirm` (the model said
   narrator) or `narration-demote` (the engine overrode the model);
-- **(c) degraded dash-open paragraph:** the sentence's paragraph matches
-  `dialogueOpen` **and** holds ≥ `MERGED_TURNS_DEGRADED`
-  `TURN_IN_PARAGRAPH` matches (owner decision 8). Tags anchor across the
-  merged speech there (`parser.ts:171`). The threshold is what keeps an
-  ordinary dash paragraph out: `— Привет, — сказал Антон. — Как дела?` has
-  one match (`. — Как`), a same-speaker resumption that is standard Russian
-  typography (`parser.ts:47-48`), and is (d) now;
+- **(c) degraded dash-open paragraph:** the sentence's paragraph **in the
+  recovery-off parse** (the imported text's own paragraph) matches
+  `dialogueOpen` **and** holds ≥ `MERGED_TURNS_DEGRADED` `TURN_IN_PARAGRAPH`
+  matches (owner decision 8). Tags anchor across the merged speech there
+  (`parser.ts:171`). Recovery never splits a paragraph that opens with a dash
+  (`paragraph-recovery.ts:100`), so no sentence is in both (a) and (c). The
+  threshold is what keeps an ordinary dash paragraph out:
+  `— Привет, — сказал Антон. — Как дела?` has one match (`. — Как`), a
+  same-speaker resumption that is standard Russian typography
+  (`parser.ts:47-48`), and is (d);
 - **(d) other:** anything else, reported so nothing is dropped.
   `tag-span-narrator` (a sentence aligned only to tag spans) lands in (a),
   (c) or (d) by where it sits; it is never (b), which needs narration spans.
 
 Every class is reported **by reason** as well as in total, so
 `narration-demote` and `narration-confirm` in class (b) are never summed out
-of sight.
-
-The **clean-noise count** applies the identical rule to **C2** against C1
-(C2's sentences, C2's reasons, C2's own post-recovery structure). C1 is never
-counted against itself (AC3 C(c)).
+of sight. 1A's changed sentences are classified by the same rule, on the
+recovery-on structure.
 
 **The verbless-tag downgrade (R5-11).** In a dash-open paragraph, a single
 tag span with no speech or beat verb stem downgrades the **whole** paragraph
 to one unanchored speech span (`parser.ts:163-168`). Its sentences then go
 to `decideUnanchoredSpeech`, which flags them (`cross-examine.ts:100-116`),
 or, where alternation fills the window, to an `alt-*` decision at ≤ 0.8.
-Either way they never reach the confident count. A long merged dash-open paragraph has many tag spans, so it
-is likelier to hit one. The runner therefore reports, per arm, how many
-degraded dash-open paragraphs the parser reduced to a single unanchored
-speech span, and how many class (c) spans the rest yielded. A thin class (c)
-is then a measured fact about merged text, not a gap in the sample.
+Either way they never reach the confident count. A long merged dash-open
+paragraph has many tag spans, so it is likelier to hit one. The runner
+therefore reports, per chapter, how many degraded dash-open paragraphs the
+parser reduced to a single unanchored speech span, and how many class (c)
+sentences the rest yielded. A thin class (c) is then a measured fact about
+the book, not a gap in the sample.
 
 The runner's unit tests include one fixture per class (a), (b) and (c), with a
 mock analyzer and a tag that anchors following speech to the wrong speaker,
 and the counter must place each in its class. Further fixtures check: a
 `tag-correct:<id>` reason is matched by prefix; a `narration-demote` run in
 an unrescued narration-open paragraph is counted in (b); an ordinary
-dash paragraph with one resumption is **not** (c); a downgraded degraded
-dash-open paragraph is reported as downgraded; a two-sentence span with one
-flagged sentence is not counted; and an unknown confident reason fails the
-run.
+dash paragraph with one resumption is **not** (c); a recovered line whose
+own text is dash-open with ≥ 10 openers is (a), not (c); a downgraded
+degraded dash-open paragraph is reported as downgraded; a sentence whose
+index is in `flags` is not counted; and an unknown confident reason fails
+the measurement while the saved capture survives it.
 
 - **The #2254 runner** (Phase 7): a committed, read-only server-side script,
   `server/scripts/paragraph-degradation-ab.mts`. It reads a manifest of
-  `{ arm, chapterId, chapterTextPath, rosterPath }`, calls
-  `captureChapterStages` per chapter, runs the 1A replays, calls the
-  measurement, computes the §4.4 statistics and writes one JSON report plus a
-  Markdown table. Like plan 265's runner it never runs in `test:all`, and its
-  inputs (real books) are never committed.
+  `{ chapterId, chapterTextPath, rosterPath }`, calls
+  `captureChapterStages` per chapter and **saves each capture** (every field
+  `captureChapterStages` returns) to the scratch directory as soon as it
+  returns, before any check runs (R6-5). It then runs the 1A replays and the
+  measurement from the saved files, and writes one JSON report plus a
+  Markdown table. `--from-captures` skips the capture and measures saved
+  files only, with no model. Like plan 265's runner it never runs in
+  `test:all`, and its inputs (real books) are never committed.
 
-### 4.4 On-box procedure (register row B110, Group B, owner-run)
+### 4.4 On-box procedure (new Group B register row, ID allocated at implementation; owner-run)
 
 **Prerequisites:**
 - local Ollama on the owner's default analysis model, passed to the runner
@@ -1149,14 +1199,13 @@ run.
   escalation at the owner's default;
 - the owner's library (Calibre and the workspace) on the box;
 - no re-imports of library books: the scanner and the runner read text and a
-  pinned roster and write only their reports and text dumps, to a scratch
-  directory outside the workspace.
+  pinned roster and write only their reports, captures and text dumps, to a
+  scratch directory outside the workspace.
 
 **Gate before step 2:** #4165 has merged (met: closed 2026-11-15, on `main`
-at `1e295990`). The run notes the build it ran on.
+since `1e295990`). The run notes the build it ran on.
 
-1. **Library legibility scan (the false-positive check, and the reference
-   pick).**
+1. **Library legibility scan (the false-positive check).**
    - Run the Phase-7 scanner over the owner's library directory. It parses
      every file with `parseManuscript`, the import path, so what it measures
      is the **imported text** (owner decision 6). Formats: EPUB, MOBI, PDF,
@@ -1165,18 +1214,22 @@ at `1e295990`). The run notes the build it ran on.
      chapter, legibility (the maximum), `countTurnOpeners` (the sum) and
      dash-opening paragraph counts (paragraphs matching `dialogueOpen`,
      R5-6); the book maximum; and two flags:
-     - **line-wrapped** (R5-9): a PDF, or a TXT in which ≥ 20% of non-blank
-       lines directly follow another non-blank line (a single `\n`, no blank
-       line between) **and** start with a lowercase letter (`\p{Ll}`). A hard
-       wrap breaks lines mid-sentence, so its continuation lines mostly start
-       lowercase; a one-paragraph-per-line file starts each line with a
-       capital or a dash. (Revision 4's "median line under 100 characters"
-       misfired: the clean committed fixture
-       `the-coalfall-commission.ru-dash.md` has a median of 50, and scores
-       0% on this test, because none of its lines directly follows another
-       non-blank line.) The scanner prints each TXT's share, so the
-       owner sees the margin. The measure under-reads line-wrapped books
-       (§2), so they are reported but **do not count toward "no breach"**;
+     - **line-wrapped** (R5-9 as amended by R6-7): a PDF, or a TXT or
+       Markdown file in which ≥ **5%** of non-blank lines directly follow
+       another non-blank line (a single `\n`, no blank line between) **and**
+       start with a lowercase letter (`\p{Ll}`). A hard wrap breaks lines
+       mid-sentence, so its continuation lines mostly start lowercase; a
+       one-paragraph-per-line file starts each line with a capital or a
+       dash. Markdown goes through the same `parseText`, with no reflow, so
+       it gets the same test. Measured on the committed fixtures, hard-wrapped
+       at 60, 70, 80, 100 and 120 columns: `the-coalfall-commission.ru-dash.md`
+       scores 30.8%, 22.0%, 16.4%, 11.8% and 6.3%, and
+       `the-coalfall-commission.ru.md` scores 50.6% to 26.4%. Both score 0%
+       as committed and 0% rewritten one paragraph per line. (Revision 5's
+       20% cut missed the dialogue-dense fixture at 80 columns, AC5 M-5.) The
+       scanner prints each file's share, so the owner sees the margin. The
+       measure under-reads line-wrapped books (§2), so they are reported but
+       **do not count toward "no breach"**;
      - **#4217 exposure** (R4-8, as amended by R5-8). For an EPUB, the
        scanner writes a scratch copy whose XHTML entries have a `<br/>`
        inserted after every block closer `stripHtml` drops (`</div>`,
@@ -1218,295 +1271,175 @@ at `1e295990`). The run notes the build it ran on.
      analysis and `GET /state` read, including any restructure held in
      `manuscript-hints.json`. The scanner dumps them once
      (`--dump <bookDir> --chapters <ids>`) to `.txt` in the scratch
-     directory. The runner and the measurement both read that one file per
-     chapter.
+     directory, byte for byte. The runner and the measurement both read that
+     one file per chapter and apply **no** normalisation of their own, so the
+     runner chunks and parses exactly the string production analysis would
+     (AC5 M-8).
    - **Chapter pick (AC3 S4):** its 3 chapters with the highest
      `countTurnOpeners` (hidden turns), excluding ch3 (the one clean
      chapter). Record each chapter's hidden-turn count and dash-opening
      paragraph count.
-   - Run the runner live on those chapters with its pinned roster.
+   - Run the runner live on those chapters with the pinned roster. Each
+     chapter's capture is saved before anything is measured (R6-5).
    - Per chapter, record:
      - **1A (per model sentence, R4-1/R4-4):** the control result (pass or
        void); sentences whose post-crossExamine speaker differs, on vs off,
        over all sentences and over turn sentences; narrator share over turn
        sentences, on vs off; confirmed/corrected/flagged/unresolved each
-       way. Every changed sentence is tagged with its class from the
-       recovery-on structure ((a)–(d) as in §4.3). 1A has no model noise,
-       because both arms replay one `raw`, so these are exact counts, not
-       estimates. They describe one raw take;
-     - **1C:** the live run's confident decisions (the §4.3 confidence,
-       flag and escalation rule, all five reasons) on turn sentences,
-       counted by class and by reason, with the downgrade count (R5-11).
-       There is no clean twin, so there is no disagreement test here;
+       way. Every changed sentence is tagged with its class ((a)–(d), §4.3).
+       1A has no model noise, because both replays share one `raw`, so these
+       are exact counts, not estimates. They describe one raw take;
+     - **1C:** the confident decisions on turn sentences (§4.3), counted by
+       class and by reason, with the downgrade count (R5-11);
      - chunk shape and escalation's share (`final` vs `deterministic`).
-   - **Hand-check (owner):** 30 random 1A-changed lines judged improvement,
-     regression or neutral; and 30 confident 1C decisions, **10 from each of
-     classes (a), (b) and (c)** where that many exist (otherwise all of them,
-     with the remainder drawn from the largest class), each judged right or
-     wrong against the text. These judgements are Ночной дозор's 1C
-     evidence.
-3. **Choose the clean reference by rule, not by name**, from step 1's scan.
-   - Take the book with the most dash-opening turns across its densest
-     chapters with legibility < 10, judged clean on its imported text in
-     step 1, and not line-wrapped. Take its qualifying chapters densest
-     first until they hold **≥ 1500 dash-opening turns, or 8 chapters**
-     (R4-5). The book qualifies only with **≥ 300** turns **and ≥ 20 clean
-     chunks** (R5-2, counted as in step 4) across what was taken. Fewer than
-     20 chunks at 1500 turns means the book is dense enough that its chunks
-     are large (the simulation's densest case, ≈ 90 chars per turn at a
-     9000-char budget, gives 23 at 1500 and 18 at 1000), so the pick keeps
-     adding chapters past 1500 turns until it reaches 20 chunks or 8
-     chapters.
-   - Record the choice, its chapters and its counts. *Юный дрессировщик* is
-     clean but nearly dialogue-free, which is why revision 1's pick is
-     withdrawn.
-   - **No qualifying book** → skip steps 4–7. 1B and the twin half of 1C
-     record **inconclusive: no qualifying reference** (R3-4), and the
-     threshold stays provisional (§2).
-4. **Build the pair, in one format.**
-   - Export the chosen chapters once to plain `.txt`, with blank-line
-     paragraphs.
-   - Create the merged twin with `scripts/degrade-paragraphs.mjs` (Phase 7).
-     **The rule (R4-3 as amended by R5-6 and R5-10), per chapter:**
-     - a paragraph is a blank-line-separated block; it is **dash-opening**
-       when it matches the language's `dialogueOpen`; a **run** is a maximal
-       sequence of consecutive dash-opening paragraphs;
-     - runs are numbered `i = 0, 1, 2, …` from the start of the chapter;
-     - a run is joined into one **dash-open** paragraph (its internal
-       separators removed, the separator before it kept) when `i mod 3 = 2`,
-       when no paragraph precedes it, or when the paragraph before it is a
-       **scene separator** (no attributable words, the
-       `isSceneSeparatorUnit` test of `stage2-chunk.ts:152-153`). The last
-       case keeps every scene break, and the chunk boundary it forces, in M;
-     - every other run is folded into the **narration** paragraph before it
-       (the separator before the run and its internal separators removed);
-     - each removed separator is replaced by the same number of spaces, so
-       the body length is unchanged.
+   - **Hand-checks (owner):**
+     - **1A:** `min(30, n)` sentences drawn uniformly, with a fixed seed,
+       from the `n` 1A-changed sentences of the chapters whose control
+       passed. Each is judged against the text as an **improvement**
+       (recovery on is right where off was wrong), a **regression** (the
+       reverse) or **neutral** (both right, or both wrong);
+     - **1C:** 30 confident decisions, **10 from each of classes (a), (b)
+       and (c)** where that many exist (otherwise all of them, with the
+       remainder drawn from the largest class), each judged **right** or
+       **wrong** against the text.
 
-     So about a third of runs become dash-open, more where scenes open on
-     dialogue. Ночной дозор's real mix is 5 dash-open to 34 narration-open,
-     so the twin over-represents dash-open on purpose. The reason is
-     corrected in revision 5 (owner decision 8): the dash-open third is
-     there to measure what that shape **costs**, and part of that cost is
-     the verbless-tag downgrade (`parser.ts:163-168`), which turns a whole
-     merged dash-open paragraph into one flagged, unanchored span. So class
-     (c) may be thin even with a third of runs dash-open, and the runner
-     reports the downgrade rate that explains it (R5-11, §4.3).
-   - **Gates before spending model time:**
-     - equal body lengths per chapter across the two arms;
-     - clean legibility < 10 and merged ≥ 10 on every chapter;
-     - both merge shapes present in the merged twin, with their turn counts
-       recorded;
-     - the clean body's recovery-on and recovery-off parses give the same
-       span set (R4-2). Any difference is recorded with its count;
-     - **the cluster floor (R5-2):** the clean chunks, computed as
-       `splitBodyIntoChunks(body, resolveStage2ChunkCharBudget(capacity,
-       body))` (`stage2-chunk.ts:142`, `:71-85`) with the `capacity` the
-       runner resolves for the owner's engine and model, number **≥ 20**
-       across the book. The budget takes the body as well as the capacity,
-       because a request-cap capacity derives it from the body. This needs no
-       model, so a book that fails it records **inconclusive: too few
-       clusters** for 1B and the twin half of 1C, and no capture is run.
-   - Mixed formats would break the whitespace-only difference between the
-     arms that alignment and the clean-chunk clusters rely on (§4.3;
-     `html-utils.ts` whitespace handling, `text.ts` normalisation, #938's
-     front-matter split). The runner reads the `.txt` text directly, with no
-     import.
-5. **Three live captures** through the runner, one shared pinned roster, one
-   shared escalation budget per arm:
-   - **C1** clean;
-   - **C2** clean again (noise);
-   - **M** merged.
-6. **Measure.** Every figure is on C1's reference span set: the `speech`
-   spans of the clean body (R4-2), from `emitSpans`.
-   - **1B (model, `raw`):** per span, `dM = [M.raw ≠ C1.raw]` and
-     `dN = [C2.raw ≠ C1.raw]`. Narrator share, paired: per span,
-     `nM − nC1` against `nC2 − nC1`, where `nX = [X.raw is narrator]`.
-   - **1C (`final`, owner decision 4):** per span,
-     `hM = [M.final ≠ C1.final]` and `hN = [C2.final ≠ C1.final]`. Both terms
-     are on the same span set, so the difference is genuinely paired.
-   - **1C confident disagreements:** M's count by class (a)–(d) and reason,
-     with the mixed-class tally, against the clean-noise count, C2's count
-     against C1 by the same rule (§4.3). The paired per-span
-     indicator (`cM − cN`) is bootstrapped like the others. The per-class
-     counts are reported but get no per-class verdict, because they are too
-     small for one.
-   - **1A on the twin:** M's on vs off replays, as in step 2.
-7. **Confirm (R4-6).** If 1B or 1C reads *degrading* or *not degrading*,
-   capture **M2** (merged again), recompute that verdict with M2 in place of
-   M, and record both. The verdict stands only if M2 gives the same one;
-   otherwise it is *inconclusive: unstable across merged runs*.
+**Verdicts (R6-1, R6-2).** Each part records **one** verdict. The verdicts
+describe this raw take of these three chapters. Stage 2 carries the previous
+chunk's last speaker and two paragraphs across every chunk seam
+(`stage2-chunk.ts:465-473`), so the sentences of one capture are not
+independent draws of the model's behaviour. The hand-check draws are
+independent samples from the capture's own sentences, which is all the tests
+below assume.
 
-**Verdicts (pooled, paired, clustered).** Pool the spans of all chapters.
-For each comparison the statistic is the mean paired difference
-(`dM − dN`, `(nM − nC1) − (nC2 − nC1)`, `hM − hN`, `cM − cN`).
+- **1A**, from its hand-check. Let `I` be the improvements and `R` the
+  regressions; neutrals are left out. The rule, in order:
+  - every chapter's control void → **void**;
+  - `n = 0` → *recovery changes no speaker*;
+  - a two-sided exact sign test of `I` against `R` gives p < 0.05 →
+    *recovery improves the speakers* when `I > R`, *recovery makes them
+    worse* when `R > I`;
+  - otherwise → *no clear direction*. That includes `I + R < 6`, where even
+    a unanimous split cannot reach p < 0.05 (`I + R = 6`, all one way, gives
+    p ≈ 0.031; `5` gives 0.0625).
 
-- **Clusters (owner decision 7).** Errors cluster by chunk (stage 2
-  attributes each chunk in one call, a coverage retry re-attributes a whole
-  section, and alternation fills whole windows), so spans are not resampled
-  one by one. A **cluster** is one of the **clean** body's stage-2 chunks,
-  recomputed as `splitBodyIntoChunks(body, resolveStage2ChunkCharBudget(
-  capacity, body))` (lossless, so the offsets are exact). C1 and C2 are one
-  body at one budget, so they share these chunks exactly. Every reference
-  span belongs to the chunk containing its start offset, and M's values on
-  that span go with it. M's own chunks play no part in the clustering.
-  Revision 4's union of all three arms' chunks chained into 1.5–7 clusters
-  per chapter (AC4 C1), because once one clean boundary falls inside a
-  merged run the two packers never realign.
-- **Bootstrap:** resample whole clean chunks, with replacement, from the
-  book's pool (not stratified by chapter, R5-1); 2000 resamples; fixed seed;
-  in the runner. The statistic is span-weighted: the resampled sum of
-  per-span differences over the resampled span count.
-- **Degrading:** 95% CI lower bound > 0 **and** point estimate ≥ 5 pp.
-- **Not degrading:** 95% CI upper bound < 5 pp.
-- **Inconclusive:** anything else; fewer than 300 pooled dash-opening turns;
-  fewer than **20 clean chunks for the book** (R5-2, checked in step 4
-  before any capture); or an R4-6 disagreement.
+  **How the statistics combine:** the exact counts do not enter the
+  verdict, because they say how many sentences changed, not which way. They
+  scale it: the report gives `n × I / m` and `n × R / m` (with `m` the
+  sample size) as the estimated numbers of improved and regressed sentences,
+  beside the exact counts by class and the narrator share on vs off.
+- **1C**, from its hand-check. Let `w_k` of `n_k` be judged wrong in class
+  `k`, `N_k` the class's confident decisions in the three chapters, and
+  `W = Σ w_k`. The rule:
+  - `W = 0` → *no confident wrong answer seen*;
+  - `W = 1` → *one confident wrong answer seen*;
+  - `W ≥ 2` → *confident wrong answers present*.
 
-**Power, stated honestly (owner decision 7).** These figures come from a
-simulation, not a formula: AC4's `cluster-sim.mjs`, extended as
-`cluster-sim-r5.mjs` (same packer, degrade rule, generator and seed; not
-committed). Its model:
-- ru-like chapters of about 41k chars, a scene break about every 15k chars,
-  at two densities: AC4's mix (≈ 176 chars per dash turn) and a
-  Ночной-дозор-like one (≈ 90);
-- two budgets, 9000 (the default) and 4915 (local `num_ctx` 8k);
-- each arm wrong on 8% of spans, so C2 disagrees with C1 on about 15%; a
-  wrong answer is one of 4 others; M wrong on 8% plus the effect;
-- per-chunk error rates drawn from a Beta with intra-chunk correlation
-  ρ = 0.1 or 0.2. C1's and C2's errors cluster on the clean chunks; **M's
-  cluster on M's own chunks**, which straddle the clean ones. So the
-  simulation tests the bootstrap against clustering it does not resample;
-- 200 replicates × 800 bootstrap resamples per cell, so each probability
-  carries about ±3 pp of Monte-Carlo noise (±1 pp near 0% or 100%).
+  **Why a count, not a percentage** (AC5 S4). Confident decisions are meant
+  to be right, so the base rate of wrong ones is small, and a percentage bar
+  either cannot be reached at 30 judgements or flips on one of them. Zero
+  wrong in 30 still leaves an exact 95% upper bound of about 12%. Two wrong
+  is the smallest count that one slip of the judge cannot produce alone.
+  **How the statistics combine:** the classes were sampled 10 each, not in
+  proportion to their size, so the raw `W / 30` is not a rate. The report
+  gives each class's `w_k / n_k` with its exact 95% interval and its `N_k`,
+  and the stratified estimate of confident wrong answers in the three
+  chapters, `Ŵ = Σ N_k × w_k / n_k` over the sampled classes. A class with
+  confident decisions but no sample is reported as **not estimated**, never
+  as zero.
 
-ρ and the error rate are **assumptions**, not measurements; the runner
-reports the achieved SE, which absorbs whatever ρ really is.
+**How blocker 1 closes (R6-3).** 1A answers the owner's 2026-08-13 question
+("confirm it is fixing a user-facing problem (or downgrade the ticket's
+effect claim to a metric/acceptance improvement)"):
+- *recovery improves the speakers* → the issue's effect claim stands, with
+  its estimated size;
+- *recovery changes no speaker* or *no clear direction* → the effect claim
+  is downgraded to a metric/acceptance improvement;
+- *recovery makes them worse* → the claim is downgraded, and a design item
+  on recovery's evidence rule is filed then, not designed here;
+- **void** → the replay seam is wrong. That is a defect, fixed and
+  re-measured from the saved captures with no new model time. A void 1A does
+  not discharge the row.
 
-**Cluster sizes.** A clean chunk holds **20–97 dash turns**: 20–27 at the
-4915 budget and 29–48 at 9000 for AC4's density, 39–54 and 65–97 at the
-Ночной-дозор-like density. That is below AC4's 30–410 per union cluster,
-because a clean chunk is one chunk, not a chain. A 17k-char chapter has 2–5
-clean chunks, a 41k one 5–11, a 116k one 14–30.
+1C is recorded beside it as the residual harm in merged text. If it reads
+*present*, with the harm concentrated in one class, a fix to that lever (tag
+anchoring in dash-open paragraphs, or recovery's evidence rule) is new
+design work, filed then.
 
-**Power.** Ranges are across the four density × budget settings and both ρ.
-"Degrading" includes the ≥ 5 pp point-estimate conjunct:
+**On-box cost (AC4 M-j, re-based for AC5 S3).** The rate comes from the
+**2026-09-05** run on `qwen38-cw-iq3-80k`, the operator's named replacement
+for the earlier model, which is no longer on the box
+(`night-watch-reanalysis-onbox-acceptance.md:671-673`). Its phase 1 did the
+work the harness does (stage 2, the engine and escalation, with the coverage
+guard's retries and re-splits) for all 9 chapters of Ночной дозор in
+**≈ 3 h 18 m** (~10:07–13:25, `onbox-wave11-group-c-results/step-2-c2c3c4-run.md:29-31`);
+ch8 alone took **52 m 49 s** (`:136`). The 2026-08-12/13 run's 12 h 27 m is
+**not** used: its 16 GB model spilled about 5 GB over PCIe for the whole run,
+which the sheet calls the dominant cause of its slowness (`:607-613`).
 
-| Pooled dash turns | Clean chunks (book) | Bootstrap SE | Effect *degrading* catches with 80% power | P(*degrading*) at a 4–5 pp effect | P(*not degrading*) when the true effect is 0 |
-|---|---|---|---|---|---|
-| 300 | 6–22 (only one setting reaches the floor of 20) | 3.3–6.5 pp | ≈ 12 pp at best; > 15 pp in most settings | 20–34% | 32–44% |
-| 1000 | 18–53 (the densest setting at 9000 misses the floor) | 2.0–4.3 pp | ≈ 7–16 pp | 19–41% | 31–72% |
-| 1500 | 23–72 | 1.6–3.7 pp | **≈ 7–14 pp** | 24–41% | **31–89%** |
+| Step | Work | Wall-clock | Measured or estimated |
+|---|---|---|---|
+| 1 · library scan | parse only | none (no model) | — |
+| 2 · Ночной дозор capture | 3 chapters, one live capture each; the 1A replays and the measurement need no model | **≈ 1–2 h**, at most ≈ 3 h 18 m | **Ceiling measured:** 3 of the 9 chapters cannot take longer than the 9 did, on the same model and settings. **Range estimated:** the chapters with the most hidden turns are among the longer ones, and the one per-chapter figure on record is ch8's 52 m 49 s |
+| 2 · hand-checks | 60 owner judgements | owner time, no GPU | — |
 
-The bootstrap is honest enough at the floor and not below it. With 18 or
-more clean chunks, at zero effect its SE is within about 15% of the
-estimator's true spread (up to about 20% low once an effect is present), and
-a true zero effect reads *degrading* 1–5% of the time. With 6–12 chunks the
-SE is 14–27% low at zero effect, and a zero effect reads *degrading* 5–9% of
-the time. That is why the floor is 20 (R5-2). Because the SE runs a little
-low even above the floor, the achieved detectable effect below is a slight
-underestimate.
-
-**What the twin can and cannot conclude.** Plainly:
-- At 1500 turns it can reach *degrading* when merging changes the answer on
-  about **7–14 more spans in 100** than a clean re-run does. Revision 4's
-  table said 4.5–6 pp; that figure ignored both the 5 pp conjunct and the
-  real cluster size.
-- An effect of about 5 pp, the size of the conjunct itself, is caught less
-  than half the time (24–41%) at any size this run can afford.
-- *Not degrading* is the hard verdict. With no effect at all, the twin says
-  so in only 31–89% of runs, and in the rest it reads *inconclusive*. An
-  *inconclusive* twin is therefore the **expected** outcome whenever the
-  true effect is small, and it means "no effect larger than the achieved
-  detectable effect was seen", never "no effect".
-- Below 1000 turns, or at a 9000 budget on a very dialogue-dense book, the
-  book may not reach 20 chunks. The twin then returns *inconclusive: too few
-  clusters* before any model time is spent.
-- An effect of the size Ночной дозор showed before #2253 (ch5 69.7% narrator
-  after the engine against 11.4% from the model, §1.4) is far above every
-  detectable effect here. The twin would see a regression of that kind.
-
-The runner reports the **achieved** detectable effect next to every verdict
-as `max(2.8 × SE, 5 pp + 0.84 × SE)` (R5-12), which accounts for the
-conjunct and sits 0.3–1.5 pp below the simulation's 80%-power points. The
-cluster bootstrap captures within-run clustering. It does not capture M's
-own run-to-run variance, which only the C2 term (for clean) and R4-6's M2
-(for merged) estimate. With the floor now a book total, R4-6 can fire
-whenever a verdict is not *inconclusive* (AC4 noted that under revision 4
-it never could).
-
-**On-box cost (AC4 M-j).** The only rate on record is the 2026-09-05 Group C
-run: ≈ 121 s of GPU per 1,000 chars, 35–233 min per chapter, 12 h 27 m for
-the whole of Ночной дозор on `qwen36-cw-iq4-32k`
-(`night-watch-reanalysis-onbox-acceptance.md:608-609`). That is a
-**whole-analysis** rate (stage 1, stage 2 and escalation). The harness runs
-stage 2 and escalation from a pinned roster, so it should be faster, but by
-an unmeasured amount. The figures below are therefore **upper bounds**:
-
-| Step | Work | GPU time (upper bound) |
-|---|---|---|
-| 1 · library scan | parse only | none |
-| 2 · Ночной дозор | 3 chapters, one live capture each; the 1A replays need no model | ≈ 2–12 h (3 × 35–233 min; the chapters with the most hidden turns are the long ones, so expect the upper half) |
-| 4 · gates | parse and chunk only | none |
-| 5 · twin C1, C2, M | 3 captures of ≈ 1500 turns, ≈ 135k–264k chars each (≈ 90–176 chars per turn) | ≈ **14–27 h** (4.5–8.9 h per capture) |
-| 7 · M2, only after a non-inconclusive verdict | one more capture | + 4.5–8.9 h, so ≈ **18–36 h** for the twin in all |
-| **Total** | | **≈ 16–48 h**, in sittings |
-
-The runner prints each capture's wall-clock and, after its first chapter, an
-estimate for the rest, so the owner can stop a capture that is running far
-over. Every step is resumable per chapter, because the runner writes one
-report entry per captured chapter. AC4 estimated 12–34 h from the
-per-capture figures alone; this table also costs the Ночной дозор step.
+What the figures are, and are not:
+- They are **wall-clock** time, not GPU time.
+- `analyzer.ollama.concurrency` is not recorded for the 2026-09-05 run. If
+  the harness runs at a lower concurrency, it is slower by up to that
+  factor, and the ceiling no longer holds.
+- They hold only for `qwen38-cw-iq3-80k` on the 5070 Ti. If the owner's
+  model has changed, they do not carry over. Either way, the runner prints
+  each chapter's wall-clock and, after the first chapter, an estimate for
+  the rest, and that estimate replaces this table's.
+- Revision 5 stated ≈ 2–12 h for this step and ≈ 16–48 h with the twin.
 
 **Recorded outcomes:**
-- **1B:** *model-degrading* / *not model-degrading* / *inconclusive*.
-- **1C:** *merging changes the final answer* / *no measurable change* /
-  *inconclusive*, with the confident-disagreement counts by class and
-  reason, the mixed-class tally, the downgrade count, the clean-noise count,
-  the clean-chunk count and the achieved detectable effect stated either
-  way.
+- **1A:** *recovery improves the speakers* / *recovery makes them worse* /
+  *no clear direction* / *recovery changes no speaker* (or **void**, which
+  does not discharge), with the exact counts by class, the estimated
+  improved and regressed sentences, and the narrator share on vs off.
+- **1C:** *confident wrong answers present* / *one confident wrong answer
+  seen* / *no confident wrong answer seen*, with the confident counts by
+  class and reason, each class's judged share and interval, `Ŵ`, and the
+  downgrade count.
 
-**Every outcome discharges the row** (R3-4). The verdicts go onto #2254 and
-close blocker 1. They decide whether the issue's "Effect" claim stands, is
-downgraded, or stands only on the Ночной дозор evidence with the missing twin
-named as the limit. If 1C finds a change concentrated in one class, a fix to
-that lever (tag anchoring in dash-open paragraphs, or recovery's evidence
-rule) is new design work. It is filed then, not designed here.
+**Every outcome except a void 1A discharges the row.** The verdicts go onto
+#2254 and close blocker 1 as above.
 
 ### 4.5 Committed-fixture limits
 
-- The Castwright-owned dash text (13 turns) is far below the 300-turn power
-  floor. It feeds the committed 1A arms (§4.2) and the tools' unit tests,
-  and gives no 1B/1C verdict.
+- The Castwright-owned dash text (13 turns) is far too small for an on-box
+  verdict. It feeds the committed 1A arms (§4.2) and the tools' unit tests.
 - `the-coalfall-commission.ru.md` uses «» quotes, which recovery and
   legibility ignore.
-- If no clean reference exists (§4.4 step 3), the authored fixtures are the
-  **only** calibration of the threshold. The regression plan states this
-  limit, and the threshold stays provisional.
+- If step 1 finds no breach-free clean, dialogue-dense ru dash book, the
+  authored fixtures stay the **only** clean calibration of the threshold.
+  The regression plan states this limit, and the threshold stays
+  provisional (§2).
 - What is committed: the 1A arms and the characterisation test,
   `runStructureEngine` and the `onStages` additions, `captureChapterStages`,
-  the recovery-off switch and `emitSpans`, the legibility exports, the
-  degrade script, the scanner and the runner, all with unit tests.
+  the legibility exports, the scanner and the runner, all with unit tests.
 - What is never committed: the real books, their text dumps, their rosters,
-  and the runner's and scanner's reports. Only the verdict tables and the
-  scan summary go on #2254 and into the run sheet.
+  the saved captures, and the runner's and scanner's reports. Only the
+  verdict tables and the scan summary go on #2254 and into the run sheet.
 
 ### 4.6 Register row: draft text
 
-ID: **next free Group B id at merge time** (`B110` at `c16da893`). Phase 8 is
-**main-thread work** (owner decision 3, 2026-11-15). The row ships with:
+ID: a new Group B register row, ID allocated at implementation (Phase 8).
+Phase 8 is **main-thread work** (owner decision 3, 2026-11-15). The row ships
+with:
 - the run sheet `docs/testing/paragraph-degradation-onbox-acceptance.md`;
 - the live-view HTML edit;
 - `npm run register:build` and `npm run check:onbox-register`;
 - `--against-published`, then a publish to the register's recorded URL, per
   the register's own four-step procedure.
 
-> ### B1xx · Does merged paragraphing change who speaks? ([#2254](https://github.com/dudarenok-maker/Castwright/issues/2254))
+> ### B1xx · Does recovery fix merged paragraphing on a real book? ([#2254](https://github.com/dudarenok-maker/Castwright/issues/2254))
 >
 > **Prerequisite:** local Ollama analyzer (model recorded), structure engine
 > on, escalation at default, no TTS, the owner's library on the box. No
-> re-imports; the tools write only their reports and text dumps, outside the
-> workspace.
+> re-imports; the tools write only their reports, captures and text dumps,
+> outside the workspace.
 >
 > **Observe:** (1) the library legibility scan over every format, on the
 > **imported** text: per-book maxima, the worst imported paragraph of each
@@ -1514,36 +1447,32 @@ ID: **next free Group B id at merge time** (`B110` at `c16da893`). Phase 8 is
 > breach of the provisional threshold), chapters labelled extractor-merged
 > (#4217) listed as true positives, line-wrapped books listed but not
 > counted, and non-ru Cyrillic books listed separately; (2) Ночной дозор,
-> the 3 chapters with the most hidden turns, live capture: the replay
-> control, post-crossExamine speakers changed by recovery on vs off per model
-> sentence (1A), confident decisions on turn sentences by class and reason,
-> including the engine's `narration-demote` overrides (1C), and two
-> 30-line hand-checks; (3) if a clean ru dash book with ≥ 300 turns exists,
-> up to 1500 turns of it and its same-format two-shape
-> `degrade-paragraphs.mjs` twin (equal lengths; clean < 10, merged ≥ 10),
-> captured live as clean ×2 and merged ×1 (×2 to confirm a verdict), with raw
-> (1B) and final (1C) compared by a paired bootstrap over the clean twin's
-> stage-2 chunks. GPU time, upper bound: ≈ 2–12 h for (2), ≈ 14–36 h for (3).
+> the 3 chapters with the most hidden turns, one live capture each: the
+> replay control, post-crossExamine speakers changed by recovery on vs off
+> per model sentence (1A), confident decisions on turn sentences by class
+> and reason, including the engine's `narration-demote` overrides (1C), and
+> two 30-sentence hand-checks. Wall-clock: none for (1); about 1–2 h for (2),
+> at most about 3 h 18 m on the 2026-09-05 model.
 >
-> **Outcome (not a pass bar):** 1B *model-degrading* / *not* /
-> *inconclusive*; 1C *changes the final answer* / *no measurable change* /
-> *inconclusive* (CI lower bound > 0 and ≥ 5 pp; CI upper bound < 5 pp;
-> otherwise, < 300 turns, < 20 clean chunks, or M2 disagreeing), each with
-> its achieved detectable effect. *Inconclusive* is the expected twin outcome
-> for a small true effect. Every outcome discharges: record the tables, the
-> verdicts, the scan, who/when, and post them on #2254.
+> **Outcome (not a pass bar):** 1A *improves the speakers* / *makes them
+> worse* (two-sided exact sign test on the hand-check, p < 0.05) / *no clear
+> direction* / *changes no speaker*; 1C *confident wrong answers present*
+> (≥ 2 judged wrong) / *one seen* / *none seen*, with the estimated count by
+> class. A void 1A does not discharge. Every other outcome discharges: record
+> the tables, the verdicts, the scan, who/when, and post them on #2254.
 >
 > **Criteria:** `docs/testing/paragraph-degradation-onbox-acceptance.md`.
 
 ## 5 · Phased rollout (each phase ≈ one agent commit)
 
-**Branching.** Every phase except 3, 8 and 9 touches `server/` (see the Scope
-column), and all of 0–7 run as **one serial chain** in one worktree:
-0 → 1 → 2 → 3 → 4 → 5 → 6 → 7. Phase 3 is frontend-only, but it sits in the
-chain rather than in a parallel lane: it consumes Phase 2's wire field, and
-Phase 4 edits the same `src/lib/types.ts` and `src/lib/api.ts`. Integration
-follows CLAUDE.md: one PR for the round, with a `docs/features/` regression
-plan and an `INDEX.md` row added in Phase 1.
+**Branching.** Every phase except 3, 6, 8 and 9 touches `server/` (see the
+Scope column), and all of 0–7 run as **one serial chain** in one worktree:
+0 → 1 → 2 → 3 → 4 → 5 → 7 (Phase 6 is withdrawn, R6-9). Phase 3 is
+frontend-only, but it sits in the chain rather than in a parallel lane: it
+consumes Phase 2's wire field, and Phase 4 edits the same `src/lib/types.ts`
+and `src/lib/api.ts`. Integration follows CLAUDE.md: one PR for the round,
+with a `docs/features/` regression plan and an `INDEX.md` row added in
+Phase 1.
 
 | # | Phase | Scope | Tier | Paired tests | Ships |
 |---|---|---|---|---|---|
@@ -1551,26 +1480,31 @@ plan and an `INDEX.md` row added in Phase 1.
 | 1 | `MERGED_TURNS_DEGRADED` (provisional), `isParagraphDegraded`, `NOTICE_LANGUAGES`, `TURN_IN_PARAGRAPH` factory, `countTurnOpeners`; regression plan + INDEX | server, docs | Cheap | unit: 9/10 edge; `undefined` for null, out-of-scope and no-convention languages; `countTurnOpeners` sum vs `measureChapterLegibility` max on one fixture; the factory returns a fresh regex | — |
 | 2 | Import `paragraphsMerged` + openapi + `openapi:types` + **hand-edit `src/lib/types.ts` `ImportCandidate`** + route test | server, frontend types | Default | route test | — |
 | 3 | Confirm Heads-up + client `NOTICE_LANGUAGES` mirror + mock mirror + `e2e/responsive/` spec with its 375 px chromium case | frontend, e2e | Default | component + e2e | both release-notes files |
-| 4 | `GET /state` `paragraphsMergedChapters` + `WeakMap` memo (unfiltered ids, per-request exclusion, R4-7/R5-7 omission via `assertHintsPairWithState` with `parseTitles`) + openapi + `src/lib/types.ts:455` + mock `/state` + `chapters-slice` + manuscript caption + e2e case | server, frontend, e2e | Default | route (incl. compute-once, toggle-after-cache, count mismatch, same-count title mismatch), slice, component, e2e | both release-notes files |
-| 5 | Characterisation test first, then extract `runStructureEngine` (`:3714-3727`; `:3728` stays in the caller; zero behaviour change) + `structureOptions` seam + `onStages` `stage1`/`paras`/`alignment` + 1A arms 1 and 2 | server | Default | characterisation (4 inputs, `toEqual` on the pre-existing fields, committed before the additions) + a separate new-fields assertion; `analysis.structure-fixture.test.ts`; existing `attributeChapterStage2` tests green | none (say so) |
-| 6 | `recoverMidParagraphTurns` switch + `emitSpans` (speech spans only, `split.hasOrphan`) on `computeAttributionMeasurement` | server | Default | `attribution-health.test.ts`: switch-off span count; span records reproduce every aggregate, including `orphanSpoken` through `hasOrphan`; off = unchanged | none (say so) |
-| 7 | Extract `captureChapterStages` from `evalFixture` (+ capacity, shared budget, chunk counters) + `degrade-paragraphs.mjs` (two shapes, `dialogueOpen`, 0-based runs, separator rule) + library scanner (formats, sums, continuation line-wrap test, EPUB rewritten-copy #4217 what-if, worst paragraph, `--dump`) + `paragraph-degradation-ab.mts` runner (replay control, `emitSpans` pairing, all-sentences confident rule over the five reasons, classes (a)–(d) + mixed, downgrade count, clean-chunk floor and pooled bootstrap, achieved detectable effect, wall-clock and estimate, M2 recompute) | server, scripts | Default | `run-eval.test.ts` green; degrade (length equality, determinism, threshold crossing, both shapes, run numbering from 0, a run after `* * *` stays dash-open and the separator survives); scanner (multi-format fixtures, the clean ru-dash fixture **not** line-wrapped and a hard-wrapped TXT fixture flagged, a `<div>`-paragraphed EPUB fixture labelled extractor-merged, a MOBI reported not computed); runner (fixture capture with a mock analyzer, a replay-control mismatch reported void, the §4.3 class and reason fixtures, an unknown confident reason fails the run, clusters equal the clean chunks, a < 20-chunk book is inconclusive before capture, bootstrap on a seeded synthetic set with a known effect) | none (say so) |
+| 4 | `GET /state` `paragraphsMergedChapters` + `WeakMap` memo (unfiltered ids, per-request exclusion, R4-7/R5-7 omission via `assertHintsPairWithState` with `parseTitles`, called per request in a `try`/`catch` of `HintsOutOfSyncError`, R6-8) + openapi + `src/lib/types.ts:455` + mock `/state` + `chapters-slice` + manuscript caption + e2e case | server, frontend, e2e | Default | route (incl. compute-once, toggle-after-cache, count mismatch, same-count title mismatch, title state changed under a cached record), slice, component, e2e | both release-notes files |
+| 5 | Characterisation test first, then extract `runStructureEngine` (`:3714-3727`; `:3728` stays in the caller; zero behaviour change) + `structureOptions` seam + `onStages` `stage1`/`paras`/`alignment`/`flags` + 1A arms 1 and 2 | server | Default | characterisation (4 inputs, `toEqual` on the pre-existing fields, committed before the additions) + a separate new-fields assertion; `analysis.structure-fixture.test.ts`; existing `attributeChapterStage2` tests green | none (say so) |
+| 6 | **Withdrawn** (owner decision 10, R6-9): the `recoverMidParagraphTurns` switch and `emitSpans` on `computeAttributionMeasurement` served only the twin | — | — | — | — |
+| 7 | Extract `captureChapterStages` from `evalFixture` (+ capacity, shared budget, chunk counters, `flags`) + library scanner (formats, sums, 5% continuation line-wrap test for TXT and Markdown, EPUB rewritten-copy #4217 what-if, worst paragraph, byte-for-byte `--dump`) + `paragraph-degradation-ab.mts` runner (captures saved first, `--from-captures`, replay control, confident rule over the five reasons with `flags`, classes (a)–(d) by precedence, downgrade count, the 1A and 1C verdict rules and their estimates, wall-clock and estimate) | server, scripts | Default | `run-eval.test.ts` green; scanner (multi-format fixtures; the clean ru-dash fixture **not** line-wrapped, and the same text one paragraph per line **not** line-wrapped; that fixture hard-wrapped at 80 columns flagged, as `.txt` and as `.md`; a `<div>`-paragraphed EPUB fixture labelled extractor-merged; a MOBI reported not computed); runner (fixture capture with a mock analyzer, captures written before measurement, a replay-control mismatch reported void, the §4.3 class, precedence and reason fixtures, an unknown confident reason fails the measurement and `--from-captures` re-runs it without the analyzer, the sign-test rule at `I + R` = 5 and 6, the 1C count bar at `W` = 0, 1 and 2, and `Ŵ` with an unsampled class reported as not estimated) | none (say so) |
 | 8 | Register row + run sheet + live view + `--against-published` + publish | docs | **Main thread** | `check:onbox-register`, `register:build` | — |
-| 9 | **Owner, on-box:** row B110 → verdicts on #2254 → discharge | — | — | — | Closes #2254 with 3, 4 and 9 done |
+| 9 | **Owner, on-box:** the new register row → verdicts on #2254 → discharge | — | — | — | Closes #2254 with 3, 4 and 9 done |
 
 **Dependencies:**
-- 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9, all serial.
-- 7 needed #4165 merged (§1.5 F1); that is met at `1e295990`.
-- **No UI phase waits on the false-positive scan.** It is row B110 step 1
-  (§2).
+- 0 → 1 → 2 → 3 → 4 → 5 → 7 → 8 → 9, all serial.
+- 7 needed #4165 merged (§1.5 F1); that is met since `1e295990`.
+- **No UI phase waits on the false-positive scan.** It is the register row's
+  step 1 (§2).
 
 **Out of scope:**
+- **a merge-cost number for clean books** (owner decision 10). Revision 5's
+  clean/merged twin is withdrawn. If that number is ever wanted, it is a
+  separate future design that starts behind a pilot: capture C1 and C2
+  first, project the detectable effect from their measured noise, and only
+  then spend M and M2;
 - better-source acquisition;
 - changes to the recovery gate;
 - #4217's extractor change (its own design pass; the scanner's what-if is
   diagnostic only);
 - recovering bare third-person tags, or re-anchoring tags in dash-open
-  paragraphs (file either only if B110 shows a change *and* points at that
+  paragraphs (file either only if the register row's 1A or 1C points at that
   lever);
 - escalation's compensation for recovery-off flags (§4.1 limits);
 - script review's use of recovered evidence (§4.1);
