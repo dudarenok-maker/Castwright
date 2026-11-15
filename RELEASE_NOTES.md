@@ -2,6 +2,8 @@
 
 **What's new in 1.16.0**
 
+- **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
+- **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
 - **Merged sentences stay merged.** Joining two sentences in the manuscript, or removing a sentence you turned into a chapter title, now survives a re-analysis and merging two characters, instead of quietly coming back on the next reload.
 
 # Castwright 1.15.0
