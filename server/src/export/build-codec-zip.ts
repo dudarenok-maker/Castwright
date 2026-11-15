@@ -18,8 +18,8 @@
    any non-excluded chapter has no encoded file in the matching format
    on disk. Re-uses the same modal 409 banner copy as the MP3.ZIP path. */
 
-import { createReadStream } from 'node:fs';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import type { ReadStream } from 'node:fs';
+import { mkdir, open, rm } from 'node:fs/promises';
 import { ZipFile } from 'yazl';
 import { audioDir } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -100,16 +100,35 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
        hold up and was removed. */
     const pipeline = createZipWritePipeline(outPath, zip);
 
+    /* Every chapter read stream we hand yazl owns its file handle (closed on
+       stream end/error/destroy). Tracked so a failure — abort, rejectBuild,
+       a throw mid-loop — destroys the ones yazl never got to drain, which
+       closes their handles instead of leaking the fds. */
+    const opened: ReadStream[] = [];
+
     try {
       for (let i = 0; i < resolved.length; i++) {
         signal?.throwIfAborted();
         const { chapter, path } = resolved[i];
         const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${meta.entryExt}`;
-        const st = await stat(path);
-        const readStream = createReadStream(path);
+        /* Open first, then take the size from the SAME handle we stream from.
+           A stat(path) followed by a lazily-opened createReadStream(path) lets
+           a render commit rename a different-size take over `path` in between,
+           so yazl's declared size disagrees with the bytes streamed. */
+        const handle = await open(path, 'r');
+        let readStream: ReadStream;
+        let size: number;
+        try {
+          size = (await handle.stat()).size;
+          readStream = handle.createReadStream();
+        } catch (e) {
+          await handle.close().catch(() => {});
+          throw e;
+        }
+        opened.push(readStream);
         readStream.on('error', pipeline.rejectBuild);
         zip.addReadStream(readStream, entryName, {
-          size: st.size,
+          size,
           mtime: new Date(),
           compress: false,
         });
@@ -125,6 +144,7 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
          `rejectBuild` already fired for some other reason (a ws/zip/
          readStream error). */
       pipeline.rejectBuild(e);
+      for (const rs of opened) rs.destroy();
       throw e;
     }
   } finally {
