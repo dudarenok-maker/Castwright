@@ -14,6 +14,15 @@ import { join } from 'node:path';
 let workspaceRoot: string;
 let bookDir: string;
 
+/* Pass-through spy on node:fs/promises.writeFile so a test can inject a
+   part-way write failure (#4218); every other test sees the real function. */
+const fsMock = vi.hoisted(() => ({ writeFile: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  fsMock.writeFile.mockImplementation(actual.writeFile as never);
+  return { ...actual, writeFile: fsMock.writeFile };
+});
+
 const fetchMock = vi.fn();
 function imageResponse(bytes: Uint8Array, contentType = 'image/jpeg'): Response {
   return new Response(bytes, { status: 200, headers: { 'Content-Type': contentType } });
@@ -101,6 +110,31 @@ describe('writeCoverFile containment', () => {
     const evil = join(workspaceRoot, '..', 'evil-cover-dir', 'evil.jpg');
     await expect(writeCoverFile(evil, Buffer.from(SAMPLE_JPEG))).rejects.toThrow();
     expect(existsSync(join(workspaceRoot, '..', 'evil-cover-dir'))).toBe(false);
+  });
+});
+
+/* #4218: a part-way temp write (ENOSPC mid-file) must not leave the partial
+   `.tmp-*` behind, and the original error must reach the caller. */
+describe('writeCoverFile temp-write failure (#4218)', () => {
+  it('unlinks the partial temp file and rethrows the original ENOSPC', async () => {
+    /* Import first: a module reset re-runs the mock factory, which re-installs
+       the pass-through, so the failing implementation is set after it. */
+    const { writeCoverFile } = await import('./store.js');
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const enospc = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    fsMock.writeFile.mockImplementation(async (p: string, ...rest: unknown[]) => {
+      if (!String(p).includes('.tmp-')) return (actual.writeFile as (...a: unknown[]) => Promise<void>)(p, ...rest);
+      await actual.writeFile(p, 'partial');
+      throw enospc;
+    });
+    const dest = join(bookDir, 'cover-enospc.jpg');
+    try {
+      await expect(writeCoverFile(dest, Buffer.from(SAMPLE_JPEG))).rejects.toBe(enospc);
+    } finally {
+      fsMock.writeFile.mockImplementation(actual.writeFile as never);
+    }
+    expect(existsSync(dest)).toBe(false);
+    expect(readdirSync(bookDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
   });
 });
 

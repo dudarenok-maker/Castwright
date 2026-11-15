@@ -40,8 +40,8 @@ export async function writeCoverFile(destPath: string, jpegBytes: Buffer): Promi
   assertContained(WORKSPACE_ROOT, destPath);
   await mkdir(dirname(destPath), { recursive: true });
   const tmp = `${destPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, jpegBytes);
   try {
+    await writeFile(tmp, jpegBytes);
     await renameWithRetry(tmp, destPath);
   } catch (e) {
     await unlink(tmp).catch(() => {

@@ -385,6 +385,7 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36 
             cloned: false,
           },
           bandMethod: 'synthetic-sigma', // post-fix field — the key difference from the pre-fix test above
+          auditionAnchorModelKey: 'none', // #3518 — fresh renders only (a legacy row without it is rebuilt)
         },
       }),
     );
