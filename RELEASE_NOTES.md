@@ -3,6 +3,7 @@
 **What's new in 1.16.0**
 
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
+- **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, a cover or a chapter's loudness data, the half-written file is cleaned up instead of lingering.
 
 # Castwright 1.15.0
 
