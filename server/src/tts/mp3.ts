@@ -644,8 +644,8 @@ export async function writeChapterLufsFile(
 ): Promise<void> {
   await mkdir(dirname(lufsPath), { recursive: true });
   const tmp = `${lufsPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
   try {
+    await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
     await rename(tmp, lufsPath);
   } catch (err) {
     /* Match writeChapterPeaksFile / writeJsonAtomic: clean up the temp
@@ -676,13 +676,13 @@ export async function writeChapterPeaksFile(
   const payload: ChapterPeaksFile = { peaks };
   await mkdir(dirname(peaksPath), { recursive: true });
   const tmp = `${peaksPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
   try {
+    await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8');
     await rename(tmp, peaksPath);
   } catch (err) {
     /* Clean up the temp file on terminal failure (matches writeJsonAtomic
-       in workspace/state-io.ts). Swallow unlink errors — the rename
-       failure is the real one to surface. */
+       in workspace/state-io.ts). Swallow unlink errors — the write or
+       rename failure is the real one to surface. */
     await unlink(tmp).catch(() => {});
     throw err;
   }

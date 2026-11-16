@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync, realpathS
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions } from './lib/report-exclusion.mjs';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
@@ -38,6 +39,22 @@ const serverEntry = resolve(serverDir, 'dist', 'index.js');
 const pkgVersion = JSON.parse(
   readFileSync(resolve(repoRoot, 'package.json'), 'utf8'),
 ).version;
+
+/** Env for the server child. APP_LOG_DIR / APP_RUN_DIR are passed as the
+ *  launcher's already-resolved absolute dirs: the child runs with cwd=server/,
+ *  so a relative value would resolve against server/ there but against the repo
+ *  root here, splitting server.log from node-reports/ (#4054). Exported for
+ *  unit testing. NODE_OPTIONS also gets the report-exclusion flags, appended:
+ *  the prod server starts no Worker today, but a Worker reads NODE_OPTIONS, not
+ *  the parent's command line, so a future one stays covered (#4054). */
+export function serverChildEnv(baseEnv, { logDir, runDir }) {
+  return {
+    ...withReportExclusionNodeOptions(baseEnv),
+    NODE_ENV: 'production',
+    APP_LOG_DIR: logDir,
+    APP_RUN_DIR: runDir,
+  };
+}
 
 /** The one-line Castwright startup banner. Exported for unit testing. */
 export function bannerLine(version) {
@@ -510,9 +527,9 @@ async function main() {
      (it's cwd-relative) — so prod gets the same WORKSPACE_DIR / analyzer / GPU
      tuning the dev server reads. detached + unref so the server outlives this
      launcher and the console window that double-clicked the .bat. */
-  const child = spawn(process.execPath, ['dist/index.js'], {
+  const child = spawn(process.execPath, [...REPORT_EXCLUSION_FLAGS, 'dist/index.js'], {
     cwd: serverDir,
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: serverChildEnv(process.env, { logDir, runDir }),
     stdio: ['ignore', outLog, errLog],
     detached: true,
     windowsHide: true,

@@ -197,7 +197,7 @@ function readDisk<T>(rel: string): T {
    in, then merges them. A test built on this never depends on an earlier
    `it` having already run a merge — it seeds and drives its own. Returns the
    merge's response plus the ids/sentence-ids the caller can assert against. */
-async function mergeFreshPair(): Promise<{
+async function mergeFreshPair(extraEdits: Record<string, unknown> = {}): Promise<{
   res: request.Response;
   sourceId: string;
   targetId: string;
@@ -221,7 +221,10 @@ async function mergeFreshPair(): Promise<{
     { id: sentenceIds[0], chapterId: 1, characterId: sourceId, text: 'Echo one.' },
     { id: sentenceIds[1], chapterId: 2, characterId: sourceId, text: 'Echo two.' },
   );
-  writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(edits));
+  writeFileSync(
+    join(bookDir, '.audiobook', 'manuscript-edits.json'),
+    JSON.stringify({ ...edits, ...extraEdits }),
+  );
 
   const res = await request(app)
     .post(`/api/books/${bookId}/cast/merge`)
@@ -305,6 +308,32 @@ describe('cast-merge router', () => {
         expect(s.characterId).not.toBe('wren');
       }
     }
+  });
+
+  it('keeps sentence-merge tombstones when it rewrites manuscript-edits.json (#4155 C1)', async () => {
+    const { res, sourceId, targetId, sentenceIds } = await mergeFreshPair({
+      mergedAwayKeys: ['1:99', '2:7'],
+    });
+    expect(res.status).toBe(200);
+    const edits = readDisk<{
+      sentences: Array<{ id: number; characterId: string }>;
+      mergedAwayKeys?: string[];
+    }>('manuscript-edits.json');
+    expect(edits.mergedAwayKeys).toEqual(['1:99', '2:7']);
+    for (const id of sentenceIds) {
+      expect(edits.sentences.find((s) => s.id === id)!.characterId).toBe(targetId);
+    }
+    expect(edits.sentences.some((s) => s.characterId === sourceId)).toBe(false);
+    // Leave no tombstones behind for later tests.
+    delete (edits as { mergedAwayKeys?: string[] }).mergedAwayKeys;
+    writeFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), JSON.stringify(edits));
+  });
+
+  it('writes no mergedAwayKeys when the file had none (#4155 C2)', async () => {
+    const { res } = await mergeFreshPair();
+    expect(res.status).toBe(200);
+    const edits = readDisk<Record<string, unknown>>('manuscript-edits.json');
+    expect(Object.keys(edits)).toEqual(['sentences']);
   });
 
   it('records a manual journal entry with chapter-qualified affected sentences (#2040 Task 8 fix round 1, item 6 — self-sufficient)', async () => {

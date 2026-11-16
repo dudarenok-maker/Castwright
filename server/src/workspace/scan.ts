@@ -39,6 +39,7 @@ import {
   type SeriesMemorySummary,
 } from './series-memory.js';
 import { voiceKindFor } from './voice-kind.js';
+import { chapterAudioExists } from './chapter-audio-file.js';
 import { describeVoice } from '../tts/voice-mapping.js';
 
 export type LibraryBookStatus =
@@ -746,10 +747,11 @@ async function scanBook(
      12-chapter book with 2 excluded would stall at 10/12 forever. */
   const activeChapters = state?.chapters.filter((c) => !c.excluded) ?? [];
   const chapterCount = activeChapters.length;
-  const audioFiles = manuscriptFile
-    ? listFiles(audioDir(bookDir)).filter((f) => /\.(mp3|m4a|opus)$/i.test(f))
-    : [];
-  const completedChapters = audioFiles.length;
+  /* A chapter is complete when it has a LIVE take (same finder as book-state's
+     completedSlugs): any live format, never a preserved `.previous` copy. */
+  const completedChapters = manuscriptFile
+    ? activeChapters.filter((c) => chapterAudioExists(audioDir(bookDir), c.slug)).length
+    : 0;
   const lastWorkedOn = relativeTimeFromMs(mtimeMs(existsSync(dotDir) ? dotDir : bookDir));
 
   /* Cast-derived counts: characterCount = total cast entries; voiceCount =

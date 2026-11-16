@@ -500,3 +500,56 @@ test('formatBuildManifestLine falls back to a clear message when the manifest is
     '[BUILD] unknown — build-manifest.json missing, run "npm run build" to populate it',
   );
 });
+
+// #4054: the launcher resolves a relative APP_LOG_DIR / APP_RUN_DIR against the
+// repo root, but the server child runs with cwd=server/ and would resolve the
+// same string against server/ — splitting server.log from node-reports/.
+import { serverChildEnv } from '../start-app-prod.mjs';
+
+test('serverChildEnv hands the child the launcher-resolved absolute log and run dirs', () => {
+  const env = serverChildEnv(
+    { APP_LOG_DIR: 'rel/logs', APP_RUN_DIR: 'rel/run', KEEP: '1' },
+    { logDir: '/abs/rel/logs', runDir: '/abs/rel/run' },
+  );
+  assert.equal(env.APP_LOG_DIR, '/abs/rel/logs');
+  assert.equal(env.APP_RUN_DIR, '/abs/rel/run');
+  assert.equal(env.NODE_ENV, 'production');
+  assert.equal(env.KEEP, '1');
+});
+
+// #4054 pass 4: a Worker parses NODE_OPTIONS, not the parent's command line, so
+// the child also gets both flags there (appended, never clobbering the user's).
+test('serverChildEnv appends the report-exclusion flags to NODE_OPTIONS', () => {
+  const env = serverChildEnv({ NODE_OPTIONS: '--max-old-space-size=8192' }, { logDir: '/l', runDir: '/r' });
+  assert.equal(env.NODE_OPTIONS, '--max-old-space-size=8192 --report-exclude-env --report-exclude-network');
+  assert.equal(
+    serverChildEnv({}, { logDir: '/l', runDir: '/r' }).NODE_OPTIONS,
+    '--report-exclude-env --report-exclude-network',
+  );
+});
+
+test('serverChildEnv sets the dirs even when the launcher env had neither', () => {
+  const env = serverChildEnv({}, { logDir: '/r/logs', runDir: '/r/.run' });
+  assert.equal(env.APP_LOG_DIR, '/r/logs');
+  assert.equal(env.APP_RUN_DIR, '/r/.run');
+});
+
+// #4054: the two serverChildEnv cases above test the helper alone, so pin the
+// spawn itself too: it must hand the child serverChildEnv's env and start node
+// with both report-exclusion flags (the server leaves fatal reports off
+// without them). Comments are stripped first so a commented-out call can't pass.
+import { readFileSync } from 'node:fs';
+
+test('the server spawn passes serverChildEnv and both report-exclusion flags', () => {
+  const src = readFileSync(new URL('../start-app-prod.mjs', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.match(
+    code,
+    /^import \{ REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions \} from '\.\/lib\/report-exclusion\.mjs';$/m,
+  );
+  assert.match(
+    code,
+    /const child = spawn\(process\.execPath, \[\.\.\.REPORT_EXCLUSION_FLAGS, 'dist\/index\.js'\], \{\s*cwd: serverDir,\s*env: serverChildEnv\(process\.env, \{ logDir, runDir \}\),/,
+  );
+  assert.equal(code.match(/\bspawn\(/g)?.length, 1, 'one server spawn, so the pin covers it');
+});

@@ -14,7 +14,7 @@ import './load-env.js';
    stamp. Runtime logging (route handlers, app.listen callback, …) all
    fires after this call, so every line in logs/server.log is stamped. */
 import { installTimestamps } from './logger.js';
-import { resolveRunDir, resolveLanCertPaths } from './app-dirs.js';
+import { resolveRunDir, resolveLanCertPaths, resolveLogDir } from './app-dirs.js';
 installTimestamps();
 
 /* Install crash handlers ASAP — right after console is timestamp-patched — so a
@@ -23,6 +23,7 @@ installTimestamps();
    makes a stray unhandled rejection survivable so a transient async error can't
    take down an unattended generation run. See crash-logging.ts. */
 import {
+  enableFatalErrorReports,
   installCrashHandlers,
   installExitLogging,
   installShutdownSignals,
@@ -198,6 +199,9 @@ export async function bootRepairDuplicateBookIds(
 }
 
 async function main(): Promise<void> {
+  /* #4054 — leave a node diagnostic report if V8 dies of a fatal error. In main(),
+     not at module scope, so importing this module (index.test.ts) creates no folder. */
+  enableFatalErrorReports(resolve(resolveLogDir(repoRoot), 'node-reports'));
   ensureWorkspace();
 
   /* #3711 — drop portable-bundle staging left behind by a crashed import. AWAITED,

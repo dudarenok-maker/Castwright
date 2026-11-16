@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, posix, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import {
@@ -506,4 +506,31 @@ test('no MANIFEST-shipped file tells the user to `npm run` a script whose target
     [],
     `Add the target to MANIFEST.include, reword the text, or (comment-only mention) allowlist it:\n${failures.join('\n')}`,
   );
+});
+
+// server/package.json ships too, and its scripts reach repo-root files via
+// `node ../scripts/<x>`: `npm --prefix server run dev` ran dev-server.mjs, which
+// the manifest did not ship (#4054, found in review). Every such tracked target
+// must be shipped, bar the maintainer-only scripts listed here.
+const UNSHIPPED_SERVER_SCRIPT_ALLOWLIST = {
+  audit: 'maintainer-only (npm audit gate); the root `audit` script is unshipped for the same reason',
+};
+
+test('every file a server/package.json `node ../…` script runs is shipped', () => {
+  const trackedSet = new Set(trackedFiles());
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'server', 'package.json'), 'utf8'));
+  const failures = [];
+  let judged = 0;
+  for (const [name, cmd] of Object.entries(pkg.scripts)) {
+    const m = /^node\s+(?:--\S+\s+)*(\S+)/.exec(cmd);
+    if (!m) continue;
+    const target = posix.normalize(posix.join('server', m[1]));
+    if (!trackedSet.has(target)) continue;
+    judged++;
+    if (!matchesManifest(target) && !(name in UNSHIPPED_SERVER_SCRIPT_ALLOWLIST)) {
+      failures.push(`server script \`${name}\` runs ${target}, which MANIFEST.include does not ship`);
+    }
+  }
+  assert.ok(judged > 0, 'sanity: server/package.json has tracked node-script targets to judge');
+  assert.deepEqual(failures, [], failures.join('\n'));
 });
