@@ -223,6 +223,11 @@ A resident GPU speaker model (SPK / ECAPA) books `spk.warm` (128 MB, unmeasured,
 not learned because the torch allocator peak already includes the resident
 weights) instead of the 200 MB cold `spk` seed (#4102).
 
+A Qwen mint with the 1.7B-Base resident, and a design with VoiceDesign resident,
+book their FULL cold peak (`qwen.1.7b.mint` / `qwen.1.7b.design`); the resident
+weights are credited only in the request's own fit check (the #4079 shape), so a
+second admission nested inside is refused the way it is on `main` (#4102).
+
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->

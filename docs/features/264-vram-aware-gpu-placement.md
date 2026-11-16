@@ -436,7 +436,7 @@ Two things distinguish the Coqui step from the others:
    refused, which matters on cards large enough to hold both. A credited
    refusal reports `neededMb = peak - weights` on the credited card, so Node's
    analyzer/endpoint levers compare against that card's raw free memory.
-   The same protection now covers a mint (protected, booking its cold peak minus the resident 1.7B-Base weights, no credit), GPU ASR and GPU SPK (protected, restricted to the resident card, booking `asr.warm` / `spk.warm`) (#4102).
+   The same protection now covers a mint (protected like the plain synth: the resident 1.7B-Base weights are credited in its own fit check only, and the ledger books the FULL `qwen.1.7b.mint` peak, so a second admission nested inside it is refused as on `main`), a design with VoiceDesign resident (`qwen.design` protected, the same full-peak booking and fit-only credit; weights measured at load, fallback 3400 MB), GPU ASR and GPU SPK (protected, restricted to the resident card, booking `asr.warm` / `spk.warm`) (#4102). A full booking also covers a reload, so the idle watchdog is not blocked: if it frees the base between a mint's admission and its claim, the cold reload still fits inside the booking. Node's capacity lever is told a mint is a mint (`purpose: 'mint'`: keep the 1.7B tier, free only the 0.6B), so its retry never posts `/unload {model:'1.7b'}`.
 2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
    `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
    registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)
