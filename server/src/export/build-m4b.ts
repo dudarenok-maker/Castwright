@@ -19,7 +19,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, stat, writeFile, rm } from 'node:fs/promises';
+import { copyFile, link, mkdir, stat, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -69,23 +69,42 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
   }
   if (missing.length > 0) throw new ExportIncompleteError(missing);
 
-  /* Probe each MP3 for its exact duration. We can't derive chapter
-     ends from the post-encode probe — AAC priming samples and concat
-     padding shift offsets by a few ms per chapter, which is enough to
-     show wrong durations in some players. The per-source-MP3 duration
-     is the source of truth for the chapter timestamps. */
-  const durationsSec: number[] = [];
-  for (const { mp3Path } of resolved) {
-    signal?.throwIfAborted();
-    durationsSec.push(await probeDurationSec(mp3Path));
-  }
-  signal?.throwIfAborted();
-  const totalDurationSec = durationsSec.reduce((a, b) => a + b, 0);
-
   const stagingDir = `${outPath}.staging-${process.pid}-${Date.now()}`;
   await mkdir(stagingDir, { recursive: true });
 
   try {
+    /* Snapshot every chapter MP3 into the staging dir BEFORE probing, then
+       probe and concat from the snapshots. An m4b export is a long job that
+       holds no book-op, so a chapter render can commit between the probe
+       and the concat; reading the live files twice would ship the new audio
+       under the old durations (#4223). A hard link is free on the same
+       volume and keeps the old bytes when a render replaces the live file;
+       fall back to a copy when linking isn't possible. */
+    const snapshots: string[] = [];
+    for (let i = 0; i < resolved.length; i++) {
+      signal?.throwIfAborted();
+      const snapshotPath = join(stagingDir, `chapter-${i}.mp3`);
+      try {
+        await link(resolved[i].mp3Path, snapshotPath);
+      } catch {
+        await copyFile(resolved[i].mp3Path, snapshotPath);
+      }
+      snapshots.push(snapshotPath);
+    }
+
+    /* Probe each MP3 for its exact duration. We can't derive chapter
+       ends from the post-encode probe — AAC priming samples and concat
+       padding shift offsets by a few ms per chapter, which is enough to
+       show wrong durations in some players. The per-source-MP3 duration
+       is the source of truth for the chapter timestamps. */
+    const durationsSec: number[] = [];
+    for (const snapshotPath of snapshots) {
+      signal?.throwIfAborted();
+      durationsSec.push(await probeDurationSec(snapshotPath));
+    }
+    signal?.throwIfAborted();
+    const totalDurationSec = durationsSec.reduce((a, b) => a + b, 0);
+
     const ffmetadataPath = join(stagingDir, 'FFMETADATA.txt');
     const concatPath = join(stagingDir, 'concat.txt');
 
@@ -98,7 +117,7 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
       ),
       'utf8',
     );
-    await writeFile(concatPath, buildConcatList(resolved.map((r) => r.mp3Path)), 'utf8');
+    await writeFile(concatPath, buildConcatList(snapshots), 'utf8');
 
     /* Plan 36 A2: pipe the cached OpenLibrary cover into the M4B as the
        iTunes `covr` atom when one exists for this book. The cover-art
