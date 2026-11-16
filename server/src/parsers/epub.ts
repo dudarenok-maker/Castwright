@@ -145,8 +145,14 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
       const entry = epub.flow[i];
       if (!entry?.id) continue;
       const html = await new Promise<string>((resolve, reject) => {
-        epub.getChapter(entry.id!, (err: Error | null, text?: string) =>
-          err ? reject(err) : resolve(text ?? ''),
+        /* getChapterRaw, not getChapter (#4239): getChapter's link-rewriting pass
+           throws (`linkparts.shift is not a function` on `<a href="">`) from inside
+           the zip's async inflate callback, which no try/await can catch — it is an
+           uncaughtException that takes the server down. Rewritten links/images are
+           irrelevant to the plain text we extract; body/script/style trimming is
+           done by htmlBodyOnly, as on the raw-zip path. */
+        epub.getChapterRaw(entry.id!, (err: Error | null, text?: string) =>
+          err ? reject(err) : resolve(htmlBodyOnly(text ?? '')),
         );
       });
       // Title from the epub2-supplied NCX/spine label, merged with the body

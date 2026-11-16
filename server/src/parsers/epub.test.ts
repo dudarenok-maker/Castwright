@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { ZipFile } from 'yazl';
+import { buildEmptyHrefEpub } from '../test-utils/empty-href-epub.js';
 import { parseEpub, UnusableEpubError, decodeEntities, mergeChapterTitle } from './epub.js';
 
 const { mkdtempSpy } = vi.hoisted(() => ({ mkdtempSpy: vi.fn() }));
@@ -389,4 +390,17 @@ describe('parseEpub — titleSynthesized wiring (#3628)', () => {
       expect('titleSynthesized' in out.chapters[1]).toBe(false);
     });
   }
+});
+
+/* #4239 — epub2's getChapter rewrites every `href` inside a zip callback and
+   throws `linkparts.shift is not a function` on `<a href="">`. A throw there
+   is an uncaughtException no await can catch, which kills the server. The
+   parser reads chapters raw instead, so the link pass never runs. */
+describe('parseEpub — empty href does not crash (#4239)', () => {
+  it('parses a chapter containing <a href=""> instead of throwing out of a zip callback', async () => {
+    const buf = await buildEmptyHrefEpub();
+    const out = await parseEpub(buf, { fileName: 'empty-href.epub' });
+    expect(out.chapters).toHaveLength(1);
+    expect(out.chapters[0].body).toContain('empty link');
+  });
 });

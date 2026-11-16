@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { detectManuscriptLanguage } from '../tts/detect-language.js';
+import { buildEmptyHrefEpub } from '../test-utils/empty-href-epub.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_EPUB = resolve(__dirname, '..', 'parsers', '__fixtures__', 'sample.epub');
@@ -794,6 +795,28 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
     expect(res.status).toBe(200);
     expect(res.body.candidate.series).toBe('Solway Bay');
     expect(res.body.candidate.seriesFromTitle).toBe(false);
+  });
+});
+
+/* #4239 — an EPUB with <a href=""> used to make epub2 throw from a zip callback,
+   an uncaughtException that exits the server. The import must now complete and
+   the process must keep serving. */
+describe('POST /api/import — EPUB with an empty href (#4239)', () => {
+  it('imports it and keeps serving the next request', async () => {
+    const epubBytes = await buildEmptyHrefEpub();
+    const res = await request(app)
+      .post('/api/import')
+      .attach('file', epubBytes, { filename: 'empty-href.epub', contentType: 'application/epub+zip' });
+    expect(res.status).toBe(200);
+    expect(res.body.candidate.chapters).toHaveLength(1);
+
+    const next = await request(app)
+      .post('/api/import')
+      .attach('file', await readFile(FIXTURE_EPUB), {
+        filename: 'sample.epub',
+        contentType: 'application/epub+zip',
+      });
+    expect(next.status).toBe(200);
   });
 });
 
