@@ -7,7 +7,8 @@
    gap this round's crash-fix work surfaced (see the last test below) and
    closes alongside it, rather than leaving the module untested. */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
@@ -45,6 +46,54 @@ vi.mock('yazl', async (importOriginal) => {
     }
   }
   return { ...real, ZipFile: TestZipFile };
+});
+
+/* Seam for the stat-then-stream race: wraps `node:fs/promises` `stat` and
+   `open` so a test can rename a different-size file over a chapter's path
+   around the call — after the builder has learned the size (old code:
+   stat(path)) or just before it opens its handle (new code: open(path)) —
+   and before the bytes are streamed. Fires once. `openedHandles`
+   records every handle the builder opens so a test can assert they close. */
+let raceHook: { path: string; replacement: Buffer } | null = null;
+const openedHandles: FileHandle[] = [];
+/* Path whose handle's read stream errors right after creation. */
+let readErrorPath: string | null = null;
+function fireRace(path: unknown): void {
+  if (!raceHook || path !== raceHook.path) return;
+  const { replacement } = raceHook;
+  raceHook = null;
+  const tmp = `${String(path)}.new`;
+  writeFileSync(tmp, replacement);
+  renameSync(tmp, String(path));
+}
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    stat: (async (...args: Parameters<typeof real.stat>) => {
+      const r = await real.stat(...args);
+      fireRace(args[0]);
+      return r;
+    }) as typeof real.stat,
+    open: (async (...args: Parameters<typeof real.open>) => {
+      /* Fired BEFORE the real open: Windows refuses to rename over a file
+         that is already open, so the only reachable window for the new
+         code is "swapped just before it opens". Old code's window (after
+         stat, before its lazy open) is hit via the stat hook above. */
+      fireRace(args[0]);
+      const h = await real.open(...args);
+      openedHandles.push(h);
+      if (readErrorPath === args[0]) {
+        const create = h.createReadStream.bind(h);
+        h.createReadStream = ((...a: Parameters<typeof create>) => {
+          const rs = create(...a);
+          setImmediate(() => rs.destroy(new Error('ENOENT: injected read failure')));
+          return rs;
+        }) as typeof h.createReadStream;
+      }
+      return h;
+    }) as typeof real.open,
+  };
 });
 
 /* Same minimal yazl-produced-zip reader as build-mp3-zip.test.ts — only the
@@ -197,33 +246,24 @@ describe('buildCodecZip', () => {
      exception, killing the whole server (crash-logging.ts's
      uncaughtException handler exits 1) instead of just failing this export.
 
-     Unlike build-mp3-zip.ts (which streams from a per-chapter STAGED copy,
-     re-created fresh each iteration), buildCodecZip streams straight from
-     each chapter's original on-disk file, and re-stats each chapter's own
-     path on every loop iteration. So this test deletes ONLY the file that
-     was just read (via onProgress, which fires right after addReadStream)
-     — never a LATER chapter's still-needed file — to isolate the
-     readStream-error path from an ordinary (and already-correctly-handled)
-     `stat()` failure on a subsequent chapter. Chapter 1's file vanishing
-     right after being streamed, while chapter 2's `await stat()` is still
-     in flight, reproduces the exact race deterministically: no sleep or
-     poll needed, because deletion always lands before Node's async
-     fs.open() behind the read stream can possibly have resolved. */
-  it('forwards a deleted-source-file read error instead of crashing the process', async () => {
+     Since the size and bytes now come from one already-open handle, deleting
+     the file mid-build no longer fails the read (the open inode survives), so
+     the read error is injected on the handle's stream instead. */
+  it('forwards a chapter read-stream error instead of crashing the process', async () => {
     const raceDir = join(tmpRoot, 'race');
     mkdirSync(join(raceDir, 'audio'), { recursive: true });
     const audioPaths = [
       join(raceDir, 'audio', '01-chapter-1.m4a'),
       join(raceDir, 'audio', '02-chapter-2.m4a'),
     ];
-    for (const p of audioPaths) writeFileSync(p, Buffer.from('doomed-bytes'));
+    for (const p of audioPaths) writeFileSync(p, Buffer.alloc(1024 * 1024, 7));
+    readErrorPath = audioPaths[0];
 
     let escaped: unknown = null;
     const onUncaught = (err: unknown) => {
       escaped = err;
     };
     process.on('uncaughtException', onUncaught);
-    let call = 0;
     try {
       await expect(
         buildCodecZip({
@@ -231,14 +271,10 @@ describe('buildCodecZip', () => {
           state: makeState(),
           outPath: join(tmpRoot, 'race.m4a.zip'),
           format: 'aac-m4a',
-          onProgress: () => {
-            const justRead = audioPaths[call];
-            call++;
-            rmSync(justRead, { force: true });
-          },
         }),
       ).rejects.toThrow(/ENOENT/);
     } finally {
+      readErrorPath = null;
       process.off('uncaughtException', onUncaught);
     }
     // The real assertion: nothing escaped as a raw uncaught exception. If
@@ -385,5 +421,64 @@ describe('buildCodecZip', () => {
     // The other half of the regression: the injected error must have been
     // forwarded to the rejection, NOT escaped as a raw uncaught exception.
     expect(escaped).toBeNull();
+  });
+
+  /* Race: the old shape did `await stat(path)` then `createReadStream(path)`,
+     which opens the file lazily — a render commit renaming a different-size
+     take over `path` in between made yazl's declared `size` disagree with the
+     streamed bytes ("unexpected number of bytes"). The size is now read from
+     the handle the bytes stream from, so both come from one inode. */
+  it('declares each entry size from the handle it streams, surviving a rename over the path mid-build', async () => {
+    const swapDir = join(tmpRoot, 'swap');
+    mkdirSync(join(swapDir, 'audio'), { recursive: true });
+    const first = join(swapDir, 'audio', '01-chapter-1.m4a');
+    writeFileSync(first, Buffer.from('original-take'));
+    writeFileSync(join(swapDir, 'audio', '02-chapter-2.m4a'), Buffer.from('chapter-2'));
+    raceHook = { path: first, replacement: Buffer.from('a-much-longer-replacement-take-bytes') };
+
+    const outPath = join(tmpRoot, 'swap.m4a.zip');
+    try {
+      await buildCodecZip({ bookDir: swapDir, state: makeState(), outPath, format: 'aac-m4a' });
+    } finally {
+      raceHook = null;
+    }
+    const entries = readZipEntries(readFileSync(outPath));
+    expect(entries.map((e) => e.name)).toEqual(['01 - Chapter 1.m4a', '02 - Chapter 2.m4a']);
+    // One consistent inode: the entry holds one whole take, never a mix.
+    expect(['original-take', 'a-much-longer-replacement-take-bytes']).toContain(
+      entries[0].data.toString('utf8'),
+    );
+    expect(entries[1].data.toString('utf8')).toBe('chapter-2');
+  });
+
+  it('closes every opened file handle when the build is aborted', async () => {
+    const closeDir = join(tmpRoot, 'close-on-abort');
+    mkdirSync(join(closeDir, 'audio'), { recursive: true });
+    const state: BookStateJson = {
+      ...makeState(),
+      chapters: [1, 2, 3].map((n) => ({ id: n, title: `Chapter ${n}`, slug: `0${n}-chapter-${n}` })),
+    };
+    for (const c of state.chapters) {
+      writeFileSync(join(closeDir, 'audio', `${c.slug}.m4a`), Buffer.alloc(2 * 1024 * 1024, c.id));
+    }
+    openedHandles.length = 0;
+    const controller = new AbortController();
+    await expect(
+      buildCodecZip({
+        bookDir: closeDir,
+        state,
+        outPath: join(tmpRoot, 'close-on-abort.zip'),
+        format: 'aac-m4a',
+        signal: controller.signal,
+        onProgress: () => controller.abort(),
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(openedHandles.length).toBeGreaterThan(0);
+    // FileHandle.close() is async behind stream.destroy(); poll briefly.
+    for (let i = 0; i < 50 && openedHandles.some((h) => h.fd !== -1); i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(openedHandles.map((h) => h.fd)).toEqual(openedHandles.map(() => -1));
   });
 });

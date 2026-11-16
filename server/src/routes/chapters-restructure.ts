@@ -606,7 +606,7 @@ async function applyRestructureClaimed(
     // manuscript-edits.json -> in-memory hints -> audio ops -> analysis cache.
     // If any step throws past here, earlier writes are already on disk; partial
     // state is recoverable via the reconciliation filter in
-    // book-state.ts:166-185.
+    // book-state.ts:660-675 (the manuscript-edits/analysis-cache reconcile filter).
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
     /* A stale record means the manuscript on disk changed, so the kept entry
        does not validate against its sha today. The order is load-bearing: if the
