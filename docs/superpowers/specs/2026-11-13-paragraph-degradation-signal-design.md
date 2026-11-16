@@ -3,10 +3,10 @@ status: draft
 issue: 2254
 refs: [2253, 2267, 2275, 2306, 2320, 4165, 4217]
 date: 2026-11-13
-revision: 7 (owner decisions 11–13 on the PR #4184 assumption-checker pass 6, 2026-11-16)
-decisions: owner decisions 1–10 of 2026-11-15 and 11–13 of 2026-11-16 are binding and are written in below (1–3 drove revision 3, 4–6 revision 4, 7–9 revision 5, 10 revision 6, 11–13 revision 7; decision 10 drops the twin experiment, and the parts of decisions 4, 5, 7 and 8 that served only the twin lapse with it); the items under "Decisions made in revision 7" (and the surviving ones from revisions 3–6) are owed owner confirmation
-gate: assumption-checker pass 6 on revision 6 did not clear it; revision 7 needs a fresh pass before decomposition
-verified-at: dbc30a2a (origin/main, 2026-11-16)
+revision: 8 (owner decisions 14–16 on the PR #4184 assumption-checker pass 7, 2026-11-17)
+decisions: owner decisions 1–10 of 2026-11-15, 11–13 of 2026-11-16 and 14–16 of 2026-11-17 are binding and are written in below (1–3 drove revision 3, 4–6 revision 4, 7–9 revision 5, 10 revision 6, 11–13 revision 7, 14–16 revision 8; decision 10 drops the twin experiment and decision 14 drops 1C, and the parts of earlier decisions that served only them lapse); the items under "Decisions made in revision 8" (and the surviving ones from revisions 3–7) are owed owner confirmation
+gate: assumption-checker pass 7 on revision 7 did not clear it; revision 8 needs a fresh pass before decomposition
+verified-at: 33f3647c (origin/main, 2026-11-17)
 ---
 
 # Paragraph-degradation signal: surfacing it, and proving what it costs (#2254)
@@ -14,16 +14,14 @@ verified-at: dbc30a2a (origin/main, 2026-11-16)
 Filename when committed:
 `docs/superpowers/specs/2026-11-13-paragraph-degradation-signal-design.md`.
 Design thread only. No code is written here. Verified against `main` @
-`dbc30a2a` (revision 6 was verified @ `25c65c0a`, revision 5 @ `1e295990`,
-revision 4 @ `c16da893`, revision 3 @ `a9918640`, revision 2 @ `3792b84b`).
-Between `25c65c0a` and `dbc30a2a` no anchored file changed (the only server
-changes are in `attribution-eval/char-project.ts`, `review-apply-core.ts`,
-`crash-logging.ts` and `index.ts`, none of which this design cites), so every
-anchor below reads the same. The anchors revision 7 adds
-(`escalation.ts`, `html-utils.ts`, `epub.ts`, `workspace/scan.ts`'s
-`findBookBy`, `store/manuscripts.ts`'s `hydrateFromDisk`,
-`workspace/state-migrate.ts`, `analysis.ts`'s `analyzerPoolWidth` and
-`registry.ts`'s concurrency key) were read at `dbc30a2a`. Paths under
+`33f3647c` (revision 7 was verified @ `dbc30a2a`, revision 6 @ `25c65c0a`,
+revision 5 @ `1e295990`, revision 4 @ `c16da893`, revision 3 @ `a9918640`,
+revision 2 @ `3792b84b`). Between `dbc30a2a` and `33f3647c` the only server
+changes are in `server/src/export/**`, `routes/export.ts` and two lines of
+`routes/chapters-restructure.ts`, none of which this design cites, so every
+anchor below reads the same. The anchors revision 8 adds
+(`cross-examine.ts:350`, the alignment floor, and `analysis.ts:3736`, the
+escalation skip below it) were read at `33f3647c`. Paths under
 `attribution-eval/` mean `server/src/analyzer/attribution-eval/`; paths under
 `dialogue-structure/` mean `server/src/analyzer/dialogue-structure/`.
 
@@ -33,7 +31,56 @@ into the import/analysis surfacing so a degraded book is flagged") is that
 instruction. It covers the user-facing surface designed here and nothing
 beyond it.
 
-## Revision 7 changelog
+## Revision 8 changelog
+
+"AC7" is the PR #4184 comment headed "Assumption-checker pass 7 (head
+af677096…)". It found 0 Critical, 1 Significant and 7 Minor, and judged that
+1C does not earn its 30 judgements. The owner answered its three questions
+on 2026-11-17; those answers are **owner decisions 14–16** below. The
+numbers in this revision come from AC7's own scripts (`cont-lines.mts`,
+`classes.mts`, `dprime.mts`, `hg-large.mjs`). None is committed. Each AC7
+finding, and whether it was **resolved by removal** (it existed only for
+1C) or **fixed**:
+
+| # | Finding | Resolution |
+|---|---|---|
+| S1 | 1C's verdict, trigger and lever are fixed before any judging | **Resolved by removal** (owner decision 14). The per-class counts of confident decisions stay, as a plain report with no verdict (§4.3, §4.4) |
+| M-1 | The ≥ 10 continuation-line arm disqualifies the only clean, dialogue-dense ru dash book on the box; the label rule ignores a breach in a line-wrapped book | **Fixed** (owner decision 15). A wrap disqualifies a calibration book only if re-joining its continuation lines could lift a paragraph to ≥ 10 (R8-1). The label rule now counts a breach in **any** scanned book. That box book (29.7 dash turns per 1,000 words, 4,491 dash turns, at most 8 after re-joining) would qualify (§2, §4.4 step 1) |
+| M-2 | A picked chapter below the 80% alignment floor makes no confident tag decisions; ch6 ran at 65% on 2026-09-05 | **Fixed** (owner decision 16). The pick is settled after capture, swapping a below-floor chapter for the next-densest one that clears it; the runner reports alignment and `flagOnly` per chapter; the cost bound is stated (R8-2, §4.4 step 2) |
+| M-3 | The no-effect rates and "500 and above" are wrong past n = 500 | **Fixed.** The reach table now reads to n = 19,000, where the *makes them worse* bar moves to 9. The no-effect rates are at most 2.1% and 10.0% (§4.4 "Verdict") |
+| M-4 | (d′) holds ordinary speech–beat–speech paragraphs, not merges | **Resolved by removal.** (d′) existed only for 1C's sampling, and no surviving text uses it |
+| M-5 | `Ŵ` not unbiased; no spare tie-break; the blind sheet names no parse; the mixed rule assumes one turn | First two: **resolved by removal**. Last two: **fixed** (R8-3, §4.3, §4.4) |
+| M-6 | `ru.md` is not purely «»-quoted; Дневной дозор's figures are unverifiable | **Fixed.** Both restated in §4.4 step 1 and §4.5 |
+| M-7 | The "up to 2 in parallel" line is from the 2026-09-07 cloud run | **Fixed.** "On-box cost" says so, and says the 2026-09-05 slot count is unrecorded |
+| Q1–Q3 | The three questions | Owner decisions 14, 15 and 16 |
+| R7 grades | AC7's grading of R7-1 … R7-11 | See owner decision 14 and the revision 7 decisions' heading. R7-5 stands |
+| CI | `check:register-citations` | Passes locally (no new register ID is cited) |
+
+## Decisions made in revision 8 (owner to confirm)
+
+These are choices owner decisions 14–16 did not settle.
+
+- **R8-1 · The re-join rule** (§4.4 step 1). Each line and the
+  continuation lines directly after it are joined, with one space, into one
+  paragraph and counted as one. No match can straddle a join, so the count
+  is exactly the sum of the lines' counts, AC7's bound. **A PDF stays
+  disqualified outright:** its layout breaks often fall before a capital or
+  a dash, which the continuation test cannot see.
+- **R8-2 · The pick caps substitutions at two.** At most five chapters are
+  captured. If fewer than three clear the floor by then, 1A is computed on
+  those that did, and the recorded outcome says how many and why. If none
+  did, 1A is **not computed** and, like a void, does not discharge the row. This keeps
+  the worst case at two extra chapter captures, not the whole book.
+- **R8-3 · Blind sheet and two-speaker sentences.**
+  - The sheet shows the sentence's line in the **recovery-off** parse (the
+    imported text), with the line either side. That parse is the same for
+    both arms, so it gives away neither answer.
+  - A sentence that holds turns by two different speakers (`— Да? — Нет.`)
+    has no single right id. The judge marks it **two speakers**, it is
+    scored **neutral**, and it is counted apart from the other mixed
+    sentences.
+
+## Revision 7 changelog (history)
 
 "AC6" is the PR #4184 comment headed "Assumption-checker pass 6 (head
 b87361ed…)". It found 0 Critical, 1 Significant and 11 Minor. The owner
@@ -53,22 +100,25 @@ None is committed. Each AC6 finding and its resolution:
 | M-2 | The 5% cut misses a 200-column wrap (4.3%); EPUB and MOBI can be line-wrapped and are never tested | **Owner decision 13.** The test runs on every format's imported text. The cut is ≥ 2% of lines **or** ≥ 10 continuation lines. Every measured fixture wrap that splits a paragraph clears it, and both real EPUBs on the box have 0 continuation lines. What still escapes is stated (R7-6, §2, §4.4 step 1) |
 | M-3 | Step 1 drops the provisional label on "no breach"; §2 and §4.5 keep it when no clean, dialogue-dense ru book exists; "dialogue-dense" has no number | **Owner decision 13.** One rule, used in step 1, §2 and §4.5: no breach **and** at least one clean, dialogue-dense ru dash book. Dialogue-dense means ≥ 25 dash turns per 1,000 words and ≥ 1,000 dash turns, calibrated on Ночной дозор (36.0) and the fixtures (R7-5) |
 | M-4 | The `flags` clone test cannot catch a clone taken after escalation | **Fixed in place.** The characterisation test gains a fifth input in which escalation actually fills a line. `onStages.flags` must still hold that line's index (§4.2) |
-| M-5 | 1C's 12% bound is misapplied; its reach is unstated; class (b) decides the verdict alone; class (d) is never sampled; the draw rule is unstated; the trigger reads `W` | **Owner decision 12.** 1C now draws (a) 11, (b) 2, (c) 11 and (d′) 6, where (d′) is the 2–9-opener dash-open merges. Draws are uniform within each class. The follow-up triggers on `Ŵ_hi`, the upper bound. At 10 per class, zero seen bounds a class at 30.8%. What 1C can and cannot see is tabled (R7-3, R7-4, §4.4 "Verdicts") |
+| M-5 | 1C's 12% bound is misapplied; its reach, class (b), class (d) and the trigger | **Owner decision 12** (R7-3, R7-4). Lapsed with 1C in revision 8 (owner decision 14) |
 | M-6 | Notice A's second sentence is a calibration claim, false at a same-speaker resumption | **Fixed in place, by labelling.** The wording is unchanged. §2 and §3 now say that each notice's first sentence is true by construction and its second is a calibration claim, which "usually" hedges. R6-10's "true by construction" is corrected to cover the first sentence only |
 | M-7 | When only some chapters' controls fail, the row discharges on the rest, with a known seam defect unfixed | **Fixed in place.** Any chapter's control failure blocks the verdict and the discharge. A replay defect is re-measured from the saved captures, and a capture defect re-captures the chapters it affects (R7-7) |
 | M-8 | A sentence that crosses a line break can meet both (a) and (c), and "its paragraph" is undefined for it | **Fixed in place.** A sentence's line, in either parse, is the line holding the start of the first span it aligns to. (a) holds if any of its spans lies on a recovered line, and (c) reads its line in the recovery-off parse. The precedence puts a crossing sentence in (a). 1A and 1C use the same rule (R7-8, §4.3) |
 | M-9 | `--dump` hydrates through `findBookBy`, whose self-heal can write `state.json`; a capture that dies mid-book has no resume rule | **Fixed in place.** The dump goes through a read-only record builder extracted from `hydrateFromDisk`, with a test that `state.json` is untouched. Each saved capture carries the escalation budget left, and `--resume` restores it and re-captures only the chapter that died (R7-10) |
 | M-10 | R3-3's rationale still cites the twin's reference-book pick | **Fixed in place.** R3-3 is marked: the decision stands, its rationale lapsed with the twin, and it now rests on one owner session and one row |
 | M-11 | The judges are not blinded, and the rubric has no rule for a sentence that spans narration and a turn | **Fixed in place.** The judge names the true speaker from a sheet that shows no arm's or engine's answer, and `--score` derives each judgement. A mixed sentence's right answer is the turn's speaker, and mixed sentences are counted apart (R7-11) |
-| Gap | Without the twin, class (c) may be thin, and 1C may say nothing about the dash-open tag-anchoring hazard | **Stated.** A thin (c) is judged in full and its spare judgements move to (a) and (d′). The recorded outcome then says that 1C is silent on that hazard (§4.4 "What 1C can and cannot see") |
+| Gap | Without the twin, class (c) may be thin | **Stated** for 1C. Lapsed with 1C in revision 8 |
 | Q1–Q3 | The three questions | Owner decisions 11, 12 and 13 |
 | R6 grades | AC6's grading of R6-1 … R6-10 | R6-1 is superseded by R7-1 and R7-2, R6-2 by R7-3 and R7-4, and R6-7 by R7-6. R6-3 is amended by R7-7, R6-6 by R7-8 and R6-10 by the M-6 label. R6-4's test is strengthened (M-4). R6-5, R6-8 and R6-9 stand |
 | CI | `check:register-citations` | Passes locally (no new register ID is cited) |
 
-## Decisions made in revision 7 (owner to confirm)
+## Decisions made in revision 7 (owner to confirm; R7-3 and R7-4 lapsed with 1C in revision 8; R7-6 and R7-11 amended by it)
 
 These are choices owner decisions 11–13 did not settle. Each one is the
-option most consistent with them.
+option most consistent with them. Owner decision 14 (revision 8) drops 1C,
+so R7-3 and R7-4 lapse, and so does R7-11's "left out of `n_k`" clause.
+R7-6 is amended by owner decision 15 and R8-1, and R7-11 by R8-3. The text
+below is as revision 7 wrote it; §2–§4 hold the current rules.
 
 - **R7-1 · The census bars: *improves* at `I − R ≥ 3`, *makes them worse* at
   `R − I ≥ 1`.** In a census the counts are the answer, apart from the judge.
@@ -91,25 +141,9 @@ option most consistent with them.
   `n = 31`, *improves* needs a sample `I − R ≥ 4`. With no effect, a sample
   reads *improves* at most 1.8% of the time and *makes them worse* at most
   9.3%.
-- **R7-3 · The 1C allocation is (a) 11, (b) 2, (c) 11, (d′) 6.**
-  - Class (b) is dash turns confidently given to the narrator, which its own
-    definition makes wrong for most members. Two judgements confirm that,
-    and (b) still enters `Ŵ`.
-  - (d′) gets 6, enough to bound a class at about 46% when no wrong answer
-    is seen. Before this revision it had no judgements at all.
-  - A class with fewer decisions than its allotment is judged in full. Each
-    spare judgement goes to whichever of (a), (c) and (d′) has the most
-    unjudged decisions, and to (b) only when those three are exhausted.
-- **R7-4 · The follow-up trigger: `Ŵ_hi` ≥ 5% of the three chapters' turn
-  sentences.**
-  - `Ŵ_hi` is the sum of each sampled class's exact one-sided upper bound at
-    1 − 0.05/K, with K the number of sampled classes. By the Bonferroni
-    inequality, that sum covers the true total with at least 95%
-    probability.
-  - When the trigger fires, the design item names the class that
-    contributes most to `Ŵ_hi`. It records whether that class's harm was
-    **seen** (`w_k ≥ 1`) or only **not ruled out** (`w_k = 0`), because the
-    bound can fire on sampling width alone (§4.4).
+- **R7-3 · The 1C allocation** and **R7-4 · the `Ŵ_hi` follow-up
+  trigger.** Lapsed with 1C (owner decision 14); AC7 S1 showed the trigger
+  fired before any judging.
 - **R7-5 · "Dialogue-dense" means ≥ 25 dash turns per 1,000 words, and
   ≥ 1,000 dash turns.**
   - A dash turn is a dash-opening paragraph or a `countTurnOpeners` match.
@@ -185,7 +219,7 @@ removal** (it existed only for the twin) or **fixed in place**:
 | R5 grades | AC5's safe / gap / weak / unsafe grading of R5-1 … R5-13 | R5-1, R5-2, R5-4, R5-5, R5-10 and R5-12 lapse with the twin. R5-3 gains R6-4 and R6-5; R5-7 gains R6-8; R5-9's cut is replaced by R6-7. The rest stand |
 | CI | `check:register-citations` fails: the spec cited a Group B row ID that does not exist yet | Every citation now reads "a new Group B register row (ID allocated at implementation)", or "the new register row" after first use. The check passes locally |
 
-## Decisions made in revision 6 (owner to confirm; R6-1, R6-2 and R6-7 superseded by revision 7; R6-3, R6-6 and R6-10 amended by it)
+## Decisions made in revision 6 (owner to confirm; R6-1, R6-2 and R6-7 superseded by revision 7; R6-3, R6-6 and R6-10 amended by it; R6-2 lapsed with 1C in revision 8)
 
 These are choices owner decision 10 did not settle. Each one is the option
 most consistent with it. Revision 7 replaces R6-1 with R7-1 and R7-2, R6-2
@@ -199,15 +233,8 @@ revision 6 wrote it; §2–§4 hold the current rules.
   hand-check alone: a two-sided exact sign test of improvements against
   regressions, ignoring neutrals, at p < 0.05. The counts give the scale
   beside it (§4.4 "Verdicts").
-- **R6-2 · 1C records one verdict, on a count of wrong judgements.** The
-  confident decisions are meant to be right, so the base rate of wrong ones
-  is small, and 30 judgements cannot carry a percentage bar: even zero wrong
-  in 30 leaves an exact 95% upper bound of about 12%. [Misapplied, AC6 M-5:
-  that bound holds for one simple sample of 30 from one population. At 10
-  per class, the bound for each class at zero seen is 30.8%.] The verdict
-  is therefore a count: two or more judged wrong means the harm is present,
-  because one wrong judgement can be a slip of the judge. A stratified
-  estimate of the total gives the scale (§4.4 "Verdicts").
+- **R6-2 · 1C's count verdict.** Superseded by R7-3 and R7-4, and lapsed
+  with 1C in revision 8.
 - **R6-3 · How the verdicts close blocker 1.** 1A answers the owner's
   2026-08-13 question directly. *Improves* keeps the issue's effect claim;
   *changes no speaker* or *no clear direction* downgrades it to a
@@ -276,45 +303,28 @@ script is committed. Each AC4 finding and where it is resolved:
 | M-j | The on-box cost is never stated | Stated per step (§4.4 "On-box cost"), as an upper bound at the run sheet's whole-analysis rate |
 | Q1–Q3 | The three questions | Owner decisions 7, 8 and 9 |
 
-## Decisions made in revision 5 (owner to confirm; R5-1, R5-2, R5-4, R5-5, R5-10 and R5-12 lapsed with the twin; R5-3, R5-7 and R5-9 amended by revision 6)
+## Decisions made in revision 5 (owner to confirm; R5-1, R5-2, R5-4, R5-5, R5-10 and R5-12 lapsed with the twin; R5-11 lapsed with 1C; R5-3, R5-7 and R5-9 amended by revision 6)
 
 These are choices owner decisions 7–9 did not settle. Each one is the option
 most consistent with them. Owner decision 10 drops the twin, so the six
 decisions that served only it lapse; R5-3 gains R6-4 and R6-5, R5-7 gains
 R6-8, and R5-9's cut is replaced by R6-7. The text below is as revision 5
-wrote it.
+wrote it, except that a lapsed decision now keeps only its title (revision
+8).
 
-- **R5-1 · The bootstrap is not stratified by chapter.** It resamples clean
-  chunks from the whole book's pool. A short chapter can have one or two
-  chunks (the simulation gives 2–5 for a 17k-char chapter), and a
-  one-cluster stratum adds no variance, so stratifying would make the CI too
-  narrow (AC4's point). Pooling loses only the chapter-to-chapter variance
-  that stratification would have removed, so it errs wide, not narrow.
-- **R5-2 · The cluster floor is ≥ 20 clean chunks for the book.** In the
-  simulation, books with 6–12 chunks have a bootstrap SE 14–27% below the
-  estimator's true spread at zero effect, and read *degrading* on a true
-  zero effect 5–9% of the time, where the nominal rate is ≤ 2.5%. With 18 or
-  more chunks the SE is within about 15% at zero effect and the false
-  *degrading* rate is 1–5% (within the simulation's ±1–3 pp noise of
-  nominal). 20 is the round number above the smallest book that behaved. The
-  floor depends only on the clean body and the budget, so it is checked
-  before any model time is spent.
+- **R5-1 · The bootstrap is not stratified by chapter.** Lapsed with the
+  twin in revision 6 (owner decision 10).
+- **R5-2 · The cluster floor is ≥ 20 clean chunks for the book.** Lapsed
+  with the twin in revision 6 (owner decision 10).
 - **R5-3 · The confident filter is structural.** It is "confidence ≥ 0.9 and
   not flagged", not a reason list, so a reason added to `crossExamine` later
   cannot silently escape it. The runner asserts that every decision passing
   the filter carries one of the five known reasons, and fails loudly on any
   other, so a new reason gets a class decision, not a default.
-- **R5-4 · A multi-sentence span counts only if every sentence passes.** A
-  non-split span can carry several aligned sentences that agree on the id.
-  It counts as a confident disagreement only when each of them passes the
-  reason, confidence, flag and escalation conjuncts. One flagged sentence
-  means the user sees a flag on that span, so it is not a confident
-  disagreement. The class is the lowest-index sentence's; a span whose
-  sentences fall in different classes is also counted as **mixed**.
-- **R5-5 · `emitSpans` covers speech spans only.** 1B and 1C pair on speech
-  spans (§4.4 step 6), and nothing compares tag spans. Emitting them would
-  need value logic the module does not have today (AC4 M-c). A split value
-  carries `hasOrphan`, which is what the R-9C5 overlap needs.
+- **R5-4 · A multi-sentence span counts only if every sentence passes.**
+  Lapsed with the twin in revision 6 (owner decision 10).
+- **R5-5 · `emitSpans` covers speech spans only.** Lapsed with the twin in
+  revision 6 (owner decision 10).
 - **R5-6 · One "opens with a dash" predicate: `conventions.dialogueOpen`.**
   The parser, `dashOpenedPara` (`attribution-health.ts`) and #2253's rescue
   already use it. Mid-paragraph openers stay `TURN_IN_PARAGRAPH`, the
@@ -337,17 +347,12 @@ wrote it.
   file starts each line with a capital or a dash. The 20% cut is a planning
   figure: the clean fixture scores 0%, and the scanner prints each TXT's share
   so the owner can see the margin.
-- **R5-10 · R4-3 never folds a run across a scene separator.** Folding into
-  `* * *` would delete a scene break and a forced chunk boundary in M only.
-- **R5-11 · The runner reports the verbless-tag downgrade.** For each
-  degraded dash-open paragraph in M's structure, it reports whether the
-  parser reduced it to one unanchored speech span. It also gives the class (c)
-  sample size before the hand-check draws from it.
-- **R5-12 · The achieved detectable effect accounts for the 5 pp
-  conjunct.** It is reported as `max(2.8 × SE, 5 pp + 0.84 × SE)`. At ≥ 20
-  chunks it sits 0.3–1.5 pp **below** the simulation's 80%-power points, so
-  the report reads it as "about", and the runner prints the SE beside it
-  (§4.4 "Power").
+- **R5-10 · R4-3 never folds a run across a scene separator.** Lapsed with
+  the twin in revision 6 (owner decision 10).
+- **R5-11 · The runner reports the verbless-tag downgrade.** Lapsed with 1C
+  in revision 8 (owner decision 14).
+- **R5-12 · The achieved detectable effect accounts for the 5 pp conjunct.**
+  Lapsed with the twin in revision 6 (owner decision 10).
 - **R5-13 · F2 is already discharged.** #4165's PR rewrote the stale
   "opt-in / Default OFF" comments and the suite title, so Phase 0 is F3 only
   (§1.5).
@@ -395,7 +400,8 @@ them: R4-3 gains its predicate, its run base and its separator rule (R5-6,
 R5-10) and a corrected rationale (owner decision 8); R4-4 uses
 `dialogueOpen` (R5-6); R4-5's floor is now in chunks as well as turns
 (R5-2); R4-7 adds the title test (R5-7). The text below is as revision 4
-wrote it; §3–§4 hold the amended rules.
+wrote it, except that a lapsed decision now keeps only its title (revision
+8); §3–§4 hold the amended rules.
 
 - **R4-1 · 1A is two replays, with a control.** Revision 3 compared a live
   snapshot with a replay. Now both arms are replays over one captured `raw`
@@ -404,37 +410,20 @@ wrote it; §3–§4 hold the amended rules.
   chapter's 1A is reported void, not computed. This replaces R3-1's
   live-vs-replay comparison and keeps its "no model" property.
 - **R4-2 · The twin's pairing space is the clean body's span set, parsed
-  with production defaults (recovery on).** Recovery should find nothing to
-  split in clean text. A gate checks that the clean body's recovery-on and
-  recovery-off parses give the same span set; any difference is reported.
-  The merged arm's own post-recovery structure is used to **classify** its
-  confident disagreements, not to pair them.
-- **R4-3 · The degrade script builds both merge shapes.** Each run of
-  consecutive dash-opening paragraphs, counted from the start of the
-  chapter, is folded in one of two ways. Runs whose index `i` gives
-  `i mod 3 = 2`, and any run with no paragraph before it, are joined into a
-  **dash-open** paragraph. Every other run is folded into the narration
-  paragraph before it. That gives about one third dash-open and two thirds
-  narration-open. Ночной дозор's real mix is 5 to 34, so the twin
-  over-represents dash-open on purpose, to give class (c) a sample. The
-  rule stays deterministic and length-preserving.
+  with production defaults (recovery on).** Lapsed with the twin in revision
+  6 (owner decision 10).
+- **R4-3 · The degrade script builds both merge shapes.** Lapsed with the
+  twin in revision 6 (owner decision 10).
 - **R4-4 · A "turn sentence" is defined from the text.** A model sentence is
   a turn sentence when its text opens with a dialogue dash or contains a
   mid-paragraph turn opener, by legibility's own `DASH` and
   `TURN_IN_PARAGRAPH` (exported in Phase 1, so there is still one
   predicate). This is how the Ночной дозор measures see hidden turns that no
   speech span covers.
-- **R4-5 · The reference run takes chapters up to 1500 turns.** It takes the
-  book's qualifying chapters densest first, until it reaches ≥ 1500
-  dash-opening turns or 8 chapters. The 300-turn floor still applies to any
-  verdict. The report states the achieved minimum detectable effect, so a
-  smaller book still yields an honest result.
+- **R4-5 · The reference run takes chapters up to 1500 turns.** Lapsed with
+  the twin in revision 6 (owner decision 10).
 - **R4-6 · A second merged capture confirms a non-inconclusive verdict.**
-  When 1B or 1C reads *degrading* or *not degrading*, the owner captures
-  **M2** (merged again) and the runner recomputes with M2. The verdict stands
-  only if M2 gives the same one; otherwise it is *inconclusive*. One run per
-  arm cannot show M's own run-to-run variance, and this is the cheapest check
-  that does.
+  Lapsed with the twin in revision 6 (owner decision 10).
 - **R4-7 · B omits the key on a chapter-count mismatch.** When the hydrated
   record has `hintsSource: 'parse'` and its chapter count differs from
   `state.json`'s, `GET /state` omits `paragraphsMergedChapters` rather than
@@ -544,10 +533,12 @@ option most consistent with them.
 > notice wording; owner decision 10 (revision 6) drops the twin experiment;
 > owner decisions 11–13 of 2026-11-16 (revision 7) settle 1A's target and
 > bars, 1C's allocation and trigger, and when the threshold stops being
-> provisional. They are written into §2–§4 and listed at the end of this
+> provisional; owner decisions 14–16 of 2026-11-17 (revision 8) drop 1C,
+> narrow the line-wrap disqualification and settle the chapter pick after
+> capture. They are written into §2–§4 and listed at the end of this
 > section. (The numbered list below is the 2026-11-13 set, cited as
-> "Decision N"; "owner decision N" means the later set, 1–10 of 2026-11-15
-> and 11–13 of 2026-11-16.)
+> "Decision N"; "owner decision N" means the later set, 1–10 of 2026-11-15,
+> 11–13 of 2026-11-16 and 14–16 of 2026-11-17.)
 
 1. **Surfaces.**
    - Options: **A** a notice on the confirm view at import · **B** a
@@ -705,14 +696,8 @@ option most consistent with them.
   - *Makes them worse* gets a lower bar than *improves*, so harm is easier
     to flag than benefit is to claim. The two bars and their reach are
     stated (R7-1, R7-2, §4.4).
-- **12 · 1C's samples are re-spread.**
-  - Judgements move out of class (b) into (a), (c) and (d′), the dash-open
-    merges with 2–9 openers, which were never sampled.
-  - The draw is uniform within each class.
-  - The follow-up triggers on the upper bound of the stratified estimate
-    `Ŵ`, not on the raw `W`.
-  - What harm 1C can and cannot see is stated with numbers. At 10 per class,
-    zero seen bounds each class at 30.8%, not "about 12%" (R7-3, R7-4, §4.4).
+- **12 · 1C's samples are re-spread** across (a), (c) and (d′), with a
+  trigger on `Ŵ_hi`. Lapsed with 1C (owner decision 14).
 - **13 · The threshold drops "provisional" only with at least one clean,
   dialogue-dense ru book.**
   - "Dialogue-dense" gets a number, calibrated on the committed ru fixtures
@@ -721,6 +706,29 @@ option most consistent with them.
     because `stripHtml` keeps raw newlines inside `<p>`
     (`html-utils.ts:79-98`).
   - The 200-column wrap that slipped under the cut is addressed (R7-6).
+
+**Owner decisions 14–16 (2026-11-17, revision 8; binding):**
+
+- **14 · Drop 1C.** Blocker 1 closes on 1A alone. Withdrawn, with every
+  phase step, test, register-row step and acceptance criterion that existed
+  only for them: 1C's hand-check sampling and allocation, its verdict, `Ŵ`
+  and `Ŵ_hi`, its trigger and follow-up rule, and class (d′). The per-class
+  counts of confident decisions stay, as a **plain report with no
+  verdict**, so the size of each class is on record for any later design.
+  - **What lapses with it.** Owner decision 12 lapses entirely, and so do
+    R7-3 and R7-4. Owner decisions 5 and 8 stand for 1A and the class
+    report; their 1C parts lapse. R5-11's downgrade count served 1C's sample
+    size and lapses. R6-3's "1C is recorded beside it" lapses. AC7 S1 is
+    resolved by removal.
+- **15 · A line wrap disqualifies a calibration book only if it matters:**
+  only if re-joining its continuation lines could lift some chapter's
+  paragraph to ≥ 10 openers (R8-1). The density bar of 25 dash turns per
+  1,000 words stays. The label rule counts a breach in any scanned book,
+  line-wrapped or not.
+- **16 · Pick the Ночной дозор chapters after the first capture.** The
+  runner reports alignment and `flagOnly` for every chapter. A picked chapter
+  below the 80% alignment floor is swapped for the next-densest chapter that
+  clears it (R8-2, §4.4 step 2).
 
 ## 1 · What actually shipped (verified @ `25c65c0a`)
 
@@ -795,8 +803,9 @@ openapi, or used by the client. Nothing runs it at all.
    What is still open:
    - **(a)** Does recovery change post-crossExamine speakers, and for the
      better?
-   - **(c)** Where do the engine's confident decisions sit in merged text,
-     and are they right? (Revision 3 from AC1.)
+   - **(c)** Where do the engine's confident decisions sit in merged text?
+     (Revision 3 from AC1.) Owner decision 14 keeps only the counts, with no
+     judgement of whether they are right.
    - Revision 5's **(b)**, whether merged paragraphing degrades the *model's
      raw* attribution, and its question of how much merging changes the final
      answer against a clean copy, needed the twin. Owner decision 10 puts both
@@ -899,9 +908,11 @@ openapi, or used by the client. Nothing runs it at all.
   owed acceptance converts into a row. A breach on a book the owner judges
   clean **on its imported text** (owner decision 6) is recorded on the row,
   and the threshold decision it forces goes to the owner. **The label is
-  dropped only when step 1 finds both** no breach among the books that are
-  not line-wrapped **and** at least one clean, dialogue-dense ru dash book
-  (owner decision 13, R7-5). Without such a book the threshold stays
+  dropped only when step 1 finds both** no breach in any scanned book,
+  line-wrapped or not, **and** at least one clean, dialogue-dense ru dash
+  book (owner decisions 13 and 15, R7-5). A wrap can only lower a book's
+  counts, so a breach in a line-wrapped book is at least as strong as
+  anyone's. Without such a book the threshold stays
   provisional indefinitely, however many other books the scan holds, and
   the regression plan says so in those words. An English book, a ru book
   whose dialogue is «» quoted, or a sparse ru dash book cannot breach, so a
@@ -909,8 +920,9 @@ openapi, or used by the client. Nothing runs it at all.
 - **Formats the measure under-reads.** The measure splits on `\n`, so any
   imported text that is line-wrapped makes every visual line its own
   paragraph, and a merge reads low. That costs false negatives (a silent
-  notice), never false positives. It also means a scan of those books cannot
-  confirm the threshold (§4.4 step 1). It happens in every format:
+  notice), never false positives. It also means such a book can be the
+  clean calibration book only when its wrap cannot hide a breach (owner
+  decision 15, R8-1, §4.4 step 1). It happens in every format:
   - a PDF, always;
   - a hard-wrapped TXT or Markdown file, which `parseText` does not reflow;
   - an EPUB or MOBI whose XHTML wraps the text inside its paragraphs.
@@ -921,7 +933,7 @@ openapi, or used by the client. Nothing runs it at all.
     changed here.
 
   The scanner therefore tests every format's imported text for line wrap
-  (R7-6).
+  (R7-6), and re-joins it to see whether the wrap matters (R8-1).
 - **What a false positive costs:** a Heads-up box suggesting a cleaner copy
   of a book that did not need one. There is no blocking, no data change and
   no analysis change. That is why shipping a provisional threshold is
@@ -1119,22 +1131,23 @@ mid-run. **Not recommended** as the deliverable.
 | Part | Question | Model? | Settled by |
 |---|---|---|---|
 | **1A** | With the model's raw take held fixed, does recovery change **post-crossExamine** speakers, and for the better? | No for the counts (two engine replays over one live raw take, R4-1); one live capture per chapter | committed test (§4.2) + Ночной дозор counts and hand-check (§4.4 step 2) |
-| **1C** | In merged text, **where do the engine's confident decisions sit, and are they right?** The #2253 harm class: unflagged, high-confidence speakers, by class (owner decisions 5 and 8) | Yes (the same capture) | Ночной дозор counts and hand-check (§4.4 step 2) |
+| **Class report** | In merged text, **where do the engine's confident decisions sit?** The #2253 harm class: unflagged, high-confidence speakers, counted by class and reason (owner decisions 5, 8 and 14). A plain report: no verdict, no hand-check | Yes (the same capture) | Ночной дозор counts (§4.4 step 2) |
 
-**Not measured here (owner decision 10):** revision 5's 1B (does merging
-degrade the model's raw attribution?) and its twin half of 1C (how much does
-merging change the final answer against a clean copy?). Both needed a
-clean/merged twin. A merge-cost number for clean books is out of scope (§5).
-1A and 1C describe **one** merged book, *Ночной дозор*, as it is in the
-library. They say what recovery does to it and whether its confident output
-is right; they do not say what merging costs a book that was clean.
+**Not measured here.** Revision 5's 1B (does merging degrade the model's raw
+attribution?) and its twin half of 1C needed a clean/merged twin (owner
+decision 10). Revision 7's 1C (are the confident decisions right?) is
+dropped (owner decision 14). A merge-cost number for clean books is out of
+scope (§5). 1A and the class report describe **one** merged book, *Ночной
+дозор*, as it is in the library. They say what recovery does to it and where
+its confident output sits; they do not say whether that output is right,
+or what merging costs a book that was clean.
 
 **Stated limits:**
 - **1A stops at crossExamine** (AC3 M6). Escalation needs a model, and only
   a live run escalates. How much escalation compensates for recovery-off
   flags is therefore not measured. Escalation's own effect within the live
   capture (`final` vs `deterministic`) is reported.
-- **Script review** (channel 3 in §1.2) is out of 1A and 1C scope. It is an
+- **Script review** (channel 3 in §1.2) is out of 1A's scope. It is an
   opt-in, later pass with its own model call, and attributing its effect to
   recovery would need a second A/B run. The harness's `review` option exists
   if a later round wants that.
@@ -1157,8 +1170,8 @@ that.
   - recovery on: `corrected` to the tag speaker;
   - recovery off: **expected** `narration-confirm` at 0.95, unflagged
     (`cross-examine.ts:274`). Off, the turn is an **unsplit dash turn inside
-    a narration-open paragraph**, which is class (b) of the 1C confident
-    count (§4.3).
+    a narration-open paragraph**, which is class (b) of the
+    confident-decision report (§4.3).
   - The implementer runs the arm first and pins what it observes. If the
     off outcome is not confident-wrong, that is reported back to the design
     thread before the test is committed, not edited to pass.
@@ -1311,8 +1324,8 @@ its text matches the language's `conventions.dialogueOpen` (ru:
 from the text, so it includes the hidden turns that sit inside a narration
 span and add no speech span to any span set (AC3 S4).
 
-**1C confident decisions (owner decisions 5 and 8).** A sentence `i` of the
-live capture counts when all of these hold:
+**The confident-decision report (owner decisions 5, 8 and 14).** A sentence
+`i` of the live capture counts when all of these hold:
 - it is a turn sentence;
 - its `deterministic` confidence is ≥ 0.9 and `i` is **not** in `flags`
   (R5-3, R6-4). At `25c65c0a` that is exactly five reasons, all unflagged:
@@ -1349,8 +1362,7 @@ length-preserving (§1.2). A sentence's **line**, in either parse, is the
 line holding the start offset of the first span it aligns to. Offsets are
 shared by both parses, so that one offset names a line in each. An unaligned
 sentence has no line and is (d). (a) and (b) read the recovery-on parse,
-and (c) and (d′) read the recovery-off parse, the imported text's own
-paragraphs.
+and (c) reads the recovery-off parse, the imported text's own paragraphs.
 - **(a) recovery-split line:** any span the sentence aligns to lies on a
   recovered line. This is tag anchoring across a split-out line
   (`parser.ts:74-78`), scored `tag-correct`/`tag-confirm`;
@@ -1372,30 +1384,13 @@ paragraphs.
 - **(d) other:** anything else, reported so nothing is dropped.
   `tag-span-narrator` (a sentence aligned only to tag spans) lands in (a),
   (c) or (d) by where it sits; it is never (b), which needs narration spans.
-  Within (d), **(d′)** is a sentence whose line in the recovery-off parse
-  matches `dialogueOpen` and holds **2–9** `TURN_IN_PARAGRAPH` matches. That
-  is a dash-open merge below the threshold, where tags anchor across merged
-  speech just as in (c) (`parser.ts:74-78`). One match is the ordinary
-  resumption above, so (d′) starts at two. 1C samples (d′) (R7-3). The rest
-  of (d), mostly ordinary one-turn dialogue lines, is not sampled.
 
 Every class is reported **by reason** as well as in total, so
 `narration-demote` and `narration-confirm` in class (b) are never summed out
-of sight. 1A's changed sentences are classified by the same rule, with the
-same parses: (a) and (b) on the recovery-on parse, and (c) and (d′) on the
-recovery-off parse.
-
-**The verbless-tag downgrade (R5-11).** In a dash-open paragraph, a single
-tag span with no speech or beat verb stem downgrades the **whole** paragraph
-to one unanchored speech span (`parser.ts:163-168`). Its sentences then go
-to `decideUnanchoredSpeech`, which flags them (`cross-examine.ts:100-116`),
-or, where alternation fills the window, to an `alt-*` decision at ≤ 0.8.
-Either way they never reach the confident count. A long merged dash-open
-paragraph has many tag spans, so it is likelier to hit one. The runner
-therefore reports, per chapter, how many degraded dash-open paragraphs the
-parser reduced to a single unanchored speech span, and how many class (c)
-sentences the rest yielded. A thin class (c) is then a measured fact about
-the book, not a gap in the sample.
+of sight. The report is counts only: nothing in it is judged, and no rule
+reads it (owner decision 14). 1A's changed sentences are classified by the
+same rule, with the same parses: (a) and (b) on the recovery-on parse, and
+(c) on the recovery-off parse.
 
 The runner's unit tests include one fixture per class (a), (b) and (c), with a
 mock analyzer and a tag that anchors following speech to the wrong speaker,
@@ -1405,11 +1400,9 @@ an unrescued narration-open paragraph is counted in (b); an ordinary
 dash paragraph with one resumption is **not** (c); a recovered line whose
 own text is dash-open with ≥ 10 openers is (a), not (c); a sentence that
 crosses a line break, touching a recovered line and a degraded dash-open
-line, is (a); a sentence on a dash-open line with five openers is (d′),
-and one with one opener is (d) outside (d′); an unaligned sentence is (d);
-a downgraded degraded dash-open paragraph is reported as downgraded; a
-sentence whose index is in `flags` is not counted; and an unknown confident
-reason fails the measurement while the saved capture survives it.
+line, is (a); an unaligned sentence is (d); a sentence whose index is in
+`flags` is not counted; and an unknown confident reason fails the
+measurement while the saved capture survives it.
 
 - **The #2254 runner** (Phase 7): a committed, read-only server-side script,
   `server/scripts/paragraph-degradation-ab.mts`. It reads a manifest of
@@ -1427,12 +1420,17 @@ reason fails the measurement while the saved capture survives it.
     the budget from the last one, and captures again only the chapter that
     died, from its start, discarding that chapter's partial work. Each
     chapter is still one live capture;
-  - it writes each hand-check (§4.4) as a **blind sheet**: per item, the
-    sentence's text and its line with the line either side, and no speaker
-    from either arm or from the engine. `--score <sheet>` reads the filled
-    sheet and derives each judgement (R7-11).
+  - it writes 1A's hand-check (§4.4) as a **blind sheet**: per item, the
+    sentence's text and its line **in the recovery-off parse** (the
+    imported text, the same for both arms), with the line either side, and
+    no speaker from either arm or from the engine. `--score <sheet>` reads
+    the filled sheet and derives each judgement (R7-11, R8-3).
 
-  It captures one chapter at a time (R7-9). Like plan 265's runner it never
+  It captures one chapter at a time (R7-9). After each capture it prints the
+  chapter's alignment (`structureReport.alignedPct`) and `flagOnly`, the
+  fields crossExamine sets when alignment is below the 80% floor
+  (`cross-examine.ts:350`), and it settles the pick from them (§4.4 step 2,
+  owner decision 16). Like plan 265's runner it never
   runs in `test:all`, and its inputs (real books) are never committed.
 
 ### 4.4 On-box procedure (new Group B register row, ID allocated at implementation; owner-run)
@@ -1459,48 +1457,47 @@ since `1e295990`). The run notes the build it ran on.
    - Per book it reports: format; detected and declared language; per
      chapter, legibility (the maximum), `countTurnOpeners` (the sum) and
      dash-opening paragraph counts (paragraphs matching `dialogueOpen`,
-     R5-6); the book maximum; and two flags:
+     R5-6); the book maximum; and three flags:
      - **line-wrapped** (R7-6, replacing R5-9 and R6-7): every PDF, and a
        book of any other format whose imported chapter bodies have
        **continuation lines** making up ≥ **2%** of their non-blank lines,
        **or** numbering ≥ **10**. The other formats are EPUB, MOBI, Markdown
        and plain text (owner decision 13).
        - **The test.** A continuation line directly follows another
-         non-blank line (a single `\n`, no blank line between) and starts
-         with a lowercase letter (`\p{Ll}`). A hard wrap breaks lines
-         mid-sentence, so its continuation lines mostly start lowercase. A
+         non-blank line (a single `\n`) and starts with a lowercase letter
+         (`\p{Ll}`): a hard wrap breaks lines mid-sentence, while a
          one-paragraph-per-line file starts each line with a capital or a
-         dash.
-       - **What it covers.** The test reads the imported text, so it covers
-         every way a book arrives wrapped (§2): a hard-wrapped TXT or
-         Markdown file, and an EPUB or MOBI whose XHTML wraps the text
-         inside a `<p>`.
-       - **Measured on the committed fixtures** (`wrap-measure-wide.mjs`),
-         hard-wrapped at 60–400 columns:
-         - `the-coalfall-commission.ru-dash.md` scores 30.8% at 60 columns,
-           16.4% at 80, 6.3% at 120–160 and **4.3% at 200**, which revision
-           6's 5% cut missed (AC6 M-2). Wider, nothing in it is split: its
-           longest paragraph is 216 characters.
-         - `the-coalfall-commission.ru.md` scores 50.6% at 60 columns, 11.6%
-           at 200 and 2.6% at 300–400. Wider, nothing is split: its longest
-           paragraph is 401 characters.
-         - So at every measured width that splits any paragraph, both clear
-           2%. Unwrapped, or one paragraph per line, both score 0%.
-       - **Measured on real EPUBs** (`density.mts`). The two real
-         Lukyanenko EPUBs on the box, *Ночной дозор* and *Дневной дозор*,
-         have 0 continuation lines in 3,333 and 2,426 non-blank lines.
-       - **Why it errs toward flagging.** A false line-wrapped flag only
-         withholds a book from the "no breach" evidence. It never hides a
-         breach, so the count arm can be strict.
+         dash. It reads the imported text, so it covers a hard-wrapped TXT
+         or Markdown file and an EPUB or MOBI that wraps inside a `<p>` (§2).
+       - **Measured** (`wrap-measure-wide.mjs`, `density.mts`). Both
+         committed ru fixtures clear 2% at every width from 60 to 400
+         columns that splits a paragraph (the ru-dash fixture's narrowest
+         margin is 4.3% at 200 columns, which revision 6's 5% cut missed),
+         and score 0% unwrapped. *Ночной дозор* has 0 continuation lines in
+         3,333. Revision 7 also read 0 in 2,426 for *Дневной дозор*; that
+         file is not in the workspace, and AC7 could not reproduce it.
        - **The limit, stated.** A wrap that splits fewer than 10 lines, and
          under 2% of a book, escapes the test. If those lines are the book's
          few longest paragraphs, the measure under-reads exactly the
          paragraphs that could breach. The scanner prints each book's
          continuation count and share, so the owner sees the margin.
-
-       The measure under-reads line-wrapped books (§2), so they are reported
-       but **do not count toward "no breach"**, and none of them can be the
-       clean, dialogue-dense book below;
+     - **wrap matters** (owner decision 15, R8-1). For a line-wrapped book
+       that is not a PDF, the scanner joins each line with the continuation
+       lines directly after it, separated by one space, and counts
+       `TURN_IN_PARAGRAPH` matches on each joined paragraph. A continuation
+       line starts lowercase, so no match straddles a join, and the joined
+       count is exactly the sum of its lines' counts. The wrap **matters**
+       when some re-joined paragraph reaches ≥ 10; a PDF's always does. The
+       scanner prints each line-wrapped book's re-joined maximum. A
+       line-wrapped book's breaches still count (§2), so the flag's one cost
+       is losing a calibration book, owed only when the wrap could hide a
+       paragraph at ≥ 10.
+       - **Measured on the box** (AC7's `cont-lines.mts`). A clean ru
+         dash-dialogue story collection outside the workspace (about 151k
+         words) has 14 continuation lines in 5,420, from print-conversion
+         breaks, which trips the count arm. No two splits are adjacent and
+         no line reads more than 4, so no re-joined paragraph exceeds 8,
+         and its wrap does not matter;
      - **#4217 exposure** (R4-8, as amended by R5-8). For an EPUB, the
        scanner writes a scratch copy whose XHTML entries have a `<br/>`
        inserted after every block closer `stripHtml` drops (`</div>`,
@@ -1533,16 +1530,25 @@ since `1e295990`). The run notes the build it ran on.
        - The committed ru-dash fixture reads 33.7, but holds only 14 dash
          turns by this count (§4.5's 13 turns, plus one dash-opening line
          that is not a turn).
-       - `the-coalfall-commission.ru.md`, whose dialogue is «» quoted, reads
-         22.5.
+       - `the-coalfall-commission.ru.md` reads 22.5. Its dialogue is mostly
+         «» quoted, but it has a dash-dialogue section (`ru.md:63-69`) and 6
+         dash-opening paragraphs in all, which supply much of that figure.
+         The workspace's «» Castwright EPUB (*Заказ Коалфолла*) reads **8.8**
+         (AC7 M-6), so a «» book sits well below 25.
        - 25 is Ночной дозор's sparsest chapter (ch7, 26.8) rounded down, and
          1,000 turns is about a quarter of its total.
-       - *Дневной дозор* reads 29.4, but is itself merged (36 paragraphs at
-         ≥ 10), so it is no clean candidate.
+       - Revision 7 read *Дневной дозор* at 29.4 and merged (36 paragraphs at
+         ≥ 10), so no clean candidate. That file is not in the workspace, and
+         AC7 could not reproduce the figures.
+       - The clean story collection above reads **29.7** per 1,000 words,
+         with 4,491 dash turns and a legibility maximum of 4. Under owner
+         decision 15 it would qualify as a clean, dialogue-dense ru dash
+         book.
      - A **clean, dialogue-dense ru dash book** is a book detected or
-       declared ru that is dialogue-dense, is not line-wrapped, and has no
-       chapter at ≥ 10 on its imported text. Each such book is listed by
-       title.
+       declared ru that is dialogue-dense, is not a PDF, is either not
+       line-wrapped or line-wrapped in a way that does not matter (no
+       re-joined paragraph at ≥ 10), and has no chapter at ≥ 10 on its
+       imported text. Each such book is listed by title.
    - For every chapter at ≥ 10, the scanner prints the **worst imported
      paragraph** (its first 400 characters and its count), so the owner
      judges the text the notice is about, not the book as a reader renders
@@ -1557,15 +1563,15 @@ since `1e295990`). The run notes the build it ran on.
      (#4217)** chapter is a **true positive**, not a breach (owner
      decision 6), and is listed as such on the row.
    - `MERGED_TURNS_DEGRADED` loses its provisional label only when **both**
-     of these hold (owner decision 13, §2):
-     - there is no breach among the books that are not line-wrapped;
+     of these hold (owner decisions 13 and 15, §2):
+     - there is no breach in any scanned book, line-wrapped or not;
      - at least one clean, dialogue-dense ru dash book was scanned.
 
      It loses the label in a follow-up commit that cites this row and names
      that book. Otherwise the label stays, and the run sheet records which
      condition failed. A non-ru Cyrillic book is reported separately
      (Decision 4).
-2. **1A and 1C on real data: Ночной дозор.** No fresh whole-book analysis and
+2. **1A and the class report on real data: Ночной дозор.** No fresh whole-book analysis and
    no cache: the 2026-09-05 cache is gone, and nothing reads one.
    - **Text source (AC3 M7, AC6 M-9):** the **hydrated record's** chapter
      bodies, the strings analysis and `GET /state` read, including any
@@ -1594,16 +1600,33 @@ since `1e295990`). The run notes the build it ran on.
      The runner and the measurement both read that one file per chapter and
      apply **no** normalisation of their own, so the runner chunks and
      parses exactly the string production analysis would (AC5 M-8).
-   - **Chapter pick (AC3 S4):** its 3 chapters with the highest
-     `countTurnOpeners` (hidden turns), excluding ch3 (the one clean
-     chapter). Record each chapter's hidden-turn count and dash-opening
-     paragraph count.
-   - Run the runner live on those chapters with the pinned roster, one
-     chapter at a time (R7-9). Each chapter's capture is saved before
-     anything is measured (R6-5), with the escalation budget left after it.
-     If a capture dies mid-run, the run continues with `--resume`, which
-     captures again only the chapter that died (R7-10).
-   - Per chapter, record:
+   - **Chapter pick, settled after capture (AC3 S4, owner decision 16,
+     R8-2).**
+     - **Candidates.** Every chapter except ch3 (the one clean chapter), in
+       descending `countTurnOpeners` (hidden turns). On the EPUB as parsed
+       the order starts ch5, ch8, ch6, ch7.
+     - **Capture.** The runner captures the first three candidates live,
+       with the pinned roster, one chapter at a time (R7-9). Each capture is
+       saved before anything is measured (R6-5), with the escalation budget
+       left after it. If a capture dies mid-run, the run continues with
+       `--resume`, which captures again only the chapter that died (R7-10).
+     - **The floor.** After each capture the runner reports the chapter's
+       alignment and `flagOnly`, for every chapter it captures. Below the
+       80% floor (`cross-examine.ts:350`), crossExamine flags every sentence
+       that is not pure narration (`:371-387`). It then makes no
+       `tag-confirm`, `tag-correct`, `tag-span-narrator` or
+       `narration-confirm` decision at all, and recovery can change almost
+       nothing for 1A to see. Alignment depends on the model's raw take, so
+       it is known only after the capture.
+     - **The swap.** A captured chapter below the floor leaves the pick. The
+       runner captures the next candidate not yet captured, and repeats
+       until three captured chapters clear the floor, or until two swaps
+       have been made (R8-2). A swapped-out chapter's capture is kept, its
+       control still runs (R7-7), and its counts are reported apart. It
+       enters neither the 1A verdict nor the class report's totals.
+     - Record each chapter's hidden-turn count, dash-opening paragraph
+       count, alignment and `flagOnly`, and whether it was swapped out.
+   - Per picked chapter, record:
      - **1A (per model sentence, R4-1/R4-4):** the control result (pass or
        void); sentences whose post-crossExamine speaker differs, on vs off,
        over all sentences and over turn sentences; narrator share over turn
@@ -1611,15 +1634,15 @@ since `1e295990`). The run notes the build it ran on.
        way. Every changed sentence is tagged with its class ((a)–(d), §4.3).
        1A has no model noise, because both replays share one `raw`, so these
        are exact counts, not estimates. They describe one raw take;
-     - **1C:** the confident decisions on turn sentences (§4.3), counted by
-       class and by reason, with the downgrade count (R5-11);
+     - **the class report:** the confident decisions on turn sentences
+       (§4.3), counted by class and by reason, with no verdict;
      - chunk shape and escalation's share (`final` vs `deterministic`).
-   - **Hand-checks (owner, blind, R7-11, AC6 M-11).**
+   - **Hand-check (owner, blind, R7-11, R8-3, AC6 M-11).**
      - **How the owner judges.** The owner fills in the runner's blind
-       sheets (§4.3). For each item they see the sentence and its line with
-       the line either side, and no speaker from either arm or from the
-       engine. They write the true speaker (a roster id or `narrator`), or
-       **can't tell**. `--score` then derives each judgement, so the judge
+       sheet (§4.3). For each item they see the sentence and its line in
+       the recovery-off parse with the line either side, and no speaker
+       from either arm or from the engine. They write the true speaker (a
+       roster id or `narrator`), or **can't tell**. `--score` then derives each judgement, so the judge
        never learns which answer came from which arm, or what the engine
        said, before naming the speaker.
      - **Rubric for a mixed sentence.** A mixed sentence is one model
@@ -1628,36 +1651,28 @@ since `1e295990`). The run notes the build it ran on.
        turn is what a listener hears misvoiced. The owner also marks it
        **mixed**, and mixed sentences are counted apart in the report, so
        the rule's effect is visible.
-     - **1A.** `n` is the sentences whose post-crossExamine speaker
-       differs, on vs off, across the three chapters.
+     - **Two speakers in one sentence (R8-3).** A model sentence that holds
+       turns by two different speakers (`— Да? — Нет.`) has no single right
+       id. The owner marks it **two speakers**, it scores neutral, and it is
+       counted apart from the mixed sentences.
+     - **Which sentences.** `n` is the sentences whose post-crossExamine
+       speaker differs, on vs off, across the three picked chapters.
        - If `n ≤ 30`, every one is judged (a **census**).
        - If `n > 30`, 30 are drawn uniformly without replacement, with a
          fixed seed that the report records.
        - Each is scored an **improvement** (on's id is the judged speaker
          and off's is not), a **regression** (the reverse) or **neutral**
-         (neither is, or can't tell). The two ids differ on every changed
-         sentence, so both cannot be right.
-     - **1C.** 30 confident decisions, allotted **(a) 11, (b) 2, (c) 11 and
-       (d′) 6** (R7-3, owner decision 12).
-       - They are drawn uniformly without replacement **within each
-         class**, with a fixed, recorded seed.
-       - A class with fewer decisions than its allotment is judged in full.
-         Each spare judgement goes to whichever of (a), (c) and (d′) has the
-         most unjudged decisions, and to (b) only when those three are
-         exhausted.
-       - Each is scored **right** or **wrong** against the judged speaker. A
-         can't-tell is reported, and is left out of `n_k`.
+         (neither is, can't tell, or two speakers). The two ids differ on
+         every changed sentence, so both cannot be right.
 
-**Verdicts (R7-1 … R7-4, owner decisions 11 and 12).** Each part records
-**one** verdict, and both describe **this capture** of these three chapters:
-its changed sentences for 1A, and its confident decisions for 1C. Stage 2
-carries the previous chunk's last speaker and two paragraphs across every
+**Verdict (R7-1, R7-2, owner decision 11).** 1A records **one** verdict,
+about **this capture** of the three picked chapters: its changed sentences.
+Stage 2 carries the previous chunk's last speaker and two paragraphs across every
 chunk seam (`stage2-chunk.ts:465-473`). So a capture's sentences are not
 independent draws of the model's behaviour, and nothing below claims to
-describe recovery beyond this take. The populations are therefore finite.
-Every test and bound below is exact for a finite population drawn without
-replacement, and none assumes independent draws from an unlimited one (AC6
-S1).
+describe recovery beyond this take. The population is therefore finite.
+The test below is exact for a finite population drawn without replacement,
+and does not assume independent draws from an unlimited one (AC6 S1).
 
 - **1A**, from its hand-check. Let `I`, `R` and `U` be the improvements,
   regressions and neutrals judged. The rule, in order:
@@ -1709,7 +1724,12 @@ S1).
   | 31 | 4 | 2 |
   | 40 | 8 | 5 |
   | 100 | 11 | 7 |
-  | 500 and above | 11 | 8 |
+  | 500 to 10,000 | 11 | 8 |
+  | 19,000 | 11 | 9 |
+
+  Past 10,000 the *makes them worse* bar rises to 9 somewhere below
+  19,000 (`hg-large.mjs`, AC7 M-3). Three chapters' changed sentences are
+  expected to be far fewer.
 
   The table below takes a true share `s` of the non-neutral changed
   sentences going recovery's way, and a neutral share `q`:
@@ -1726,9 +1746,14 @@ S1).
   | 500 | 0.25 | 0.09 / 0.38 / 0.78 / 0.98 | 0.26 / 0.64 / 0.93 |
   | 500 | 0.5 | 0.02 / 0.10 / 0.33 / 0.69 | 0.11 / 0.34 / 0.67 |
 
-  - **With no effect** (`s` = 0.5), a sample reads *improves* at most 1.8%
-    of the time and *makes them worse* at most 9.3%. Both maxima are at
-    `n = 500`, `q = 0`.
+  - **With no effect** (`s` = 0.5, `q` = 0), a sample reads *improves*
+    1.8% of the time and *makes them worse* 9.3% at `n = 500`. Both rise
+    with `n`: at `n` = 2,000–5,000 they are 2.1% and 9.9–10.0%. The exact
+    test keeps each at or under its level at any finite `n`, which is why
+    the *worse* bar steps up to 9 by `n = 19,000`. Reach at `n` = 2,000 and
+    5,000 matches the `n = 500` rows above to within 0.01. At 19,000 the
+    *makes them worse* column drops (0.29 / 0.73 / 0.97 at `q = 0`),
+    because its bar is 9.
   - **Said plainly:** once `n` is in the hundreds and half the judgements
     are neutral, a recovery that is right four times for every regression
     reads *improves* only about a third of the time. 30 judgements cannot do
@@ -1744,69 +1769,6 @@ S1).
   sample it gives `n × I / 30` and `n × R / 30` as the estimated numbers of
   improved and regressed sentences. Either way they sit beside the exact
   counts by class and the narrator share on vs off.
-- **1C**, from its hand-check. Let `w_k` of `n_k` be judged wrong in class
-  `k` ∈ {(a), (b), (c), (d′)}, `N_k` be the class's confident decisions in
-  the three chapters, and `W = Σ w_k`. The verdict rule is R6-2's:
-  - `W = 0` → *no confident wrong answer seen*;
-  - `W = 1` → *one confident wrong answer seen*;
-  - `W ≥ 2` → *confident wrong answers present*.
-
-  Two wrong is the smallest count that one slip of the judge cannot
-  produce alone. The recorded verdict names the classes `W` came from.
-  Class (b) is wrong for most of its members by its own definition, so a
-  *present* that rests on (b) alone says little about (a), (c) or (d′).
-  **How the statistics combine (R7-4):**
-  - **Estimate.** `Ŵ = Σ N_k × w_k / n_k`, over the sampled classes, is
-    unbiased because each class is drawn uniformly. The report gives each
-    class's `w_k / n_k` with its exact 95% interval for a class of `N_k`
-    (hypergeometric). A class judged in full gives its exact count.
-  - **Upper bound.** `Ŵ_hi = Σ U_k`, where `U_k` is class `k`'s exact
-    one-sided upper bound on its number of wrong decisions, at level
-    1 − 0.05/K. `K` (at most 4) is the number of sampled classes. By the
-    Bonferroni inequality, `Ŵ_hi` covers the true total with at least 95%
-    probability.
-  - **Follow-up trigger.** The follow-up is filed when `Ŵ_hi` is at least
-    **5%** of the three chapters' turn sentences, not when `W` crosses a
-    count.
-  - **Not estimated.** A class with confident decisions but no sample, and
-    the rest of (d) outside (d′), are reported as **not estimated**, never
-    as zero. The recorded outcome says so itself.
-
-  **What 1C can and cannot see** (large-class limits, from `hypergeo.mjs`'s
-  per-class formulas):
-
-  | Class (judgements) | P(at least one wrong seen) at a true wrong share of 5% / 10% / 20% / 30% | Zero seen is consistent with up to (two-sided 95%) | `U_k` as a share of `N_k` at zero seen (`K` = 4) |
-  |---|---|---|---|
-  | (a), (c) (11 each) | 0.43 / 0.69 / 0.91 / 0.98 | 28.5% | 32.9% |
-  | (d′) (6) | 0.26 / 0.47 / 0.74 / 0.88 | 45.9% | 51.8% |
-  | (b) (2) | 0.10 / 0.19 / 0.36 / 0.51 | 84.2% | 88.8% |
-  | for comparison, 10 | 0.40 / 0.65 / 0.89 / 0.97 | 30.8% | 35.5% |
-
-  - **Revision 6's "about 12%" was misapplied** (AC6 M-5). That is the bound
-    for one simple sample of 30 from one population. This sample is
-    stratified, and at 10 per class each class's bound at zero seen is
-    30.8%.
-  - ***None seen* and *one seen*** are therefore consistent with tens of
-    confidently wrong voices in a large class.
-  - **The trigger reads the bound, so it can fire on sampling width
-    alone.**
-    - A class of 11 judgements with no wrong answer seen still adds about a
-      third of its size to `Ŵ_hi`. So any such class holding more than
-      about 15% of the chapters' turn sentences fires the trigger by itself.
-      For (d′), the figure is about 10%.
-    - That is the price of making harm easy to flag. The recorded outcome
-      says which class drove `Ŵ_hi`, and whether its harm was **seen**
-      (`w_k ≥ 1`) or only **not ruled out** (`w_k = 0`).
-  - **Class (c) may be thin.**
-    - Book-wide, only 5 of Ночной дозор's 39 breaching paragraphs open with
-      a dash (#2275 C1). On the EPUB as parsed, the pick below would
-      include three of them: ch6 (63 openers), ch5 (31) and ch8 (25).
-    - The verbless-tag downgrade removes more (R5-11).
-    - A thin (c) is judged in full, and its spare judgements move to (a)
-      and (d′). 1C then says little about the dash-open tag-anchoring hazard
-      that Decision 2's rationale names, and the recorded outcome says so.
-  - **1C never sees the rest of (d).**
-
 **How blocker 1 closes (R6-3, as amended by R7-7).** 1A answers the owner's
 2026-08-13 question ("confirm it is fixing a user-facing problem (or
 downgrade the ticket's effect claim to a metric/acceptance improvement)"):
@@ -1819,21 +1781,14 @@ downgrade the ticket's effect claim to a metric/acceptance improvement)"):
 - **void**: **any** chapter's control failed (AC6 M-7). A control mismatch
   is a defect in the seam, so the row does not discharge, and the verdict is
   not computed on the chapters that passed.
-  - If the replay is at fault, it is fixed, and all three chapters are
+  - If the replay is at fault, it is fixed, and every captured chapter is
     re-measured from the saved captures, with no model time.
   - If the capture is at fault (what `onStages` recorded), it is fixed, and
     the chapters it affects are captured again.
 
-  The verdict is computed only once every chapter's control passes. So it
-  never rests on fewer chapters than were picked.
-
-1C is recorded beside it as the residual harm in merged text. When its
-trigger fires, a design item on the lever of the class that contributes most
-to `Ŵ_hi` is filed then:
-- recovery's evidence rule, for (a) and (b);
-- tag anchoring in dash-open paragraphs, for (c) and (d′).
-
-The item records whether that class's harm was seen or only not ruled out.
+  The verdict is computed only once every captured chapter's control
+  passes, swapped-out chapters included. So it never rests on fewer
+  chapters than the pick holds.
 
 **On-box cost (AC4 M-j, re-based for AC5 S3, re-derived for AC6 M-1).**
 - **The rate's source.** The rate comes from the **2026-09-05** run on
@@ -1845,15 +1800,17 @@ The item records whether that class's harm was seen or only not ruled out.
   дозор in **≈ 3 h 18 m** (~10:07–13:25,
   `onbox-wave11-group-c-results/step-2-c2c3c4-run.md:29-31`). Ch8 alone took
   **52 m 49 s** for 11,317 words (`:136`).
-- **Production ran two chapters at once.** `analyzerPoolWidth()` dispatches
-  up to `analyzer.ollama.concurrency` chapters in parallel
+- **Production dispatched two chapters at once.** `analyzerPoolWidth()`
+  dispatches up to `analyzer.ollama.concurrency` chapters in parallel
   (`analysis.ts:2142-2145`, `:7288-7292`), and the default is 2
   (`registry.ts:1013-1019`). The 2026-09-05 log does not record the
-  setting. But the same box logged "Running 9 chapters with up to 2 in
-  parallel" on 2026-09-07 (`step-3-c1-cloud.md:137`). And on 09-05, ch8
+  setting. The "Running 9 chapters with up to 2 in parallel" line
+  (`step-3-c1-cloud.md:137`) is from the **2026-09-07 cloud run**
+  (`gemma-4-31b-it`), not the 09-05 Ollama run (AC7 M-7). On 09-05, ch8
   finished at 13:22:18 after 52 m 49 s, with ch9 at 13:24:58
-  (`step-2-c2c3c4-run.md:18`, `:134-136`), which only overlapping chapters
-  explain.
+  (`step-2-c2c3c4-run.md:18`, `:134-136`), so the two chapters overlapped.
+  Whether that Ollama instance served them in two slots
+  (`OLLAMA_NUM_PARALLEL`) or queued one behind the other is unrecorded.
 - **The harness runs one chapter at a time** (R7-9). Stage 2's chunks run
   one after another within a chapter (`stage2-chunk.ts:465-473`).
 - **The likely pick.** On the EPUB as parsed (`density.mts`), the three
@@ -1868,7 +1825,8 @@ The item records whether that class's harm was seen or only not ruled out.
 |---|---|---|---|
 | 1 · library scan | parse only | none (no model) | — |
 | 2 · Ночной дозор capture | 3 chapters, one live capture each, one at a time; the 1A replays and the measurement need no model | **≈ 1.1–2.8 h**; ≈ 3 h 18 m is an **inferred** ceiling | **Estimated.** See the bullets below |
-| 2 · hand-checks | up to 60 owner judgements | owner time, no GPU | — |
+| 2 · swaps, if any | up to 2 more chapter captures (R8-2) | about 1 h each | **Estimated** |
+| 2 · hand-check | up to 30 owner judgements | owner time, no GPU | — |
 
 - **Low end, ≈ 1.1 h.** This is the pick's word share of the two-slot whole
   book (34.6% × 3 h 18 m). It assumes the second slot bought nothing.
@@ -1878,13 +1836,28 @@ The item records whether that class's harm was seen or only not ruled out.
     (`step-2-c2c3c4-run.md:128-131`). Ch5, also in the pick, had a
     "Dialogue markers lost" retry (`:76-81`). So the rate is not
     optimistic.
-  - Ch8's time was measured while it shared the GPU with a second chapter,
-    so alone it is unlikely to be slower.
+  - Ch8's time was measured while ch9 ran beside it, whether in a second
+    slot or queued. Alone it is unlikely to be slower, and if the box
+    served one slot, the high end is generous.
 - **The 3 h 18 m ceiling is inferred, not measured.** Two slots can at most
   double throughput. So three chapters run one at a time take no longer
   than the whole book did if they carry at most half its phase-1 work. They
   carry 34.6% of its words, but two of them are the run's retry-heavy
   chapters, and their share of the work was never measured.
+- **The swaps are bounded** (owner decision 16, R8-2). On 2026-09-05 ch6
+  aligned at **65%**, below the floor (`step-2-c2c3c4-run.md:64`, `:69`),
+  so the first swap is likely. Each swap costs one more chapter capture and
+  nothing else:
+  - the swapped-out chapter's capture is already saved, and its replays
+    and measurement need no model;
+  - below the floor escalation is skipped (`analysis.ts:3736`), so a
+    swapped-out chapter spends none of the shared escalation budget the
+    picked chapters use;
+  - at most two swaps are made, so at most five chapters are captured.
+
+  The book's mean chapter is about 11,500 words (103,751 over 9), which at
+  ch8's rate is about 54 min. So each swap adds about an hour, and the worst
+  case is about two hours over the table's range.
 - **What the figures are.** They are **wall-clock** time, not GPU time.
 - **What they hold for.** They hold only for `qwen38-cw-iq3-80k` on the
   5070 Ti. If the owner's model has changed, they do not carry over. Either
@@ -1899,33 +1872,30 @@ The item records whether that class's harm was seen or only not ruled out.
 - **1A:**
   - the verdict: *recovery improves the speakers* / *recovery makes them
     worse* / *no clear direction* / *recovery changes no speaker*, or
-    **void**, which does not discharge;
-  - whether it came from a census or a sample, with `n`, `I`, `R`, `U` and
-    the mixed-sentence count, plus the p-values for a sample;
+    **void** or **not computed** (R8-2), neither of which discharges;
+  - whether it came from a census or a sample, with `n`, `I`, `R` and
+    `U`, plus the p-values for a sample;
   - the exact counts by class;
   - the improved and regressed sentences, exact or estimated;
-  - the narrator share on vs off.
-- **1C:**
-  - the verdict: *confident wrong answers present* / *one confident wrong
-    answer seen* / *no confident wrong answer seen*, with the classes `W`
-    came from;
-  - the confident counts by class and reason;
-  - each class's judged share and interval;
-  - `Ŵ` and `Ŵ_hi`;
-  - whether the trigger fired, which class drove it, and whether that
-    class's harm was seen or only not ruled out;
-  - the classes **not estimated**;
-  - the downgrade count.
+  - the narrator share on vs off;
+  - the mixed and two-speaker sentence counts.
+- **The pick:** each captured chapter's alignment and `flagOnly`, which
+  chapters were swapped out, and, if the swap cap was reached with fewer
+  than three chapters clear of the floor, how many 1A rests on.
+- **The class report:** the confident counts by class and reason, with no
+  verdict (owner decision 14).
 
-**Every outcome except a void 1A discharges the row.** The verdicts go onto
-#2254 and close blocker 1 as above.
+**Every outcome except a void or not-computed 1A discharges the row.** The
+verdict goes onto #2254 and closes blocker 1 as above.
 
 ### 4.5 Committed-fixture limits
 
 - The Castwright-owned dash text (13 turns) is far too small for an on-box
   verdict. It feeds the committed 1A arms (§4.2) and the tools' unit tests.
-- `the-coalfall-commission.ru.md` uses «» quotes, which recovery and
-  legibility ignore.
+- `the-coalfall-commission.ru.md` uses «» quotes for most of its dialogue,
+  which recovery and legibility ignore. Its short dash-dialogue section
+  (`ru.md:63-69`, 6 dash-opening paragraphs in all) is the only part
+  either reads.
 - If step 1 scans no clean, dialogue-dense ru dash book (R7-5), the
   authored fixtures stay the **only** clean calibration of the threshold.
   The regression plan states this limit, and the threshold stays
@@ -1962,26 +1932,28 @@ with:
 > flagged chapter judged merged or clean, any clean-judged chapter ≥ 10 (a
 > breach of the provisional threshold), chapters labelled extractor-merged
 > (#4217) listed as true positives, line-wrapped books (any format) listed
-> but not counted, each book's dash-turn density, the clean dialogue-dense
-> ru dash books by title (the provisional label needs at least one), and
-> non-ru Cyrillic books listed separately; (2) Ночной дозор, the 3 chapters
-> with the most hidden turns, one live capture each, one at a time: the
-> replay control, post-crossExamine speakers changed by recovery on vs off
-> per model sentence (1A), confident decisions on turn sentences by class
-> and reason, including the engine's `narration-demote` overrides (1C), and
-> two blind hand-checks of up to 30 each. Wall-clock: none for (1); about
-> 1.1–2.8 h for (2), estimated, on the 2026-09-05 model.
+> with their re-joined maximum and their breaches counted, each book's
+> dash-turn density, the clean dialogue-dense ru dash books by title (the
+> provisional label needs at least one), and non-ru Cyrillic books listed
+> separately; (2) Ночной дозор, the 3 chapters with the most hidden turns
+> that clear the 80% alignment floor, one live capture each, one at a time,
+> a chapter below the floor swapped for the next (at most two swaps): each
+> chapter's alignment and `flagOnly`, the replay control, post-crossExamine
+> speakers changed by recovery on vs off per model sentence (1A), confident
+> decisions on turn sentences by class and reason, including the engine's
+> `narration-demote` overrides (a report, no verdict), and one blind
+> hand-check of up to 30. Wall-clock: none for (1); about 1.1–2.8 h for
+> (2), plus about 1 h per swap, estimated, on the 2026-09-05 model.
 >
 > **Outcome (not a pass bar):** 1A *improves the speakers* / *makes them
 > worse* / *no clear direction* / *changes no speaker*, decided by the
 > counts when 30 or fewer sentences changed (*improves* at `I − R ≥ 3`,
 > *worse* at `R − I ≥ 1`), otherwise by an exact finite-population test of
-> the same claims (one-sided 0.025 for *improves*, 0.10 for *worse*); 1C
-> *confident wrong answers present* (≥ 2 judged wrong) / *one seen* /
-> *none seen*, with `Ŵ`, its upper bound `Ŵ_hi`, and whether the follow-up
-> trigger fired. A void 1A (any chapter's control failed) does not
-> discharge. Every other outcome discharges: record the tables, the
-> verdicts, the scan, who/when, and post them on #2254.
+> the same claims (one-sided 0.025 for *improves*, 0.10 for *worse*). A
+> void 1A (any captured chapter's control failed), or one not computed (no
+> chapter cleared the floor), does not discharge.
+> Every other outcome discharges: record the tables, the verdict, the
+> class report, the scan, who/when, and post them on #2254.
 >
 > **Criteria:** `docs/testing/paragraph-degradation-onbox-acceptance.md`.
 
@@ -2005,7 +1977,7 @@ Phase 1.
 | 4 | `GET /state` `paragraphsMergedChapters` + `WeakMap` memo (unfiltered ids, per-request exclusion, R4-7/R5-7 omission via `assertHintsPairWithState` with `parseTitles`, called per request in a `try`/`catch` of `HintsOutOfSyncError`, R6-8) + openapi + `src/lib/types.ts:455` + mock `/state` + `chapters-slice` + manuscript caption + e2e case | server, frontend, e2e | Default | route (incl. compute-once, toggle-after-cache, count mismatch, same-count title mismatch, title state changed under a cached record), slice, component, e2e | both release-notes files |
 | 5 | Characterisation test first, then extract `runStructureEngine` (`:3714-3727`; `:3728` stays in the caller; zero behaviour change) + `structureOptions` seam + `onStages` `stage1`/`paras`/`alignment`/`flags` (`flags` cloned at `:3729`, before escalation) + 1A arms 1 and 2 | server | Default | characterisation (5 inputs, one in which escalation fills a line, `toEqual` on the pre-existing fields, committed before the additions) + a separate new-fields assertion (on the escalation-fill input, `onStages.flags` still holds the filled line's index); `analysis.structure-fixture.test.ts`; existing `attributeChapterStage2` tests green | none (say so) |
 | 6 | **Withdrawn** (owner decision 10, R6-9): the `recoverMidParagraphTurns` switch and `emitSpans` on `computeAttributionMeasurement` served only the twin | — | — | — | — |
-| 7 | Extract `captureChapterStages` from `evalFixture` (+ capacity, shared budget, chunk counters, `flags`) + extract `buildManuscriptRecord` from `hydrateFromDisk` (`store/manuscripts.ts`, called by it unchanged, R7-10) + library scanner (formats, sums, line-wrap test on every format's imported text at ≥ 2% or ≥ 10 continuation lines (R7-6), dash-turn density and the clean dialogue-dense flag (R7-5), EPUB rewritten-copy #4217 what-if, worst paragraph, byte-for-byte read-only `--dump`) + `paragraph-degradation-ab.mts` runner (one chapter at a time, captures saved first with the budget left, `--from-captures`, `--resume`, replay control, confident rule over the five reasons with `flags`, classes (a)–(d) and (d′) by precedence with lines defined by first-span start (R7-8), downgrade count, blind hand-check sheets and `--score` (R7-11), the 1A census and finite-population sample rules (R7-1, R7-2), the 1C allocation, `Ŵ`, `Ŵ_hi` and trigger (R7-3, R7-4), wall-clock and estimate) | server, scripts | Default | `run-eval.test.ts` green; existing `manuscripts` hydrate tests green; scanner (multi-format fixtures; the clean ru-dash fixture **not** line-wrapped, and the same text one paragraph per line **not** line-wrapped; that fixture hard-wrapped at 80 and at **200** columns flagged, as `.txt` and as `.md`; an EPUB whose `<p>` text is hard-wrapped flagged; a book-length unwrapped text with exactly 10 continuation lines (under 2%) flagged and with 9 not; dash-turn density and the dialogue-dense flag at 25 per 1,000 words and at 1,000 turns, either side of each bar; a `<div>`-paragraphed EPUB fixture labelled extractor-merged; a MOBI reported not computed; a dump leaves the book's `state.json` byte for byte unchanged where the scan's self-heal would have written it); runner (fixture capture with a mock analyzer, captures written before measurement, a replay-control mismatch in one chapter of three reported void and blocking the verdict, the §4.3 class, precedence and reason fixtures, an unknown confident reason fails the measurement and `--from-captures` re-runs it without the analyzer, `--resume` after a chapter fails mid-capture keeps the saved chapters, restores `remainingWindows` and re-captures only that chapter, a blind sheet carrying no speaker id, the census bars at `I − R` = 2 and 3 and `R − I` = 0 and 1, the sample test's critical values at `n` = 31 and 40 against the table in §4.4, the 1C allocation with a thin class's spare moved to (a)/(c)/(d′) before (b), the 1C count bar at `W` = 0, 1 and 2, `Ŵ`, `Ŵ_hi` against a hand-computed bound and the trigger either side of 5%, and an unsampled class reported as not estimated) | none (say so) |
+| 7 | Extract `captureChapterStages` from `evalFixture` (+ capacity, shared budget, chunk counters, `flags`) + extract `buildManuscriptRecord` from `hydrateFromDisk` (`store/manuscripts.ts`, called by it unchanged, R7-10) + library scanner (formats, sums, line-wrap test on every format's imported text at ≥ 2% or ≥ 10 continuation lines (R7-6), the re-joined maximum and whether the wrap matters (R8-1), dash-turn density and the clean dialogue-dense flag (R7-5), EPUB rewritten-copy #4217 what-if, worst paragraph, byte-for-byte read-only `--dump`) + `paragraph-degradation-ab.mts` runner (one chapter at a time, captures saved first with the budget left, per-chapter alignment and `flagOnly`, the pick settled after capture with at most two swaps (R8-2), `--from-captures`, `--resume`, replay control, confident rule over the five reasons with `flags`, classes (a)–(d) by precedence with lines defined by first-span start (R7-8), the class report, the blind 1A sheet on the recovery-off parse and `--score` (R7-11, R8-3), the 1A census and finite-population sample rules (R7-1, R7-2), wall-clock and estimate) | server, scripts | Default | `run-eval.test.ts` green; existing `manuscripts` hydrate tests green; scanner (multi-format fixtures; the clean ru-dash fixture **not** line-wrapped, and the same text one paragraph per line **not** line-wrapped; that fixture hard-wrapped at 80 and at **200** columns flagged, as `.txt` and as `.md`; an EPUB whose `<p>` text is hard-wrapped flagged; a book-length unwrapped text with exactly 10 continuation lines (under 2%) flagged and with 9 not; a line-wrapped book whose re-joined maximum is 9 is a calibration candidate and one at 10 is not, and a PDF never is; a breach in a line-wrapped book counts against the label; dash-turn density and the dialogue-dense flag at 25 per 1,000 words and at 1,000 turns, either side of each bar; a `<div>`-paragraphed EPUB fixture labelled extractor-merged; a MOBI reported not computed; a dump leaves the book's `state.json` byte for byte unchanged where the scan's self-heal would have written it); runner (fixture capture with a mock analyzer, captures written before measurement, a replay-control mismatch in one chapter of three reported void and blocking the verdict; a below-floor capture swapped for the next candidate, reported with its alignment and kept out of the verdict and the totals, and the swap cap stopping at five captures; the §4.3 class, precedence and reason fixtures, an unknown confident reason fails the measurement and `--from-captures` re-runs it without the analyzer, `--resume` after a chapter fails mid-capture keeps the saved chapters, restores `remainingWindows` and re-captures only that chapter, a blind sheet carrying no speaker id and showing the recovery-off line, a two-speaker sentence scored neutral, the census bars at `I − R` = 2 and 3 and `R − I` = 0 and 1, and the sample test's critical values at `n` = 31 and 40 against the table in §4.4) | none (say so) |
 | 8 | Register row + run sheet + live view + `--against-published` + publish | docs | **Main thread** | `check:onbox-register`, `register:build` | — |
 | 9 | **Owner, on-box:** the new register row → verdicts on #2254 → discharge | — | — | — | Closes #2254 with 3, 4 and 9 done |
 
@@ -2026,7 +1998,7 @@ Phase 1.
 - #4217's extractor change (its own design pass; the scanner's what-if is
   diagnostic only);
 - recovering bare third-person tags, or re-anchoring tags in dash-open
-  paragraphs (file either only if the register row's 1A or 1C points at that
+  paragraphs (file either only if the register row's 1A or class report points at that
   lever);
 - escalation's compensation for recovery-off flags (§4.1 limits);
 - script review's use of recovered evidence (§4.1);
