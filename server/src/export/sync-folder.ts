@@ -42,13 +42,16 @@ export async function writeToSyncFolder(
      across volumes fails with EXDEV on Windows, and the user's most
      likely sync folder (OneDrive under their profile) is genuinely on
      a different drive from the workspace under many setups. */
-  await copyFile(srcPath, tmpPath);
   try {
+    await copyFile(srcPath, tmpPath);
     await renameWithRetry(tmpPath, finalPath);
   } catch (e) {
-    /* Cleanup the tmp on terminal failure — leaving `.tmp-<pid>-<ts>`
-       droppings inside a user's synced folder is the kind of thing they
-       notice and complain about. */
+    /* Cleanup the tmp on terminal failure (defensive for a copy that
+       fails part-way, e.g. ENOSPC, in case the platform's own cleanup
+       does not run) — leaving `.tmp-<pid>-<ts>` droppings inside a
+       user's synced folder is the kind of thing they notice and
+       complain about. A copy failure also gets the Drive / OneDrive
+       hint below, same as a rename failure. */
     await unlink(tmpPath).catch(() => {});
     throw wrapWithSyncHint(e, destDir);
   }
@@ -98,8 +101,8 @@ export async function writeFolderToSyncFolder(
     const src = join(srcDir, name);
     const finalPath = join(targetDir, basename(name));
     const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}-${copied}`;
-    await copyFile(src, tmpPath);
     try {
+      await copyFile(src, tmpPath);
       await renameWithRetry(tmpPath, finalPath);
     } catch (e) {
       await unlink(tmpPath).catch(() => {});

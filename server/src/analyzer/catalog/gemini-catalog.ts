@@ -33,6 +33,11 @@ import { createHash } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
 import { redactKnownSecrets } from '../redact.js';
 
+/** Every `new GoogleGenAI` pins this. @google/genai 3.0 flipped the Developer API
+    default from v1beta to v1, and v1 has no speech output (speechConfig /
+    responseModalities AUDIO) — an unpinned client breaks Gemini TTS. */
+export const GEMINI_API_VERSION = 'v1beta';
+
 export interface GeminiModelInfo {
   id: string;
   displayName?: string;
@@ -127,7 +132,8 @@ function joinListing(
 ): SharedListing {
   if (!opts.refresh && inFlight && inFlight.keyHash === keyHash) return inFlight;
 
-  const client = opts.client ?? (new GoogleGenAI({ apiKey }) as unknown as GeminiModelsClient);
+  const client =
+    opts.client ?? (new GoogleGenAI({ apiKey, apiVersion: GEMINI_API_VERSION }) as unknown as GeminiModelsClient);
   /* P26 — the SDK bounds each HTTP attempt (httpOptions.timeout, abortSignal);
      our own timer bounds the whole listing, pages included, and aborts the SDK
      signal when it fires. */
