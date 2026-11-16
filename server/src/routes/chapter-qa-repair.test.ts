@@ -584,6 +584,45 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(done!.reviewOutcome).toBe('failed');
   });
 
+  /* #4233 — the catch-all's `chapter_failed` frame must never carry a node fs
+     error's or a lock timeout's own message (both embed the absolute path). */
+  describe('curated failure frame (#4233)', () => {
+    const ABS = 'C:/Users/secret/books/x/chapter-one.mp3';
+
+    async function failFinalizeWith(err: unknown): Promise<string> {
+      synthesiseChapterMock.mockReset();
+      synthesiseChapterMock.mockImplementation(async () => ({ pcm: tone(0.5, 12000), sampleRate: SR }));
+      const fin = await import('../audio/finalize-chapter-write.js');
+      vi.mocked(fin.finalizeChapterAudioWrite).mockRejectedValueOnce(err);
+      const { bookId: id } = await scaffoldVerdictBook(`Curated Fail ${Math.random().toString(36).slice(2, 8)}`);
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+        .send({ dryRun: false, modelKey: 'kokoro-v1' });
+      const failed = parseSse(res.text).find((e) => e.type === 'chapter_failed');
+      expect(failed, `expected chapter_failed, got ${res.text}`).toBeTruthy();
+      return failed!.errorReason as string;
+    }
+
+    it.each(['EBUSY', 'ENOSPC'])('an fs %s error carrying an absolute path answers a path-free sentence', async (code) => {
+      const err = Object.assign(new Error(`${code}: operation failed, open '${ABS}'`), { code, syscall: 'open', path: ABS });
+      const reason = await failFinalizeWith(err);
+      expect(reason).not.toContain(ABS);
+      expect(reason).not.toMatch(/secret|[A-Za-z]:/);
+      expect(reason).not.toContain(code);
+    });
+
+    it('a lock acquisition timeout answers the curated contention sentence', async () => {
+      const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+      const reason = await failFinalizeWith(new LockAcquisitionTimeoutError(`state-json:${ABS}`, 10_000));
+      expect(reason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+      expect(reason).not.toContain(ABS);
+    });
+
+    it('a plain error keeps its own message behind the Audio-QA repair failed prefix', async () => {
+      expect(await failFinalizeWith(new Error('encoder exploded'))).toBe('Audio-QA repair failed: encoder exploded');
+    });
+  });
+
   it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({

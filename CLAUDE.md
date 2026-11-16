@@ -729,7 +729,7 @@ Design rationale:
   `cast-design`'s job) whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-five call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-seven call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -737,6 +737,9 @@ Design rationale:
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
+  `chapter-splice` and `chapter-qa-repair` (the catch-alls of their SSE jobs: the
+  `chapter_failed` frame keeps its `Splice failed: ` / `Audio-QA repair failed: `
+  prefix only for an ordinary error, #4233),
   `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
   `cast-merge`, `voice-match`, `failure-taxonomy` (the persist-failure
   sentence of `AnalysisPersistError`)),
