@@ -13,11 +13,13 @@ export type FfmpegFailureError = Error & { ffmpegStderr: string };
 
 const MAX_TAIL = 160;
 
-/* A path root: `file:`, UNC / `\\?\`, a drive letter, `~/`, or a `/` that opens a
-   token (start of line or after whitespace, a quote, `(`, `[` or `:`). Paths can
-   hold spaces, quotes and colons, so no end can be told apart from the text that
-   follows: everything from the first root to the end of the line is dropped. */
-const PATH_ROOT = /file:|\\\\|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.])~\/|(?<![^\s'"([:])\/(?=[\w.~-])/;
+/* A path root: a `file:` URL (`file:` + `/`; ffmpeg's own "Error closing file:
+   <strerror>" is not one), UNC / `\\?\`, a drive letter, `~/`, or a `/` that opens a
+   token (not glued to a word, `#`, `.` or `/`, so `I/O`, `out#0/mp3`, `1/2` and
+   `http://` stay whole). Paths can hold spaces, quotes and colons, so no end can be
+   told apart from the text that follows: everything from the first root to the end
+   of the line is dropped. */
+const PATH_ROOT = /file:(?=\/)|\\\\|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.])~\/|(?<![\w#./])\/(?=[\w.~-])/;
 
 function scrubPaths(s: string): string {
   const m = PATH_ROOT.exec(s);

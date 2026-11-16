@@ -732,7 +732,7 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-eight call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-nine call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -744,7 +744,9 @@ Design rationale:
   `chapter_failed` frame keeps its `Splice failed: ` / `Audio-QA repair failed: `
   prefix only for an ordinary error, #4233),
   `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
-  `cast-merge`, `voice-match`, `failure-taxonomy` ×2 (the persist-failure
+  `cast-merge`, `voice-match`, `setup-readiness` (`POST /setup/smoke`'s synth-stage
+  catch, whose mkdir / writeFile / encode readFile errors embed a path, #4233),
+  `failure-taxonomy` ×2 (the persist-failure
   sentence of `AnalysisPersistError`, and `classifyFailure`'s unmapped-error
   fallback)),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the

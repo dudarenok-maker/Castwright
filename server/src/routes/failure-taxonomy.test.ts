@@ -1617,6 +1617,18 @@ describe('classifyFailure -- an unmapped node fs error is curated, not echoed (#
       expect(c.raw).toContain(title); // the log keeps the detail
     });
 
+    it('a spawn error that carries a path still reaches its signature, not the fs outcome', () => {
+      const c = classifyFailure(
+        Object.assign(new Error('spawn C:\\bin\\ffmpeg.exe ENOENT (CUDA out of memory)'), {
+          code: 'ENOENT',
+          syscall: 'spawn C:\\bin\\ffmpeg.exe',
+          path: 'C:\\bin\\ffmpeg.exe',
+        }),
+      );
+      expect(c.userMessage).not.toBe('Files could not be read or written right now. Try again.');
+      expect(c.code).not.toBe('unknown');
+    });
+
     it('a network error with a code and syscall still reaches its signature', () => {
       const c = classifyFailure(
         Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9000'), {

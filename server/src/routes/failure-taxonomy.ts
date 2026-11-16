@@ -463,11 +463,12 @@ function scanSignatures(
 const GENERATION_SOURCES: ReadonlySet<FailureSource> = new Set(['generation', 'both']);
 const ANALYSIS_SOURCES: ReadonlySet<FailureSource> = new Set(['analysis', 'both']);
 
-/** A node fs error on a path. Net and spawn errors also carry `code` + `syscall`
-    but are not this class: they still go through the signature scan. */
+/** A node fs error on a path. Net errors (TCP / named pipe) carry `address`, never
+    `path`, so the `path` check alone excludes them. A spawn error carries the binary's
+    `path` but is not an fs error on a book file: it still goes through the signature scan. */
 function isFsPathError(err: unknown): boolean {
   const e = err as { syscall?: unknown; path?: unknown };
-  return isFsError(err) && typeof e.path === 'string' && !/^(spawn|connect)/.test(String(e.syscall));
+  return isFsError(err) && typeof e.path === 'string' && !/^spawn/.test(String(e.syscall));
 }
 
 /** Classify a synthesis/analysis error into the structured taxonomy. A node fs
@@ -475,7 +476,8 @@ function isFsPathError(err: unknown): boolean {
     curated fs sentence) before the signature scan, because its message embeds
     the path. Otherwise the first matching signature wins; an unmapped error
     returns `code: 'unknown'` with the (trimmed) raw message as `userMessage` and
-    a generic remediation, `fatal: false`. */
+    a generic remediation, `fatal: false` (an fs-shaped error with no `path` skips
+    the pre-check and, if unmapped, gets the curated fs sentence from the fallback). */
 export function classifyFailure(err: unknown, engine?: string): ClassifiedFailure {
   /* #3625 — finalizeChapterAudioWrite takes the per-book state-json lock
      (#3700), so a chapter failure can be a lock timeout. `withStateJsonLock`

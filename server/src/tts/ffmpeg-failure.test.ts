@@ -69,6 +69,25 @@ describe('ffmpegFailure path scrub (#4233)', () => {
     expect(err.message).toBe('ffmpeg exited with code 1: Invalid data found when processing input');
   });
 
+  it("keeps ffmpeg 8.1.1's own \"Error closing file\" wording intact", () => {
+    const err = ffmpegFailure('ffmpeg', 1, 'Error closing file: Invalid argument');
+    expect(err.message).toBe('ffmpeg exited with code 1: Error closing file: Invalid argument');
+  });
+
+  it.each(['=', ']', ',', '{', '<'])('scrubs a posix path that follows %s', (lead) => {
+    const err = ffmpegFailure('ffmpeg', 1, `banner\nError opening output url${lead}/home/bob/Secret Book/ch1.mp3: denied`);
+    expect(err.message).not.toContain('Secret');
+    expect(err.message).not.toContain('/home');
+  });
+
+  it.each(['I/O error', 'Input/output error', 'out#0/mp3', '1/2', '/', 'http://127.0.0.1:9000/x', 'pipe:0'])(
+    'leaves %s intact',
+    (line) => {
+      const err = ffmpegFailure('ffmpeg', 1, line);
+      expect(err.message).toBe(`ffmpeg exited with code 1: ${line}`);
+    },
+  );
+
   it('does not mistake non-path slashes for a path root', () => {
     const err = ffmpegFailure('ffmpeg', 1, '[out#0/mp3 @ 0x1] I/O error, and/or N/A');
     expect(err.message).toContain('I/O error, and/or N/A');
