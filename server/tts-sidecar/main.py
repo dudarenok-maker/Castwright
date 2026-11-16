@@ -6007,8 +6007,11 @@ def _engine_any_model_resident(engine_id: str) -> bool:
     the VoiceDesign), so a "cold" op beside a resident sibling would learn its
     peak minus the freed sibling. Qwen therefore uses the same four terms as
     `_qwen_resident_device_key` WITHOUT its device-family gate (an in-flight
-    design whose `_device` has not resolved yet still counts). Any exception,
-    or a non-`QwenEngine` object, returns True: unknown residency discards the
+    design whose `_device` has not resolved yet still counts). Every other
+    engine counts as resident when its model is loaded, whatever device it
+    sits on (`_engine_actual_card`, not `_is_resident`, which answers None for
+    a CPU-loaded model). Any exception, an unknown engine id, or a
+    non-`QwenEngine` object, returns True: unknown residency discards the
     sample rather than learning it."""
     try:
         if engine_id == "qwen":
@@ -6021,7 +6024,14 @@ def _engine_any_model_resident(engine_id: str) -> bool:
                 or qwen._design is not None
                 or qwen._design_in_flight.busy
             )
-        return _is_resident(engine_id) is not None
+        # Model presence, not GPU residency: an engine whose model is loaded
+        # on the CPU (Kokoro on the AMD profile, or after a CUDA fallback)
+        # still holds a GPU it was admitted to, and a warm op there must not
+        # learn another op's allocation as its own footprint.
+        named: dict[str, Any] = dict(ENGINES)
+        named["spk"] = SPK
+        engine = named.get(engine_id)
+        return engine is None or _engine_actual_card(engine) is not None
     except Exception:
         return True
 

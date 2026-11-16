@@ -229,12 +229,29 @@ def test_o7_production_predicate_and_wiring(monkeypatch):
         main.ENGINES, "qwen", _qwen_stub(_design_in_flight=types.SimpleNamespace(busy=True))
     )
     assert main._engine_any_model_resident("qwen") is True
+    # each remaining Qwen term alone, so dropping any one turns this red
+    monkeypatch.setitem(main.ENGINES, "qwen", _qwen_stub(_base=object()))
+    assert main._engine_any_model_resident("qwen") is True
+    monkeypatch.setitem(main.ENGINES, "qwen", _qwen_stub(_design=object()))
+    assert main._engine_any_model_resident("qwen") is True
     monkeypatch.setitem(main.ENGINES, "qwen", object())
     assert main._engine_any_model_resident("qwen") is True
-    monkeypatch.setattr(main, "_is_resident", lambda e: "cuda:0")
+    # other engines: model presence, whatever the device
+    monkeypatch.setitem(main.ENGINES, "coqui", object())
+    monkeypatch.setattr(main, "_engine_actual_card", lambda e: {"family": "cuda", "index": 0})
     assert main._engine_any_model_resident("coqui") is True
-    monkeypatch.setattr(main, "_is_resident", lambda e: None)
+    monkeypatch.setattr(main, "_engine_actual_card", lambda e: None)
     assert main._engine_any_model_resident("coqui") is False
+    # #4163 review: a model loaded on the CPU is still resident (warm)
+    monkeypatch.setattr(main, "_engine_actual_card", lambda e: {"family": "cpu", "index": None})
+    assert main._engine_any_model_resident("coqui") is True
+
+    def boom(e):
+        raise RuntimeError("probe failed")
+
+    # fail closed: an unreadable state counts as resident
+    monkeypatch.setattr(main, "_engine_actual_card", boom)
+    assert main._engine_any_model_resident("coqui") is True
     assert main._placement.any_model_resident is main._engine_any_model_resident
 
 
