@@ -13,11 +13,15 @@ export type FfmpegFailureError = Error & { ffmpegStderr: string };
 
 const MAX_TAIL = 160;
 
+/* A path root: `file:`, UNC / `\\?\`, a drive letter, `~/`, or a `/` that opens a
+   token (start of line or after whitespace, a quote, `(`, `[` or `:`). Paths can
+   hold spaces, quotes and colons, so no end can be told apart from the text that
+   follows: everything from the first root to the end of the line is dropped. */
+const PATH_ROOT = /file:|\\\\|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.])~\/|(?<![^\s'"([:])\/(?=[\w.~-])/;
+
 function scrubPaths(s: string): string {
-  return s
-    .replace(/\\\\[^\s'"]+/g, '<path>') // UNC
-    .replace(/[A-Za-z]:[\\/][^'"\r\n:]*/g, '<path>') // drive-letter, up to the next ':'
-    .replace(/(?<![\w:.])\/[^\s'"():]+\/[^\s'"():]*/g, '<path>'); // posix, 2+ segments
+  const m = PATH_ROOT.exec(s);
+  return m ? `${s.slice(0, m.index)}<path>` : s;
 }
 
 export function ffmpegFailure(label: string, code: number | null, stderr: string): FfmpegFailureError {

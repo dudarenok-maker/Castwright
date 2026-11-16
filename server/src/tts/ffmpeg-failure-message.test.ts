@@ -9,11 +9,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { encodePcmToAudio, decodeAudioToPcm, decodeAudioFileToPcm } from './mp3.js';
+import { applyGainToPcm } from './gain-pcm.js';
+import { runLoudnormFirstPass } from './loudnorm.js';
 import { ffmpegFailure } from './ffmpeg-failure.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { classifyFailure } from '../routes/failure-taxonomy.js';
 
-const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status === 0;
 const ABS_PATH = /[A-Za-z]:[\\/]|\/(?:tmp|var|home|Users)\//;
 
 const SR = 24000;
@@ -58,7 +60,7 @@ describe('ffmpegFailure', () => {
     expect(ffmpegFailure('ffmpeg', 2, '').message).toBe('ffmpeg exited with code 2');
     const e = ffmpegFailure('ffmpeg', 1, 'Error opening output /var/tmp/a/b.mp3: No such file or directory');
     expect(e.message).not.toMatch(ABS_PATH);
-    expect(e.message).toMatch(/No such file or directory/);
+    expect(e.message).toMatch(/Error opening output <path>/);
   });
 });
 
@@ -86,6 +88,26 @@ describe.skipIf(!hasFfmpeg)('real ffmpeg failure is path-free in the message', (
       expect(frame).toMatch(/^Splice failed: ffmpeg exited with code/);
     });
   }
+
+  it('applyGainToPcm and the loudnorm first pass fail path-free with stderr on the property', async () => {
+    type Failure = (Error & { ffmpegStderr?: string }) | null;
+    const settle = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as Failure);
+    // An unusable sample rate / filter value makes ffmpeg exit non-zero for real.
+    const gain = await settle(applyGainToPcm(pcm, -1, 6));
+    const loud = await settle(
+      runLoudnormFirstPass(pcm, SR, { target: Number.NaN, lra: 11, tp: -1.5, twoPass: true }),
+    );
+    for (const [err, label] of [
+      [gain, /^ffmpeg \(volume\) exited with code/],
+      [loud, /^ffmpeg loudnorm first pass exited with code/],
+    ] as const) {
+      expect(err).toBeInstanceOf(Error);
+      expect(err!.message).toMatch(label);
+      expect(err!.message).not.toMatch(ABS_PATH);
+      expect(err!.message.length).toBeLessThan(400);
+      expect(typeof err!.ffmpegStderr).toBe('string');
+    }
+  });
 
   it('decodeAudioToPcm / decodeAudioFileToPcm keep stderr off the message', async () => {
     const d = (await decodeAudioToPcm(Buffer.from('not audio at all'), SR).then(

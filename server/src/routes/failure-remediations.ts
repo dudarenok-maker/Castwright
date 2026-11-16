@@ -322,7 +322,8 @@ export const FAILURE_REMEDIATIONS = {
       'If the model came from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
   },
   unknown: {
-    /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */
+    /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead
+       (a node fs error shows the curated fs sentence instead, #4233). */
     userMessage:
       'Something failed in a way the app does not recognise — the raw error message is shown in place of this line.',
     remediation:

@@ -205,6 +205,8 @@ setupReadinessRouter.post('/smoke', async (_req: Request, res: Response) => {
     url = voiceSamplePublicUrl('setup-smoke.mp3');
     durationSec = pcm.length / 2 / sampleRate; // 16-bit mono
   } catch (e) {
+    // #4233: the response carries a path-free message; the full ffmpeg stderr rides on `ffmpegStderr`.
+    console.error('[setup/smoke] synth stage failed', e);
     return res.json({ ok: false, stage: 'synth', error: (e as Error).message });
   }
 
