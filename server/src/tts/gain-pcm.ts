@@ -9,6 +9,7 @@
    dep; we spawn the real binary in tests rather than mock this boundary. */
 
 import { spawn } from 'node:child_process';
+import { ffmpegFailure } from './ffmpeg-failure.js';
 
 /** Apply `gainDb` (signed dB) to 16-bit signed LE mono PCM at `sampleRate`.
     Output sample count equals the input's. ffmpeg's encoder/filter clamps to
@@ -60,7 +61,7 @@ export async function applyGainToPcm(
     child.on('close', (code) => {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
       if (code === 0) resolve(Buffer.concat(stdoutChunks));
-      else reject(new Error(`ffmpeg (volume) exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
+      else reject(ffmpegFailure('ffmpeg (volume)', code, stderr));
     });
     child.stdin.on('error', (err) => {
       if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);

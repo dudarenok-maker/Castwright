@@ -1550,3 +1550,34 @@ describe('classifyAnalysisFailure - an authoritative persist write failed (#4031
     }
   });
 });
+
+describe('classifyFailure -- an unmapped node fs error is curated, not echoed (#4233)', () => {
+  const ABS = 'C:\\Users\\someone\\Castwright\\books\\Author\\Title\\audio\\chapter-01.mp3';
+  const fsErr = (code: string) =>
+    Object.assign(new Error(`${code}: resource busy or locked, rename '${ABS}.tmp' -> '${ABS}'`), {
+      code,
+      syscall: 'rename',
+      path: `${ABS}.tmp`,
+      dest: ABS,
+    });
+
+  it.each(['EBUSY', 'EPERM'])('%s answers the curated fs sentence with no path', (code) => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = classifyFailure(fsErr(code));
+      expect(c.code).toBe('unknown');
+      expect(c.fatal).toBe(false);
+      expect(c.userMessage).not.toContain('C:\\Users');
+      expect(c.userMessage).not.toContain('chapter-01');
+      expect(c.userMessage.length).toBeGreaterThan(0);
+      expect(c.raw).toContain(ABS); // the log keeps the detail
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('a plain error with a stray code is still passed through verbatim', () => {
+    const c = classifyFailure(Object.assign(new Error('weird thing'), { code: 'X1' }));
+    expect(c.userMessage).toBe('weird thing');
+  });
+});

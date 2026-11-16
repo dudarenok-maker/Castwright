@@ -484,7 +484,10 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
   const raw = rawOf(err);
   return {
     code: 'unknown',
-    userMessage: trimRaw(raw),
+    /* #4233 -- an unmapped node fs error (EBUSY / EPERM on the finalize rename)
+       embeds the absolute book path, and this reason is broadcast over SSE and
+       persisted as generationError. Curated; `raw` keeps the detail for the log. */
+    userMessage: requestFailureMessageFs(err, trimRaw(raw)),
     remediation: FAILURE_REMEDIATIONS.unknown.remediation,
     fatal: false,
     raw,
