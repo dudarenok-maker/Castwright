@@ -9,6 +9,7 @@ import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { parseManuscript, UnsupportedFormatError, UnusableMediaError } from '../parsers/index.js';
 import { putManuscript, withParseOrigin, type ManuscriptRecord } from '../store/manuscripts.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -66,6 +67,6 @@ manuscriptsRouter.post('/', upload.single('file'), async (req: Request, res: Res
       return res.status(415).json({ error: e.message });
     }
     console.error('[manuscripts] upload failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Upload failed.' });
+    return res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'Upload failed.') });
   }
 });

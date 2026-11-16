@@ -403,9 +403,18 @@ describeIfTools('buildM4b', () => {
       /* Verbatim: ffmpeg sees the TS stream and the mux fails. */
       writeFileSync(coverPath, poisoned);
       expect(probeFormat(coverPath)).toContain('mpegts');
-      await expect(
-        buildM4b({ bookDir, state: makeState(), outPath: join(tmpRoot, 'poisoned.m4b') }),
-      ).rejects.toThrow(/ffmpeg exited/);
+      const failure = await buildM4b({
+        bookDir,
+        state: makeState(),
+        outPath: join(tmpRoot, 'poisoned.m4b'),
+      }).then(
+        () => null,
+        (e: Error & { ffmpegStderr?: string }) => e,
+      );
+      expect(failure?.message).toMatch(/^ffmpeg exited with code/);
+      /* #4236 -- the message is path-free; the full stderr rides on `ffmpegStderr`. */
+      expect(failure?.message).not.toContain(tmpRoot);
+      expect(failure?.ffmpegStderr).toBeTruthy();
 
       /* After the upload path's re-encode the same bytes mux cleanly. */
       writeFileSync(coverPath, await reencodeToJpeg(poisoned, { tolerant: true }));

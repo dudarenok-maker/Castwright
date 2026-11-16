@@ -52,6 +52,7 @@ import {
 } from '../tts/engine-health.js';
 import { classifyPackageFault } from '../tts/models-status.js';
 import type { AnalysisEngine } from '../analyzer/model-id.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -559,7 +560,11 @@ modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) =>
         remediation: 'Stop the sidecar (or Unload the model) and retry.',
       });
     }
-    return res.status(500).json({ error: err.message || 'Removal failed.' });
+    console.error('[models-inventory] removal failed', err);
+    /* `ollama rm` failures are a spawn / daemon message with no book or cache path; only the
+       weight-dir `rmSync` carries one (a spawn ENOENT must not read as a disk problem). */
+    const fallback = err.message || 'Removal failed.';
+    return res.status(500).json({ error: id.startsWith('ollama:') ? fallback : requestFailureMessageFs(err, fallback) });
   }
 });
 

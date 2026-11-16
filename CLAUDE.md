@@ -732,23 +732,29 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-nine call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  one hundred and sixteen call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
-  `voices` ×4, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
-  `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
+  `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
+  `voice-style` ×3, `single-design` ×3, `script-review` ×5 (the two `chapter-failed`
+  frames beside its start-failure and save-findings sites, #4236), `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
-  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `series-cast`, `series-roster`,
+  `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
+  weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
+  not a disk fault), `annotate-emotion` and `instruct-annotation` (their
+  `chapter-failed` frames) (#4236),
   `chapter-splice` and `chapter-qa-repair` (the catch-alls of their SSE jobs: the
   `chapter_failed` frame keeps its `Splice failed: ` / `Audio-QA repair failed: `
   prefix only for an ordinary error, #4233),
   `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
   `cast-merge`, `voice-match`, `setup-readiness` (`POST /setup/smoke`'s synth-stage
   catch, whose mkdir / writeFile / encode readFile errors embed a path, #4233),
-  `failure-taxonomy` ×2 (the persist-failure
-  sentence of `AnalysisPersistError`, and `classifyFailure`'s unmapped-error
-  fallback)),
+  `failure-taxonomy` ×4 (the persist-failure
+  sentence of `AnalysisPersistError`, `classifyFailure`'s unmapped-error
+  fallback, and the same two for the analysis side: `classifyAnalysisError`'s
+  fallback and `classifyAnalysisFailure`'s final `unknown`, #4236)),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the
   merge-accept route's outer catch and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since

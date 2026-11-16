@@ -1642,3 +1642,61 @@ describe('classifyFailure -- an unmapped node fs error is curated, not echoed (#
     });
   });
 });
+
+describe('classifyAnalysisError / classifyAnalysisFailure -- an fs error is classified by code, not echoed (#4236)', () => {
+  const titled = (title: string, code: string) => {
+    const path = `C:\\Users\\someone\\Castwright\\books\\Some Author\\${title}\\.audiobook\\state.json`;
+    return Object.assign(new Error(`${code}: resource busy or locked, open '${path}'`), {
+      code,
+      syscall: 'open',
+      path,
+    });
+  };
+  const FS_SENTENCE = 'Files could not be read or written right now. Try again.';
+  /* The title's words reach the rate-limit (`quota`, `rate limit`), auth (`API key`,
+     `invalid key`) and `ENOSPC`/`no space left` signatures through the message's path. */
+  const TITLES = ['The Quota', 'Rate Limit Rules', 'The API Key', 'Invalid Key', 'No Space Left'];
+
+  it.each(TITLES)('%s: EBUSY stays the curated, non-fatal fs outcome (not rate-limit / auth / disk-full)', (title) => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = classifyAnalysisError(titled(title, 'EBUSY'));
+      expect(c.code).toBe('unknown');
+      expect(c.fatal).toBe(false);
+      expect(c.userMessage).toBe(FS_SENTENCE);
+      expect(c.raw).toContain('EBUSY'); // the log keeps the detail
+      const run = classifyAnalysisFailure(titled(title, 'EBUSY'), 'Gemini');
+      expect(run.code).toBe('unknown');
+      expect(run.userMessage).toBe(FS_SENTENCE);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it.each(TITLES)('%s: ENOSPC is disk-full', (title) => {
+    const c = classifyAnalysisError(titled(title, 'ENOSPC'));
+    expect(c.code).toBe('disk-full');
+    expect(c.userMessage).not.toContain('Some Author');
+    expect(classifyAnalysisFailure(titled(title, 'ENOSPC'), 'Gemini').code).toBe('disk-full');
+  });
+
+  it('classifyAnalysisFailure never echoes the path of an unmapped fs error', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = classifyAnalysisFailure(titled('Plain Title', 'EPERM'), 'Gemini');
+      expect(r.userMessage).toBe(FS_SENTENCE);
+      expect(JSON.stringify(r)).not.toMatch(/Users|Some Author|state\.json/);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('a plain error with a stray code is still passed through verbatim', () => {
+    const c = classifyAnalysisError(Object.assign(new Error('weird thing'), { code: 'X1' }));
+    expect(c.userMessage).toBe('weird thing');
+  });
+
+  it('a genuine quota message (no fs path) still classifies as a rate limit', () => {
+    expect(classifyAnalysisError(new Error('quota exceeded')).code).toBe('analyzer-rate-limit');
+  });
+});

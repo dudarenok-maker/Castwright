@@ -17,6 +17,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const seriesRosterRouter = Router();
 
@@ -54,6 +55,6 @@ seriesRosterRouter.get('/:bookId/series-roster', async (req: Request, res: Respo
     return res.json({ characters });
   } catch (e) {
     console.error('[series-roster] scan failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Series roster scan failed.' });
+    return res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'Series roster scan failed.') });
   }
 });

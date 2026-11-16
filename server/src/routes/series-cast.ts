@@ -21,6 +21,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const seriesCastRouter = Router();
 
@@ -40,6 +41,6 @@ seriesCastRouter.get('/:bookId/series-cast', async (req: Request, res: Response)
     return res.json({ characters });
   } catch (e) {
     console.error('[series-cast] scan failed', e);
-    return res.status(500).json({ error: (e as Error).message || 'Series cast scan failed.' });
+    return res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'Series cast scan failed.') });
   }
 });

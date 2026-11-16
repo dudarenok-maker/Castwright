@@ -31,6 +31,7 @@ import { spawn } from 'node:child_process';
 import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { audioDir } from '../workspace/paths.js';
+import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
 
 const MAX_DURATION_SEC = 60;
 
@@ -143,9 +144,8 @@ clipRouter.get(
       if (code !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
         if (!headersSent && !res.headersSent) {
-          return res.status(500).json({
-            message: `ffmpeg exited with code ${code}: ${stderr || '(no stderr)'}`,
-          });
+          console.error('[clip] ffmpeg failed', code, stderr);
+          return res.status(500).json({ message: ffmpegFailure('ffmpeg', code, stderr).message });
         }
         /* Already streaming — end the response so the client sees a
            truncated download rather than a hung socket. */
