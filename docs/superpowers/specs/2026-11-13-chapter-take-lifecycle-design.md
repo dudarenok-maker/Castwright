@@ -1,15 +1,70 @@
 ---
 status: draft
-revision: 8 (assumption-checker pass 7 on PR #4189 folded, 2026-11-17, around the owner's binding decisions E9 and E10; revision 7 folded pass 6 around E8; revision 6 folded pass 5 around E7; revision 5 folded pass 4 around E5-E6; revision 4 folded pass 3 around E1-E4; revision 3 folded passes A and 1 around D1-D4; revision 2 folded the manual check F1-F24, V2-V4, D)
+revision: 9 (assumption-checker pass 8 on PR #4189 folded, 2026-11-17, around the owner's binding decisions E11 and E12; revision 8 folded pass 7 around E9 and E10; revision 7 folded pass 6 around E8; revision 6 folded pass 5 around E7; revision 5 folded pass 4 around E5-E6; revision 4 folded pass 3 around E1-E4; revision 3 folded passes A and 1 around D1-D4; revision 2 folded the manual check F1-F24, V2-V4, D)
 issue: 3456
 refs: [3400, 3397, 3457, 3518, 3524, 3704, 3711, 3717, 3774, 4166, 4167, 4195, 4204, 4206, 4211, 4220, 4223, 4224, 4227, 4230, 4233, 4234, 4235, 4236]
-verified-at: 33f3647c (since dbc30a2a, #4224 merged. Of the cited files it moved server/src/export/build-m4b.ts, build-mp3-zip.ts and build-codec-zip.ts, and rewrote the comment at routes/chapters-restructure.ts:607-609 without changing its line count; §1 onward is re-anchored to match. The changelogs and earlier decision lists keep the anchors they were written against. PR #4234 is still open at 33f3647c, head d0d78c12)
-decisions: OD1-OD8 accepted by the owner 2026-11-14; D1-D4, E1-E4 and E5-E6 binding 2026-11-15; E7 and E8 binding 2026-11-16; E9 and E10 binding 2026-11-17; the items under "Decisions made in revision 3" to "Decisions made in revision 8" are owed owner confirmation
+verified-at: 08742125 (since 33f3647c, #4234 merged. Of the cited files it moved server/src/routes/chapter-splice.ts (+4 after :23), routes/chapter-qa-repair.ts (+4 after :26), tts/mp3.ts (+1 after :31) and routes/failure-taxonomy.ts (classifyFailure :469 → :481); §1 onward is re-anchored to match. The changelogs and earlier decision lists keep the anchors they were written against)
+decisions: OD1-OD8 accepted by the owner 2026-11-14; D1-D4, E1-E4 and E5-E6 binding 2026-11-15; E7 and E8 binding 2026-11-16; E9 to E12 binding 2026-11-17 (E11 and E12 restate the reach of E9 and E10); the items under "Decisions made in revision 3" to "Decisions made in revision 9" are owed owner confirmation
 ---
 
 # Chapter take lifecycle: who owns a chapter's live and `.previous` audio (#3456)
 
+## Revision 9 changelog
+
+`assumption-checker` pass 8 ran on revision 8 at head `498e9846` (PR #4189 comment "Assumption-checker
+pass 8"). It cleared the gate: 0 Critical, 0 Significant and 10 Minors (K1–K10), plus non-gate
+notes. Two Minors carried an owner question. The owner answered both on 2026-11-17 as E11 and E12
+(binding, quoted under "Owner decisions"). The rest needed no decision, and this revision settles
+them (R9-1 to R9-9). Every anchor was re-checked against `origin/main` (`08742125`). Since
+`33f3647c`:
+- **#4234** (merged, #4233) curates the splice and QA-repair SSE frames, scrubs ffmpeg messages
+  through `ffmpegFailure` (`tts/ffmpeg-failure.ts`), and gives `classifyFailure` its fs handling.
+  That is all of R7-5's widened scope, so R7-5 is **done on `main`**. Phase 2 step 4 no longer lands
+  any of it; it only keeps the new frames on the curated path. It moves `chapter-splice.ts`,
+  `chapter-qa-repair.ts`, `tts/mp3.ts` and `failure-taxonomy.ts`, re-anchored in §1 onward.
+
+| Finding (pass 8) | Resolution in revision 9 |
+|---|---|
+| **Q1 / K3 / K4 → E11 (owner).** E9's per-book sample of `inFlightByBook` is empty between a queue render's chapters (K3), and cannot see another book's render on the same sidecar (K4) | **E11.** Resume's re-check uses the process-wide `isAnyGenerationActive()` (`gpu/active-generation-gate.ts:139-142`), the repo's documented eviction-safety predicate, which already folds in the splice/QA-repair registry's count, plus that registry's and generation's registration epoch (`readSpliceEpoch`, `:128-131`), read when the pass starts and compared just before the reconcile. A render chapter, splice or QA repair that registered at any point during the pass moves the epoch even when it has deregistered by the reconcile, which is the chapter gap (K3). Another book's render is seen (K4). The cost: Resume skips the cleanup whenever anything synthesises anywhere, and stray tiers wait for the next render's reconcile. R8-8's `hasInFlightSpliceForBook` and `isBookSynthesising` are withdrawn, and `chapter-job-coordination.ts` leaves the blast radius again. §5.A Scoring's "no per-book reader of `chapter-job-coordination.ts`" sentence is rewritten. E9 and E11 are restated together, and the test gains the gap and other-book cases (§5.A Scoring, Tests) |
+| **Q2 / K6 → E12 (owner).** Step 0's supersedable list, §4.1's list and `:1533` disagreed, and drop's owed `excluded` write is not dominated by a commit | **E12.** A new render may supersede **a commit journal past `installed`, a restore journal or a promotion journal** (both past their moves, at `stamp` or later), and nothing else. Drop and Accept journals keep block-and-retry: the record-step budget, then the chapter ends. Step 0, the chapter-start list, Retries cause 3, the State-write sites row and the old `:1533` sentence now all cite one list (§4.1, §5.A Commit step 0) |
+| K1 (m, the revision 8 regression): R8-1's "both present" row quarantined the source copy, which at install is the new render's staged part | **R9-1.** The row is defined **by name kind**. A journal-unique name (`.next-<takeId>`, `.discard-<jid>`) is never foreign. When one side is journal-unique, the copy at the slug name is the foreign one: quarantine it, then rename (or count the part done when the journal-unique side is the target). When both sides are slug names (preserve, promote, and rollbacks between live and previous), a segments part is decided by its `takeId` against the journal's ids; any other part found at both slug names is a move-step failure, revision 7's fail-closed refusal with R8-2's sentence. No path produces a mixed take. Test added (§5.A Journal rules, Tests) |
+| K2 (m): "lost" was decided from one probe, inside OneDrive's documented transient-`ENOENT` window | **R9-2.** A part is recorded as lost only when it is absent under both names at every probe across `RENAME_RETRY_DELAYS_MS`' schedule (`atomic-rename.ts:22`, about 1.8 s base). The `ENOENT` re-probe uses the same schedule. That applies to the relabel journal's `lost` rows too. Row Q gains an OneDrive scan cell (§5.A Journal rules, §7 Phase 4) |
+| K5 (m): supersession was one level deep, so a chain of three journals unlinked a journal that still named another | **R9-3.** Supersession **absorbs transitively**: `supersedes` is a list. A commit that supersedes a journal which itself supersedes others absorbs the whole chain, and step 8 unlinks it oldest first, so no journal is ever unlinked while it names one that is present. Replay reads **every** journal of a slug before it acts on any, and one unreadable journal stops the slug's replay as a record-step failure, acting on none (§5.A Commit step 3, step 8, Journal rules) |
+| K7 (m): after R8-2's failed mint, the entry has no `previousTakeId`, and H17's Reject retry then answered `revision_gone` | **R9-4.** When an entry's `previousTakeId` is `null`, the Accept and Reject tables' "A" row matches a live take whose segments' `synthesizedAt` equals the entry's `previousRenderedAt`. No write is added (§5.A Retry recognition) |
+| K8 (m): "only the scan heal runs while restructure releases `book`" missed GET `/state`'s title refresh and uuid mint | **R9-5.** Named. Both run under `book` without book-op (`book-state.ts:457-485`). The refresh rewrites `title` and `titleSynthesized`, and a slug is built from the id and title (`restructure.ts:126-128`), so the slug plan's inputs now list titles. The closure's re-check catches a refresh: the restructure answers its fixed 500 before it writes, and the retry re-plans. The uuid mint writes nothing the plan reads (§5.A Restructure) |
+| K9 (m): no module was named for `canonicalDirKey` and the unaddressed set | **R9-6.** A new leaf, `workspace/book-dir-key.ts`, that imports nothing from `server/src` (only `node:path`), as `book-lock.ts` and the gate are leaves. `scan.ts`, `book-state-update.ts`, `chapter-take.ts` and `scan-import-folder.ts` import it, so `check:cycles` gains no cycle (§4.4, §5.A Ownership) |
+| K10 (m): "no carried journal outlives the swap" contradicted R8-5's own record-step branch and its test | **R9-7.** The claim and the test are limited to a carried journal whose replay completes. One on E12's list stuck on record steps outlives the swap until `replace` supersedes it; any other carried journal stuck on record steps refuses the import with the curated 500. R8-5's "move steps have all landed" becomes E12's list (§5.A Ownership, Tests) |
+| Note: R8-2's sentence said "this chapter's" but book-wide operations answer it too | **R9-8.** A book-wide variant, "Some of this book's audio files…", for backup restore, the bundle overwrite, the PUT and a new restructure (§5.A Ownership) |
+| Note: J6's 28,800 | **R9-9.** Stated as an upper bound: it counts a fully rendered book scored again. From scratch, pass *k* sees about *k* chapters, so about 14,600 (§5.A Span length) |
+| Note: #4234 moved, then merged | R7-5 is restated as done on `main` (above). Phase 2 step 4, Remaining, Tests, §7 and the blast radius drop the conditional |
+| Note: #4235's acceptance criteria | Phase 2 step 4's PR restates #4235's criteria: E11 runs the pass and skips only its cleanup, rather than refusing Resume (§7 Phase 2 step 4) |
+| Note: the bundle decodes under the claim | Pre-existing, not from revision 8, and unchanged: `replace` decodes an unindexed bundle take under the workspace-wide claim. Listed under Remaining |
+| Questions 1–3 | Q1 answered by E11, Q2 by E12, Q3 by R9-1 and R9-3 (§8.1) |
+
+## Decisions made in revision 9 (owner to confirm)
+
+- **R9-1 (both present at two slug names).** A part other than segments found at both slug names
+  refuses, as revision 7 did, rather than guessing. That fails closed and needs two faults.
+- **R9-3 (chains absorb).** Preventing chains was the other option: refuse to supersede a journal
+  that still names a present one. It was not taken, because that journal would then take the
+  record-step budget and end the chapter, which is revision 7's discarded render, the outcome E10
+  removed, in the case where the disk is already refusing record writes.
+- **R9-4 (match by time).** Minting at step 3 was the other option. It was not taken: it repeats the
+  write that just failed, so it can fail the same way.
+- **R9-6 (`workspace/book-dir-key.ts`).** The name is new.
+- **E11's "registry" as the epoch.** One sample of `isAnyGenerationActive()` still reads idle in a
+  render's chapter gap; the gate's own header says so (`:155-159`). E11 says the re-check covers
+  that gap, which only the registration epoch does, so the re-check reads both.
+- **E12 and `replace`.** E12 lists commit, restore and promotion journals. A bundle `replace` journal
+  runs the commit protocol, and what it owes (a stamp, an entry drop) is dominated the same way, but
+  it is not on the list, so it keeps block-and-retry. The owner may add it.
+
 ## Revision 8 changelog
+
+Kept for history. Where revision 9 changed a resolution (E9's per-book check and R8-8's query,
+R8-1's "both present" row and single probe, E10's one-level `supersedes` and its list, R8-2's
+mint-failure side effect and its one sentence, R8-3's gap claim, R8-4's unnamed module, R8-5's
+claim and criteria, and J6's figure), the revision 9 changelog above wins.
 
 `assumption-checker` pass 7 ran on revision 7 at head `73e37a24` (PR #4189 comment "Assumption-checker
 pass 7"). It cleared the gate: 0 Critical, 0 Significant and 13 Minors (J1–J13), plus non-gate
@@ -648,6 +703,16 @@ D1–D4 left these open. Each takes the option most consistent with them.
 >   render they waited for. *(This replaces revision 7's "end at step 0 and discard the render" for
 >   this case.)*
 >
+> **Binding 2026-11-17 (E11–E12), after assumption-checker pass 8:**
+> - **E11 (answers pass 8's Q1; restates E9's reach).** Resume's re-check before the cleanup uses
+>   the process-wide `isAnyGenerationActive()`, the repo's documented "is an eviction safe" check,
+>   plus the splice/QA-repair registry, instead of a per-book check. That covers the chapter-gap
+>   case (K3) and other books' renders sharing the sidecar (K4). The cost: Resume skips the cleanup
+>   more often, and stray tiers wait for the next render's pass.
+> - **E12 (answers pass 8's Q2; restates E10's reach).** A new render may supersede **commit
+>   journals past `installed`, restore journals and promotion journals only**. Drop and Accept
+>   journals are not superseded; they keep block-and-retry.
+>
 > The `assumption-checker` gate is owed again on this revision before any implementation chain is
 > filed. Row Q's OneDrive cells must run on the box before Phase 2 (the NTFS cells are recorded,
 > §5.A Windows).
@@ -751,7 +816,7 @@ The remaining question is therefore narrower. **The things left to fence are:**
 The take files also need **one naming scheme**, a **defined fidelity**, a **defined "live take"**,
 and a **recovery rule that does not guess**.
 
-## 2. Inventory at `3792b84b` (re-checked at `25c65c0a`: finalize moved by #4211 and #4220, `aggregate.ts` and `chapter-qa-repair.ts` by #4195, `book-state.ts` and `scan.ts` by #4206; re-checked again at `dbc30a2a`: only `index.ts` moved, by #4216; and at `33f3647c`: the export builders moved, by #4224)
+## 2. Inventory at `3792b84b` (re-checked at `25c65c0a`: finalize moved by #4211 and #4220, `aggregate.ts` and `chapter-qa-repair.ts` by #4195, `book-state.ts` and `scan.ts` by #4206; re-checked again at `dbc30a2a`: only `index.ts` moved, by #4216; and at `33f3647c`: the export builders moved, by #4224; and at `08742125`: `chapter-splice.ts`, `chapter-qa-repair.ts` and `tts/mp3.ts` moved, by #4234)
 
 ### 2.1 The files
 
@@ -761,8 +826,8 @@ and a **recovery rule that does not guess**.
 | `<slug>.segments.json` | finalize `:776`; restructure metadata rewrite; bundle overwrite | yes | moved/deleted |
 | `<slug>.peaks.json` | finalize `:780`; bundle overwrite | **no** | moved/deleted |
 | `<slug>.lufs.json` | finalize `:296` (**before** preserve) | **no** | moved/deleted |
-| `<slug>.embeddings.json` | finalize `:699`/`:768` (**before** preserve); QA repair Edit 6b (`chapter-qa-repair.ts:866`) | **no** | moved/deleted |
-| `<slug>.render-integrity.json` | scoring (`aggregate.ts:1077`, per character via `mergeVerdictRows`, `verdicts-io.ts:42-58`); QA repair Edit 6b `writeVerdicts` (`chapter-qa-repair.ts:~872-901`) | **no** | moved/deleted |
+| `<slug>.embeddings.json` | finalize `:699`/`:768` (**before** preserve); QA repair Edit 6b (`chapter-qa-repair.ts:870`) | **no** | moved/deleted |
+| `<slug>.render-integrity.json` | scoring (`aggregate.ts:1077`, per character via `mergeVerdictRows`, `verdicts-io.ts:42-58`); QA repair Edit 6b `writeVerdicts` (`chapter-qa-repair.ts:~876-905`) | **no** | moved/deleted |
 | `<slug>.render-integrity-attempted.json` | `writeAttempted` in generation (`generation.ts:295`) and scoring (`aggregate.ts:667`); existence-only | **no** | moved/deleted |
 | `<slug>.previous.mp3`, `.previous.segments.json` | preserve | — | moved/deleted |
 | `<slug>.previous.peaks.json` / `.previous.lufs.json` | **nothing** (always absent) | — | listed, never present |
@@ -778,8 +843,8 @@ Book-level scoring files (centroids, pending-attempts) are not take parts (§4.3
 |---|---|---|---|---|
 | W1 | **Finalize** | `audio/finalize-chapter-write.ts:188-833` | None for the files. `state-json` for the stamp (`:791`). `revisions` in `applyReview` (`:823`). Its caller is a `render` job (no book-op). | Lufs and embeddings are written before preserve (H4). If `:777` fails, the **new** segments (`:776`) sit next to the old audio or none (H6). It interleaves with reject (H9), with a second finalize (N9), and with the fsck (N8). |
 | W2 | **Generation** | `routes/generation.ts:858` (`runBookJob`); calls W1 at `:1996` | No book-op; abort-based displacement keyed `${bookId}::X` / `::*` (`:513-515`) | Finalize gets no signal. Bails at `:1957` (before assembly) and `:2044` (after finalize) only (H8). The watchdog releases the token while an abort-ignoring body can still run (`:2225-2243`) (N15). A `*` job's `abortInFlightSplice(bookId, null)` (`:1383`) is a no-op (`chapter-job-coordination.ts:54`) (H16 → OD2). `::*` and `::X` jobs don't displace each other (`:1318-1319`, `:1379-1383`) (N9). |
-| W3 | **Splice** | `routes/chapter-splice.ts:174`; calls W1 at `:555` | No book-op; `registerSplice` at `:336` | Reads segments (`:185`) before it registers; the last abort check is `:526` (H7). Never triggers scoring (`:589-600`). |
-| W4 | **QA repair** | `routes/chapter-qa-repair.ts:143`; calls W1 at `:806` | No book-op; registers at `:333` | Reads **and decodes** the audio (`:150-163`) before it registers (H7). **Edit 6b** writes embeddings (`:866`) and verdicts (`:~872-901`) **after** finalize returns, outside any fence (F4). Never triggers scoring (`:908-921`). |
+| W3 | **Splice** | `routes/chapter-splice.ts:178`; calls W1 at `:559` | No book-op; `registerSplice` at `:340` | Reads segments (`:189`) before it registers; the last abort check is `:530` (H7). Never triggers scoring (`:593-604`). |
+| W4 | **QA repair** | `routes/chapter-qa-repair.ts:147`; calls W1 at `:810` | No book-op; registers at `:337` | Reads **and decodes** the audio (`:154-167`) before it registers (H7). **Edit 6b** writes embeddings (`:870`) and verdicts (`:~876-905`) **after** finalize returns, outside any fence (F4). Never triggers scoring (`:912-925`). |
 | W5 | **Accept** | `routes/revision-ops.ts:65-121` → `acceptPreviousAudio` (`previous-audio.ts:27-34`) | `book-op` → `revision-op` → `revisions` | No busy check. `.previous.mp3` only (`previous-audio.ts:19-23`). |
 | W6 | **Reject** | `revision-ops.ts:123-182` → `restorePreviousAudio` (`previous-audio.ts:39-61`) | as W5 | Unlinks the live take first (`:45-48`) (H1). Restores to `<slug>.mp3` (`:22`, `:51`) (H13). Swallows a failed segments rename (`:58`) (H2). Busy check is generation only (`generation.ts:661`) (H9). Restores audio and segments only, and **leaves `state.audioRenderedAt` naming the rejected take** (H3, F2). |
 | W7 | **restore-unrecorded** | `routes/chapter-audio.ts:404-452` | `isGenerationActive`, then `book-op`; `revision-op` around the restore only | `has_revision` (`:420`) versus finalize's lock-free `recordPending` (H20). |
@@ -813,7 +878,7 @@ are the ones with a named hazard. The others are listed in the blast radius (§5
 | R-k | Variable-suffix builders | `workspace/chapter-audio-file.ts:57`, `rewrite-chapter-slugs.ts:105-106` (`suffixPath`), `previous-audio.ts:51`, `finalize-chapter-write.ts:217`, `routes/book-state.ts:2411` | Build `<slug>.<suffix>` from a runtime suffix. The guard sees finalize's shape (same-function `const` chain from `audioDir`) but not the others (a parameter root, a helper's return, an array iterated in a loop). They fold into the module in Phase 1, so they are removed, not guarded (§5.A Guard) |
 | R-l | Library scan `completedChapters` | `workspace/scan.ts:750-754` | **Fixed** by #4206 (merged at `25c65c0a`): it used to count **files** matching `/\.(mp3\|m4a\|opus)$/i`, which missed `.ogg`, counted `.previous.mp3` and would have counted a staged `.next-*.mp3`. It now counts non-excluded chapters that `chapterAudioExists` finds, which is the module's live-take predicate, like R-d |
 
-## 3. Hazards, verified at `3792b84b` (re-checked at `25c65c0a` and `dbc30a2a`)
+## 3. Hazards, verified at `3792b84b` (re-checked at `25c65c0a`, `dbc30a2a` and `08742125`)
 
 Status key: **P** present, **F** fixed, **Pt** partly fixed, **N** newly found.
 
@@ -845,8 +910,8 @@ Status key: **P** present, **F** fixed, **Pt** partly fixed, **N** newly found.
 | N3 | `completedSlugs` misses `.ogg` and counts a lone `.previous.mp3` | **F** (#4166, fixed by #4206) | `book-state.ts:782-789` |
 | N4 | **Windows, verified on NTFS by pass 1's probe.** An ffmpeg reader of the live file (m4b build, clip cut) makes rename-away fail EBUSY, rename-onto fail EPERM, and unlink fail EBUSY. A Node `openSync` holder makes rename-onto fail EPERM only. Preserve swallows its failure, so today a commit during an export can leave old audio + new segments, or **two live files** on a format switch. | N, NTFS confirmed; OneDrive owed (row Q) | probe (PR #4189, pass 1); `preserve-previous-audio.ts:42-51`; finalize `:776-777` |
 | N5 | Finalize tmp leaked on a throw | **F** (#4167, fixed by #4211; a crash still leaves it, and the sweep unlinks it) | `:188-206,242-244` |
-| N6 | `splice_complete`/QA-repair completion always send `hasPreviousAudio: true` | N (minor) | `chapter-splice.ts:596`, `chapter-qa-repair.ts:917` |
-| N7 | Scoring files verdicts and attempted markers under whichever take is live; QA repair's Edit 6b writes embeddings and verdicts after finalize, unfenced | N | `aggregate.ts:631,667,672,1077`; `chapter-qa-repair.ts:866,~872-901` |
+| N6 | `splice_complete`/QA-repair completion always send `hasPreviousAudio: true` | N (minor) | `chapter-splice.ts:600`, `chapter-qa-repair.ts:921` |
+| N7 | Scoring files verdicts and attempted markers under whichever take is live; QA repair's Edit 6b writes embeddings and verdicts after finalize, unfenced | N | `aggregate.ts:631,667,672,1077`; `chapter-qa-repair.ts:870,~876-905` |
 | N8 | The fsck runs alongside requests. Between finalize's segments write (`:776`) and its audio install (`:777`), live audio is absent, so case 1 promotes `.previous.mp3` **and renames `.previous.segments.json` over the new segments**. | N | `fsck-orphan-audio.ts:89-96` |
 | N9 | Two renders of one chapter (`::*` and `::X`, which don't displace each other) interleave, and the second commit discards the user's pre-render take | N | `generation.ts:513-515,1318-1319,1379-1383` |
 | N10 | `revision-op` is redundant: its only holders (`revision-ops.ts:58`, `chapter-audio.ts:429`) are inside `withBookOp` | N (observation, confirmed by pass A) | — |
@@ -905,13 +970,14 @@ abort, generation opens one short span, calls `ensureTakeIdentity` and reads the
 when the render started. The same span runs the chapter's journal replay. If a journal naming the
 chapter's slug stays stuck on a **move-step** failure, the chapter fails `take_repair_pending`
 here, before any synthesis is spent on it (R5-4). A **record-step** failure (revision 8, R8-2 and
-E10) is handled by what the journal still owes:
-- **a leftover journal whose move steps have all landed** (a commit or replace at `installed` or
-  later, a restore or promotion at `stamp` or later): the failure is logged and the chapter
-  proceeds. The commit will supersede that journal (E10, §5.A Commit step 0), so nothing here can
-  cost the render;
-- **any other record step** (a journal read, a rolled-back journal's unlink, a relabel journal's
-  cursor or `metadata` write): it gets the record-step budget, three attempts in all, the first in
+E10, with E12's list in revision 9) is handled by what the journal still owes:
+- **a supersedable journal (E12):** a commit journal at `installed` or later, or a restore or
+  promotion journal at `stamp` or later, that is, past every move. The failure is logged and the
+  chapter proceeds. The commit will supersede that journal (E10, §5.A Commit step 0), so nothing
+  here can cost the render. This is the one list; step 0 and Retries cite it;
+- **any other record step** (a journal read; a drop, Accept or `replace` journal past its moves; a
+  rolled-back journal's unlink; a relabel journal's cursor or `metadata` write): it gets the
+  record-step budget, three attempts in all, the first in
   this span and two more in fresh spans after 1 s and 2 s. If the third fails, the chapter ends
   `chapter_failed` before synthesis, with `requestFailureMessageFs`' sentence for the last error.
   `code` chooses that sentence and nothing else: it never decides whether to retry (pass 7, J2).
@@ -919,7 +985,10 @@ E10) is handled by what the journal still owes:
 `ensureTakeIdentity`'s own failures never stop a full render. Its `state.json` mirror is swallowed
 (State-write sites), and a failed mint into the live segments leaves the take id-less, so the render
 proceeds with `startTakeId: null` and R3-1 loses only its tiebreak. A full render carries no base,
-so its commit does not need the id (R8-2). The span resolves without the segments backfill and
+so its commit does not need the id (R8-2). The entry it records then has `previousTakeId: null`
+when the take that became previous was id-less, and the retry tables match that entry by its
+`previousRenderedAt` instead (R9-4, §5.A Retry recognition), so H17's Reject retry survives the
+mint that the next entry point makes. The span resolves without the segments backfill and
 reads the journal listing once (R7-8, §5.A Span length).
 
 Restructure carries `audioTakeId` across a rename with the other take fields. Staging, discard and
@@ -1076,7 +1145,7 @@ revision 6):
   fields as they were, so restoring such a take kept the rejected take's fields, the F2/H3 shape.
   - **`duration` of an unindexed take (R7-7, revision 7)** is measured by §6.1 step 2's **full
     decode** (`ffmpeg -i <f> -f null -`), not by ffprobe's header estimate, which is about 7× too
-    long on legacy MP3s with no Xing header (`tts/mp3.ts:172-176`). Revision 6 used ffprobe for
+    long on legacy MP3s with no Xing header (`tts/mp3.ts:173-177`). Revision 6 used ffprobe for
     exactly these takes, which are mostly legacy. The decode runs in the caller's book-op span
     **before** the stamp takes `book`, never inside `book` → `state-json`, whose other waiters have a
     10 s budget. A journalled op (restore, promotion, replace) records the measured seconds in its
@@ -1176,6 +1245,13 @@ its directory comes from `bookDirByDisplay` and can be spelt differently from th
   work, so a heal that started after registration skips the book, and a heal that started before
   it read a state with no id and holds the same canonical key the handle's writes wait on. The skip
   is a swallowed lazy migration, so the next scan repeats it.
+- **Where they live (R9-6, revision 9; pass 8, K9).** `canonicalDirKey` and the unaddressed set
+  live in a new leaf, `workspace/book-dir-key.ts`, which imports nothing from `server/src` (only
+  `node:path`), as `book-lock.ts` and `gpu/active-generation-gate.ts` are leaves. `scan.ts`,
+  `book-state-update.ts`, `chapter-take.ts` and `scan-import-folder.ts` import it. Putting them in
+  `chapter-take.ts`, which needs `scan.ts`'s state types, would close a cycle through `scan.ts`,
+  which already sits in two allowlisted ones (`madge-cycles-allowlist.json:10-11`), and
+  `check:cycles` would refuse it.
 
 So if the read saw installed segments, their journal still exists when the check runs: a rollback
 can finish its renames during the heal, but its unlink waits for the heal's `book`. The slug is
@@ -1224,10 +1300,13 @@ names, or is book-wide: a new restructure, backup restore, the bundle overwrite,
     (R8-1, Journal rules). An entry point on a named slug answers 409 `take_repair_pending` with
     **one sentence for every code** (R8-2, revision 8): "Some of this chapter's audio files could
     not be moved into place. Close any other program using the book's folder, and check free disk
-    space and the folder's permissions, then try again." Revision 7 chose between two sentences by
+    space and the folder's permissions, then try again." A **book-wide** operation that refuses
+    with `take_repair_pending` (backup restore, the bundle overwrite, a PUT that sends `chapters`,
+    a new restructure) answers the same sentence with "this book's" for "this chapter's"
+    (R9-8, revision 9; pass 8), because none of them is about one chapter. Revision 7 chose between two sentences by
     `code`, which gave EACCES a held-file diagnosis here and a permanent one at a record step out of
     the same `renameWithRetry` call (pass 7, J2). A job that has already flushed its event-stream
-    headers (splice, `chapter-splice.ts:132-136`; QA repair, `chapter-qa-repair.ts:122-126`) sends
+    headers (splice, `chapter-splice.ts:136-140`; QA repair, `chapter-qa-repair.ts:126-130`) sends
     the `chapter_failed` frame it already fails with, carrying `code: 'take_repair_pending'` and the
     same sentence, as a render's `chapter_failed` does.
   - **Record step** (a stamp, `dropEntry`, the review record, a journal or cursor write, a journal
@@ -1247,9 +1326,10 @@ names, or is book-wide: a new restructure, backup restore, the bundle overwrite,
       `LOCK_CONTENTION_REQUEST_ERROR`, `FS_PERMANENT_FAILURE_REQUEST_ERROR` or
       `FS_FAILURE_REQUEST_ERROR` by the last error, and the fixed fallback for anything that is not
       an fs error. `code` chooses that sentence and nothing else;
-    - **one exception, E10:** at a render's chapter-start span and a commit's step 0, a leftover
-      per-slug journal whose move steps have all landed is not retried at all. The commit
-      supersedes it (Commit step 0).
+    - **one exception, E10 with E12's list:** at a render's chapter-start span and a commit's
+      step 0, a supersedable journal (a commit journal at `installed` or later, a restore or
+      promotion journal at `stamp` or later, §4.1) is not retried at all. The commit supersedes it
+      (Commit step 0). A drop, Accept or `replace` journal is not on the list and gets the budget.
 
     There is no "`book` timeout": `withBookLock` is a bare promise chain with no acquisition
     timeout (`book-lock.ts:57-86`). Revision 6 named one.
@@ -1338,14 +1418,19 @@ holder is closed, and the try is the entry point that finishes it.
       then left a local commit or restore journal to be replayed against the **bundle's** state:
       the local take rolled forward or back, the bundle's audio for the slug was lost with the
       import's stage directory, and the state described the bundle while the disk held the local
-      take (pass 7, J10). Replayed before the claim, no such journal outlives the swap. An import
-      that fails after the replay (for example `BundleConflictError`, `scan-import-folder.ts:480`)
-      leaves nothing pending, because the journals have finished;
+      take (pass 7, J10). Replayed before the claim, **a carried journal whose replay completes**
+      does not outlive the swap (revision 9 limits the claim to that case; pass 8, K10). An import
+      that fails after such a replay (for example `BundleConflictError`,
+      `scan-import-folder.ts:480`) leaves nothing pending, because the journals have finished;
     - a carried slug's journal whose replay fails on a **move step** refuses the import with
-      `take_repair_pending`, as any other replay does (R5-5). One whose move steps have all landed
-      and whose replay fails on **record steps** only does not refuse: `replaceTakesFromBundle`'s
-      `replace` journal supersedes it after the swap, exactly as a commit does under E10 (Commit
-      step 0), absorbing its discard set. If the server crashes before that, the next replay
+      `take_repair_pending`, as any other replay does (R5-5). One on E12's supersedable list (§4.1)
+      whose replay fails on **record steps** only does not refuse, and it **does** outlive the swap:
+      `replaceTakesFromBundle`'s `replace` journal supersedes it after the swap, exactly as a commit
+      does under E10 (Commit step 0), absorbing its discard set. Any other carried journal whose
+      replay fails on record steps (a drop or Accept journal, a rolled-back journal owing its
+      unlink) refuses the import with `requestFailureMessageFs`' curated 500, and nothing is
+      swapped. Revision 8 admitted every journal "whose move steps have all landed", which
+      disagreed with step 0's list (K10). If the server crashes before the supersession, the next replay
       of that journal stamps `state.json` from the local take that is still live, so the state
       describes the disk; the bundle's audio for that slug is lost with the stage directory, and the
       user imports again.
@@ -1366,7 +1451,8 @@ holder is closed, and the try is the entry point that finishes it.
       separators normalised to `/`, a trailing separator dropped, and lower-cased on win32 and
       darwin, whose default filesystems are case-insensitive. The same function forms every `book`
       lock key taken from a directory, and an unaddressed handle keys its `book` acquisitions on it
-      for its whole life (R8-4, §4.4).
+      for its whole life (R8-4, §4.4). It and the set live in the leaf `workspace/book-dir-key.ts`
+      (R9-6, §4.4).
     - **Unicode normalisation is out of scope (R7-11, revision 7).** The key does not normalise
       NFC against NFD. On darwin a display-derived NFC name and an NFD name on disk would miss each
       other in the set, and the fence would fail open for that book while the overwrite runs. That is
@@ -1501,17 +1587,20 @@ are passed to `commitTake`, which applies them at step 4.
    - **a move-step failure** of a journal that names this slug, book or per-slug: the commit sweeps
      its staged set and ends the chapter `take_repair_pending`. It is not retried until the
      watchdog, which would report "the audio file is in use", the wrong diagnosis (R5-4);
-   - **a record-step failure of a leftover per-slug journal whose move steps have all landed** (a
-     commit or replace at `installed` or later, a restore or promotion at `stamp` or later, an
-     Accept or drop past its discard move): **E10.** The commit **supersedes** it and goes on.
-     Every file is where that journal put them, so its take is simply the live take this commit
-     preserves or discards. What the journal still owes is dominated by this commit: its stamp by
-     step 7's stamp, which writes every member (§4.4); its review record by this commit's own,
-     which describes the live and previous pair that will then exist; its discard set and its own
-     file by step 8. The commit's journal records `supersedes: {jid, discards, dropEntry}` (step 3),
-     and nothing of the old journal is replayed again on its own (Journal rules);
-   - **any other record-step failure** (a journal read, a rolled-back journal's unlink, a relabel
-     journal's cursor or `metadata` write): retryable cause 3, within the record-step budget of
+   - **a record-step failure of a supersedable journal** (E12's list, §4.1: a commit journal at
+     `installed` or later, a restore or promotion journal at `stamp` or later, and nothing else):
+     **E10.** The commit **supersedes** it and goes on. Every file is where that journal put them,
+     so its take is simply the live take this commit preserves or discards. What the journal still
+     owes is dominated by this commit: its stamp by step 7's stamp, which writes every member
+     (§4.4); its review record or entry drop by this commit's own, which describes the live and
+     previous pair that will then exist; its discard set and its own file by step 8. The commit's
+     journal records it in `supersedes` (step 3), and nothing of the old journal is replayed again
+     on its own (Journal rules). **Drop and Accept journals are not on the list (E12).** A drop
+     journal owes the `excluded: true` write (Exclude, below), which no commit's stamp makes, and
+     an Accept journal's owed record is not shown to be dominated; they keep block-and-retry;
+   - **any other record-step failure** (a journal read; a drop, Accept or `replace` journal past
+     its moves; a rolled-back journal's unlink; a relabel journal's cursor or `metadata` write):
+     retryable cause 3, within the record-step budget of
      three attempts (Retries). After the third, the commit sweeps its staged set and ends the
      chapter with `requestFailureMessageFs(err, FS_FAILURE_REQUEST_ERROR)`.
 
@@ -1524,14 +1613,15 @@ are passed to `commitTake`, which applies them at step 4.
    and EROFS fails every write. And a journal created during synthesis (an Accept on the same chapter,
    or a sibling `::X` render whose stamp parked, N9) is first met here, not at the chapter-start
    span. Under E10 the leftover-journal case keeps the render. Step 0 now discards a finished render
-   only when a journal E10 cannot supersede fails three times, or when this commit's own journal
+   only when a journal off E12's list fails three times, or when this commit's own journal
    write fails before anything has moved. The second is a disk or folder that refuses the commit's
    own writes, where `main` fails too. The first is the one loss left that `main` does not have: a
-   journal read, a rolled-back journal's unlink, or a relabel journal's record step failing three
-   times on a file `main` would never touch. A journal that cannot be read cannot say what it owes,
-   and a relabel journal is a book journal that names other chapters, so neither can be superseded
-   by one chapter's commit. A rolled-back journal that owes only its unlink could be, but E10 is
-   scoped to a journal past `installed`, and this design does not widen it. All three are rare.
+   journal read, a drop, Accept or `replace` journal's record step, a rolled-back journal's unlink,
+   or a relabel journal's record step failing three times on a file `main` would never touch. A
+   journal that cannot be read cannot say what it owes, and a relabel journal is a book journal
+   that names other chapters, so neither can be superseded by one chapter's commit. The others are
+   left off by E12, the owner's list (revision 9; revision 8's sentence here said E10 was scoped to
+   a journal past `installed` while step 0 above listed Accept and drop, pass 8, K6). All are rare.
 1. Refuse if `signal.aborted` (H8).
 2. CAS, partial writers only (OD2): the live `segments.json`'s `takeId` must equal `base`. A
    mismatch sweeps the staged set and returns `changed`.
@@ -1542,7 +1632,7 @@ are passed to `commitTake`, which applies them at step 4.
     review: undefined | null | {characterId, triggeredBy},
     preserved, oldDuration, newDuration,
     entry: {takeId, renderedAt, previousTakeId, previousRenderedAt} | null,
-    supersedes: {jid, discards, dropEntry} | null,   // E10, revision 8
+    supersedes: [{jid, discards, dropEntry}],        // E10, revision 8; a list, R9-3
     lost: [part]}                                     // R8-1, revision 8
    ```
    - It lists only the parts **present** on disk at this moment, so no rename ever targets an
@@ -1552,6 +1642,13 @@ are passed to `commitTake`, which applies them at step 4.
      review record (`dropEntry`). Step 7 runs that drop, after a successful stamp and before this
      commit records its own entry. Step 8 unlinks the old discards, then the old journal, then
      this one, each under `book`.
+   - **Chains absorb (R9-3, revision 9; pass 8, K5).** `supersedes` is a list, oldest first. When
+     the journal step 0 supersedes is itself a superseding journal (a commit whose step-8 unlink
+     of its own superseded journal failed and was parked), this commit copies that journal's
+     `supersedes` entries and then appends that journal itself. So every journal of the chain is
+     named by the one journal in charge, and step 8 unlinks the chain oldest first. Revision 8
+     held one `jid`, and a third commit unlinked the middle journal while it still named the
+     first, which then replayed its stale entry over the newest one's.
    - **The review inputs (A3)** are what `applyReview` reads today (`finalize-chapter-write.ts:841-883`):
      - `review` is finalize's `input.review`: absent means "leave the review state alone", `null`
        means "drop the pending entry", and an object means "record one when `preserved`";
@@ -1618,9 +1715,9 @@ are passed to `commitTake`, which applies them at step 4.
        otherwise discard the wrong take. Dropping it is a `revisions.json` write and does not depend
        on `state.json`. Replay stamps first, then records the new entry. **Restore appears once
        replay lands the stamp.**
-8. `phase:'cleanup'`: unlink the `.discard-<jid>.*` set, and a superseded journal's discards and
-   then its file (E10). Then unlink the journal, **only if the stamp succeeded** and the superseded
-   journal is gone. A parked stamp error leaves the journal at `installed`, so the next
+8. `phase:'cleanup'`: unlink the `.discard-<jid>.*` set, and each superseded journal's discards and
+   then its file, oldest first (E10, R9-3). Then unlink the journal, **only if the stamp succeeded**
+   and every superseded journal is gone. A parked stamp error leaves the journal at `installed`, so the next
    `reconcileSlug` re-runs the stamp and then records the entry; a failed unlink of the superseded
    journal is parked the same way, so this journal is never unlinked while it still names one. Last
    of all, rethrow the parked error, if any.
@@ -1647,31 +1744,26 @@ are passed to `commitTake`, which applies them at step 4.
     permissions." instead of R3-7's "they will be repaired". That is `code` choosing a sentence,
     which R8-2 allows; it decides no retry.
   - **Splice and QA repair** do the same with their own terminal frames.
-  - **Terminal frames are curated, at the source and at the catch-all (R7-5, widened in
-    revision 8).** This is #4233, live on `main` today independently of this design, and PR #4234
-    (open at `33f3647c`, head `d0d78c12`) fixes it. Revision 7's heading said "no terminal frame
-    carries an error's own message", but its own formula, `requestFailureMessageFs(err, (err as
-    Error).message)`, passes every non-fs error through verbatim, and an ffmpeg exit error carries
-    its whole stderr, which names the absolute temp path (`tts/mp3.ts:397,545`). So R7-5 alone would
-    have left that leak (pass 7). R7-5 is now #4234's scope:
-    - the splice and QA-repair catch-alls (`chapter-splice.ts:602`, `chapter-qa-repair.ts:923`) send
-      `requestFailureMessageFs(err, (err as Error).message)` after their prefix, and log the raw
-      error. A node fs error and a lock timeout get the curated sentences; any other error keeps its
-      message, which is now path-free at the source:
-    - **ffmpeg failures are scrubbed where they are made.** `encodePcmToAudio`, the decode helpers,
-      `applyGainToPcm` and the loudnorm first pass reject through `ffmpegFailure` in
-      `tts/ffmpeg-failure.ts`: a one-line message (the exit code and the last stderr line, scrubbed
-      of every path, "no space left" kept), with the full stderr on `err.ffmpegStderr` for the log;
-    - **generation's `classifyFailure`** (`routes/failure-taxonomy.ts:469`) answers the
-      `requestFailureMessageFs` sentence in its `unknown` fallback for a node fs error, and runs an
-      fs-before-signature-scan pre-check (`isFsPathError`): an fs error on a path is classified by
-      its `code` (ENOSPC is `disk-full`) before any signature regex can match a book title in its
-      path.
+  - **Terminal frames are curated, at the source and at the catch-all (R7-5; done on `main` by
+    #4234, merged at `08742125`).** This was #4233, live on `main` independently of this design.
+    #4234 landed all of R7-5's widened scope, so this design adds none of it:
+    - the splice and QA-repair catch-alls (`chapter-splice.ts:606-609`, `chapter-qa-repair.ts:927-929`)
+      send `requestFailureMessageFs(err, …)` with their prefix inside the fallback, and log the raw
+      error. A node fs error and a lock timeout get the curated sentences; any other error keeps
+      its message, which is path-free at the source;
+    - ffmpeg failures reject through `ffmpegFailure` (`tts/ffmpeg-failure.ts:29`; for example
+      `tts/mp3.ts:398,546`): a one-line, path-scrubbed message, with the full stderr on
+      `err.ffmpegStderr` for the log;
+    - generation's `classifyFailure` (`routes/failure-taxonomy.ts:481`) runs its `isFsPathError`
+      pre-check (`:469`) before any signature regex, and answers the `requestFailureMessageFs`
+      sentence for a node fs error (`:494-518`).
 
-    **Phase 2 step 4 lands this only if #4234 has not merged by then**, and then lands all of it,
-    not only the two catch-alls, with CLAUDE.md's `requestFailureMessageFs` handler list and
-    call-site count updated as #4234 does. #4236 tracks the other routes that still echo a raw
-    `err.message`; it is not part of this design.
+    **What this design still needs from it.** Every new terminal frame this design adds goes
+    through the same seams: the `take_repair_pending` and `take_details_pending` frames carry fixed
+    sentences, and the base-read span's record-step failure ends through
+    `requestFailureMessageFs(err, FS_FAILURE_REQUEST_ERROR)` (Ownership, above). Phase 2 step 4
+    keeps those on the curated path and adds no call site beyond the ones it names. #4236 tracks
+    the other routes that still echo a raw `err.message`; it is not part of this design.
   - The fail-loud and swallow classification of every new `state.json` write site is in the
     table below. It replaces revision 3's "the fail-loud count is unchanged", which was false.
 
@@ -1683,7 +1775,7 @@ moves one site and adds eight (revision 5 splits the replay row):
 |---|---|---|
 | `commitTake` step 7 stamp (moved from finalize's `:791`) | **fail-loud**, deferred | D2. Parked, rethrown after cleanup; the review record waits for a successful stamp (E6); the journal keeps both owed |
 | `restoreTake` `stamp` phase (Reject, `restore-unrecorded`) | **fail-loud**, deferred | New: today's reject does not stamp. Parked, rethrown after cleanup of the discard set; the journal stays at `stamp` |
-| journal replay's stamp (commit and restore roll-forward, R3-5's promotion, replace), at an entry point that has a terminal outcome | **fail-loud** to that entry point | The journal stays. It is a record step, so it never answers 409 `take_repair_pending`, which is only for a move step (R7-4). At a quick op: the curated 500 at once. At a render's chapter-start span and a commit's step 0: a journal whose move steps have all landed is logged and then superseded by the commit (E10); any other gets the record-step budget of three attempts and then ends the chapter with `requestFailureMessageFs`' sentence (R8-2). Its class never depends on `code` (§4.1, Commit step 0) |
+| journal replay's stamp (commit and restore roll-forward, R3-5's promotion, replace), at an entry point that has a terminal outcome | **fail-loud** to that entry point | The journal stays. It is a record step, so it never answers 409 `take_repair_pending`, which is only for a move step (R7-4). At a quick op: the curated 500 at once. At a render's chapter-start span and a commit's step 0: a journal on E12's supersedable list (§4.1) is logged and then superseded by the commit (E10); any other gets the record-step budget of three attempts and then ends the chapter with `requestFailureMessageFs`' sentence (R8-2). Its class never depends on `code` (§4.1, Commit step 0) |
 | journal replay's stamp at the **boot fsck** (fire-and-forget, `index.ts:549-555`) | **swallow** (logged), revision 5 | Nothing to fail into. The journal stays, and the next entry point on the slug repeats the replay |
 | journal replay's stamp in **R4-2's background `reconcileBook` retries** | **swallow** (logged), revision 5 | The request already answered its fixed 500. The journal stays, and the next attempt or entry point repeats it |
 | `reconcileBookTakes` (backup restore, R3-9) | **fail-loud**, deferred | Otherwise restored take fields describe absent audio (N12). Parked across chapters, rethrown after the last |
@@ -1705,8 +1797,9 @@ adds the fsck and background replay rows, which also cover `dropEntry` there).
      itself.
   2. **A held file**: EBUSY or EPERM from step 5 or 6, after the in-span rollback.
   3. **A record-step failure before step 3 writes this commit's journal (A11, restated by R7-4,
-     then by R8-2 and E10 in revision 8)**, from a journal step 0 cannot supersede: a journal read,
-     a rolled-back journal's unlink, a relabel journal's cursor or `metadata` write. Any error, of
+     then by R8-2 and E10 in revision 8, and by E12 in revision 9)**, from a journal step 0 cannot
+     supersede: a journal read, a drop, Accept or `replace` journal's record step, a rolled-back
+     journal's unlink, a relabel journal's cursor or `metadata` write. Any error, of
      any `code`. Nothing of this commit has moved yet, and replay is idempotent, so re-running
      step 0 is safe. **Its bound is the record-step budget, not the watchdog:** three attempts in
      all, the first in the span and two more between spans after 1 s and 2 s. After the third, the
@@ -1719,8 +1812,9 @@ adds the fsck and background replay rows, which also cover `dropEntry` there).
        journal step 0 itself started. It ends `take_repair_pending`. Revision 5 listed "a held file
        met by step 0's promotion" under this cause, and also carved out only book journals. That
        made step 0 retry what the chapter-start span refused (pass 5, C4); both now refuse;
-     - **a leftover per-slug journal whose move steps have all landed.** It is superseded at once,
-       never retried (E10, Commit step 0);
+     - **a supersedable journal (E12's list, §4.1).** It is superseded at once, never retried
+       (E10, Commit step 0). A drop, Accept or `replace` journal is not on the list, so it is
+       cause 3;
      - **`ensureTakeIdentity`'s failures.** Its mirror stamp is swallowed, and a full render
        commits without the id (§4.1). Revision 7 listed "`ensureTakeIdentity`'s stamp" here while
        the State-write sites table called it a swallow site (pass 7, J2).
@@ -1781,58 +1875,82 @@ adds the fsck and background replay rows, which also cover `dropEntry` there).
   - **a relabel**: resume at its cursor (Restructure, below). Never roll back once `state.json` has
     landed (E1).
 - **Idempotence of per-slug journals.** For a commit, replace, restore, accept or drop journal,
-  every rename step, forward or in a rollback, decides each part from what is on disk:
+  every rename step, forward or in a rollback, decides each part from what is on disk. **Which row
+  applies depends on the kind of each name (R9-1, revision 9; pass 8, K1).** A name is
+  **journal-unique** (`.next-<takeId>.*`, `.discard-<jid>.*`, which nothing outside the protocol
+  creates) or a **slug name** (the slug's live or `.previous.*` name, which a sync client or
+  Explorer can refill once the protocol vacates it):
 
   | Source name | Target name | Replay does |
   |---|---|---|
   | present | absent | rename |
   | absent | present | done |
-  | present | present | the copy at the source name is foreign (nothing in the protocol refills a vacated name): quarantine it; done (R8-1, as R5-1's row) |
-  | absent | absent | **lost (R8-1, revision 8):** append the part to the journal's `lost`, log it, continue |
+  | present | present, **one side journal-unique** | the copy at the **slug name** is the foreign one. Target journal-unique (a discard, or install's rollback to `.next-*`): the part already moved; quarantine the source copy; done. Source journal-unique (install, or a discard rolled back): the slug was refilled; quarantine the target copy, then rename |
+  | present | present, **both slug names** (preserve, promote, and a rollback between live and previous) | a **segments** part is decided by its `takeId` against the journal's (`liveTakeId`, `prevTakeId`, `newTakeId`): the copy that carries the id the step moves is the protocol's, and the other is quarantined; then rename, or done when the protocol's copy is already at the target. **Any other part**, or a segments part that neither or both copies decide: a **move-step failure**, revision 7's refusal, with R8-2's sentence |
+  | absent | absent | **lost (R8-1):** only after the re-probe below finds it absent at every probe; then append the part to the journal's `lost`, log it, continue |
 
-  - **Why the third row (pass 7, J1, the most dangerous assumption).** Revision 7 had only the first
-    two rows here; only the relabel journal had R5-1's "absent under both names". A part deleted
-    from outside the protocol while a per-slug journal was pending (Explorer, a sync client
-    propagating a delete) was then renamed anyway. `renameWithRetry` retries `ENOENT` for about
-    3.6 s (`atomic-rename.ts:41-47`) and rethrows, which is a move-step failure, so the slug was
-    blocked. Every retry failed the same way, because there was no file to free: every render,
-    Accept, Reject and exclude of the chapter, a restructure naming it, and backup restore of the
-    whole book (R5-5) were refused for good, behind a sentence that could never work.
-  - **A rename that throws `ENOENT`** (the source vanished between the probe and the rename)
-    re-probes both names once and takes the matching row. So `ENOENT` never blocks a slug.
+  - **Why by kind (pass 8, K1, the most dangerous assumption).** Revision 8's third row said "the
+    copy at the source name is foreign" for every step, copied from R5-1, whose targets are all
+    journal-unique. A per-slug journal's targets include slug names. At install the source,
+    `.next-<takeId>`, is journal-unique, so "both present" there means the **target** was refilled
+    (step 5 moved the live audio away, a sync client restored it), and revision 8 quarantined the
+    staged audio, then installed the staged segments: old audio beside new segments, a mixed take,
+    with no error. Revision 7 refused that shape (step 5's "a present target is a fault"), which
+    failed closed. Revision 9 keeps the cases it can decide and refuses the rest, so no path
+    produces a mixed take: a refilled live name is quarantined before the staged part lands, and a
+    shape that cannot be decided blocks the slug as revision 7 did.
+  - **Why the both-absent row (pass 7, J1).** Revision 7 had only the first two rows here; only the
+    relabel journal had R5-1's "absent under both names". A part deleted from outside the protocol
+    while a per-slug journal was pending (Explorer, a sync client propagating a delete) was then
+    renamed anyway. `renameWithRetry` retries `ENOENT` for about 3.6 s (`atomic-rename.ts:41-47`)
+    and rethrows, which is a move-step failure, so the slug was blocked for good, behind a sentence
+    that could never work.
+  - **The re-probe (R9-2, revision 9; pass 8, K2).** A part is recorded as lost only when it is
+    absent under both names at a first probe **and** at a re-probe after each delay of
+    `RENAME_RETRY_DELAYS_MS` (`atomic-rename.ts:22`, about 1.8 s in all). OneDrive can move a just
+    written file into its own staging for scanning and drop it back milliseconds later (the
+    helper's own header, `:7-9`), and a part recorded as lost that then drops back is a
+    `.next-<id>` file no journal names, which the sweep **unlinks** (Sweep). The same schedule
+    serves a rename that throws `ENOENT`: replay re-probes both names on it and takes the matching
+    row, so `ENOENT` never blocks a slug. Revision 8 re-probed once, with no wait.
   - **What a lost part leaves.** An incomplete take: with no audio the chapter reads unrendered, and
     with no segments it is unindexed (§4.2), as for a relabel. A lost live audio part of a commit
     being rolled back leaves no live take, and the next step 0 meets §4.2's no-live-take shape. A
     stamp after a lost segments part clears every member except `duration` (§4.4). Replay always
     converges.
-  - **"Both present" is outside the protocol too.** A per-slug journal's targets are journal-unique
-    names or the slug's own vacated names, which nothing in the protocol refills under book-op, so
-    a copy at the source name can only come from outside (a sync client restoring what it saw
-    deleted). Quarantining it, rather than refusing, keeps this shape from blocking the slug too.
-    Step 5's in-span "a present target is a fault" check is unchanged: it guards a first run, where
+  - Step 5's in-span "a present target is a fault" check is unchanged: it guards a first run, where
     the journal has just listed what is present.
 
-  That presence test is sound **only** because every name such
-  a journal moves between is either journal-unique (`.next-<takeId>`, `.discard-<jid>`) or the
-  slug's own live or previous name, which nothing else can take while book-op is held. A relabel
-  moves takes between **different chapters'** slugs, so the presence test is not sound **across**
-  its groups. A relabel uses a cursor across groups (A1), and a per-part test **inside** the group
-  that runs next, the one after the group the cursor names, where the presence test is sound again
-  (R5-1, R6-2, Restructure below). The stamp is a pure function of the live segments, and the
-  review entry is keyed by `takeId`. Nothing counts.
-- **At most one unsuperseded journal per slug (E10, revision 8).** Revision 7 said "one journal per
-  slug". A commit that supersedes a leftover journal (Commit step 0) now leaves two on disk until
-  its cleanup: its own, whose `supersedes.jid` names the old one, and the old one. Replay of the
-  slug runs the superseding journal only, and never replays a journal another one names:
+  Inside the protocol, under book-op, nothing refills a vacated slug name, so the table above meets
+  "both present" only after a fault from outside. A relabel moves takes between **different
+  chapters'** slugs, so the presence test is not sound **across** its groups. A relabel uses a
+  cursor across groups (A1), and a per-part test **inside** the group that runs next, the one
+  after the group the cursor names, where the presence test is sound again (R5-1, R6-2,
+  Restructure below). The stamp is a pure function of the live segments, and the review entry is
+  keyed by `takeId`. Nothing counts.
+- **At most one unsuperseded journal per slug (E10, revision 8; chains R9-3).** Revision 7 said
+  "one journal per slug". A commit that supersedes a leftover journal (Commit step 0) now leaves
+  two or more on disk until its cleanup: its own, whose `supersedes` list names every journal of
+  the chain, and those. Replay of the slug runs the journal no other one names, and never replays
+  a named journal on its own:
+  - **replay reads every journal of the slug before it acts on any (R9-3, revision 9; pass 8,
+    K5).** Which journal is in charge depends on the others' `supersedes`, so a journal that cannot
+    be read (EBUSY, EPERM, Sweep) stops the slug's replay: it is a record-step failure, and no
+    journal of the slug is acted on until every one reads. Otherwise a superseded journal would
+    look like a plain leftover while the journal naming it was unreadable;
   - **the superseding journal before `installed`** rolls back, and its rollback unlinks only its
-    own file. The old journal is then a plain leftover again, with every file where it left them,
-    and the next step 0 replays or supersedes it as before;
-  - **from `installed` on**, it rolls forward: its stamp, the superseded journal's owed entry drop,
-    its own entry, then step 8's unlinks, the old journal's before its own.
+    own file. The journals it named are then leftovers again, the one no other names in charge,
+    with every file where they left them, and the next step 0 replays or supersedes them as before;
+  - **from `installed` on**, it rolls forward: its stamp, the superseded journals' owed entry
+    drops, its own entry, then step 8's unlinks, oldest first, its own last.
 
   So a crash at any point leaves exactly one journal in charge. **More than one unsuperseded
   journal for a slug** should be impossible under book-op. If it happens, the entry point refuses
-  with a fixed 500, and the fsck quarantines the extra journals to `audio/.orphaned/` and logs them.
+  with a fixed 500, and the fsck quarantines **every** unsuperseded journal of the slug, with the
+  jid-tagged files they name, into one `audio/.orphaned/` event folder, as R6-3 does, and logs
+  them. Nothing orders two random jids, so none is preferred; the live take stays where it is, and
+  the next entry point's stamp describes it. Revision 8 said "the extra journals" without saying
+  which (pass 8, K5).
 - **Unique names.** The journal id is fresh per operation, so names never collide.
 - **Not boot-only.** Recovery runs at every entry point, in the failing job's catch path, and at
   boot.
@@ -1845,7 +1963,7 @@ take A, so Accept meets the converge row below. Accept **changes no take field**
 | Live `takeId` is… | Accept does |
 |---|---|
 | the entry's `takeId` (B) | moves the previous take to `.discard-<jid>.prev.*`, then cleanup; commits `accepted` |
-| the entry's `previousTakeId` (A) | **a reject's audio step already ran**. Accept and reject converge: the entry is removed, `rejected` (the truth) is appended, and the answer is 409 `revision_gone` with the state |
+| the entry's `previousTakeId` (A), or, when that is `null`, a take whose segments' `synthesizedAt` is the entry's `previousRenderedAt` (R9-4) | **a reject's audio step already ran**. Accept and reject converge: the entry is removed, `rejected` (the truth) is appended, and the answer is 409 `revision_gone` with the state |
 | anything else | `revision_gone`, entry kept as today |
 
 **Reject** (`restoreTake`). Journal `op:'restore'`. The phases, with what a replay does at each:
@@ -1881,11 +1999,22 @@ the existing `renderedAt`. Reject compares the live `takeId`:
 | Live `takeId` is… | Reject does |
 |---|---|
 | B | runs the restore |
-| A | the audio step is already done: commits `rejected` |
+| A (or, when `previousTakeId` is `null`, a take whose segments' `synthesizedAt` is the entry's `previousRenderedAt`, R9-4) | the audio step is already done: commits `rejected` |
 | anything else | `revision_gone` |
 
 Both tables read the **live segments'** `takeId`, inside the module under book-op. They never read
 `state.json`'s `audioTakeId` mirror (E6).
+
+**An entry with no `previousTakeId` (R9-4, revision 9; pass 8, K7).** When a full render's mint
+failed (§4.1, R8-2), the take that became previous at its commit was id-less, so step 3 recorded
+`previousTakeId: null`. The next entry point's `ensureTakeIdentity` then mints that take a fresh id,
+which no entry carries, and a Reject retry met "anything else". So the "A" row of both tables also
+matches, when the entry's `previousTakeId` is `null`, a live take whose segments' `synthesizedAt`
+equals the entry's `previousRenderedAt`. That is the same time `entryMatchesChapter` already
+accepts (Matching, below), and the routes that bring a take back with A's time drop the entry first
+(R6-8), so it never matches a stale entry. A previous take with no segments has neither an id nor a
+time, and its entry matches on `renderedAt` alone, as a legacy entry does. Minting at step 3 was
+the alternative; it repeats the write that just failed.
 
 **Matching (E6, revision 5).** Revision 4 widened `entryMatchesChapter` to `takeId ∈ {B, A}`, but
 named no chapter-side source. Revisions-store builds every `ChapterRef` from `state.json`, so the
@@ -1981,8 +2110,11 @@ The journal is written before step 1. Step 2's `state.json` write also stamps th
   restated in revision 8):
   1. **The slug plan.** Step 0 takes `book`, reads `state.json`, computes the slug plan, and
      releases `book`. The slug plan is `buildAudioOps`' map of which slugs are a `from`, a `to`, a
-     `drop` or a `clearStalePrevious`. **Its inputs, stated truthfully (pass 7, J7):** chapter ids,
-     slugs, `excluded`, the op, and `buildAudioOps`' presence test. Revision 7 omitted the last,
+     `drop` or a `clearStalePrevious`. **Its inputs, stated truthfully (pass 7, J7; titles added in
+     revision 9, pass 8, K8):** chapter ids, slugs, titles (with `titleSynthesized`, because a new
+     slug is built from the id and the title, `restructure.ts:126-128`, and the transform renumbers
+     app-made titles, `chapters-restructure.ts:387-389`), `excluded`, the op, and `buildAudioOps`'
+     presence test. Revision 7 omitted the last,
      and that test read `audioRenderedAt` alone (`restructure.ts:443`), which step 0 itself can
      write: R3-5's promotion of an unindexed previous take clears it (R6-8), and the legacy-reject
      re-stamp rewrites it. **The presence test is now an OR (R8-7):** a chapter is in the plan when
@@ -2005,13 +2137,22 @@ The journal is written before step 1. Step 2's `state.json` write also stamps th
 
   The restructure then takes `book` again, as today (`chapters-restructure.ts:331`), and its closure
   rebuilds the plan from its fresh read (`:386-392`) and asserts that its slug plan equals step
-  0's. That holds for the reasons above: step 0 writes no id, slug or `excluded`, its writes keep
-  the presence OR true, and book-op plus the gate keep every other writer of those fields out while
-  `book` is released. The only writer that can run in that gap is the library-scan heal, which
-  fills absent take fields from a live take, so it can only fill `audioRenderedAt` for a chapter the
-  OR already admits. Revision 7 said the assertion "cannot fire", and it could (pass 7, J7). It is
-  now a tripwire for a writer this list misses: if it fires, the restructure fails with the existing
-  fixed 500 before it writes, and the retry re-plans. Inside the closure, the journal write is a
+  0's. Step 0 writes no id, slug, title or `excluded`, and its writes keep the presence OR true.
+  book-op plus the gate keep out every writer that holds book-op. **Three writers hold only `book`,
+  and can run while it is released (revision 9 names the last two; pass 8, K8):**
+  - the library-scan heal, which fills absent take fields from a live take, so it can only fill
+    `audioRenderedAt` for a chapter the OR already admits;
+  - GET `/state`'s **title refresh** (`book-state.ts:457-485`, `refreshChapterTitles` from
+    `:319`, its rewrite at `:430-441`), which rewrites `title` and `titleSynthesized` when the book's
+    `chapterTitleParserVersion` is behind. That can change a planned target slug;
+  - GET `/state`'s **uuid mint** in the same span, which writes `uuid` only, which the plan does
+    not read.
+
+  So the assertion **can** fire, once per book after a bump of the title parser's version, when a
+  GET lands in the gap. That is what the tripwire is for: the restructure fails with the existing
+  fixed 500 before it writes anything, and the retry re-plans against the refreshed titles, which
+  the refresh's version stamp keeps from changing again. Revision 8 said the heal was the only
+  writer in the gap, and revision 7 that the assertion "cannot fire" (pass 7, J7; pass 8, K8). Inside the closure, the journal write is a
   plain file write that takes no lock: `state-json` is a leaf.
   - **Why `reconcileSlug` is named (pass 5, C11).** A per-slug journal is named
     `<slug>.take-journal.<jid>.json`. A relabel that moved its slug's parts would strand that journal
@@ -2089,7 +2230,8 @@ idempotent **per part** (R5-1), and revision 6 settles which parts each group de
   segments, because step 1 clears the whole target before anything of `k` arrives. A crash after the
   last land rename and before the cursor write re-runs `land` as a no-op: every source is in
   `landing`, and every part is at its target.
-- **A lost part never blocks.** It leaves an incomplete take: with no audio the chapter reads
+- **A lost part never blocks.** Every "lost" row in these groups is reached only after R9-2's
+  re-probe (Journal rules) finds the part absent at every probe. It leaves an incomplete take: with no audio the chapter reads
   unrendered, and with no segments it is unindexed (§4.2). `lost` is logged at `cleanup`.
 - **`metadata`:** each rewrite sets fixed values. It runs only on the target of a source in
   `landing` (R7-2), and, where the source has a recorded `takeId` (or previous `takeId`), only when
@@ -2292,21 +2434,23 @@ as today. A crash in the window is undone the same way by replay.
   - **Re-arm bound.** A mid-pass CAS mismatch requests a re-run only when the pass was **not**
     itself a mismatch-requested re-run. A chain of passes therefore re-arms on mismatch at most
     once. New triggers always re-arm.
-- **Which passes run the post-audition tier reconcile (E7, E8, E9; restated together in
-  revision 8).** A pass runs `reconcileResidentQwenTiers` (`generation.ts:215-216`;
+- **Which passes run the post-audition tier reconcile (E7, E8, E9, E11; restated together in
+  revision 9).** A pass runs `reconcileResidentQwenTiers` (`generation.ts:215-216`;
   `tts/ensure-sidecar-loaded.ts:236` onward) after its auditions only when **all** of these hold:
   1. **it started at once** (E8): `triggerScoring`'s synchronous single-flight check found no pass
      of the book in flight when its trigger arrived (J5, above);
   2. **its trigger is a render's or a resume's** (E7);
-  3. **for a resume pass, nothing that synthesises for the book is running immediately before the
-     reconcile** (E9): no render, no splice and no QA repair. The check runs after the auditions,
-     synchronously, with no await between it and the call. If one is running, the pass skips the
-     cleanup and logs it.
+  3. **for a resume pass, nothing synthesises anywhere, and nothing registered during the pass**
+     (E9 as restated by E11): immediately before the reconcile, synchronously, with no await
+     between the check and the call, `isAnyGenerationActive()` is false **and** the registration
+     epoch `readSpliceEpoch()` equals the value the pass read when it started. If either fails, or
+     the epoch reader is unregistered (`null`, which the gate says to treat as "moved"), the pass
+     skips the cleanup and logs it.
 
   | Trigger | Starts at once (no pass in flight) | Queued behind a pass, started from the pending list |
   |---|---|---|
   | `'render'` (a render's own pass) | reconciles against its `ctx.keep`, the run's full-cast set (`:207-216`), as on `main` | **never** reconciles (E8) |
-  | `'resume'` | reconciles against `scoreBook`'s own `usedQwenTiers`, as on `main` (`:215`), **unless** a render, splice or QA repair of the book is running immediately before the reconcile; then it skips the cleanup (E9) | **never** reconciles (E8) |
+  | `'resume'` | reconciles against `scoreBook`'s own `usedQwenTiers`, as on `main` (`:215`), **unless** a render, splice or QA repair of **any** book is running immediately before the reconcile, or one registered after the pass started; then it skips the cleanup (E9, E11) | **never** reconciles (E8) |
   | `'partial'` (splice, QA repair) | **never** reconciles (E7) | **never** reconciles (E7, E8) |
 
   - **Why E9 (pass 7, J5, Q1).** Revision 7 said that, because the route refuses resume while the
@@ -2317,30 +2461,42 @@ as today. A crash in the window is undone the same way by replay.
     minutes. A render that registered in either window lost its tier. And `isGenerationActive`
     counts generation jobs only (`generation.ts:661-663`), so a resume beside a running splice or
     QA repair evicted the tier it was synthesising with: **#4235**, pre-existing on `main`. E9's
-    re-check closes all three, and so **closes #4235**. #4235 proposed refusing Resume while a splice
+    re-check closes these, and so **closes #4235**. #4235 proposed refusing Resume while a splice
     or QA repair runs; E9 lets the pass score and skips only its cleanup, so its auditions still run
-    beside synthesis, which E5 accepts (R8-8). The route's own refusal during generation is
-    unchanged.
-  - **Where the query lives (R8-8).** E9 needs a per-book "is anything synthesising" query, which
-    does not exist: `isGenerationActive` sees generation jobs only, and the leaf gate's
-    `isAnyGenerationActive()` (`gpu/active-generation-gate.ts:139`) is process-wide. Splice and QA
-    repair both register through `registerSplice` (`chapter-splice.ts:336`,
-    `chapter-qa-repair.ts:333`) in `routes/chapter-job-coordination.ts`'s `inFlightSplices`, keyed
-    `${bookId}::${chapterId}`. So:
-    - `routes/chapter-job-coordination.ts`, which owns that registry, gains
-      `hasInFlightSpliceForBook(bookId)`;
-    - `routes/generation.ts` composes it with `isGenerationActive(bookId)` as
-      `isBookSynthesising(bookId)`, and `triggerScoring`'s resume path calls it. `generation.ts`
-      already imports `abortInFlightSplice` from that module (`:78`), so no import edge is added;
-    - nothing under `server/src/gpu/` reads it. CLAUDE.md's rule, that `server/src/gpu/` reaches a
-      route module only through a stateless leaf gate, is kept: if a `gpu/` module ever needs this
-      query, it is registered into a leaf gate, as `setInFlightSpliceCounter` already is, never
-      imported.
-  - **What E9 does not see.** A render's chapter POST runs its own run-start reconcile before it
-    calls `registerJob` (`generation.ts:1216-1217`), so a render that is starting is invisible to
-    `isGenerationActive` until then. The leaf gate's header documents the same window. A job that
-    registers during the reconcile's own await is not seen either. In both, the render's next
-    synthesis reloads its tier: a reload, not a failure. Both windows are narrower than `main`'s,
+    beside synthesis, which E5 accepts. The route's own refusal during generation is unchanged.
+  - **Why E11's reach (pass 8, K3, K4, Q1).** Revision 8 implemented E9 as one per-book sample of
+    `inFlightByBook` plus the splice registry. That sample had two holes:
+    - **the chapter gap (K3).** The queue makes one POST per chapter, and `deregisterJob` empties
+      `inFlightByBook` between chapters (`generation.ts:610-622`), the same B4 finding that
+      withdrew E3's wait (below). A reconcile that landed in a gap evicted the queue render's tier;
+    - **other books (K4).** `reconcileResidentQwenTiers` unloads from the one sidecar every book
+      shares (`ensure-sidecar-loaded.ts:288-289`). A resume of book A whose `usedQwenTiers` is
+      0.6B alone evicted 1.7B under a render of book B.
+
+    E11 takes the repo's own eviction-safety predicate. `isAnyGenerationActive()`
+    (`gpu/active-generation-gate.ts:139-142`) is process-wide, folds in the splice/QA-repair
+    registry's count (`setInFlightSpliceCounter`, `chapter-job-coordination.ts:21`), and fails
+    closed when generation has not registered. The gate reserves the eviction decision for it
+    (`:165-170`). It closes K4. A single sample of it still reads idle in a render's chapter gap,
+    as the gate's own header says (`:155-159`). So the re-check also compares the **registration
+    epoch**, `readSpliceEpoch()` (`:128-131`): the registry's count of every `registerSplice` ever
+    made (`chapter-job-coordination.ts:25-26,40`) plus generation's count of every `registerJob`
+    (`generation.ts:582-585,683`). A queue render's next chapter, or a splice or QA repair, that
+    registered at any point after the pass started moves it, even if it has deregistered by the
+    reconcile. That closes K3 for every gap in which a registration falls during the pass's
+    minutes of auditions.
+  - **No new query, no new import edge.** `generation.ts` already imports from
+    `gpu/active-generation-gate.ts` (`:105-110`), `isAnyGenerationActive` among them (`:109`, for
+    the run-start reconcile at `:1216`), and registers its providers there (`:682-683`), so the
+    re-check adds one name, `readSpliceEpoch`, to an existing import. R8-8's `hasInFlightSpliceForBook` and
+    `isBookSynthesising` are withdrawn, and `chapter-job-coordination.ts` gains nothing. CLAUDE.md's
+    leaf-gate rule is untouched: the gate is the leaf, and the route reads it.
+  - **What E11 still does not see.** A render that has started but not reached `registerJob`, whose
+    own run-start reconcile runs first (`generation.ts:1216-1217`); the gate documents that window
+    (`:30-49`). A job that registers during the reconcile's own `/health` await
+    (`ensure-sidecar-loaded.ts:244`). A pass whose whole span, from its start to its reconcile,
+    falls inside one chapter gap, which is a POST round-trip against minutes of auditions. In each,
+    the job's next synthesis reloads its tier: a reload, not a failure, and narrower than `main`,
     which has no re-check at all.
 
   - **Why a queued pass never reconciles (E8, pass 6, G1).** On `main`, a trigger that finds a pass
@@ -2359,7 +2515,7 @@ as today. A crash in the window is undone the same way by replay.
     (`tts/per-character-engine.ts:43-58,70-80`), so the full-cast set is a property of a run, not
     of the book. Each request brings its own run key: a render from its POST body
     (`generation.ts:830-831,1019-1021`), a QA repair from `body.modelKey ?? segFile.modelKey`
-    (`chapter-qa-repair.ts:306-311`; the Listen view omits `modelKey` on purpose, so the chapter's
+    (`chapter-qa-repair.ts:310-315`; the Listen view omits `modelKey` on purpose, so the chapter's
     own render key wins), a splice re-record from its request. Nothing serialises a repair against
     a render. So revision 5's full-cast `keep` for a partial trigger, computed for a QA repair on a
     chapter rendered at 0.6B while a queue renders at 1.7B, was `{keep06}` and evicted 1.7B under
@@ -2373,19 +2529,23 @@ as today. A crash in the window is undone the same way by replay.
     job of the book ran (E3, R4-9). Pass 4 showed that this cannot be observed for a queue-driven
     render (B4). The queue makes one POST per chapter (`generation.ts:387-391,497-503,1192-1193`),
     and `deregisterJob` empties `inFlightByBook` between chapters (`:610-619`), so the wait fired in
-    every gap. There is therefore no `afterRenders` mark, no synth-job exit hook, and no per-book
-    reader of `chapter-job-coordination.ts`.
+    every gap. There is therefore no `afterRenders` mark and no synth-job exit hook. The same finding
+    is why E11's resume re-check is not a per-book sample either: it reads the leaf gate's
+    process-wide `isAnyGenerationActive()` and its registration epoch, and adds no per-book reader
+    of `chapter-job-coordination.ts` (revision 8's `hasInFlightSpliceForBook` was one, and is
+    withdrawn).
 - **What the design closes, and what it does not.** Revision 6 said "nothing is evicted under a
-  running render". That was broader than the design (pass 6). What E7, E8 and E9 close is
+  running render". That was broader than the design (pass 6). What E7, E8, E9 and E11 close is
   narrower: **a partial job's pass never evicts a tier, a queued pass never does, and a resume pass
-  never does while a render, splice or QA repair of the book is running** (E9, which also closes
-  #4235). These eviction paths remain, all pre-existing on `main` and none widened here:
+  never does while a render, splice or QA repair of any book is running, or after one registered
+  during the pass** (E9 and E11, which also close #4235). These eviction paths remain, all
+  pre-existing on `main` and none widened here:
   - a render's own pass that started at once reconciles after its auditions, and a render at
     another run key, or a splice or QA repair, that started during those auditions loses its tier.
-    On `main` the same happens. E9 is the owner's decision for a resume pass only, so a render's own
-    pass keeps `main`'s behaviour;
-  - a resume pass in E9's two blind windows (above): a render that has not yet registered, or a job
-    that registers during the reconcile's await;
+    On `main` the same happens. E9 and E11 are the owner's decisions for a resume pass only, so a
+    render's own pass keeps `main`'s behaviour;
+  - a resume pass in E11's blind windows (above): a render that has not yet registered, a job
+    that registers during the reconcile's await, or a pass that lies wholly inside one chapter gap;
   - two concurrent renders of one book at different keys (`::*` and `::X`, N9) evict each other's
     tier through their own passes;
   - the run-start reconcile at a render's chapter POST targets that render's own set
@@ -2393,13 +2553,17 @@ as today. A crash in the window is undone the same way by replay.
     tier that a concurrent QA repair or splice is synthesising with, as on `main`. **New because
     partial passes are new:** it can also evict a partial pass's audition tier mid-pass, which then
     reloads at the pass's next audition. That is a reload, not a failure.
-- **The cost (E7, E8, E9).** A pass that never reconciles, or a resume pass that skips its cleanup
-  under E9, can leave a tier its auditions pulled, such as
+- **The cost (E7, E8, E9, E11).** A pass that never reconciles, or a resume pass that skips its
+  cleanup under E9 and E11, can leave a tier its auditions pulled, such as
   the 0.6B base beside a 1.7B render, resident beside the render's tier: the co-residency that the
   post-audition reconcile exists to prevent on an 8 GB card. It stays until the next render
   reconcile, which is the run-start reconcile at the render's next chapter POST
   (`generation.ts:1203-1220`; the queue sends one POST per chapter), or a pass that starts at once
-  and reconciles. With no render running, it stays until the next render starts. E7, E8 and E9
+  and reconciles. With no render running, it stays until the next render starts. **E11 makes the
+  skip more frequent, stated honestly:** a resume pass now skips its cleanup whenever anything
+  synthesises anywhere in the process, another book's render included, and whenever any render
+  chapter, splice or QA repair registered during its auditions. On a busy box Resume therefore
+  rarely cleans up, and its stray tiers wait for the next render's reconcile. E7, E8, E9 and E11
   accept that cost over evicting a running job's tier.
 - **Auditions beside synthesis:** auditions can still run beside a sibling chapter's synthesis, as a
   render's own between-chapter scoring pass already does on `main`. E5 accepts that.
@@ -2531,6 +2695,11 @@ What the protocol does with each:
   | per-character CAS reads (~480 a pass) | ~28,800 | none |
   | **total** | **~39,600** | **~14,400** |
 
+  **The CAS row is an upper bound (R9-9, revision 9; pass 8 note).** It counts a book that is
+  already fully rendered and is being scored again, where every pass sees 60 rendered chapters.
+  The per-character loop runs only over chapters with embedding rows (`aggregate.ts:1025-1077`), so
+  in a render from scratch pass *k* sees about *k* chapters: about 8 × (1 + … + 60) ≈ 14,600 CAS
+  reads, roughly half. Scoring's phase-1 reads scale the same way on both sides.
   If every character speaks in every chapter, the CAS reads rise to about 108,000. Each one is a
   whole-file read and parse (R8-9): a bounded head read would depend on `takeId` being the file's
   first key, which a legacy file rewritten by `ensureTakeIdentity` does not guarantee. Each CAS
@@ -2563,37 +2732,45 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   write skips the cache rebuild (§5.A Restructure). Closing it owes a design pass (#4227, §8.3);
 - **a file the OS refuses to rename under every name** keeps the slugs a stuck journal names
   blocked, and only those, until the user removes the cause and tries again (R5-3, R5-4, R6-3);
-- **stray Qwen tiers after a pass that does not reconcile** (E7, E8, E9): a tier that a splice- or
-  QA-repair-triggered pass, a queued pass, or a resume pass that skipped its cleanup auditioned at
-  can stay resident beside a running job's tier until a render's next chapter POST, or until the
-  next render starts (§5.A Scoring). E7, E8 and E9 accept this over evicting a running job's tier;
+- **stray Qwen tiers after a pass that does not reconcile** (E7, E8, E9, E11): a tier that a
+  splice- or QA-repair-triggered pass, a queued pass, or a resume pass that skipped its cleanup
+  auditioned at can stay resident beside a running job's tier until a render's next chapter POST,
+  or until the next render starts (§5.A Scoring). Under E11 a resume pass skips its cleanup
+  whenever anything synthesises anywhere or registered during the pass, so this is the common case
+  for Resume on a busy box. E7, E8, E9 and E11 accept this over evicting a running job's tier;
 - **the tier evictions that are pre-existing on `main`** (§5.A Scoring): a render's own pass that
   started at once can evict a render at another key, or a splice or QA repair, that started during
-  its auditions; a resume pass can still evict in E9's two blind windows (a render not yet
-  registered, a job registering during the reconcile's await), which reloads; two concurrent
-  renders at different keys (N9) evict each other's tier; a render's run-start reconcile can evict
-  a concurrent partial job's synthesis tier, and now also a partial pass's audition tier, which
-  reloads. **#4235** (a resume beside a running splice or QA repair) is **closed by E9**;
+  its auditions; a resume pass can still evict in E11's blind windows (a render not yet
+  registered, a job registering during the reconcile's await, a pass wholly inside one chapter
+  gap), which reloads; two concurrent renders at different keys (N9) evict each other's tier; a
+  render's run-start reconcile can evict a concurrent partial job's synthesis tier, and now also a
+  partial pass's audition tier, which reloads. **#4235** (a resume beside a running splice or QA
+  repair) is **closed by E9**, and a resume beside another book's render (pass 8, K4) **by E11**;
 - **Unicode normalisation of the unaddressed-set key** (R7-11): on darwin an NFC and an NFD spelling
   of one book folder miss each other, so the fence fails open for that book while a no-`bookId`
   bundle overwrite runs;
-- **the splice and QA-repair SSE path leak** (R7-5, #4233) is pre-existing on `main`. PR #4234 (open
-  at `33f3647c`) fixes it, with the ffmpeg message scrub and `classifyFailure`'s fs handling. Phase 2
-  step 4 lands that whole scope only if #4234 has not merged. The other routes that still echo a
-  raw `err.message` are #4236, outside this design;
+- **the splice and QA-repair SSE path leak** (R7-5, #4233) is **fixed on `main`** by #4234, merged
+  at `08742125`. The other routes that still echo a raw `err.message` are #4236, outside this
+  design;
+- **a bundle take decoded under the workspace-wide claim** (pre-existing, pass 8 note): `replace`
+  decodes an unindexed bundle take before its first rename, under `withBookPathClaim`, the hazard
+  R6-7 moved replay out of the claim for. R8-3 moved decodes out of `book` only. Unchanged here;
 - **a part deleted from outside the protocol** while a journal is pending is recorded as lost
-  (R8-1), and the chapter reads unrendered or unindexed until it is rendered again;
+  (R8-1), after R9-2's re-probe, and the chapter reads unrendered or unindexed until it is rendered
+  again;
+- **a part found at both slug names that is not segments** (R9-1) blocks the slug, as revision 7
+  did, until the user removes the stray copy and tries again;
 - **an unparseable journal** quarantines the takes it was moving, so those chapters read unrendered
   until a person restores them from `.orphaned/` (R6-3). Journals are written atomically, so only
   damage from outside the protocol produces this;
 - **a re-analysis that retitles a rendered chapter** leaves its take at the old slug, as on `main`
   (W16; §8.3; #4230).
 
-**Blast radius (F24; corrected).** About **65–71 non-test server files** (revision 8 adds two), plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`. Revision 5 drops `chapter-job-coordination.ts` again (E5: no exit hook) and adds `test-utils/guard-scan.ts` (rule 3's resolver). Its other changes land in files already listed: `audio/segments-io.ts` (the shared classifier predicate), `routes/chapters-restructure.ts` (no cache rebuild after a parked edits write) and `import/scan-import-folder.ts` (the handles, R5-7). Revision 6 adds `routes/analysis.ts` (W16's carry, R6-4). Its other changes land in files already listed: `routes/generation.ts` (trigger `source`, the per-key pending list, no reconcile for partial passes), `routes/backup.ts` and `workspace/auto-backup.ts` (the handle), `routes/book-state.ts` (the PUT's `chapters` checks and replay), `routes/chapters-restructure.ts` and `workspace/restructure.ts` (`relabelJid`, the plan-driven pending-entry reconcile, step 0's `reconcileSlug`), `workspace/scan.ts` (`relabelJid` in the state type; the heal's read-then-check order) and `audio/segments-io.ts` (the name set as a predicate input). Revision 7 adds no file. Its changes land in files already listed: `routes/generation.ts` (the at-once rule, E8; pending entries by `uuid`, R7-12), `workspace/book-op-lock.ts` (`{ backfill: false }`, R7-8), `workspace/chapter-uuid.ts` (the field-list parameter, R7-6), `routes/chapter-splice.ts` and `routes/chapter-qa-repair.ts` (curated frames, R7-5) and `routes/chapters-restructure.ts` (step 0's slug plan, R7-3). Revision 8 adds `routes/chapter-job-coordination.ts` back (`hasInFlightSpliceForBook`, E9; it was dropped in revision 5) and `workspace/book-state-update.ts` (the canonical directory key, R8-4). If #4234 has not merged by Phase 2, `tts/ffmpeg-failure.ts` (new), `tts/mp3.ts` and `routes/failure-taxonomy.ts` join too (R7-5). Its other changes land in files already listed: `routes/generation.ts` (E9's re-check and `isBookSynthesising`, the synchronous hand-off, chapters without a `uuid`), `workspace/restructure.ts` (the presence OR, R8-7), `routes/chapters-restructure.ts` (step 0 outside `book`, R8-3), `workspace/auto-backup.ts` (releasing `book`, the pre-restore `duration`, R8-3), `workspace/scan.ts` (the heal's key and set check, R8-4), `import/scan-import-folder.ts` (carried journals replayed before the claim, R8-5) and `workspace/chapter-uuid.ts` (`carryTakeStateFields`):
+**Blast radius (F24; corrected).** About **65–71 non-test server files** (revision 8 adds two), plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`. Revision 5 drops `chapter-job-coordination.ts` again (E5: no exit hook) and adds `test-utils/guard-scan.ts` (rule 3's resolver). Its other changes land in files already listed: `audio/segments-io.ts` (the shared classifier predicate), `routes/chapters-restructure.ts` (no cache rebuild after a parked edits write) and `import/scan-import-folder.ts` (the handles, R5-7). Revision 6 adds `routes/analysis.ts` (W16's carry, R6-4). Its other changes land in files already listed: `routes/generation.ts` (trigger `source`, the per-key pending list, no reconcile for partial passes), `routes/backup.ts` and `workspace/auto-backup.ts` (the handle), `routes/book-state.ts` (the PUT's `chapters` checks and replay), `routes/chapters-restructure.ts` and `workspace/restructure.ts` (`relabelJid`, the plan-driven pending-entry reconcile, step 0's `reconcileSlug`), `workspace/scan.ts` (`relabelJid` in the state type; the heal's read-then-check order) and `audio/segments-io.ts` (the name set as a predicate input). Revision 7 adds no file. Its changes land in files already listed: `routes/generation.ts` (the at-once rule, E8; pending entries by `uuid`, R7-12), `workspace/book-op-lock.ts` (`{ backfill: false }`, R7-8), `workspace/chapter-uuid.ts` (the field-list parameter, R7-6), `routes/chapter-splice.ts` and `routes/chapter-qa-repair.ts` (curated frames, R7-5) and `routes/chapters-restructure.ts` (step 0's slug plan, R7-3). Revision 8 added `routes/chapter-job-coordination.ts` back (`hasInFlightSpliceForBook`, E9) and `workspace/book-state-update.ts` (the canonical directory key, R8-4). Revision 9 drops `routes/chapter-job-coordination.ts` again (E11 reads the leaf gate instead) and adds `workspace/book-dir-key.ts` (new, R9-6), so the count is unchanged. #4234 merged, so its files no longer join (R7-5). Revision 8's other changes land in files already listed: `routes/generation.ts` (the resume re-check, now E11's `isAnyGenerationActive()` and epoch, the synchronous hand-off, chapters without a `uuid`), `workspace/restructure.ts` (the presence OR, R8-7), `routes/chapters-restructure.ts` (step 0 outside `book`, R8-3), `workspace/auto-backup.ts` (releasing `book`, the pre-restore `duration`, R8-3), `workspace/scan.ts` (the heal's key and set check, R8-4), `import/scan-import-folder.ts` (carried journals replayed before the claim, R8-5) and `workspace/chapter-uuid.ts` (`carryTakeStateFields`):
 
 | Area | Files |
 |---|---|
-| New | `workspace/chapter-take.ts`, `workspace/chapter-take.guard.test.ts` |
+| New | `workspace/chapter-take.ts`, `workspace/chapter-take.guard.test.ts`, `workspace/book-dir-key.ts` (the leaf, R9-6) |
 | Folded in / removed | `workspace/preserve-previous-audio.ts`, `audio/previous-audio.ts`, `audio/rewrite-chapter-slugs.ts`, the take-name builder in `workspace/chapter-audio-file.ts` |
 | Finalize and callers | `audio/finalize-chapter-write.ts`, `routes/generation.ts` (commit site, signal, `committing`, `stallPhase`, failure-stamp check, `writeAttempted`, OD2 per-chapter abort, `startTakeId` span and its `take_repair_pending` check, `triggerScoring`'s per-key pending re-runs, re-arm bound, trigger `source`, and no post-audition reconcile for a partial-only pass (E7)), `routes/chapter-splice.ts`, `routes/chapter-qa-repair.ts` (registration-first base read, Edit 6b staged as rows and patches, exit-path scoring trigger) |
 | Waiter retries (E2) | `workspace/book-jobs.ts` (registration retry), `routes/book-state.ts` (listen-progress and listen-stats PUT retry; listen-progress receive-time ordering, R5-6) |
@@ -2637,6 +2814,12 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
     live segments' `takeId`. A Reject whose audio step and stamp landed but whose `revisions.json`
     write failed is retried and commits `rejected`, matched through `previousRenderedAt`. The
     negative control: a later render C makes the entry invisible;
+  - **an entry with no `previousTakeId` (R9-4, revision 9; pass 8, K7):** a full render whose
+    chapter-start mint fails (injected) over an id-less live take commits, and records an entry with
+    `previousTakeId: null`. A Reject restores that take, whose next entry point mints it a fresh id;
+    its `revisions.json` write fails (injected), and the retry commits `rejected` through the
+    `previousRenderedAt` row. The mutation that must fail: match the "A" row by `previousTakeId`
+    alone, and the retry answers `revision_gone`;
   - **listen-progress under retry (R5-6):** two autosaves with no `listenedAt` queue behind a span
     longer than 10 s; the older one's retry lands after the newer one and leaves the newer record,
     `markers` included;
@@ -2656,7 +2839,7 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
     own `runModelKey` to `scoreBook`, so each side's characters audition at their own tier. Two
     triggers at the same key merge into one. The mutation that must fail: merge across keys, and one
     side's characters audition at the other's tier;
-  - **E7, E8 and E9 (restated in revision 8; pass 7, J4).** The harness has **no scoring pass
+  - **E7, E8, E9 and E11 (restated in revision 9; pass 7, J4; pass 8, K3, K4).** The harness has **no scoring pass
     running** when each trigger under test arrives, unless the case says otherwise, so that
     trigger's pass starts at once rather than being queued. **It counts only the scoring pass's own
     reconcile.** Revision 7 counted every call to `reconcileResidentQwenTiers`, which a real
@@ -2682,23 +2865,33 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
        **render** trigger at run key 1.7B arrives and is queued, and the render (stub) keeps
        running with 1.7B resident. The partial pass ends; the queued render pass starts from the
        pending list and calls the seam **zero** times; 1.7B stays resident. Separately, a
-       **resume** trigger is queued the same way, and **nothing** is running when its queued pass
-       reaches the reconcile, so E9's re-check would let it through: it still calls the seam
-       **zero** times. That case is what keeps E9 from masking E8. Mutation that must fail: let a
+       **resume** trigger is queued the same way, and **nothing** is running or registers once its
+       queued pass starts, so E11's re-check would let it through: it still calls the seam
+       **zero** times. That case is what keeps E11 from masking E8. Mutation that must fail: let a
        queued pass reconcile when it carries a render or resume trigger (revision 6's R6-1 rule);
        the seam is called.
     3. **Positive controls (E8, `main` parity).** With no pass running, a render's own trigger
        calls the seam **once**, with its run's full-cast `ctx.keep`. With no pass and no render,
-       splice or QA repair running, a resume trigger calls it **once**, with `scoreBook`'s
-       `usedQwenTiers`. While the book generates, the resume route answers 409 and triggers
+       splice or QA repair running in any book, and none registering during the pass, a resume
+       trigger calls it **once**, with `scoreBook`'s `usedQwenTiers`. While the book generates, the resume route answers 409 and triggers
        nothing.
-    4. **A resume pass re-checks before it reconciles (E9).** No pass is running, and the route
-       accepts a resume trigger. Then, separately: a splice (stub) registers during the pass's
-       auditions; a QA repair (stub) does the same; a render (stub) registers after the route's
-       check and before the pass starts, the click-to-start window. In each, the seam is called
-       **zero** times and the resident tier stays. Two mutations must fail: drop the re-check, and
-       the seam is called once; re-check with `isGenerationActive` alone, and the splice and QA
-       repair cases call it once (the #4235 regression).
+    4. **A resume pass re-checks before it reconciles (E9, E11).** No pass is running, and the
+       route accepts a resume trigger. Then, separately, each of these calls the seam **zero**
+       times and leaves the resident tier:
+       - a splice (stub) registers during the pass's auditions; a QA repair (stub) does the same;
+       - a render (stub) registers after the route's check and before the pass starts, the
+         click-to-start window;
+       - **the chapter gap (K3):** a render (stub) registers a chapter during the auditions and
+         deregisters before the reconcile, so `inFlightByBook` is empty at the reconcile and only
+         the epoch moved;
+       - **another book (K4):** a render (stub) of a second book is running at the reconcile;
+       - **fail closed:** the gate's generation provider is unregistered, or its epoch reader is.
+
+       Three mutations must fail: drop the re-check, and every case calls the seam once; re-check
+       with `isGenerationActive` alone, and the splice and QA-repair cases call it once (the #4235
+       regression); re-check `isAnyGenerationActive()` without the epoch, and the chapter-gap case
+       calls it once. Revision 8's per-book check (`isGenerationActive` plus the book's splices)
+       fails the other-book case.
     5. **The hand-off keeps single flight (J5).** A pass ends while one entry is pending. A trigger
        injected between the `.finally` and the queued pass's registration is queued, not started:
        exactly one pass runs at a time. The mutation that must fail: await the queued pass's
@@ -2801,26 +2994,30 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
     step 0 too, and fails loud at its own step 7 if the injection still holds (the supersession case
     above); it never reaches the watchdog. Accept answers `FS_PERMANENT_FAILURE_REQUEST_ERROR` as a
     500.
-  - **No path in a terminal frame (R7-5, widened in revision 8):** a splice and a QA repair whose
-    finalize (and, separately, whose base-read span) throws an injected node fs error with an
-    absolute `path` end with a `chapter_failed` frame whose `errorReason` contains neither the
-    workspace path nor the raw message, and carries the curated sentence. A real ffmpeg encode that
-    fails with its output under a path, and a generation chapter whose finalize rename throws an
-    unmapped node fs error, do the same, and a book title that matches a failure signature is not
-    classified by it. These fail on `main` today; they are #4234's tests, and land here only if
-    #4234 has not merged.
+  - **No path in a terminal frame (R7-5; done on `main` by #4234):** #4234's own tests pin the
+    curated splice and QA-repair catch-alls, the ffmpeg scrub and `classifyFailure`'s fs handling,
+    so this design adds none of them. It adds only its own frames: a splice and a QA repair whose
+    base-read span throws an injected node fs error with an absolute `path` end with a
+    `chapter_failed` frame whose `errorReason` contains neither the workspace path nor the raw
+    message; a `take_repair_pending` and a `take_details_pending` frame carry their fixed sentences
+    and no path.
   - **Whole-book writers (R5-5):** a backup restore and a bundle overwrite over a book with a pending
     relabel journal finish the journal before they swap `state.json`, and refuse with
     `take_repair_pending` when the replay fails, swapping nothing. The bundle overwrite's replay
     runs **before** `withBookPathClaim` (R6-7): with a slow injected replay on book A, an import
     into book B is not held behind it. **Carried slugs (R8-5):** a per-slug commit journal at
     `installed` on a slug the bundle carries is replayed before the claim, without lazy migration
-    (no decode is called), and the bundle's take is installed. A crash injected between the swap
-    and `replaceTakesFromBundle` leaves no local journal to replay against the bundle's state. The
-    mutation that must fail: skip the carried slugs' replay, as revision 7 did, and the crash
+    (no decode is called), and the bundle's take is installed. For a carried journal whose
+    replay **completes**, a crash injected between the swap and `replaceTakesFromBundle` leaves no
+    local journal to replay against the bundle's state (R9-7: the claim is limited to that case).
+    The mutation that must fail: skip the carried slugs' replay, as revision 7 did, and the crash
     case rolls the local take over the bundle's state. A carried journal stuck on a move step
-    refuses the import with `take_repair_pending`; one stuck on its stamp only is superseded by the
-    `replace` journal, and the import succeeds. An overwrite that fails with `BundleConflictError`
+    refuses the import with `take_repair_pending`. A carried commit journal stuck on its stamp only
+    outlives the swap and is superseded by the `replace` journal, and the import succeeds; the same
+    journal with the crash injected before the supersession is replayed at the next entry point,
+    which stamps from the local take still live, so the state describes the disk. A carried drop
+    journal stuck on a record step refuses the import with the curated 500 and swaps nothing
+    (E12, K10). An overwrite that fails with `BundleConflictError`
     after its pre-claim replay leaves nothing pending.
   - **A parked edits write** skips the cache rebuild.
 - **Windows-shaped tests:** an injected EBUSY/EPERM at step 5 keeps the staged set and retries; an
@@ -2907,15 +3104,33 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   as its remedy, and is the same for an injected EBUSY, EACCES and ENOSPC. After it, a render of a
   chapter the journal does **not** name leaves the journal pending, and a render of one it names
   finishes it, which is what the sentence promises.
-- **Lost parts in per-slug journals (R8-1, J1):** a commit journal stopped mid-preserve, a restore
-  stopped mid-promote, and an accept and a drop journal each stopped after their first rename,
-  with one listed part then deleted under both names. Replay records the part in `lost`, finishes,
-  and unblocks the slug; the next render of the chapter commits, and a backup restore of the book
-  is not refused. The same with the part deleted between replay's probe and its rename (an
-  injected `ENOENT` from the rename): replay re-probes and records it as lost. A copy planted at a
-  vacated source name is quarantined and replay finishes. The mutations that must fail: drop the
-  both-absent row, and the slug answers `take_repair_pending` for good; treat `ENOENT` as a
-  move-step failure, and the same.
+- **Lost parts in per-slug journals (R8-1, J1; re-probe R9-2):** a commit journal stopped
+  mid-preserve, a restore stopped mid-promote, and an accept and a drop journal each stopped after
+  their first rename, with one listed part then deleted under both names. Replay records the part
+  in `lost` only after its re-probe schedule, finishes, and unblocks the slug; the next render of
+  the chapter commits, and a backup restore of the book is not refused. The same with the part
+  deleted between replay's probe and its rename (an injected `ENOENT` from the rename): replay
+  re-probes and records it as lost. **A part that drops back** (absent at the first probe, present
+  at the second, the OneDrive scan shape) is renamed, not recorded as lost, and the sweep never
+  unlinks it. The mutations that must fail: drop the both-absent row, and the slug answers
+  `take_repair_pending` for good; treat `ENOENT` as a move-step failure, and the same; decide
+  "lost" from one probe, and the dropped-back part is lost and then swept.
+- **"Both present" by name kind (R9-1, revision 9; pass 8, K1):**
+  - **install with a refilled live name:** a commit stopped after step 5 moved the live audio, and
+    a copy planted at the live audio name (a sync client restoring it). Replay quarantines the
+    planted copy, installs the staged audio and segments, and the chapter's audio and segments are
+    both the new take's;
+  - **a discard with a refilled source name:** an Accept stopped after its `.previous.*` rename,
+    with a copy planted at `.previous.*`. Replay quarantines the planted copy and finishes;
+  - **two slug names, segments:** a commit stopped mid-preserve with a foreign
+    `.previous.segments.json` planted. Replay keeps the copy carrying `liveTakeId` and quarantines
+    the other;
+  - **two slug names, not segments:** the same with a foreign `.previous.mp3`. Replay refuses with
+    a move-step failure, and the slug answers `take_repair_pending` with R8-2's sentence; nothing
+    is installed over it.
+
+  The mutation that must fail: revision 8's row (quarantine the copy at the source name), and the
+  install case leaves the old audio live beside the new segments.
 - **Retry budget by step (R8-2, J2):** a commit's step 0 meets a leftover journal (one owing a
   rolled-back unlink) whose record step fails with an injected permanent EPERM. It is attempted
   three times, about 3 s in all, then the chapter ends with `FS_FAILURE_REQUEST_ERROR` and the
@@ -2940,11 +3155,28 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   replay never runs the old journal on its own, and a crash between the two unlinks leaves one
   journal in charge. The mutation that must fail: end the commit at step 0 as revision 7 did, and
   the render is discarded.
+  - **A chain (R9-3, revision 9; pass 8, K5):** commit J2 supersedes J1 and its unlink of J1 fails
+    (injected), so both stay; commit J3 then supersedes J2. J3's `supersedes` names J2 and J1; its
+    cleanup unlinks J1, then J2, then itself, and the chapter's pending entry is J3's. The mutation
+    that must fail: supersede one level only, and J1 replays its stale entry over J3's. With J2's
+    read failing (injected EBUSY), replay acts on no journal of the slug, and J1 is not replayed
+    as a plain leftover.
+  - **Off the list (E12):** a drop journal stuck past its moves on an injected failure of its
+    `state.json` write (so the chapter is not yet `excluded`), and separately an Accept journal
+    stuck past its moves on an injected record-step failure. A render of the chapter does not supersede it: the
+    chapter-start span gives it the record-step budget, and after the third attempt the chapter
+    ends with `requestFailureMessageFs`' sentence before synthesis. The drop's `excluded: true` is
+    never reversed. The mutation that must fail: put drop on the list, and the render clears the
+    exclude.
 - **The slug plan under step 0 (R8-7, J7):** a restructure over a chapter whose only take is an
   unindexed previous take, and separately one with a legacy-reject shape. Step 0 promotes or
   re-stamps it, the closure's assertion does not fire, and the promoted take moves with its
   chapter. The mutation that must fail: test presence by `audioRenderedAt` alone, and the
-  assertion fires (or, with it removed, the take stays at its old slug).
+  assertion fires (or, with it removed, the take stays at its old slug). **A GET in the gap (R9-5;
+  pass 8, K8):** a book whose `chapterTitleParserVersion` is behind, with a GET `/state` injected
+  while step 0 has released `book`. The refresh retitles a chapter, the closure's assertion fires,
+  the restructure answers its fixed 500 having written nothing, and a retry succeeds against the
+  refreshed titles.
 - **The `book` key for an unaddressed handle (R8-4, J9):** a no-`bookId` bundle overwrite whose
   directory arrives spelt differently from the walk's, with a library-scan heal running across
   the swap. The heal either skips the book (it found the canonical directory in the unaddressed
@@ -3056,7 +3288,7 @@ replace an existing file. A target that already exists means the source is quara
    - **Choosing the live one.** A file "matches" when its duration is within ±0.5 s of the live
      `segments.json`'s `durationSec`. The duration is measured by a **full decode**
      (`ffmpeg -i <f> -f null -`), not by ffprobe's header estimate, which is unreliable on legacy
-     MP3s with no Xing header (`tts/mp3.ts:144-182`). This shape is rare, so the decode cost is
+     MP3s with no Xing header (`tts/mp3.ts:145-183`). This shape is rare, so the decode cost is
      paid rarely. It is paid inside the entry point's span, at most once per slug: the outcome is a
      rename, and with no span deadline (E2) nothing rolls it back. Exactly one match: that file stays
      live.
@@ -3102,7 +3334,7 @@ replace an existing file. A target that already exists means the source is quara
 (R4-1). So Phase 1 step 2 only re-points those two call sites at the module's accessor; it changes
 no behaviour. #4167 (N5, the leaked tmp audio) is fixed by #4211. #4223 (the m4b duration skew) is
 not part of this design; #4224 closed it, merged at `33f3647c`. #4233 (the splice and QA-repair SSE
-leak) has its fix open as PR #4234; Phase 2 step 4 lands that scope only if it has not merged.
+leak) is fixed by #4234, merged at `08742125`, which is all of R7-5's scope; no phase lands any of it.
 
 **Phase 1: identity, naming, liveness and lazy migration.** No behaviour change for a clean mp3
 book.
@@ -3149,10 +3381,13 @@ first.
    `take_repair_pending` for a per-slug journal stuck on a move-step failure, with the one
    move-step sentence, and the curated 500 for a record-step one, classed by the step that threw
    and never by `code` (R5-3, R5-4, R6-3, R7-4, R8-2); the per-slug journals' `lost` row and the
-   `ENOENT` re-probe (R8-1); supersession of a leftover journal whose move steps have landed, with
-   `supersedes` in the commit journal and "at most one unsuperseded journal per slug" (E10); a
-   journal read error never quarantines (R7-4); every journal unlink under `book` (R7-1), keyed
-   through `canonicalDirKey` for an unaddressed handle, with the heal's set check (R8-4); the
+   `ENOENT` re-probe, both on `RENAME_RETRY_DELAYS_MS`' schedule (R8-1, R9-2), and the "both
+   present" row by name kind (R9-1); supersession of a journal on E12's list only, with
+   `supersedes` as a list that absorbs chains, every journal of a slug read before any is acted on,
+   and "at most one unsuperseded journal per slug" (E10, E12, R9-3); a journal read error never
+   quarantines (R7-4); every journal unlink under `book` (R7-1), keyed through `canonicalDirKey`
+   for an unaddressed handle, with the heal's set check, both in the leaf
+   `workspace/book-dir-key.ts` (R8-4, R9-6); the
    take-switching stamp that clears members the new segments lack, its decoded `duration` for an
    unindexed take, never inside `book` (R8-3), and the backup-restore and legacy-reject stamps among
    them (R6-8, R7-7); `{ backfill: false }` for the module's in-job spans, and one journal listing
@@ -3166,37 +3401,39 @@ first.
      before it, and the permanent-cause sentence chosen by `requestFailureMessageFs` (R7-4, R8-2);
    - `afterChapterFinalized` after the span;
    - OD2's per-chapter splice abort, and the `startTakeId` span with its stuck-journal check
-     (R5-4; a move step fails the chapter, a supersedable journal is logged, any other record
-     step gets the three-attempt budget, R8-2, E10), and `ensureTakeIdentity`'s failures never
+     (R5-4; a move step fails the chapter, a journal on E12's list is logged, any other record
+     step gets the three-attempt budget, R8-2, E10, E12), and `ensureTakeIdentity`'s failures never
      stopping a full render (R8-2);
    - the PUT's `reconcileBook` before it compares `chapters` (R6-5).
 4. Splice and QA repair: registration-first base read, base tokens, the CAS-mismatch sentence, N6
    driven by the commit result, the `chapter_failed` frame with `code: 'take_repair_pending'`
    (R6-3), the base-read span ending through `requestFailureMessageFs` after its budget (R7-5,
    R8-2), and the exit-path scoring request outside the span, **with `source: 'partial'`, whose
-   pass never runs the post-audition reconcile** (E7). **#4233's fix**, only if PR #4234 has not
-   merged by then, and then its whole scope: the curated catch-all frames, the ffmpeg message
-   scrub through `ffmpegFailure` (`tts/ffmpeg-failure.ts`), and `classifyFailure`'s fs fallback and
-   `isFsPathError` pre-check (R7-5). `triggerScoring`'s `source`, its per-key pending list with
+   pass never runs the post-audition reconcile** (E7). #4233's fix is already on `main` (#4234);
+   this step keeps its new frames on that curated path (R7-5). `triggerScoring`'s `source`, its
+   per-key pending list with
    chapters by `uuid`, else by `id` and `slug` (R6-1, R7-12, R8-6), the synchronous hand-off of the
    in-flight marker (J5), the no-reconcile rule for partial passes (E7), the at-once rule for every
-   other pass (E8), and the resume pass's re-check through `isBookSynthesising` with
-   `hasInFlightSpliceForBook` in `chapter-job-coordination.ts` (E9) land in the same step as the
+   other pass (E8), and the resume pass's re-check through the leaf gate's
+   `isAnyGenerationActive()` and `readSpliceEpoch()` (E9, E11) land in the same step as the
    request, so no phase ships a pass that reconciles from the pending list, or a resume pass that
-   reconciles beside a running job. This step's PR closes #4235.
+   reconciles beside a running job. This step's PR closes #4235, and its body restates #4235's
+   acceptance criteria: #4235 asked the route to refuse Resume, with a "resume is refused" test,
+   and E9 instead runs the pass and skips only its cleanup, so the PR's test is §5.A Tests' case 4,
+   not a refusal (pass 8 note).
 5. The bundle overwrite through `replaceTakesFromBundle`, placed after the rename loop (R3-8, A14),
    with both of its branches' handles (R5-7), the `finally` and the canonical key (R6-6), and its
    replay before the path claim (R6-7), the carried slugs' per-slug journals replayed there too
-   without lazy migration, and superseded by the `replace` journal when stuck on record steps only
-   (R8-5); backup restore through `reconcileBookTakes` with the threaded handle, after `book` is
+   without lazy migration, and superseded by the `replace` journal when on E12's list and stuck
+   on record steps only, any other refusing the import (R8-5, R9-7); backup restore through `reconcileBookTakes` with the threaded handle, after `book` is
    released, with the pre-restore `duration` carry (R3-9, R6-6, R8-3); both resolve a pending
    journal before they swap `state.json` (R5-5).
 6. The waiter retries (R4-10): `runBookJob`'s registration, and the listen-progress and listen-stats
    PUTs, with listen-progress's receive-time ordering (R5-6).
 7. Lock-order comments, and the CLAUDE.md lock-order sentence and the fail-loud and swallow
    enumerations (State-write sites table: five new fail-loud, `dropEntry` among them, one moved,
-   four new swallow), and the `requestFailureMessageFs` handler list and call-site count if
-   #4234's scope lands here (R7-5).
+   four new swallow), and the `requestFailureMessageFs` handler list and call-site count for any
+   call site this design adds (#4234 already updated them for its own, R7-5).
 
 **Phase 3: fidelity, retry recognition, scoring.**
 1. `restoreTake` with its journal phases, and R3-5's promotion (§6.1 step 6), which replaces fsck
@@ -3248,6 +3485,9 @@ first.
        With ffmpeg holding the live file directly, the controls fail EPERM and EBUSY respectively.
        Commit step 5 opens with the rename-away, so the second half is the one #4224's m4b case
        rests on. The OneDrive cells for both are still owed;
+     - **the OneDrive scan window (R9-2):** a part probed while OneDrive has it in its own
+       staging, to confirm the re-probe schedule outlasts the absence `atomic-rename.ts:7-9`
+       describes;
      - waiter outcomes (autosave, job registration) while an export holds a live file and while a
        slow commit runs.
    - **An m4a book on real hardware:** render → splice → reject → accept, with the files listed
@@ -3261,7 +3501,7 @@ Each PR carries:
 
 ## 8. Questions
 
-### 8.1 Owed questions from all seven passes, answered
+### 8.1 Owed questions from all eight passes, answered
 
 | Question | Answer |
 |---|---|
@@ -3280,6 +3520,9 @@ Each PR carries:
 | Does E8's "starts at once" mean "not queued", checked when Resume is clicked, or "no render is running", checked by the pass itself? (pass 7, Q1) | E9: both. A resume pass that starts at once also re-checks, immediately before it reconciles, that no render, splice or QA repair of the book is running, and skips the cleanup if one is. That closes the click-to-start and audition windows, and #4235 (§5.A Scoring). |
 | A leftover journal past `installed` owes only record steps, which fail persistently: end the new commit and discard the render, or supersede the journal and keep it? (pass 7, Q2) | E10: supersede. The new commit names the old journal, absorbs what it owes, installs its own take, and fails loud at its own step 7 if the same refusal hits its stamp (§5.A Commit step 0, Journal rules). |
 | What does a per-slug journal's replay do with a part absent under both names? What bounds a record-step retry when `code` misstates persistence? (pass 7, Q3) | Records it as lost and continues, with an `ENOENT` re-probe (R8-1). A record step gets three attempts of its own, never the watchdog, and `code` chooses only the sentence (R8-2) (§5.A Ownership, Journal rules, Retries). |
+| E9's reach: a literal per-book sample, a per-book signal that spans chapter gaps, or the process-wide `isAnyGenerationActive()`? (pass 8, Q1) | E11: the process-wide predicate, plus the registration epoch so the chapter gap is covered. Resume skips its cleanup more often, a stated cost (§5.A Scoring). |
+| E10's reach: restore and promotion journals too? Drop and Accept? (pass 8, Q2) | E12: commit journals past `installed`, restore journals and promotion journals only. Drop and Accept keep block-and-retry (§4.1, §5.A Commit step 0). |
+| What does replay do when both names are present and the target is a slug name? What happens to a journal superseded by one that is itself superseded? (pass 8, Q3) | By name kind: the slug-name copy is foreign when the other side is journal-unique; at two slug names a segments part is decided by `takeId`, and anything else refuses (R9-1). Chains absorb: `supersedes` is a list, unlinked oldest first, and replay reads every journal of a slug first (R9-3) (§5.A Journal rules, Commit). |
 | Where does the canonical `takeSeq` live, and what exact equality does the commit test? Should Accept bump it? (A1, 1-1) | Nowhere: it is dropped (D1). The commit tests `live segments.takeId === base`. Accept bumps nothing. |
 | A failed stamp after `installed`: swallow or rethrow? Which source decides "committed"? (A2) | Rethrow (D2). The journal at `installed` or later, or the live segments' `takeId`, decides; never `state.json` (`takeCommitted`). |
 | Must the module own every whole-book and whole-state writer, and every book of any age, with minting and liveness enforced at its own entry points? (A3, 1-3) | Yes (D3): W13–W15 go through module entry points; `ensureTakeIdentity` and the §4.2 predicate run at every entry point. (Revision 3 also claimed that guard rule 3 sees zip-relative and variable-suffix writers. E4 withdraws that claim: they are listed blind spots, and every such site on `main` folds into the module.) |
