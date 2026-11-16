@@ -9,7 +9,7 @@
    stub builder has returned, so rehydrate's own `readdir` of the manifests dir
    (every request) is never the held one. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,8 @@ import request from 'supertest';
 const seam = vi.hoisted(() => {
   type Hold = { entered: Promise<void>; release: () => void; enter: () => void; released: Promise<void> };
   const holds: Record<string, Hold | undefined> = {};
+  /* Holds that were entered stay reachable here so cleanup can release them. */
+  const entered: Hold[] = [];
   const state = { revokeReady: false, renameCalls: 0 };
   function arm(name: string): { entered: Promise<void>; release: () => void } {
     let enter!: () => void;
@@ -32,10 +34,15 @@ const seam = vi.hoisted(() => {
     const h = holds[name];
     if (!h) return;
     delete holds[name];
+    entered.push(h);
     h.enter();
     await h.released;
   }
-  return { holds, state, arm, maybeHold };
+  function releaseAll(): void {
+    for (const h of Object.values(holds)) h?.release();
+    for (const h of entered.splice(0)) h.release();
+  }
+  return { holds, state, arm, maybeHold, releaseAll };
 });
 
 vi.mock('../export/build-mp3-zip.js', () => ({
@@ -159,6 +166,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  seam.releaseAll();
   await awaitInFlightJobs?.();
   resetJobs?.();
   for (const k of Object.keys(seam.holds)) delete seam.holds[k];
@@ -168,8 +176,12 @@ beforeEach(async () => {
   rmSync(join(bookDir, '.audiobook', 'export-manifests'), { recursive: true, force: true });
 });
 
+afterEach(() => {
+  seam.releaseAll();
+});
+
 afterAll(async () => {
-  for (const h of Object.values(seam.holds)) h?.release();
+  seam.releaseAll();
   await awaitInFlightJobs?.();
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
