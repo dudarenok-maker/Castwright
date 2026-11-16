@@ -21,13 +21,15 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 TOTAL = 8192
+BASE_MB = 1300  # the 0.6B audition base `design_voice` always leaves resident
 BASE17_MB = 3900  # measured on-box (A122 tts.err.log: vram_reserved 3951/4048 with base17 resident)
 OTHER_MB = 300  # CUDA context etc.
 
 
-def _fake_qwen(resident=True, weights_mb=0, device="cuda:0", design_mb=0):
+def _fake_qwen(resident=True, weights_mb=0, device="cuda:0", design_mb=0, base_mb=0):
     q = object.__new__(main.QwenEngine)
-    q._base = None
+    q._base = object() if base_mb else None
+    q._base_weights_mb = base_mb
     q._base17 = object() if resident else None
     q._design = object() if design_mb else None
     q._design_weights_mb = design_mb
@@ -84,6 +86,7 @@ def _one_card(qwen, extra_free=0, other_mb=OTHER_MB):
     def probe():
         used = other_mb + (BASE17_MB if qwen._base17 is not None else 0)
         used += BASE17_MB if qwen._design is not None else 0
+        used += BASE_MB if qwen._base is not None else 0
         return [{"kind": "cuda", "index": 0, "label": "g", "totalMb": TOTAL, "freeMb": TOTAL - used + extra_free}]
 
     return probe
@@ -354,7 +357,7 @@ def _design(pc):
 
 
 def test_d1_back_to_back_designs_do_not_evict_or_reload_voicedesign(monkeypatch):
-    qwen = _fake_qwen(resident=False, design_mb=3900)
+    qwen = _fake_qwen(resident=False, design_mb=3900, base_mb=BASE_MB)
     pc = _wire(monkeypatch, qwen, _one_card(qwen))
     design = qwen._design
     for _ in range(2):
@@ -365,15 +368,15 @@ def test_d1_back_to_back_designs_do_not_evict_or_reload_voicedesign(monkeypatch)
 
 
 def test_d2_design_protects_voicedesign_when_nothing_fits(monkeypatch):
-    qwen = _fake_qwen(resident=False, design_mb=3900)
+    qwen = _fake_qwen(resident=False, design_mb=3900, base_mb=BASE_MB)
     pc = _wire(monkeypatch, qwen, _one_card(qwen, extra_free=-3000))
     adm, _ = _design(pc)
-    assert adm == {"noCapacity": {"neededMb": 6144 - 3900, "deviceKey": "cuda:0"}}
+    assert adm == {"noCapacity": {"neededMb": 6144 - 3900 - BASE_MB, "deviceKey": "cuda:0"}}
     assert qwen._design is not None
 
 
 def test_d3_another_admissions_ladder_cannot_evict_voicedesign_under_the_hold(monkeypatch):
-    qwen = _fake_qwen(resident=False, design_mb=3900)
+    qwen = _fake_qwen(resident=False, design_mb=3900, base_mb=BASE_MB)
     pc = _wire(monkeypatch, qwen, _one_card(qwen))
     out = {}
 
@@ -393,12 +396,119 @@ def test_d3_another_admissions_ladder_cannot_evict_voicedesign_under_the_hold(mo
 def test_d4_design_resolver(monkeypatch):
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=3900))
     assert main._own_resident_tier("qwen", "1.7b", DESIGN) == ("qwen.design", 3900, "cuda:0")
+    # the resident 0.6B audition base is credited beside it (measured, else the constant)
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=3900, base_mb=BASE_MB))
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN) == ("qwen.design", 3900 + BASE_MB, "cuda:0")
+    unmeasured_base = _fake_qwen(resident=False, design_mb=3900, base_mb=1)
+    unmeasured_base._base_weights_mb = 0
+    monkeypatch.setitem(main.ENGINES, "qwen", unmeasured_base)
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == 3900 + main._QWEN_BASE_WEIGHTS_MB
+    # a mint never gets the 0.6B credit (#4237 owns that decision)
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=3900, base_mb=BASE_MB))
+    assert main._own_resident_tier("qwen", "1.7b", MINT)[1] == 3900
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=0))
     assert main._own_resident_tier("qwen", "1.7b", DESIGN) == (None, 0, None)
     unmeasured = _fake_qwen(resident=False, design_mb=1)
     unmeasured._design_weights_mb = 0
     monkeypatch.setitem(main.ENGINES, "qwen", unmeasured)
     assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == main._QWEN_DESIGN_WEIGHTS_MB
+
+
+def test_d5_warm_design_on_an_8188_card_is_admitted_without_evicting_voicedesign(monkeypatch):
+    """Review pass 2 (A): the design's peak includes the 0.6B audition base that
+    `design_voice` always leaves resident, so crediting only VoiceDesign refused a
+    warm design by ~900 MB (neededMb 2544), left the Node design lever to decline
+    (it sees VoiceDesign resident) and cost the back-to-back design the ~2 min
+    idle watchdog. Probe-style figures: 8188 card, context 400, VoiceDesign 4000
+    reserved / 3600 measured, 0.6B 1300, seed 6144, cushion 409."""
+    qwen = _fake_qwen(resident=False, design_mb=3600, base_mb=1300)
+    pc = _wire(monkeypatch, qwen, lambda: [
+        {"kind": "cuda", "index": 0, "label": "g", "totalMb": 8188, "freeMb": 8188 - 400 - 4000 - 1300}
+    ])
+    monkeypatch.setattr(pc, "reserve_mb", lambda: 409)
+    design = qwen._design
+    adm, booked = _design(pc)
+    assert adm == {"device": "cuda:0"}
+    assert booked == 6144
+    assert qwen._design is design, "admission evicted the warm VoiceDesign"
+    assert qwen._base is not None
+
+
+def test_b1_a_credited_model_freed_during_a_ladder_step_is_not_counted_twice(monkeypatch):
+    """Review pass 2 (B): the idle watchdog frees the credited model on its own
+    thread while a ladder step runs; the re-probe then already counts those
+    weights, so adding the up-front credit again admitted a mint that cannot fit
+    (true headroom 5692 against a 6144 peak plus cushion)."""
+    qwen = _fake_qwen(weights_mb=3900)
+    steps = lambda device_key, engine: [
+        main.EvictStep("other", None, lambda: setattr(qwen, "_base17", None) or True)
+    ]
+    pc = _wire(monkeypatch, qwen, _one_card(qwen, other_mb=2500), steps=steps)
+    adm, booked = _mint(pc)
+    assert "noCapacity" in adm
+    assert booked == 0
+
+
+def test_design_weights_are_measured_at_load(monkeypatch):
+    """VoiceDesign's resident size is measured like the 1.7B-Base's (#4102): the
+    credit must not silently fall back to the constant."""
+    import types
+
+    class T:
+        def numel(self):
+            return 3500 * 1_048_576 // 2
+
+        def element_size(self):
+            return 2
+
+    class FakeModel:
+        def parameters(self):
+            return [T()]
+
+        def buffers(self):
+            return []
+
+    loaded = types.SimpleNamespace(model=FakeModel())
+    q = _fake_qwen(resident=False)
+    q._cold_load_lock = threading.Lock()
+    q._device_pref = "cuda:0"
+    q._ensure_device_resolved = lambda: None
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    monkeypatch.setattr(q, "_load_qwen_model", lambda name: loaded, raising=False)
+    monkeypatch.setattr(main, "_QWEN_DESIGN_EVER_LOADED", False)
+    q._ensure_design_loaded()
+    assert q._design_weights_mb == 3500
+
+
+def test_base_weights_are_measured_at_load(monkeypatch):
+    """Same for the 0.6B audition base, credited beside a warm VoiceDesign."""
+    import types
+
+    class T:
+        def numel(self):
+            return 1250 * 1_048_576 // 2
+
+        def element_size(self):
+            return 2
+
+    class FakeModel:
+        def parameters(self):
+            return [T()]
+
+        def buffers(self):
+            return []
+
+    loaded = types.SimpleNamespace(model=FakeModel())
+    q = _fake_qwen(resident=False)
+    q._cold_load_lock = threading.Lock()
+    q._device_pref = "cuda:0"
+    q._ensure_device_resolved = lambda: None
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    monkeypatch.setattr(q, "_load_qwen_model", lambda name: loaded, raising=False)
+    monkeypatch.setattr(main, "_install_codec_timing", lambda m: None)
+    monkeypatch.setattr(main, "_maybe_compile_codec", lambda m, t: None)
+    q._ensure_base_loaded()
+    assert q._base_weights_mb == 1250
 
 
 def test_credit_size_is_the_measured_footprint_and_never_zero(monkeypatch):

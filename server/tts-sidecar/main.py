@@ -4954,6 +4954,22 @@ class PlacementController:
             return candidates
         return [(k, free + credit_mb if k == card else free, total) for k, free, total in candidates]
 
+    def _live_credit(
+        self, engine: str, model: Optional[str], cfg: Optional[dict],
+        protect: Optional[str], credit_card: Optional[str], credit_mb: int,
+    ) -> int:
+        """#4102 — the credit to add to a RE-probe: re-read residency, because the
+        idle watchdog runs on its own thread and may free a credited model during
+        a ladder step. The re-probe then already counts the freed weights, so the
+        up-front credit would count them twice. A changed tier or card drops the
+        credit; a partly freed one (e.g. only the 0.6B base) shrinks it."""
+        if credit_card is None or credit_mb <= 0:
+            return credit_mb
+        now_protect, now_mb, now_card = self.own_resident_tier(engine, model, cfg)
+        if now_protect != protect or now_card != credit_card:
+            return 0
+        return min(now_mb, credit_mb)
+
     def _worst_device_key(self, devices: list[dict]) -> Optional[str]:
         """The GPU device with the MOST headroom (closest to fitting) — the one
         Node should try to free the analyzer's share from, since it's where an
@@ -5160,8 +5176,9 @@ class PlacementController:
         if worst is not None:
             def _fits():
                 probed = self.probe()
+                live = self._live_credit(engine, model, cfg, protect, credit_card, credit_mb)
                 return self.ledger.best_fit(
-                    self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, credit_mb),
+                    self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, live),
                     peak, reserve_cap,
                 )
 
@@ -5184,8 +5201,9 @@ class PlacementController:
         # failure path, so a stranded pool can never by itself cause a refusal.
         if device_key is not None:
             await self._reclaim_stranded_cache(device_key)
+            live = self._live_credit(engine, model, cfg, protect, credit_card, credit_mb)
             key = self.ledger.best_fit(
-                self._credit_candidates(self._gpu_candidates(self.probe(), constraint), credit_card, credit_mb),
+                self._credit_candidates(self._gpu_candidates(self.probe(), constraint), credit_card, live),
                 peak, reserve_cap,
             )
             if key is not None:
@@ -5493,8 +5511,9 @@ class PlacementController:
             if worst is not None:
                 def _fits():
                     probed = self.probe()
+                    live = self._live_credit(engine, model, cfg, protect, credit_card, credit_mb)
                     return self.ledger.try_hold(
-                        self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, credit_mb),
+                        self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, live),
                         peak, reserve_cap, engine,
                     )
 
@@ -5517,8 +5536,9 @@ class PlacementController:
                 if reclaim_key is not None:
                     await self._reclaim_stranded_cache(reclaim_key)
                     devices = self.probe()
+                    live = self._live_credit(engine, model, cfg, protect, credit_card, credit_mb)
                     held = self.ledger.try_hold(
-                        self._credit_candidates(self._gpu_candidates(devices, constraint), credit_card, credit_mb),
+                        self._credit_candidates(self._gpu_candidates(devices, constraint), credit_card, live),
                         peak, reserve_cap, engine,
                     )
 
@@ -6080,8 +6100,11 @@ def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
         # KNOWN RESIDUAL: this leaves #1920B open for Qwen specifically — a
         # /design_voice admitted but not yet at its `_design_in_flight` claim
         # can have a warm VoiceDesign model evicted underneath it, the same
-        # window the ledger closes for Coqui/ASR/ECAPA. Recorded in the design's
-        # Known limitations. Closing it properly means recording
+        # window the ledger closes for Coqui/ASR/ECAPA. #4102 closed it for a
+        # design whose VoiceDesign was resident at admission (and #4079 for
+        # base17): `_protected_steps["qwen.design"]` keeps other admissions'
+        # ladders off it. A design admitted COLD is still open. Closing it
+        # properly means recording
         # FootprintTable._key(...) (`qwen.1.7b.design` / `.mint` / `qwen.1.7b` /
         # `qwen`) in the ledger instead of the bare engine — out of scope here.
         steps.append(EvictStep("qwen.design", None, lambda: qwen.maybe_free_idle_design(0.0)))
@@ -6126,6 +6149,10 @@ _QWEN_BASE17_WEIGHTS_MB = 3400
 # #4102 - the same fallback for the transient 1.7B VoiceDesign model (the same
 # model class and size as the 1.7B-Base), used when its load did not measure.
 _QWEN_DESIGN_WEIGHTS_MB = 3400
+# #4102 - and for the 0.6B audition base `design_voice` always leaves resident
+# (`_ensure_base_loaded`): a warm design's probe has it out of free VRAM, and the
+# design's peak includes it, so its fit check credits it beside VoiceDesign.
+_QWEN_BASE_WEIGHTS_MB = 1200
 
 
 def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
@@ -6144,7 +6171,8 @@ def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple
 
 def _own_resident_design(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
     """`(card, weights_mb)` when a 1.7b Qwen design request finds VoiceDesign
-    resident (#4102), else None."""
+    resident (#4102), else None. The weights include the resident 0.6B audition
+    base, which the design itself uses and its peak already contains."""
     if engine != "qwen" or "1.7b" not in (model or "").lower():
         return None
     qwen = ENGINES.get("qwen")
@@ -6153,7 +6181,10 @@ def _own_resident_design(engine: str, model: Optional[str]) -> Optional[tuple[st
     card = _qwen_resident_device_key(qwen)
     if card is None:
         return None
-    return (card, getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB)
+    weights = getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB
+    if getattr(qwen, "_base", None) is not None:
+        weights += getattr(qwen, "_base_weights_mb", 0) or _QWEN_BASE_WEIGHTS_MB
+    return (card, weights)
 
 
 def _own_resident_tier(
@@ -6751,6 +6782,7 @@ class QwenEngine(Engine):
         # load (MB); 0 = not measured. Read by `_own_resident_tier`.
         self._base17_weights_mb: int = 0
         self._design_weights_mb: int = 0  # #4102, like `_base17_weights_mb`
+        self._base_weights_mb: int = 0  # #4102, the 0.6B audition base
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -7026,6 +7058,7 @@ class QwenEngine(Engine):
                 self._ensure_device_resolved()
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
+                self._base_weights_mb = _module_weights_mb(self._base)
                 _install_codec_timing(self._base)
                 import torch  # injected into the compile hook for testability
                 _maybe_compile_codec(self._base, torch)
