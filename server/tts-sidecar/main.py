@@ -4880,7 +4880,6 @@ class PlacementController:
         is_resident: Optional[Callable[[str], Optional[str]]] = None,
         reclaim: Optional[Callable[[str], bool]] = None,
         own_resident_tier: Optional[Callable[[str, Optional[str], Optional[dict]], tuple[Optional[str], int, Optional[str]]]] = None,
-        own_resident_warm_mb: Optional[Callable[[str, Optional[str], Optional[dict]], int]] = None,
     ) -> None:
         self.probe = probe
         # #4079 — `(evict_step_name, weights_mb, card)` for the request's OWN tier
@@ -4893,11 +4892,6 @@ class PlacementController:
         # peak, so every other admission sees `total - peak` and a reload stays
         # covered.
         self.own_resident_tier = own_resident_tier if own_resident_tier is not None else (lambda engine, model, cfg: (None, 0, None))
-        # #4102 — MB subtracted from the request's cold peak BEFORE booking, when
-        # the model it needs (a Qwen mint's 1.7B-Base) is already resident: the
-        # ledger books the warm amount, not the cold peak. Unlike the #4079
-        # credit above this is a booking, not a fit-only adjustment.
-        self.own_resident_warm_mb = own_resident_warm_mb if own_resident_warm_mb is not None else (lambda engine, model, cfg: 0)
         # Evict-step names a live reservation needs resident (name -> holders),
         # so another admission's ladder cannot run them between this
         # reservation's hold and the op's own in-flight claim.
@@ -5142,7 +5136,6 @@ class PlacementController:
         # engine's `neededMb`).
         resident = self.is_resident(engine)
         peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
-        peak = max(peak - self.own_resident_warm_mb(engine, model, cfg), 0)
         protect, credit_mb, credit_card = self.own_resident_tier(engine, model, cfg)
         constraint = credit_card if credit_card is not None else (resident if resident is not None else pinned)
         reserve_cap = self.reserve_mb()
@@ -5444,7 +5437,6 @@ class PlacementController:
         # needs an incremental forward-only reservation, not the cold-load peak
         # unconditionally booked before this.
         peak = self.footprints.peak_mb(engine, model, cfg, resident is not None)
-        peak = max(peak - self.own_resident_warm_mb(engine, model, cfg), 0)
         protect, credit_mb, credit_card = self.own_resident_tier(engine, model, cfg)
         constraint = credit_card if credit_card is not None else (resident if resident is not None else pinned)
         reserve_cap = self.reserve_mb()
@@ -6127,10 +6119,13 @@ def _module_weights_mb(loaded: Any) -> int:
 # out of the free VRAM the probe reads, so its fit check adds them back (see
 # `PlacementController.own_resident_tier`); otherwise the full cold booking
 # double-counts them and sends the request down the ladder to evict (and then
-# reload) the very model it was about to use. #4102: the same figure is also a
-# mint's warm discount (`_own_resident_warm_mb`): a mint with the base resident
-# books its cold peak minus these weights.
+# reload) the very model it was about to use. #4102: a mint with the base
+# resident gets the same fit-only credit, and a design with VoiceDesign resident
+# gets it from `_QWEN_DESIGN_WEIGHTS_MB`; both still book the FULL peak.
 _QWEN_BASE17_WEIGHTS_MB = 3400
+# #4102 - the same fallback for the transient 1.7B VoiceDesign model (the same
+# model class and size as the 1.7B-Base), used when its load did not measure.
+_QWEN_DESIGN_WEIGHTS_MB = 3400
 
 
 def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
@@ -6147,39 +6142,47 @@ def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple
     return (card, getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB)
 
 
+def _own_resident_design(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
+    """`(card, weights_mb)` when a 1.7b Qwen design request finds VoiceDesign
+    resident (#4102), else None."""
+    if engine != "qwen" or "1.7b" not in (model or "").lower():
+        return None
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine) or qwen._design is None:
+        return None
+    card = _qwen_resident_device_key(qwen)
+    if card is None:
+        return None
+    return (card, getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB)
+
+
 def _own_resident_tier(
     engine: str, model: Optional[str], cfg: Optional[dict]
 ) -> tuple[Optional[str], int, Optional[str]]:
     """PlacementController.own_resident_tier: `("qwen.base17", weights_mb, card)`
-    for a plain (not mint / design) 1.7b Qwen synth while the 1.7B-Base is
+    for a 1.7b Qwen synth or mint (`op == "mint"`, #4102) while the 1.7B-Base is
     resident, else `(None, 0, None)`. `card` is the device Qwen is on
     (`_qwen_resident_device_key`, which sees `_base17` where `_is_resident` does
-    not); `weights_mb` is the footprint measured at load, else the fallback.
-    A mint (`op == "mint"`, #4102) with the base resident PROTECTS it on that
-    card with NO credit (`("qwen.base17", 0, card)`); its warm booking comes
-    from `_own_resident_warm_mb`. design_voice evicts the base itself.
+    not); `weights_mb` is the footprint measured at load, else the fallback. It
+    is credited in the fit check only; the ledger books the FULL peak.
+    A design (`op == "design"`, #4102) with VoiceDesign resident protects
+    `qwen.design` the same way (`_own_resident_design`).
     A resident GPU ASR or SPK (ECAPA) model (#4102) is protected on its card
     with NO credit (`("asr"|"spk", 0, card)`); the warm booking covers it."""
     if engine in ("asr", "spk"):
         card = _is_resident(engine)
         return (engine, 0, card) if card is not None else (None, 0, None)
-    op = (cfg or {}).get("op")
-    if op == "design":
-        return (None, 0, None)
+    if (cfg or {}).get("op") == "design":
+        found = _own_resident_design(engine, model)
+        if found is None:
+            return (None, 0, None)
+        card, weights = found
+        return ("qwen.design", weights, card)
     found = _own_resident_qwen_card(engine, model)
     if found is None:
         return (None, 0, None)
     card, weights = found
-    return ("qwen.base17", 0 if op == "mint" else weights, card)
-
-
-def _own_resident_warm_mb(engine: str, model: Optional[str], cfg: Optional[dict]) -> int:
-    """PlacementController.own_resident_warm_mb (#4102): the resident 1.7B-Base
-    weights a Qwen mint does not need to book again, else 0."""
-    if (cfg or {}).get("op") != "mint":
-        return 0
-    found = _own_resident_qwen_card(engine, model)
-    return found[1] if found is not None else 0
+    return ("qwen.base17", weights, card)
 
 
 # Module-level admission instance /synthesize reserves against when the flag
@@ -6194,7 +6197,6 @@ _placement = PlacementController(
     idle_evict_steps=_idle_evict_steps,
     is_resident=_is_resident,
     own_resident_tier=_own_resident_tier,
-    own_resident_warm_mb=_own_resident_warm_mb,
 )
 
 
@@ -6748,6 +6750,7 @@ class QwenEngine(Engine):
         # #4079 — parameter + buffer bytes of the last-loaded 1.7B-Base
         # load (MB); 0 = not measured. Read by `_own_resident_tier`.
         self._base17_weights_mb: int = 0
+        self._design_weights_mb: int = 0  # #4102, like `_base17_weights_mb`
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -7469,6 +7472,7 @@ class QwenEngine(Engine):
                     self.VOICEDESIGN_MODEL, self._device,
                 )
                 self._design = self._load_qwen_model(self.VOICEDESIGN_MODEL)
+                self._design_weights_mb = _module_weights_mb(self._design)
                 global _QWEN_DESIGN_EVER_LOADED
                 _QWEN_DESIGN_EVER_LOADED = True
                 log.info("Qwen VoiceDesign loaded.")
@@ -9093,7 +9097,8 @@ class WhisperEngine:
     "every sentence" pass costs ZERO VRAM and never competes with synth on the
     GPU. `ASR_DEVICE=cuda` opts into the GPU — a `tiny`/`base` int8 model is
     only ~150–400 MB, fits the ~1–2 GB generation headroom, and is gated by the
-    server's weighted VRAM semaphore (`engine-vram-cost.ts`, cost `asr`) plus
+    sidecar's own admission (`PlacementController.reservation`, ledger-booked,
+    the resident model protected from its own admission's ladder) plus
     the idle-evict watchdog below. Decode is deterministic + hallucination-
     resistant (greedy, temperature 0, no cross-sentence carryover, VAD filter)
     so a QA verdict is idempotent run-to-run and Whisper doesn't invent words on
@@ -9451,8 +9456,8 @@ def _disarm_speechbrain_lazy_modules() -> list[str]:
 
 class SpeakerEngine:
     """ECAPA-TDNN speaker embedding (srv-36). Defaults to CPU (zero VRAM); the
-    optional cuda path (srv-47, SPK_DEVICE=cuda) is VRAM-semaphore-gated on the
-    Node side and idle-evicted here. NOT in the synth ENGINES map — like
+    optional cuda path (srv-47, SPK_DEVICE=cuda) is gated by the sidecar's own
+    admission (`PlacementController.reservation`) and idle-evicted here. NOT in the synth ENGINES map — like
     WhisperEngine it consumes audio and emits a vector."""
     TARGET_SR = 16000
 

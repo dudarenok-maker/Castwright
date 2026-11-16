@@ -25,11 +25,13 @@ BASE17_MB = 3900  # measured on-box (A122 tts.err.log: vram_reserved 3951/4048 w
 OTHER_MB = 300  # CUDA context etc.
 
 
-def _fake_qwen(resident=True, weights_mb=0, device="cuda:0"):
+def _fake_qwen(resident=True, weights_mb=0, device="cuda:0", design_mb=0):
     q = object.__new__(main.QwenEngine)
     q._base = None
     q._base17 = object() if resident else None
-    q._design = None
+    q._design = object() if design_mb else None
+    q._design_weights_mb = design_mb
+    q._design_last_used = 0.0
     q._base17_last_used = 0.0
     q._base17_in_flight = main.InFlightCounter()
     q._design_in_flight = main.InFlightCounter()
@@ -43,7 +45,7 @@ class FP:
     """Footprints at the seeds (cold 1.7b = 6144), no learning."""
 
     def __init__(self, peaks=None):
-        self.peaks = peaks or {"qwen.1.7b": 6144, "qwen.1.7b.mint": 6144, "qwen": 3072, "coqui": 3584}
+        self.peaks = peaks or {"qwen.1.7b": 6144, "qwen.1.7b.mint": 6144, "qwen.1.7b.design": 6144, "qwen": 3072, "coqui": 3584}
 
     def peak_mb(self, engine, model, cfg=None, resident=False):
         return self.peaks.get(main.FootprintTable._key(engine, model, cfg, resident), 0)
@@ -78,9 +80,10 @@ def _wire(monkeypatch, qwen, devices_fn, steps=None):
     return pc
 
 
-def _one_card(qwen, extra_free=0):
+def _one_card(qwen, extra_free=0, other_mb=OTHER_MB):
     def probe():
-        used = OTHER_MB + (BASE17_MB if qwen._base17 is not None else 0)
+        used = other_mb + (BASE17_MB if qwen._base17 is not None else 0)
+        used += BASE17_MB if qwen._design is not None else 0
         return [{"kind": "cuda", "index": 0, "label": "g", "totalMb": TOTAL, "freeMb": TOTAL - used + extra_free}]
 
     return probe
@@ -239,28 +242,22 @@ def test_own_resident_tier_resolver(monkeypatch):
     assert main._own_resident_tier("qwen", "0.6b", {}) == (None, 0, None)
     assert main._own_resident_tier("qwen", None, {}) == (None, 0, None)
     assert main._own_resident_tier("qwen", "1.7b", {"op": "design"}) == (None, 0, None)
-    assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == ("qwen.base17", 0, "cuda:0")
-    assert main._own_resident_tier("coqui", "1.7b", {}) == (None, 0, None)
-    assert main._own_resident_warm_mb("qwen", "1.7b", {"op": "mint"}) == 3900
-    assert main._own_resident_warm_mb("qwen", "1.7b", {}) == 0
-    assert main._own_resident_warm_mb("qwen", "1.7b", None) == 0
-    assert main._own_resident_warm_mb("qwen", "1.7b", {"op": "design"}) == 0
-    assert main._own_resident_warm_mb("qwen", "0.6b", {"op": "mint"}) == 0
+    assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == ("qwen.base17", 3900, "cuda:0")
     assert main._own_resident_tier("qwen", "0.6b", {"op": "mint"}) == (None, 0, None)
-    assert main._own_resident_warm_mb("coqui", "1.7b", {"op": "mint"}) == 0
+    assert main._own_resident_tier("coqui", "1.7b", {}) == (None, 0, None)
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(False))
     assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0, None)
     assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == (None, 0, None)
-    assert main._own_resident_warm_mb("qwen", "1.7b", {"op": "mint"}) == 0
     only06 = _fake_qwen(False)
     only06._base = object()  # Qwen is on a card, but the 1.7B-Base is not loaded
     monkeypatch.setitem(main.ENGINES, "qwen", only06)
     assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0, None)
 
 
-# --- #4102: a mint keeps the resident base and books only its warm amount ---
+# --- #4102: a mint keeps the resident base; credited in the fit check only --
 
 MINT = {"op": "mint"}
+DESIGN = {"op": "design"}
 
 
 def _mint(pc):
@@ -271,12 +268,12 @@ def _mint(pc):
     return asyncio.run(body())
 
 
-def test_t1_warm_mint_is_admitted_booked_warm_and_keeps_base17(monkeypatch):
+def test_t1_warm_mint_is_admitted_booked_full_peak_and_keeps_base17(monkeypatch):
     qwen = _fake_qwen(weights_mb=3900)
     pc = _wire(monkeypatch, qwen, _one_card(qwen))
     adm, booked = _mint(pc)
     assert adm == {"device": "cuda:0"}
-    assert booked == 6144 - 3900
+    assert booked == 6144, "the ledger must book the FULL peak, not peak minus the resident base"
     assert qwen._base17 is not None
 
 
@@ -293,7 +290,7 @@ def test_t3_mint_falls_back_to_the_constant_weights(monkeypatch):
     pc = _wire(monkeypatch, qwen, _one_card(qwen))
     adm, booked = _mint(pc)
     assert adm == {"device": "cuda:0"}
-    assert booked == 6144 - main._QWEN_BASE17_WEIGHTS_MB
+    assert booked == 6144
     assert qwen._base17 is not None
 
 
@@ -303,6 +300,105 @@ def test_t4_cold_mint_is_unchanged(monkeypatch):
     adm, booked = _mint(pc)
     assert adm == {"device": "cuda:0"}
     assert booked == 6144
+
+
+def test_t5_a_second_admission_is_refused_inside_a_mint_on_a_tight_card(monkeypatch):
+    """The warm booking (6144 - 3900) let Coqui in beside a mint that still had
+    2244 MB to allocate: 200 + 3900 + 2244 + 3584 > 8192. The full booking
+    refuses it the way `main` does."""
+    qwen = _fake_qwen(weights_mb=3900)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen, other_mb=200))
+    out = {}
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", MINT, cpu_capable=False, heavy=True) as a:
+            out["a"] = a
+            async with pc.reservation("coqui", None, {}, cpu_capable=False, heavy=True) as b:
+                out["b"] = b
+            out["base17"] = qwen._base17
+
+    asyncio.run(body())
+    assert out["a"] == {"device": "cuda:0"}
+    assert "noCapacity" in out["b"]
+    assert out["base17"] is not None
+
+
+def test_t6_base17_freed_between_admission_and_claim_stays_inside_the_booking(monkeypatch):
+    """The idle watchdog is NOT blocked by the mint's protection (it only guards
+    the admission ladder), and need not be: the booking is the FULL peak, so a
+    reload of the freed base stays inside it."""
+    qwen = _fake_qwen(weights_mb=3900)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+    monkeypatch.setattr(main, "_reclaim_host_and_vram", lambda: None)
+    out = {}
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", MINT, cpu_capable=False, heavy=True):
+            out["freed"] = qwen.maybe_free_idle_base17(0.0)
+            out["booked"] = pc.ledger.reserved_mb("cuda:0")
+
+    asyncio.run(body())
+    assert out["freed"] is True
+    assert out["booked"] >= 6144 - 0, "the hold must still cover a cold reload of the base"
+
+
+# --- #4102: a design keeps its own warm VoiceDesign -------------------------
+
+
+def _design(pc):
+    async def body():
+        async with pc.reservation("qwen", "1.7b", DESIGN, cpu_capable=False, heavy=True) as adm:
+            return adm, pc.ledger.reserved_mb("cuda:0")
+
+    return asyncio.run(body())
+
+
+def test_d1_back_to_back_designs_do_not_evict_or_reload_voicedesign(monkeypatch):
+    qwen = _fake_qwen(resident=False, design_mb=3900)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+    design = qwen._design
+    for _ in range(2):
+        adm, booked = _design(pc)
+        assert adm == {"device": "cuda:0"}
+        assert booked == 6144, "the design books its FULL peak"
+        assert qwen._design is design, "admission evicted the VoiceDesign the request needs"
+
+
+def test_d2_design_protects_voicedesign_when_nothing_fits(monkeypatch):
+    qwen = _fake_qwen(resident=False, design_mb=3900)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen, extra_free=-3000))
+    adm, _ = _design(pc)
+    assert adm == {"noCapacity": {"neededMb": 6144 - 3900, "deviceKey": "cuda:0"}}
+    assert qwen._design is not None
+
+
+def test_d3_another_admissions_ladder_cannot_evict_voicedesign_under_the_hold(monkeypatch):
+    qwen = _fake_qwen(resident=False, design_mb=3900)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen))
+    out = {}
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", DESIGN, cpu_capable=False, heavy=True):
+            async with pc.reservation("coqui", None, {}, cpu_capable=False, heavy=True) as b:
+                out["b"] = b
+            out["during"] = qwen._design
+        out["after"] = dict(pc._protected_steps)
+
+    asyncio.run(body())
+    assert out["during"] is not None
+    assert "noCapacity" in out["b"]
+    assert out["after"].get("qwen.design", 0) == 0
+
+
+def test_d4_design_resolver(monkeypatch):
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=3900))
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN) == ("qwen.design", 3900, "cuda:0")
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=0))
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN) == (None, 0, None)
+    unmeasured = _fake_qwen(resident=False, design_mb=1)
+    unmeasured._design_weights_mb = 0
+    monkeypatch.setitem(main.ENGINES, "qwen", unmeasured)
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == main._QWEN_DESIGN_WEIGHTS_MB
 
 
 def test_credit_size_is_the_measured_footprint_and_never_zero(monkeypatch):
