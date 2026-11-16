@@ -229,6 +229,37 @@ function collectReadKeys(files: string[]): Set<string> {
   return keys;
 }
 
+/** #4238 — a column-0 `const|let|var NAME = … configValue(…)`/`getKnob(…)`
+    whose initialiser is a value, not a function. That runs at import, when the
+    user-settings cache is still cold, so only the shipped default (or an env
+    var) resolves and an Advanced Settings override is silently ignored. An
+    arrow/`function` initialiser defers the read to its call and is fine.
+    BLIND SPOT: only a single-line initialiser is seen; a read wrapped onto the
+    next line, or inside a top-level call/IIFE, is not. */
+const MODULE_LOAD_READ_RE =
+  /^(?:export\s+)?(?:const|let|var)\s+\w+[^=\n]*=(?![^\n]*(?:=>|\bfunction\b))[^\n]*\b(?:configValue|getKnob)\b/gm;
+
+function moduleLoadReads(source: string): string[] {
+  return [...stripComments(source).matchAll(MODULE_LOAD_READ_RE)].map((m) => m[0].trim());
+}
+
+describe('registry knobs read at module load (#4238 guard)', () => {
+  it('recognises a module-level value read and ignores a deferred one', () => {
+    expect(moduleLoadReads("const SIZE = configValue<number>('tts.batch.size');")).toHaveLength(1);
+    expect(moduleLoadReads("export const X = getKnob('a.b');")).toHaveLength(1);
+    expect(moduleLoadReads("const ttl = () => clampTtlDays(configValue('a.b'));")).toEqual([]);
+    expect(moduleLoadReads("  const inFn = configValue('a.b');")).toEqual([]);
+  });
+
+  it('no non-test server source reads a registry key into a module-level constant', () => {
+    const files = WALK_TARGETS.flatMap((t) => collectFiles(t.dir, t.exts));
+    const offenders = files.flatMap((f) =>
+      moduleLoadReads(readFileSync(f, 'utf8')).map((line) => `${f.slice(REPO_ROOT.length + 1)}: ${line}`),
+    );
+    expect(offenders, 'module-load registry reads (read per call instead)').toEqual([]);
+  });
+});
+
 describe('registry knobs the server never reads (#3139/#3146 guard)', () => {
   it('every in-scope knob is read via a literal resolver call, a verified dynamic reader, or is a declared #3141 gap', () => {
     const files = WALK_TARGETS.flatMap((t) => collectFiles(t.dir, t.exts));
