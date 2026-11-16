@@ -514,10 +514,16 @@ snapshot.
       validated.
     - The client builds no manuscript save while `selectCastReadOnly` holds, refuses every
       manuscript-editing surface at click time (`refuseIfManuscriptEditsLocked`, toast only, before
-      any side write: review-op resolve, change-log entry, `prosodyAnnotated`), drops a given-up
-      manuscript save like a cast one, and takes the cast
+      any side write: review-op resolve, change-log entry; the manual "Detect emotions" run is one
+      of these surfaces), drops a given-up manuscript save like a cast one, and takes the cast
       409 path for a manuscript 409 (`manuscript/applyChapterRestructure` is route-backed and
       silent).
+    - An era that rises MID-operation is handled where the operation is long: Script Review's
+      proposed batch stops through `shouldStop` (before the next op's apply and resolve, ledger op
+      kept); the manual Detect emotions run and the layout's background run count annotations they
+      cannot apply as skipped through their `canApply`, so the book is never marked
+      `prosodyAnnotated` for nothing (that watermark is guarded there, not by the click-time
+      refusal). The background run also never starts, and yields, while the book is read-only.
     - The era's post-run re-read (`rehydrateCastAfterAnalysis`) also hydrates the manuscript from
       the same read. No new query: no manuscript save can land between its flush and its read
       while the era stands.
