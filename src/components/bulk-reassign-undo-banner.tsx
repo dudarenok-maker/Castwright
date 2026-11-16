@@ -15,7 +15,9 @@
    a silent divergence that resurrects the old reassignment on reload. Gating
    on the SAME source keeps the banner visible exactly when Undo can persist. */
 
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { refuseIfManuscriptEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiSelectors } from '../store/ui-slice';
@@ -24,6 +26,7 @@ import { buildBulkReassignRevertEvent } from '../lib/change-log';
 
 export function BulkReassignUndoBanner() {
   const dispatch = useAppDispatch();
+  const appStore = useStore<RootState>();
   const slot = useAppSelector((s) => s.manuscript.lastBulkReassign);
   const bookId = useAppSelector(uiSelectors.bookId);
   const restructuring = useAppSelector((s) => (bookId ? selectBookRestructuring(s, bookId) : false));
@@ -38,6 +41,9 @@ export function BulkReassignUndoBanner() {
         <button
           disabled={restructuring}
           onClick={() => {
+            /* #4098 - refused while the book's analysis runs: the revert would be
+               dropped, but its audit event would still be saved. */
+            if (refuseIfManuscriptEditsLocked(appStore.getState, dispatch)) return;
             dispatch(manuscriptActions.undoBulkReassign());
             dispatch(changeLogActions.appendLogEvent(buildBulkReassignRevertEvent({ count: n })));
           }}

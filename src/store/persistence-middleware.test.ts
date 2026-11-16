@@ -2921,6 +2921,27 @@ describe('persistenceMiddleware — the cast gate (plan 291, #4031)', () => {
     err.mockRestore();
   });
 
+  it('a manuscript save given up while the gate is up is dropped with the read-only toast alone (#4098, review pass 1)', async () => {
+    putBookState.mockRejectedValue(new Error('Book state PUT failed (503): down'));
+    const state: Record<string, unknown> = baseState();
+    const store = makeStore(state);
+    const mw = persistenceMiddleware(store)(vi.fn((x) => x));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mw({ type: 'manuscript/setSentenceCharacter' });
+    await advance(600);
+    state.cast = { characters: [{ id: 'halloran' }], analysisEra: { 'book-1': { epoch: 1 } } };
+    await advance(20000);
+    expect(putBookState).toHaveBeenCalledTimes(4);
+    /* One discarded edit, one toast: the read-only one, never "could not be saved". */
+    expect(toastsOf(store).map((t: { dedupeKey?: string }) => t.dedupeKey)).toEqual(['cast-read-only']);
+    putBookState.mockReset();
+    putBookState.mockResolvedValue(undefined);
+    mw(flushBookPersistence('book-1'));
+    await advance(20000);
+    expect(putBookState).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+
   it.each([
     ['kept before the gate rose', false],
     ['given up while the gate was up', true],

@@ -1201,6 +1201,20 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(watermarkPuts('b1')).toEqual([]);
   });
 
+  it('read-only (#4098): annotations that arrive while the book is cast-read-only are skipped, and the book is never marked annotated', async () => {
+    const { store, release } = await openWithHeldRun();
+    /* The era rises mid-run (a run started on another device, or a 409). */
+    act(() => {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    });
+    release();
+    await settle(700);
+
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(emotionOf(store, 2)).toBeUndefined();
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
   it('rendered audio: the re-run never rewrites the text of a chapter with rendered audio, and makes no chapter stale', async () => {
     libBooks = [makeBook('b1', 'voices_pending')];
     marks.set('b1', false);

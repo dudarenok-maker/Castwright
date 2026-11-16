@@ -1,4 +1,3 @@
-
 ---
 status: stable
 shipped: 2026-11-12
@@ -513,7 +512,10 @@ snapshot.
     - The server refuses `PUT /state {slice:'manuscript'}` with 409 `book_busy` while an analysis
       is registered: the same predicate as the cast slice, checked first, before the patch is
       validated.
-    - The client builds no manuscript save while `selectCastReadOnly` holds, and takes the cast
+    - The client builds no manuscript save while `selectCastReadOnly` holds, refuses every
+      manuscript-editing surface at click time (`refuseIfManuscriptEditsLocked`, toast only, before
+      any side write: review-op resolve, change-log entry, `prosodyAnnotated`), drops a given-up
+      manuscript save like a cast one, and takes the cast
       409 path for a manuscript 409 (`manuscript/applyChapterRestructure` is route-backed and
       silent).
     - The era's post-run re-read (`rehydrateCastAfterAnalysis`) also hydrates the manuscript from

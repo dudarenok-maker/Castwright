@@ -742,7 +742,7 @@ export const persistenceMiddleware: Middleware = (store) => {
           }
           /* Plan 291 — given up while the cast is read-only: dropped, never
              kept (see dropKeptCast). */
-          if (slice === 'cast' && selectCastReadOnly(store.getState() as PersistableRootState, bookId)) {
+          if ((slice === 'cast' || slice === 'manuscript') && selectCastReadOnly(store.getState() as PersistableRootState, bookId)) {
             box.clear();
             toast(CAST_READ_ONLY_MESSAGE, CAST_READ_ONLY_DEDUPE_KEY);
             ok = false;

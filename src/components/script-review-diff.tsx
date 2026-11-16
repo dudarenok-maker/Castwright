@@ -9,7 +9,7 @@ import type { Dispatch } from '@reduxjs/toolkit';
 import { useStore } from 'react-redux';
 import { Checkbox } from './primitives';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import {
   scriptReviewActions,
   selectActiveReview,
@@ -261,7 +261,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      nothing. `store` is read in handlers: a flag raised after render is seen. */
   const store = useStore<RootState>();
   const editsLocked = useAppSelector(selectEditsLocked);
-  const refuseIfLocked = () => refuseIfEditsLocked(store.getState, dispatch);
+  const refuseIfLocked = () => refuseIfManuscriptEditsLocked(store.getState, dispatch);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bucket = useAppSelector((s) => selectActiveReview(s as any, bookId));
   const sentences = useAppSelector((s) => s.manuscript.sentences);

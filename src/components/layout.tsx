@@ -1692,7 +1692,7 @@ export function Layout() {
             if (!signal?.aborted)
               dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d)));
           },
-          canApply: () => !signal?.aborted && isOpen(),
+          canApply: () => !signal?.aborted && isOpen() && !selectCastReadOnly(store.getState(), id),
         });
         /* Yielded, partial or skipped: the start mark stays, and the open
            trigger owns the fill-only re-run — the book stays in `considered`. */
