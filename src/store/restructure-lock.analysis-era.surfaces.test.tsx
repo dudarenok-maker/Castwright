@@ -3,10 +3,13 @@
 // between render and click, so the control cannot have disabled itself). Each
 // pins that the edit AND its paired side write are refused and the read-only
 // toast shows. Reverting any refusal to the restructure-only `refuseIfEditsLocked`
-// (or removing it) turns its case red.
+// (or removing it) turns its case red — including the five ManuscriptView sites
+// that share its own `refuseIfLocked` (boundary pointer-down, commitBoundaryMove,
+// reassignSegment, assignSelectionTo, onReassignSentence), one case each at the
+// bottom of this file.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 
 import { store } from './index';
@@ -161,5 +164,134 @@ describe('click-time refusals while the book is cast-read-only', () => {
 
     expect(store.getState().manuscript.sentences.find((s) => s.id === 2)?.excludeFromSynthesis).toBe(true);
     expect(toastKeys()).toContain(CAST_READ_ONLY_DEDUPE_KEY);
+  });
+});
+
+// The five ManuscriptView sites guarded by its own `refuseIfLocked`. Each is
+// driven through the real view; a refused edit must leave the sentences AND the
+// changeLog (`bumpBoundaryMove`) untouched, send no save, and toast read-only.
+describe('ManuscriptView refusals while the book is cast-read-only', () => {
+  const twoSegments = () => [
+    { id: 1, chapterId: 1, characterId: 'narrator', text: 'Opening narration line.' },
+    { id: 2, chapterId: 1, characterId: 'egor', text: 'Egor speaks a long line.' },
+    { id: 3, chapterId: 1, characterId: 'egor', text: 'Egor speaks once more.' },
+  ];
+  const renderView = () =>
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[chapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={store.getState().manuscript.sentences}
+        />
+      </Provider>,
+    );
+  const expectRefused = (before: unknown[], logBefore: string) => {
+    expect(sentencesNow()).toEqual(before);
+    expect(JSON.stringify(store.getState().changeLog)).toBe(logBefore);
+    // seeding the roster saves the `cast` slice on its own; a refused edit saves nothing else
+    const saved = vi.mocked(api.putBookState).mock.calls.map((c) => (c[1] as { slice: string }).slice);
+    expect(saved.filter((sl) => sl !== 'cast')).toEqual([]);
+    expect(toastKeys()).toContain(CAST_READ_ONLY_DEDUPE_KEY);
+  };
+
+  afterEach(() => {
+    document.body.classList.remove('dragging-boundary');
+  });
+
+  it('boundary pointer-down: no drag starts', async () => {
+    seed(twoSegments());
+    renderView();
+    const handle = document.querySelector('[data-tour-id="chapter-boundary"]') as HTMLElement;
+    latchEra();
+    const before = sentencesNow();
+    const logBefore = JSON.stringify(store.getState().changeLog);
+    fireEvent.pointerDown(handle);
+    await settle();
+
+    expect(document.body.classList.contains('dragging-boundary')).toBe(false);
+    expectRefused(before, logBefore);
+  });
+
+  it('commitBoundaryMove: the drop moves no boundary and logs no boundary_move', async () => {
+    seed(twoSegments());
+    renderView();
+    const handle = document.querySelector('[data-tour-id="chapter-boundary"]') as HTMLElement;
+    const target = document.querySelector('[data-sentence-idx="0"]') as HTMLElement;
+    const elementFromPoint = vi.fn(() => target);
+    (document as unknown as { elementFromPoint: unknown }).elementFromPoint = elementFromPoint;
+    fireEvent.pointerDown(handle); // the drag starts while the book is still editable
+    expect(document.body.classList.contains('dragging-boundary')).toBe(true);
+    fireEvent(window, new Event('pointermove'));
+    await settle();
+    expect(elementFromPoint).toHaveBeenCalled();
+    latchEra(); // ... and the era rises mid-drag
+    const before = sentencesNow();
+    const logBefore = JSON.stringify(store.getState().changeLog);
+    fireEvent(window, new Event('pointerup'));
+    await settle();
+
+    delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint;
+    expectRefused(before, logBefore);
+  });
+
+  it('reassignSegment: the whole segment keeps its speaker', async () => {
+    seed(twoSegments());
+    renderView();
+    fireEvent.click(screen.getByText('Opening narration line.'));
+    fireEvent.click(screen.getByText(/Change…/));
+    const picker = screen.getByRole('dialog', { name: /reassign speaker/i });
+    latchEra();
+    const before = sentencesNow();
+    const logBefore = JSON.stringify(store.getState().changeLog);
+    fireEvent.click(within(picker).getByRole('option', { name: /Anton/ }));
+    await settle();
+
+    expectRefused(before, logBefore);
+  });
+
+  it('assignSelectionTo: the highlighted text is not split off', async () => {
+    seed(twoSegments());
+    renderView();
+    const textNode = (document.querySelector('[data-sentence-id="1"] [data-text-offset]') as HTMLElement)
+      .firstChild as Text;
+    const fakeRange = {
+      startContainer: textNode,
+      endContainer: textNode,
+      startOffset: 0,
+      endOffset: 7,
+      getBoundingClientRect: () => ({ top: 0, left: 0, width: 0, height: 0, bottom: 0, right: 0 }),
+    };
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => fakeRange,
+    } as unknown as Selection);
+    act(() => void fireEvent(document, new Event('selectionchange')));
+    const popover = screen.getByText(/assign selection to/i).parentElement as HTMLElement;
+    latchEra();
+    const before = sentencesNow();
+    const logBefore = JSON.stringify(store.getState().changeLog);
+    fireEvent.mouseDown(within(popover).getByRole('button', { name: /Anton/ }));
+    await settle();
+
+    expectRefused(before, logBefore);
+  });
+
+  it('onReassignSentence: the single line keeps its speaker', async () => {
+    seed(twoSegments());
+    renderView();
+    fireEvent.click(screen.getByText('Egor speaks a long line.'));
+    fireEvent.click(screen.getAllByRole('button', { name: /Reassign just this one/ })[0]);
+    const picker = screen.getByRole('dialog');
+    latchEra();
+    const before = sentencesNow();
+    const logBefore = JSON.stringify(store.getState().changeLog);
+    fireEvent.click(within(picker).getByRole('option', { name: /Anton/ }));
+    await settle();
+
+    expectRefused(before, logBefore);
   });
 });
