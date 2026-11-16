@@ -268,4 +268,45 @@ describe('projectToChars (stripTags option)', () => {
       projectToChars(chapterText, units),
     );
   });
+
+  it('(n) #4219: a unit containing an astral char that NFC rewrites (U+2F800) is projected, not dropped', () => {
+    const chapterText = 'Он сказал \u{2F800} и ушёл. Она ответила.';
+    const units = [
+      { text: 'Он сказал \u{2F800} и ушёл.', speakerId: 'a' },
+      { text: ' Она ответила.', speakerId: 'b' },
+    ];
+    const result = projectToChars(chapterText, units);
+    expect(result.dropped).toBe(0);
+    // U+2F800 is 2 UTF-16 units; span ends are original-text offsets.
+    expect(result.spans).toEqual([
+      { start: 0, end: 20, speakerId: 'a' },
+      { start: 20, end: 34, speakerId: 'b' },
+    ]);
+  });
+
+  it('(o) control: a BMP char (U+4E3D, the image of U+2F800, itself unchanged by NFC) projects with exact spans', () => {
+    const chapterText = 'Он сказал 丽 и ушёл. Она ответила.';
+    const units = [
+      { text: 'Он сказал 丽 и ушёл.', speakerId: 'a' },
+      { text: ' Она ответила.', speakerId: 'b' },
+    ];
+    const result = projectToChars(chapterText, units);
+    expect(result.dropped).toBe(0);
+    expect(result.spans).toEqual([
+      { start: 0, end: 19, speakerId: 'a' },
+      { start: 19, end: 33, speakerId: 'b' },
+    ]);
+  });
+
+  it('(p) #4219: a later unit repeating text of an astral-char unit lands after it, not inside it', () => {
+    const result = projectToChars('He said \u{2F800} yes. yes.', [
+      { text: 'He said \u{2F800} yes.', speakerId: 'a' },
+      { text: ' yes.', speakerId: 'b' },
+    ]);
+    expect(result.dropped).toBe(0);
+    expect(result.spans).toEqual([
+      { start: 0, end: 15, speakerId: 'a' },
+      { start: 15, end: 20, speakerId: 'b' },
+    ]);
+  });
 });

@@ -1,7 +1,9 @@
 /* fs-21 — bootstrap-venv.mjs helpers. The script's main() is
-   guarded (runs only when invoked directly), so importing it here is inert. */
+   guarded (runs only when invoked directly), so importing it here is inert.
+   installForProfile logs its progress to stdout even with a fake pip; these tests
+   capture it so the suite never prints install-looking output (#3712). */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +41,12 @@ describe('bootstrap-venv helpers', () => {
 });
 
 describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
+  let stdoutSpy: MockInstance;
+  beforeEach(() => {
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => stdoutSpy.mockRestore());
+
   it('nvidia pre-installs cu128 torch, then the overlay, then swaps onnxruntime → onnxruntime-gpu', () => {
     const pip = fakePip();
     expect(installForProfile('/py', 'nvidia', pip.run, 'win32', null)).toBe('nvidia');
@@ -119,6 +127,12 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
       // fell back to the cpu overlay, and never installed the amd overlay
       expect(joined.some((c) => /install -r .*cpu\.txt/.test(c))).toBe(true);
       expect(joined.some((c) => /amd-rocm\.txt/.test(c))).toBe(false);
+      // provenance (#3712): the FAILED line is installForProfile's own log(); only the fake pip ran
+      expect(
+        stdoutSpy.mock.calls.some((c) =>
+          String(c[0]).includes('[bootstrap-venv] AMD ROCm install FAILED'),
+        ),
+      ).toBe(true);
       // and recorded the fallback marker for the runtime/UI to surface
       expect(existsSync(join(d, '.accelerator-fallback.json'))).toBe(true);
       expect(JSON.parse(readFileSync(join(d, '.accelerator-fallback.json'), 'utf8'))).toEqual({
@@ -144,6 +158,12 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
 });
 
 describe('installForProfile ORT marker wiring', () => {
+  let stdoutSpy: MockInstance;
+  beforeEach(() => {
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => stdoutSpy.mockRestore());
+
   function harness(profile: string, { failSwap = false } = {}) {
     const calls: string[] = [];
     const runPip = (args: string[]) => {
