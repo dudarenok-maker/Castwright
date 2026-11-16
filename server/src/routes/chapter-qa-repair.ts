@@ -23,7 +23,11 @@ import type { Request, Response } from '../http.js';
 import { bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
-import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import {
+  LOCK_CONTENTION_REQUEST_ERROR,
+  isLockAcquisitionTimeout,
+  requestFailureMessageFs,
+} from '../workspace/file-lock.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -920,7 +924,9 @@ chapterQaRepairRouter.post(
       });
       res.end();
     } catch (err) {
-      fail(`Audio-QA repair failed: ${(err as Error).message}`);
+      /* #4233 -- as the splice route: no absolute path in the SSE frame. */
+      console.error('[qa-repair] failed', err);
+      fail(requestFailureMessageFs(err, `Audio-QA repair failed: ${(err as Error).message}`));
     } finally {
       releaseSlot?.();
     }
