@@ -877,7 +877,9 @@ async function runExportJob(
        this runs a DELETE landing during the revoke below would read
        `in_progress`, unlink the finished artifact, and the `finally` would
        then write `done` + `downloadUrl` back over it. After this, a DELETE
-       sees `done` and is a no-op. */
+       sees `done` and is a no-op. Keep NO awaited step (setTimeout, await)
+       between the last cancel check and this publish: it would reopen the
+       gap, and no test pins the ordering. */
     jobs.set(job.id, { ...job });
     /* Plan 79 — clobber-newest-wins on disk PLUS revoke any older
        manifest for the same (book, format). Together they keep the
