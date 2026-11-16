@@ -521,9 +521,12 @@ snapshot.
     - An era that rises MID-operation is handled where the operation is long: Script Review's
       proposed batch stops through `shouldStop` (before the next op's apply and resolve, ledger op
       kept); the manual Detect emotions run and the layout's background run count annotations they
-      cannot apply as skipped through their `canApply`, so the book is never marked
-      `prosodyAnnotated` for nothing (that watermark is guarded there, not by the click-time
-      refusal). The background run also never starts, and yields, while the book is read-only.
+      cannot apply as skipped through their `canApply`, so neither reports a false "Tagged N"
+      success. The manual run never writes `prosodyAnnotated: true`; the two runs that do, the
+      layout's background run and its library-triggered run, share that same `canApply`, so the
+      book is never marked `prosodyAnnotated` for nothing (that watermark is guarded there, not by
+      the click-time refusal). The background run also never starts, and yields, while the book is
+      read-only.
     - The era's post-run re-read (`rehydrateCastAfterAnalysis`) also hydrates the manuscript from
       the same read. No new query: no manuscript save can land between its flush and its read
       while the era stands.

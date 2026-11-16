@@ -1569,8 +1569,9 @@ export function Layout() {
      shows, but it never makes the book busy (analysis-substage-selectors), so
      Generate / Resume / Design / Detect and the queue stay open while it runs.
      It yields instead: the moment the user starts work of their own on the
-     book (selectBookHasForegroundWork, which counts an analysis run), or the
-     book stops being the open trigger's book (another book or a non-book
+     book (selectBookHasForegroundWork, which counts an analysis run) or the
+     book turns read-only (selectCastReadOnly, #4098: an analysis run or its era;
+     the persistence gate would drop every annotation), or the book stops being the open trigger's book (another book or a non-book
      view opens), it is aborted and its pill cleared; the book stays marked
      unfinished, so it is run again the next time it is opened. So at most
      one background run at a time: the open book's. The run in flight, if
@@ -1804,7 +1805,7 @@ export function Layout() {
       prosodyOpenDeferred.current = id;
       return;
     }
-    if (openProsodyBusy) return; // the user's own work on the book — looked at again when it ends
+    if (openProsodyBusy) return; // the user's own work on the book, or a read-only book (#4098) — looked at again when it ends
     prosodyOpenHandled.current = id;
     runAutoProsody(id, { background: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
