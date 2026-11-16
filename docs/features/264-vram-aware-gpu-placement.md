@@ -315,8 +315,11 @@ OOM — see the status header:
   > and a sample is learned only from a cold op (the engine had no model
   > resident at admission; for Qwen, none of its four models), because warm ops
   > share the cold op's key and would collapse its p95 to activations only.
-  > Residual: torch's peak counter is per device, so an overlapping op on the
-  > same card can still truncate or inflate a sample. Coverage:
+  > Residuals: (1) torch's peak counter is per device, so an overlapping op on
+  > the same card can still truncate or inflate a sample; (2) memory another op
+  > frees during the window can push a sample below the op's own weights (down
+  > to 0), which was not reachable before because the sample always included
+  > the op's own resident allocation. Coverage:
   > `tests/test_op_own_footprint.py`.
 - **`persona-gpu-plan.ts`'s `unloadResidentSidecar` + `GpuBusyForPersonaError`
   are now dead code** (the reverse-evict was removed); deletion candidates.
