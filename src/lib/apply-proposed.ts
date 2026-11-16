@@ -7,6 +7,10 @@ export interface ApplyProposedDeps {
   setSentenceCharacter: (chapterId: number, sentenceId: number, characterId: string) => void;
   onBoundaryMove: (chapterId: number) => void;
   isSameBook: () => boolean;
+  /** #4098 — re-checked before each op is applied (and again after its create's
+      await): true stops the run, so no further op is applied or resolved. The
+      caller surfaces why. Optional; absent never stops. */
+  shouldStop?: () => boolean;
   /** Fires immediately after EVERY successfully-applied op, including one
       that reused an existing/memoized id and never called createCharacter
       (design spec §6.5) — lets the caller resolve this op server-side
@@ -31,6 +35,7 @@ export async function applyProposedReattributions(
   let created = 0;
   for (const op of proposed) {
     if (!op.proposed) continue;
+    if (deps.shouldStop?.()) return { created, createdCharacters, aborted: true };
     const key = norm(op.proposed.name);
     let id = deps.rosterByName.get(key)?.id ?? memo.get(key);
     if (!id) {
@@ -42,6 +47,7 @@ export async function applyProposedReattributions(
       createdCharacters.push({ id: c.id, name: c.name });
       created += 1;
     }
+    if (deps.shouldStop?.()) return { created, createdCharacters, aborted: true };
     deps.setSentenceCharacter(op.chapterId, op.id, id);
     deps.onBoundaryMove(op.chapterId);
     deps.onOpApplied(op);

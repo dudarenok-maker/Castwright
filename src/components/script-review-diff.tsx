@@ -417,6 +417,9 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         onBoundaryMove: (chapterId) =>
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
         isSameBook: () => stageBookIdRef.current === startBookId,
+        // #4098 — an era that rises mid-run drops the manuscript save; resolving
+        // the op anyway would lose the suggestion. Stop, toast, resolve nothing more.
+        shouldStop: () => refuseIfLocked(),
         onOpApplied: (op) => {
           if (!bucket) return;
           void resolveAppliedOps(dispatch, startBookId, bucket, [op]);

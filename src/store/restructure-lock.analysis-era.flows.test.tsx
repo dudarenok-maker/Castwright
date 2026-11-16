@@ -6,7 +6,7 @@
 // pin: nothing resolved, nothing logged or saved, and the read-only toast shows.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 
 import { store } from './index';
@@ -15,7 +15,7 @@ import { manuscriptActions } from './manuscript-slice';
 import { uiActions } from './ui-slice';
 import { castActions } from './cast-slice';
 import { chaptersActions } from './chapters-slice';
-import { scriptReviewActions } from './script-review-slice';
+import { scriptReviewActions, opKey } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
 import { CAST_READ_ONLY_DEDUPE_KEY } from './book-busy-slice';
 import { ScriptReviewDiff } from '../components/script-review-diff';
@@ -154,5 +154,48 @@ describe('Bulk reassign Undo while the book is cast-read-only', () => {
     expect(put).not.toHaveBeenCalled();
     expect(store.getState().manuscript.lastBulkReassign).not.toBeNull();
     expect(toastKeys()).toContain(CAST_READ_ONLY_DEDUPE_KEY);
+  });
+});
+
+describe('Script Review proposed batch when the era starts mid-run', () => {
+  it('stops before the next op: no apply, no resolve, the ledger op survives, the toast shows', async () => {
+    const resolve = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true } as never);
+    // The era rises while the SECOND op's create is in flight (the first op has
+    // already been applied and resolved by then).
+    vi.spyOn(api, 'createCharacter').mockImplementation(async (_bookId, fields) => {
+      if (fields.name === 'Sol') latchEra();
+      return { character: { id: fields.name.toLowerCase(), name: fields.name, role: 'character' } } as never;
+    });
+    store.dispatch(
+      scriptReviewActions.setReview({
+        bookId: BOOK,
+        ops: [
+          { chapterId: 1, id: 1, op: 'reattribute', proposed: { name: 'Nova' }, rationale: 'x' },
+          { chapterId: 1, id: 2, op: 'reattribute', proposed: { name: 'Sol' }, rationale: 'x' },
+        ] as never,
+        unappliable: [],
+        manuscriptId: 'm1',
+        versionByChapter: { 1: 1 },
+      }),
+    );
+    store.dispatch(scriptReviewActions.toggleClass({ bookId: BOOK, op: 'reattribute' }));
+    render(
+      <Provider store={store}>
+        <ScriptReviewDiff bookId={BOOK} />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('apply-button'));
+    fireEvent.click(screen.getByTestId('create-character-submit')); // Nova
+    await waitFor(() => expect(screen.getByText(/2 of 2/)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('create-character-submit')); // Sol -> era latches in flight
+    await settle();
+
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve).toHaveBeenCalledWith(BOOK, expect.objectContaining({ appliedOpKeys: [opKey(1, 1, 'reattribute')] }));
+    const bucket = store.getState().scriptReview.byBook[BOOK];
+    expect(bucket?.ops.map((o) => o.id)).toEqual([2]);
+    expect(store.getState().manuscript.sentences.find((s) => s.id === 2)?.characterId).toBe('egor');
+    expect(toastKeys()).toContain(CAST_READ_ONLY_DEDUPE_KEY);
+    expect(toastKeys().filter((k) => k === CAST_READ_ONLY_DEDUPE_KEY)).toHaveLength(1);
   });
 });
