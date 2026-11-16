@@ -226,7 +226,9 @@ weights) instead of the 200 MB cold `spk` seed (#4102).
 A Qwen mint with the 1.7B-Base resident, and a design with VoiceDesign resident,
 book their FULL cold peak (`qwen.1.7b.mint` / `qwen.1.7b.design`); the resident
 weights are credited only in the request's own fit check (the #4079 shape), so a
-second admission nested inside is refused the way it is on `main` (#4102).
+second admission nested inside is refused the way it is on `main` (#4102). A
+design's credit also includes the resident 0.6B audition base (it is part of the
+design's peak), so a warm design fits on an 8 GB card.
 
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
