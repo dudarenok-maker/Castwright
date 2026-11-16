@@ -1248,6 +1248,44 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
   });
 
+  it('read-only (#4098): an era that rises while the open read is in flight stops the start; the run starts once it clears', async () => {
+    /* The start gate re-checks the book AFTER the book-state read: the open
+       trigger passed its own gate before the read, so only the check at the
+       start (prosodyBookBlocked) keeps a run from starting on a read-only book
+       — and, being refused there, re-arms the trigger for the clear. */
+    libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    let releaseRead!: () => void;
+    let held = false;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (!held && store.getState().manuscript.bookId === 'b1') {
+        held = true;
+        await new Promise<void>((r) => (releaseRead = r));
+      }
+      return stateFor(id);
+    });
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(held).toBe(true));
+    act(() => {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    });
+    releaseRead();
+    await settle(400);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+    expect(unfinishedPuts()).toEqual([]); // no start mark: the run never began
+
+    const era = store.getState().cast.analysisEra?.b1;
+    expect(era).toBeDefined();
+    act(() => {
+      store.dispatch(castSlice.actions.clearAnalysisEra({ bookId: 'b1', epoch: era!.epoch }));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(emotionOf(store, 1)).toBe('angry'));
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rendered audio: the re-run never rewrites the text of a chapter with rendered audio, and makes no chapter stale', async () => {
     libBooks = [makeBook('b1', 'voices_pending')];
     marks.set('b1', false);
