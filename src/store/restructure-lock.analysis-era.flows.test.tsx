@@ -179,6 +179,9 @@ describe('Script Review proposed batch when the era starts mid-run', () => {
       }),
     );
     store.dispatch(scriptReviewActions.toggleClass({ bookId: BOOK, op: 'reattribute' }));
+    // pushToast de-dupes by key in the reducer, so the toast count cannot show a
+    // double push; count the action creator's calls instead.
+    const pushToast = vi.spyOn(notificationsActions, 'pushToast');
     render(
       <Provider store={store}>
         <ScriptReviewDiff bookId={BOOK} />
@@ -196,6 +199,6 @@ describe('Script Review proposed batch when the era starts mid-run', () => {
     expect(bucket?.ops.map((o) => o.id)).toEqual([2]);
     expect(store.getState().manuscript.sentences.find((s) => s.id === 2)?.characterId).toBe('egor');
     expect(toastKeys()).toContain(CAST_READ_ONLY_DEDUPE_KEY);
-    expect(toastKeys().filter((k) => k === CAST_READ_ONLY_DEDUPE_KEY)).toHaveLength(1);
+    expect(pushToast.mock.calls.filter(([t]) => t.dedupeKey === CAST_READ_ONLY_DEDUPE_KEY)).toHaveLength(1);
   });
 });

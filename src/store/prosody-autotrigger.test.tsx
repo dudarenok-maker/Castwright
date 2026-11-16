@@ -1215,6 +1215,39 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(watermarkPuts('b1')).toEqual([]);
   });
 
+  it('read-only (#4098): the run yields at once when the era rises mid-run — its pill is cleared and the book stays marked unfinished', async () => {
+    const { store, release } = await openWithHeldRun();
+    expect(store.getState().prosody.activeStreams.b1).toBeDefined();
+    act(() => {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    release();
+    await settle(300);
+
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(watermarkPuts('b1')).toEqual([]);
+    expect(unfinishedPuts()).toEqual(['b1']);
+  });
+
+  it('read-only (#4098): the open run does not start while the era is latched, and starts once it clears', async () => {
+    libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'b1' }));
+    renderAnyPath(store);
+    await settle(500);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+
+    const era = store.getState().cast.analysisEra?.b1;
+    expect(era).toBeDefined(); // the layout did not release it on its own
+    act(() => {
+      store.dispatch(castSlice.actions.clearAnalysisEra({ bookId: 'b1', epoch: era!.epoch }));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+  });
+
   it('rendered audio: the re-run never rewrites the text of a chapter with rendered audio, and makes no chapter stale', async () => {
     libBooks = [makeBook('b1', 'voices_pending')];
     marks.set('b1', false);

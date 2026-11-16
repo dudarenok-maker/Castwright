@@ -426,7 +426,8 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         },
       });
       if (aborted) {
-        // Book-switch guard tripped mid-batch (silent, no throw) — whatever
+        // Stopped mid-batch (no throw): the book-switch guard (silent) or the
+        // #4098 era stop (shouldStop, which toasts) — whatever
         // was already resolved via onOpApplied above stays resolved; hide,
         // don't discard the rest (design spec §6.5).
         setConfirm(null);

@@ -23,8 +23,11 @@ export interface ApplyProposedDeps {
 const norm = (s: string) => s.trim().toLowerCase();
 
 /* fs-58 Unit B — off-roster reattribute apply. INTERLEAVED create→reassign so a
-   cancel/failure leaves a self-consistent partial (no created member without a
-   line). Dedup by normalized name against roster ∪ createdThisBatch BEFORE the
+   cancel/failure leaves a self-consistent partial. One narrow window remains: a
+   stop (book switch, or #4098's era stop) right after the create's await leaves
+   a created member with no line. The server refuses creates mid-run (R55), so
+   it needs the era to land just after the create; it is recoverable, since the
+   ledger op is kept and re-applying it offers "Reattribute to «X»". Dedup by normalized name against roster ∪ createdThisBatch BEFORE the
    POST. Re-check isSameBook() after every await (concurrent-multi-book guard). */
 export async function applyProposedReattributions(
   proposed: ReviewOpWithChapter[],

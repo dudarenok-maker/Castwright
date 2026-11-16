@@ -236,6 +236,13 @@ function selectOpenProsodyBookId(s: RootState): string | null {
     : null;
 }
 
+/* #4098 — the background emotion run yields to the user's own work on the book
+   AND to a read-only book (its analysis runs, or the era is latched): the
+   persistence gate drops every annotation it would apply, so the run would spend
+   a whole-book LLM pass for nothing. */
+const prosodyBookBlocked = (s: RootState, bookId: string): boolean =>
+  selectBookHasForegroundWork(s, bookId) || selectCastReadOnly(s, bookId);
+
 export function Layout() {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
@@ -1588,7 +1595,7 @@ export function Layout() {
         const bg = prosodyBackground.current;
         if (!bg || bg.ctrl.signal.aborted) return;
         const s = store.getState();
-        if (selectOpenProsodyBookId(s) === bg.id && !selectBookHasForegroundWork(s, bg.id)) return;
+        if (selectOpenProsodyBookId(s) === bg.id && !prosodyBookBlocked(s, bg.id)) return;
         bg.ctrl.abort();
         if (s.prosody.activeStreams[bg.id]?.background) dispatch(prosodyActions.clear({ bookId: bg.id }));
       }),
@@ -1633,10 +1640,11 @@ export function Layout() {
         if (background) {
           /* Never start a run that could apply nothing (the slices hold the
              book under another manuscriptId than its read reports, or it is no
-             longer open), nor one the user's own work would end at once — the
-             open trigger looks again when that work is gone. */
+             longer open), nor one the user's own work, or a read-only book
+             (#4098), would end at once — the open trigger looks again when
+             that is gone. */
           if (!isOpen() || selectOpenProsodyBookId(store.getState()) !== id) return;
-          if (selectBookHasForegroundWork(store.getState(), id)) {
+          if (prosodyBookBlocked(store.getState(), id)) {
             if (prosodyOpenHandled.current === id) prosodyOpenHandled.current = null;
             return;
           }
@@ -1779,7 +1787,7 @@ export function Layout() {
   const openProsodyBusy = useAppSelector((s) =>
     openProsodyBookId
       ? !shouldAutoTriggerProsody(s, openProsodyBookId) ||
-        selectBookHasForegroundWork(s, openProsodyBookId)
+        prosodyBookBlocked(s, openProsodyBookId)
       : false,
   );
   useEffect(() => {
