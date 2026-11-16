@@ -20,7 +20,11 @@ import type { Request, Response } from '../http.js';
 import { bookStateAudioFormat, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
-import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import {
+  LOCK_CONTENTION_REQUEST_ERROR,
+  isLockAcquisitionTimeout,
+  requestFailureMessageFs,
+} from '../workspace/file-lock.js';
 import { castJsonPath, audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -599,7 +603,10 @@ chapterSpliceRouter.post(
       });
       res.end();
     } catch (err) {
-      fail(`Splice failed: ${(err as Error).message}`);
+      /* #4233 -- a node fs error / lock timeout embeds the absolute workspace path;
+         curate it out of the SSE frame, keep the raw error in the log. */
+      console.error('[splice] failed', err);
+      fail(requestFailureMessageFs(err, `Splice failed: ${(err as Error).message}`));
     } finally {
       releaseSlot();
     }

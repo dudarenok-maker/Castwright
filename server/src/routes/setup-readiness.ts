@@ -31,6 +31,7 @@ import { probeFfmpeg } from '../diagnostics/ffmpeg.js';
 import {
   diagnoseSidecar, diagnoseTts, diagnoseFfmpeg, diagnoseAnalyzer, anyAnalyzerModelPulled,
 } from './setup-diagnosis.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -205,7 +206,10 @@ setupReadinessRouter.post('/smoke', async (_req: Request, res: Response) => {
     url = voiceSamplePublicUrl('setup-smoke.mp3');
     durationSec = pcm.length / 2 / sampleRate; // 16-bit mono
   } catch (e) {
-    return res.json({ ok: false, stage: 'synth', error: (e as Error).message });
+    // #4233: the ffmpeg message is path-free (the full stderr rides on `ffmpegStderr`); a node fs
+    // error from mkdir / writeFile / the encode's readFile embeds an absolute path, so it is curated.
+    console.error('[setup/smoke] synth stage failed', e);
+    return res.json({ ok: false, stage: 'synth', error: requestFailureMessageFs(e, (e as Error).message) });
   }
 
   let analyzerOk = false;
