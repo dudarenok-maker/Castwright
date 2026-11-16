@@ -5540,7 +5540,7 @@ class PlacementController:
             # Device-wide reset, not scoped to this op. #4163 — the learned
             # sample is this op's OWN increment above `peak_baseline_mb`, and
             # only for a COLD op (no model of this engine present at admission,
-            # read under `_admit_lock` right before the reset). A warm op's
+            # read under `_admit_lock` right after the reset). A warm op's
             # baseline is voided (None -> sample discarded). Residuals NOT
             # fixed here: (1) torch's peak counter is per device and process,
             # so a concurrent op on the same card can truncate this op's window

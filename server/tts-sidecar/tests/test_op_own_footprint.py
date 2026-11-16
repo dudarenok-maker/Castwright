@@ -245,6 +245,12 @@ def test_o7_production_predicate_and_wiring(monkeypatch):
     # #4163 review: a model loaded on the CPU is still resident (warm)
     monkeypatch.setattr(main, "_engine_actual_card", lambda e: {"family": "cpu", "index": None})
     assert main._engine_any_model_resident("coqui") is True
+    # spk (the /embed engine) is in the named map: unknown ids fail closed to True,
+    # so dropping its entry would make every cold /embed read as warm
+    monkeypatch.setattr(main, "_engine_actual_card", lambda e: None)
+    assert main._engine_any_model_resident("spk") is False
+    monkeypatch.setattr(main, "_engine_actual_card", lambda e: {"family": "cuda", "index": 0})
+    assert main._engine_any_model_resident("spk") is True
 
     def boom(e):
         raise RuntimeError("probe failed")
