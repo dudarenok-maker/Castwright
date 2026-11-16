@@ -71,6 +71,21 @@ export interface CharacterCentroid {
    *  had a current voice; absent on 'audition'/'too-short' rows and on legacy rows. Lets the
    *  qa-repair route tell when the in-book reference has gone stale after a voice change. */
   inBookVoiceName?: string;
+  /** #3518 — the Qwen/TTS tier the anchors pooled into an 'in-book' row were rendered at: the one
+   *  model key when every pooled anchor shares it, `IN_BOOK_MIXED_TIER` when they differ. Absent when
+   *  any pooled anchor's tier is unknown (an anchor whose chapter snapshot carries two different keys,
+   *  i.e. a partial write re-recorded some of the character's lines off the frozen full-render tier,
+   *  counts as unknown; so does one whose snapshot carries no key of its own — a chapter written before
+   *  2026-07-06 — since the chapter-level key is rewritten by any partial write and is not trusted here; but finalize's freeze seed can still carry that key onto a legacy snapshot, a residual tracked in #4225), on 'audition'/'too-short' rows, and on a row written before
+   *  this field existed. Absent / mixed means "no single tier": qa-repair drops the row. */
+  inBookModelKey?: string;
+  /** #3518 — on an 'audition' row, the tier of the REAL anchors blended into it (same uniform /
+   *  `IN_BOOK_MIXED_TIER` / absent-when-unknown semantics as `inBookModelKey`), or
+   *  `AUDITION_NO_ANCHORS` when it was built from fresh renders alone. The row is usable only when this
+   *  is `AUDITION_NO_ANCHORS` or equals `auditionVoice.modelKey`. Absent on a legacy row (written before
+   *  this field existed) and on non-audition rows: a legacy row that blended no anchors cannot be told
+   *  from one that did, so ALL legacy audition rows fail closed until scoreBook rebuilds them. */
+  auditionAnchorModelKey?: string;
   /** #3524 — marker on a 'too-short' row written for a character that has a current cast voice
    *  but NO rendered line in it yet (reassigned before any re-render, or rendered only on a
    *  fallback engine). It is a conclusive "nothing to check yet", not a reference: it takes the
@@ -86,6 +101,22 @@ export interface CharacterCentroid {
    *  Pre-fix rows lack this field entirely — they are detected and rebuilt to apply the current
    *  band-computation logic. Only present on 'audition' referenceKind rows. */
   bandMethod?: 'percentile' | 'synthetic-sigma';
+}
+
+/** #3518 — `inBookModelKey` value for an in-book row whose pooled anchors span more than one tier.
+ *  Never equal to a real model key, so a comparison against the current key can only fail. */
+export const IN_BOOK_MIXED_TIER = 'mixed';
+
+/** #3518 — `auditionAnchorModelKey` value for an audition row built from fresh renders only (no real
+ *  anchor blended in), which has no anchor tier to disagree with the voice's. */
+export const AUDITION_NO_ANCHORS = 'none';
+
+/** #3518 — whether an audition row's blended real anchors were all rendered at the row's own tier.
+ *  Shared by qa-repair's usability rule and scoreBook's reuse gate so the two cannot drift. */
+export function auditionAnchorsMatchTier(row: CharacterCentroid): boolean {
+  const stamp = row.auditionAnchorModelKey;
+  if (stamp == null || row.auditionVoice == null) return false;
+  return stamp === AUDITION_NO_ANCHORS || stamp === row.auditionVoice.modelKey;
 }
 
 const CENTROIDS_FILENAME = 'render-integrity.centroids.json';
@@ -124,35 +155,41 @@ export async function readCentroids(
 
 /** #1969 sibling — is a persisted centroid usable to score a character given the
  *  character's CURRENT resolved voice name + model key. The caller
- *  (chapter-qa-repair.ts) derives the voice name from the CURRENT cast via
- *  pickVoiceForEngine, but the model key from the snapshot/segFile (NOT the current
- *  cast). Voice name staleness after a reassignment with no re-render is caught here
+ *  (chapter-qa-repair.ts) derives BOTH the voice name and the model key from the
+ *  CURRENT cast (#3449, #3518), never from the previous render's snapshot. Voice name staleness after a reassignment with no re-render is caught here
  *  (#3449). An in-book row is usable when it recorded NO `inBookVoiceName` (a legacy
  *  row, or one built when no current voice was known — kept as before, rebuilt with
  *  the field once a line is rendered in the current voice and `scoreBook` runs) or when that name equals the character's
  *  current voice; a recorded name that differs (or a missing current voice) means the
  *  anchors came from a voice the character no longer has and the row is dropped
- *  (#3524, settles #3517's in-book half). An 'audition' row is
+ *  (#3524, settles #3517's in-book half). An in-book row is ALSO usable only when its
+ *  recorded `inBookModelKey` (the tier every anchor pooled into it was rendered at, stamped
+ *  by scoreBook) EXACTLY equals `currentModelKey` (#3518). A `mixed` stamp, an absent stamp
+ *  (an anchor of unknown tier, or a row written before the stamp existed — fail closed, not
+ *  grandfathered) and an unknown current key all drop the row; the next scoreBook pass
+ *  rebuilds it with a stamp. An 'audition' row is
  *  usable ONLY when it recorded a voice identity AND that identity matches the
  *  character's current resolved voice/model — otherwise it is a stale reference
- *  (possibly for a voice the character no longer is) and must not be scored against.
- *  A null/absent current (no resolved voice to compare) is never trusted.
+ *  (possibly for a voice the character no longer is) and must not be scored against. It must
+ *  also pass `auditionAnchorsMatchTier` (#3518): every real anchor blended into it was rendered
+ *  at the row's own tier.
+ *  A null/absent current (no resolved voice or model key to compare) is never trusted.
  *  NOTE: this is the repair seam's intentionally CONSERVATIVE subset — it compares
- *  only the voice name + model key. Voice-name changes are caught reliably; same-engine
- *  voice reassignments are caught by voice-name mismatch; Qwen tier changes are NOT
- *  caught here (known gap per #3518). The authoritative scoring gate (`matchesCurrentVoice`
+ *  only the voice name + model key. The authoritative scoring gate (`matchesCurrentVoice`
  *  in aggregate.ts) additionally enforces strict language/cloned equality on the next
  *  `scoreBook` pass, which supersedes any residual language-only staleness between a
  *  repair and that pass. */
 export function auditionCentroidUsableForCurrent(
   row: CharacterCentroid,
   currentVoiceName: string | undefined,
-  currentModelKey: string,
+  currentModelKey: string | undefined,
 ): boolean {
   if (row.referenceKind === 'in-book') {
+    if (row.inBookModelKey == null || currentModelKey == null || row.inBookModelKey !== currentModelKey) return false;
     return row.inBookVoiceName == null || row.inBookVoiceName === currentVoiceName;
   }
   if (row.referenceKind !== 'audition') return false; // incl. 'too-short'
-  if (row.auditionVoice == null || currentVoiceName == null) return false;
+  if (row.auditionVoice == null || currentVoiceName == null || currentModelKey == null) return false;
+  if (!auditionAnchorsMatchTier(row)) return false;
   return row.auditionVoice.voiceName === currentVoiceName && row.auditionVoice.modelKey === currentModelKey;
 }

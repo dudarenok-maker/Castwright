@@ -82,12 +82,16 @@ export function projectToChars(
 
   // Build the normalized basis + its index map ONCE — same construction as
   // review-apply-core.ts's resolveAnchorOffset, but retained for the whole text.
-  // origEndForNormLen[k] = basis index after k normalized chars.
+  // origEndForNormLen[k] = basis index after k normalized chars (UTF-16 offsets;
+  // each code point's normalized output maps to the offset after that code point).
   let norm = '';
   const origEndForNormLen: number[] = [0];
-  for (let i = 0; i < basis.length; i++) {
-    const piece = normalizeForMatch(basis[i]!);
-    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i + 1);
+  let i = 0; // UTF-16 offset into basis
+  for (const ch of basis) {
+    // Walk by code point (as normalizeForMatch does) so NFC never splits a surrogate pair.
+    i += ch.length;
+    const piece = normalizeForMatch(ch);
+    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i);
     norm += piece;
   }
 

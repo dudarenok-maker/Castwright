@@ -223,8 +223,8 @@ test('build-release-zip.mjs imported as a module does not execute main() (no arg
 // dist/index.html check — always resolves to the REAL location of the
 // invoked file, not the junction path. Junctioning only a *container* around
 // the real script can't relocate that. So instead this builds a standalone
-// fixture: a real copy of start-app-prod.mjs plus its one relative import
-// (lib/is-main-module.mjs) and a minimal package.json, at a fresh temp root
+// fixture: a real copy of start-app-prod.mjs plus its relative imports
+// (the whole scripts/lib/ dir) and a minimal package.json, at a fresh temp root
 // that provably has no dist/ folder — then junctions TO that fixture root.
 // This still exercises the #2291 guard through a real junction exactly like
 // the other four tests in this file; it just no longer depends on whether
@@ -236,10 +236,10 @@ function buildStartAppProdFixture() {
     join(REPO_ROOT, 'scripts', 'start-app-prod.mjs'),
     join(fixtureRoot, 'scripts', 'start-app-prod.mjs'),
   );
-  cpSync(
-    join(REPO_ROOT, 'scripts', 'lib', 'is-main-module.mjs'),
-    join(fixtureRoot, 'scripts', 'lib', 'is-main-module.mjs'),
-  );
+  // Whole lib/ dir, not a hand-listed set: start-app-prod.mjs's relative
+  // imports (is-main-module, report-exclusion, ...) grow over time, and a
+  // hand-listed copy breaks on the next one (#4054).
+  cpSync(join(REPO_ROOT, 'scripts', 'lib'), join(fixtureRoot, 'scripts', 'lib'), { recursive: true });
   // start-app-prod.mjs reads package.json's version at import time.
   writeFileSync(join(fixtureRoot, 'package.json'), JSON.stringify({ version: '0.0.0-test' }));
   return fixtureRoot;

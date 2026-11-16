@@ -91,8 +91,8 @@ async function stagePortableLocally(bookDir: string, filename: string, buf: Buff
   await mkdir(exportsRoot, { recursive: true });
   const finalPath = join(exportsRoot, filename);
   const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmpPath, buf);
   try {
+    await writeFile(tmpPath, buf);
     await renameWithRetry(tmpPath, finalPath);
   } catch (err) {
     await unlink(tmpPath).catch(() => {});

@@ -243,6 +243,7 @@ function writeCentroidFixture() {
         pSevere: 0.45,
         pBand: 0.6,
         referenceKind: 'in-book',
+        inBookModelKey: 'kokoro-v1',
       },
       the_torment: {
         characterId: 'the_torment',
@@ -251,6 +252,7 @@ function writeCentroidFixture() {
         pSevere: 0.45,
         pBand: 0.6,
         referenceKind: 'in-book',
+        inBookModelKey: 'kokoro-v1',
       },
     }),
   );
@@ -551,6 +553,7 @@ describe('audio-qa-repair acoustic gate survives a cast-id-history write between
           pSevere: 0.45,
           pBand: 0.6,
           referenceKind: 'in-book',
+          inBookModelKey: 'kokoro-v1',
         },
         mairin: {
           characterId: 'mairin',
@@ -559,6 +562,7 @@ describe('audio-qa-repair acoustic gate survives a cast-id-history write between
           pSevere: 0.45,
           pBand: 0.6,
           referenceKind: 'in-book',
+          inBookModelKey: 'kokoro-v1',
         },
       }),
     );

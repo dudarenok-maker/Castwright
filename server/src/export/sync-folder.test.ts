@@ -7,8 +7,27 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeToSyncFolder, writeFolderToSyncFolder } from './sync-folder.js';
+
+/* Pass-through spy on node:fs/promises.copyFile so a test can inject a
+   part-way copy failure (#4218); every other test sees the real function. */
+const fsMock = vi.hoisted(() => ({ copyFile: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  fsMock.copyFile.mockImplementation(actual.copyFile as never);
+  return { ...actual, copyFile: fsMock.copyFile };
+});
+
+/* A copyFile that writes a partial destination, then fails ENOSPC. A real
+   fs.copyFile unlinks its own partial destination, so this simulates the
+   case where that cleanup does not happen (defensive cleanup, #4218). */
+function failCopyPartWay() {
+  fsMock.copyFile.mockImplementationOnce(async (_src: unknown, dest: unknown) => {
+    writeFileSync(String(dest), 'par');
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  });
+}
 
 describe('writeToSyncFolder', () => {
   let tmpRoot: string;
@@ -55,6 +74,16 @@ describe('writeToSyncFolder', () => {
     expect(stragglers).toEqual([]);
   });
 
+  it('removes the partial .tmp- file when the copy fails part-way, and rethrows (#4218)', async () => {
+    const dest = join(tmpRoot, 'sync');
+    failCopyPartWay();
+    await expect(writeToSyncFolder(srcPath, dest, 'audiobook.zip')).rejects.toMatchObject({
+      code: 'ENOSPC',
+    });
+    expect(readdirSync(dest).filter((n) => n.includes('.tmp-'))).toEqual([]);
+    expect(existsSync(join(dest, 'audiobook.zip'))).toBe(false);
+  });
+
   it('keeps a path-traversal filename contained under the destination (CodeQL path-injection)', async () => {
     /* Pre-fix, `join(dest, '../escape.zip')` would write into tmpRoot — one
        level ABOVE the user's chosen sync target. The sanitiser collapses the
@@ -75,8 +104,8 @@ describe('writeToSyncFolder', () => {
   it('wraps the error with a Drive hint when destDir looks like a Drive for Desktop mount', async () => {
     const dest = join(tmpRoot, 'My Drive', 'Audiobooks');
     /* Source missing -> copyFile throws ENOENT before rename even runs.
-       The wrapper only kicks in on the rename branch, so we craft a
-       failure inside rename by writing to a path whose parent is a file
+       The wrapper covers both the copy and the rename branch; to hit
+       the rename branch we craft a failure inside rename by writing to a path whose parent is a file
        (EEXIST/ENOTDIR depending on platform). Easiest: write to a path
        under a dest-dir that we then rm in a child invocation. We just
        assert that on a successful rename inside a "My Drive"-shaped
@@ -124,6 +153,44 @@ describe('writeToSyncFolder — Drive hint wrapping', () => {
       );
     } finally {
       rmSync(driveTmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['My Drive', /Google Drive for Desktop/i],
+    ['OneDrive', /OneDrive folder/i],
+  ])('wraps a copy failure under a %s path with the hint, keeping code and cause (#4218)', async (dir, hint) => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-copyhint-test-'));
+    try {
+      const src = join(root, 'src.bin');
+      writeFileSync(src, Buffer.from('x'.repeat(32)));
+      failCopyPartWay();
+      const err = await writeToSyncFolder(src, join(root, dir, 'Audiobooks'), 'audiobook.zip').catch(
+        (e: unknown) => e,
+      );
+      expect((err as Error).message).toMatch(hint);
+      expect((err as { code?: string }).code).toBe('ENOSPC');
+      expect(((err as { cause?: { code?: string } }).cause ?? {}).code).toBe('ENOSPC');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wraps a folder-copy failure under a Drive path with the hint, keeping code and cause (#4218)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-copyhint-dir-test-'));
+    try {
+      const srcDir = join(root, 'staging');
+      mkdirSync(srcDir, { recursive: true });
+      writeFileSync(join(srcDir, '01.mp3'), 'x');
+      failCopyPartWay();
+      const err = await writeFolderToSyncFolder(srcDir, join(root, 'My Drive'), 'Book').catch(
+        (e: unknown) => e,
+      );
+      expect((err as Error).message).toMatch(/Google Drive for Desktop/i);
+      expect((err as { code?: string }).code).toBe('ENOSPC');
+      expect(((err as { cause?: { code?: string } }).cause ?? {}).code).toBe('ENOSPC');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -191,6 +258,16 @@ describe('writeFolderToSyncFolder', () => {
     const result = await writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission');
     expect(result.copied).toBe(2);
     expect(existsSync(join(result.syncPath, 'README.txt'))).toBe(false);
+  });
+
+  it('removes the partial .tmp- file when a copy fails part-way, and rethrows (#4218)', async () => {
+    const destDir = join(tmpRoot, 'sync');
+    failCopyPartWay();
+    await expect(
+      writeFolderToSyncFolder(srcDir, destDir, 'The Coalfall Commission'),
+    ).rejects.toMatchObject({ code: 'ENOSPC' });
+    const target = join(destDir, 'The Coalfall Commission');
+    expect(readdirSync(target).filter((n) => n.includes('.tmp-'))).toEqual([]);
   });
 
   it('keeps a path-traversal book sub-folder contained under destDir (CodeQL path-injection)', async () => {
