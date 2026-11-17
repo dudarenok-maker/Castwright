@@ -1114,12 +1114,39 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
 // Orchestration — the pre-push census and `npm run doctor`.
 // ---------------------------------------------------------------------------
 
+/** Why a reap candidate must be SPARED under the pre-push guard, or null when
+ *  every guard passes. Names every failed guard. Any subtree member's argv may
+ *  satisfy the checkout test (the root is often a path-less `cmd.exe /c npx`). */
+function prePushSpareReason(v, processes, root) {
+  const failures = [];
+  if (!v.reasons.includes('orphaned-unreachable')) failures.push('not orphaned');
+  if (!v.reasons.includes('stalled-rate')) {
+    failures.push(
+      v.cpuRatePerMin === null
+        ? 'rate unknown (no trusted prior sample)'
+        : `not stalled (rate ${v.cpuRatePerMin.toFixed(1)} CPU-s/min)`,
+    );
+  }
+  const members = new Set(v.subtreePids);
+  const underRoot = processes.some((p) => members.has(p.pid) && commandLineUnderRoot(p.commandLine, root));
+  if (!underRoot) failures.push(`not under checkout ${root}`);
+  return failures.length > 0 ? failures.join('; ') : null;
+}
+
 /**
  * Runs one census, appends it to the log, and (when `kill` is true) reaps
  * qualifying subtrees. `killReasons` narrows WHICH reap reasons this caller
- * is allowed to act on — the pre-push wiring passes only
- * ['orphaned-unreachable'] ("kill only provably-orphaned trees"); the wider
- * `--kill` manual path passes both. Before each kill, `findKillRefusalReason`
+ * is allowed to act on. The pre-push wiring additionally passes
+ * `prePushGuard: { root }`, under which a reap verdict is killed only when ALL
+ * THREE hold: orphaned-unreachable AND stalled-rate (a trusted CPU rate at or
+ * under the dead-rate threshold) AND at least one subtree member's argv names a
+ * path under `root` (the pushing checkout). The check is argv-only: the process
+ * snapshot carries no cwd. Consequence: a battery whose argv names no path under
+ * the pushing checkout is spared from pre-push, and so is one launched through a
+ * `node_modules` junction that resolves to another checkout's path; only a
+ * manual `npm run doctor -- --kill` can reap those. Spared candidates are
+ * returned in `spared` (`{rootPid, reason}`) and logged as `spareReason`.
+ * With `prePushGuard` null (manual runs) behaviour is unchanged. Before each kill, `findKillRefusalReason`
  * re-checks the root's real OS descendant closure (not classify()'s subtree)
  * and refuses rather than kills when that closure reaches anything protected
  * or alive — see its own doc comment. That same descendant closure is also
@@ -1141,6 +1168,7 @@ export function runCensus({
   appendLog = appendCensusLog,
   kill = false,
   killReasons = ['orphaned-unreachable', 'stalled-rate'],
+  prePushGuard = null,
   thresholds = DEFAULT_THRESHOLDS,
   now = Date.now(),
   killFn = killTree,
@@ -1156,6 +1184,7 @@ export function runCensus({
   const killed = [];
   const refused = [];
   const failed = [];
+  const spared = [];
   if (kill) {
     const pidToRoot = new Map();
     const rootVerdict = new Map();
@@ -1167,6 +1196,13 @@ export function runCensus({
     for (const v of verdicts) {
       if (v.verdict !== 'reap') continue;
       if (!v.reasons.some((r) => killReasons.includes(r))) continue;
+      if (prePushGuard) {
+        const spareReason = prePushSpareReason(v, processes, prePushGuard.root);
+        if (spareReason) {
+          spared.push({ rootPid: v.rootPid, reason: spareReason });
+          continue;
+        }
+      }
       const refusalReason = findKillRefusalReason(v.rootPid, processes, protectedPids, pidToRoot, rootVerdict);
       if (refusalReason) {
         refused.push({ rootPid: v.rootPid, reason: refusalReason });
@@ -1193,6 +1229,7 @@ export function runCensus({
   // record is half of making that observable, and runCli's pre-push stderr
   // line is the other half.
   const refusalByRoot = new Map(refused.map((r) => [r.rootPid, r.reason]));
+  const spareByRoot = new Map(spared.map((s) => [s.rootPid, s.reason]));
   appendLog(
     {
       ts: now,
@@ -1210,13 +1247,14 @@ export function runCensus({
         reasons: v.reasons,
         killed: killed.includes(v.rootPid),
         refusalReason: refusalByRoot.get(v.rootPid) ?? null,
+        spareReason: spareByRoot.get(v.rootPid) ?? null,
         killFailed: failed.includes(v.rootPid),
       })),
     },
     logPath,
   );
 
-  return { verdicts, killed, refused, failed };
+  return { verdicts, killed, refused, failed, spared };
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,18 +1268,23 @@ export function runCensus({
  * assertion about source text — pass a `runCensusFn` that throws and
  * confirm this still returns 0.
  */
-export function runCli(args, { runCensusFn = runCensus } = {}) {
+export function runCli(args, { runCensusFn = runCensus, checkoutRoot = REPO_ROOT } = {}) {
   const wideKill = args.includes('--kill');
   const isPrePush = args.includes('--pre-push');
 
   try {
     const { verdicts, killed, refused, failed } = runCensusFn({
       kill: isPrePush || wideKill,
-      // Pre-push is the narrow, never-blocking path: only kill what is
-      // PROVABLY orphaned (dead parent), never a merely-slow subtree that
-      // might still land. `--kill` (npm run doctor -- --kill) is the wider,
-      // human-invoked path and may also reap stalled-but-live-parented work.
+      // Pre-push is the narrow, never-blocking path. It reaps only a battery
+      // that is orphaned AND stalled-rate AND whose argv is under the pushing
+      // checkout (`prePushGuard`, enforced in runCensus). Argv only: there is
+      // no cwd in the snapshot, so a battery with no path under this checkout
+      // in its argv (or one launched via a node_modules junction that resolves
+      // to another checkout) is spared here; only a manual `--kill` reaps it.
+      // `--kill` (npm run doctor -- --kill) is the wider, human-invoked path
+      // and is unchanged.
       killReasons: isPrePush && !wideKill ? ['orphaned-unreachable'] : ['orphaned-unreachable', 'stalled-rate'],
+      prePushGuard: isPrePush && !wideKill ? { root: checkoutRoot } : null,
     });
 
     if (isPrePush) {

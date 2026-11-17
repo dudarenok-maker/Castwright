@@ -48,6 +48,7 @@ import {
   appendCensusLog,
   collectProcessSnapshot,
   commandLineUnderRoot,
+  REPO_ROOT,
   isBatteryInvocation,
   killTree,
   tailBytesFor,
@@ -568,6 +569,135 @@ test('runCli: --kill (the manual doctor path) allows both reap reasons', () => {
     },
   });
   assert.deepEqual(seenKillReasons.slice().sort(), ['orphaned-unreachable', 'stalled-rate'].sort());
+});
+
+// --- #4222 pre-push guards (G1-G8): orphaned AND stalled AND under checkout ---
+
+const GUARD_ROOT = 'C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards';
+const IN_CHECKOUT = `node ${GUARD_ROOT}\\node_modules\\vitest\\vitest.mjs run`;
+const OUT_OF_CHECKOUT = 'node C:\\Users\\x\\scratchpad\\p2-4213\\server\\node_modules\\vitest\\vitest.mjs run';
+
+// An orphaned path-less `cmd.exe /c npx vitest run` root plus a node child that
+// carries the path under test. `rate`: 'busy' (5 CPU-s/min), 'stalled' (~0.07),
+// or 'unknown' (no prior sample).
+function guardFixture({ childCommandLine, rate }) {
+  const startedAt = NOW - 60 * MIN;
+  const processes = [
+    { pid: 9001, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
+    { pid: 9002, ppid: 9001, name: 'node.exe', commandLine: childCommandLine, cpuSeconds: rate === 'busy' ? 100 : 25, startedAt },
+  ];
+  const priorSamples =
+    rate === 'unknown'
+      ? {}
+      : { 9001: { cpuSeconds: rate === 'busy' ? 25 : 24, sampledAt: NOW - 15 * MIN, startedAt } };
+  return { processes, priorSamples };
+}
+
+function runGuard(fixture, { prePushGuard = { root: GUARD_ROOT }, appended = [] } = {}) {
+  const killedPids = [];
+  const result = runCensus({
+    collectSnapshot: () => fixture.processes,
+    readPrior: () => fixture.priorSamples,
+    appendLog: (entry) => appended.push(entry),
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    prePushGuard,
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: (pid) => {
+      killedPids.push(pid);
+      return true;
+    },
+  });
+  return { ...result, killedPids };
+}
+
+test('G0: the guard fixtures really are battery orphans (non-vacuous)', () => {
+  assert.equal(isBatteryInvocation(IN_CHECKOUT), true);
+  const v = classify(
+    { ...guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'stalled' }), protectedPids: [] },
+    NOW,
+    THRESHOLDS,
+  );
+  assert.deepEqual(verdictFor(v, 9001).reasons.slice().sort(), ['orphaned-unreachable', 'stalled-rate']);
+});
+
+test('G1: a busy, orphaned, OUT-of-checkout battery survives pre-push', () => {
+  const r = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'busy' }));
+  assert.deepEqual(r.killed, []);
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.equal(r.spared[0].rootPid, 9001);
+});
+
+test('G2: a busy, orphaned, IN-checkout battery survives (stalled guard alone)', () => {
+  const r = runGuard(guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'busy' }));
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /not stalled \(rate 5\.0 CPU-s\/min\)/);
+});
+
+test('G3: a stalled, orphaned, OUT-of-checkout battery survives (root guard alone)', () => {
+  const r = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }));
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /not under checkout/);
+});
+
+test('G4: a stalled, orphaned, IN-checkout battery IS killed, whatever the path spelling', () => {
+  const child = 'node /c/claude/projects/WT-4222-prepush-reaper-guards/node_modules/vitest/vitest.mjs run';
+  const r = runGuard(guardFixture({ childCommandLine: child, rate: 'stalled' }));
+  assert.deepEqual(r.killedPids, [9001]);
+  assert.deepEqual(r.killed, [9001]);
+  assert.deepEqual(r.spared, []);
+});
+
+test('G5 control: with prePushGuard null the G1 and G3 fixtures ARE killed (manual-run behaviour)', () => {
+  const g1 = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'busy' }), { prePushGuard: null });
+  assert.deepEqual(g1.killedPids, [9001]);
+  assert.deepEqual(g1.spared, []);
+  const g3 = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }), { prePushGuard: null });
+  assert.deepEqual(g3.killedPids, [9001]);
+});
+
+test('G6: an unknown rate (no trusted prior sample) in-checkout orphan survives', () => {
+  const r = runGuard(guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'unknown' }));
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /rate unknown/);
+});
+
+test('G7: runCli passes prePushGuard only on the pure --pre-push path', () => {
+  const seen = (args, opts = {}) => {
+    let guard;
+    runCli(args, {
+      ...opts,
+      runCensusFn: (o) => {
+        guard = o.prePushGuard;
+        return { verdicts: [], killed: [] };
+      },
+    });
+    return guard;
+  };
+  assert.deepEqual(seen(['--pre-push'], { checkoutRoot: 'C:\\injected\\root' }), { root: 'C:\\injected\\root' });
+  assert.equal(seen(['--kill']), null);
+  assert.equal(seen(['--pre-push', '--kill']), null);
+  assert.equal(seen([]), null);
+  assert.deepEqual(seen(['--pre-push']), { root: REPO_ROOT });
+});
+
+test('G8: the census log records spareReason for a spared root and null for a killed one', () => {
+  const spared = [];
+  runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }), { appended: spared });
+  const sr = spared[0].roots.find((x) => x.rootPid === 9001);
+  assert.equal(sr.killed, false);
+  assert.ok(typeof sr.spareReason === 'string' && sr.spareReason.length > 0);
+
+  const killedLog = [];
+  runGuard(guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'stalled' }), { appended: killedLog });
+  const kr = killedLog[0].roots.find((x) => x.rootPid === 9001);
+  assert.equal(kr.killed, true);
+  assert.equal(kr.spareReason, null);
 });
 
 test('runCli: report-only mode (no flags) never sets kill=true', () => {
