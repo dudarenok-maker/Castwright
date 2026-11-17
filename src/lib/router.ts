@@ -20,7 +20,9 @@ import type { Stage } from './types';
                                              openProfileId }
      #/books/:bookId/:view?chapter=&profile=
                                          → { kind: 'ready', bookId, view,
-                                             currentChapterId, openProfileId } */
+                                             currentChapterId, openProfileId }
+                                         (?chapter=3 is kept only when the stage says the
+                                         chapter was explicit; otherwise 3 is the plain default) */
 
 export function stageToHash(stage: Stage | null | undefined): string {
   if (!stage) return '#/';
@@ -79,7 +81,7 @@ export function stageToHash(stage: Stage | null | undefined): string {
     }
     case 'ready': {
       const q = new URLSearchParams();
-      if (stage.currentChapterId != null && stage.currentChapterId !== 3)
+      if (stage.currentChapterId != null && (stage.currentChapterId !== 3 || stage.chapterExplicit))
         q.set('chapter', String(stage.currentChapterId));
       if (stage.openProfileId) q.set('profile', stage.openProfileId);
       const qs = q.toString();
@@ -101,11 +103,16 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
   if (!a || !b) return a === b;
   if (a.kind !== b.kind) return false;
   if ((a as { bookId?: string }).bookId !== (b as { bookId?: string }).bookId) return false;
+  /* #4212 — `chapterExplicit` is compared (undefined === false) because it
+     decides whether `stageToHash` keeps `?chapter=3`. Ignored, a cold
+     `?chapter=3` link whose hydrated stage matches the persisted one but for
+     the flag would never dispatch `hydrateFromUrl`, and the URL would stay plain. */
   if (a.kind === 'ready' && b.kind === 'ready') {
     return (
       a.view === b.view &&
       a.currentChapterId === b.currentChapterId &&
-      a.openProfileId === b.openProfileId
+      a.openProfileId === b.openProfileId &&
+      !!a.chapterExplicit === !!b.chapterExplicit
     );
   }
   if (a.kind === 'confirm' && b.kind === 'confirm') {

@@ -113,6 +113,49 @@ describe('stageToHash', () => {
     };
     expect(stageToHash(stage)).toBe('#/books/ns/generate?chapter=7&profile=eliza');
   });
+
+  describe('ready chapterExplicit (#4212)', () => {
+    const mk = (over: Partial<Extract<Stage, { kind: 'ready' }>>): Stage => ({
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'generate',
+      currentChapterId: 3,
+      openProfileId: null,
+      ...over,
+    });
+
+    it('explicit chapter 3 keeps ?chapter=3', () => {
+      expect(stageToHash(mk({ chapterExplicit: true }))).toBe('#/books/ns/generate?chapter=3');
+    });
+
+    it('explicit chapter 3 with a profile pins chapter-before-profile order', () => {
+      expect(stageToHash(mk({ view: 'cast', chapterExplicit: true, openProfileId: 'halloran' }))).toBe(
+        '#/books/ns/cast?chapter=3&profile=halloran',
+      );
+    });
+
+    it('chapter 3 with chapterExplicit false or absent stays plain', () => {
+      expect(stageToHash(mk({ view: 'manuscript', chapterExplicit: false }))).toBe('#/books/ns/manuscript');
+      expect(stageToHash(mk({ view: 'manuscript' }))).toBe('#/books/ns/manuscript');
+      expect(stageToHash(mk({ view: 'cast', chapterExplicit: false, openProfileId: 'halloran' }))).toBe(
+        '#/books/ns/cast?profile=halloran',
+      );
+      expect(stageToHash(mk({ view: 'cast', openProfileId: 'halloran' }))).toBe('#/books/ns/cast?profile=halloran');
+    });
+
+    it('chapter 5 emits ?chapter=5 whatever chapterExplicit says', () => {
+      expect(stageToHash(mk({ currentChapterId: 5, chapterExplicit: true }))).toBe('#/books/ns/generate?chapter=5');
+      expect(stageToHash(mk({ currentChapterId: 5, chapterExplicit: false }))).toBe('#/books/ns/generate?chapter=5');
+      expect(stageToHash(mk({ currentChapterId: 5 }))).toBe('#/books/ns/generate?chapter=5');
+    });
+
+    it('stageEqual: true vs false differ; undefined vs false equal; true vs true equal', () => {
+      expect(stageEqual(mk({ chapterExplicit: true }), mk({ chapterExplicit: false }))).toBe(false);
+      expect(stageEqual(mk({ chapterExplicit: undefined }), mk({ chapterExplicit: false }))).toBe(true);
+      expect(stageEqual(mk({}), mk({ chapterExplicit: false }))).toBe(true);
+      expect(stageEqual(mk({ chapterExplicit: true }), mk({ chapterExplicit: true }))).toBe(true);
+    });
+  });
 });
 
 describe('stageEqual', () => {
