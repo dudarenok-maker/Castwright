@@ -333,3 +333,16 @@ describe('parseMobi — extractorVersion option (#4217)', () => {
     expect(v1.sourceText).toBe(plain.sourceText);
   });
 });
+
+/* #4217 MB1. Mutation: call stripHtml at mobi.ts:178 without the version and
+   this goes red (the divs glue to `AB`). */
+describe('parseMobi — block-closer paragraphs at extractorVersion 2 (#4217)', () => {
+  it('MB1: <div>A</div><div>B</div> gives A\n\nB', async () => {
+    chaptersMock = [{ id: 'c1', html: '<div>A</div><div>B</div>' }];
+    const out = await parseMobi(mobiBufferWithEncryption(0), {
+      fileName: 'book.mobi',
+      extractorVersion: 2,
+    });
+    expect(out.chapters[0].body).toBe('A\n\nB');
+  });
+});

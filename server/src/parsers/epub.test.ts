@@ -460,3 +460,29 @@ describe('parseEpub — a throwing chapter sends the whole book to the raw-zip r
     expect(out.chapters[1].body).toBe('Chapter 2\nFirst line\u2029second line.\n\nEven one = better than none.');
   });
 });
+
+/* #4217 — under extractorVersion 2 the `</div>` closers break paragraphs on
+   both EPUB paths; version 1 keeps them glued. E1 mutation: call stripHtml at
+   epub.ts:163 without the version. E2 mutation: same at epub.ts:307. */
+describe('parseEpub — block-closer paragraphs by extractorVersion (#4217)', () => {
+  const divs = (extra: string) =>
+    `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><div>Alpha${extra}</div><div>Beta</div></body></html>`;
+
+  it('E1: <div> paragraphs are split at version 2 and glued at version 1', async () => {
+    const buf = await buildEpub([divs('')]);
+    const v2 = await parseEpub(buf, { fileName: 'divs.epub', extractorVersion: 2 });
+    const v1 = await parseEpub(buf, { fileName: 'divs.epub', extractorVersion: 1 });
+    expect(v2.chapters[0].body).toContain('Alpha\n\nBeta');
+    expect(v1.chapters[0].body).toContain('AlphaBeta');
+    expect(v1.chapters[0].body).not.toContain('\n\n');
+  });
+
+  it('E2: the same through the raw-zip path (<a href="">) splits at 2, not at 1', async () => {
+    const buf = await buildEpub([divs(' <a href="">link</a>')]);
+    const v2 = await parseEpub(buf, { fileName: 'divs-raw.epub', extractorVersion: 2 });
+    const v1 = await parseEpub(buf, { fileName: 'divs-raw.epub', extractorVersion: 1 });
+    expect(v2.chapters[0].body).toContain('Alpha link\n\nBeta');
+    expect(v1.chapters[0].body).toContain('Alpha linkBeta');
+    expect(v1.chapters[0].body).not.toContain('\n\n');
+  });
+});

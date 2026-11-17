@@ -25,5 +25,8 @@ export const CHAPTER_TITLE_PARSER_VERSION = 2;
    History:
    - 1: the extraction before #4217. Implicit when the field is absent: only
         `</p>`, `<br>` and `<hr>` break, and raw-zip EPUB `href`/`src` values
-        are not entity-decoded. */
+        are not entity-decoded.
+   - 2: #4217: the named block closers break paragraphs; raw-zip `href`/`src`
+        are XML-entity-decoded (child 3). */
 export const LEGACY_EXTRACTOR_VERSION = 1;
+export const MANUSCRIPT_EXTRACTOR_VERSION = 2;

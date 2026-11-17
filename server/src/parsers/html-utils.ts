@@ -78,11 +78,17 @@ export function decodeNamedEntities(s: string): string {
    `[emphasis]…[/emphasis]` tags via tagHtmlEmphasis before stripping so the
    audio-tag information survives the strip.
 
-   `_extractorVersion` is version-gated: see `parsers/version.ts`. Nothing reads
-   it yet; version 1 is the only behaviour. */
+   `extractorVersion` is version-gated: see `parsers/version.ts`. At version 2+
+   (#4217) the named block closers `</div>`, `</li>`, `</blockquote>`,
+   `</h1>`-`</h6>`, `</dd>`, `</dt>`, `</section>` and `</article>` become
+   paragraph breaks (a blank line, like `</p>`), and the final whitespace trim
+   strips any non-newline whitespace (spaces, tabs, CR, U+00A0) on both sides
+   of every newline, so nested blocks collapse to single paragraph breaks with
+   no empty or indented paragraphs. Opening tags still add no break. Below 2
+   the code path is exactly the version-1 behaviour. */
 export function stripHtml(
   html: string,
-  _extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
+  extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
 ): string {
   let s = tagHtmlEmphasis(html)
     .replace(/<\s*br\s*\/?>/gi, '\n')
@@ -92,6 +98,9 @@ export function stripHtml(
        a standalone paragraph unit rather than gluing it to adjacent prose. */
     .replace(/<\s*hr\s*[^>]*\/?>/gi, '\n\n* * *\n\n')
     .replace(/<\/p>/gi, '\n\n');
+  if (extractorVersion >= 2) {
+    s = s.replace(/<\/\s*(?:div|li|blockquote|h[1-6]|dd|dt|section|article)\s*>/gi, '\n\n');
+  }
   // Replace-until-stable: a single `<[^>]+>` pass can leave a reconstructed tag.
   let prev: string;
   do {
@@ -100,7 +109,7 @@ export function stripHtml(
   } while (s !== prev);
   s = decodeNamedEntities(s);
   return decodeNumericEntities(s)
-    .replace(/[ \t]+\n/g, '\n')
+    .replace(extractorVersion >= 2 ? /[^\S\n]*\n[^\S\n]*/g : /[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

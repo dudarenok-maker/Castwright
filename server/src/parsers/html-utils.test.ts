@@ -13,6 +13,7 @@ import {
   stripTitleHeading,
   GENERIC_NCX_RE,
 } from './html-utils.js';
+import { MANUSCRIPT_EXTRACTOR_VERSION } from './version.js';
 
 describe('stripHtml — tag stripping', () => {
   it('still strips tags and reaches a fixed point (replace-until-stable)', () => {
@@ -264,5 +265,43 @@ describe('extractFirstHeading — named entities (#2310)', () => {
   });
   it('#2310: still leaves a bare ampersand alone', () => {
     expect(extractFirstHeading('<h1>Smith &amp; Sons, AT&T</h1>')).toBe('Smith & Sons, AT&T');
+  });
+});
+
+describe('stripHtml — named block closers at extractor v2 (#4217)', () => {
+  /* H1. Mutation: drop that tag from the closer regex in html-utils.ts (e.g.
+     remove `blockquote`) and its row goes red, because `a` glues to `two`. */
+  it.each(['div', 'li', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dd', 'dt', 'section', 'article'])(
+    '</%s> breaks a paragraph at version 2',
+    (tag) => {
+      expect(stripHtml(`<p>one</p><${tag}>a</${tag}>two`, 2)).toBe('one\n\na\n\ntwo');
+    },
+  );
+
+  /* H2. Mutation: keep the version-1 `[ \t]+\n` trim at version 2 and the CR,
+     NBSP and indentation survive as stray paragraphs, so this goes red. */
+  it('collapses nested blocks to single breaks with no empty or indented paragraphs', () => {
+    const html =
+      '<section>\r\n  <article>\r\n    <div><p>A</p></div>\r\n  </article>\r\n</section>\r\n<div>&#160;</div>\r\n<blockquote><p>B</p>\n  <p>C</p></blockquote>';
+    expect(stripHtml(html, 2)).toBe('A\n\nB\n\nC');
+  });
+
+  /* H3. Mutation: add `span` (or `a`, `em`) to the closer regex and the inline
+     case differs from version 1. */
+  it('does not break on inline closers, and matches closers case-insensitively with spacing', () => {
+    const inline = '<p>A <span>b</span> <em>c</em> <a href="x">d</a> e</p>';
+    expect(stripHtml(inline, 2)).toBe(stripHtml(inline, 1));
+    expect(stripHtml('x</DIV >y', 2)).toBe('x\n\ny');
+    expect(stripHtml('x</DIV >y', 1)).toBe('xy');
+  });
+
+  /* H4. Mutation: set MANUSCRIPT_EXTRACTOR_VERSION to 1, or make the default
+     version 2, and this goes red. */
+  it('exports version 2, and the default version is the legacy extraction', () => {
+    expect(MANUSCRIPT_EXTRACTOR_VERSION).toBe(2);
+    const html =
+      '<section>\r\n  <article>\r\n    <div><p>A</p></div>\r\n  </article>\r\n</section>\r\n<div>&#160;</div>\r\n<blockquote><p>B</p>\n  <p>C</p></blockquote>';
+    expect(stripHtml(html)).toBe(stripHtml(html, 1));
+    expect(stripHtml(html)).not.toBe(stripHtml(html, 2));
   });
 });
