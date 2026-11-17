@@ -534,7 +534,8 @@ Design rationale:
 - **Discriminated-union `ui.stage`** (`src/store/ui-slice.ts`) — `{ kind: 'books'
 | 'upload' | 'analysing' | 'confirm' | 'ready' }`, with `view`/`currentChapterId`/
   `openProfileId` living _inside_ the `ready` variant. Don't flatten.
-- **Hash router grammar** (`src/lib/router.ts`) — pure `parseHash`/`stageToHash`,
+- **Hash router grammar** (`src/lib/router.ts`) — pure `stageToHash`/`stageEqual`
+  (URL → stage is derived in `ReadyRoute`, which sets the `ready` stage's optional `chapterExplicit` flag),
   installed against the store via the `RouterStore` adapter so the router stays
   decoupled. Same URL grammar as the original prototype.
 - **OpenAPI is the type source of truth** — `Character`/`Chapter`/`Sentence` etc.
