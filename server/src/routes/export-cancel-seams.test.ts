@@ -10,7 +10,7 @@
    (every request) is never the held one. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -21,7 +21,9 @@ const seam = vi.hoisted(() => {
   const holds: Record<string, Hold | undefined> = {};
   /* Holds that were entered stay reachable here so cleanup can release them. */
   const entered: Hold[] = [];
-  const state = { revokeReady: false, renameCalls: 0, builds: 0, folderBuilds: 0 };
+  const state = { revokeReady: false, renameCalls: 0, builds: 0, folderBuilds: 0, failCopy: false };
+  /* Predicates over (src, dest): a rename matching any of them rejects with EPERM. */
+  const failRenames: Array<(src: string, dest: string) => boolean> = [];
   function arm(name: string): { entered: Promise<void>; release: () => void } {
     let enter!: () => void;
     let release!: () => void;
@@ -42,7 +44,7 @@ const seam = vi.hoisted(() => {
     for (const h of Object.values(holds)) h?.release();
     for (const h of entered.splice(0)) h.release();
   }
-  return { holds, state, arm, maybeHold, releaseAll };
+  return { holds, state, failRenames, arm, maybeHold, releaseAll };
 });
 
 vi.mock('../export/build-mp3-zip.js', () => ({
@@ -75,6 +77,15 @@ vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
   return {
     ...actual,
     renameWithRetry: vi.fn(async (src: string, dest: string) => {
+      if (seam.failRenames.some((f) => f(src, dest))) {
+        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${src}' -> '${dest}'`), {
+          code: 'EPERM',
+          syscall: 'rename',
+          path: src,
+        });
+      }
+      /* The first manifest write's tmp -> manifest rename (not the .bak rotation). */
+      if (dest.includes('export-manifests') && dest.endsWith('.json')) await seam.maybeHold('manifestRename');
       /* Only the build's own rename into place: manifest writes also go through here. */
       if (src.includes('.partial-')) {
         seam.state.renameCalls++;
@@ -122,11 +133,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   /* `cancelRm` holds the first removal of a job-private `.partial-` path: that is
      bailIfCancelled's own rm, reached right after the post-copy syncPath patch
      and before the job's catch/finally rewrite the map entry. */
+  const copyFile = (async (...a: Parameters<typeof actual.copyFile>) => {
+    if (seam.state.failCopy) {
+      throw Object.assign(
+        new Error(`EPERM: operation not permitted, copyfile '${String(a[0])}' -> '${String(a[1])}'`),
+        { code: 'EPERM', syscall: 'copyfile', path: String(a[0]) },
+      );
+    }
+    return actual.copyFile(...a);
+  }) as typeof actual.copyFile;
   const rm = (async (...a: Parameters<typeof actual.rm>) => {
     if (seam.holds.cancelRm && String(a[0]).includes('.partial-')) await seam.maybeHold('cancelRm');
     return actual.rm(...a);
   }) as typeof actual.rm;
-  return { ...actual, readdir, rm, default: { ...actual, readdir, rm } };
+  return { ...actual, readdir, rm, copyFile, default: { ...actual, readdir, rm, copyFile } };
 });
 
 const AUTHOR = 'Seam Author';
@@ -191,6 +211,8 @@ beforeEach(async () => {
   seam.state.renameCalls = 0;
   seam.state.builds = 0;
   seam.state.folderBuilds = 0;
+  seam.state.failCopy = false;
+  seam.failRenames.length = 0;
   rmSync(join(bookDir, 'exports'), { recursive: true, force: true });
   rmSync(join(bookDir, '.audiobook', 'export-manifests'), { recursive: true, force: true });
 });
@@ -558,6 +580,204 @@ describe('cancel seams (#4223)', () => {
       expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('done');
       expect(droppings()).toEqual([]);
     } finally {
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  /* An mp3-folder re-export whose swap onto the flat folder fails (a scanner holds a
+     fresh mp3, say): staging -> flat rejects; with `restoreFails`, `.old-` -> flat
+     rejects too. */
+  async function failedSwap(restoreFails: boolean) {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-swapfail-'));
+    await writeUserSettings({ exportSyncFolder: syncRoot });
+    const first = await post('mp3-folder', 'sync-folder');
+    await awaitInFlightJobs();
+    seam.failRenames.push((src, dest) => src.includes('.partial-') && !dest.includes('.old-'));
+    if (restoreFails) seam.failRenames.push((src, dest) => src.includes('.old-') && !dest.includes('.old-'));
+    const second = await post('mp3-folder', 'sync-folder');
+    await awaitInFlightJobs();
+    return { syncRoot, first, second };
+  }
+
+  it('a failed mp3-folder swap whose restore succeeds leaves the previous export byte-identical at the flat name (#4228)', async () => {
+    let syncRoot = '';
+    try {
+      const r = await failedSwap(false);
+      syncRoot = r.syncRoot;
+      const second = (await request(app).get(`/api/books/${bookId}/exports/${r.second.id}`)).body;
+      expect(second.status).toBe('failed');
+      expect(readFileSync(join(exportsDir(), r.first.filename, '01.mp3')).toString()).toBe('id3-1');
+      expect(droppings()).toEqual([]);
+    } finally {
+      await awaitInFlightJobs();
+      if (syncRoot) rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a failed mp3-folder swap whose restore also fails never deletes the previous export (#4228)', async () => {
+    let syncRoot = '';
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await failedSwap(true);
+      syncRoot = r.syncRoot;
+      const second = (await request(app).get(`/api/books/${bookId}/exports/${r.second.id}`)).body;
+      expect(second.status).toBe('failed');
+      /* The previous folder sits in its dot-prefixed swap-aside, byte-identical, not deleted. */
+      const aside = ls(exportsDir()).filter((n) => n.startsWith('.') && n.includes('.old-'));
+      expect(aside).toHaveLength(1);
+      expect(readFileSync(join(exportsDir(), aside[0], '01.mp3')).toString()).toBe('id3-1');
+      expect(ls(exportsDir()).filter((n) => n.includes('.partial-'))).toEqual([]);
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes('could not restore the previous export'))).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+      await awaitInFlightJobs();
+      if (syncRoot) rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a previous done mp3-folder manifest survives a rehydrate while its folder sits in the swap-aside (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-aside-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const first = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      renameSync(join(exportsDir(), first.filename), join(exportsDir(), `.${first.filename}.old-exp_crash`));
+      resetJobs();
+      const list = (await request(app).get(`/api/books/${bookId}/exports`)).body as Array<{ id: string }>;
+      expect(list.map((j) => j.id)).toContain(first.id);
+      expect(existsSync(join(bookDir, '.audiobook', 'export-manifests', `${first.id}.json`))).toBe(true);
+    } finally {
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('the job record marks the mp3-folder sync copy in flight while it runs, and a cancel during it reads in-flight, then the landed syncPath (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-inflight-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const copy = seam.arm('syncCopy');
+      const job = await post('mp3-folder', 'sync-folder');
+      await copy.entered;
+      expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
+      /* What the modal reads right after DELETE: cancelled, no syncPath yet, copy in flight. */
+      const during = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(during.status).toBe('cancelled');
+      expect(during.syncPath ?? null).toBeNull();
+      expect(during.syncCopyInFlight).toBe(true);
+      copy.release();
+      await awaitInFlightJobs();
+      const after = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(after.status).toBe('cancelled');
+      expect(after.syncCopyInFlight).toBe(false);
+      expect(after.syncPath).toBe(join(syncRoot, AUTHOR, TITLE));
+      expect(manifestOf(job.id).syncCopyInFlight).toBe(false);
+    } finally {
+      seam.releaseAll();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a single-file sync commit is marked in flight too (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-inflight-file-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const commit = seam.arm('syncCommit');
+      const job = await post('mp3-zip', 'sync-folder');
+      await commit.entered;
+      expect((await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body.syncCopyInFlight).toBe(true);
+      commit.release();
+      await awaitInFlightJobs();
+      const done = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(done.status).toBe('done');
+      expect(done.syncCopyInFlight).toBe(false);
+    } finally {
+      seam.releaseAll();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a sync-copy failure under a OneDrive path reports a reason with no workspace or sync-folder path (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-leak-'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeUserSettings({ exportSyncFolder: join(syncRoot, 'OneDrive', 'Audiobooks') });
+      seam.state.failCopy = true;
+      const job = await post('mp3-zip', 'sync-folder');
+      await awaitInFlightJobs();
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(mem.status).toBe('failed');
+      expect(mem.errorReason).toMatch(/OneDrive folder/);
+      expect(mem.errorReason).toContain('EPERM');
+      for (const text of [mem.errorReason, String(manifestOf(job.id).errorReason)]) {
+        expect(text).not.toContain(workspaceRoot);
+        expect(text).not.toContain(syncRoot);
+        expect(text).not.toMatch(/copyfile/i);
+      }
+    } finally {
+      errSpy.mockRestore();
+      seam.state.failCopy = false;
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a local commit failing after the sync copy landed says the files were already copied (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-failafter-'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      seam.failRenames.push((src) => src.includes('.partial-'));
+      const job = await post('mp3-zip', 'sync-folder');
+      await awaitInFlightJobs();
+      const syncFile = join(syncRoot, AUTHOR, job.filename);
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(mem.status).toBe('failed');
+      expect(mem.syncPath).toBe(syncFile);
+      expect(mem.errorReason).toContain('The files were already copied to the sync folder.');
+      expect(mem.errorReason).not.toContain(workspaceRoot);
+      expect(String(manifestOf(job.id).errorReason)).toContain('already copied to the sync folder');
+      expect(existsSync(syncFile)).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it("DELETE's manifest write cannot land after the job's own later write: the final manifest keeps syncPath (#4228)", async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-order-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const commit = seam.arm('syncCommit');
+      const heldWrite = seam.arm('manifestRename');
+      const job = await post('mp3-zip', 'sync-folder');
+      await commit.entered;
+      /* DELETE snapshots the job BEFORE syncPath is published, and its manifest rename is held. */
+      const del = request(app)
+        .delete(`/api/books/${bookId}/exports/${job.id}`)
+        .then((r) => r);
+      await heldWrite.entered;
+      commit.release();
+      /* Let the job run on to its own `finally` manifest write while DELETE's is still held. */
+      await new Promise((r) => setTimeout(r, 200));
+      heldWrite.release();
+      expect((await del).status).toBe(204);
+      await awaitInFlightJobs();
+      expect(manifestOf(job.id).syncPath).toBe(join(syncRoot, AUTHOR, job.filename));
+    } finally {
+      seam.releaseAll();
       await awaitInFlightJobs();
       rmSync(syncRoot, { recursive: true, force: true });
       await writeUserSettings({ exportSyncFolder: null });

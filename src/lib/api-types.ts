@@ -6878,7 +6878,9 @@ export interface components {
             downloadUrl?: string | null;
             /** @description Absolute path the archive was copied to when destination === 'sync-folder'. A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted). */
             syncPath?: string | null;
-            /** @description Human-readable reason; populated when status === 'failed' or 'cancelled'. A cancelled job whose sync-folder copy had already landed reads 'Cancelled by user. The files were already copied to the sync folder.' */
+            /** @description True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A cancelled job can still gain a syncPath until this clears, so a client that cancelled keeps following the job until it is false or absent. */
+            syncCopyInFlight?: boolean | null;
+            /** @description Human-readable reason; populated when status === 'failed' or 'cancelled'. A cancelled job whose sync-folder copy had already landed reads 'Cancelled by user. The files were already copied to the sync folder.'; a failed job whose sync-folder copy had already landed ends with 'The files were already copied to the sync folder.' */
             errorReason?: string | null;
             /** @description ISO timestamp */
             createdAt: string;
