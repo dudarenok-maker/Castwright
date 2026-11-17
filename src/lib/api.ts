@@ -1414,9 +1414,19 @@ export async function mockGetBookState(
   const seeded = (
     globalThis as unknown as { __SEED_PROSODY_ANNOTATED__?: Record<string, boolean> }
   ).__SEED_PROSODY_ANNOTATED__?.[bookId];
-  return withRevisions && seeded !== undefined
-    ? { ...withRevisions, state: { ...withRevisions.state, prosodyAnnotated: seeded } }
-    : withRevisions;
+  const withProsody =
+    withRevisions && seeded !== undefined
+      ? { ...withRevisions, state: { ...withRevisions.state, prosodyAnnotated: seeded } }
+      : withRevisions;
+  /* e2e seam (#2254): a spec can prime a book's merged-paragraph chapter ids
+     via `page.addInitScript` BEFORE the app boots. Undefined in normal
+     dev/prod; with no entry for the book the key stays absent. */
+  const seededMerged = (
+    globalThis as unknown as { __SEED_PARAGRAPHS_MERGED__?: Record<string, number[]> }
+  ).__SEED_PARAGRAPHS_MERGED__?.[bookId];
+  return withProsody && seededMerged !== undefined
+    ? { ...withProsody, paragraphsMergedChapters: seededMerged }
+    : withProsody;
 }
 
 /* e2e seam (plan 291, #4031): every mock PUT, in order, exposed on

@@ -502,6 +502,9 @@ export interface BookStateResponse {
       entries mean the raw id already equals its cast id or could not be
       resolved. */
   characterIdAliases?: Record<string, string>;
+  /** #2254 — ids of chapters whose paragraph structure was merged at import
+      (the degradation signal). Absent = not measured or nothing flagged. */
+  paragraphsMergedChapters?: number[];
   /** fe-16 — characterId → engine the character ACTUALLY rendered in when it
       differs from its configured engine (`'kokoro'` when a Qwen character fell
       back across any rendered chapter). Threaded into `resolveVoiceStatus` so

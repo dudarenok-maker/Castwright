@@ -508,6 +508,7 @@ describe('GenerationView — #3440 step 4: aliased sentences join drifted attrib
           renderedSpeakersByChapter: {},
           renderedTextByChapter: {},
           characterIdAliases: aliases,
+          paragraphsMergedChapterIds: [],
         },
       },
     });
