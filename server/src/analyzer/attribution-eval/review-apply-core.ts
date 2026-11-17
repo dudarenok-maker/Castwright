@@ -22,40 +22,79 @@ export interface LiveSentence {
   vocalization?: boolean;
 }
 
-/** NFC + quote/dash/ellipsis folds ONLY — every fold maps 1 original char to a
-    known number of normalized chars, so an index map is exact. No whitespace
-    collapse (it would desync positions — the plan-review bug). */
-function normChar(c: string): string {
-  if (c === "‘" || c === "’") return "'";
-  if (c === "“" || c === "”") return '"';
-  if (c === "–" || c === "—") return '-';
-  if (c === "…") return '...';
-  return c.normalize('NFC');
-}
-export function normalizeForMatch(text: string): string {
-  let out = '';
-  for (const ch of text) out += normChar(ch);
-  return out;
+let graphemes: Intl.Segmenter | undefined;
+
+/** Built lazily, never at module load: this module is in the app's eager import
+    graph, and a browser without Intl.Segmenter (Firefox < 125) must still start.
+    Absent => null, and resolveAnchorOffset fails closed. */
+function getGraphemes(): Intl.Segmenter | null {
+  if (graphemes) return graphemes;
+  if (typeof Intl.Segmenter !== 'function') return null;
+  graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  return graphemes;
 }
 
-/** Returns the ORIGINAL-text offset of the END of a unique anchor match, or null. */
-export function resolveAnchorOffset(text: string, anchor: string): number | null {
-  // Build normalized string + a map from each normalized index to the original index AFTER it.
-  let norm = '';
-  const origEndForNormLen: number[] = [0]; // origEndForNormLen[k] = original index after k normalized chars
-  let i = 0; // UTF-16 offset into the original text
-  for (const ch of text) {
-    // Walk by code point (as normalizeForMatch does) so NFC never splits a surrogate pair.
-    i += ch.length;
-    const piece = normChar(ch);
-    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i);
-    norm += piece;
+/** Matching unit = a RUN: one extended grapheme cluster (a user-perceived
+    character). That keeps a base with its combining marks (Mn, Mc and Me alike),
+    Hangul jamo, emoji with a skin-tone modifier or variation selector, ZWJ
+    sequences and regional-indicator flag pairs together, so a match boundary can
+    never fall inside one. */
+function splitRuns(text: string): string[] {
+  const g = getGraphemes();
+  if (!g) throw new Error('Intl.Segmenter is unavailable');
+  return Array.from(g.segment(text), (s) => s.segment);
+}
+
+/** A run's normalized form: the quote/dash/ellipsis fold applies to EVERY code
+    point of the run (a Prepend char can cluster with a following quote or
+    ellipsis), then the whole run is NFC-normalized (so e + U+0301 composes to the same text as a precomposed é).
+    No whitespace collapse (it would desync positions — the plan-review bug). */
+function normRun(run: string): string {
+  let folded = '';
+  for (const ch of run) {
+    if (ch === "‘" || ch === "’") folded += "'";
+    else if (ch === "“" || ch === "”") folded += '"';
+    else if (ch === "–" || ch === "—") folded += '-';
+    else if (ch === "…") folded += '...';
+    else folded += ch;
   }
+  return folded.normalize('NFC');
+}
+
+export function normalizeForMatch(text: string): string {
+  return splitRuns(text).map(normRun).join('');
+}
+
+/** Normalized text plus an offset map with norm.length + 1 entries. Only a run
+    BOUNDARY has an original offset; every position strictly inside a run's
+    normalized output (inside an ellipsis fold, between an astral char's halves,
+    between a base and its mark) is null, so a match ending there is refused,
+    never rounded. origAt[0] = 0. */
+export function buildNormIndex(text: string): { norm: string; origAt: Array<number | null> } {
+  let norm = '';
+  const origAt: Array<number | null> = [0];
+  let i = 0; // UTF-16 offset into the original text, just after the current run
+  for (const run of splitRuns(text)) {
+    i += run.length;
+    const p = normRun(run);
+    for (let j = 0; j < p.length - 1; j++) origAt.push(null);
+    origAt.push(i);
+    norm += p;
+  }
+  return { norm, origAt };
+}
+
+/** Returns the ORIGINAL-text offset of the END of a unique anchor match, or null.
+    null also when the match ends INSIDE a run (fail closed) — every raw occurrence
+    still counts toward uniqueness. */
+export function resolveAnchorOffset(text: string, anchor: string): number | null {
+  if (!getGraphemes()) return null; // no Intl.Segmenter: fail closed
+  const { norm, origAt } = buildNormIndex(text);
   const nAnchor = normalizeForMatch(anchor);
   if (!nAnchor) return null;
   const first = norm.indexOf(nAnchor);
   if (first < 0 || first !== norm.lastIndexOf(nAnchor)) return null;
-  return origEndForNormLen[first + nAnchor.length];
+  return origAt[first + nAnchor.length] ?? null;
 }
 
 export function planApply(

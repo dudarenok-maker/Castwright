@@ -4,11 +4,11 @@
    (src/lib/script-review-apply.test.ts) loads the same file and asserts its
    `planApply` produces an identical result, so the two implementations can
    never silently drift apart. */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { normalizeForMatch, resolveAnchorOffset, planApply, type LiveSentence } from './review-apply-core.js';
+import { buildNormIndex, normalizeForMatch, resolveAnchorOffset, planApply, type LiveSentence } from './review-apply-core.js';
 import type { ScriptReviewOp } from '../../handoff/schemas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +41,35 @@ describe('review-apply-core — shared no-drift vector', () => {
 
       const unappliable = result.unappliable.map((u) => ({ opIndex: vector.ops.indexOf(u.op), reason: u.reason }));
       expect(unappliable).toEqual(vector.expected.unappliable);
+    });
+  }
+});
+
+interface AnchorVector {
+  name: string;
+  text: string;
+  anchor: string;
+  expectedTail: string | null;
+  forms?: { text: 'NFC' | 'NFD'; anchor: 'NFC' | 'NFD' };
+}
+
+describe('resolveAnchorOffset — shared anchor vectors (#4226)', () => {
+  const vectors: AnchorVector[] = JSON.parse(
+    readFileSync(path.join(__dirname, '__fixtures__', 'anchor-offset-vectors.json'), 'utf8'),
+  );
+  const other = (f: 'NFC' | 'NFD'): 'NFC' | 'NFD' => (f === 'NFC' ? 'NFD' : 'NFC');
+
+  for (const vector of vectors) {
+    it(vector.name, () => {
+      if (vector.forms) {
+        expect(vector.text.normalize(vector.forms.text)).toBe(vector.text);
+        expect(vector.text.normalize(other(vector.forms.text))).not.toBe(vector.text);
+        expect(vector.anchor.normalize(vector.forms.anchor)).toBe(vector.anchor);
+        expect(vector.anchor.normalize(other(vector.forms.anchor))).not.toBe(vector.anchor);
+      }
+      const off = resolveAnchorOffset(vector.text, vector.anchor);
+      if (vector.expectedTail === null) expect(off).toBeNull();
+      else expect(vector.text.slice(off!)).toBe(vector.expectedTail);
     });
   }
 });
@@ -93,5 +122,34 @@ describe('normalizeForMatch', () => {
 
   it('does NOT collapse whitespace', () => {
     expect(normalizeForMatch('a  b')).toBe('a  b');
+  });
+
+  it('treats composed and decomposed spellings as equal (#4226)', () => {
+    expect(normalizeForMatch('café')).toBe(normalizeForMatch('café'));
+  });
+
+  it('keeps a combining mark that has no precomposed form (#4226)', () => {
+    expect(normalizeForMatch('Она́')).toHaveLength(4);
+  });
+});
+
+describe('buildNormIndex', () => {
+  it('maps only run boundaries; positions inside the ellipsis fold are null (#4226)', () => {
+    expect(buildNormIndex('Wait… no').origAt).toEqual([0, 1, 2, 3, 4, null, null, 5, 6, 7, 8]);
+  });
+});
+
+describe('without Intl.Segmenter (older browsers; #4226)', () => {
+  const real = Intl.Segmenter;
+  afterEach(() => {
+    (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter = real;
+    vi.resetModules();
+  });
+
+  it('loads the module and fails closed instead of throwing', async () => {
+    vi.resetModules();
+    delete (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    const mod = await import('./review-apply-core.js');
+    expect(mod.resolveAnchorOffset('He ran. Then stopped.', 'He ran.')).toBeNull();
   });
 });

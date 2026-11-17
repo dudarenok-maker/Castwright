@@ -128,6 +128,11 @@ export default defineConfig({
          full run, closing the matching gap in vitest's own selection. */
       '{**/index.html,**/.*/**/index.html}',
       '{**/styles.css,**/.*/**/styles.css}',
+      /* #4226 — src/lib/script-review-apply.test.ts readFileSync()s the shared
+         attribution-eval fixtures at RUNTIME (the drift lock against the server
+         core copy) with no module-graph edge, so a fixture-only diff would
+         select zero tests under `vitest --changed`. */
+      '{**/attribution-eval/__fixtures__/*.json,**/.*/**/attribution-eval/__fixtures__/*.json}',
     ],
     /* One retry to absorb transient jsdom/timer flakes inside a single
        verify run instead of forcing a full pre-push re-execution. See

@@ -31,6 +31,19 @@ for (const path of [
   });
 }
 
+// #4226 — the frontend suite readFileSync()s the shared attribution-eval
+// fixtures, so a server-core + fixture-only diff must still schedule step_test.
+test('computeScopes routes a shared attribution-eval fixture diff to the frontend test step (#4226)', () => {
+  const scopes = computeScopes(
+    [
+      'server/src/analyzer/attribution-eval/review-apply-core.ts',
+      'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
+    ],
+    { eventName: 'pull_request' },
+  );
+  assert.equal(scopes.step_test, true);
+});
+
 // Defect D.
 test('computeScopes routes a workflow diff to test:hooks', () => {
   const scopes = computeScopes(['.github/workflows/verify.yml'], { eventName: 'pull_request' });
