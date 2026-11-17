@@ -304,9 +304,10 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
     expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
   });
   /* Mounts the view in a MemoryRouter whose navigate() the test can call, to
-     edit the URL in place while Generate stays mounted (a cold `?chapter=3`
-     link scrolls only when hydrating it leaves the persisted `ui.stage`
-     unchanged; otherwise Layout drops the param before the view mounts). */
+     edit the URL in place while Generate stays mounted (since #4212 the stage
+     carries `chapterExplicit` and `stageToHash` keeps `?chapter=3` for it, so
+     a cold `?chapter=3` link survives Layout's sync and scrolls like any
+     other chapter). */
   function renderMounted(entry: string, stageChapterId: number) {
     const store = makeStore();
     store.dispatch(chaptersSlice.actions.setChapters(chs));
