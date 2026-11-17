@@ -228,7 +228,12 @@ book their FULL cold peak (`qwen.1.7b.mint` / `qwen.1.7b.design`); the resident
 weights are credited only in the request's own fit check (the #4079 shape), so a
 second admission nested inside is refused the way it is on `main` (#4102). A
 design's credit also includes the resident 0.6B audition base (it is part of the
-design's peak), so a warm design fits on an 8 GB card.
+design's peak), so a warm design fits on an 8 GB card with at most about
+1.2 GB in use on it besides the sidecar's own models (the CUDA context and
+anything else). Above that, up to about 1.6 GB, it waits for the idle watchdog
+(~120-150 s at the default `QWEN_DESIGN_IDLE_TTL`) where an unprotected design
+would have reloaded VoiceDesign in seconds, and it fails with `noCapacity` if
+that TTL is above about 258 s.
 
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
