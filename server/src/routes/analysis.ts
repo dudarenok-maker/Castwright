@@ -3652,6 +3652,13 @@ export async function attributeChapterStage2(opts: {
     raw: SentenceOutput[];
     deterministic: SentenceOutput[];
     reasons: Array<{ index: number; reason: string; bucket: DecisionBucket }>;
+    /* #2254 §4.2 — the deduplicated roster the engine used (every branch). */
+    stage1: Stage1Output;
+    /* #2254 §4.2 — engine branch only, cloned when crossExamine returns, BEFORE
+       escalation splices `flags` for every line it fills. */
+    paras?: ReturnType<typeof runStructureEngine>['paras'];
+    alignment?: ReturnType<typeof runStructureEngine>['alignment'];
+    flags?: ReturnType<typeof runStructureEngine>['examined']['flags'];
   }) => void;
 }): Promise<Stage2ChunkRunResult> {
   /* Task 9 — consolidate the roster BEFORE stage-2 so the model sees CLEAN ids.
@@ -3734,6 +3741,9 @@ export async function attributeChapterStage2(opts: {
   const rawSnapshot = opts.onStages ? structuredClone(result.sentences) : null;
   let detSnapshot: SentenceOutput[] | null = null;
   let detReasons: Array<{ index: number; reason: string; bucket: DecisionBucket }> = [];
+  let detParas: ReturnType<typeof runStructureEngine>['paras'] | undefined;
+  let detAlignment: ReturnType<typeof runStructureEngine>['alignment'] | undefined;
+  let detFlags: ReturnType<typeof runStructureEngine>['examined']['flags'] | undefined;
   /* srv-59 — deterministic dialogue-structure engine: replays the model's
      per-sentence attribution against the chapter's structural evidence (dash/
      quote dialogue tags, conversation-window alternation, pronoun resolution)
@@ -3747,7 +3757,7 @@ export async function attributeChapterStage2(opts: {
      above, which already resolves conventions independently of this knob. */
   const conventions = conventionsFor(opts.stageCall.language);
   if (configValue<boolean>('analyzer.structure.enabled') && conventions) {
-    const { examined, paras, rosterIds } = runStructureEngine({
+    const { examined, paras, alignment, rosterIds } = runStructureEngine({
       sentences: result.sentences,
       body: opts.chapter.body,
       stage1,
@@ -3755,7 +3765,14 @@ export async function attributeChapterStage2(opts: {
       structureOptions: opts.structureOptions,
     });
     result.sentences = examined.sentences;
-    if (opts.onStages) { detSnapshot = structuredClone(examined.sentences); detReasons = examined.reasons; }
+    if (opts.onStages) {
+      detSnapshot = structuredClone(examined.sentences);
+      detReasons = examined.reasons;
+      /* #2254 — cloned here, before escalation edits `examined.flags` in place. */
+      detParas = structuredClone(paras);
+      detAlignment = structuredClone(alignment);
+      detFlags = structuredClone(examined.flags);
+    }
 
     /* Task 9b — second-pass re-query of the windows crossExamine couldn't
        resolve. 'off' disables the model re-query entirely (the deterministic
@@ -3831,6 +3848,8 @@ export async function attributeChapterStage2(opts: {
       raw: rawSnapshot,
       deterministic: detSnapshot ?? structuredClone(result.sentences),
       reasons: detReasons,
+      stage1,
+      ...(detParas ? { paras: detParas, alignment: detAlignment, flags: detFlags } : {}),
     });
   }
   return result;

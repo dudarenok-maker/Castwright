@@ -17,7 +17,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import type { Analyzer, StageCall } from '../analyzer/index.js';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
-import { attributeChapterStage2 } from './analysis.js';
+import { attributeChapterStage2, runStructureEngine } from './analysis.js';
+import { dedupeRosterByName, EMPTY_DEDUP_CONSTRAINTS } from '../analyzer/roster-dedup.js';
+import { conventionsFor } from '../analyzer/dialogue-structure/lang/index.js';
 
 const FIXTURE_PATH = resolve(__dirname, '..', '__fixtures__', 'the-coalfall-commission.ru-dash.md');
 const GOLDEN_DIR = resolve(__dirname, '..', '__fixtures__', 'structure-characterisation');
@@ -191,5 +193,99 @@ describe('attributeChapterStage2 — characterisation before the structure-engin
     expect(sentences[idx].characterId).toBe('tobias');
     expect(deterministic[idx].characterId).not.toBe('tobias');
     checkGolden('escalation-fill', recorded);
+  });
+});
+
+/* #2254 §4.2 — the four fields onStages gained. Separate from the five golden cases
+   above (those compare raw/deterministic/reasons by name and must stay untouched). */
+type FullStages = Parameters<NonNullable<Parameters<typeof attributeChapterStage2>[0]['onStages']>>[0];
+
+async function captureStages(
+  sentences: SentenceOutput[],
+  language: string,
+  escalate?: EscalationFn,
+): Promise<{ stages: FullStages; sentences: SentenceOutput[] }> {
+  let stages: FullStages | undefined;
+  const result = await attributeChapterStage2({
+    analyzer: fakeAnalyzer(sentences, escalate),
+    manuscriptId: 'm1',
+    title: 'The Coalfall Commission',
+    stage1: STAGE1,
+    chapter: { id: 1, title: 'Маяк на Холодном мысу', body: CHAPTER_BODY },
+    stageCall: { language } as StageCall,
+    onStages: (s) => { stages = s; },
+  });
+  if (!stages) throw new Error('onStages was not called');
+  return { stages, sentences: result.sentences };
+}
+
+describe('onStages exposes stage1, paras, alignment and flags (#2254)', () => {
+  const expectedRoster = dedupeRosterByName(STAGE1.characters, [], {
+    language: 'ru',
+    constraints: EMPTY_DEDUP_CONSTRAINTS,
+  }).characters;
+
+  it('stage1 is the deduplicated roster in all five inputs', async () => {
+    process.env.ATTRIBUTION_ESCALATION = 'local';
+    const fill = () => Promise.resolve({ assignments: [{ line: 13, characterId: 'tobias' }] });
+    const runs = [
+      await captureStages(mockSentences(), 'ru'),
+      await captureStages(misalignedSentences(), 'ru'),
+      await captureStages(mockSentences(), 'xx'),
+      await captureStages(mockSentences(), 'ru', fill),
+    ];
+    process.env.STRUCTURE_ENGINE = '0';
+    runs.push(await captureStages(mockSentences(), 'ru'));
+    expect(runs).toHaveLength(5);
+    for (const r of runs) expect(r.stages.stage1.characters).toEqual(expectedRoster);
+  });
+
+  it('paras, alignment and flags are present for engine on, flagOnly and escalation fill', async () => {
+    process.env.ATTRIBUTION_ESCALATION = 'local';
+    const fill = () => Promise.resolve({ assignments: [{ line: 13, characterId: 'tobias' }] });
+    for (const { stages } of [
+      await captureStages(mockSentences(), 'ru'),
+      await captureStages(misalignedSentences(), 'ru'),
+      await captureStages(mockSentences(), 'ru', fill),
+    ]) {
+      expect(stages.paras).toBeDefined();
+      expect(stages.alignment).toBeDefined();
+      expect(stages.flags).toBeDefined();
+    }
+  });
+
+  it('paras, alignment and flags are absent for knob off and no conventions', async () => {
+    process.env.STRUCTURE_ENGINE = '0';
+    const off = await captureStages(mockSentences(), 'ru');
+    delete process.env.STRUCTURE_ENGINE;
+    const none = await captureStages(mockSentences(), 'xx');
+    for (const { stages } of [off, none]) {
+      expect(stages.paras).toBeUndefined();
+      expect(stages.alignment).toBeUndefined();
+      expect(stages.flags).toBeUndefined();
+    }
+  });
+
+  it('flags equals examined.flags as crossExamine returned it', async () => {
+    const { stages } = await captureStages(mockSentences(), 'ru');
+    const conventions = conventionsFor('ru')!;
+    const direct = runStructureEngine({
+      sentences: stages.raw,
+      body: CHAPTER_BODY,
+      stage1: stages.stage1,
+      conventions,
+    });
+    expect(stages.flags).toEqual(direct.examined.flags);
+    expect(stages.flags!.length).toBeGreaterThan(0);
+  });
+
+  it('on escalation fill, flags still holds the filled line while the sentence carries the escalated id', async () => {
+    process.env.ATTRIBUTION_ESCALATION = 'local';
+    const { stages, sentences } = await captureStages(mockSentences(), 'ru', () =>
+      Promise.resolve({ assignments: [{ line: 13, characterId: 'tobias' }] }),
+    );
+    const idx = sentences.findIndex((s) => s.id === 13);
+    expect(sentences[idx].characterId).toBe('tobias');
+    expect(stages.flags!.map((f) => f.index)).toContain(idx);
   });
 });
