@@ -14,6 +14,7 @@
 - **Merged sentences stay merged.** Joining two sentences in the manuscript, or removing a sentence you turned into a chapter title, now survives a re-analysis and merging two characters, instead of quietly coming back on the next reload.
 - **Re-recording a flagged chapter now matches each voice to a reference made at the same quality.** With Auto-fix voice mismatches on, the chapter's "Re-record the flagged lines" button only compares a new take against a stored voice reference recorded at the same voice quality. Where the reference doesn't match, or predates this update, those lines stay flagged for you instead of being re-recorded against the wrong sound.
 - **If Castwright's server ever stops on a serious internal error, it now leaves a diagnostic report in your logs folder,** so the cause can be tracked down.
+- **Manuscript edits made while a book is re-analysed are no longer silently undone.** Castwright now tells you the manuscript is read-only until the analysis finishes, and refuses the change on the spot, so nothing else (a Script Review suggestion, a change-log entry, an Undo) is recorded for an edit that didn't happen. It shows you the finished result when the run ends.
 - **A failed re-record or chapter render no longer shows where your files live.** When "Re-record the flagged lines" or a chapter render hits a full disk, a locked file or a busy folder, the message now says what went wrong in plain words, without the full path to your files, and a locked file no longer gets mistaken for running out of memory.
 
 # Castwright 1.15.0

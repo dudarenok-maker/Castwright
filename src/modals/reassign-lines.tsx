@@ -19,7 +19,7 @@ import { useStore } from 'react-redux';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { IconClose } from '../lib/icons';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import type { UnlinkAliasImpactedChapter } from '../lib/api';
@@ -168,7 +168,7 @@ export function ReassignLinesModal({ source, onClose }: Props) {
   const canApply = selectedCount > 0 && targetId !== '' && targetId !== sourceCharacterId;
 
   function apply() {
-    if (refuseIfEditsLocked(store.getState, dispatch)) return;
+    if (refuseIfManuscriptEditsLocked(store.getState, dispatch)) return;
     // Re-validate each selected key against the LIVE store (m9 — drift).
     const liveKeys = new Set(sentences.map((s) => keyOf(s.chapterId, s.id)));
     const requested = [...selected];
