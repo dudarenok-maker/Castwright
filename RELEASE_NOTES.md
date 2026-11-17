@@ -5,6 +5,7 @@
 - **Renaming chapters no longer loses their audio.** If a chapter you've already made gets a new title and you analyse the book again, that chapter keeps its audio and still shows as done. Only the title changes.
 - **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
+- **Castwright now tells you when a Russian book's dialogue is run together.** If the imported text packs many lines of dialogue into one paragraph, the import screen names those chapters and suggests that a different copy or format of the book may give a better result.
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
 - **Opus books show their progress.** Reopening an Opus book now shows the chapters you've already made as done, the Library card counts them too, and a chapter that only has an earlier take left over is no longer marked finished.
