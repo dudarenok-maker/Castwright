@@ -356,6 +356,37 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
     expect(scrollSpy).toHaveBeenCalledTimes(1);
     expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-3'));
   });
+  /* #4212 — a reload rehydrates the stage to the URL's chapter before the rows
+     exist; the scroll must fire when they appear, once, not on every update. */
+  it('scrolls once when the named chapter row appears after mount, not on later list updates', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(5));
+    const view = (list: Chapter[]) => (
+      <Provider store={store}>
+        <HostedGenerationView
+          initialEntry="/books/b1/generate?chapter=5"
+          chapters={list}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>
+    );
+    const { rerender } = render(view([]));
+    expect(scrollSpy).not.toHaveBeenCalled();
+    rerender(view(chs));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
+    rerender(view(chs.map((c) => ({ ...c }))));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
   it('does not scroll to chapter 3 when a mounted ?chapter=5 is edited in place to a malformed value', () => {
     const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
     expect(scrollSpy).toHaveBeenCalledTimes(1);

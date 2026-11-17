@@ -405,17 +405,27 @@ export function GenerationView({
   );
   const [searchParams] = useSearchParams();
   const chapterNamedInUrl = parseChapterParam(searchParams.get('chapter')) != null;
+  /* #4212 — a reload rehydrates the stage straight to the URL's chapter, so
+     neither dep below changes once the chapter rows load, and the effect's
+     last run found no row. `targetRowLoaded` re-runs it when the row appears;
+     `scrolledForChapter` keeps later list updates (generation ticks) from
+     scrolling again. */
+  const targetRowLoaded = chapters.some((c) => c.id === currentChapterId);
+  const scrolledForChapter = useRef<number | null>(null);
   useEffect(() => {
+    if (!chapterNamedInUrl) scrolledForChapter.current = null;
     if (currentChapterId == null || !chapterNamedInUrl) return;
+    if (scrolledForChapter.current === currentChapterId) return;
     const el = document.getElementById(`chapter-${currentChapterId}`);
     if (!el) return;
+    scrolledForChapter.current = currentChapterId;
     /* Defer a frame so any layout shift from view-switch settles before
        the scroll fires; without this, the target row is sometimes still
        being laid out and the scroll lands a few hundred pixels short. */
     requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [currentChapterId, chapterNamedInUrl]);
+  }, [currentChapterId, chapterNamedInUrl, targetRowLoaded]);
   /* Default analyzer engine used by the subset retry below (un-exclude
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
