@@ -9,6 +9,13 @@ import { UnusableMediaError } from './errors.js';
 import { parseMobi, DrmProtectedError } from './mobi.js';
 import type { ParseWorkerRequest, ParseWorkerMessage, SerializedParseError } from './parse-in-worker.js';
 
+/* Same policy as the main thread (crash-logging.ts): a stray unhandled
+   rejection is logged and survived, not fatal. Without this Node's default
+   `throw` would end the worker and fail a parse that was going to succeed. */
+process.on('unhandledRejection', (reason) => {
+  console.error('[parse-worker] unhandledRejection (survived)', reason);
+});
+
 async function run(): Promise<ParseWorkerMessage> {
   const req = workerData as ParseWorkerRequest;
   /* workerData is structured-cloned, so the Buffer arrives as a plain

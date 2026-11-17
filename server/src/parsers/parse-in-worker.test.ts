@@ -137,6 +137,16 @@ describe('parseInWorker', () => {
       expect(exited).toBe(true);
     }, 10_000);
 
+    it('a stray unhandled rejection in the worker is logged, not fatal to the parse', async () => {
+      const buffer = fixture('sample.epub');
+      const expected = await parseEpub(buffer, { fileName: 'sample.epub', extractorVersion: 1 });
+      const parsed = await parseInWorker(
+        { format: 'epub', buffer, fileName: 'sample.epub', extractorVersion: 1 },
+        { workerUrl: workerFixture('stray-rejection-then-real-parse.mjs') },
+      );
+      expect(parsed).toStrictEqual(expected);
+    }, 30_000);
+
     describe('the per-parse scratch dir is removed whatever the outcome', () => {
       const roots: string[] = [];
       const freshRoot = (): string => {
