@@ -154,6 +154,12 @@ describe('parseInWorker', () => {
         roots.push(r);
         return r;
       };
+      /* The scratch rm runs in the background after the worker exits, so a
+         test that inspects the root awaits it through the onCleanup seam. */
+      const trackCleanup = (): { onCleanup: (p: Promise<void>) => void; done: () => Promise<void> } => {
+        let pending: Promise<void> = Promise.resolve();
+        return { onCleanup: (p) => (pending = p), done: () => pending };
+      };
       afterEach(() => {
         for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
       });
@@ -161,10 +167,12 @@ describe('parseInWorker', () => {
       it('a worker crash after writing temp files leaves nothing behind', async () => {
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
         const scratchRoot = freshRoot();
+        const cleanup = trackCleanup();
         const err = await parseInWorker(
           { format: 'epub', buffer: Buffer.alloc(1), extractorVersion: 1 },
-          { workerUrl: workerFixture('crash-with-scratch.mjs'), scratchRoot },
+          { workerUrl: workerFixture('crash-with-scratch.mjs'), scratchRoot, onCleanup: cleanup.onCleanup },
         ).catch((e) => e);
+        await cleanup.done();
         expect(err.message).toBe(EPUB_CRASH);
         /* positive control: the fixture really wrote into the scratch dir */
         expect(JSON.stringify(spy.mock.calls.flat().map(String))).toContain('boom after scratch write');
@@ -174,6 +182,7 @@ describe('parseInWorker', () => {
       it('a timed-out parse leaves nothing behind', async () => {
         vi.spyOn(console, 'error').mockImplementation(() => {});
         const scratchRoot = freshRoot();
+        const cleanup = trackCleanup();
         let wrote = false;
         const err = await parseInWorker(
           { format: 'mobi', buffer: Buffer.alloc(1), extractorVersion: 1 },
@@ -181,6 +190,7 @@ describe('parseInWorker', () => {
             workerUrl: workerFixture('hang-with-scratch.mjs'),
             scratchRoot,
             timeoutMs: 1500,
+            onCleanup: cleanup.onCleanup,
             onWorker: (w) => {
               w.once('online', () => {
                 /* hang-with-scratch writes immediately; poll until it shows */
@@ -195,6 +205,7 @@ describe('parseInWorker', () => {
             },
           },
         ).catch((e) => e);
+        await cleanup.done();
         expect(err.message).toBe(TIMEOUT);
         expect(wrote).toBe(true);
         expect(readdirSync(scratchRoot)).toEqual([]);
@@ -216,6 +227,33 @@ describe('parseInWorker', () => {
         expect(mobi.code).toBe('ENOENT');
       });
 
+      it('the timeout bounds the caller, and the scratch rm runs only after the worker has exited', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const scratchRoot = freshRoot();
+        let exited = false;
+        const cleanup = trackCleanup();
+        const t0 = Date.now();
+        const err = await parseInWorker(
+          { format: 'epub', buffer: Buffer.alloc(1), extractorVersion: 1 },
+          {
+            workerUrl: workerFixture('hang-with-threadpool-io.mjs'),
+            scratchRoot,
+            timeoutMs: 150,
+            onWorker: (w) => w.once('exit', () => (exited = true)),
+            onCleanup: cleanup.onCleanup,
+          },
+        ).catch((e) => e);
+        const elapsed = Date.now() - t0;
+        expect(err.message).toBe(TIMEOUT);
+        /* positive control: terminate() really is held up by the threadpool work */
+        expect(exited).toBe(false);
+        expect(elapsed).toBeLessThan(150 + 400);
+        expect(readdirSync(scratchRoot)).not.toEqual([]);
+        await cleanup.done();
+        expect(exited).toBe(true);
+        expect(readdirSync(scratchRoot)).toEqual([]);
+      }, 30_000);
+
       it('the real worker forwards scratchDir to both parsers (not tmpdir())', async () => {
         const workerUrl = workerFixture('real-worker-missing-scratch.mjs');
         const epub = await parseInWorker(
@@ -232,10 +270,12 @@ describe('parseInWorker', () => {
 
       it('a successful real parse leaves nothing behind either', async () => {
         const scratchRoot = freshRoot();
+        const cleanup = trackCleanup();
         await parseInWorker(
           { format: 'epub', buffer: fixture('sample.epub'), fileName: 'sample.epub', extractorVersion: 1 },
-          { scratchRoot },
+          { scratchRoot, onCleanup: cleanup.onCleanup },
         );
+        await cleanup.done();
         expect(readdirSync(scratchRoot)).toEqual([]);
         expect(existsSync(scratchRoot)).toBe(true);
       }, 30_000);

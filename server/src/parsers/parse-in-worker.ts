@@ -53,6 +53,9 @@ export interface ParseInWorkerOptions {
   scratchRoot?: string;
   /** Test seam: receives the spawned worker. */
   onWorker?: (worker: Worker) => void;
+  /** Test seam: receives the background promise that settles once the worker
+      has exited and the scratch dir has been removed (never rejects). */
+  onCleanup?: (done: Promise<void>) => void;
 }
 
 /* Bounds how long a hung worker can stall a parse. Precedent:
@@ -122,26 +125,26 @@ export async function parseInWorker(
 
 /** Same as parseInWorker but also reports the worker's threadId (tests use it
     to prove the parse left the main thread). The main thread owns a per-parse
-    scratch dir and removes it once the worker is stopped, on every outcome:
-    a worker that dies or is terminated never runs the parsers' own `finally`
-    cleanup, so whatever they wrote there would otherwise outlive the parse. */
+    scratch dir and removes it, in the background, once the worker has exited,
+    on every outcome: a worker that dies or is terminated never runs the
+    parsers' own `finally` cleanup, so whatever they wrote there would
+    otherwise outlive the parse. The caller is NOT held up by that removal. */
 export async function parseInWorkerWithThread(
   request: ParseWorkerRequest,
   opts: ParseInWorkerOptions = {},
 ): Promise<{ parsed: ParsedManuscript; threadId: number }> {
   const scratchDir = await mkdtemp(join(opts.scratchRoot ?? tmpdir(), 'parse-scratch-'));
-  try {
-    return await spawnParseWorker({ ...request, scratchDir }, opts);
-  } finally {
-    await rm(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(
-      (err) => console.error('[parse-worker] scratch cleanup failed', err),
+  const removeScratch = (): Promise<void> =>
+    rm(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch((err) =>
+      console.error('[parse-worker] scratch cleanup failed', err),
     );
-  }
+  return spawnParseWorker({ ...request, scratchDir }, opts, removeScratch);
 }
 
 function spawnParseWorker(
   request: ParseWorkerRequest,
   opts: ParseInWorkerOptions,
+  removeScratch: () => Promise<void>,
 ): Promise<{ parsed: ParsedManuscript; threadId: number }> {
   const resolved = resolveWorker();
   const url = opts.workerUrl ?? resolved.url;
@@ -149,15 +152,27 @@ function spawnParseWorker(
   const { format } = request;
   return new Promise((resolve, reject) => {
     let settled = false;
-    const worker = new Worker(url, { workerData: request, execArgv: resolved.execArgv });
+    let worker: Worker;
+    try {
+      worker = new Worker(url, { workerData: request, execArgv: resolved.execArgv });
+    } catch (err) {
+      /* No worker exists, so nothing can hold the scratch dir. */
+      opts.onCleanup?.(removeScratch());
+      throw err;
+    }
     opts.onWorker?.(worker);
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      /* Settle only once the thread is gone, so the caller's scratch cleanup
-         never races a worker that still holds files open. */
-      void worker.terminate().then(fn, fn);
+      /* The caller is released at once: terminate() resolves only after the
+         worker's in-flight threadpool I/O finishes, which must not push the
+         caller past its deadline. The scratch dir is removed in the
+         background, strictly after the thread is gone (it may still hold
+         files open until then); removeScratch never rejects. */
+      const done = worker.terminate().then(removeScratch, removeScratch);
+      opts.onCleanup?.(done);
+      fn();
     };
     const timer = setTimeout(() => {
       settle(() => {
