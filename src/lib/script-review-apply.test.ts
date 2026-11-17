@@ -92,6 +92,45 @@ describe('planApply — shared no-drift vector (server review-apply-core)', () =
   }
 });
 
+const ANCHOR_VECTORS_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'server',
+  'src',
+  'analyzer',
+  'attribution-eval',
+  '__fixtures__',
+  'anchor-offset-vectors.json',
+);
+
+interface AnchorVector {
+  name: string;
+  text: string;
+  anchor: string;
+  expectedTail: string | null;
+  forms?: { text: 'NFC' | 'NFD'; anchor: 'NFC' | 'NFD' };
+}
+
+describe('resolveAnchorOffset — shared anchor vectors (#4226, server review-apply-core)', () => {
+  const vectors: AnchorVector[] = JSON.parse(readFileSync(ANCHOR_VECTORS_PATH, 'utf8'));
+  const other = (f: 'NFC' | 'NFD'): 'NFC' | 'NFD' => (f === 'NFC' ? 'NFD' : 'NFC');
+
+  for (const vector of vectors) {
+    it(vector.name, () => {
+      if (vector.forms) {
+        expect(vector.text.normalize(vector.forms.text)).toBe(vector.text);
+        expect(vector.text.normalize(other(vector.forms.text))).not.toBe(vector.text);
+        expect(vector.anchor.normalize(vector.forms.anchor)).toBe(vector.anchor);
+        expect(vector.anchor.normalize(other(vector.forms.anchor))).not.toBe(vector.anchor);
+      }
+      const off = resolveAnchorOffset(vector.text, vector.anchor);
+      if (vector.expectedTail === null) expect(off).toBeNull();
+      else expect(vector.text.slice(off!)).toBe(vector.expectedTail);
+    });
+  }
+});
+
 describe('planApply', () => {
   const live = [
     { id: 5, chapterId: 3, text: 'The hall was dark.', characterId: 'narrator' },
