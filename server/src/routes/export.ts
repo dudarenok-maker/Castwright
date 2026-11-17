@@ -40,7 +40,13 @@ import { buildM4b } from '../export/build-m4b.js';
 import { buildMp3Folder } from '../export/build-mp3-folder.js';
 import { buildCodecZip } from '../export/build-codec-zip.js';
 import { buildCaptions } from '../export/build-captions.js';
-import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
+import {
+  commitSyncStage,
+  discardSyncStage,
+  stageToSyncFolder,
+  writeFolderToSyncFolder,
+  type SyncStage,
+} from '../export/sync-folder.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
@@ -810,6 +816,7 @@ async function runExportJob(
         bookExportsDir(bookDir),
         `.${sanitizeIdSegment(job.filename)}.partial-${job.id}`,
       );
+      let staged: SyncStage | null = null;
       try {
         const result =
           job.format === 'mp3-zip'
@@ -847,13 +854,26 @@ async function runExportJob(
         await bailIfCancelled(signal, { path: buildPath });
         if (job.destination === 'sync-folder' && syncFolder) {
           const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
-          /* Copies from the job-private build, not the flat artifact: the flat
-             name still holds the previous export until the commit rename. */
-          const synced = await writeToSyncFolder(buildPath, authoredSyncDir, job.filename);
+          /* Stage a job-private `.tmp-<jobId>` copy next to the flat sync name
+             (copied from the job-private build: the flat local name still holds
+             the previous export). The previous sync copy at the flat name is
+             untouched until the commit rename below (#4228). */
+          const stage = await stageToSyncFolder(buildPath, authoredSyncDir, job.filename, job.id);
+          staged = stage;
+          if (signal.aborted) {
+            /* Cancelled before the commit: drop only this job's own temp and
+               the private build; the earlier sync copy stays byte-identical. */
+            await discardSyncStage(stage);
+            staged = null;
+            await bailIfCancelled(signal, { path: buildPath });
+          }
+          const synced = await commitSyncStage(stage, authoredSyncDir);
+          staged = null;
           job.syncPath = synced.syncPath;
-          /* The sync copy is renamed over the flat `<syncFolder>/<author>/<filename>`
-             name, where the previous completed export's copy lives, so it is left
-             in place (#4228). Only the private build is dropped. */
+          /* A cancel after the sync commit leaves the synced copy and syncPath
+             (it already replaced the previous copy and cannot be restored).
+             Only the private build is dropped, so the local rename below is
+             skipped and the previous LOCAL export stays intact. */
           await bailIfCancelled(signal, { path: buildPath });
         }
         /* Commit step: the LAST thing that touches the flat name. Every cancel
@@ -871,6 +891,7 @@ async function runExportJob(
            so a `<bookDir>/exports/` listing never shows half-baked
            artifacts. Best-effort — if the rename above already moved it
            there's nothing to unlink. */
+        if (staged) await discardSyncStage(staged);
         await unlink(buildPath).catch(() => {});
         throw e;
       }

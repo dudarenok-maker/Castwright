@@ -88,10 +88,17 @@ vi.mock('../export/sync-folder.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../export/sync-folder.js')>();
   return {
     ...actual,
-    /* The copy has LANDED when the hold is entered: the cancel arrives after it. */
-    writeToSyncFolder: vi.fn(async (...a: Parameters<typeof actual.writeToSyncFolder>) => {
-      const r = await actual.writeToSyncFolder(...a);
+    /* The stage has LANDED (tmp present, final untouched) when `syncCopy` is
+       entered: the cancel arrives before the commit. */
+    stageToSyncFolder: vi.fn(async (...a: Parameters<typeof actual.stageToSyncFolder>) => {
+      const r = await actual.stageToSyncFolder(...a);
       await seam.maybeHold('syncCopy');
+      return r;
+    }),
+    /* `syncCommit` is entered AFTER the real commit rename landed. */
+    commitSyncStage: vi.fn(async (...a: Parameters<typeof actual.commitSyncStage>) => {
+      const r = await actual.commitSyncStage(...a);
+      await seam.maybeHold('syncCommit');
       return r;
     }),
     writeFolderToSyncFolder: vi.fn(async (...a: Parameters<typeof actual.writeFolderToSyncFolder>) => {
@@ -225,7 +232,7 @@ describe('cancel seams (#4223)', () => {
     expect(dl.status).toBe(200);
   });
 
-  it('a cancel during a re-export\'s sync-folder copy keeps the earlier sync copy and the earlier export\'s syncPath', async () => {
+  it('a cancel during a re-export\'s sync-folder copy leaves the earlier sync copy byte-identical and the earlier export intact (#4228)', async () => {
     const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-sync-'));
     try {
       await writeUserSettings({ exportSyncFolder: syncRoot });
@@ -233,11 +240,17 @@ describe('cancel seams (#4223)', () => {
       await awaitInFlightJobs();
       const firstDone = (await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body;
       expect(firstDone.status).toBe('done');
-      expect(existsSync(firstDone.syncPath)).toBe(true);
+      const firstSyncBytes = readFileSync(firstDone.syncPath);
+      expect(firstSyncBytes.toString()).toBe('PK stub-zip-1');
+      const flatLocal = join(exportsDir(), first.filename);
+      const firstLocalBytes = readFileSync(flatLocal);
 
       const copy = seam.arm('syncCopy');
       const second = await post('mp3-zip', 'sync-folder');
       await copy.entered;
+      /* The stage landed: a job-private tmp sits beside the untouched flat copy. */
+      expect(ls(join(syncRoot, AUTHOR)).some((n) => n.includes('.tmp-'))).toBe(true);
+      expect(readFileSync(firstDone.syncPath).equals(firstSyncBytes)).toBe(true);
       const del = await request(app).delete(`/api/books/${bookId}/exports/${second.id}`);
       expect(del.status).toBe(204);
       copy.release();
@@ -245,10 +258,48 @@ describe('cancel seams (#4223)', () => {
 
       const mem = (await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body;
       expect(mem.status).toBe('cancelled');
-      expect(existsSync(firstDone.syncPath)).toBe(true);
-      expect(ls(join(syncRoot, AUTHOR)).filter((n) => !n.includes('.tmp-'))).toEqual([first.filename]);
+      expect(mem.syncPath ?? null).toBeNull();
+      expect(readFileSync(firstDone.syncPath).equals(firstSyncBytes)).toBe(true);
+      expect(ls(join(syncRoot, AUTHOR))).toEqual([first.filename]);
       const firstAfter = (await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body;
+      expect(firstAfter.status).toBe('done');
       expect(existsSync(firstAfter.syncPath)).toBe(true);
+      expect(readFileSync(flatLocal).equals(firstLocalBytes)).toBe(true);
+      expect(ls(exportsDir()).filter((n) => n.includes('.partial-'))).toEqual([]);
+    } finally {
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a cancel after the sync commit leaves the new synced copy and syncPath, and skips the local rename (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-sync-commit-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const first = await post('mp3-zip', 'sync-folder');
+      await awaitInFlightJobs();
+      const flatLocal = join(exportsDir(), first.filename);
+      const firstLocalBytes = readFileSync(flatLocal);
+      expect(firstLocalBytes.toString()).toBe('PK stub-zip-1');
+
+      const commit = seam.arm('syncCommit');
+      const second = await post('mp3-zip', 'sync-folder');
+      await commit.entered;
+      const del = await request(app).delete(`/api/books/${bookId}/exports/${second.id}`);
+      expect(del.status).toBe(204);
+      commit.release();
+      await awaitInFlightJobs();
+
+      const syncFile = join(syncRoot, AUTHOR, first.filename);
+      expect(readFileSync(syncFile).toString()).toBe('PK stub-zip-2');
+      expect(ls(join(syncRoot, AUTHOR))).toEqual([first.filename]);
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body;
+      expect(mem.status).toBe('cancelled');
+      expect(manifestOf(second.id).status).toBe('cancelled');
+      expect(manifestOf(second.id).syncPath).toBe(syncFile);
+      expect(readFileSync(flatLocal).equals(firstLocalBytes)).toBe(true);
+      expect(ls(exportsDir()).filter((n) => n.includes('.partial-'))).toEqual([]);
     } finally {
       await awaitInFlightJobs();
       rmSync(syncRoot, { recursive: true, force: true });
