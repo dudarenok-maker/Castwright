@@ -585,8 +585,8 @@ export function classifyBatteryLocation(commandLines, root, knownRoots = []) {
     if (typeof line !== 'string') continue;
     const text = normalizeSeparators(line)
       .toLowerCase()
-      .replace(/(^|[\s"'=])\/(?:mnt\/)?([a-z])\//g, '$1$2:/');
-    for (const m of text.matchAll(/[a-z]:\/[^\s"'`<>|*?,;]*/g)) {
+      .replace(/(^|[\s\x22\x27=])\/(?:mnt\/)?([a-z])\//g, '$1$2:/');
+    for (const m of text.matchAll(/[a-z]:\/[^\s\x22\x27\x60<>|*?,;]*/g)) {
       const token = m[0].replace(/\/+$/, '');
       const owner = owners.find((o) => token === o || token.startsWith(o + '/'));
       if (owner === rootN) {
