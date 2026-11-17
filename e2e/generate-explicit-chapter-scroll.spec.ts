@@ -47,7 +47,10 @@ test.describe('Generate view chapter scroll (#4199)', () => {
     await page.reload();
     /* No polling assertion here: polling changes the load timing and let a
        reload that never scrolled pass. Wait a fixed settle period, then read
-       the page once. */
+       the page once. This is still a probabilistic check: it can pass on
+       unfixed code when the chapter list arrives before the lazy Generate view
+       mounts. The reliable lock is the Vitest case "scrolls once when the named
+       chapter row appears after mount" in src/views/generation.test.tsx. */
     await page.waitForTimeout(RELOAD_SETTLE_MS);
     const { scrollY, top, height, viewport } = await page.evaluate(() => {
       const r = document.getElementById('chapter-3')!.getBoundingClientRect();
