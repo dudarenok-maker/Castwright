@@ -884,8 +884,10 @@ describe('applySentenceRemap (#4227)', () => {
     extra(2, 3, 'narr', 'Three two.', 6),
   ];
 
-  it('R1 merge: rebuilds result.sentences (red if a remap field is ignored)', () => {
-    const sentences = input();
+  it('R1 merge: rebuilds result.sentences (red if a remap field is ignored or the lookup key drops the chapter id)', () => {
+    // file order deliberately not chapter order, so a key on the sentence id
+    // alone pairs the wrong sentences
+    const sentences = input().reverse();
     const result = applyMerge(chapters(), hintsFor(), sentences, { chapterIds: [1, 2] });
     expect(applySentenceRemap(sentences, result.remap)).toEqual(result.sentences);
     // not vacuous: the merge really renumbered (no chapter 3 left)
