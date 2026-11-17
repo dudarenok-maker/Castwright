@@ -659,8 +659,8 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Qwen batch size',
     help: 'Hard width cap: max sentences packed into one batched Qwen forward. Set to 1 to disable batching entirely (every Qwen sentence becomes its own call). Only affects Qwen — Coqui/Kokoro/Gemini always synth one-per-call.',
     type: 'integer', min: 1,
-    default: 32, // ← QWEN_BATCH_SIZE default in tts/synthesise-chapter.ts (line 41)
-    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+    default: 32, // shipped default; read per render by tts/synthesise-chapter.ts
+    apply: 'live', risk: 'medium', // read per render (each chapter start), not at import
   },
   {
     key: 'tts.batch.tokenBudget',
@@ -669,8 +669,8 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Qwen batch token budget',
     help: 'Variable-width packing budget (normalised chars): keep adding sentences to a batch while (count+1) × maxLen ≤ budget. Short/dialogue batches pack wider; long batches stay narrow. Set to 0 for exact fixed-width slicing (QWEN_BATCH_SIZE only, kill-switch).',
     type: 'integer', min: 0,
-    default: 3600, // ← DEFAULT_QWEN_BATCH_TOKEN_BUDGET in tts/synthesise-chapter.ts (line 72)
-    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+    default: 3600, // shipped default; read per render by tts/synthesise-chapter.ts
+    apply: 'live', risk: 'medium', // read per render (each chapter start), not at import
   },
   {
     key: 'tts.batch.size17b',
@@ -679,8 +679,8 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Qwen 1.7B batch size',
     help: 'Hard width cap for the 1.7B Quality-tier specifically. Defaults to the same 32 as the 0.6B tier: once the 0.6B base is no longer co-resident (#1162 readiness-gate fix evicts the unused tier), a 1.7B render fits 32/3600 on an 8 GB card (measured peak ~5.7 GB, ~1.7 GB margin under the recycle line) at ~2× real-time. Lower this (and the budget below) on a smaller card if you hit a recycle storm. Only affects 1.7B groups.',
     type: 'integer', min: 1,
-    default: 32, // ← QWEN_BATCH_SIZE_17B default in tts/synthesise-chapter.ts (matches the 0.6B tier post-#1162)
-    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+    default: 32, // shipped default (matches the 0.6B tier post-#1162); read per render by tts/synthesise-chapter.ts
+    apply: 'live', risk: 'medium', // read per render (each chapter start), not at import
   },
   {
     key: 'tts.batch.tokenBudget17b',
@@ -689,8 +689,8 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Qwen 1.7B batch token budget',
     help: 'Variable-width packing budget (normalised chars) for the 1.7B Quality tier only. Defaults to the same 3600 as the 0.6B tier (safe on an 8 GB card post-#1162, since the unused 0.6B base no longer co-resides). Lower it on a smaller card if a 1.7B render trips the VRAM recycle. Set to 0 for exact fixed-width slicing on the 1.7B tier (tts.batch.size17b only).',
     type: 'integer', min: 0,
-    default: 3600, // ← DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B in tts/synthesise-chapter.ts
-    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+    default: 3600, // shipped default; read per render by tts/synthesise-chapter.ts
+    apply: 'live', risk: 'medium', // read per render (each chapter start), not at import
   },
   {
     key: 'tts.batch.bucket',
@@ -699,8 +699,8 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Qwen batch length bucketing',
     help: 'Sort batchable Qwen groups by normalised text length before slicing into batches, so similar-length sentences share a batch (less padding waste). Output is byte-identical regardless of batch composition. Set to false to revert to index order.',
     type: 'boolean',
-    default: true, // ← QWEN_BATCH_BUCKET default (env not '0'/'false') in tts/synthesise-chapter.ts (line 53-54)
-    apply: 'restart-server', risk: 'medium', // read once at Node module-load (module-level constant), not sidecar
+    default: true, // shipped default; read per render by tts/synthesise-chapter.ts
+    apply: 'live', risk: 'medium', // read per render (each chapter start), not at import
   },
   {
     key: 'tts.gen.workers',

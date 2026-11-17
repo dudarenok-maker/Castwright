@@ -97,14 +97,15 @@ import { join } from 'node:path';
 const DEFAULT_SENTENCE_CONCURRENCY = 1;
 
 /* How many Qwen sentences to pack into one batched `generate_voice_clone`
-   call (plan 112 — true batching). Read once at module load; `=1` is an
+   call (plan 112 — true batching). Knob `tts.batch.size`, read per render in
+   `synthesiseChapter`'s parameter defaults (#4238 — never at import, when the
+   user-settings cache is still cold and only the shipped default resolves); `=1` is an
    instant per-call kill-switch (every Qwen sentence becomes a single synth,
    byte-identical to pre-112). When `QWEN_BATCH_TOKEN_BUDGET` is on (the default
    now), this is the HARD width cap the token budget clamps to. Default 32 —
    adopted 2026-05-30 after the plan-136 live A/B on the 8 GB box (cap 32 /
    budget 3600); lower it (or the budget) if a smaller card OOMs. Only Qwen
    batches; Coqui/Kokoro/Gemini sentences always synth one-per-call. */
-const QWEN_BATCH_SIZE = configValue<number>('tts.batch.size');
 
 /* Length-bucketing (plan 128). A batched Qwen forward decodes for as many
    steps as the LONGEST item in the batch, padding the shorter ones; so a
@@ -114,7 +115,6 @@ const QWEN_BATCH_SIZE = configValue<number>('tts.batch.size');
    audio-produced-per-step. Output-preserving (per-sentence prompts + index
    scatter-back), so audio is byte-identical regardless of batch composition.
    Default ON; `QWEN_BATCH_BUCKET=0` (or `false`) reverts to index-order. */
-const QWEN_BATCH_BUCKET = configValue<boolean>('tts.batch.bucket');
 
 /* Token-budget packing (plan 136). A batched Qwen forward decodes to its
    LONGEST item and pads the rest, so its VRAM/compute proxy is
@@ -131,20 +131,6 @@ const QWEN_BATCH_BUCKET = configValue<boolean>('tts.batch.bucket');
    (3600, adopted 2026-05-30 after the plan-136 live A/B); an explicit `0` is
    the fixed-width kill-switch + back-compat path. Output-preserving (per-item
    prompts + index scatter-back), same as plan 128. */
-export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET = 3600;
-
-/** Resolve `QWEN_BATCH_TOKEN_BUDGET` from a raw env string. Unset / empty →
-    the shipped default (token-budget packing ON); an explicit `0` (or a
-    non-positive / non-numeric value) → `0` = OFF, the fixed-width kill-switch.
-    Exported for unit coverage so the unset-vs-0 parsing contract stays pinned.
-    The module-level constant routes through the registry so env vars AND app
-    overrides take effect. */
-export function resolveQwenTokenBudget(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === '') return DEFAULT_QWEN_BATCH_TOKEN_BUDGET;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-}
-const QWEN_BATCH_TOKEN_BUDGET = configValue<number>('tts.batch.tokenBudget');
 
 /* 1.7B tier-aware batch width. The packer applies these caps to the 1.7B bucket
    ONLY; 0.6B batches keep the defaults above (a mixed-tier chapter packs each
@@ -154,10 +140,6 @@ const QWEN_BATCH_TOKEN_BUDGET = configValue<number>('tts.batch.tokenBudget');
    (measured peak ~5.7 GB, ~1.7 GB margin under the recycle line) at ~2× RT.
    These knobs remain the small-card safety valve — lower them if a 1.7B render
    trips the VRAM recycle on a < 8 GB card. */
-export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B = 3600;
-const QWEN_BATCH_SIZE_17B = configValue<number>('tts.batch.size17b');
-const QWEN_BATCH_TOKEN_BUDGET_17B = configValue<number>('tts.batch.tokenBudget17b');
-
 /* Defensive per-call ceiling (plan 148) — defined in ./synth-call-timeout.ts
    (a leaf, so tts/gemini.ts can import it without an import cycle, #3724). */
 import { SYNTH_CALL_TIMEOUT_MS } from './synth-call-timeout.js';
@@ -776,36 +758,38 @@ export interface SynthesiseChapterOpts {
       unbounded wait there. */
   callTimeoutMs?: number;
   /** How many Qwen sentences to pack per batched synth call (plan 112).
-      Defaults to the module-level `QWEN_BATCH_SIZE` (env `QWEN_BATCH_SIZE`,
+      Defaults to the `tts.batch.size` knob, read per render (env `QWEN_BATCH_SIZE`,
       default 32). `=1` disables batching (every Qwen sentence is its own
       call). Mainly an explicit value for tests, which exercise packing /
       splitting without touching process env. Clamped to >= 1. Only Qwen
       sentences are ever batched — see the dispatch partition below. */
   qwenBatchSize?: number;
-  /** Hard width cap for the 1.7B Quality tier specifically (8 GB OOM guard).
-      The 1.7B-Base is ~3.4 GB resident, so a 1.7B batch as wide as the 0.6B
-      default OOMs an 8 GB card mid-forward → recycle storm. The packer applies
-      this to the 1.7B bucket only; 0.6B groups keep `qwenBatchSize`. Defaults to
-      the module-level `QWEN_BATCH_SIZE_17B` (env `QWEN_BATCH_SIZE_17B`, default
-      8). Clamped to >= 1. */
+  /** Hard width cap for the 1.7B Quality tier specifically (small-card OOM guard).
+      The 1.7B-Base is ~3.4 GB resident; since #1162 evicts the unused 0.6B base
+      first, the default 32 fits an 8 GB card, but a batch that wide can still OOM
+      a card smaller than that mid-forward → recycle storm, so lower it there. The
+      packer applies this to the 1.7B bucket only; 0.6B groups keep `qwenBatchSize`.
+      Defaults to the `tts.batch.size17b` knob, read per render (env
+      `QWEN_BATCH_SIZE_17B`, default 32). Clamped to >= 1. */
   qwenBatchSize17b?: number;
-  /** Token-budget for the 1.7B tier only (env `QWEN_BATCH_TOKEN_BUDGET_17B`,
-      default 1200 — far below the 0.6B `qwenBatchTokenBudget`). Keeps 1.7B
-      batches within an 8 GB card; `0` = exact fixed-width slicing on the 1.7B
+  /** Token-budget for the 1.7B tier only. Defaults to the
+      `tts.batch.tokenBudget17b` knob, read per render (env
+      `QWEN_BATCH_TOKEN_BUDGET_17B`, default 3600 — the same as the 0.6B
+      `qwenBatchTokenBudget`). Lower it to keep 1.7B batches within a small card; `0` = exact fixed-width slicing on the 1.7B
       tier (`qwenBatchSize17b` only). 0.6B groups keep `qwenBatchTokenBudget`. */
   qwenBatchTokenBudget17b?: number;
   /** Length-bucketing (plan 128): sort batchable Qwen groups by their
       normalised text length before slicing into batches, so similar-length
       sentences share a batch and the batched forward decodes to a tight
-      max-length (less padding waste). Defaults to `QWEN_BATCH_BUCKET` (env
-      `QWEN_BATCH_BUCKET`, default ON). Output-preserving — set `false` for the
+      max-length (less padding waste). Defaults to the `tts.batch.bucket`
+      knob, read per render (env `QWEN_BATCH_BUCKET`, default ON). Output-preserving — set `false` for the
       index-order baseline (tests assert byte-identity ON vs OFF). */
   qwenBatchBucket?: boolean;
   /** Token-budget packing (plan 136). The soft VRAM/compute budget in
       normalised-text chars; the packer fills each batch while
       `(count+1) × candidateMaxLen <= qwenBatchTokenBudget` AND
       `count+1 <= qwenBatchSize` (the hard width cap). Defaults to the
-      module-level `QWEN_BATCH_TOKEN_BUDGET` (env, default 3600). An explicit
+      `tts.batch.tokenBudget` knob, read per render (env, default 3600). An explicit
       `0` falls back to EXACT fixed-width slicing — the kill-switch and the
       back-compat contract. Relies on `qwenBatchBucket` (the ascending length
       sort) being on, which it is by default; with bucketing off the packer
@@ -1363,11 +1347,11 @@ export async function synthesiseChapter(
     sentenceConcurrency = DEFAULT_SENTENCE_CONCURRENCY,
     groupHeartbeatMs = 10_000,
     callTimeoutMs = SYNTH_CALL_TIMEOUT_MS,
-    qwenBatchSize = QWEN_BATCH_SIZE,
-    qwenBatchSize17b = QWEN_BATCH_SIZE_17B,
-    qwenBatchBucket = QWEN_BATCH_BUCKET,
-    qwenBatchTokenBudget = QWEN_BATCH_TOKEN_BUDGET,
-    qwenBatchTokenBudget17b = QWEN_BATCH_TOKEN_BUDGET_17B,
+    qwenBatchSize = configValue<number>('tts.batch.size'),
+    qwenBatchSize17b = configValue<number>('tts.batch.size17b'),
+    qwenBatchBucket = configValue<boolean>('tts.batch.bucket'),
+    qwenBatchTokenBudget = configValue<number>('tts.batch.tokenBudget'),
+    qwenBatchTokenBudget17b = configValue<number>('tts.batch.tokenBudget17b'),
     maxSegmentRerecords = 0,
     segmentQaThresholds,
     onSegmentRerecord,
