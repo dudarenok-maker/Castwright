@@ -741,14 +741,16 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and twenty-five call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
-  `chapters-restructure` ×6, `cast-design` ×6
+  one hundred and thirty-one call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  `chapters-restructure` ×6, `cast-design` ×8
   (both arms of its defensive outer plus the job's two terminal `error` events
-  and its per-item failure reason, plus the persona fallback's per-item reason, #4236),
+  and its per-item failure reason, plus the persona fallback's per-item reason and the
+  shared-GPU pre-pass's per-item reason, #4236; its sidecar-down terminal message is
+  curated too, and an fs error is classified ahead of the sidecar-down scan),
   `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
   handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×3,
   `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
-  `voice-override-linked` ×2, `voice-sample`, `script-review` ×5 (its three
+  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites keep their path on purpose), `script-review` ×5 (its three
   start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
