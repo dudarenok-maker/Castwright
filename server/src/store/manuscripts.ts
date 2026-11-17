@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findBookByManuscriptId, type BookStateJson } from '../workspace/scan.js';
 import { parseManuscript } from '../parsers/index.js';
+import { extractorVersionOf } from '../parsers/version.js';
 import { hintsFromPersisted, readManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
 import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
 
@@ -179,6 +180,8 @@ export async function buildManuscriptRecord(
   const parsed = await parseManuscript({
     buffer,
     fileName: state.manuscriptFile,
+    /* #4217: implicit re-read: unstamped = version 1, byte-stable. */
+    extractorVersion: extractorVersionOf(state),
   }).catch(() => null);
   if (!parsed) return undefined;
 

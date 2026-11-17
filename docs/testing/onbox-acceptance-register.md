@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**82 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**83 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
+> **Last change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
 >
 > **Previous change: 2026-11-13 (#4163), 80 → 81.** Row **A126** (a cold model load learns its own weights, a warm op learns nothing: the per-op VRAM footprint fix) added. Group A 45 → 46. `next-id` bumped A125 → A127 in the same change; A125 is reserved for #4102's row. Row is owed; not run here.
 >
@@ -1948,7 +1950,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A127 -->
+<!-- next-id: A128 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6668,6 +6670,17 @@ The automated tests prove the admission decisions with a fake probe and fake eng
 - **Back-to-back designs keep VoiceDesign.** Design two voices in a row on the tight card with the base-voices-only "Design full cast" scope (the Both scope mints each character's variants between designs, and a mint unloads VoiceDesign, so a second `Loading Qwen VoiceDesign` line is expected there). The log has no second `Loading Qwen VoiceDesign` line and no `Qwen VoiceDesign unloaded` line between the designs; the second design starts within seconds (no wait for the idle watchdog) and completes with no CUDA out-of-memory and no 503 line for `POST /qwen/design-voice` in the `logs/tts.log` count. Measure "within seconds" from the `qwen voice design: ... load_ms=... total_ms=...` line in `logs/tts.err.log`: it is timestamped when the design ends and `total_ms` excludes the admission wait, so the design's start is that line's timestamp minus its `total_ms`; subtract the first design's line timestamp to get the gap between the two, which is the admission wait plus any idle time you left. Also record `load_ms`, near 0 when VoiceDesign stayed warm. `Qwen VoiceDesign freed after >120s idle (watchdog).` after a quiet pause is the idle watchdog and is fine; a plain `Qwen VoiceDesign unloaded (Base stays resident).` line is any VoiceDesign free, including an admission eviction, so it does not prove the watchdog. Record the `nvidia-smi` peak during a design. Known risk, not a failure of this row: the allocator cache a design leaves behind can make a design that follows within the 30 s per-card reclaim cooldown get a 503 and wait up to 30 s; a wait that ends at `freed after >120s idle (watchdog)` is the idle-watchdog band instead (plan 264). To tell them apart, record `GET /health` `vram_reserved_mb` between the two designs.
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4. *Criteria:* this row. Clears when each bullet is recorded with the log line or number it produced.
+
+### A127 · An existing book keeps its old text and a new import keeps its paragraphs (extractor pin) ([#4217](https://github.com/dudarenok-maker/Castwright/issues/4217)) · **the operator's real EPUB corpus and live library (no GPU)**
+
+The automated tests prove version 1's bytes on 12 repo EPUBs plus synthetic books, and version 2's behaviour on synthetic HTML. PR #4241's review showed why that is not enough: its synthetic fixtures were green while a differential over **640 real EPUBs** found 6 files (4 books, one of them fully produced in a live library) whose text had silently changed. Only that corpus and a real library can show these, and both live on the operator's box, not in this repo: version 1 is byte-identical to `main` on real books; version 2's breaks land where they should, with no empty paragraphs; an existing book really keeps its offsets after the upgrade. No GPU is needed. The observable surface is `state.json`'s `manuscriptExtractorVersion` (absent on old books, `2` on new ones and on any book explicitly re-parsed or replaced), `parseManuscript({ buffer, fileName, extractorVersion })` and the book's Manuscript view. No bullet re-parses a live book, because a re-parse clears its cast and audio.
+
+- **Version 1 is `main`, byte for byte, on the corpus.** Run a scratch differential outside the repo over the same 640-file corpus PR #4241 used (63 + 577 real EPUBs, read in place, sha256-deduplicated within each set), plus any `.mobi`/`.azw3` in the library. For each file, compare `JSON.stringify(await parseManuscript({ buffer, fileName, extractorVersion: 1 }))` on this branch against `JSON.stringify(await parseManuscript({ buffer, fileName }))` on `main` at the branch's merge base, with errors compared by message. Observe: **0 files differ**. Record the identical / differ / error-on-both counts.
+- **What version 2 changes.** Run the same files on this branch at version 1 and at version 2. Record how many files differ, and how many change chapter count. For the 5 files whose paragraph count rises most, open one changed chapter at each version. Observe: no chapter body contains `\n\n\n` or a paragraph that is only whitespace (`/\n\n\s*\n\n/`). Record that count; it must be 0. Then count the mid-sentence breaks version 2 added: a new break where the paragraph on the left has no terminal punctuation (`.`, `!`, `?`, a closing quote or bracket, `…` or `:`) and the paragraph on the right starts with a lowercase letter. That is a block closer used for an inline element, for example `<div class="dropcap">T</div>he night was cold.`, which gives `T\n\nhe night was cold.` at version 2. Record that count and name every file where it is non-zero; open each hit and say whether the break is wrong. For the 3 corpus EPUBs whose manifest `href`s contain `&amp;` (PR #4241 review pass 3), record whether their version-2 output differs from version 1. They are read by epub2, so no difference is expected from the entity decode.
+- **An existing book keeps its text after the upgrade.** Before switching the server to this branch, pick one cast-confirmed EPUB book in the live library whose source bullet 2 shows changes at version 2. Note its `state.json` (no `manuscriptExtractorVersion` key), and the first and last sentence and speaker of one changed chapter in the Manuscript view. Restart the server on this branch and open the book. Observe: the same sentences, the same speakers, and still no `manuscriptExtractorVersion` key in `state.json`. Record the chapter and the sentences.
+- **A new import gets version 2.** Import that same EPUB again under a new title (for example append ` (v2 check)`). Observe: its `state.json` has `"manuscriptExtractorVersion": 2`, and the chapter from bullet 3 shows the new paragraph breaks. Record the paragraph counts of that chapter in both books, then delete the test book.
+
+*Needs:* the operator's real EPUB corpus (the 640 files of PR #4241, plus any `.mobi`/`.azw3`) and a live library with a cast-confirmed EPUB book; no GPU. *Criteria:* this row. Clears when each bullet's counts, key and sentences are recorded.
 
 ## Group B — local Ollama analyzer only
 

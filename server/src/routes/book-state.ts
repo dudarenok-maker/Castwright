@@ -141,7 +141,11 @@ import { buildCastResolver } from '../store/cast-resolve.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { parseManuscript } from '../parsers/index.js';
-import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
+import {
+  CHAPTER_TITLE_PARSER_VERSION,
+  MANUSCRIPT_EXTRACTOR_VERSION,
+  extractorVersionOf,
+} from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { DEFAULT_NARRATOR_CREDIT } from '../export/narrator-credit.js';
@@ -344,11 +348,14 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
       ? await parseManuscript({
           text: buffer.toString('utf8'),
           fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+          extractorVersion: extractorVersionOf(state),
         })
       : await parseManuscript({
           buffer,
           fileName: state.manuscriptFile,
           sourcePath: manuscriptPath,
+          /* #4217: implicit re-read: unstamped = version 1, byte-stable. */
+          extractorVersion: extractorVersionOf(state),
         });
 
     /* #3828 — the hints read is write-free and, like the parse, outside the
@@ -1933,6 +1940,8 @@ async function applyReparse(
             ...(opts.manuscriptFile ? { manuscriptFile: opts.manuscriptFile } : {}),
             chapters: newChapters,
             chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+            /* #4217: explicit user action: version 2 + stamp (owner decision). */
+            manuscriptExtractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
             castConfirmed: false,
             /* Plan 289 — a wipe: every revision token of the book moves, so a kept
                or retrying save built before it is refused. */
@@ -2100,12 +2109,15 @@ async function prepareReparse(
       parsed = await parseManuscript({
         text: buffer.toString('utf8'),
         fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
     } else {
       parsed = await parseManuscript({
         buffer,
         fileName: state.manuscriptFile,
         sourcePath: manuscriptPath,
+        /* #4217: explicit user action: version 2 + stamp (owner decision). */
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
     }
     return { fingerprint, parsed, sourceSha256: sha256Hex(buffer) };
@@ -2212,6 +2224,8 @@ bookStateRouter.post(
         buffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
+        /* #4217: explicit user action: version 2 + stamp (owner decision). */
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
       const newFile = `manuscript.${REPLACE_EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
       safeSegment(newFile);

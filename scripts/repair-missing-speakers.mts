@@ -52,6 +52,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEpub } from '../server/src/parsers/epub.js';
+import { extractorVersionOf } from '../server/src/parsers/version.js';
 import {
   validateRosterCoverage,
   validateAttributionCoverage,
@@ -82,6 +83,7 @@ const chaptersOverride = flag('--chapters')
   .filter((n) => Number.isInteger(n)) ?? null;
 
 interface StateJson {
+  manuscriptExtractorVersion?: number;
   manuscriptId?: string;
   title?: string;
   author?: string;
@@ -203,7 +205,11 @@ async function auditBook(book: Book): Promise<{ findings: Finding[]; cast: CastJ
   if (!existsSync(epub)) return null; // non-EPUB: audit needs parsed prose
   let parsed;
   try {
-    parsed = await parseEpub(Buffer.alloc(0), { sourcePath: epub, fileName: 'manuscript.epub' });
+    parsed = await parseEpub(Buffer.alloc(0), {
+      sourcePath: epub,
+      fileName: 'manuscript.epub',
+      extractorVersion: extractorVersionOf(book.state), // #4217: parse with the book's stamped version
+    });
   } catch {
     return null;
   }

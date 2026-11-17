@@ -1263,7 +1263,7 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     const stPath = join(bookDir, '.audiobook', 'state.json');
     const st = JSON.parse(readFileSync(stPath, 'utf8'));
     const buffer = readFileSync(join(bookDir, 'manuscript.md'));
-    const parsed = await parseManuscript({ buffer, fileName: 'manuscript.md' });
+    const parsed = await parseManuscript({ buffer, fileName: 'manuscript.md', extractorVersion: 1 });
     expect(parsed.chapters).toHaveLength(st.chapters.length);
     st.chapters.forEach((c: { uuid?: string }, i: number) => {
       c.uuid = `00000000-0000-4000-8000-00000000000${i + 1}`;
