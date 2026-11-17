@@ -35,6 +35,7 @@ import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
+import { listKnownCheckoutRoots, normalizeSeparators } from './hooks/guard-worktree-write.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, '..');
@@ -483,8 +484,17 @@ export function classify(snapshot, now, thresholds) {
     if (prior && prior.startedAt === root.startedAt) {
       const elapsedMs = now - prior.sampledAt;
       if (elapsedMs >= thresholds.minSampleAgeMs) {
-        const deltaCpu = Math.max(0, cpuSecondsNow - prior.cpuSeconds);
-        cpuRatePerMin = deltaCpu / (elapsedMs / 60000);
+        // A subtree-sum delta is only a rate while the member set is stable. A
+        // forks pool recycles a worker per test file, and an exited worker's
+        // CPU leaves the sum, so a busy battery can read as ~0 (or negative).
+        // A member born after the prior sample, or a falling sum, means the
+        // delta is not a rate: leave it unknown, which every caller reads as
+        // "not provably stalled" (#4222 review).
+        const deltaCpu = cpuSecondsNow - prior.cpuSeconds;
+        const membersChurned = members.some((m) => m.startedAt > prior.sampledAt);
+        if (!membersChurned && deltaCpu >= 0) {
+          cpuRatePerMin = deltaCpu / (elapsedMs / 60000);
+        }
       }
     }
 
@@ -537,6 +547,67 @@ export function classify(snapshot, now, thresholds) {
 // ---------------------------------------------------------------------------
 
 const isWindows = process.platform === 'win32';
+
+// Path literals in a command line that say nothing about WHICH checkout a
+// battery belongs to: the node / shell install and the global npm prefix.
+// `c:/program` is how `C:\Program Files\...` reads once the token is cut at its
+// space; the boundary keeps `C:\Programming` / `C:\Programs` from reading neutral.
+const NEUTRAL_PATH_RE = /^[a-z]:\/(program|programdata|windows)(\/|$)|\/appdata\/roaming\/npm(\/|$)/;
+
+/** Verdict on where a battery's argv points, judged over ALL its members'
+ *  command lines. ARGV ONLY: the process snapshot carries no working directory
+ *  (see `rowsToProcesses`), so a battery whose argv names no path at all is
+ *  neither in nor foreign (callers spare it; only a manual `doctor -- --kill`
+ *  reaps it). Every spelling of a path is read (backslash, forward slash,
+ *  doubled backslash, Git Bash `/c/...`, WSL `/mnt/c/...`, any letter case). The
+ *  boundary is a real path separator after a root: `<root> - Copy`, `<root>+old`,
+ *  `<root>,v2` and `wt-3243-followup` are other directories, and a look-alike
+ *  must never read as the checkout because this verdict feeds a KILL. Judged
+ *  over every member, never one alone: a worktree whose node_modules is
+ *  junctioned from the primary has fork workers naming the primary's realpath
+ *  while its main vitest names its own path. Every absolute path literal is
+ *  assigned to the MOST-SPECIFIC known checkout root containing it, so a path
+ *  under `<primary>/.claude/worktrees/<name>` belongs to that worktree, not
+ *  the primary. Tokens are `..`-resolved first, and a token equal to the BARE
+ *  root counts as foreign (a look-alike is cut down to exactly it). `inRoot`:
+ *  some path is strictly under the pushing root.
+ *  `foreign`: the first path that belongs to anything else (another known root,
+ *  a nested worktree, or an absolute location outside every known root, e.g. a
+ *  scratchpad). The caller spares on any `foreign`: a battery that cannot be
+ *  placed wholly in the pushing checkout is left alone. */
+export function classifyBatteryLocation(commandLines, root, knownRoots = []) {
+  if (typeof root !== 'string' || root.replace(/[\\/]+$/, '') === '') {
+    return { inRoot: false, foreign: '(no checkout root)' };
+  }
+  const norm = (r) => normalizeSeparators(r.replace(/[\\/]+$/, '')).toLowerCase();
+  const rootN = norm(root);
+  const owners = [...new Set([rootN, ...knownRoots.map(norm)])].sort((x, y) => y.length - x.length);
+  const nestedPrefix = rootN + '/.claude/worktrees/';
+  let inRoot = false;
+  let foreign = null;
+  for (const line of commandLines) {
+    if (typeof line !== 'string') continue;
+    const text = normalizeSeparators(line)
+      .toLowerCase()
+      .replace(/(^|[\s\x22\x27=])\/(?:mnt\/)?([a-z])\//g, '$1$2:/');
+    for (const m of text.matchAll(/[a-z]:\/[^\s\x22\x27\x60<>|*?,;]*/g)) {
+      // Resolve `..` / `//` first: `<root>/../other-wt/x` is not under the root.
+      const token = posix.normalize(m[0]).replace(/\/+$/, '');
+      const owner = owners.find((o) => token === o || token.startsWith(o + '/'));
+      if (owner === rootN) {
+        // A token that is the BARE root is ambiguous: the parse cuts a look-alike
+        // (`<root> - Copy`, `<root>,v2`, `<root>'s copy`) down to exactly it.
+        if (token === rootN || token.startsWith(nestedPrefix)) foreign ??= token;
+        else inRoot = true;
+      } else if (owner) {
+        foreign ??= token;
+      } else if (!NEUTRAL_PATH_RE.test(token)) {
+        foreign ??= token;
+      }
+    }
+  }
+  return { inRoot, foreign };
+}
 
 /** Map raw JSON rows from `collectProcessSnapshot`'s PowerShell query into the
  *  process shape `classify()` expects. Pure and exported so this layer has a
@@ -1092,12 +1163,51 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
 // Orchestration — the pre-push census and `npm run doctor`.
 // ---------------------------------------------------------------------------
 
+/** Why a reap candidate must be SPARED under the pre-push guard, or null when
+ *  every guard passes. Names every failed guard. The checkout test is judged
+ *  over the WHOLE subtree's argv (the root is often a path-less `cmd.exe /c
+ *  npx`): some member must name a path under `root`, and NO member may name a
+ *  location outside it (any such member vetoes the kill). */
+function prePushSpareReason(v, processes, root, knownRoots = []) {
+  const failures = [];
+  if (!v.reasons.includes('orphaned-unreachable')) failures.push('not orphaned');
+  if (!v.reasons.includes('stalled-rate')) {
+    failures.push(
+      v.cpuRatePerMin === null
+        ? 'rate unknown (no trusted prior sample)'
+        : `not stalled (rate ${v.cpuRatePerMin.toFixed(1)} CPU-s/min)`,
+    );
+  }
+  const members = new Set(v.subtreePids);
+  const { inRoot, foreign } = classifyBatteryLocation(
+    processes.filter((p) => members.has(p.pid)).map((p) => p.commandLine),
+    root,
+    knownRoots,
+  );
+  if (foreign) failures.push(`battery names a location outside checkout ${root}: ${foreign}`);
+  else if (!inRoot) failures.push(`not under checkout ${root}`);
+  return failures.length > 0 ? failures.join('; ') : null;
+}
+
 /**
  * Runs one census, appends it to the log, and (when `kill` is true) reaps
  * qualifying subtrees. `killReasons` narrows WHICH reap reasons this caller
- * is allowed to act on — the pre-push wiring passes only
- * ['orphaned-unreachable'] ("kill only provably-orphaned trees"); the wider
- * `--kill` manual path passes both. Before each kill, `findKillRefusalReason`
+ * is allowed to act on. The pre-push wiring additionally passes
+ * `prePushGuard: { root }`, under which a reap verdict is killed only when ALL
+ * THREE hold: orphaned-unreachable AND stalled-rate (a trusted CPU rate at or
+ * under the dead-rate threshold) AND the whole subtree's argv places it in `root`
+ * (the pushing checkout): at least one member names a path under `root` and NO
+ * member names a location outside it (see `classifyBatteryLocation`). The check
+ * is argv-only: the process snapshot carries no cwd. Consequence: a battery whose
+ * argv names no path under the pushing checkout is spared from pre-push, and so
+ * is one with any member naming another checkout (e.g. fork workers launched
+ * through a `node_modules` junction that resolves to another checkout's path);
+ * only a manual `npm run doctor -- --kill` can reap those. Spared candidates are
+ * returned in `spared` (`{rootPid, reason}`) and logged as `spareReason`.
+ * `restrictTo` (a `Map<pid, {startedAt, approx}>`, verify-cache's timeout sweep)
+ * narrows the kill set to roots the caller itself recorded; every other
+ * orphan on the machine is left alone and unlogged.
+ * With `prePushGuard` null (manual runs) behaviour is unchanged. Before each kill, `findKillRefusalReason`
  * re-checks the root's real OS descendant closure (not classify()'s subtree)
  * and refuses rather than kills when that closure reaches anything protected
  * or alive — see its own doc comment. That same descendant closure is also
@@ -1119,6 +1229,8 @@ export function runCensus({
   appendLog = appendCensusLog,
   kill = false,
   killReasons = ['orphaned-unreachable', 'stalled-rate'],
+  prePushGuard = null,
+  restrictTo = null,
   thresholds = DEFAULT_THRESHOLDS,
   now = Date.now(),
   killFn = killTree,
@@ -1134,6 +1246,7 @@ export function runCensus({
   const killed = [];
   const refused = [];
   const failed = [];
+  const spared = [];
   if (kill) {
     const pidToRoot = new Map();
     const rootVerdict = new Map();
@@ -1145,6 +1258,25 @@ export function runCensus({
     for (const v of verdicts) {
       if (v.verdict !== 'reap') continue;
       if (!v.reasons.some((r) => killReasons.includes(r))) continue;
+      if (restrictTo) {
+        // Kill only a root the caller itself recorded: pid AND an exact start
+        // time. An `approx` entry (its root had already exited, or the pre-kill
+        // snapshot failed, so its start time is unreliable) never matches: while
+        // the genuine root lives its parent is the caller, which is protected, so
+        // a pid match could only be a recycled pid. Not logged as a spare:
+        // everything else in a machine-wide census is simply not this caller's
+        // to touch.
+        const own = restrictTo.get(v.rootPid);
+        const live = processes.find((p) => p.pid === v.rootPid);
+        if (!own || own.approx || own.startedAt !== live?.startedAt) continue;
+      }
+      if (prePushGuard) {
+        const spareReason = prePushSpareReason(v, processes, prePushGuard.root, prePushGuard.knownRoots ?? []);
+        if (spareReason) {
+          spared.push({ rootPid: v.rootPid, reason: spareReason });
+          continue;
+        }
+      }
       const refusalReason = findKillRefusalReason(v.rootPid, processes, protectedPids, pidToRoot, rootVerdict);
       if (refusalReason) {
         refused.push({ rootPid: v.rootPid, reason: refusalReason });
@@ -1171,6 +1303,7 @@ export function runCensus({
   // record is half of making that observable, and runCli's pre-push stderr
   // line is the other half.
   const refusalByRoot = new Map(refused.map((r) => [r.rootPid, r.reason]));
+  const spareByRoot = new Map(spared.map((s) => [s.rootPid, s.reason]));
   appendLog(
     {
       ts: now,
@@ -1188,13 +1321,14 @@ export function runCensus({
         reasons: v.reasons,
         killed: killed.includes(v.rootPid),
         refusalReason: refusalByRoot.get(v.rootPid) ?? null,
+        spareReason: spareByRoot.get(v.rootPid) ?? null,
         killFailed: failed.includes(v.rootPid),
       })),
     },
     logPath,
   );
 
-  return { verdicts, killed, refused, failed };
+  return { verdicts, killed, refused, failed, spared };
 }
 
 // ---------------------------------------------------------------------------
@@ -1208,18 +1342,30 @@ export function runCensus({
  * assertion about source text — pass a `runCensusFn` that throws and
  * confirm this still returns 0.
  */
-export function runCli(args, { runCensusFn = runCensus } = {}) {
+export function runCli(
+  args,
+  {
+    runCensusFn = runCensus,
+    checkoutRoot = REPO_ROOT,
+    knownRootsFn = () => listKnownCheckoutRoots({ cwd: checkoutRoot }),
+  } = {},
+) {
   const wideKill = args.includes('--kill');
   const isPrePush = args.includes('--pre-push');
 
   try {
     const { verdicts, killed, refused, failed } = runCensusFn({
       kill: isPrePush || wideKill,
-      // Pre-push is the narrow, never-blocking path: only kill what is
-      // PROVABLY orphaned (dead parent), never a merely-slow subtree that
-      // might still land. `--kill` (npm run doctor -- --kill) is the wider,
-      // human-invoked path and may also reap stalled-but-live-parented work.
+      // Pre-push is the narrow, never-blocking path. It reaps only a battery
+      // that is orphaned AND stalled-rate AND whose argv is under the pushing
+      // checkout (`prePushGuard`, enforced in runCensus). Argv only: there is
+      // no cwd in the snapshot, so a battery with no path under this checkout
+      // in its argv (or one launched via a node_modules junction that resolves
+      // to another checkout) is spared here; only a manual `--kill` reaps it.
+      // `--kill` (npm run doctor -- --kill) is the wider, human-invoked path
+      // and is unchanged.
       killReasons: isPrePush && !wideKill ? ['orphaned-unreachable'] : ['orphaned-unreachable', 'stalled-rate'],
+      prePushGuard: isPrePush && !wideKill ? { root: checkoutRoot, knownRoots: knownRootsFn() } : null,
     });
 
     if (isPrePush) {

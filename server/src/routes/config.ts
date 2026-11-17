@@ -289,7 +289,8 @@ configRouter.post('/env-cleanup', async (_req, res) => {
   const envPath = resolveServerEnvPath();
 
   if (!existsSync(envPath)) {
-    res.status(404).json({ error: `server .env not found at ${envPath}` });
+    console.error('[config] env-cleanup: server .env not found', envPath);
+    res.status(404).json({ error: 'server/.env not found.' });
     return;
   }
 
@@ -297,7 +298,8 @@ configRouter.post('/env-cleanup', async (_req, res) => {
   try {
     original = readFileSync(envPath, 'utf-8');
   } catch (err) {
-    res.status(500).json({ error: `failed to read ${envPath}: ${(err as Error).message}` });
+    console.error('[config] env-cleanup: failed to read server .env', envPath, err);
+    res.status(500).json({ error: 'Could not read server/.env.' });
     return;
   }
 
@@ -347,7 +349,8 @@ configRouter.post('/env-cleanup', async (_req, res) => {
       mode: originalMode,
     });
   } catch (err) {
-    res.status(500).json({ error: `failed to write backup ${bakPath}: ${(err as Error).message}` });
+    console.error('[config] env-cleanup: failed to write backup', bakPath, err);
+    res.status(500).json({ error: 'Could not write the backup server/.env.bak.' });
     return;
   }
 
@@ -371,12 +374,13 @@ configRouter.post('/env-cleanup', async (_req, res) => {
     await renameWithRetry(tmp, envPath);
   } catch (err) {
     /* If temp file exists (was created but not renamed), attempt cleanup.
-       Cleanup errors are swallowed since we're already reporting the original
-       error to the client. */
+       Cleanup errors are swallowed since the original error is already being
+       reported (logged below; the client gets a fixed sentence). */
     if (tmp !== undefined) {
       await unlink(tmp).catch(() => {});
     }
-    res.status(500).json({ error: `failed to write cleaned .env: ${(err as Error).message}` });
+    console.error('[config] env-cleanup: failed to write cleaned server .env', envPath, err);
+    res.status(500).json({ error: 'Could not write the cleaned server/.env.' });
     return;
   }
 

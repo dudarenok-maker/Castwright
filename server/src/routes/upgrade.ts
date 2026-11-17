@@ -24,6 +24,7 @@ import { anyJobInFlight } from '../upgrade/busy-probe.js';
 import { validateUpgradeZip } from '../upgrade/zip-validate.js';
 import { applyUpgrade, createApplySteps } from '../upgrade/apply.js';
 import { resolveUpgradePaths, type UpgradePaths } from '../upgrade/paths.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /* server/{src,dist}/routes → repoRoot is three levels up. */
@@ -135,7 +136,10 @@ upgradeRouter.post('/stage', (req: Request, res: Response) => {
       });
     } catch (e) {
       rmSync(p.stagedZip, { force: true });
-      return res.status(400).json({ error: (e as Error).message });
+      /* #4236 — an fs error from writeState embeds the absolute staging path; the
+         client gets the curated sentence, the raw error stays in the log. */
+      console.error('[upgrade] stage failed:', e);
+      return res.status(400).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });

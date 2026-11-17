@@ -741,7 +741,7 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and thirty call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  one hundred and thirty-one call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
@@ -750,12 +750,12 @@ Design rationale:
   `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
   handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×3,
   `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
-  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites keep their path pending the #4236 owner decision), `script-review` ×5 (its three
+  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites answer fixed relative-name sentences directly, not through this seam, #4236), `script-review` ×5 (its three
   start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
-  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `series-cast`, `series-roster`,
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` (the stage route's catch, #4236), `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
   weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
   not a disk fault), `annotate-emotion` and `instruct-annotation` (their
