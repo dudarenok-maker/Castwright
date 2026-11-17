@@ -40,11 +40,13 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import {
   findChapterAudio,
+  findPreviousAudio,
+  restorePreviousAudio,
   livePartPath,
   previousPartPath,
   type ChapterAudioFile,
+  type PreviousAudioFile,
 } from '../workspace/chapter-take.js';
-import { restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
 import { withKeyLock, isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { revisionOpLockKey, hasPendingForChapter } from '../workspace/revisions-store.js';
@@ -190,7 +192,7 @@ async function locateChapterAudio(
   chapterIdRaw: string,
   variant: AudioVariant = 'current',
 ): Promise<{
-  audio: ChapterAudioFile;
+  audio: ChapterAudioFile | PreviousAudioFile;
   segPath: string;
   /** Sibling `<slug>.peaks.json` (current) or `<slug>.previous.peaks.json`
    *  (preserved) location. The file is optional — `readPeaksOrEmpty`
@@ -221,7 +223,7 @@ async function locateChapterAudio(
   const audio =
     variant === 'current'
       ? findChapterAudio(root, chapter.slug)
-      : findPreviousChapterAudio(root, chapter.slug);
+      : findPreviousAudio(root, chapter.slug);
   if (!audio) return null;
   const segPath =
     variant === 'current'
@@ -328,7 +330,7 @@ function makeFileHandler(variant: AudioVariant = 'current') {
     const audio =
       variant === 'current'
         ? findChapterAudio(audioRoot, chapter.slug)
-        : findPreviousChapterAudio(audioRoot, chapter.slug);
+        : findPreviousAudio(audioRoot, chapter.slug);
     if (!audio) return res.status(404).json({ message: 'Chapter audio not found.' });
     res.sendFile(
       audio.path,

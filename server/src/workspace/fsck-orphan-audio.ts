@@ -1,6 +1,6 @@
 /* Sibling fsck for the chapter-audio rollback-preservation pair (plan 20).
  *
- * The preserve helper (`preserve-previous-audio.ts`) renames two files —
+ * The preserve helper (`preserveExistingAsPrevious`, `chapter-take.ts`) renames two files —
  * `<slug>.mp3` and `<slug>.segments.json` — to `<slug>.previous.*` before
  * a regen clobbers the live render. The renames are sequential, not
  * atomic: a crash between them leaves a half-preserved state.

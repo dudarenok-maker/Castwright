@@ -12,13 +12,12 @@
    it no longer inlines its own tail. */
 
 import { rename, rm, writeFile } from 'node:fs/promises';
-import { liveAudioPath, livePartPath } from '../workspace/chapter-take.js';
+import { liveAudioPath, livePartPath, preserveExistingAsPrevious } from '../workspace/chapter-take.js';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
-import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';
 import { formatDuration } from './format-duration.js';
 import { measureLoudnessFile, type MeasuredLoudness } from './measure-loudness.js';

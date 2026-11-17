@@ -791,3 +791,27 @@ describe('rewriteChapterSlugs — per-chapter sidecars (#3400)', () => {
     }
   });
 });
+
+describe('rewriteChapterSlugs — previous take with a real extension (#4334)', () => {
+  it('P6: a rename moves .previous.m4a and .previous.segments.json to the new slug and clears a stale .previous.m4a at the target', async () => {
+    writeFileSync(join(audioRoot, '01-a.m4a'), 'live-m4a:01-a');
+    writeFileSync(join(audioRoot, '01-a.previous.m4a'), 'previous-m4a:01-a');
+    writeFileSync(
+      join(audioRoot, '01-a.previous.segments.json'),
+      JSON.stringify({ bookId: 'b', chapterId: 99, chapterTitle: 'OLD', segments: [] }),
+    );
+    // Stale orphan previous take at the slug the chapter moves into.
+    writeFileSync(join(audioRoot, '02-b.previous.m4a'), 'STALE');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-b.previous.m4a'), 'utf8')).toBe('previous-m4a:01-a');
+    expect(existsSync(join(audioRoot, '02-b.previous.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '01-a.previous.m4a'))).toBe(false);
+    expect(result.renamed.map((r) => r.suffix)).toContain('previous.m4a');
+    expect(result.deleted).toContainEqual({ slug: '02-b', suffix: 'previous.m4a' });
+  });
+});

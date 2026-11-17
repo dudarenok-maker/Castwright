@@ -542,7 +542,7 @@ async function main(): Promise<void> {
   await bootRepairDuplicateBookIds();
 
   /* Plan 20 — sibling fsck for the rollback-preservation pair. The
-     preserve helper (`workspace/preserve-previous-audio.ts`) renames two
+     preserve helper (`preserveExistingAsPrevious` in `workspace/chapter-take.ts`) renames two
      files (audio + segments) sequentially; a crash between them leaves a
      half-preserved state. On startup we walk every book's audio root,
      promote any `.previous.mp3` back to live when the live counterpart

@@ -156,7 +156,7 @@ export function touchedChapterIds(
   return [...touched].sort((a, b) => a - b);
 }
 
-/** #3704 — old chapter id → new chapter id for every chapter whose `.previous.mp3`
+/** #3704 — old chapter id → new chapter id for every chapter whose previous take (`.previous.<ext>`)
     a restructure's rename actually moved (`previousMovedFrom` = the old slugs
     rewriteChapterSlugs reported moving it from). Its pending A/B entry moves
     with it; every other touched chapter's entry is dropped. */

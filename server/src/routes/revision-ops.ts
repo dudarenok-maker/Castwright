@@ -1,6 +1,6 @@
 /* Plan 285 (#3400) — server-owned revisions operations (spec §2). One route per
    operation. Accept and reject run the audio step (today's code,
-   audio/previous-audio.ts) and then the JSON write, in that order; the JSON is
+   workspace/chapter-take.ts) and then the JSON write, in that order; the JSON is
    written only if the audio step succeeded.
 
    Since plan 286 (PR 2) the client calls these and writes no revisions of its
@@ -11,13 +11,13 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { audioDir } from '../workspace/paths.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { findChapterAudio } from '../workspace/chapter-take.js';
-import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
 import {
   acceptPreviousAudio,
-  findPreviousChapterAudio,
+  findChapterAudio,
+  findPreviousAudio,
   restorePreviousAudio,
-} from '../audio/previous-audio.js';
+} from '../workspace/chapter-take.js';
+import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
 import {
   beginRevisionOp,
   commitRevisionOp,
@@ -89,7 +89,7 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
          rename). The recovery is to retry Reject. Read-only pre-check; the audio
          code itself is unchanged. The body's state is a fresh lock-free read. */
       const root = audioDir(bookDir);
-      if (!findChapterAudio(root, begin.chapter.slug) && findPreviousChapterAudio(root, begin.chapter.slug)) {
+      if (!findChapterAudio(root, begin.chapter.slug) && findPreviousAudio(root, begin.chapter.slug)) {
         const current = await readRevisions(bookDir, chapters);
         return res.status(409).json({
           error: 'live_audio_missing',

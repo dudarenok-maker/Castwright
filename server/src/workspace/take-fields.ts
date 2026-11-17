@@ -173,6 +173,25 @@ export function previousPartPath(audioRoot: string, slug: string, part: TakeSide
   return join(audioRoot, `${slug}.previous.${TAKE_SIDECAR_SUFFIXES[part]}`);
 }
 
+/** Every suffix a take part can carry (§4.3): the live audio exts, the six
+    sidecar suffixes, `previous.<each audio ext>` and `previous.<each sidecar
+    suffix>`. The single table slug-keyed movers (rewrite-chapter-slugs)
+    derive their companion list from. */
+export const TAKE_SUFFIXES = [
+  ...CHAPTER_AUDIO_EXTS,
+  ...Object.values(TAKE_SIDECAR_SUFFIXES),
+  ...CHAPTER_AUDIO_EXTS.map((ext) => `previous.${ext}` as const),
+  ...Object.values(TAKE_SIDECAR_SUFFIXES).map((suffix) => `previous.${suffix}` as const),
+] as const;
+
+export type TakeSuffix = (typeof TAKE_SUFFIXES)[number];
+
+/** `join(audioRoot, `${slug}.${suffix}`)`, byte-identical to the
+    `suffixPath` it replaces. */
+export function takeSuffixPath(audioRoot: string, slug: string, suffix: TakeSuffix): string {
+  return join(audioRoot, `${slug}.${suffix}`);
+}
+
 /* ------------------------------------------------------------------ *
  * Take identity (§4.1)
  * ------------------------------------------------------------------ */

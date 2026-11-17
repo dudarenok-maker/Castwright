@@ -237,12 +237,10 @@ interface AllowEntry {
 }
 
 const ALLOWLIST: Record<string, AllowEntry> = {
-  'audio/previous-audio.ts': { count: 7, removedBy: 4334, reason: "preserve/restore/revisions builds previous-take paths" },
   'import/scan-import-folder.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(stage): the audio/ directory itself, not a take part." },
   'routes/book-state.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: §5.A Ownership: the reparse wipe stays allowlisted (applyReparse rm(ad, { recursive: true, force: true }), the audio/ directory itself, not a take part)." },
   'routes/generation.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(bookDir): the audio/ directory itself, not a take part." },
   'workspace/fsck-orphan-audio.ts': { count: 8, removedBy: 4335, reason: "fsck probes and removes take files" },
-  'workspace/preserve-previous-audio.ts': { count: 7, removedBy: 4334, reason: "preserve/restore/revisions builds previous-take paths" },
 };
 
 /* ---------------------------------------------------------------------------

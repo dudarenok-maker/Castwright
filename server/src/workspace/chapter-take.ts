@@ -16,19 +16,25 @@
    does). The only lock taken here is `updateStateAtDir`'s `book` -> `state-json`
    pair, and its mutate callback takes no other lock. */
 
-import { open } from 'node:fs/promises';
+import { open, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { renameWithRetry } from './atomic-rename.js';
 import { assertHeld, type BookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
 import { audioDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import {
+  CHAPTER_AUDIO_EXTS,
   TAKE_STATE_FIELDS,
   chapterAudioExists,
   deriveTakeFields,
+  findChapterAudio,
+  findPreviousAudio,
   isTakeId,
+  liveAudioPath,
   livePartPath,
   mintTakeId,
+  previousAudioPath,
   previousPartPath,
   type ChapterAudioExt,
   type TakeFields,
@@ -165,4 +171,129 @@ export async function ensureTakeIdentity(handle: BookHandle, slug: string): Prom
     await writeJsonAtomic(prevSegPath, { ...prevSegments, takeId });
     await stampIdIntoJson(previousPartPath(root, slug, 'embeddings'), takeId);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * The A/B take functions (Phase 1 forms)
+ *
+ * Moved here from the old preserve helper and the old A/B audio steps
+ * (both files deleted). Same names and signatures, so
+ * callers only changed their import; the one change is that a previous take
+ * keeps its REAL extension (`.previous.m4a`, `.previous.ogg`), where it used to
+ * be forced to `.mp3` (H12, H13). Each is the Phase 1 form that `commitTake`
+ * (Phase 2) and `restoreTake` / `acceptTake` (Phase 3) replace.
+ * ------------------------------------------------------------------ */
+
+export interface PreserveResult {
+  /** True when an existing audio file was found and the rename succeeded.
+      False on first render (nothing to preserve) and on rename failures. */
+  preserved: boolean;
+}
+
+/** Phase 1 form (`commitTake`, Phase 2, replaces it). Called right before a
+    fresh render clobbers the live take: renames the live audio to
+    `.previous.<its own ext>` and the live segments to `.previous.segments.json`.
+
+    - First render (no live audio): no-op.
+    - A previous take's audio with a DIFFERENT extension (a format switch left
+      `.previous.mp3` beside a live m4a) is removed first, so the old previous
+      take does not survive beside the new one. Same-extension previous audio is
+      overwritten by the rename, as before. An unlink failure is logged and
+      skipped.
+    - Best-effort: a rename failure is logged, never thrown. We must NEVER block
+      the regen on preservation; losing the audition is much less bad than losing
+      the new audio. The two renames are not atomic; the fsck pairs up a crash
+      between them. */
+export async function preserveExistingAsPrevious(
+  audioRoot: string,
+  slug: string,
+): Promise<PreserveResult> {
+  const existing = findChapterAudio(audioRoot, slug);
+  if (!existing) return { preserved: false };
+
+  for (const ext of CHAPTER_AUDIO_EXTS) {
+    if (ext === existing.ext) continue;
+    const stale = previousAudioPath(audioRoot, slug, ext);
+    if (!existsSync(stale)) continue;
+    try {
+      await unlink(stale);
+    } catch (err) {
+      console.warn(`[take] stale previous audio removal failed for ${slug}: ${(err as Error).message}`);
+    }
+  }
+
+  const segmentsPath = livePartPath(audioRoot, slug, 'segments');
+  const previousSegments = previousPartPath(audioRoot, slug, 'segments');
+
+  try {
+    /* Audio first — if this fails we abort before touching segments so the
+       live pair is left untouched. */
+    await renameWithRetry(existing.path, previousAudioPath(audioRoot, slug, existing.ext));
+  } catch (err) {
+    console.warn(`[take] audio rename failed for ${slug}: ${(err as Error).message}`);
+    return { preserved: false };
+  }
+
+  if (existsSync(segmentsPath)) {
+    try {
+      await renameWithRetry(segmentsPath, previousSegments);
+    } catch (err) {
+      /* Audio moved but segments didn't — the audition works off the audio
+         alone (no per-segment seek). Log and continue. */
+      console.warn(`[take] segments rename failed for ${slug}: ${(err as Error).message}`);
+    }
+  }
+
+  return { preserved: true };
+}
+
+/** Whether a preserved (`.previous.<ext>`) take's audio exists for the chapter.
+    Phase 1 form. The revisions detector sets `hasPreviousAudio` from it. */
+export function hasPreviousAudio(audioRoot: string, slug: string): boolean {
+  return findPreviousAudio(audioRoot, slug) !== null;
+}
+
+/** ACCEPT — the new render wins. Phase 1 form (`acceptTake`, Phase 3,
+    replaces it). Deletes the previous audio, whatever its extension, and
+    `.previous.segments.json` (unlink errors swallowed, as today). 'none' when
+    nothing was preserved. */
+export async function acceptPreviousAudio(audioRoot: string, slug: string): Promise<'deleted' | 'none'> {
+  const previous = findPreviousAudio(audioRoot, slug);
+  if (!previous) return 'none';
+  /* Delete both files — segments.json absence on its own isn't a fault. */
+  await unlink(previous.path).catch(() => {});
+  await unlink(previousPartPath(audioRoot, slug, 'segments')).catch(() => {});
+  return 'deleted';
+}
+
+/** REJECT — the prior render wins. Phase 1 form (`restoreTake`, Phase 3,
+    replaces it). Promotes the previous take over the live names, with the
+    previous take's real extension. 'none' when nothing was preserved; throws
+    when the audio rename fails (callers answer today's fixed 500).
+
+    Residuals kept exactly as today (Phase 3's `restoreTake` fixes them, H1 and
+    H2): the live take is deleted BEFORE the rename, and a failed segments
+    rename is swallowed. */
+export async function restorePreviousAudio(audioRoot: string, slug: string): Promise<'restored' | 'none'> {
+  const previous = findPreviousAudio(audioRoot, slug);
+  if (!previous) return 'none';
+
+  /* Delete the live render first so the previous → live rename doesn't race a
+     still-present current file. */
+  const currentLive = findChapterAudio(audioRoot, slug);
+  if (currentLive) await unlink(currentLive.path).catch(() => {});
+  const liveSegments = livePartPath(audioRoot, slug, 'segments');
+  if (existsSync(liveSegments)) await unlink(liveSegments).catch(() => {});
+
+  try {
+    await renameWithRetry(previous.path, liveAudioPath(audioRoot, slug, previous.ext));
+  } catch (err) {
+    console.error(`[take] failed to restore previous audio for ${slug}: ${(err as Error).message}`);
+    throw err;
+  }
+  const previousSegments = previousPartPath(audioRoot, slug, 'segments');
+  if (existsSync(previousSegments)) {
+    await renameWithRetry(previousSegments, liveSegments).catch(() => {});
+  }
+  return 'restored';
 }
