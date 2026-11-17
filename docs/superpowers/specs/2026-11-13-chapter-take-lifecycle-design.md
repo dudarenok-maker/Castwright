@@ -2661,6 +2661,7 @@ as today. A crash in the window is undone the same way by replay.
     is still in the cache or above its maximum and drops the rest, by sentence-id range. That does
     not recover a renumbering, so the claim is still false. Phase 4 corrects the claim itself,
     unconditionally (pass 7, J13).
+    **Update (2026-11-17, #4227):** closed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
   - Pending entries are not reconciled by replay. A server-recorded entry carries `chapterUuid` and
     its render times, so `entryMatchesChapter` refuses it on the wrong chapter
     (`revisions-store.ts:199-203`, widened as in Retry recognition).
@@ -4070,6 +4071,7 @@ decision it owes. In this design both are accepted residuals (§5.A Remaining).
   owed is which behaviour is right: replaying the edits rewrite from a journal (its payload is every
   sentence), marking the saved sentences stale, or discarding them. #4227 holds those three options.
   This design only keeps the cache rebuild from compounding it.
+  **Update (2026-11-17, #4227):** closed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
 - **A re-analysis that retitles a rendered chapter (design pass owed, #4230; new in revision 6).** The
   analysis persist (W16) recomputes every slug from the hints' titles with restructure's formula
   (`restructure.ts:127`). Where a hint's title differs from the slug's source, the chapter's take
