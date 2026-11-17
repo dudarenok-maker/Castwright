@@ -74,6 +74,7 @@ function seedState(): void {
       isStandalone: true,
       manuscriptFile: 'manuscript.md',
       castConfirmed: true,
+      editEpoch: 'epoch-4227',
       chapters: [
         { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
         { id: 2, title: 'Chapter Two', slug: '02-chapter-two' },
