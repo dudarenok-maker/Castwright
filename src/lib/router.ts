@@ -1,7 +1,8 @@
 import type { Stage } from './types';
 
-/* Stage ↔ hash URL serialization. URL grammar (unchanged from the
-   hand-rolled router, now driven by react-router's createHashRouter):
+/* Stage ↔ hash URL serialization. URL grammar (the hand-rolled router's,
+   plus `?chapter=3` for an explicit chapter 3 since #4212; now driven by
+   react-router's createHashRouter):
 
      #/                                  → { kind: 'books' }
      #/new                               → { kind: 'upload' }
@@ -20,7 +21,9 @@ import type { Stage } from './types';
                                              openProfileId }
      #/books/:bookId/:view?chapter=&profile=
                                          → { kind: 'ready', bookId, view,
-                                             currentChapterId, openProfileId } */
+                                             currentChapterId, openProfileId }
+                                         (?chapter=3 is kept only when the stage says the
+                                         chapter was explicit; otherwise 3 is the plain default) */
 
 export function stageToHash(stage: Stage | null | undefined): string {
   if (!stage) return '#/';
@@ -79,7 +82,7 @@ export function stageToHash(stage: Stage | null | undefined): string {
     }
     case 'ready': {
       const q = new URLSearchParams();
-      if (stage.currentChapterId != null && stage.currentChapterId !== 3)
+      if (stage.currentChapterId != null && (stage.currentChapterId !== 3 || stage.chapterExplicit))
         q.set('chapter', String(stage.currentChapterId));
       if (stage.openProfileId) q.set('profile', stage.openProfileId);
       const qs = q.toString();
@@ -101,11 +104,20 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
   if (!a || !b) return a === b;
   if (a.kind !== b.kind) return false;
   if ((a as { bookId?: string }).bookId !== (b as { bookId?: string }).bookId) return false;
+  /* #4212 — `chapterExplicit` is compared (undefined === false) because it
+     decides whether `stageToHash` keeps `?chapter=3`. Ignored, a cold
+     `?chapter=3` link whose hydrated stage matches the persisted one but for
+     the flag would never dispatch `hydrateFromUrl`, and the URL would stay plain. */
   if (a.kind === 'ready' && b.kind === 'ready') {
     return (
       a.view === b.view &&
       a.currentChapterId === b.currentChapterId &&
-      a.openProfileId === b.openProfileId
+      a.openProfileId === b.openProfileId &&
+      /* Only chapter 3 (the default) needs the flag: any other chapter is
+         always in the URL, so an in-app pick (false) and its echoed URL
+         (true) are the same stage and must not re-hydrate. */
+      (a.currentChapterId !== 3 || !!a.chapterExplicit) ===
+        (b.currentChapterId !== 3 || !!b.chapterExplicit)
     );
   }
   if (a.kind === 'confirm' && b.kind === 'confirm') {
