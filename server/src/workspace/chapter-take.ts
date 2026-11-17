@@ -16,7 +16,9 @@
    does). The only lock taken here is `updateStateAtDir`'s `book` -> `state-json`
    pair, and its mutate callback takes no other lock. */
 
-import { open, unlink } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { mkdir, open, stat, unlink } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { renameWithRetry } from './atomic-rename.js';
 import { assertHeld, type AnyBookHandle } from './book-op-lock.js';
@@ -31,6 +33,7 @@ import {
   findChapterAudio,
   findPreviousAudio,
   isTakeId,
+  liveAudioFiles,
   liveAudioPath,
   livePartPath,
   mintTakeId,
@@ -296,4 +299,236 @@ export async function restorePreviousAudio(audioRoot: string, slug: string): Pro
     await renameWithRetry(previousSegments, liveSegments).catch(() => {});
   }
   return 'restored';
+}
+
+/* ------------------------------------------------------------------ *
+ * Lazy migration, steps 1-3 (§6.1) and the quarantine (OD8)
+ *
+ * Nothing calls `migrateSlugFiles` yet; the wiring and the identity re-stamp
+ * (steps 4-5) land in #4339. Step 6 belongs to Phase 3.
+ *
+ * NO DECODE UNDER `book` (§4.4, R8-3): `decodeDurationSec` runs under the
+ * caller's book-op only, never inside `updateStateAtDir` or `withBookLock`.
+ * This code takes no lock of its own.
+ * ------------------------------------------------------------------ */
+
+/** `YYYY-MM-DD` in UTC. */
+function isoDateUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** OD8: move files to `audio/.orphaned/<iso-date>-<jid>/<name>`. Never deletes
+    and never overwrites: every target is checked absent BEFORE any file moves,
+    and a present target throws with nothing moved. Directories are created
+    only under an EXISTING `audio/` (non-recursive), so a vanished `audio/`
+    throws ENOENT and the book folder is never recreated (N15). Each call is
+    one event with its own subfolder (jid = `mintTakeId()`). Returns the event
+    folder. */
+export async function quarantineToOrphaned(
+  handle: AnyBookHandle,
+  files: string[],
+  reason: string,
+): Promise<string> {
+  assertHeld(handle, 'quarantineToOrphaned');
+  const root = audioDir(handle.bookDir);
+  const orphaned = join(root, '.orphaned');
+  const eventDir = join(orphaned, `${isoDateUtc()}-${mintTakeId()}`);
+
+  const targets = files.map((f) => ({ from: f, to: join(eventDir, basename(f)) }));
+  const seen = new Set<string>();
+  for (const t of targets) {
+    if (seen.has(t.to) || existsSync(t.to)) {
+      throw new Error(`[take] quarantine target already exists, refusing to overwrite: ${t.to}`);
+    }
+    seen.add(t.to);
+  }
+
+  /* Non-recursive on purpose: a missing `audio/` is ENOENT, not a recreated
+     book folder. */
+  try {
+    await mkdir(orphaned);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+  }
+  try {
+    await mkdir(eventDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+  }
+  for (const t of targets) {
+    await renameWithRetry(t.from, t.to);
+  }
+  console.warn(
+    `[take] quarantined ${files.map((f) => basename(f)).join(', ')} -> ${eventDir} (${reason})`,
+  );
+  return eventDir;
+}
+
+const DECODE_TIMEOUT_MS = 120_000;
+
+/** The duration of a FULL decode of `path` (ffmpeg's last `time=` progress
+    line), never a header estimate: a VBR mp3 without a Xing header reports a
+    wrong length to ffprobe. Resolves null on any failure, including a timeout
+    and a file with no audio. */
+export function decodeDurationSec(path: string): Promise<number | null> {
+  return new Promise<number | null>((resolve) => {
+    const child = spawn('ffmpeg', ['-hide_banner', '-i', path, '-vn', '-f', 'null', '-'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    let settled = false;
+    const settle = (value: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      settle(null);
+    }, DECODE_TIMEOUT_MS);
+    const chunks: Buffer[] = [];
+    child.stderr.on('data', (c) => chunks.push(c));
+    child.on('error', () => settle(null));
+    child.on('close', (code) => {
+      if (code !== 0) return settle(null);
+      const text = Buffer.concat(chunks).toString('utf8');
+      const all = [...text.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
+      const last = all[all.length - 1];
+      if (!last) return settle(null);
+      settle(Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]));
+    });
+  });
+}
+
+export interface MigrationReport {
+  /** Live files a step-2 decision kept live. Empty when nothing was ambiguous. */
+  kept: string[];
+  /** Step 3: wrong-name files renamed to their real extension. */
+  renamed: Array<{ from: string; to: string }>;
+  /** Step 2: a non-matching live file that became the previous take. */
+  madePrevious: Array<{ from: string; to: string }>;
+  /** Files moved to `audio/.orphaned/`, with the event folder name. */
+  quarantined: Array<{ file: string; event: string }>;
+}
+
+/** A decoded duration within this of the segments' `durationSec` "matches". */
+const DURATION_MATCH_TOLERANCE_SEC = 0.5;
+
+/** Newest by mtime; ties fall to the earlier entry. */
+async function newestByMtime(paths: string[]): Promise<string> {
+  let best = paths[0];
+  let bestM = (await stat(best)).mtimeMs;
+  for (const p of paths.slice(1)) {
+    const m = (await stat(p)).mtimeMs;
+    if (m > bestM) {
+      best = p;
+      bestM = m;
+    }
+  }
+  return best;
+}
+
+function previousAudioFiles(root: string, slug: string): Array<{ path: string; ext: ChapterAudioExt }> {
+  return CHAPTER_AUDIO_EXTS.map((ext) => ({ path: previousAudioPath(root, slug, ext), ext })).filter((f) =>
+    existsSync(f.path),
+  );
+}
+
+/** §6.1 steps 1-3 for one slug, under the caller's book-op (the handle is
+    asserted first). Idempotent: every step checks before it renames, and a
+    target that already exists means the source is quarantined instead, so a
+    second call on a clean slug changes nothing and returns an empty report.
+
+    1. Inventory every live and previous audio file and sniff each (nothing is
+       renamed here).
+    2. Two or more live files: exactly one whose full-decode duration is within
+       ±0.5 s of the live `segments.json` `durationSec` stays live; with no
+       previous take, one non-match (the newest) becomes the previous take
+       under its real extension, the rest are quarantined. Zero or several
+       matches (or no numeric `durationSec`): keep the newest by mtime,
+       quarantine the rest, and log the case.
+    3. A live or previous file whose bytes disagree with its extension is
+       renamed to the right extension if that target is absent, else
+       quarantined. A file whose bytes are unrecognised is left alone. */
+export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Promise<MigrationReport> {
+  assertHeld(handle, 'migrateSlugFiles');
+  const root = audioDir(handle.bookDir);
+  const report: MigrationReport = { kept: [], renamed: [], madePrevious: [], quarantined: [] };
+
+  const quarantine = async (files: string[], reason: string): Promise<void> => {
+    if (files.length === 0) return;
+    const eventDir = await quarantineToOrphaned(handle, files, reason);
+    for (const f of files) report.quarantined.push({ file: basename(f), event: basename(eventDir) });
+  };
+
+  /* Step 1: inventory + sniff. Nothing is renamed here. */
+  const live = liveAudioFiles(root, slug);
+  const realExt = new Map<string, ChapterAudioExt>();
+  for (const f of live) {
+    const sniffed = await sniffAudioFormat(f.path);
+    if (sniffed) realExt.set(f.path, sniffed);
+  }
+
+  /* Step 2: resolve two or more live files. */
+  if (live.length >= 2) {
+    const segments = await readJson<{ durationSec?: unknown }>(livePartPath(root, slug, 'segments'));
+    const expected =
+      typeof segments?.durationSec === 'number' && Number.isFinite(segments.durationSec)
+        ? segments.durationSec
+        : null;
+    const matches: string[] = [];
+    if (expected !== null) {
+      for (const f of live) {
+        const dur = await decodeDurationSec(f.path);
+        if (dur !== null && Math.abs(dur - expected) <= DURATION_MATCH_TOLERANCE_SEC) matches.push(f.path);
+      }
+    }
+    const allPaths = live.map((f) => f.path);
+
+    let keep: string;
+    let rest: string[];
+    if (matches.length === 1) {
+      keep = matches[0];
+      rest = allPaths.filter((p) => p !== keep);
+      if (findPreviousAudio(root, slug) === null && rest.length > 0) {
+        const demote = await newestByMtime(rest);
+        const demoteExt = realExt.get(demote) ?? live.find((f) => f.path === demote)!.ext;
+        const target = previousAudioPath(root, slug, demoteExt);
+        if (!existsSync(target)) {
+          await renameWithRetry(demote, target);
+          report.madePrevious.push({ from: basename(demote), to: basename(target) });
+          rest = rest.filter((p) => p !== demote);
+        }
+      }
+      await quarantine(rest, `step 2: ${live.length} live audio files for ${slug}, one matches segments`);
+    } else {
+      keep = await newestByMtime(allPaths);
+      rest = allPaths.filter((p) => p !== keep);
+      console.warn(
+        `[take] ${slug}: ${live.length} live audio files, ${matches.length} match segments durationSec ` +
+          `${expected ?? 'none'}; keeping the newest (${basename(keep)})`,
+      );
+      await quarantine(rest, `step 2: ${live.length} live audio files for ${slug}, ${matches.length} matches`);
+    }
+    report.kept.push(basename(keep));
+  }
+
+  /* Step 3: a file whose bytes disagree with its extension. */
+  const candidates: Array<{ path: string; ext: ChapterAudioExt; previous: boolean }> = [
+    ...liveAudioFiles(root, slug).map((f) => ({ path: f.path, ext: f.ext, previous: false })),
+    ...previousAudioFiles(root, slug).map((f) => ({ path: f.path, ext: f.ext, previous: true })),
+  ];
+  for (const c of candidates) {
+    const sniffed = await sniffAudioFormat(c.path);
+    if (!sniffed || sniffed === c.ext) continue;
+    const target = c.previous ? previousAudioPath(root, slug, sniffed) : liveAudioPath(root, slug, sniffed);
+    if (existsSync(target)) {
+      await quarantine([c.path], `step 3: ${basename(c.path)} holds ${sniffed} bytes and ${basename(target)} exists`);
+    } else {
+      await renameWithRetry(c.path, target);
+      report.renamed.push({ from: basename(c.path), to: basename(target) });
+    }
+  }
+  return report;
 }
