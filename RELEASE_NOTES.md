@@ -14,7 +14,7 @@
 - **Re-recording a flagged chapter now matches each voice to a reference made at the same quality.** With Auto-fix voice mismatches on, the chapter's "Re-record the flagged lines" button only compares a new take against a stored voice reference recorded at the same voice quality. Where the reference doesn't match, or predates this update, those lines stay flagged for you instead of being re-recorded against the wrong sound.
 - **If Castwright's server ever stops on a serious internal error, it now leaves a diagnostic report in your logs folder,** so the cause can be tracked down.
 - **A failed re-record or chapter render no longer shows where your files live.** When "Re-record the flagged lines" or a chapter render hits a full disk, a locked file or a busy folder, the message now says what went wrong in plain words, without the full path to your files, and a locked file no longer gets mistaken for running out of memory.
-- **Importing certain malformed EPUBs no longer crashes Castwright.** A book with an empty link inside a chapter used to take the whole app down the moment you imported it; it now opens normally, and Castwright keeps running.
+- **Importing certain malformed EPUBs no longer crashes Castwright.** A book with an empty link inside a chapter used to take the whole app down the moment you imported it; it now opens normally, and Castwright keeps running. Books that already imported fine read exactly as before.
 
 # Castwright 1.15.0
 

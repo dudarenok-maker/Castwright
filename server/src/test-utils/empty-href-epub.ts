@@ -1,9 +1,16 @@
-/* Synthetic EPUB whose only chapter contains <a href=""> — epub2's getChapter
-   throws on it from inside an async zip callback (#4239). Shared by the parser
-   and import-route tests. */
+/* Synthetic one-chapter EPUBs for the parser and import-route tests.
+   `buildEmptyHrefEpub`'s chapter contains <a href=""> — epub2's getChapter
+   throws on it from inside an async zip callback (#4239).
+   `buildSingleChapterEpub` takes any chapter XHTML (the parity fixture). */
 import { ZipFile } from 'yazl';
 
 export function buildEmptyHrefEpub(): Promise<Buffer> {
+  return buildSingleChapterEpub(
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Some prose with an <a href="">empty link</a> in it.</p></body></html>',
+  );
+}
+
+export function buildSingleChapterEpub(chapterXhtml: string): Promise<Buffer> {
   return new Promise((resolveBuf, reject) => {
     const zip = new ZipFile();
     zip.addBuffer(Buffer.from('application/epub+zip'), 'mimetype', { compress: false });
@@ -25,12 +32,7 @@ export function buildEmptyHrefEpub(): Promise<Buffer> {
       ),
       'OEBPS/toc.ncx',
     );
-    zip.addBuffer(
-      Buffer.from(
-        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Some prose with an <a href="">empty link</a> in it.</p></body></html>',
-      ),
-      'OEBPS/c1.xhtml',
-    );
+    zip.addBuffer(Buffer.from(chapterXhtml), 'OEBPS/c1.xhtml');
     zip.end();
     const chunks: Buffer[] = [];
     zip.outputStream
@@ -39,3 +41,18 @@ export function buildEmptyHrefEpub(): Promise<Buffer> {
       .on('error', reject);
   });
 }
+
+/* Chapter for the extraction-parity test: three things epub2's `getChapter`
+   does that a plain body trim does not, each of which moves persisted sentence
+   offsets or the chapter title in an already-imported book.
+   1. U+2029 in the body — getChapter's `.`-based body regex cannot cross it, so
+      the whole document goes through and the <head><title> text leads the body.
+   2. "Even one = better" — its `on…=` handler rewrite turns it into "skip-one".
+   3. A heading whose inner markup is 400 chars or fewer raw but longer once the
+      self-link's href is rewritten under /links/, so the heading is not found
+      (FIRST_HEADING_RE is length-bounded) and the title stays the NCX label. */
+const PARITY_FOOTNOTE = 'x'.repeat(340);
+export const PARITY_CHAPTER_XHTML =
+  '<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">\n<head><title>Head Title Text</title></head>\n<body>\n' +
+  `<h1>Chapter 3<br/>SUBTITLE<a href="c1.xhtml#n_4" title="${PARITY_FOOTNOTE}"><sup>[4]</sup></a></h1>\n` +
+  '<p>First line\u2029second line.</p>\n<p>Even one = better than none.</p>\n</body>\n</html>';
