@@ -887,7 +887,7 @@ async function mockDiscardQwenPreview(
   await wait(20);
 }
 
-async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
+export async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
   await wait(250);
   const effectiveName = fileName ?? file?.name ?? null;
   const effectiveText = text ?? '';
@@ -921,6 +921,14 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
   const cyrillicCount = (effectiveText.match(/[Ѐ-ӿ]/g) ?? []).length;
   const letterCount = (effectiveText.match(/\p{L}/gu) ?? []).length;
   const mockLanguage = letterCount > 0 && cyrillicCount / letterCount >= 0.3 ? 'ru' : 'en';
+  /* #2254 notice A — mirrors MERGED_TURNS_DEGRADED (10) and TURN_IN_PARAGRAPH in
+     server/src/analyzer/dialogue-structure/legibility.ts (source of truth), so e2e can
+     seed the confirm-view merged-paragraph Heads-up without a server. */
+  const mockParagraphsMerged =
+    mockLanguage === 'ru' &&
+    effectiveText
+      .split('\n')
+      .some((line) => (line.match(/[.!?…:]\s+(?:—|–|-)\s+(?=\p{Lu})/gu) ?? []).length >= 10);
   const candidate = {
     format: (inferFormat(effectiveName ?? undefined) ?? 'markdown') as UploadResponse['format'],
     title,
@@ -931,7 +939,9 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
     sourceText: effectiveText,
     wordCount: effectiveText.trim().split(/\s+/).filter(Boolean).length,
     byteSize: file ? file.size : new Blob([effectiveText]).size,
-    chapters: [{ id: 1, title: 'Chapter 1' }],
+    chapters: [
+      { id: 1, title: 'Chapter 1', ...(mockParagraphsMerged ? { paragraphsMerged: true } : {}) },
+    ],
     language: mockLanguage,
     languageSupported: true,
     languageFallback: false,
