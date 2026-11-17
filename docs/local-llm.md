@@ -154,8 +154,14 @@ machine-parseable ground truth a parity test (`test_footprints.py`) checks
 against `SEED_FOOTPRINTS_MB`. They're measured real per-op decode peaks
 (0.6B ~1952 MB, 1.7B mint ~5654 MB) rounded up with margin, refined once the
 sidecar has real usage: once an engine/tier has accumulated >= 5 per-op
-observations (each op's own CUDA peak, reset right before the op starts —
-not the process-lifetime high-water mark), the seed is superseded by the
+observations (each one taken only from a cold op, where the engine had no
+model resident when the op was admitted: that op's own increment, the CUDA
+allocated peak during the op minus the memory already allocated on that card
+when it started; warm ops record nothing, and other engines already on the
+card are not counted, #4163; two residuals remain: an overlapping op on the
+same card can truncate or inflate a sample through the shared peak counter,
+and memory another op frees during the window can push a sample below the
+op's own weights), the seed is superseded by the
 windowed p95 of the last 64 observations, which tracks real usage up OR
 down instead of ratcheting to a single worst-case spike forever.
 
