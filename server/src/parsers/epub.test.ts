@@ -12,7 +12,7 @@ import {
   PARITY_CHAPTER_XHTML,
   PARITY_NAV_LABEL,
 } from '../test-utils/empty-href-epub.js';
-import { parseEpub, UnusableEpubError, decodeEntities, mergeChapterTitle } from './epub.js';
+import { parseEpub, UnusableEpubError, decodeEntities, decodeXmlEntities, mergeChapterTitle } from './epub.js';
 
 const { mkdtempSpy } = vi.hoisted(() => ({ mkdtempSpy: vi.fn() }));
 
@@ -484,5 +484,50 @@ describe('parseEpub — block-closer paragraphs by extractorVersion (#4217)', ()
     expect(v2.chapters[0].body).toContain('Alpha link\n\nBeta');
     expect(v1.chapters[0].body).toContain('Alpha linkBeta');
     expect(v1.chapters[0].body).not.toContain('\n\n');
+  });
+});
+
+/* #4217 — under extractorVersion 2 the raw-zip reader decodes XML entities in
+   manifest hrefs and NCX srcs. */
+describe('decodeXmlEntities (#4217)', () => {
+  /* X1 mutation (M4): implement it as `decodeEntities` — `&amp;#38;` is then
+     double-unescaped to `&`, and `&nbsp;` is folded to a space. */
+  it('X1: decodes the five XML names and numeric refs exactly once; leaves the rest as typed', () => {
+    expect(decodeXmlEntities('A &amp; B')).toBe('A & B');
+    expect(decodeXmlEntities('&amp;#38;')).toBe('&#38;');
+    expect(decodeXmlEntities('&#38;')).toBe('&');
+    expect(decodeXmlEntities('&#x26;')).toBe('&');
+    expect(decodeXmlEntities('&lt;&gt;&quot;&apos;')).toBe(`<>"'`);
+    expect(decodeXmlEntities('&nbsp;')).toBe('&nbsp;');
+    expect(decodeXmlEntities('AT&T')).toBe('AT&T');
+    expect(decodeXmlEntities('&#xZZ;')).toBe('&#xZZ;');
+    expect(decodeXmlEntities('&#x110000;')).toBe('&#x110000;');
+  });
+});
+
+/* X2 mutations: M1 (drop the decode in the manifest) turns the version-2
+   case into a rejection; M3 (decode at every version) makes the version-1
+   case resolve instead of rejecting. X3 mutation M2 (drop the decode on the
+   NCX src) loses the NCX titles. */
+describe('parseEpub — XML-entity hrefs in the raw-zip reader (#4217)', () => {
+  const plain =
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Plain prose, nothing odd.</p></body></html>';
+  const emptyHref =
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Some prose with an <a href="">empty link</a> in it.</p></body></html>';
+  const fileNames = ['Part 1 & More.xhtml', 'Part 2 & More.xhtml'];
+
+  it('X2: version 1 rejects, version 2 finds the chapter files', async () => {
+    const buf = await buildEpub([plain, emptyHref], { fileNames });
+    await expect(parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 1 })).rejects.toThrow(UnusableEpubError);
+    await expect(parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 1 })).rejects.toThrow(/readable text/);
+    const v2 = await parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 2 });
+    expect(v2.chapters.map((c) => c.title)).toEqual(['Part 1', 'Part 2']);
+    expect(v2.chapters.map((c) => c.body)).toEqual(['Plain prose, nothing odd.', 'Some prose with an empty link in it.']);
+  });
+
+  it('X3: NCX labels still match the decoded chapter paths at version 2', async () => {
+    const buf = await buildEpub([plain, emptyHref], { fileNames, navLabels: ['Opening', 'Closing'] });
+    const v2 = await parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 2 });
+    expect(v2.chapters.map((c) => c.title)).toEqual(['Opening', 'Closing']);
   });
 });

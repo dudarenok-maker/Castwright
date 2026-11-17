@@ -22,7 +22,7 @@ export function decodeNumericEntities(s: string): string {
     .replace(/&#(\d+);/g, (m, dec) => codePointOr(m, parseInt(dec, 10)));
 }
 
-function codePointOr(original: string, codePoint: number): string {
+export function codePointOr(original: string, codePoint: number): string {
   if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return original;
   try {
     return String.fromCodePoint(codePoint);

@@ -25,6 +25,7 @@ import {
   GENERIC_NCX_RE,
   decodeNamedEntities,
   decodeNumericEntities,
+  codePointOr,
 } from './html-utils.js';
 import { UnusableMediaError } from './errors.js';
 import { LEGACY_EXTRACTOR_VERSION } from './version.js';
@@ -243,7 +244,10 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
     const id = /\bid="([^"]+)"/i.exec(attrs)?.[1];
     const href = /\bhref="([^"]+)"/i.exec(attrs)?.[1];
     const mediaType = /\bmedia-type="([^"]+)"/i.exec(attrs)?.[1] ?? '';
-    if (id && href) manifest.set(id, { href, mediaType });
+    if (id && href) {
+      const v = opts.extractorVersion ?? LEGACY_EXTRACTOR_VERSION;
+      manifest.set(id, { href: v >= 2 ? decodeXmlEntities(href) : href, mediaType });
+    }
   }
 
   /* 3. Spine, in document order. */
@@ -440,7 +444,7 @@ function parseNcxTitles(
   manifest: Map<string, { href: string; mediaType: string }>,
   opfDir: string,
   entries: Map<string, Buffer>,
-  _extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
+  extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
 ): Map<string, string> {
   const titles = new Map<string, string>();
 
@@ -488,7 +492,7 @@ function parseNcxTitles(
     /<(?:\w+:)?navPoint\b[\s\S]*?<(?:\w+:)?text>([\s\S]*?)<\/(?:\w+:)?text>[\s\S]*?<(?:\w+:)?content\b[^>]*\bsrc="([^"]+)"/gi,
   )) {
     const label = decodeEntities(m[1]);
-    const src = m[2].split('#')[0];
+    const src = (extractorVersion >= 2 ? decodeXmlEntities(m[2]) : m[2]).split('#')[0];
     if (!label || !src) continue;
     const key = normalizeZipPath(ncxDir ? `${ncxDir}/${src}` : src);
     if (!titles.has(key)) titles.set(key, label);
@@ -554,6 +558,24 @@ function readCalibreMeta(opf: string, name: string): string | null {
     new RegExp(`<(?:\\w+:)?meta\\b[^>]*\\bname="${esc}"[^>]*\\bcontent="([^"]+)"`, 'i').exec(opf) ??
     new RegExp(`<(?:\\w+:)?meta\\b[^>]*\\bcontent="([^"]+)"[^>]*\\bname="${esc}"`, 'i').exec(opf);
   return m ? decodeEntities(m[1]) : null;
+}
+
+/** Decode the five predefined XML entities plus numeric references, once.
+    Used for raw-zip OPF `href` and NCX `src` attribute values (#4217). It is
+    deliberately NOT `decodeEntities`: that decodes the whole HTML5 named set,
+    folds U+00A0 to a space (breaking a file name with a literal U+00A0), trims,
+    and runs numeric references after named ones (so `&amp;#39;` would be
+    unescaped twice). An attribute value is unescaped exactly once; invalid
+    numeric references and unknown names are left as typed. */
+export function decodeXmlEntities(s: string): string {
+  return s.replace(
+    /&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(amp|lt|gt|quot|apos));/g,
+    (m, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
+      if (hex !== undefined) return codePointOr(m, parseInt(hex, 16));
+      if (dec !== undefined) return codePointOr(m, parseInt(dec, 10));
+      return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[name as string] ?? m;
+    },
+  );
 }
 
 /** Decode entities in OPF metadata (title / author / series) and NCX chapter
