@@ -1834,7 +1834,11 @@ since `1e295990`). The run notes the build it ran on.
        fixed, and the chapters are captured again. The pick is then settled afresh from the head of the
        candidate list, and the two-swap cap resets. The row stays open until
        1A is computed. Any other capture-defect re-capture (R7-7) settles the
-       pick the same way (R9-2).
+       pick the same way (R9-2). A re-capture uses the **same analyzer model
+       and settings** as the first capture (owner decision 20, 2026-11-17): a
+       model change would make the verdict describe a setup users don't run. If
+       the same model still clears no chapter, 1A stays **not computed** with
+       that reason recorded, and the row stays open for the owner to revisit.
      - Record each chapter's hidden-turn count, dash-opening paragraph
        count, alignment and `flagOnly`, whether it was swapped out, and
        each re-capture with its cause.
