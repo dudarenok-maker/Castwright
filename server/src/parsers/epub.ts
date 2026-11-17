@@ -1,5 +1,5 @@
 /* EPUB parser. Primary path is the epub2 library (walks the spine via
-   `epub.flow` + `getChapter`, strips HTML to plain text). When epub2 yields
+   `epub.flow` + `getChapter`'s transform, strips HTML to plain text). When epub2 yields
    zero chapters — or throws — we fall back to a yauzl-based raw-zip parser
    (`parseEpubRawZip`) that reads META-INF/container.xml → OPF → manifest +
    spine ourselves with namespace-prefix-tolerant regex. epub2's OPF walker
@@ -144,11 +144,12 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
     for (let i = 0; i < epub.flow.length; i++) {
       const entry = epub.flow[i];
       if (!entry?.id) continue;
-      const html = await new Promise<string>((resolve, reject) => {
-        epub.getChapter(entry.id!, (err: Error | null, text?: string) =>
+      const raw = await new Promise<string>((resolve, reject) => {
+        epub.getChapterRaw(entry.id!, (err: Error | null, text?: string) =>
           err ? reject(err) : resolve(text ?? ''),
         );
       });
+      const html = epubChapterHtml(epub, entry.id, raw);
       // Title from the epub2-supplied NCX/spine label, merged with the body
       // heading via the shared resolver (see {@link mergeChapterTitle}).
       const { title: chTitle, synthesized } = mergeChapterTitle(
@@ -173,10 +174,39 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
     if (chapters.length === 0) return null;
     return assembleManuscript(meta, chapters, opts);
   } catch {
-    /* epub2 choked mid-walk (e.g. a getChapter threw). Defer to the raw-zip
+    /* epub2 choked mid-walk (e.g. a chapter read failed). Defer to the raw-zip
        fallback, which re-parses the whole archive from scratch. */
     return null;
   }
+}
+
+/** epub2's own `getChapter` transform over text already read with
+    `getChapterRaw`, so its exact output — and every persisted sentence offset
+    derived from it — is kept (#4239). `getChapter` rewrites each `href` from
+    inside the zip's async inflate callback and throws
+    `linkparts.shift is not a function` on `<a href="">`; there the throw is an
+    uncaughtException no try/await can catch, and the server exits. Over a proxy
+    whose `getChapterRaw` answers synchronously the same code runs in this
+    call's own stack, so the throw is catchable. It is deliberately not caught
+    here: it propagates to {@link tryEpub2Parse}'s catch and the whole book goes
+    to {@link parseEpubRawZip}, as the older code did whenever the throw was
+    catchable (a book with STORED zip entries). Relies on epub2 3.0.2's
+    `getChapter` delegating through `this.getChapterRaw`; pinned by a test. */
+function epubChapterHtml(epub: EPub, id: string, raw: string): string {
+  const proxy = Object.create(epub, {
+    getChapterRaw: {
+      value: (_id: string, cb: (err: Error | null, text?: string) => void) => cb(null, raw),
+    },
+  });
+  let out: string | undefined;
+  let failure: Error | undefined;
+  epub.getChapter.call(proxy, id, (err: Error | null, text?: string) => {
+    if (err) failure = err;
+    else out = text;
+  });
+  if (failure) throw failure;
+  if (out === undefined) throw new Error('epub2 getChapter did not answer synchronously');
+  return out;
 }
 
 /** Raw-zip fallback: unzip the EPUB and parse the OPF ourselves, tolerant of
@@ -247,8 +277,8 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
     const buf = resolveEntry(entries, opfDir, item.href);
     if (!buf) continue;
     resolvedHtmlDocs += 1;
-    /* Extract the <body> first — unlike epub2's getChapter, we have the full
-       document, so <head>/<title>/<style> text would otherwise leak into the
+    /* Extract the <body> first — here we have the full document (epub2's
+       getChapter trims it for the primary path), so <head>/<title>/<style> text would otherwise leak into the
        prose. */
     const bodyHtml = htmlBodyOnly(buf.toString('utf8'));
     /* Title from the NCX navLabel (parity with the epub2 path), merged with
@@ -380,8 +410,8 @@ function readAllZipEntries(bytes: Buffer): Promise<Map<string, Buffer>> {
   });
 }
 
-/** Return the inner HTML of <body> (epub2's getChapter does this for us on
-    the primary path; the raw-zip path has the whole document). Drops
+/** Return the inner HTML of <body> (epub2's getChapter does this on the
+    primary path; the raw-zip path has the whole document). Drops
     <script>/<style> blocks whose text content would otherwise leak into the
     stripped prose. Falls back to the whole input when there's no <body>. */
 function htmlBodyOnly(html: string): string {
