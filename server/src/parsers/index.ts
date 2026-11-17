@@ -4,8 +4,7 @@
 
 import { parseText, type ParsedManuscript } from './text.js';
 import { parsePdf } from './pdf.js';
-import { parseEpub } from './epub.js';
-import { parseMobi } from './mobi.js';
+import { parseInWorker } from './parse-in-worker.js';
 
 export type { ParsedManuscript };
 export { UnusableMediaError } from './errors.js';
@@ -65,7 +64,11 @@ export async function parseManuscript(input: {
     return parsePdf(input.buffer, { fileName: input.fileName });
   }
   if (format === 'epub' || input.mimeType === 'application/epub+zip') {
-    return parseEpub(input.buffer, {
+    return parseInWorker({
+      format: 'epub',
+      /* With sourcePath the parser reads from disk and never touches the
+         buffer; don't clone the whole book into the worker for nothing. */
+      buffer: input.sourcePath ? Buffer.alloc(0) : input.buffer,
       fileName: input.fileName,
       sourcePath: input.sourcePath,
       extractorVersion: input.extractorVersion,
@@ -76,7 +79,9 @@ export async function parseManuscript(input: {
     input.mimeType === 'application/x-mobipocket-ebook' ||
     input.mimeType === 'application/vnd.amazon.ebook'
   ) {
-    return parseMobi(input.buffer, {
+    return parseInWorker({
+      format: 'mobi',
+      buffer: input.buffer,
       fileName: input.fileName,
       extractorVersion: input.extractorVersion,
     });

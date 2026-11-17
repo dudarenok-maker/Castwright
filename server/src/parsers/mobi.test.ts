@@ -8,6 +8,7 @@
 // verification step in plan 52; see "Verification" there.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { buildMinimalMobi } from '../test-utils/minimal-mobi.js';
 
 let lastInitMobiCalledWith: { data: Uint8Array; resourceDir: string } | null = null;
 let lastInitKf8CalledWith: { data: Uint8Array; resourceDir: string } | null = null;
@@ -352,9 +353,11 @@ describe('parseMobi — block-closer paragraphs at extractorVersion 2 (#4217)', 
    case goes red (the divs glue to `AB`). */
 describe('parseManuscript -- MOBI arm threads extractorVersion (#4217)', () => {
   it('v2 splits on a block closer, v1 does not', async () => {
-    chaptersMock = [{ id: 'c1', html: '<div>A</div><div>B</div>' }];
+    /* A real MOBI, not the mock: since #4242 the arm parses in a worker thread,
+       which the module mock cannot reach. */
+    const buffer = buildMinimalMobi('<html><body><div>A</div><div>B</div></body></html>');
     const run = (extractorVersion: number) =>
-      parseManuscript({ buffer: mobiBufferWithEncryption(0), fileName: 'book.mobi', extractorVersion });
+      parseManuscript({ buffer, fileName: 'book.mobi', extractorVersion });
     expect((await run(2)).chapters[0].body).toBe('A\n\nB');
     expect((await run(1)).chapters[0].body).toBe('AB');
   });

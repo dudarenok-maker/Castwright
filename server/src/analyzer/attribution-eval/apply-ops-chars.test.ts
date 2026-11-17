@@ -23,6 +23,18 @@ function makeOp(partial: Partial<ScriptReviewOp> & Pick<ScriptReviewOp, 'id' | '
   return { rationale: 'test', ...partial } as ScriptReviewOp;
 }
 
+/** A chapter text whose span slices are the sentence texts (the verbatim case);
+    the rest is filler. applyOpsToCharArray resolves anchors against the chapter
+    slice, so the chapter has to carry the sentence text at the span. */
+function chapterOf(length: number, sentences: FinalSentence[], spans: FinalSpan[]): string {
+  const chars = Array<string>(length).fill('_');
+  for (const sp of spans) {
+    const text = sentences.find((s) => s.id === sp.id)!.text;
+    for (let i = 0; i < sp.end - sp.start; i++) chars[sp.start + i] = text[i] ?? '_';
+  }
+  return chars.join('');
+}
+
 describe('applyOpsToCharArray', () => {
   it('reattribute recolors the whole span', () => {
     // 30-char chapter; sentence 1 occupies [0,10) as 'alice'; rest is 'zed' filler.
@@ -34,7 +46,7 @@ describe('applyOpsToCharArray', () => {
     const finalSpans: FinalSpan[] = [{ id: 1, start: 0, end: 10 }];
     const ops: ScriptReviewOp[] = [makeOp({ id: 1, op: 'reattribute', characterId: 'bob' })];
 
-    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops);
+    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops, chapterOf(finalByChar.length, finalSentences, finalSpans));
 
     expect(reviewed.slice(0, 10)).toEqual(Array(10).fill('bob'));
     expect(reviewed.slice(10, 30)).toEqual(Array(20).fill('zed'));
@@ -56,7 +68,7 @@ describe('applyOpsToCharArray', () => {
       makeOp({ id: 2, op: 'split', anchor: 'abcde', pieceCharacterIds: ['alice', 'carol'] }),
     ];
 
-    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops);
+    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops, chapterOf(finalByChar.length, finalSentences, finalSpans));
 
     expect(reviewed.slice(0, 10)).toEqual(Array(10).fill('zed')); // untouched
     expect(reviewed.slice(10, 15)).toEqual(Array(5).fill('alice')); // piece0 [10,15)
@@ -85,7 +97,7 @@ describe('applyOpsToCharArray', () => {
       }),
     ];
 
-    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops);
+    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops, chapterOf(finalByChar.length, finalSentences, finalSpans));
 
     expect(reviewed.slice(0, 20)).toEqual(Array(20).fill('zed')); // untouched
     expect(reviewed.slice(20, 23)).toEqual(Array(3).fill('alice')); // left flank
@@ -99,7 +111,7 @@ describe('applyOpsToCharArray', () => {
     const finalSpans: FinalSpan[] = [{ id: 4, start: 0, end: 10 }];
     const ops: ScriptReviewOp[] = [makeOp({ id: 4, op: 'split', anchor: 'abcde' })]; // no pieceCharacterIds
 
-    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops);
+    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops, chapterOf(finalByChar.length, finalSentences, finalSpans));
 
     expect(reviewed).toEqual(finalByChar);
   });
@@ -113,7 +125,7 @@ describe('applyOpsToCharArray', () => {
       makeOp({ id: 5, op: 'split', anchor: 'xyz', pieceCharacterIds: ['alice', 'carol'] }),
     ];
 
-    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops);
+    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops, chapterOf(finalByChar.length, finalSentences, finalSpans));
 
     expect(reviewed).toEqual(finalByChar);
   });
@@ -125,10 +137,57 @@ describe('applyOpsToCharArray', () => {
     const finalSpans: FinalSpan[] = [{ id: 1, start: 0, end: 10 }];
     const ops: ScriptReviewOp[] = [makeOp({ id: 1, op: 'reattribute', characterId: 'bob' })];
 
-    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops);
+    const reviewed = applyOpsToCharArray(finalByChar, finalSentences, finalSpans, ops, chapterOf(finalByChar.length, finalSentences, finalSpans));
 
     expect(reviewed).not.toBe(finalByChar);
     expect(finalByChar).toEqual(original); // input untouched
     expect(reviewed[0]).toBe('bob'); // the copy DID change
+  });
+
+  // #4226 review pass 1: the anchor offset is sentence-relative, the span start is a
+  // chapterText coordinate. When the sentence and its chapter slice differ in spelling
+  // (NFC vs NFD, or ... vs the real ellipsis) the offset must come from the SLICE.
+  describe('anchors resolve against the chapter slice, not the sentence text', () => {
+    const TEXT = 'Tiếng Việt rất hay, anh nói. Ừ.';
+    const ANCHOR = 'Tiếng Việt rất hay,';
+
+    function paintedSplit(chapter: string, sentenceText: string, anchor: string): number {
+      const finalByChar: Array<string | null> = Array(chapter.length).fill('alice');
+      const reviewed = applyOpsToCharArray(
+        finalByChar,
+        [{ id: 1, text: sentenceText, characterId: 'alice' }],
+        [{ id: 1, start: 0, end: chapter.length }],
+        [makeOp({ id: 1, op: 'split', anchor, pieceCharacterIds: ['alice', 'carol'] })],
+        chapter,
+      );
+      return reviewed.indexOf('carol');
+    }
+
+    it('NFC chapter, NFD sentence: the split lands after the comma (19)', () => {
+      expect(paintedSplit(TEXT.normalize('NFC'), TEXT.normalize('NFD'), ANCHOR)).toBe(19);
+    });
+
+    it('NFD chapter, NFC sentence: the split lands after the comma (25)', () => {
+      expect(paintedSplit(TEXT.normalize('NFD'), TEXT.normalize('NFC'), ANCHOR)).toBe(25);
+    });
+
+    it('real-ellipsis chapter, three-dot sentence: the split lands after the comma (9)', () => {
+      // Chapter 'Wait… no, he said.': the split after 'no,' is chapter char 9.
+      expect(paintedSplit('Wait… no, he said.', 'Wait... no, he said.', 'Wait... no,')).toBe(9);
+    });
+
+    it('extract_dialogue measures both anchors on the chapter slice', () => {
+      const chapter = TEXT.normalize('NFD');
+      const finalByChar: Array<string | null> = Array(chapter.length).fill('alice');
+      const reviewed = applyOpsToCharArray(
+        finalByChar,
+        [{ id: 1, text: TEXT.normalize('NFC'), characterId: 'alice' }],
+        [{ id: 1, start: 0, end: chapter.length }],
+        [makeOp({ id: 1, op: 'extract_dialogue', anchor: 'Tiếng Việt', anchorEnd: ANCHOR, pieceCharacterIds: ['alice', 'dave'] })],
+        chapter,
+      );
+      expect(reviewed.indexOf('dave')).toBe('Tiếng Việt'.normalize('NFD').length);
+      expect(reviewed.lastIndexOf('dave')).toBe(24); // the NFD comma is char 24; the extract ends after it
+    });
   });
 });

@@ -335,8 +335,10 @@ export async function evalFixture(opts: {
   // Truth lines are the corrected/re-segmented labels; the raw chapterText carries
   // inline `[...]` tags they don't, so strip tags from the truth basis to keep
   // tag-only-divergent truth lines in the recall denominator (tag positions stay
-  // null → invisible to the metric). finalSentences derive from chapterText and
-  // match verbatim, so the final projection needs no stripping and is unchanged.
+  // null → invisible to the metric). finalSentences derive from chapterText, so the
+  // final projection needs no stripping and is unchanged. They match it up to the
+  // normalisation matching tolerates (NFC/NFD, quote/dash/ellipsis folds), not
+  // verbatim: anything measured in chapterText coordinates reads the chapter slice.
   const truthProj = projectToChars(opts.truth.chapterText, opts.truth.lines, { stripTags: true });
   const finalProj = projectToChars(
     opts.truth.chapterText,
@@ -344,7 +346,7 @@ export async function evalFixture(opts: {
   );
 
   const finalSpans = pairSpansToSentences(opts.truth.chapterText, finalSentences, finalProj.spans);
-  const reviewedByChar = applyOpsToCharArray(finalProj.speakerByChar, finalSentences, finalSpans, accepted);
+  const reviewedByChar = applyOpsToCharArray(finalProj.speakerByChar, finalSentences, finalSpans, accepted, opts.truth.chapterText);
   // scoreCharRecall reads only predicted.speakerByChar (spans/dropped unused for the predicted side).
   const reviewedProj = { speakerByChar: reviewedByChar, spans: finalProj.spans, dropped: finalProj.dropped };
 

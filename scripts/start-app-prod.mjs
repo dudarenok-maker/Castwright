@@ -45,8 +45,10 @@ const pkgVersion = JSON.parse(
  *  so a relative value would resolve against server/ there but against the repo
  *  root here, splitting server.log from node-reports/ (#4054). Exported for
  *  unit testing. NODE_OPTIONS also gets the report-exclusion flags, appended:
- *  the prod server starts no Worker today, but a Worker reads NODE_OPTIONS, not
- *  the parent's command line, so a future one stays covered (#4054). */
+ *  the EPUB/MOBI parse worker inherits the command-line flags by default
+ *  `execArgv` inheritance (an explicit `execArgv` there would undo that), and
+ *  a Worker reads NODE_OPTIONS, not the parent's command line, so any other
+ *  one stays covered (#4054). */
 export function serverChildEnv(baseEnv, { logDir, runDir }) {
   return {
     ...withReportExclusionNodeOptions(baseEnv),
