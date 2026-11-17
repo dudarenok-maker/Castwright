@@ -8,7 +8,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { findBookByManuscriptId } from '../workspace/scan.js';
+import { findBookByManuscriptId, type BookStateJson } from '../workspace/scan.js';
 import { parseManuscript } from '../parsers/index.js';
 import { hintsFromPersisted, readManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
 import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
@@ -155,14 +155,30 @@ export async function getOrHydrateManuscript(
 async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord | undefined> {
   const book = await findBookByManuscriptId(manuscriptId);
   if (!book) return undefined;
+  return buildManuscriptRecord(book.bookDir, book.state);
+}
 
-  const manuscriptPath = join(book.bookDir, book.state.manuscriptFile);
+/* Build the ManuscriptRecord for a book already located on disk: read and parse
+   the manuscript file, take the chapter hints from manuscript-hints.json when it
+   provably matches, else from the fresh parse (#2254).
+
+   This does no book lookup and no self-heal: `findBookByManuscriptId` applies
+   the scan's lazy heal, which writes state.json. A read-only caller (the #2254
+   scanner's --dump) therefore builds the same record analysis and GET /state
+   read without writing from its own process. `hydrateFromDisk` is the only
+   production caller. */
+export async function buildManuscriptRecord(
+  bookDir: string,
+  state: BookStateJson,
+): Promise<ManuscriptRecord | undefined> {
+  const manuscriptId = state.manuscriptId;
+  const manuscriptPath = join(bookDir, state.manuscriptFile);
   const buffer = await readFile(manuscriptPath).catch(() => null);
   if (!buffer) return undefined;
 
   const parsed = await parseManuscript({
     buffer,
-    fileName: book.state.manuscriptFile,
+    fileName: state.manuscriptFile,
   }).catch(() => null);
   if (!parsed) return undefined;
 
@@ -173,7 +189,7 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
      the wrong structure back); return undefined so the next call retries. */
   let persisted: unknown = null;
   try {
-    persisted = await readManuscriptHints(book.bookDir);
+    persisted = await readManuscriptHints(bookDir);
   } catch (err) {
     if (err instanceof SyntaxError) {
       console.warn(`[manuscripts] ${manuscriptId}: manuscript-hints.json is corrupt; re-parsing`);
@@ -186,7 +202,7 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
   let chapterHints: ChapterHint[] | null = null;
   let parseChapterCount: number | undefined;
   if (persisted !== null) {
-    const checked = hintsFromPersisted(persisted, book.state, sourceSha256);
+    const checked = hintsFromPersisted(persisted, state, sourceSha256);
     if (checked.ok) {
       chapterHints = checked.hints;
       parseChapterCount = checked.parseChapterCount;
@@ -197,23 +213,23 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
     }
   }
   const fromParse = !chapterHints;
-  if (!chapterHints) chapterHints = hintsFromParse(book.state, parsed.chapters);
+  if (!chapterHints) chapterHints = hintsFromParse(state, parsed.chapters);
 
   const record: ManuscriptRecord = {
     manuscriptId,
     format: parsed.format,
-    title: book.state.title,
+    title: state.title,
     wordCount: parsed.sourceText.trim().split(/\s+/).filter(Boolean).length,
     byteSize: buffer.length,
-    uploadedAt: book.state.createdAt,
+    uploadedAt: state.createdAt,
     sourceText: parsed.sourceText,
     chapterHints,
     sourceSha256,
     ...(parseChapterCount !== undefined ? { parseChapterCount } : {}),
     hintsSource: fromParse ? 'parse' : 'persisted',
     ...(fromParse ? { parseTitles: parsed.chapters.map((c) => (c.titleSynthesized ? null : c.title)) } : {}),
-    bookId: book.state.bookId,
-    bookDir: book.bookDir,
+    bookId: state.bookId,
+    bookDir: bookDir,
   };
   return record;
 }
