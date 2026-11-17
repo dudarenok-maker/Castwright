@@ -535,7 +535,7 @@ Design rationale:
 | 'upload' | 'analysing' | 'confirm' | 'ready' }`, with `view`/`currentChapterId`/
   `openProfileId` living _inside_ the `ready` variant. Don't flatten.
 - **Hash router grammar** (`src/lib/router.ts`) — pure `stageToHash`/`stageEqual`
-  (URL → stage is derived in `ReadyRoute`, which sets the `ready` stage's optional `chapterExplicit` flag),
+  (URL → stage is derived per route in `src/routes/index.tsx` via `useHydrateStage`; `ReadyRoute` does it for `ready` and also sets the stage's optional `chapterExplicit` flag),
   driven by react-router's `createHashRouter`, so the router stays decoupled from
   components. The grammar is the original prototype's plus `?chapter=3` when the
   stage's `chapterExplicit` is set (#4212).

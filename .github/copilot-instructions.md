@@ -85,7 +85,7 @@ Design notes Copilot should know:
   - Every change must add or update paired automated tests. UI-visible changes should include an e2e Playwright spec when crossing router/RTK/layout seams.
   - Flaky tests: use quarantinedIt utilities; test:quarantine exists.
 - UI state: ui.stage is a discriminated union; maintain its shape (don't flatten into booleans).
-- Router: hash-based grammar (src/lib/router.ts) — use stageToHash/stageEqual (URL → stage is derived in ReadyRoute), keep router logic decoupled from components.
+- Router: hash-based grammar (src/lib/router.ts) — use stageToHash/stageEqual (URL → stage is derived per route in src/routes/index.tsx via useHydrateStage; ReadyRoute does it for `ready`), keep router logic decoupled from components.
 - Type generation: run npm run openapi:types after changing openapi.yaml; prefer the generated src/lib/api-types.ts.
 - Mock flag: VITE_USE_MOCKS toggles mock vs real API. Use it when running e2e vs unit tests as intended.
 - Precommit & prepush lifecycle (ops-2997, 2026-09):
