@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">82</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">83</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->47<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->48<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">47 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">48 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -964,6 +964,18 @@
         <li><strong>Back-to-back designs keep VoiceDesign.</strong> Design two voices in a row on the tight card with the base-voices-only &quot;Design full cast&quot; scope (the Both scope mints each character&#39;s variants between designs, and a mint unloads VoiceDesign, so a second <code>Loading Qwen VoiceDesign</code> line is expected there). The log has no second <code>Loading Qwen VoiceDesign</code> line and no <code>Qwen VoiceDesign unloaded</code> line between the designs; the second design starts within seconds (no wait for the idle watchdog) and completes with no CUDA out-of-memory and no 503 line for <code>POST /qwen/design-voice</code> in the <code>logs/tts.log</code> count. Measure &quot;within seconds&quot; from the <code>qwen voice design: ... load_ms=... total_ms=...</code> line in <code>logs/tts.err.log</code>: it is timestamped when the design ends and <code>total_ms</code> excludes the admission wait, so the design&#39;s start is that line&#39;s timestamp minus its <code>total_ms</code>; subtract the first design&#39;s line timestamp to get the gap between the two, which is the admission wait plus any idle time you left. Also record <code>load_ms</code>, near 0 when VoiceDesign stayed warm. <code>Qwen VoiceDesign freed after &gt;120s idle (watchdog).</code> after a quiet pause is the idle watchdog and is fine; a plain <code>Qwen VoiceDesign unloaded (Base stays resident).</code> line is any VoiceDesign free, including an admission eviction, so it does not prove the watchdog. Record the <code>nvidia-smi</code> peak during a design. Known risk, not a failure of this row: the allocator cache a design leaves behind can make a design that follows within the 30 s per-card reclaim cooldown get a 503 and wait up to 30 s; a wait that ends at <code>freed after &gt;120s idle (watchdog)</code> is the idle-watchdog band instead (plan 264). To tell them apart, record <code>GET /health</code> <code>vram_reserved_mb</code> between the two designs.</li>
         </ul>
         <p class="src">the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4 &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4102">#4102</a> &#183; criteria in this row</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A127</span><span class="iname">EPUB and MOBI books read the same through the parse worker as in-process</span><span class="risk">the operator&#39;s box with the real EPUB/MOBI library (no GPU or sidecar needed)</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests prove byte-identical output on the repo&#39;s seven EPUB fixtures and the synthetic builders, and contained crashes on the malformed corpus. They do not prove parity on real publisher books, which PR #4241&#39;s review showed differ in ways synthetic fixtures miss (6 of 640 books once differed through a change no fixture caught). Since #4242 every in-process EPUB and MOBI/AZW3 parse (import, re-parse, restructure, samples, hydrate-from-disk) runs in a worker thread. Only the real library shows whether that changes what a book reads as.</p>
+        <ul>
+        <li><strong>Parity over the real library.</strong> From the repo root at the merged commit, run <code>node server/node_modules/tsx/dist/cli.mjs server/scripts/parse-worker-parity.ts &quot;&lt;set 1&gt;&quot; &quot;&lt;set 2&gt;&quot;</code> over the same two directories PR #4241&#39;s review used (63 + 577 EPUBs), plus any directory of MOBI/AZW3 books. Observe the summary line: <code>differ 0</code> and <code>error-differ 0</code>; <code>in-process-crash</code> books (expect 2 or fewer, the truncated zips) each show a clean worker rejection. Record the summary line and the date.</li>
+        <li><strong>The server stays up on a crasher.</strong> If the run reports any <code>in-process-crash</code> book, import that file through the running app (Upload) and observe a 415 message, not a server exit; the server log has <code>[parse-worker]</code> and no <code>FATAL uncaughtException</code>.</li>
+        <li><strong>Re-parse after a restart.</strong> Open a fully produced EPUB book after a server restart (the <code>hydrateFromDisk</code> path) and observe its chapters and text unchanged.</li>
+        </ul>
+        <p class="src">the operator&#39;s box with the real EPUB/MOBI library (no GPU or sidecar needed) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4242">#4242</a> &#183; criteria in this row; harness <code>server/scripts/parse-worker-parity.ts</code></p>
       </div>
     </details>
 

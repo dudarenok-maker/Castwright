@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**82 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**83 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
+> **Last change: 2026-11-17 (#4242), 82 → 83.** Row **A127** (EPUB and MOBI books read the same through the parse worker as in-process: parity over the operator's real library) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
 >
 > **Previous change: 2026-11-13 (#4163), 80 → 81.** Row **A126** (a cold model load learns its own weights, a warm op learns nothing: the per-op VRAM footprint fix) added. Group A 45 → 46. `next-id` bumped A125 → A127 in the same change; A125 is reserved for #4102's row. Row is owed; not run here.
 >
@@ -1948,7 +1950,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A127 -->
+<!-- next-id: A128 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6668,6 +6670,16 @@ The automated tests prove the admission decisions with a fake probe and fake eng
 - **Back-to-back designs keep VoiceDesign.** Design two voices in a row on the tight card with the base-voices-only "Design full cast" scope (the Both scope mints each character's variants between designs, and a mint unloads VoiceDesign, so a second `Loading Qwen VoiceDesign` line is expected there). The log has no second `Loading Qwen VoiceDesign` line and no `Qwen VoiceDesign unloaded` line between the designs; the second design starts within seconds (no wait for the idle watchdog) and completes with no CUDA out-of-memory and no 503 line for `POST /qwen/design-voice` in the `logs/tts.log` count. Measure "within seconds" from the `qwen voice design: ... load_ms=... total_ms=...` line in `logs/tts.err.log`: it is timestamped when the design ends and `total_ms` excludes the admission wait, so the design's start is that line's timestamp minus its `total_ms`; subtract the first design's line timestamp to get the gap between the two, which is the admission wait plus any idle time you left. Also record `load_ms`, near 0 when VoiceDesign stayed warm. `Qwen VoiceDesign freed after >120s idle (watchdog).` after a quiet pause is the idle watchdog and is fine; a plain `Qwen VoiceDesign unloaded (Base stays resident).` line is any VoiceDesign free, including an admission eviction, so it does not prove the watchdog. Record the `nvidia-smi` peak during a design. Known risk, not a failure of this row: the allocator cache a design leaves behind can make a design that follows within the 30 s per-card reclaim cooldown get a 503 and wait up to 30 s; a wait that ends at `freed after >120s idle (watchdog)` is the idle-watchdog band instead (plan 264). To tell them apart, record `GET /health` `vram_reserved_mb` between the two designs.
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4. *Criteria:* this row. Clears when each bullet is recorded with the log line or number it produced.
+
+### A127 · EPUB and MOBI books read the same through the parse worker as in-process ([#4242](https://github.com/dudarenok-maker/Castwright/issues/4242)) · **the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed)**
+
+The automated tests prove byte-identical output on the repo's seven EPUB fixtures and the synthetic builders, and contained crashes on the malformed corpus. They do not prove parity on real publisher books, which PR #4241's review showed differ in ways synthetic fixtures miss (6 of 640 books once differed through a change no fixture caught). Since #4242 every in-process EPUB and MOBI/AZW3 parse (import, re-parse, restructure, samples, hydrate-from-disk) runs in a worker thread. Only the real library shows whether that changes what a book reads as.
+
+- **Parity over the real library.** From the repo root at the merged commit, run `node server/node_modules/tsx/dist/cli.mjs server/scripts/parse-worker-parity.ts "<set 1>" "<set 2>"` over the same two directories PR #4241's review used (63 + 577 EPUBs), plus any directory of MOBI/AZW3 books. Observe the summary line: `differ 0` and `error-differ 0`; `in-process-crash` books (expect 2 or fewer, the truncated zips) each show a clean worker rejection. Record the summary line and the date.
+- **The server stays up on a crasher.** If the run reports any `in-process-crash` book, import that file through the running app (Upload) and observe a 415 message, not a server exit; the server log has `[parse-worker]` and no `FATAL uncaughtException`.
+- **Re-parse after a restart.** Open a fully produced EPUB book after a server restart (the `hydrateFromDisk` path) and observe its chapters and text unchanged.
+
+*Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
 
 ## Group B — local Ollama analyzer only
 
