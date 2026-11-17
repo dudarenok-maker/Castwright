@@ -215,9 +215,12 @@ export function RestructureView({ bookId }: Props) {
         slicesTookIt = true;
       }
       /* #4227 — the slice now equals the disk the re-read saw, so its tokens are the
-         client's; left stale, the next restructure would read as moved-under-client. */
+         client's; left stale, the next restructure would read as moved-under-client.
+         Only the manuscript slice took the read: the cast and state tokens stay what
+         those slices show, so a retried save of theirs is still refused when another
+         tab changed them. */
       if (slicesTookIt && adoptedFresh && fresh) {
-        dispatch(learnSliceRevisions(bookId, fresh.sliceRevisions, readSeq));
+        dispatch(learnSliceRevisions(bookId, fresh.sliceRevisions, readSeq, ['manuscript']));
       }
       /* #3967 — the mark is per book and writes no slice, so it must not sit behind the
          guards above that stop a cross-book slice write (leaving the book dropped it, and

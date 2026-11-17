@@ -445,7 +445,10 @@ export const learnSliceRevisions = (
   bookId: string,
   revisions: Partial<Record<StateSlice, SliceRevision>> | undefined,
   readSeq: number,
-) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq } });
+  /* #4227 — the slices the caller took from the read; every other slice keeps the
+     token it knows. Omitted: all of them (Layout's full read hydrates every slice). */
+  only?: StateSlice[],
+) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq, only } });
 /* #4227 — the token the client last learned for a slice's fields, or an empty map
    when it learned none. The Restructure view compares the manuscript's with the
    one a restructure response names, to tell that the edits moved under it. Not a
@@ -838,14 +841,15 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === LEARN_REVISIONS) {
-      const { bookId: readBook, revisions, readSeq } = a.payload as {
+      const { bookId: readBook, revisions, readSeq, only } = a.payload as {
         bookId: string;
         revisions?: Partial<Record<StateSlice, SliceRevision>>;
         readSeq: number;
+        only?: StateSlice[];
       };
       /* C4 — every field the read covers, except one a PUT landed on since the
          read was stamped. */
-      for (const slice of LEARNED_SLICES) {
+      for (const slice of only ?? LEARNED_SLICES) {
         const key = flushKey(readBook, slice);
         const la = landedAt.get(key) ?? {};
         const kn = { ...known.get(key) };

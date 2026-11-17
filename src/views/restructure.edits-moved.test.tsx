@@ -272,3 +272,71 @@ describe('#4227 the client adopts the server when the edits moved under it', () 
     expect(store.dispatch(knownSliceRevision('b1', 'manuscript'))).toEqual(tok('rev2'));
   });
 });
+
+/* #4227 pass 2 -- the re-read after a restructure covers all four slices, but only the
+   manuscript slice takes it. The client must learn the manuscript token ONLY: the
+   cast and state tokens it holds belong to what those slices show, and they become
+   the base of a retried save (plan 289 C3), so the server can refuse it as stale
+   when another tab changed that slice. Red when the learn covers every slice: the
+   retry then carries the re-read's token, which the server would accept, and the
+   other tab's write is silently reverted. */
+describe('#4227 the learn after a restructure is scoped to the manuscript slice', () => {
+  const eliza = (name: string) => ({ id: 'c1', name, role: '', color: 'narrator' }) as never;
+  type Req = { slice: string; baseRevision?: Record<string, string> };
+
+  async function restructureThenFailFirstSave(slice: 'cast' | 'state', edit: (store: ReturnType<typeof makeStore>) => void) {
+    const store = makeStore();
+    disk = { sentences: CLIENT, rev: 'rev1' };
+    store.dispatch(
+      learnSliceRevisions(
+        'b1',
+        { manuscript: tok('rev1'), cast: { characters: 'cast-old' }, state: { castConfirmed: 'state-old' } },
+        store.dispatch(beginFullRead('b1')) as unknown as number,
+      ),
+    );
+    /* Another tab has since changed the cast and the book's state. */
+    apiMock.getBookState.mockImplementation(async () => ({
+      state: { chapters: [] },
+      completedSlugs: [],
+      manuscriptEdits: { sentences: disk.sentences },
+      sliceRevisions: {
+        manuscript: tok(disk.rev),
+        cast: { characters: 'cast-outside' },
+        state: { castConfirmed: 'state-outside' },
+      },
+    }));
+    apiMock.refreshChapterTitles.mockImplementation(async () => ({
+      sentenceRemap: identity(CLIENT),
+      editsRevisionBefore: tok('rev1'), // nothing moved: the remap branch
+      warnings: [],
+    }));
+    await run(store, 'refresh');
+    const sent: Req[] = [];
+    let failed = false;
+    apiMock.putBookState.mockReset().mockImplementation(async (_id: string, w: Req) => {
+      sent.push(w);
+      if (w.slice === slice && !failed) {
+        failed = true;
+        throw new Error('Book state PUT failed (503): down');
+      }
+    });
+    edit(store);
+    await new Promise((r) => setTimeout(r, 1500)); // the debounce, then the first retry delay
+    return { store, sent: sent.filter((r) => r.slice === slice) };
+  }
+
+  it('S1 a cast edit retried after a restructure carries the OLD cast base, not the re-read token', async () => {
+    const { sent } = await restructureThenFailFirstSave('cast', (store) =>
+      store.dispatch(castSlice.actions.setCharacters([eliza('Renamed')])),
+    );
+    expect(sent.length).toBeGreaterThanOrEqual(2);
+    expect(sent[0].baseRevision).toBeUndefined();
+    expect(sent[1].baseRevision).toEqual({ characters: 'cast-old' });
+  });
+
+  it('S2 a state edit retried after a restructure carries the OLD state base', async () => {
+    const { sent } = await restructureThenFailFirstSave('state', (store) => store.dispatch({ type: 'ui/confirmCast' })); 
+    expect(sent.length).toBeGreaterThanOrEqual(2);
+    expect(sent[1].baseRevision).toEqual({ castConfirmed: 'state-old' });
+  });
+});
