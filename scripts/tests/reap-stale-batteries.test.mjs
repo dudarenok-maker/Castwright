@@ -709,15 +709,22 @@ test('G8: the census log records spareReason for a spared root and null for a ki
 // pre-kill snapshot failed) never matches: while the genuine root lives its
 // parent is verify-cache, which is protected, so a match is only a recycled pid. ---
 
+// Fixture pids sit above any OS pid_max (Linux 4194304) so they can never equal the
+// real test process's own pid (or an ancestor's), which ownAncestryPids would
+// protect: Windows pids are multiples of 4, so a literal 5000 could collide and
+// make the control below fail intermittently (the A2 CI flake).
+const SWEEP_ROOT_PID = 2_000_000_000;
+const SWEEP_CHILD_PID = SWEEP_ROOT_PID + 1;
+
 function runSweep(restrictTo, startedAtOfLive) {
   const processes = [
-    { pid: 5000, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /d /s /c vitest run', cpuSeconds: 0, startedAt: startedAtOfLive },
-    { pid: 5001, ppid: 5000, name: 'node.exe', commandLine: OUT_OF_CHECKOUT, cpuSeconds: 100, startedAt: startedAtOfLive },
+    { pid: SWEEP_ROOT_PID, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /d /s /c vitest run', cpuSeconds: 0, startedAt: startedAtOfLive },
+    { pid: SWEEP_CHILD_PID, ppid: SWEEP_ROOT_PID, name: 'node.exe', commandLine: OUT_OF_CHECKOUT, cpuSeconds: 100, startedAt: startedAtOfLive },
   ];
   const killedPids = [];
   const result = runCensus({
     collectSnapshot: () => processes,
-    readPrior: () => ({ 5000: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: startedAtOfLive } }),
+    readPrior: () => ({ SWEEP_ROOT_PID: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: startedAtOfLive } }),
     appendLog: () => {},
     kill: true,
     killReasons: ['orphaned-unreachable'],
@@ -733,16 +740,29 @@ function runSweep(restrictTo, startedAtOfLive) {
 }
 
 test('A1: an approx restrictTo entry never matches, so a recycled pid in another checkout is not killed', () => {
-  const r = runSweep(new Map([[5000, { startedAt: NOW - 30 * MIN, approx: true }]]), NOW - 2 * MIN);
+  const r = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 30 * MIN, approx: true }]]), NOW - 2 * MIN);
   assert.deepEqual(r.killed, []);
   assert.deepEqual(r.killedPids, []);
 });
 
 test('A2: an exact restrictTo entry whose live start time differs is not killed; an equal one is', () => {
-  const differs = runSweep(new Map([[5000, { startedAt: NOW - 30 * MIN, approx: false }]]), NOW - 2 * MIN);
+  const differs = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 30 * MIN, approx: false }]]), NOW - 2 * MIN);
   assert.deepEqual(differs.killedPids, []);
-  const same = runSweep(new Map([[5000, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
-  assert.deepEqual(same.killedPids, [5000], 'control: the exact match is still reaped (the fixture is a real orphan)');
+  const same = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
+  assert.deepEqual(same.killedPids, [SWEEP_ROOT_PID], 'control: the exact match is still reaped (the fixture is a real orphan)');
+});
+
+test('A2 regression: the sweep fixture is immune to the test process owning a low (Windows-style) pid', () => {
+  const real = process.pid;
+  // 5000 is what the fixture used to hard-code; a CI runner whose test process
+  // landed on it had the root protected as "own ancestry" and the control failed.
+  Object.defineProperty(process, 'pid', { value: 5000, configurable: true });
+  try {
+    const same = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
+    assert.deepEqual(same.killedPids, [SWEEP_ROOT_PID]);
+  } finally {
+    Object.defineProperty(process, 'pid', { value: real, configurable: true });
+  }
 });
 
 // --- #4222 review findings 1 and 4: "under the pushing checkout" is judged for the
