@@ -24,11 +24,20 @@
    --reroll --reason <t> (once, only after not-computed) supersedes them all and
    captures afresh.
 
+   Phase 7c step 2 (§4.3 "1A engine replay", §4.4 step 2, R4-1, R4-4, R5-6, R7-7, R9-3,
+   R10-2): --from-captures --scratch <dir> --manifest <file.json> --language ru measures the
+   saved captures with NO model and NO analyzer. Per captured chapter the engine is replayed
+   three times over the captured `raw`: control (recovery on, must deep-equal the captured
+   `deterministic`, else the chapter's 1A is void), on (the control's output) and off
+   (recoverMidParagraphTurns: false). A capture does not store the chapter text, so the
+   manifest supplies it (the same string the capture read). Writes report.json / report.md.
+
    Harness vs production (§4.3): capacity comes from resolveCapacity for the
    owner's real engine ('local' for Ollama); --model is required, with no default;
    ONE structureBudget, seeded from analyzer.structure.maxWindowsPerBook, is shared
    across the book's chapters. Chapter text is read as-is (AC5 M-8). */
 
+import { isDeepStrictEqual } from 'node:util';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -37,12 +46,15 @@ import { buildRosterSnapshot } from '../src/analyzer/attribution-eval/capture.js
 import type { RosterSnapshot } from '../src/analyzer/attribution-eval/roster-schema.js';
 import { OllamaAnalyzer } from '../src/analyzer/ollama.js';
 import type { Analyzer, StageCall } from '../src/analyzer/index.js';
-import { countTurnOpeners } from '../src/analyzer/dialogue-structure/legibility.js';
+import { countTurnOpeners, turnInParagraphRegex } from '../src/analyzer/dialogue-structure/legibility.js';
+import { conventionsFor } from '../src/analyzer/dialogue-structure/lang/index.js';
+import { runStructureEngine } from '../src/routes/analysis.js';
 import { resolveCapacity } from '../src/analyzer/capacity.js';
 import { configValue } from '../src/config/resolver.js';
 
 export const USAGE =
-  'usage: paragraph-degradation-ab.mts --manifest <file.json> --model <name> --scratch <dir> [--language ru] [--resume | --recapture <ids> --reason <text> | --reroll --reason <text>]\n';
+  'usage: paragraph-degradation-ab.mts --manifest <file.json> --model <name> --scratch <dir> [--language ru] [--resume | --recapture <ids> --reason <text> | --reroll --reason <text>]\n' +
+  '       paragraph-degradation-ab.mts --from-captures --manifest <file.json> --scratch <dir> --language ru\n';
 
 export interface ManifestEntry {
   chapterId: number;
@@ -377,6 +389,261 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
   return 0;
 }
 
+/* ---- Phase 7c step 2: the 1A replays (measurement half, no model) ---- */
+
+type EngineRun = ReturnType<typeof runStructureEngine>;
+type Conventions = NonNullable<ReturnType<typeof conventionsFor>>;
+
+/** R4-4, R5-6: a model sentence is a turn sentence when its own text opens with the language's
+    dialogue marker or contains a mid-paragraph turn. Decided from the text, so a hidden turn
+    inside a narration span counts. */
+export function isTurnSentence(text: string, conventions: Conventions): boolean {
+  return (conventions.dialogueOpen?.test(text) ?? false) || turnInParagraphRegex().test(text);
+}
+
+export interface ControlVoid {
+  index: number;
+  controlId: string | null;
+  capturedId: string | null;
+  controlReason: string | null;
+  capturedReason: string | null;
+}
+export type ControlResult = { status: 'pass' } | ({ status: 'void' } & ControlVoid);
+
+export interface ArmReport {
+  confirmed: number;
+  corrected: number;
+  flagged: number;
+  unresolved: number;
+}
+export interface ChapterReplay {
+  chapterId: number;
+  status: ChapterStatus;
+  control: ControlResult;
+  sentences: number;
+  turnSentences: number;
+  /** Sentences whose post-crossExamine speaker differs, on vs off. */
+  changedAll: number;
+  changedTurn: number;
+  /** Narrator-attributed turn sentences, on and off (the share's numerators). */
+  narratorTurnOn: number;
+  narratorTurnOff: number;
+  on: ArmReport;
+  off: ArmReport;
+  chunks: CapturedChapter['chunks'];
+  /** Ids escalation changed: `final` vs `deterministic`. */
+  escalationChanged: number;
+}
+
+const armOf = (r: EngineRun): ArmReport => ({
+  confirmed: r.examined.report.confirmed,
+  corrected: r.examined.report.corrected,
+  flagged: r.examined.report.flagged,
+  unresolved: r.examined.report.unresolved,
+});
+
+/** The first sentence where the control's output departs from the captured `deterministic`. */
+function firstDifference(control: EngineRun, saved: SavedCapture): ControlVoid | null {
+  const a = control.examined.sentences;
+  const b = saved.deterministic;
+  if (isDeepStrictEqual(a, b)) return null;
+  const n = Math.min(a.length, b.length);
+  let index = n;
+  for (let i = 0; i < n; i++) {
+    if (!isDeepStrictEqual(a[i], b[i])) {
+      index = i;
+      break;
+    }
+  }
+  return {
+    index,
+    controlId: a[index]?.characterId ?? null,
+    capturedId: b[index]?.characterId ?? null,
+    controlReason: control.examined.reasons[index]?.reason ?? null,
+    capturedReason: saved.reasons[index]?.reason ?? null,
+  };
+}
+
+/** R4-1: replay the engine over one captured `raw`: control (= on) and off. No analyzer, no coverage guard. */
+export function replayChapter(saved: SavedCapture, body: string, conventions: Conventions, status: ChapterStatus): ChapterReplay {
+  const args = () => ({ sentences: structuredClone(saved.raw), body, stage1: saved.stage1, conventions });
+  const control = runStructureEngine(args()); // recovery on; the "on" arm is this same output, reused
+  const off = runStructureEngine({ ...args(), structureOptions: { recoverMidParagraphTurns: false } });
+  const diff = firstDifference(control, saved);
+  const onS = control.examined.sentences;
+  const offS = off.examined.sentences;
+  const n = Math.min(onS.length, offS.length);
+  let changedAll = 0;
+  let changedTurn = 0;
+  let turnSentences = 0;
+  let narratorTurnOn = 0;
+  let narratorTurnOff = 0;
+  for (let i = 0; i < n; i++) {
+    const turn = isTurnSentence(saved.raw[i]?.text ?? onS[i]!.text, conventions);
+    const differs = onS[i]!.characterId !== offS[i]!.characterId;
+    if (differs) changedAll++;
+    if (turn) {
+      turnSentences++;
+      if (differs) changedTurn++;
+      if (onS[i]!.characterId === 'narrator') narratorTurnOn++;
+      if (offS[i]!.characterId === 'narrator') narratorTurnOff++;
+    }
+  }
+  let escalationChanged = 0;
+  const m = Math.min(saved.final.length, saved.deterministic.length);
+  for (let i = 0; i < m; i++) if (saved.final[i]!.characterId !== saved.deterministic[i]!.characterId) escalationChanged++;
+  return {
+    chapterId: saved.chapterId,
+    status,
+    control: diff ? { status: 'void', ...diff } : { status: 'pass' },
+    sentences: n,
+    turnSentences,
+    changedAll,
+    changedTurn,
+    narratorTurnOn,
+    narratorTurnOff,
+    on: armOf(control),
+    off: armOf(off),
+    chunks: saved.chunks,
+    escalationChanged,
+  };
+}
+
+const COUNT_KEYS = [
+  'sentences', 'turnSentences', 'changedAll', 'changedTurn', 'narratorTurnOn', 'narratorTurnOff', 'escalationChanged',
+] as const;
+export type Totals = Record<(typeof COUNT_KEYS)[number], number> & { chapters: number; on: ArmReport; off: ArmReport };
+
+/** Sums over the chapters given: the caller decides which chapters count (picked only, R9-3). */
+export function sumReplays(rs: ChapterReplay[]): Totals {
+  const arm = (k: 'on' | 'off'): ArmReport => ({
+    confirmed: rs.reduce((n, r) => n + r[k].confirmed, 0),
+    corrected: rs.reduce((n, r) => n + r[k].corrected, 0),
+    flagged: rs.reduce((n, r) => n + r[k].flagged, 0),
+    unresolved: rs.reduce((n, r) => n + r[k].unresolved, 0),
+  });
+  const t = { chapters: rs.length, on: arm('on'), off: arm('off') } as Totals;
+  for (const k of COUNT_KEYS) t[k] = rs.reduce((n, r) => n + r[k], 0);
+  return t;
+}
+
+export interface VoidChapter extends ControlVoid {
+  chapterId: number;
+  status: ChapterStatus;
+}
+export interface MeasurementReport {
+  model: string | null;
+  language: string;
+  pickOutcome: PickOutcome | null;
+  /** Picked chapters' 1A: the only chapters in the verdict, `n`, the blind sheet and every total. */
+  picked: ChapterReplay[];
+  totals: Totals;
+  /** Swapped-out and captured-not-used chapters, kept outside every total (R9-3, R10-2). */
+  outside: ChapterReplay[];
+  /** Every control's result, across all current captures (superseded ones are not read). */
+  controls: Array<{ chapterId: number; status: ChapterStatus; control: ControlResult }>;
+  verdict: { state: 'void'; void: VoidChapter[] } | { state: 'ready' };
+}
+
+/** Reads the saved captures and pick.json and replays each chapter. Constructs no analyzer.
+    `bodyOf(chapterId)` supplies the chapter text the capture ran over. */
+export function measureCaptures(opts: {
+  scratch: string;
+  language: string;
+  bodyOf: (chapterId: number) => string;
+}): MeasurementReport {
+  const scratch = resolve(opts.scratch);
+  const conventions = conventionsFor(opts.language);
+  if (!conventions) throw new Error(`no dialogue conventions for language "${opts.language}"`);
+  const pick = readPick(scratch);
+  const saved = readSavedCaptures(scratch).map((e) => e.saved).sort((a, b) => a.chapterId - b.chapterId);
+  if (saved.length === 0) throw new Error(`${scratch} holds no saved captures`);
+  const statusOf = (id: number): ChapterStatus => pick?.chapters[String(id)]?.status ?? 'captured-not-used';
+  // Every current capture is replayed, swapped-out and captured-not-used ones too: their controls
+  // gate the verdict (R7-7). A superseded capture is a different file and is never read.
+  const replays = saved.map((s) => replayChapter(s, opts.bodyOf(s.chapterId), conventions, statusOf(s.chapterId)));
+  const picked = replays.filter((r) => r.status === 'picked');
+  const outside = replays.filter((r) => r.status !== 'picked');
+  const voids: VoidChapter[] = replays.flatMap((r) =>
+    r.control.status === 'void'
+      ? [{ chapterId: r.chapterId, status: r.status, index: r.control.index, controlId: r.control.controlId,
+           capturedId: r.control.capturedId, controlReason: r.control.controlReason, capturedReason: r.control.capturedReason }]
+      : [],
+  );
+  return {
+    model: pick?.model ?? saved[0]!.model,
+    language: opts.language,
+    pickOutcome: pick?.outcome ?? null,
+    picked,
+    totals: sumReplays(picked),
+    outside,
+    controls: replays.map((r) => ({ chapterId: r.chapterId, status: r.status, control: r.control })),
+    verdict: voids.length > 0 ? { state: 'void', void: voids } : { state: 'ready' },
+  };
+}
+
+const pct = (a: number, b: number): string => (b === 0 ? 'n/a' : `${((100 * a) / b).toFixed(1)}%`);
+
+function chapterRows(rs: ChapterReplay[]): string[] {
+  return rs.map(
+    (r) =>
+      `| ch${r.chapterId} | ${r.control.status} | ${r.sentences} | ${r.turnSentences} | ${r.changedAll} | ${r.changedTurn} | ` +
+      `${pct(r.narratorTurnOn, r.turnSentences)} / ${pct(r.narratorTurnOff, r.turnSentences)} | ` +
+      `${r.on.confirmed}/${r.on.corrected}/${r.on.flagged}/${r.on.unresolved} | ` +
+      `${r.off.confirmed}/${r.off.corrected}/${r.off.flagged}/${r.off.unresolved} | ` +
+      `${r.chunks.chunkCount}/${r.chunks.coverageRetries}/${r.chunks.coverageExhausted}/${r.chunks.deterministicSplits} | ${r.escalationChanged} |`,
+  );
+}
+const TABLE_HEAD = [
+  '| chapter | control | sentences | turn sentences | changed (all) | changed (turn) | narrator share on / off | on c/k/f/u | off c/k/f/u | chunks n/retry/exhausted/split | escalation changed |',
+  '|---|---|---|---|---|---|---|---|---|---|---|',
+];
+
+export function renderReport(r: MeasurementReport): string {
+  const L: string[] = [`# #2254 1A engine replay (${r.language}${r.model ? `, model ${r.model}` : ''})`, ''];
+  L.push(`Pick outcome: ${r.pickOutcome ?? 'no pick.json'}`, '', '## Chapter status and control', '', '| chapter | status | control |', '|---|---|---|');
+  for (const c of r.controls) L.push(`| ch${c.chapterId} | ${c.status} | ${c.control.status} |`);
+  L.push('', '## Picked chapters: 1A (c/k/f/u = confirmed/corrected/flagged/unresolved)', '', ...TABLE_HEAD, ...chapterRows(r.picked));
+  const t = r.totals;
+  L.push(
+    '',
+    `Totals over ${t.chapters} picked chapter(s): ${t.sentences} sentences, ${t.turnSentences} turn sentences, changed ${t.changedAll} (all) / ${t.changedTurn} (turn).`,
+  );
+  L.push('', '## Outside the verdict: swapped-out and captured-not-used (in no total)', '');
+  if (r.outside.length === 0) L.push('None.');
+  else L.push(...TABLE_HEAD, ...chapterRows(r.outside));
+  L.push('', '## Verdict state', '');
+  if (r.verdict.state === 'ready') L.push('`ready` (the hand-check is a later step).');
+  else {
+    L.push('`void`: a replay control did not reproduce the live snapshot.', '');
+    for (const v of r.verdict.void) {
+      L.push(
+        `- ch${v.chapterId} (${v.status}): first difference at sentence ${v.index}: control id ${v.controlId} (${v.controlReason}) vs captured id ${v.capturedId} (${v.capturedReason})`,
+      );
+    }
+  }
+  return `${L.join('\n')}\n`;
+}
+
+/** Measures from the saved files and writes report.json and report.md beside them. Nothing here
+    writes a capture file, so a failure never touches a saved capture (R6-5). */
+export function runMeasurement(opts: { scratch: string; language: string; manifest: ManifestEntry[] }): MeasurementReport {
+  const paths = new Map(opts.manifest.map((m) => [m.chapterId, m.chapterTextPath] as const));
+  const report = measureCaptures({
+    scratch: opts.scratch,
+    language: opts.language,
+    bodyOf: (id) => {
+      const p = paths.get(id);
+      if (!p) throw new Error(`chapter ${id} has a saved capture but is not in the manifest`);
+      return readFileSync(p, 'utf8'); // as-is, the string the capture read
+    },
+  });
+  const scratch = resolve(opts.scratch);
+  writeAtomic(join(scratch, 'report.json'), JSON.stringify(report, null, 2));
+  writeAtomic(join(scratch, 'report.md'), renderReport(report));
+  return report;
+}
+
 function argValue(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
@@ -386,6 +653,22 @@ export async function main(argv: string[], deps: RunnerDeps = defaultDeps()): Pr
   const manifestPath = argValue(argv, '--manifest');
   const model = argValue(argv, '--model');
   const scratch = argValue(argv, '--scratch');
+  if (argv.includes('--from-captures')) {
+    const language = argValue(argv, '--language');
+    if (!manifestPath || !scratch || !language) {
+      process.stderr.write(USAGE);
+      return 2;
+    }
+    try {
+      const manifest = JSON.parse(readFileSync(resolve(manifestPath), 'utf8')) as ManifestEntry[];
+      const r = runMeasurement({ scratch, language, manifest });
+      deps.log(`measured ${r.controls.length} capture(s): verdict ${r.verdict.state}`);
+      return 0;
+    } catch (e) {
+      process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+  }
   if (!manifestPath || !model || !scratch) {
     process.stderr.write(USAGE);
     return 2;
@@ -398,7 +681,7 @@ export async function main(argv: string[], deps: RunnerDeps = defaultDeps()): Pr
   }
   try {
     const manifest = JSON.parse(readFileSync(resolve(manifestPath), 'utf8')) as ManifestEntry[];
-    return await runCapture(
+    const code = await runCapture(
       {
         manifest,
         model,
@@ -411,6 +694,17 @@ export async function main(argv: string[], deps: RunnerDeps = defaultDeps()): Pr
       },
       deps,
     );
+    // The same measurement after the walk settles; its failure never touches a saved capture (R6-5).
+    const language = argValue(argv, '--language');
+    if (code === 0 && language && conventionsFor(language)) {
+      try {
+        const r = runMeasurement({ scratch, language, manifest });
+        deps.log(`measured ${r.controls.length} capture(s): verdict ${r.verdict.state}`);
+      } catch (e) {
+        deps.log(`measurement failed (saved captures untouched; re-run with --from-captures): ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return code;
   } catch (e) {
     process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;

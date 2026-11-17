@@ -18,7 +18,12 @@ import {
   type RunnerDeps,
   type ManifestEntry,
   type SavedCapture,
+  type PickFile,
+  type MeasurementReport,
+  isTurnSentence,
 } from '../../server/scripts/paragraph-degradation-ab.mts';
+import { conventionsFor } from '../../server/src/analyzer/dialogue-structure/lang/index.ts';
+import { runStructureEngine } from '../../server/src/routes/analysis.ts';
 import { configValue } from '../../server/src/config/resolver.ts';
 import { captureChapterStages } from '../../server/src/analyzer/attribution-eval/run-eval.ts';
 import type { Analyzer } from '../../server/src/analyzer/index.ts';
@@ -413,4 +418,178 @@ test('a --reroll after a computed outcome is refused and writes nothing', async 
   assert.notEqual(await runCapture({ manifest, model: 'A', scratch, reroll: true, reason: 'x' }, deps), 0);
   assert.equal(calls.length, 0);
   assert.equal(snapshot(scratch), before);
+});
+
+/* ---- Phase 7c step 2: the 1A replays from saved captures (spec §4.3, §4.4 step 2, R4-1, R7-7, R9-3, R10-2) ---- */
+
+const MERGED_BODY = [
+  '— Ты уверен, что это сработает? — спросил Антон.',
+  '— Да, вполне, — ответила Ольга.',
+  'Борис промолчал. — Тогда идём, — сказал Борис. — Хорошо.',
+  '— После тебя.',
+].join('\n');
+const MERGED_SENTENCES: Array<[string, string]> = [
+  ['anton', '— Ты уверен, что это сработает?'],
+  ['olga', '— Да, вполне,'],
+  ['narrator', 'Борис промолчал.'],
+  ['boris', '— Тогда идём,'],
+  ['olga', '— Хорошо.'],
+  ['narrator', '— После тебя.'],
+];
+
+/** A three-chapter ru run captured for real (mock analyzer, real engine); returns the scratch dir. */
+async function threeChapterRun() {
+  process.env.ATTRIBUTION_ESCALATION = 'local';
+  process.env.STAGE2_COVERAGE_RETRIES = '0';
+  const { dir, manifest } = fixtureDir(3);
+  for (const m of manifest) writeFileSync(m.chapterTextPath, MERGED_BODY);
+  const scratch = scratchOf(dir);
+  let chapterId = 0;
+  const analyzer = {
+    runStage2Chapter: () =>
+      Promise.resolve({
+        sentences: MERGED_SENTENCES.map(([characterId, text], i) => ({ id: i + 1, chapterId, characterId, confidence: 0.9, text })),
+      }),
+    runAttributionEscalation: () => Promise.resolve(null),
+  } as unknown as Analyzer;
+  const { deps } = fakeDeps({
+    makeAnalyzer: () => analyzer,
+    capture: ((o: Parameters<typeof captureChapterStages>[0]) => {
+      chapterId = o.chapterId;
+      return captureChapterStages(o);
+    }) as RunnerDeps['capture'],
+  });
+  assert.equal(await runCapture({ manifest, model: 'A', scratch, language: 'ru' }, deps), 0);
+  assert.deepEqual(readPick(scratch)!.picked, [1, 2, 3]);
+  const manifestPath = join(dir, 'manifest.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  return { dir, scratch, manifest, manifestPath };
+}
+
+const reportOf = (scratch: string) => JSON.parse(readFileSync(join(scratch, 'report.json'), 'utf8')) as MeasurementReport;
+const FROM_CAPTURES = (r: { scratch: string; manifestPath: string }) =>
+  ['--from-captures', '--manifest', r.manifestPath, '--scratch', r.scratch, '--language', 'ru'];
+const noAnalyzerDeps = (): RunnerDeps => ({
+  makeAnalyzer: () => {
+    throw new Error('--from-captures must construct no analyzer');
+  },
+  capture: (() => {
+    throw new Error('--from-captures must capture nothing');
+  }) as unknown as RunnerDeps['capture'],
+  log: () => {},
+});
+
+/** Edit one saved capture file in place. */
+function editCapture(scratch: string, id: number, edit: (c: SavedCapture) => void): void {
+  const f = join(scratch, captureFileName(id));
+  const c = JSON.parse(readFileSync(f, 'utf8')) as SavedCapture;
+  edit(c);
+  writeFileSync(f, JSON.stringify(c, null, 2));
+}
+function editPick(scratch: string, edit: (p: PickFile) => void): void {
+  const f = join(scratch, 'pick.json');
+  const p = JSON.parse(readFileSync(f, 'utf8')) as PickFile;
+  edit(p);
+  writeFileSync(f, JSON.stringify(p, null, 2));
+}
+
+test('1A replay: a clean three-chapter capture passes every control and counts equal a direct on/off comparison', async () => {
+  const r = await threeChapterRun();
+  assert.equal(await main(FROM_CAPTURES(r), noAnalyzerDeps()), 0);
+  const rep = reportOf(r.scratch);
+  assert.deepEqual(rep.controls.map((c) => c.control.status), ['pass', 'pass', 'pass']);
+  assert.equal(rep.verdict.state, 'ready');
+  assert.ok(existsSync(join(r.scratch, 'report.md')));
+  const conv = conventionsFor('ru')!;
+  for (const { saved } of readSavedCaptures(r.scratch)) {
+    const args = { sentences: structuredClone(saved.raw), body: MERGED_BODY, stage1: saved.stage1, conventions: conv };
+    const on = runStructureEngine(args).examined.sentences;
+    const off = runStructureEngine({ ...args, sentences: structuredClone(saved.raw), structureOptions: { recoverMidParagraphTurns: false } }).examined.sentences;
+    const direct = on.filter((s, i) => s.characterId !== off[i]!.characterId).length;
+    const got = rep.picked.find((p) => p.chapterId === saved.chapterId)!;
+    assert.equal(got.changedAll, direct, `ch${saved.chapterId} changed-sentence count`);
+    assert.equal(got.sentences, on.length);
+    assert.ok(got.turnSentences >= 4, 'dash-opening and merged-turn sentences are turn sentences');
+  }
+  assert.equal(rep.totals.changedAll, rep.picked.reduce((n, p) => n + p.changedAll, 0));
+  assert.equal(rep.totals.chapters, 3);
+});
+
+test('1A replay: a control mismatch in one chapter of three is void, naming the chapter and sentence', async () => {
+  const r = await threeChapterRun();
+  editCapture(r.scratch, 2, (c) => {
+    c.deterministic[1]!.characterId = 'boris';
+  });
+  assert.equal(await main(FROM_CAPTURES(r), noAnalyzerDeps()), 0);
+  const rep = reportOf(r.scratch);
+  assert.equal(rep.verdict.state, 'void');
+  const v = rep.verdict.state === 'void' ? rep.verdict.void : [];
+  assert.equal(v.length, 1);
+  assert.equal(v[0]?.chapterId, 2);
+  assert.equal(v[0]?.index, 1);
+  assert.equal(v[0]?.capturedId, 'boris');
+  assert.deepEqual(rep.controls.map((c) => c.control.status), ['pass', 'void', 'pass']);
+  assert.match(readFileSync(join(r.scratch, 'report.md'), 'utf8'), /ch2 \(picked\): first difference at sentence 1/);
+});
+
+test('1A replay: a control mismatch in a captured-not-used chapter still voids the verdict', async () => {
+  const r = await threeChapterRun();
+  editPick(r.scratch, (p) => {
+    p.chapters['3']!.status = 'captured-not-used';
+  });
+  editCapture(r.scratch, 3, (c) => {
+    c.deterministic[0]!.characterId = 'boris';
+  });
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const rep = reportOf(r.scratch);
+  assert.equal(rep.verdict.state, 'void');
+  const v = rep.verdict.state === 'void' ? rep.verdict.void : [];
+  assert.equal(v[0]?.chapterId, 3);
+  assert.equal(v[0]?.status, 'captured-not-used');
+});
+
+test('1A replay: swapped-out and captured-not-used chapters sit in their own table and in no total', async () => {
+  const r = await threeChapterRun();
+  editPick(r.scratch, (p) => {
+    p.chapters['2']!.status = 'swapped-out';
+    p.chapters['3']!.status = 'captured-not-used';
+  });
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const rep = reportOf(r.scratch);
+  assert.deepEqual(rep.picked.map((p) => p.chapterId), [1]);
+  assert.deepEqual(rep.outside.map((p) => [p.chapterId, p.status]), [[2, 'swapped-out'], [3, 'captured-not-used']]);
+  assert.ok(rep.outside.every((o) => o.turnSentences > 0), 'the outside chapters have counts of their own');
+  assert.equal(rep.totals.chapters, 1);
+  assert.equal(rep.totals.turnSentences, rep.picked[0]!.turnSentences, 'totals hold the picked chapter alone');
+  assert.equal(rep.totals.sentences, rep.picked[0]!.sentences);
+  assert.equal(rep.verdict.state, 'ready', 'their controls ran and passed');
+});
+
+test('1A replay: a superseded capture is read by nothing', async () => {
+  const r = await threeChapterRun();
+  const c = JSON.parse(readFileSync(join(r.scratch, captureFileName(2)), 'utf8')) as SavedCapture;
+  c.deterministic[0]!.characterId = 'boris';
+  writeFileSync(join(r.scratch, 'capture-ch2.superseded-r1.json'), JSON.stringify(c));
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const rep = reportOf(r.scratch);
+  assert.equal(rep.verdict.state, 'ready');
+  assert.equal(rep.controls.length, 3);
+});
+
+test('1A replay: turn sentences come from the text, dash openers and hidden turns both', () => {
+  const ru = conventionsFor('ru')!;
+  assert.equal(isTurnSentence('— Да, вполне', ru), true, 'dash-opening');
+  assert.equal(isTurnSentence('Он промолчал. — Да', ru), true, 'a turn hidden inside a narration sentence');
+  assert.equal(isTurnSentence('Он промолчал и ушёл', ru), false, 'plain narration');
+});
+
+test('1A replay: --from-captures constructs no analyzer and a failed measurement leaves the captures alone', async () => {
+  const r = await threeChapterRun();
+  const files = () => readdirSync(r.scratch).filter((f) => f.startsWith('capture-')).map((f) => `${f}:${readFileSync(join(r.scratch, f)).length}`);
+  const before = files();
+  assert.equal(await main(FROM_CAPTURES(r), noAnalyzerDeps()), 0);
+  // a language with no table fails the measurement; the capture files are as they were
+  const bad = ['--from-captures', '--manifest', r.manifestPath, '--scratch', r.scratch, '--language', 'xx'];
+  assert.equal(await main(bad, noAnalyzerDeps()), 1);
+  assert.deepEqual(files(), before);
 });
