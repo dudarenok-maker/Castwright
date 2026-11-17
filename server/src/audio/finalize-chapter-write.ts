@@ -12,7 +12,7 @@
    it no longer inlines its own tail. */
 
 import { rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { liveAudioPath, livePartPath } from '../workspace/chapter-take.js';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
@@ -216,10 +216,10 @@ async function finalizeChapterAudioWriteInner(
 
   const audioRoot = audioDir(bookDir);
   const audioExt = audioExtForFormat(audioFormat);
-  const audioPath = join(audioRoot, `${chapter.slug}.${audioExt}`);
-  const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
-  const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
-  const lufsPath = join(audioRoot, `${chapter.slug}.lufs.json`);
+  const audioPath = liveAudioPath(audioRoot, chapter.slug, audioExt);
+  const segPath = livePartPath(audioRoot, chapter.slug, 'segments');
+  const peaksPath = livePartPath(audioRoot, chapter.slug, 'peaks');
+  const lufsPath = livePartPath(audioRoot, chapter.slug, 'lufs');
 
   /* EBU R128 loudness normalisation (plan 71). Default ON; opt out with
      AUDIO_LOUDNORM_ENABLED=false. Two-pass measure-then-apply runs inside
@@ -697,7 +697,7 @@ async function finalizeChapterAudioWriteInner(
      under-scores, whereas a failure between the move and the audio rename
      left no `<slug>.<ext>` on disk (an unplayable chapter). */
   if (input.embeddings) {
-    const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+    const embPath = livePartPath(audioRoot, chapter.slug, 'embeddings');
     await writeEmbeddings(embPath, input.embeddings, EMBEDDINGS_VERSION);
   } else if (resynthesizedIndexSet.size > 0) {
     /* #3362 pass-6 fix (🟠G, owner design (i)) — chapter-splice.ts's
@@ -735,7 +735,7 @@ async function finalizeChapterAudioWriteInner(
        is dropped. That is right — the audio was just re-rendered, so those
        rows are stale — and leaves the chapter unembedded until a render
        embeds it. */
-    const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+    const embPath = livePartPath(audioRoot, chapter.slug, 'embeddings');
     const existing = await readEmbeddings(embPath).catch(() => null);
     if (existing) {
       const droppedKeys = new Set(

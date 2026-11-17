@@ -51,7 +51,7 @@ import {
 } from '../workspace/scan.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
-import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
+import { chapterAudioExists } from '../workspace/chapter-take.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {

@@ -27,7 +27,7 @@ import {
 } from '../workspace/file-lock.js';
 import { castJsonPath, audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, livePartPath } from '../workspace/chapter-take.js';
 import {
   canonicalModelKeyForEngine,
   engineForModelKey,
@@ -79,7 +79,6 @@ import {
   resolveAsrSampleEvery,
   buildCastNameAllowlist,
 } from '../tts/segment-asr-qa.js';
-import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
 export const chapterSpliceRouter = Router();
@@ -185,7 +184,7 @@ chapterSpliceRouter.post(
     const audioFile = findChapterAudio(audioRoot, chapter.slug);
     if (!audioFile) return fail('Chapter has no rendered audio to splice — generate it first.');
 
-    const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
+    const segPath = livePartPath(audioRoot, chapter.slug, 'segments');
     const segFile = await readJson<ChapterSegmentsFile>(segPath).catch(() => null);
     if (!segFile || !Array.isArray(segFile.segments) || !segFile.segments.length) {
       return fail('Chapter segments metadata is missing or unreadable — re-render the chapter.');
