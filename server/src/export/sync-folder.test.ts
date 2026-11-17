@@ -9,12 +9,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  writeToSyncFolder,
   writeFolderToSyncFolder,
   stageToSyncFolder,
   commitSyncStage,
   discardSyncStage,
 } from './sync-folder.js';
+
+/* The production path is always stage -> (cancel check) -> commit; these
+   suites drive the two stages back to back. */
+async function writeToSyncFolder(srcPath: string, destDir: string, filename: string) {
+  return commitSyncStage(await stageToSyncFolder(srcPath, destDir, filename), destDir);
+}
 
 /* Pass-through spy on node:fs/promises.copyFile so a test can inject a
    part-way copy failure (#4218); every other test sees the real function. */
@@ -177,6 +182,40 @@ describe('writeToSyncFolder — Drive hint wrapping', () => {
       expect((err as Error).message).toMatch(hint);
       expect((err as { code?: string }).code).toBe('ENOSPC');
       expect(((err as { cause?: { code?: string } }).cause ?? {}).code).toBe('ENOSPC');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['stage', 'My Drive'],
+    ['stage', 'OneDrive'],
+    ['folder copy', 'My Drive'],
+  ])('a hinted %s failure under %s carries no absolute path in its message (#4228)', async (kind, dir) => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-leak-test-'));
+    try {
+      const src = join(root, 'src.bin');
+      writeFileSync(src, 'x');
+      const srcDir = join(root, 'staging');
+      mkdirSync(srcDir, { recursive: true });
+      writeFileSync(join(srcDir, '01.mp3'), 'x');
+      fsMock.copyFile.mockImplementationOnce(async (s: unknown, d: unknown) => {
+        throw Object.assign(
+          new Error(`EPERM: operation not permitted, copyfile '${String(s)}' -> '${String(d)}'`),
+          { code: 'EPERM', syscall: 'copyfile', path: String(s) },
+        );
+      });
+      const dest = join(root, dir, 'Audiobooks');
+      const err = await (kind === 'stage'
+        ? stageToSyncFolder(src, dest, 'book.zip', 'job1')
+        : writeFolderToSyncFolder(srcDir, dest, 'Book')
+      ).catch((e: unknown) => e);
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/Drive|OneDrive/);
+      expect(msg).toContain('EPERM');
+      expect(msg).not.toContain(root);
+      expect(msg).not.toMatch(/copyfile/i);
+      expect((err as { code?: string }).code).toBe('EPERM');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

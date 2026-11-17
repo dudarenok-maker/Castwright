@@ -3,7 +3,7 @@
    directory — typically a OneDrive / Syncthing / Google Drive watch path
    the user mirrors to their Android phone.
 
-   Atomic by design: writes to `<dest>/<filename>.tmp-<pid>-<ts>` first,
+   Atomic by design: writes to `<dest>/<filename>.tmp-<job id>` first,
    then renames over the final name using the same EPERM/EBUSY/ENOENT
    backoff the workspace's state.json writer relies on. Without that,
    OneDrive's change-detection scan window briefly locks the destination
@@ -67,8 +67,10 @@ export async function stageToSyncFolder(
 }
 
 /* Stage 2: rename the staged temp onto the flat sync name, using the same
-   EPERM/EBUSY/ENOENT backoff as the state.json writer. Once started this is
-   never undone (the replaced copy cannot be restored). */
+   EPERM/EBUSY/ENOENT backoff as the state.json writer. That backoff can retry
+   for up to RENAME_RETRY_WORST_CASE_MS (~3.6 s), a window a DELETE can land
+   in. Once the rename has landed it is never undone (the replaced copy cannot
+   be restored). */
 export async function commitSyncStage(
   stage: SyncStage,
   destDir: string,
@@ -86,15 +88,6 @@ export async function commitSyncStage(
    or anything else in the user's sync folder. */
 export async function discardSyncStage(stage: { tmpPath: string }): Promise<void> {
   await unlink(stage.tmpPath).catch(() => {});
-}
-
-export async function writeToSyncFolder(
-  srcPath: string,
-  destDir: string,
-  filename: string,
-): Promise<WriteToSyncFolderResult> {
-  const stage = await stageToSyncFolder(srcPath, destDir, filename);
-  return commitSyncStage(stage, destDir);
 }
 
 export interface WriteFolderToSyncFolderResult {
@@ -178,7 +171,12 @@ function wrapWithSyncHint(err: unknown, destDir: string): Error {
   if (!hint) return base;
   const code = (err as { code?: string }).code;
   const codeLabel = code ? ` (${code})` : '';
-  const wrapped = new Error(`${hint} Underlying error${codeLabel}: ${base.message}`);
+  /* The message is built from the code only: a node fs error's own text embeds
+     the absolute workspace/sync paths, and this message reaches the client as
+     the job's errorReason (the wrapper has no `syscall`/`path`, so the curation
+     seams would pass it through). The raw error stays in `cause` and the log. */
+  console.error('[export] sync-folder write failed:', err);
+  const wrapped = new Error(`${hint} Underlying error${codeLabel}.`);
   /* Preserve the original error code so callers / tests can branch on it. */
   if (code) (wrapped as { code?: string }).code = code;
   (wrapped as { cause?: unknown }).cause = err;
