@@ -2,6 +2,7 @@
 
 **What's new in 1.16.0**
 
+- **Renaming chapters in a re-analysis no longer loses their audio.** If analysing a book again gives a chapter a new title, a chapter you've already made keeps its audio and still shows as done. Only the title changes.
 - **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
