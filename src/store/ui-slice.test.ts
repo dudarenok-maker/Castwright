@@ -216,6 +216,49 @@ describe('uiSlice — hydrateFromUrl + stageToHash round-trip', () => {
   });
 });
 
+describe('uiSlice — #4212 chapterExplicit', () => {
+  it('openBook and confirmCast build a ready stage with chapterExplicit false', () => {
+    const opened = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.openBook({ id: 'ns', status: 'complete' }),
+    );
+    expect(opened.stage).toMatchObject({ kind: 'ready', chapterExplicit: false });
+    const confirmed = uiSlice.reducer(
+      baseState({ kind: 'confirm', bookId: 'ns', openProfileId: null }),
+      uiActions.confirmCast(),
+    );
+    expect(confirmed.stage).toMatchObject({ kind: 'ready', chapterExplicit: false });
+  });
+
+  it('setCurrentChapterId clears chapterExplicit and sets the id', () => {
+    const start = baseState({
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'generate',
+      currentChapterId: 3,
+      chapterExplicit: true,
+      openProfileId: null,
+    });
+    const next = uiSlice.reducer(start, uiActions.setCurrentChapterId(3));
+    expect(next.stage).toMatchObject({ currentChapterId: 3, chapterExplicit: false });
+    const moved = uiSlice.reducer(start, uiActions.setCurrentChapterId(6));
+    expect(moved.stage).toMatchObject({ currentChapterId: 6, chapterExplicit: false });
+  });
+
+  it('hydrateFromUrl stores chapterExplicit true unstripped', () => {
+    const stage: Stage = {
+      kind: 'ready',
+      bookId: 'ns',
+      view: 'generate',
+      currentChapterId: 3,
+      chapterExplicit: true,
+      openProfileId: null,
+    };
+    const next = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.hydrateFromUrl(stage));
+    expect(next.stage).toEqual(stage);
+  });
+});
+
 describe('uiSlice — setOpenProfileId across stages', () => {
   it('writes openProfileId on the confirm stage', () => {
     /* "Meet the cast" cards open the same ProfileDrawer the ready-stage
