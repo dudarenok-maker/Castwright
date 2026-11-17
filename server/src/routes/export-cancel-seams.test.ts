@@ -24,6 +24,9 @@ const seam = vi.hoisted(() => {
   const state = { revokeReady: false, renameCalls: 0, builds: 0, folderBuilds: 0, failCopy: false };
   /* Predicates over (src, dest): a rename matching any of them rejects with EPERM. */
   const failRenames: Array<(src: string, dest: string) => boolean> = [];
+  /* Predicates over the rm target: a matching rm rejects with EBUSY (recorded in `rmAttempts`). */
+  const failRm: Array<(path: string) => boolean> = [];
+  const rmAttempts: string[] = [];
   function arm(name: string): { entered: Promise<void>; release: () => void } {
     let enter!: () => void;
     let release!: () => void;
@@ -44,7 +47,7 @@ const seam = vi.hoisted(() => {
     for (const h of Object.values(holds)) h?.release();
     for (const h of entered.splice(0)) h.release();
   }
-  return { holds, state, failRenames, arm, maybeHold, releaseAll };
+  return { holds, state, failRenames, failRm, rmAttempts, arm, maybeHold, releaseAll };
 });
 
 vi.mock('../export/build-mp3-zip.js', () => ({
@@ -144,6 +147,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }) as typeof actual.copyFile;
   const rm = (async (...a: Parameters<typeof actual.rm>) => {
     if (seam.holds.cancelRm && String(a[0]).includes('.partial-')) await seam.maybeHold('cancelRm');
+    if (String(a[0]).includes('.old-')) seam.rmAttempts.push(String(a[0]));
+    if (seam.failRm.some((f) => f(String(a[0])))) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rm '${String(a[0])}'`), {
+        code: 'EBUSY',
+        syscall: 'rm',
+        path: String(a[0]),
+      });
+    }
     return actual.rm(...a);
   }) as typeof actual.rm;
   return { ...actual, readdir, rm, copyFile, default: { ...actual, readdir, rm, copyFile } };
@@ -213,6 +224,8 @@ beforeEach(async () => {
   seam.state.folderBuilds = 0;
   seam.state.failCopy = false;
   seam.failRenames.length = 0;
+  seam.failRm.length = 0;
+  seam.rmAttempts.length = 0;
   rmSync(join(bookDir, 'exports'), { recursive: true, force: true });
   rmSync(join(bookDir, '.audiobook', 'export-manifests'), { recursive: true, force: true });
 });
@@ -700,6 +713,130 @@ describe('cancel seams (#4223)', () => {
       expect(done.syncCopyInFlight).toBe(false);
     } finally {
       seam.releaseAll();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a transient failure of the post-swap cleanup rm is retried and the swap-aside is removed (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-rm-retry-'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      let failed = 0;
+      seam.failRm.push((p) => p.includes('.old-') && failed++ < 1);
+      const second = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+
+      expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('done');
+      expect(seam.rmAttempts.length).toBeGreaterThanOrEqual(2);
+      expect(droppings()).toEqual([]);
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes('could not remove the superseded'))).toBe(false);
+    } finally {
+      errSpy.mockRestore();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a permanent cleanup rm failure is logged, the next successful export removes the leftover, then a missing folder drops its row (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-rm-perm-'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const first = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      seam.failRm.push((p) => p.includes('.old-'));
+      const second = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+
+      expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('done');
+      const leftover = ls(exportsDir()).filter((n) => n.includes('.old-'));
+      expect(leftover).toHaveLength(1);
+      expect(readFileSync(join(exportsDir(), leftover[0], '01.mp3')).toString()).toBe('id3-1');
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes('could not remove the superseded'))).toBe(true);
+
+      seam.failRm.length = 0;
+      const third = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      expect((await request(app).get(`/api/books/${bookId}/exports/${third.id}`)).body.status).toBe('done');
+      expect(droppings()).toEqual([]);
+      expect(readFileSync(join(exportsDir(), first.filename, '01.mp3')).toString()).toBe('id3-3');
+
+      /* With the leftover gone, a deleted flat folder drops the row on restart, as on main. */
+      rmSync(join(exportsDir(), first.filename), { recursive: true, force: true });
+      resetJobs();
+      const list = (await request(app).get(`/api/books/${bookId}/exports`)).body as Array<{ id: string }>;
+      expect(list.map((j) => j.id)).not.toContain(third.id);
+      expect(existsSync(join(bookDir, '.audiobook', 'export-manifests', `${third.id}.json`))).toBe(false);
+    } finally {
+      errSpy.mockRestore();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a manifest persisted with syncCopyInFlight true reads false after a restart (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-inflight-crash-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const copy = seam.arm('syncCopy');
+      const job = await post('mp3-folder', 'sync-folder');
+      await copy.entered;
+      expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
+      expect(manifestOf(job.id).syncCopyInFlight).toBe(true);
+      resetJobs();
+      const after = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(after.status).toBe('cancelled');
+      expect(after.syncCopyInFlight).toBe(false);
+    } finally {
+      seam.releaseAll();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a failed mp3-folder sync copy leaves syncCopyInFlight false (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-inflight-fail-'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      seam.state.failCopy = true;
+      const job = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(mem.status).toBe('failed');
+      expect(mem.syncCopyInFlight).toBe(false);
+      expect(manifestOf(job.id).syncCopyInFlight).toBe(false);
+    } finally {
+      errSpy.mockRestore();
+      seam.state.failCopy = false;
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a failed single-file sync commit leaves syncCopyInFlight false (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-inflight-commitfail-'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      seam.failRenames.push((src, dest) => src.includes('.tmp-') && dest.startsWith(syncRoot));
+      const job = await post('mp3-zip', 'sync-folder');
+      await awaitInFlightJobs();
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(mem.status).toBe('failed');
+      expect(mem.syncCopyInFlight).toBe(false);
+      expect(manifestOf(job.id).syncCopyInFlight).toBe(false);
+    } finally {
+      errSpy.mockRestore();
       await awaitInFlightJobs();
       rmSync(syncRoot, { recursive: true, force: true });
       await writeUserSettings({ exportSyncFolder: null });

@@ -22,7 +22,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, unlink } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
@@ -174,6 +174,9 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
           continue;
         }
       }
+      /* A restart means no sync copy is in flight, whatever the manifest says
+         (a DELETE during the copy persisted `true`). */
+      if (job.syncCopyInFlight) job.syncCopyInFlight = false;
       if (!jobs.has(job.id)) jobs.set(job.id, job);
     } catch {
       /* Corrupt manifest — skip, don't fail the GET. */
@@ -821,21 +824,73 @@ async function swapFolderIntoPlace(
   oldPath: string,
 ): Promise<void> {
   const hadPrevious = existsSync(finalPath);
-  if (hadPrevious) await renameWithRetry(finalPath, oldPath);
+  liveSwapAsides.add(oldPath);
   try {
-    await renameWithRetry(staging, finalPath);
-  } catch (e) {
-    if (hadPrevious) {
-      await renameWithRetry(oldPath, finalPath).catch((restoreErr) => {
-        console.error(
-          `[export] could not restore the previous export from ${oldPath} to ${finalPath}; it is left in place, restore it by hand:`,
-          restoreErr,
-        );
-      });
+    if (hadPrevious) await renameWithRetry(finalPath, oldPath);
+    try {
+      await renameWithRetry(staging, finalPath);
+    } catch (e) {
+      if (hadPrevious) {
+        await renameWithRetry(oldPath, finalPath).catch((restoreErr) => {
+          console.error(
+            `[export] could not restore the previous export from ${oldPath} to ${finalPath}; it is left in place, restore it by hand:`,
+            restoreErr,
+          );
+        });
+      }
+      throw e;
     }
-    throw e;
+    /* Committed: the new export supersedes the previous one and any `.old-*`
+       an earlier failed cleanup left behind. Only now, and never a swap-aside
+       another job is still using (#4228). */
+    if (hadPrevious) await removeSupersededSwapAside(oldPath);
+    await sweepSupersededSwapAsides(finalPath, oldPath);
+  } finally {
+    liveSwapAsides.delete(oldPath);
   }
-  if (hadPrevious) await rm(oldPath, { recursive: true, force: true }).catch(() => {});
+}
+
+/* Swap-asides of swaps running right now, so a sweep never takes the previous
+   export of a concurrent same-name job out from under it. */
+const liveSwapAsides = new Set<string>();
+
+/* Best-effort removal of a superseded swap-aside: a transient lock (a scanner,
+   Explorer) is retried, and a permanent failure is logged, not swallowed. The
+   next successful export of the same name sweeps the leftover. */
+async function removeSupersededSwapAside(path: string): Promise<void> {
+  const ATTEMPTS = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      if (attempt >= ATTEMPTS) {
+        console.error(
+          `[export] could not remove the superseded previous export at ${path}; the next successful export of it will retry:`,
+          e,
+        );
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+}
+
+async function sweepSupersededSwapAsides(finalPath: string, ownOldPath: string): Promise<void> {
+  const dir = dirname(finalPath);
+  const prefix = `.${basename(finalPath)}.old-`;
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    if (!n.startsWith(prefix)) continue;
+    const p = join(dir, n);
+    if (p === ownOldPath || liveSwapAsides.has(p)) continue;
+    await removeSupersededSwapAside(p);
+  }
 }
 
 async function runExportJob(
@@ -900,8 +955,10 @@ async function runExportJob(
            retry for up to RENAME_RETRY_WORST_CASE_MS (~3.6 s each), a window a
            DELETE can land in; it still ends `cancelled` and the swapped folder
            stays as the newest valid export. The previous folder is moved to a
-           dot-prefixed `.<slug>.old-<id>` so a crash mid-swap leaves no
-           visible stray. */
+           dot-prefixed `.<slug>.old-<id>`: a crash mid-swap leaves it behind
+           (dot-prefixed folders still show in Windows Explorer), and a
+           cleanup rm that fails permanently does too; the next successful
+           export of the same name removes it. */
         await swapFolderIntoPlace(
           staging,
           outPath,
