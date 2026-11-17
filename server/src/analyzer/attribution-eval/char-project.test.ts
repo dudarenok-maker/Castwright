@@ -309,4 +309,64 @@ describe('projectToChars (stripTags option)', () => {
       { start: 15, end: 20, speakerId: 'b' },
     ]);
   });
+
+  // #4226 (q)-(v): matching is per combining-mark run; a boundary inside a run drops the unit.
+  const S1 = 'Ещё раз, — сказал он.';
+  const S2 = ' Да.';
+  const ONA = 'Она́ ушла.';
+
+  it('(q) #4226: NFD chapter text, NFC unit', () => {
+    expect((S1 + S2).normalize('NFD')).not.toBe((S1 + S2).normalize('NFC'));
+    const result = projectToChars((S1 + S2).normalize('NFD'), [
+      { text: S1.normalize('NFC'), speakerId: 'a' },
+      { text: S2, speakerId: 'b' },
+    ]);
+    expect(result.dropped).toBe(0);
+    expect(result.spans).toEqual([
+      { start: 0, end: 22, speakerId: 'a' },
+      { start: 22, end: 26, speakerId: 'b' },
+    ]);
+  });
+
+  it('(r) #4226: NFC chapter text, NFD unit', () => {
+    expect((S1 + S2).normalize('NFD')).not.toBe((S1 + S2).normalize('NFC'));
+    const result = projectToChars((S1 + S2).normalize('NFC'), [
+      { text: S1.normalize('NFD'), speakerId: 'a' },
+      { text: S2, speakerId: 'b' },
+    ]);
+    expect(result.dropped).toBe(0);
+    expect(result.spans).toEqual([
+      { start: 0, end: 21, speakerId: 'a' },
+      { start: 21, end: 25, speakerId: 'b' },
+    ]);
+  });
+
+  it('(s) #4226: a unit ending just before a combining mark is dropped', () => {
+    const result = projectToChars(ONA, [{ text: 'Она', speakerId: 'a' }]);
+    expect(result.dropped).toBe(1);
+    expect(result.spans).toEqual([]);
+    expect(result.speakerByChar.every((s) => s === null)).toBe(true);
+  });
+
+  it('(t) #4226: a unit ending inside the ellipsis fold is dropped', () => {
+    const result = projectToChars('Wait… no', [{ text: 'Wait.', speakerId: 'a' }]);
+    expect(result.dropped).toBe(1);
+    expect(result.spans).toEqual([]);
+  });
+
+  it('(u) #4226: a unit starting inside a run is dropped', () => {
+    const result = projectToChars(ONA, [{ text: '́ ушла.', speakerId: 'a' }]);
+    expect(result.dropped).toBe(1);
+    expect(result.spans).toEqual([]);
+    expect(result.speakerByChar.every((s) => s === null)).toBe(true);
+  });
+
+  it('(v) #4226: a dropped unit does not move the cursor', () => {
+    const result = projectToChars(ONA, [
+      { text: 'Она', speakerId: 'a' },
+      { text: ONA, speakerId: 'b' },
+    ]);
+    expect(result.dropped).toBe(1);
+    expect(result.spans).toEqual([{ start: 0, end: 10, speakerId: 'b' }]);
+  });
 });

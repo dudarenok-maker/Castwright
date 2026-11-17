@@ -5,6 +5,8 @@
    [start,end) match can be mapped back to exact chapterText offsets. NEVER
    use scorer.ts's normalise() here — it collapses whitespace/strips bracket
    tags and has no positional correspondence back to the original text.
+   normalizeForMatch now works per combining-mark run, and a span boundary
+   inside a run drops the unit (counted in `dropped`) rather than rounding.
 
    `stripTags` (opt-in) additionally removes inline `[...]` annotation tags
    (`[emphatic]`, `[structure: …]`) from BOTH the chapterText basis and each
@@ -16,7 +18,7 @@
    to nothing), so they stay null — invisible to the metric, which only scores
    truth-attributed chars. Default (`stripTags` off) is byte-identical to the
    original projection. */
-import { normalizeForMatch } from './review-apply-core.js';
+import { buildNormIndex, normalizeForMatch } from './review-apply-core.js';
 
 export interface CharProjection {
   speakerByChar: Array<string | null>; // length === chapterText.length
@@ -80,20 +82,11 @@ export function projectToChars(
     : { stripped: chapterText, map: null as number[] | null };
   const toOrig = (basisIdx: number): number => (map ? map[basisIdx]! : basisIdx);
 
-  // Build the normalized basis + its index map ONCE — same construction as
-  // review-apply-core.ts's resolveAnchorOffset, but retained for the whole text.
-  // origEndForNormLen[k] = basis index after k normalized chars (UTF-16 offsets;
-  // each code point's normalized output maps to the offset after that code point).
-  let norm = '';
-  const origEndForNormLen: number[] = [0];
-  let i = 0; // UTF-16 offset into basis
-  for (const ch of basis) {
-    // Walk by code point (as normalizeForMatch does) so NFC never splits a surrogate pair.
-    i += ch.length;
-    const piece = normalizeForMatch(ch);
-    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i);
-    norm += piece;
-  }
+  // Build the normalized basis + its index map ONCE with the run-based index
+  // shared with review-apply-core.ts. origAt[k] = basis index after k normalized
+  // chars, but only at a combining-mark-run boundary; positions inside a run's
+  // normalized output are null, so a match boundary there is refused, not rounded.
+  const { norm, origAt } = buildNormIndex(basis);
 
   const speakerByChar: Array<string | null> = new Array(chapterText.length).fill(null);
   const spans: Array<{ start: number; end: number; speakerId: string }> = [];
@@ -112,11 +105,14 @@ export function projectToChars(
       continue;
     }
     const matchEnd = matchStart + nUnit.length;
-    // origEndForNormLen[k] is the basis index AFTER k normalized chars, so the
-    // basis start is origEndForNormLen[matchStart] and the basis end is
-    // origEndForNormLen[matchEnd]; map both back to original chapterText coords.
-    const basisStart = origEndForNormLen[matchStart]!;
-    const basisEnd = origEndForNormLen[matchEnd]!;
+    // origAt[k] is the basis index AFTER k normalized chars (null inside a run).
+    // A start or end inside a run drops the unit; the cursor does not advance.
+    const basisStart = origAt[matchStart];
+    const basisEnd = origAt[matchEnd];
+    if (basisStart == null || basisEnd == null) {
+      dropped++;
+      continue;
+    }
     const start = toOrig(basisStart);
     const end = toOrig(basisEnd);
     // Paint the ORIGINAL positions of the surviving basis chars in the match —
