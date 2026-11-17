@@ -41,7 +41,9 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { withBookLock } from './book-lock.js';
-import { readBookStateOrThrow } from './book-op-lock.js';
+import { BOOK_GONE, bookJobKinds, readBookStateOrThrow, withBookOp } from './book-op-lock.js';
+import { beginRestructure, endRestructure, isRestructuring } from './restructure-gate.js';
+import { collectBooks } from './scan.js';
 import { withStateJsonLock } from './file-lock.js';
 import { readEditsForHintsCheck } from './hints-proof-io.js';
 import { manuscriptEditsJsonPath, restructureEditsJournalPath, stateJsonPath } from './paths.js';
@@ -176,4 +178,46 @@ export async function replayRestructureEditsJournal(bookDir: string, bookId: str
     }
     return outcome;
   });
+}
+
+export interface ReplayAllResult {
+  replayed: string[];
+  discarded: string[];
+  /** bookIds: a job or the restructure gate was busy */
+  skipped: string[];
+  errors: Array<{ bookId: string; message: string }>;
+}
+
+/** Boot sweep (#4227): replay every book's pending edits journal once at server
+    start. Covers the crash case: the process died between the restructure's
+    state.json write and its manuscript-edits.json write. A book with a running
+    job or a held restructure gate is skipped and its journal left for the next
+    start or the next restructure of that book. Lock order (CLAUDE.md):
+    book-op -> restructure-gate -> book -> state-json; a throw for one book is
+    recorded and the walk continues. */
+export async function replayAllRestructureEditsJournals(): Promise<ReplayAllResult> {
+  const out: ReplayAllResult = { replayed: [], discarded: [], skipped: [], errors: [] };
+  for (const { bookDir, state } of await collectBooks()) {
+    const bookId = state.bookId;
+    const manuscriptId = state.manuscriptId;
+    if (!bookId || !manuscriptId) continue;
+    if (!existsSync(restructureEditsJournalPath(bookDir))) continue;
+    try {
+      const res = await withBookOp(bookId, async (book) => {
+        if (bookJobKinds(bookId).length > 0) return 'skipped' as const;
+        // a held gate is a restructure in flight; beginRestructure alone only refuses for analysis
+        if (isRestructuring(manuscriptId) || !beginRestructure(manuscriptId)) return 'skipped' as const;
+        try {
+          return await replayRestructureEditsJournal(book.bookDir, bookId);
+        } finally {
+          endRestructure(manuscriptId);
+        }
+      });
+      if (res === BOOK_GONE || res === 'none') continue;
+      out[res].push(bookId);
+    } catch (e) {
+      out.errors.push({ bookId, message: (e as Error).message });
+    }
+  }
+  return out;
 }

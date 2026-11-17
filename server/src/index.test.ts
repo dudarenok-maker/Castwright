@@ -285,6 +285,10 @@ describe('main() boot order (#3713, PR #4004)', () => {
   it('starts the fsck only after the sweep, so the two never touch a state.json together', () => {
     expect(at('await bootRepairDuplicateBookIds();')).toBeLessThan(at('void fsckAllBooks()'));
   });
+
+  it('starts the restructure edits journal replay only after the sweep (#4227)', () => {
+    expect(at('await bootRepairDuplicateBookIds();')).toBeLessThan(at('void replayAllRestructureEditsJournals()'));
+  });
 });
 
 describe('bootStartSidecarSupervisor (#3174 G4)', () => {
