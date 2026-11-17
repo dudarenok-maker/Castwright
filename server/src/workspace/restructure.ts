@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { slug } from './paths.js';
 import type { BookStateJson } from './scan.js';
+import { TAKE_STATE_FIELDS } from './take-fields.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { pairWithParse } from './title-align.js';
 
@@ -391,7 +392,6 @@ function buildNewStateChapters(
       uuid: oldChapter?.uuid ?? randomUUID(),
     };
     if (hint.excluded) base.excluded = true;
-    if (oldChapter?.duration) base.duration = oldChapter.duration;
     const anySourceHeld = [...fates.values()].some(
       (f) =>
         (f.newId === newId || f.splitSecondHalfNewId === newId) &&
@@ -407,12 +407,16 @@ function buildNewStateChapters(
     if (oldChapter?.titleSynthesized) base.titleSynthesized = true;
 
     const contentChanged = fate?.contentChanged ?? true;
+    // The take-state carry is a rule over TAKE_STATE_FIELDS (spec §4.3):
+    // `duration` always; every other member only when the content is unchanged.
+    if (oldChapter) {
+      for (const key of TAKE_STATE_FIELDS) {
+        if (key !== 'duration' && contentChanged) continue;
+        if (oldChapter[key]) (base as Record<string, unknown>)[key] = oldChapter[key];
+      }
+    }
     if (!contentChanged && oldChapter) {
       // Preserve audio metadata — file will be renamed, content valid
-      if (oldChapter.audioModelKey) base.audioModelKey = oldChapter.audioModelKey;
-      if (oldChapter.audioRenderedAt) base.audioRenderedAt = oldChapter.audioRenderedAt;
-      if (oldChapter.audioEngines) base.audioEngines = oldChapter.audioEngines;
-      if (oldChapter.audioQa) base.audioQa = oldChapter.audioQa;
       if (oldChapter.generationState) base.generationState = oldChapter.generationState;
       if (oldChapter.generationError) base.generationError = oldChapter.generationError;
       if (oldChapter.generationErrorCode) base.generationErrorCode = oldChapter.generationErrorCode;

@@ -271,4 +271,19 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     expect(ch.find((c) => c.title === 'Four')!.uuid).not.toBe('u-4');
     expect(ch.find((c) => c.title === 'Three')!.uuid).not.toBe('u-4');
   });
+
+  it('U1. a client audioTakeId is dropped; the disk value (or none) is stored (N13)', async () => {
+    const CLIENT = 'zzzzzzzzzzzzzzzz';
+    // Disk has a take id: the disk value wins.
+    writeState(withOverlay(seedChapters(), 1, { audioTakeId: 'abcdefghijklmnop' }));
+    const withDisk = await putChapters(withOverlay(seedChapters(), 1, { audioTakeId: CLIENT }));
+    expect(withDisk.status).toBe(200);
+    expect(readChapters().find((c) => c.id === 1)!.audioTakeId).toBe('abcdefghijklmnop');
+
+    // Disk has none: the client value is not stored at all.
+    writeState(seedChapters());
+    const noDisk = await putChapters(withOverlay(seedChapters(), 1, { audioTakeId: CLIENT }));
+    expect(noDisk.status).toBe(200);
+    expect('audioTakeId' in readChapters().find((c) => c.id === 1)!).toBe(false);
+  });
 });

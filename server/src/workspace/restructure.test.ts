@@ -38,6 +38,7 @@ function makeState(
     excluded?: boolean;
     audioModelKey?: string;
     audioRenderedAt?: string;
+    audioTakeId?: string;
     uuid?: string;
     titleSynthesized?: boolean;
   }>,
@@ -60,6 +61,7 @@ function makeState(
       ...(c.excluded ? { excluded: true } : {}),
       ...(c.audioModelKey ? { audioModelKey: c.audioModelKey } : {}),
       ...(c.audioRenderedAt ? { audioRenderedAt: c.audioRenderedAt } : {}),
+      ...(c.audioTakeId ? { audioTakeId: c.audioTakeId } : {}),
       ...(c.uuid ? { uuid: c.uuid } : {}),
       ...(c.titleSynthesized ? { titleSynthesized: true } : {}),
     })),
@@ -1145,5 +1147,40 @@ describe('pendingMovesAfterRestructure (#3704)', () => {
   });
   it('never maps a delete', () => {
     expect(pendingMovesAfterRestructure(old as never, ops, new Set(['05-e'])).size).toBe(0);
+  });
+});
+
+/* -- take-state carry rule over TAKE_STATE_FIELDS (#4340) ------------ */
+
+describe('restructure take-state carry (#4340, spec §4.3)', () => {
+  const TAKE_ID = 'abcdefghijklmnop';
+  const stamped = () =>
+    makeState([
+      { id: 1, title: 'A', duration: '00:01:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: TAKE_ID },
+      { id: 2, title: 'B', duration: '00:02:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: 'bbbbbbbbbbbbbbbb' },
+      { id: 3, title: 'C', duration: '00:03:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: 'cccccccccccccccc' },
+    ]);
+  const hints = () =>
+    makeHints([
+      { id: 1, title: 'A', body: 'a' },
+      { id: 2, title: 'B', body: 'b' },
+      { id: 3, title: 'C', body: 'c' },
+    ]);
+  const sents = (): RestructureSentence[] => [s(1, 1, 'narr', 'A1'), s(1, 2, 'narr', 'B1'), s(1, 3, 'narr', 'C1')];
+
+  it('U3a. a reorder (content unchanged) carries every member, audioTakeId included', () => {
+    const result = applyReorder(stamped(), hints(), sents(), { order: [3, 1, 2] });
+    const byTitle = new Map(result.state.chapters.map((c) => [c.title, c]));
+    expect(byTitle.get('A')).toMatchObject({ duration: '00:01:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: TAKE_ID });
+    expect(byTitle.get('C')!.audioTakeId).toBe('cccccccccccccccc');
+  });
+
+  it('U3b. a merge survivor (contentChanged) carries duration only', () => {
+    const result = applyMerge(stamped(), hints(), sents(), { chapterIds: [1, 2] });
+    const survivor = result.state.chapters[0];
+    expect(survivor.duration).toBe('00:01:00');
+    expect('audioModelKey' in survivor).toBe(false);
+    expect('audioRenderedAt' in survivor).toBe(false);
+    expect('audioTakeId' in survivor).toBe(false);
   });
 });
