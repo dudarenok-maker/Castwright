@@ -2,7 +2,10 @@
    parse, terminated once it settles. The buffer is COPIED into the worker
    (plain workerData), never transferred: routes/import.ts keeps using the
    original buffer after the parse. */
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type { ParsedManuscript } from './text.js';
@@ -18,6 +21,9 @@ export interface ParseWorkerRequest {
   /** Required, never defaulted: the worker must extract exactly as the
       in-process parser would at this version (#4217, #4242). */
   extractorVersion: number;
+  /** Set by parseInWorker, never by a caller: the per-parse scratch dir the
+      main thread owns and removes once the worker is gone. */
+  scratchDir?: string;
 }
 
 export type ParseWorkerMessage =
@@ -43,6 +49,10 @@ export interface ParseInWorkerOptions {
   workerUrl?: URL;
   /** Hang bound; defaults to PARSE_WORKER_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** Test seam: parent of the per-parse scratch dir (default: os.tmpdir()). */
+  scratchRoot?: string;
+  /** Test seam: receives the spawned worker. */
+  onWorker?: (worker: Worker) => void;
 }
 
 /* Bounds how long a hung worker can stall a parse. Precedent:
@@ -109,10 +119,27 @@ export async function parseInWorker(
 }
 
 /** Same as parseInWorker but also reports the worker's threadId (tests use it
-    to prove the parse left the main thread). */
-export function parseInWorkerWithThread(
+    to prove the parse left the main thread). The main thread owns a per-parse
+    scratch dir and removes it once the worker is stopped, on every outcome:
+    a worker that dies or is terminated never runs the parsers' own `finally`
+    cleanup, so whatever they wrote there would otherwise outlive the parse. */
+export async function parseInWorkerWithThread(
   request: ParseWorkerRequest,
   opts: ParseInWorkerOptions = {},
+): Promise<{ parsed: ParsedManuscript; threadId: number }> {
+  const scratchDir = await mkdtemp(join(opts.scratchRoot ?? tmpdir(), 'parse-scratch-'));
+  try {
+    return await spawnParseWorker({ ...request, scratchDir }, opts);
+  } finally {
+    await rm(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(
+      (err) => console.error('[parse-worker] scratch cleanup failed', err),
+    );
+  }
+}
+
+function spawnParseWorker(
+  request: ParseWorkerRequest,
+  opts: ParseInWorkerOptions,
 ): Promise<{ parsed: ParsedManuscript; threadId: number }> {
   const resolved = resolveWorker();
   const url = opts.workerUrl ?? resolved.url;
@@ -121,12 +148,14 @@ export function parseInWorkerWithThread(
   return new Promise((resolve, reject) => {
     let settled = false;
     const worker = new Worker(url, { workerData: request, execArgv: resolved.execArgv });
+    opts.onWorker?.(worker);
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      void worker.terminate();
-      fn();
+      /* Settle only once the thread is gone, so the caller's scratch cleanup
+         never races a worker that still holds files open. */
+      void worker.terminate().then(fn, fn);
     };
     const timer = setTimeout(() => {
       settle(() => {

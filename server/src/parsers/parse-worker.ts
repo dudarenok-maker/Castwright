@@ -22,10 +22,12 @@ async function run(): Promise<ParseWorkerMessage> {
             fileName: req.fileName,
             sourcePath: req.sourcePath,
             extractorVersion: req.extractorVersion,
+            scratchDir: req.scratchDir,
           })
         : await parseMobi(buffer, {
             fileName: req.fileName,
             extractorVersion: req.extractorVersion,
+            scratchDir: req.scratchDir,
           });
     return { ok: true, parsed, threadId };
   } catch (err) {

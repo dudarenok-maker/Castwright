@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { parseEpub, UnusableEpubError } from './epub.js';
 import { UnusableMediaError } from './errors.js';
+import { buildMinimalMobi } from '../test-utils/minimal-mobi.js';
 import { DrmProtectedError, parseMobi } from './mobi.js';
 import { parseInWorker, parseInWorkerWithThread } from './parse-in-worker.js';
 
@@ -121,6 +122,86 @@ describe('parseInWorker', () => {
       expect(err).toBeInstanceOf(UnusableEpubError);
       expect(err.message).toBe(TIMEOUT);
     }, 10_000);
+
+    describe('the per-parse scratch dir is removed whatever the outcome', () => {
+      const roots: string[] = [];
+      const freshRoot = (): string => {
+        const r = mkdtempSync(join(tmpdir(), 'scratch-root-'));
+        roots.push(r);
+        return r;
+      };
+      afterEach(() => {
+        for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+      });
+
+      it('a worker crash after writing temp files leaves nothing behind', async () => {
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const scratchRoot = freshRoot();
+        const err = await parseInWorker(
+          { format: 'epub', buffer: Buffer.alloc(1), extractorVersion: 1 },
+          { workerUrl: workerFixture('crash-with-scratch.mjs'), scratchRoot },
+        ).catch((e) => e);
+        expect(err.message).toBe(EPUB_CRASH);
+        /* positive control: the fixture really wrote into the scratch dir */
+        expect(JSON.stringify(spy.mock.calls.flat().map(String))).toContain('boom after scratch write');
+        expect(readdirSync(scratchRoot)).toEqual([]);
+      }, 30_000);
+
+      it('a timed-out parse leaves nothing behind', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const scratchRoot = freshRoot();
+        let wrote = false;
+        const err = await parseInWorker(
+          { format: 'mobi', buffer: Buffer.alloc(1), extractorVersion: 1 },
+          {
+            workerUrl: workerFixture('hang-with-scratch.mjs'),
+            scratchRoot,
+            timeoutMs: 1500,
+            onWorker: (w) => {
+              w.once('online', () => {
+                /* hang-with-scratch writes immediately; poll until it shows */
+                const t = setInterval(() => {
+                  if (readdirSync(scratchRoot).length > 0) {
+                    wrote = true;
+                    clearInterval(t);
+                  }
+                }, 10);
+                setTimeout(() => clearInterval(t), 1400);
+              });
+            },
+          },
+        ).catch((e) => e);
+        expect(err.message).toBe(TIMEOUT);
+        expect(wrote).toBe(true);
+        expect(readdirSync(scratchRoot)).toEqual([]);
+      }, 30_000);
+
+      it('the parsers put their temp files inside a given scratchDir, not tmpdir()', async () => {
+        const missing = join(freshRoot(), 'no-such-dir');
+        const epub = await parseEpub(fixture('sample.epub'), {
+          fileName: 'sample.epub',
+          extractorVersion: 1,
+          scratchDir: missing,
+        }).catch((e) => e);
+        expect(epub.code).toBe('ENOENT');
+        const mobi = await parseMobi(buildMinimalMobi('<p>A</p>'), {
+          fileName: 'a.mobi',
+          extractorVersion: 1,
+          scratchDir: missing,
+        }).catch((e) => e);
+        expect(mobi.code).toBe('ENOENT');
+      });
+
+      it('a successful real parse leaves nothing behind either', async () => {
+        const scratchRoot = freshRoot();
+        await parseInWorker(
+          { format: 'epub', buffer: fixture('sample.epub'), fileName: 'sample.epub', extractorVersion: 1 },
+          { scratchRoot },
+        );
+        expect(readdirSync(scratchRoot)).toEqual([]);
+        expect(existsSync(scratchRoot)).toBe(true);
+      }, 30_000);
+    });
 
     it('two parses at once are independent: one crashes, the other fulfils', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});

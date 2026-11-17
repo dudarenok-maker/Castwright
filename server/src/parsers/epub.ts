@@ -32,7 +32,14 @@ import { UnusableMediaError } from './errors.js';
 /** `extractorVersion` selects the extraction behaviour; see `version.ts`. It is
     required: a caller that omits it must fail typecheck rather than extract at
     v1 under a book stamped 2 (#4217). */
-type EpubOpts = { fileName?: string; sourcePath?: string; extractorVersion: number };
+/** `scratchDir`: a directory the caller owns and removes (the parse worker's
+    per-parse scratch, #4242); temp files go inside it instead of `tmpdir()`. */
+type EpubOpts = {
+  fileName?: string;
+  sourcePath?: string;
+  extractorVersion: number;
+  scratchDir?: string;
+};
 
 /** Raw metadata both parse paths produce before the shared title/series
     resolution in {@link assembleManuscript}. */
@@ -69,7 +76,7 @@ export async function parseEpub(buffer: Buffer, opts: EpubOpts): Promise<ParsedM
   if (opts.sourcePath) {
     filePath = opts.sourcePath;
   } else {
-    tmp = await mkdtemp(join(tmpdir(), 'epub-'));
+    tmp = await mkdtemp(join(opts.scratchDir ?? tmpdir(), 'epub-'));
     filePath = join(tmp, safeSegment(basename(opts.fileName ?? 'book.epub')));
     await writeFile(filePath, buffer);
   }
