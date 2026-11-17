@@ -112,7 +112,7 @@ interface MobiLikeParser {
 
 export async function parseMobi(
   buffer: Buffer,
-  opts: { fileName?: string; extractorVersion?: number },
+  opts: { fileName?: string; extractorVersion: number },
 ): Promise<ParsedManuscript> {
   /* DRM guard. Runs before any parser library call so we can surface a
      specific actionable error message. */

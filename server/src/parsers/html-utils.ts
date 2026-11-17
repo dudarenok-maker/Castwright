@@ -5,7 +5,6 @@
 import { decodeHTMLStrict } from 'entities';
 import { tagHtmlEmphasis } from './audio-tags.js';
 import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
-import { LEGACY_EXTRACTOR_VERSION } from './version.js';
 
 /* Decode numeric character references — both hex (`&#x27;`) and decimal
    (`&#39;`). EPUB serializers very commonly emit the HEX apostrophe
@@ -86,10 +85,7 @@ export function decodeNamedEntities(s: string): string {
    of every newline, so nested blocks collapse to single paragraph breaks with
    no empty or indented paragraphs. Opening tags still add no break. Below 2
    the code path is exactly the version-1 behaviour. */
-export function stripHtml(
-  html: string,
-  extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
-): string {
+export function stripHtml(html: string, extractorVersion: number): string {
   let s = tagHtmlEmphasis(html)
     .replace(/<\s*br\s*\/?>/gi, '\n')
     /* #1679 — <hr> is the most common EPUB/MOBI scene-break glyph; the generic

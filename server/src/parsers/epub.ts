@@ -28,11 +28,11 @@ import {
   codePointOr,
 } from './html-utils.js';
 import { UnusableMediaError } from './errors.js';
-import { LEGACY_EXTRACTOR_VERSION } from './version.js';
 
-/** `extractorVersion` selects the extraction behaviour; see `version.ts`.
-    Absent behaves as {@link LEGACY_EXTRACTOR_VERSION}. */
-type EpubOpts = { fileName?: string; sourcePath?: string; extractorVersion?: number };
+/** `extractorVersion` selects the extraction behaviour; see `version.ts`. It is
+    required: a caller that omits it must fail typecheck rather than extract at
+    v1 under a book stamped 2 (#4217). */
+type EpubOpts = { fileName?: string; sourcePath?: string; extractorVersion: number };
 
 /** Raw metadata both parse paths produce before the shared title/series
     resolution in {@link assembleManuscript}. */
@@ -245,8 +245,7 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
     const href = /\bhref="([^"]+)"/i.exec(attrs)?.[1];
     const mediaType = /\bmedia-type="([^"]+)"/i.exec(attrs)?.[1] ?? '';
     if (id && href) {
-      const v = opts.extractorVersion ?? LEGACY_EXTRACTOR_VERSION;
-      manifest.set(id, { href: v >= 2 ? decodeXmlEntities(href) : href, mediaType });
+      manifest.set(id, { href: opts.extractorVersion >= 2 ? decodeXmlEntities(href) : href, mediaType });
     }
   }
 
@@ -444,7 +443,7 @@ function parseNcxTitles(
   manifest: Map<string, { href: string; mediaType: string }>,
   opfDir: string,
   entries: Map<string, Buffer>,
-  extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
+  extractorVersion: number,
 ): Map<string, string> {
   const titles = new Map<string, string>();
 

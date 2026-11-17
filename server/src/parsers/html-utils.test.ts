@@ -17,41 +17,41 @@ import { MANUSCRIPT_EXTRACTOR_VERSION } from './version.js';
 
 describe('stripHtml — tag stripping', () => {
   it('still strips tags and reaches a fixed point (replace-until-stable)', () => {
-    const once = stripHtml('<p>a <em>b</em></p>');
+    const once = stripHtml('<p>a <em>b</em></p>', 1);
     expect(once).not.toMatch(/<[^>]+>/); // all tags removed
-    expect(stripHtml(once)).toBe(once); // idempotent — no second-pass change
+    expect(stripHtml(once, 1)).toBe(once); // idempotent — no second-pass change
   });
 });
 
 describe('stripHtml — numeric character references', () => {
   it('decodes the hex apostrophe &#x27; (the Coalfall regression)', () => {
-    expect(stripHtml('<p>You&#x27;ll have to make do with the second.</p>')).toBe(
+    expect(stripHtml('<p>You&#x27;ll have to make do with the second.</p>', 1)).toBe(
       "You'll have to make do with the second.",
     );
   });
 
   it('still decodes the decimal apostrophe &#39;', () => {
-    expect(stripHtml('<p>I&#39;m not crying.</p>')).toBe("I'm not crying.");
+    expect(stripHtml('<p>I&#39;m not crying.</p>', 1)).toBe("I'm not crying.");
   });
 
   it('decodes hex curly punctuation (&#x2019; &#x201C; &#x201D;)', () => {
-    expect(stripHtml('<p>&#x201C;I&#x2019;ve been nursing it,&#x201D; he said.</p>')).toBe(
+    expect(stripHtml('<p>&#x201C;I&#x2019;ve been nursing it,&#x201D; he said.</p>', 1)).toBe(
       '“I’ve been nursing it,” he said.',
     );
   });
 
   it('decodes the hex double-quote &#x22; and uppercase hex digits', () => {
-    expect(stripHtml('<p>&#x22;Begin,&#x22; said the dragon &#x2014; tired.</p>')).toBe(
+    expect(stripHtml('<p>&#x22;Begin,&#x22; said the dragon &#x2014; tired.</p>', 1)).toBe(
       '"Begin," said the dragon — tired.',
     );
   });
 
   it('decodes a decimal reference above the named set (&#8217; right quote)', () => {
-    expect(stripHtml('<p>don&#8217;t</p>')).toBe('don’t');
+    expect(stripHtml('<p>don&#8217;t</p>', 1)).toBe('don’t');
   });
 
   it('leaves real text and the existing named entities intact', () => {
-    expect(stripHtml('<p>Smith &amp; Sons &lt;forge&gt; &quot;open&quot;</p>')).toBe(
+    expect(stripHtml('<p>Smith &amp; Sons &lt;forge&gt; &quot;open&quot;</p>', 1)).toBe(
       'Smith & Sons <forge> "open"',
     );
   });
@@ -72,19 +72,19 @@ describe('extractFirstHeading — numeric character references', () => {
 describe('stripTitleHeading — drop the leading heading already spoken as the title', () => {
   it('removes the leading <h1> when it equals the resolved title', () => {
     const html = '<h1>The Berth at Liverpool</h1><p>It was cold.</p>';
-    expect(stripHtml(stripTitleHeading(html, 'The Berth at Liverpool'))).toBe('It was cold.');
+    expect(stripHtml(stripTitleHeading(html, 'The Berth at Liverpool'), 1)).toBe('It was cold.');
   });
 
   it('removes the heading when the title is the merged "Chapter N — Heading" form', () => {
     const html = '<h2>The Berth at Liverpool</h2><p>It was cold.</p>';
-    expect(stripHtml(stripTitleHeading(html, 'Chapter 1 — The Berth at Liverpool'))).toBe(
+    expect(stripHtml(stripTitleHeading(html, 'Chapter 1 — The Berth at Liverpool'), 1)).toBe(
       'It was cold.',
     );
   });
 
   it('matches case- and punctuation-insensitively (and through hex entities)', () => {
     const html = "<h1>Oduvan&#x27;s Forge</h1><p>Body.</p>";
-    expect(stripHtml(stripTitleHeading(html, "ODUVAN'S FORGE"))).toBe('Body.');
+    expect(stripHtml(stripTitleHeading(html, "ODUVAN'S FORGE"), 1)).toBe('Body.');
   });
 
   it('leaves the body untouched when the heading is content the title does not cover', () => {
@@ -105,7 +105,7 @@ describe('stripTitleHeading — drop the leading heading already spoken as the t
 
   it('removes only the first heading, leaving later section headings in the body', () => {
     const html = '<h1>The Title</h1><p>Intro.</p><h2>A Section</h2><p>More.</p>';
-    const out = stripHtml(stripTitleHeading(html, 'The Title'));
+    const out = stripHtml(stripTitleHeading(html, 'The Title'), 1);
     expect(out.startsWith('The Title')).toBe(false);
     expect(out).toContain('A Section');
   });
@@ -143,7 +143,7 @@ describe('GENERIC_NCX_RE — non-English generic chapter labels (seam 3b)', () =
 
 describe('stripHtml — scene-break preservation (#1679)', () => {
   it('converts <hr> to a standalone word-free separator line', () => {
-    const body = stripHtml('<p>End of scene one.</p><hr/><p>Scene two begins.</p>');
+    const body = stripHtml('<p>End of scene one.</p><hr/><p>Scene two begins.</p>', 1);
     const units = body.split(/\n[ \t]*\n/).map((u) => u.trim());
     expect(units).toContain('* * *');
     expect(body).toContain('End of scene one.');
@@ -151,13 +151,13 @@ describe('stripHtml — scene-break preservation (#1679)', () => {
   });
 
   it('preserves an existing <p>* * *</p> separator line', () => {
-    const body = stripHtml('<p>Before.</p><p>* * *</p><p>After.</p>');
+    const body = stripHtml('<p>Before.</p><p>* * *</p><p>After.</p>', 1);
     const units = body.split(/\n[ \t]*\n/).map((u) => u.trim());
     expect(units).toContain('* * *');
   });
 
   it('handles <hr> with attributes and whitespace', () => {
-    const body = stripHtml('<p>A.</p>\n<hr class="scene" />\n<p>B.</p>');
+    const body = stripHtml('<p>A.</p>\n<hr class="scene" />\n<p>B.</p>', 1);
     const units = body.split(/\n[ \t]*\n/).map((u) => u.trim());
     expect(units).toContain('* * *');
   });
@@ -170,25 +170,25 @@ describe('stripHtml — named character references (#2310)', () => {
      first server commit), and es/fr `dialogueOpen` carrying &mdash; but not
      &ndash; (#2289). An enumeration of spellings loses a spelling per round. */
   it('#2310: decodes the dash entities that opened this bug', () => {
-    expect(stripHtml('<p>&ndash; Un momento &mdash; dijo él.</p>')).toBe(
+    expect(stripHtml('<p>&ndash; Un momento &mdash; dijo él.</p>', 1)).toBe(
       '– Un momento — dijo él.',
     );
   });
 
   it('#2310: decodes accented letters — the case that corrupts whole words', () => {
-    expect(stripHtml('<p>&eacute;t&eacute; &agrave; la fen&ecirc;tre</p>')).toBe(
+    expect(stripHtml('<p>&eacute;t&eacute; &agrave; la fen&ecirc;tre</p>', 1)).toBe(
       'été à la fenêtre',
     );
   });
 
   it('#2310: decodes typographic punctuation and guillemets', () => {
-    expect(stripHtml('<p>&laquo;Привет&raquo;&hellip; &rsquo;tis</p>')).toBe(
+    expect(stripHtml('<p>&laquo;Привет&raquo;&hellip; &rsquo;tis</p>', 1)).toBe(
       '«Привет»… ’tis',
     );
   });
 
   it('#2310: decodes &apos; — an XML-predefined entity the hand-rolled set dropped', () => {
-    expect(stripHtml('<p>&apos;tis</p>')).toBe("'tis");
+    expect(stripHtml('<p>&apos;tis</p>', 1)).toBe("'tis");
   });
 
   /* decodeHTMLStrict vs decodeHTML. decodeHTML implements HTML5's legacy
@@ -196,22 +196,22 @@ describe('stripHtml — named character references (#2310)', () => {
      `Copyright © 2026`. This test is the ONLY thing pinning that choice —
      swapping to decodeHTML turns it red. */
   it('#2310: a bare ampersand in prose is never decoded (decodeHTMLStrict, not decodeHTML)', () => {
-    expect(stripHtml('<p>Fish &notice this</p>')).toBe('Fish &notice this');
-    expect(stripHtml('<p>Copyright &copy 2026</p>')).toBe('Copyright &copy 2026');
-    expect(stripHtml('<p>Smith & Sons, AT&T and R&D</p>')).toBe('Smith & Sons, AT&T and R&D');
+    expect(stripHtml('<p>Fish &notice this</p>', 1)).toBe('Fish &notice this');
+    expect(stripHtml('<p>Copyright &copy 2026</p>', 1)).toBe('Copyright &copy 2026');
+    expect(stripHtml('<p>Smith & Sons, AT&T and R&D</p>', 1)).toBe('Smith & Sons, AT&T and R&D');
   });
 
   it('#2310: an unknown entity is left literal', () => {
-    expect(stripHtml('<p>&unknownentity; stays</p>')).toBe('&unknownentity; stays');
+    expect(stripHtml('<p>&unknownentity; stays</p>', 1)).toBe('&unknownentity; stays');
   });
 
   it('#2310: &amp;ndash; single-passes to &ndash;, never to a dash', () => {
-    expect(stripHtml('<p>&amp;ndash;</p>')).toBe('&ndash;');
+    expect(stripHtml('<p>&amp;ndash;</p>', 1)).toBe('&ndash;');
   });
 
   it('#2310: &nbsp; still yields U+0020, not U+00A0 — and so do its aliases', () => {
-    expect(stripHtml('<p>A&nbsp;B</p>')).toBe('A B');
-    expect(stripHtml('<p>A&NonBreakingSpace;B</p>')).toBe('A B');
+    expect(stripHtml('<p>A&nbsp;B</p>', 1)).toBe('A B');
+    expect(stripHtml('<p>A&NonBreakingSpace;B</p>', 1)).toBe('A B');
   });
 
   /* The contract at html-utils.ts:15-16 — documented since the Coalfall fix
@@ -226,7 +226,7 @@ describe('stripHtml — named character references (#2310)', () => {
      draft of this plan did exactly that, and probing is how it was caught. */
   it('#2310: out-of-range numeric references are still left literal', () => {
     for (const ref of ['&#99999999;', '&#x110000;']) {
-      const out = stripHtml(`<p>A${ref}B</p>`);
+      const out = stripHtml(`<p>A${ref}B</p>`, 1);
       expect(out).toBe(`A${ref}B`);
       expect(out).not.toContain('\ufffd');
     }
@@ -242,15 +242,15 @@ describe('stripHtml — named character references (#2310)', () => {
      claim that structure is preserved. Vanishingly rare in real ebook
      output; pinned anyway, because "rare" is not "handled". */
   it('#2310: &NewLine; / &Tab; decode, and DO split a paragraph in two', () => {
-    expect(stripHtml('<p>A&Tab;B</p>')).toBe('A\tB');
-    expect(stripHtml('<p>One&NewLine;Two</p>').split('\n').filter(Boolean)).toEqual(['One', 'Two']);
+    expect(stripHtml('<p>A&Tab;B</p>', 1)).toBe('A\tB');
+    expect(stripHtml('<p>One&NewLine;Two</p>', 1).split('\n').filter(Boolean)).toEqual(['One', 'Two']);
   });
 
   /* Appendix B: three consecutive &NewLine; references decode to three
      literal newlines BEFORE the `\n{3,}` -> `\n\n` collapse runs, so they
      land inside that collapse's own input rather than escaping it. */
   it('#2310: three consecutive &NewLine; feed the \\n{3,} -> \\n\\n collapse', () => {
-    expect(stripHtml('<p>A&NewLine;&NewLine;&NewLine;B</p>')).toBe('A\n\nB');
+    expect(stripHtml('<p>A&NewLine;&NewLine;&NewLine;B</p>', 1)).toBe('A\n\nB');
   });
 });
 
@@ -301,7 +301,7 @@ describe('stripHtml — named block closers at extractor v2 (#4217)', () => {
     expect(MANUSCRIPT_EXTRACTOR_VERSION).toBe(2);
     const html =
       '<section>\r\n  <article>\r\n    <div><p>A</p></div>\r\n  </article>\r\n</section>\r\n<div>&#160;</div>\r\n<blockquote><p>B</p>\n  <p>C</p></blockquote>';
-    expect(stripHtml(html)).toBe(stripHtml(html, 1));
-    expect(stripHtml(html)).not.toBe(stripHtml(html, 2));
+    expect(stripHtml(html, 1)).toBe(stripHtml(html, 1));
+    expect(stripHtml(html, 1)).not.toBe(stripHtml(html, 2));
   });
 });

@@ -49,7 +49,7 @@ const imageOnlyFixturePath = resolve(here, '__fixtures__/sample-epub-image-only.
 describe('parseEpub', () => {
   it('returns format: "epub"', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     expect(out.format).toBe('epub');
   });
 
@@ -57,7 +57,7 @@ describe('parseEpub', () => {
     const buf = await readFile(fixturePath);
     // `../../evil.epub` -> basename `evil.epub` -> safeSegment passes -> parses normally,
     // never writing outside the mkdtemp dir.
-    const out = await parseEpub(buf, { fileName: '../../evil.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: '../../evil.epub' });
     expect(out.format).toBe('epub');
   });
 
@@ -90,19 +90,19 @@ describe('parseEpub', () => {
 
   it('uses dc:title from the OPF metadata', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     expect(out.title).toBe('The Solway Light');
   });
 
   it('exposes dc:creator as the author', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     expect(out.author).toBe('Jane Doe');
   });
 
   it('parses Calibre series + index from <meta name="calibre:series">', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     expect(out.series).toBe('Solway Bay');
     expect(out.seriesPosition).toBe(2);
     /* Authoritative Calibre meta wins — heuristic flag stays false. */
@@ -116,7 +116,7 @@ describe('parseEpub', () => {
   describe('parseEpub — series-from-title fallback when Calibre meta absent', () => {
     it('extracts series + position from the dc:title parenthetical', async () => {
       const buf = await readFile(seriesFromTitleFixturePath);
-      const out = await parseEpub(buf, { fileName: 'sample-title-no-calibre.epub' });
+      const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-title-no-calibre.epub' });
       expect(out.title).toBe('The Tidewatcher’s Oath');
       expect(out.series).toBe('The Hollow Tide');
       expect(out.seriesPosition).toBe(3);
@@ -126,13 +126,13 @@ describe('parseEpub', () => {
 
   it('turns each spine entry into a chapter', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     expect(out.chapters).toHaveLength(2);
   });
 
   it('strips HTML tags from chapter bodies but preserves visible text', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     const allBody = out.chapters.map((c) => c.body).join('\n');
     expect(allBody).toContain('The tower stood at the edge of the world.');
     expect(allBody).not.toContain('<p>');
@@ -141,7 +141,7 @@ describe('parseEpub', () => {
 
   it('applies tagHtmlEmphasis to inline emphasis tags', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     const allBody = out.chapters.map((c) => c.body).join('\n');
     // chapter1 contains <em>across</em> — should land as [emphatic] across.
     expect(allBody).toContain('[emphatic] across');
@@ -149,7 +149,7 @@ describe('parseEpub', () => {
 
   it('applies tagShoutingDialog to HTML-stripped content', async () => {
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample.epub' });
     const allBody = out.chapters.map((c) => c.body).join('\n');
     // chapter2 contains "GET OUT NOW," — should be tagged + title-cased.
     expect(allBody).toContain('[shouting] Get Out Now');
@@ -159,7 +159,7 @@ describe('parseEpub', () => {
     // Same fixture has Calibre series → use a fileName with a different
     // series pattern and confirm OPF wins.
     const buf = await readFile(fixturePath);
-    const out = await parseEpub(buf, { fileName: 'Other Author - Other Series 09 - X.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'Other Author - Other Series 09 - X.epub' });
     expect(out.series).toBe('Solway Bay');
     expect(out.seriesPosition).toBe(2);
     expect(out.author).toBe('Jane Doe');
@@ -171,19 +171,19 @@ describe('parseEpub', () => {
   describe('parseEpub — chapter title extraction', () => {
     it('merges generic NCX label with descriptive body <h1> ("Chapter 1 — The Berth at Liverpool")', async () => {
       const buf = await readFile(titleFallbackFixturePath);
-      const out = await parseEpub(buf, { fileName: 'sample-title-fallback.epub' });
+      const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-title-fallback.epub' });
       expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
     });
 
     it('uses body <h2> as title when NCX label is empty', async () => {
       const buf = await readFile(titleFallbackFixturePath);
-      const out = await parseEpub(buf, { fileName: 'sample-title-fallback.epub' });
+      const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-title-fallback.epub' });
       expect(out.chapters[1].title).toBe('A Manifest Two Names Short');
     });
 
     it('keeps descriptive NCX label as-is (does not duplicate body heading)', async () => {
       const buf = await readFile(titleFallbackFixturePath);
-      const out = await parseEpub(buf, { fileName: 'sample-title-fallback.epub' });
+      const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-title-fallback.epub' });
       expect(out.chapters[2].title).toBe('What the Captain Knew');
     });
   });
@@ -196,7 +196,7 @@ describe('parseEpub', () => {
   describe('parseEpub — sourcePath path (re-parse from workspace location)', () => {
     it('reads from sourcePath verbatim when provided, ignoring the buffer', async () => {
       /* Pass an empty buffer to prove sourcePath is the actual data source. */
-      const out = await parseEpub(Buffer.alloc(0), {
+      const out = await parseEpub(Buffer.alloc(0), { extractorVersion: 1,
         fileName: 'sample.epub',
         sourcePath: fixturePath,
       });
@@ -207,7 +207,7 @@ describe('parseEpub', () => {
 
     it('does not create a temp directory under %TEMP%/epub-* when sourcePath is provided', async () => {
       mkdtempSpy.mockClear();
-      await parseEpub(Buffer.alloc(0), { fileName: 'sample.epub', sourcePath: fixturePath });
+      await parseEpub(Buffer.alloc(0), { extractorVersion: 1, fileName: 'sample.epub', sourcePath: fixturePath });
       expect(mkdtempSpy).not.toHaveBeenCalled();
     });
   });
@@ -225,7 +225,7 @@ describe('parseEpub', () => {
 describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () => {
   it('recovers chapters epub2 cannot walk', async () => {
     const buf = await readFile(opfPrefixedFixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-opf-prefixed.epub' });
     expect(out.format).toBe('epub');
     expect(out.chapters.length).toBe(2);
     const allBody = out.chapters.map((c) => c.body).join('\n');
@@ -234,7 +234,7 @@ describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () =>
 
   it('carries metadata + Calibre series through the fallback', async () => {
     const buf = await readFile(opfPrefixedFixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-opf-prefixed.epub' });
     expect(out.title).toBe('The Solway Light');
     expect(out.author).toBe('Jane Doe');
     expect(out.series).toBe('Solway Bay');
@@ -244,7 +244,7 @@ describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () =>
 
   it('runs the same audio-tag pipeline as the primary path', async () => {
     const buf = await readFile(opfPrefixedFixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-opf-prefixed.epub' });
     const allBody = out.chapters.map((c) => c.body).join('\n');
     expect(allBody).toContain('[emphatic] across');
     expect(allBody).toContain('[shouting] Get Out Now');
@@ -252,7 +252,7 @@ describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () =>
 
   it('reads from sourcePath verbatim (re-parse path) without a temp dir', async () => {
     mkdtempSpy.mockClear();
-    const out = await parseEpub(Buffer.alloc(0), {
+    const out = await parseEpub(Buffer.alloc(0), { extractorVersion: 1,
       fileName: 'sample-opf-prefixed.epub',
       sourcePath: opfPrefixedFixturePath,
     });
@@ -270,19 +270,19 @@ describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () =>
 describe('parseEpub — NCX titles through the raw-zip fallback (srv-13)', () => {
   it('merges generic NCX label with descriptive body <h1>', async () => {
     const buf = await readFile(opfPrefixedTitlesFixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed-titles.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-opf-prefixed-titles.epub' });
     expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
   });
 
   it('uses body <h2> as title when the NCX label is empty', async () => {
     const buf = await readFile(opfPrefixedTitlesFixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed-titles.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-opf-prefixed-titles.epub' });
     expect(out.chapters[1].title).toBe('A Manifest Two Names Short');
   });
 
   it('keeps a descriptive NCX label as-is', async () => {
     const buf = await readFile(opfPrefixedTitlesFixturePath);
-    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed-titles.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'sample-opf-prefixed-titles.epub' });
     expect(out.chapters[2].title).toBe('What the Captain Knew');
   });
 
@@ -291,10 +291,10 @@ describe('parseEpub — NCX titles through the raw-zip fallback (srv-13)', () =>
       readFile(opfPrefixedTitlesFixturePath),
       readFile(titleFallbackFixturePath),
     ]);
-    const fromFallback = await parseEpub(prefixed, {
+    const fromFallback = await parseEpub(prefixed, { extractorVersion: 1,
       fileName: 'sample-opf-prefixed-titles.epub',
     });
-    const fromEpub2 = await parseEpub(plain, { fileName: 'sample-title-fallback.epub' });
+    const fromEpub2 = await parseEpub(plain, { extractorVersion: 1, fileName: 'sample-title-fallback.epub' });
     expect(fromFallback.chapters.map((c) => c.title)).toEqual(
       fromEpub2.chapters.map((c) => c.title),
     );
@@ -307,18 +307,18 @@ describe('parseEpub — NCX titles through the raw-zip fallback (srv-13)', () =>
 describe('parseEpub — unusable-EPUB diagnostics', () => {
   it('reports DRM when META-INF/encryption.xml is present', async () => {
     const buf = await readFile(drmFixturePath);
-    await expect(parseEpub(buf, { fileName: 'sample-epub-drm.epub' })).rejects.toThrow(
+    await expect(parseEpub(buf, { extractorVersion: 1, fileName: 'sample-epub-drm.epub' })).rejects.toThrow(
       UnusableEpubError,
     );
-    await expect(parseEpub(buf, { fileName: 'sample-epub-drm.epub' })).rejects.toThrow(/DRM/i);
+    await expect(parseEpub(buf, { extractorVersion: 1, fileName: 'sample-epub-drm.epub' })).rejects.toThrow(/DRM/i);
   });
 
   it('reports image-only when spine docs resolve but hold no text', async () => {
     const buf = await readFile(imageOnlyFixturePath);
-    await expect(parseEpub(buf, { fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
+    await expect(parseEpub(buf, { extractorVersion: 1, fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
       UnusableEpubError,
     );
-    await expect(parseEpub(buf, { fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
+    await expect(parseEpub(buf, { extractorVersion: 1, fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
       /image-only/i,
     );
   });
@@ -390,7 +390,7 @@ describe('parseEpub — titleSynthesized wiring (#3628)', () => {
     ['raw-zip path (namespace-prefixed OPF)', true],
   ] as const) {
     it(`${label}: flags the chapter with no heading, not the one with a heading`, async () => {
-      const out = await parseEpub(await buildEpub(prefixed), { fileName: 'x.epub' });
+      const out = await parseEpub(await buildEpub(prefixed), { extractorVersion: 1, fileName: 'x.epub' });
       expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Real Heading']);
       expect(out.chapters[0].titleSynthesized).toBe(true);
       expect('titleSynthesized' in out.chapters[1]).toBe(false);
@@ -407,7 +407,7 @@ describe('parseEpub — titleSynthesized wiring (#3628)', () => {
 describe('parseEpub — empty href does not crash (#4239)', () => {
   it('parses a chapter containing <a href=""> instead of throwing out of a zip callback', async () => {
     const buf = await buildEmptyHrefEpub();
-    const out = await parseEpub(buf, { fileName: 'empty-href.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'empty-href.epub' });
     expect(out.chapters).toHaveLength(1);
     /* Exact, so the fallback's body trimming is pinned: the <title>x</title> in
        the head must not lead the prose. */
@@ -426,7 +426,7 @@ describe('parseEpub — empty href does not crash (#4239)', () => {
 describe('parseEpub — getChapter parity (#4239)', () => {
   it('keeps getChapter output for U+2029, `on…=` prose and a length-bounded heading', async () => {
     const buf = await buildSingleChapterEpub(PARITY_CHAPTER_XHTML, PARITY_NAV_LABEL);
-    const out = await parseEpub(buf, { fileName: 'parity.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'parity.epub' });
     expect(out.chapters).toHaveLength(1);
     // The head <title> leads (U+2029 defeats getChapter's body regex), the prose
     // reads `skip-one` (handler rewrite), the heading stays in the body and the
@@ -455,7 +455,7 @@ describe('parseEpub — a throwing chapter sends the whole book to the raw-zip r
       ],
       { compress: false },
     );
-    const out = await parseEpub(buf, { fileName: 'stored.epub' });
+    const out = await parseEpub(buf, { extractorVersion: 1, fileName: 'stored.epub' });
     expect(out.chapters).toHaveLength(2);
     expect(out.chapters[1].body).toBe('Chapter 2\nFirst line\u2029second line.\n\nEven one = better than none.');
   });

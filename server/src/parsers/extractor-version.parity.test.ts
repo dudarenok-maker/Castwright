@@ -7,8 +7,7 @@
    `-u` run of this file with no source file edited. They are the contract now:
    never re-run this file with `-u`.
 
-   Every case also runs with `extractorVersion: 1` passed explicitly and must
-   equal the default (no option) result. */
+   Every case passes `extractorVersion: 1` explicitly: there is no default (see (d)).  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -36,7 +35,7 @@ const REAL_EPUBS = [
   'samples/the-coalfall-commission-ru/manuscript.epub',
 ];
 
-type Opts = { extractorVersion?: number };
+type Opts = { extractorVersion: number };
 
 async function parseOrErr(
   buf: Buffer,
@@ -144,17 +143,17 @@ const HTML_SNIPPETS: Record<string, string> = {
   'mid-body heading': '<p>before</p>\n  <h2>Part Two</h2>\n  <p>after</p>',
 };
 
-function snippetResults(version?: number): Record<string, string> {
+function snippetResults(version: number): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, html] of Object.entries(HTML_SNIPPETS)) {
-    out[name] = version === undefined ? stripHtml(html) : stripHtml(html, version);
+    out[name] = stripHtml(html, version);
   }
   return out;
 }
 
 describe('version-1 extraction parity (#4217)', () => {
   it('(a) real EPUBs: digest of the whole parse result', async () => {
-    expect(await realDigests({})).toMatchInlineSnapshot(`
+    expect(await realDigests({ extractorVersion: 1 })).toMatchInlineSnapshot(`
       {
         "samples/the-coalfall-commission-de/manuscript.epub": "b24f41075b11d2050557707aacfa1cb20bf53b48930f675f53da574bfb4e0bfa",
         "samples/the-coalfall-commission-es/manuscript.epub": "1748c6767ab80d576a9657ff79e9820b97593f3f0426b82382d1a0b9b2b442a5",
@@ -173,7 +172,7 @@ describe('version-1 extraction parity (#4217)', () => {
   });
 
   it('(b) synthetic EPUBs: sourceText and chapter titles', async () => {
-    expect(await syntheticResults({})).toMatchInlineSnapshot(`
+    expect(await syntheticResults({ extractorVersion: 1 })).toMatchInlineSnapshot(`
       {
         "amp-names": "ERR:UnusableEpubError:Could not locate readable text in this EPUB's package document.",
         "amp-names-plain": {
@@ -232,7 +231,7 @@ describe('version-1 extraction parity (#4217)', () => {
   });
 
   it('(c) stripHtml on block closers and nesting shapes', () => {
-    expect(snippetResults()).toMatchInlineSnapshot(`
+    expect(snippetResults(1)).toMatchInlineSnapshot(`
       {
         "article": "alphabeta",
         "blockquote": "alphabeta",
@@ -268,15 +267,15 @@ describe('version-1 extraction parity (#4217)', () => {
     `);
   });
 
-  it('(a) explicit extractorVersion: 1 equals the default', async () => {
-    expect(await realDigests({ extractorVersion: 1 })).toEqual(await realDigests({}));
-  });
-
-  it('(b) explicit extractorVersion: 1 equals the default', async () => {
-    expect(await syntheticResults({ extractorVersion: 1 })).toEqual(await syntheticResults({}));
-  });
-
-  it('(c) explicit stripHtml(s, 1) equals the default', () => {
-    expect(snippetResults(1)).toEqual(snippetResults());
+  /* There is no default version any more (#4217 pass 1): a layer that drops it
+     must fail typecheck, not extract at v1 under a book stamped 2. */
+  it("(d) the version is required at every parser layer (compile-time guard)", () => {
+    const never = () => {
+      // @ts-expect-error -- extractorVersion is required
+      void stripHtml("<p>x</p>");
+      // @ts-expect-error -- extractorVersion is required
+      void parseEpub(Buffer.alloc(0), { fileName: "x.epub" });
+    };
+    expect(never).toBeTypeOf("function");
   });
 });
