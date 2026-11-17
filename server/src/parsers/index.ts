@@ -62,7 +62,9 @@ export async function parseManuscript(input: {
   if (format === 'epub' || input.mimeType === 'application/epub+zip') {
     return parseInWorker({
       format: 'epub',
-      buffer: input.buffer,
+      /* With sourcePath the parser reads from disk and never touches the
+         buffer; don't clone the whole book into the worker for nothing. */
+      buffer: input.sourcePath ? Buffer.alloc(0) : input.buffer,
       fileName: input.fileName,
       sourcePath: input.sourcePath,
       extractorVersion: input.extractorVersion,
