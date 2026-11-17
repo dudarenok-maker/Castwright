@@ -685,8 +685,8 @@ describe.each(['main', 'subset'] as const)(
   (kind) => {
     it('keeps the slug (and the take) of a rendered retitled chapter; an unrendered one gets the new slug', async () => {
       const { manuscriptId, bookDir } = await seedBook(`slug-${kind}`, TAKE_MANUSCRIPT, [
-        { title: 'Alpha', slug: '01-alpha' },
-        { title: 'Old Name', slug: '02-old-name' },
+        { title: 'Alpha Prime', slug: '01-alpha' },
+        { title: 'New Name', slug: '02-old-name' },
         { title: 'Epilogue', slug: '03-epilogue' },
       ]);
       /* Dynamic imports: a static import would load paths.js before beforeAll
@@ -700,14 +700,12 @@ describe.each(['main', 'subset'] as const)(
       writeFileSync(join(audio, '02-old-name.mp3'), bytes2);
       writeFileSync(join(audio, '03-epilogue.m4a'), bytes3);
 
-      /* With equal chapter counts the hydrate takes hint titles from state.json
-         (hintsFromParse), so the headings alone cannot retitle. Retitle the cached
-         record's hints, which is what a re-parse of an edited manuscript yields. */
-      const { getOrHydrateManuscript } = await import('../store/manuscripts.js');
-      const record = (await getOrHydrateManuscript(manuscriptId))!;
-      record.chapterHints[0].title = 'Alpha Prime';
-      record.chapterHints[1].title = 'New Name';
-
+      /* The realistic state: a CHAPTER_TITLE_PARSER_VERSION bump ran
+         refreshChapterTitles (routes/book-state.ts), which retitles a rendered
+         chapter in state.json and keeps its slug. With equal chapter counts the
+         next cold hydrate takes hint titles from state.json (hintsFromParse), so
+         the hints carry 'New Name' while the audio still sits at '02-old-name'.
+         The persist then recomputed the slug from the new title. */
       await runAnalysis(manuscriptId, kind);
       expect(readState(bookDir).analysisProvenance?.scope).toBe(kind === 'main' ? 'book' : 'subset');
 
