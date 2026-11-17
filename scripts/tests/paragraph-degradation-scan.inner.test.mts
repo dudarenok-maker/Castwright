@@ -14,7 +14,10 @@ import {
   readdirSync,
   existsSync,
   rmSync,
+  cpSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -29,6 +32,13 @@ import {
   type ParsedLike,
 } from '../../server/scripts/paragraph-degradation-scan.mts';
 import { parseManuscript } from '../../server/src/parsers/index.ts';
+import { buildManuscriptRecord } from '../../server/src/store/manuscripts.ts';
+import {
+  buildHintsEntry,
+  composeHintsFile,
+  sha256Hex,
+  writeManuscriptHints,
+} from '../../server/src/workspace/manuscript-hints.ts';
 import { buildEpub, buildSingleChapterEpub } from '../../server/src/test-utils/empty-href-epub.ts';
 import {
   countTurnOpeners,
@@ -687,4 +697,177 @@ test('an EPUB that never parses gets no what-if and never stops the scan', () =>
   assert.equal(byName(rep.entries, 'a.epub').result, undefined);
   assert.equal(byName(rep.entries, 'ok.md').status, 'parsed');
   rmSync(lib, { recursive: true, force: true });
+});
+
+/* ---- --dump (#2254 spec §4.4 step 2): read-only, byte-exact chapter bodies ---- */
+
+const DUMP_AUTHOR = 'Dump Author';
+const DUMP_SERIES = 'Standalones';
+const DUMP_TITLE = 'Dump Book';
+const DUMP_MANUSCRIPT_ID = 'm_dump_fixture';
+const DUMP_MANUSCRIPT =
+  '# Alpha\n\nFirst alpha paragraph.\n\nSecond alpha paragraph.\n\n# Beta\n\nOnly beta paragraph.\n';
+const SCANNER = join(import.meta.dirname, '..', '..', 'server', 'scripts', 'paragraph-degradation-scan.mts');
+const TSX_CLI = join(import.meta.dirname, '..', '..', 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+
+function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.NODE_TEST_WORKER_ID;
+  return env;
+}
+
+/** A workspace with one book whose chapter 1 has a segments file the self-heal would back-fill from. */
+function makeDumpWorkspace(): { root: string; bookDir: string; statePath: string } {
+  const root = tempDir('dump-ws');
+  const bookDir = join(root, 'books', DUMP_AUTHOR, DUMP_SERIES, DUMP_TITLE);
+  mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+  mkdirSync(join(bookDir, 'audio'), { recursive: true });
+  writeFileSync(join(bookDir, 'manuscript.md'), DUMP_MANUSCRIPT);
+  const state = {
+    bookId: 'dump-author--standalones--dump-book',
+    manuscriptId: DUMP_MANUSCRIPT_ID,
+    title: DUMP_TITLE,
+    author: DUMP_AUTHOR,
+    series: DUMP_SERIES,
+    seriesPosition: null,
+    isStandalone: true,
+    manuscriptFile: 'manuscript.md',
+    castConfirmed: true,
+    chapters: [
+      { id: 1, title: 'Alpha', slug: '01-alpha', uuid: 'u-alpha' },
+      { id: 2, title: 'Beta', slug: '02-beta', uuid: 'u-beta' },
+    ],
+    coverGradient: ['#000', '#fff'],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const statePath = join(bookDir, '.audiobook', 'state.json');
+  writeFileSync(statePath, JSON.stringify(state));
+  /* No audioModelKey / audioRenderedAt / duration on the chapter: the heal fills all three. */
+  writeFileSync(
+    join(bookDir, 'audio', '01-alpha.segments.json'),
+    JSON.stringify({ modelKey: 'model-x', synthesizedAt: '2026-02-02T00:00:00.000Z', durationSec: 12.5 }),
+  );
+  return { root, bookDir, statePath };
+}
+
+function runDump(args: string[]): { status: number | null; json: Record<string, unknown> | null } {
+  const r = spawnSync(process.execPath, [TSX_CLI, SCANNER, '--dump', ...args], {
+    encoding: 'utf8',
+    /* The workspace is pointed at the fixture so a dump that wrongly goes through the
+       book lookup would find (and heal) this very book. */
+    env: childEnv({ WORKSPACE_DIR: join(args[0], '..', '..', '..', '..') }),
+    timeout: 60_000,
+  });
+  const line = r.stdout.trim().split('\n').filter(Boolean).pop();
+  return { status: r.status, json: line ? (JSON.parse(line) as Record<string, unknown>) : null };
+}
+
+function healViaFindBook(root: string): void {
+  const helper = join(tempDir('dump-helper'), 'heal.mts');
+  const scanUrl = pathToFileURL(
+    join(import.meta.dirname, '..', '..', 'server', 'src', 'workspace', 'scan.ts'),
+  ).href;
+  writeFileSync(
+    helper,
+    `import { findBookByManuscriptId } from ${JSON.stringify(scanUrl)};\n` +
+      `const b = await findBookByManuscriptId(${JSON.stringify(DUMP_MANUSCRIPT_ID)});\n` +
+      `if (!b) { console.error('book not found'); process.exit(3); }\n`,
+  );
+  const r = spawnSync(process.execPath, [TSX_CLI, helper], {
+    encoding: 'utf8',
+    env: childEnv({ WORKSPACE_DIR: root }),
+    timeout: 60_000,
+  });
+  assert.equal(r.status, 0, r.stderr);
+}
+
+test('--dump: the fixture really triggers the self-heal (positive control)', () => {
+  const ws = makeDumpWorkspace();
+  const copy = tempDir('dump-copy');
+  cpSync(ws.root, copy, { recursive: true });
+  const copyState = join(copy, 'books', DUMP_AUTHOR, DUMP_SERIES, DUMP_TITLE, '.audiobook', 'state.json');
+  const before = readFileSync(copyState);
+  healViaFindBook(copy);
+  assert.ok(!readFileSync(copyState).equals(before), 'findBookByManuscriptId must rewrite state.json here');
+  rmSync(ws.root, { recursive: true, force: true });
+  rmSync(copy, { recursive: true, force: true });
+});
+
+test('--dump never rewrites state.json and writes the record bodies exactly', async () => {
+  const ws = makeDumpWorkspace();
+  const before = readFileSync(ws.statePath);
+  const out = join(tempDir('dump-out'), 'dump');
+  const r = runDump([ws.bookDir, '--chapters', '1,2', '--out', out]);
+  assert.equal(r.status, 0);
+  assert.equal(r.json?.ok, true);
+  assert.ok(readFileSync(ws.statePath).equals(before), 'state.json must be byte for byte unchanged');
+
+  const state = JSON.parse(before.toString('utf8'));
+  const record = await buildManuscriptRecord(ws.bookDir, state);
+  assert.ok(record);
+  assert.equal(record.chapterHints.length, 2);
+  for (const h of record.chapterHints) {
+    assert.equal(readFileSync(join(out, `ch${h.id}.txt`), 'utf8'), h.body);
+  }
+  const manifest = JSON.parse(readFileSync(join(out, 'dump.json'), 'utf8'));
+  assert.equal(manifest.bookId, state.bookId);
+  assert.equal(manifest.manuscriptId, DUMP_MANUSCRIPT_ID);
+  assert.equal(manifest.hintsSource, 'parse');
+  assert.deepEqual(
+    manifest.chapters.map((c: { id: number; length: number; sha256: string }) => [c.id, c.length, c.sha256]),
+    record.chapterHints.map((h) => [
+      h.id,
+      h.body.length,
+      createHash('sha256').update(h.body, 'utf8').digest('hex'),
+    ]),
+  );
+  rmSync(ws.root, { recursive: true, force: true });
+});
+
+test('--dump of a restructured book writes the hints bodies exactly, not a fresh parse', async () => {
+  const ws = makeDumpWorkspace();
+  const state = JSON.parse(readFileSync(ws.statePath, 'utf8'));
+  const sha = sha256Hex(Buffer.from(DUMP_MANUSCRIPT));
+  const bodies = [
+    'Restructured alpha.\r\n\r\n  indented line \n\n',
+    'Restructured beta, trailing blank lines.\n\n\n',
+  ];
+  const entry = buildHintsEntry({
+    manuscriptId: DUMP_MANUSCRIPT_ID,
+    manuscriptFile: 'manuscript.md',
+    sourceSha256: sha,
+    hints: bodies.map((body, i) => ({ id: i + 1, body })),
+    stateChapters: state.chapters,
+  });
+  await writeManuscriptHints(ws.bookDir, composeHintsFile(entry, null, state, sha));
+  const out = join(tempDir('dump-out'), 'dump');
+  const r = runDump([ws.bookDir, '--chapters', '1,2', '--out', out]);
+  assert.equal(r.status, 0);
+  assert.equal(r.json?.hintsSource, 'persisted');
+  assert.equal(readFileSync(join(out, 'ch1.txt'), 'utf8'), bodies[0]);
+  assert.equal(readFileSync(join(out, 'ch2.txt'), 'utf8'), bodies[1]);
+  rmSync(ws.root, { recursive: true, force: true });
+});
+
+test('--dump with an unknown chapter id writes nothing and exits non-zero', () => {
+  const ws = makeDumpWorkspace();
+  const out = join(tempDir('dump-out'), 'dump');
+  const r = runDump([ws.bookDir, '--chapters', '1,99', '--out', out]);
+  assert.notEqual(r.status, 0);
+  assert.equal(r.json?.ok, false);
+  assert.match(String(r.json?.error), /unknown chapter id 99/);
+  assert.equal(existsSync(out), false);
+  rmSync(ws.root, { recursive: true, force: true });
+});
+
+test('--dump of a book with no manuscript record writes nothing and exits non-zero', () => {
+  const ws = makeDumpWorkspace();
+  rmSync(join(ws.bookDir, 'manuscript.md'));
+  const out = join(tempDir('dump-out'), 'dump');
+  const r = runDump([ws.bookDir, '--chapters', '1', '--out', out]);
+  assert.notEqual(r.status, 0);
+  assert.equal(existsSync(out), false);
+  rmSync(ws.root, { recursive: true, force: true });
 });

@@ -14,6 +14,9 @@
                                           <out>/scan.md; nothing outside <out>.
      --child <file>                       parse one file, measure it, print one JSON line.
      --rewrite <epub> --to <copy>         write the #4217 what-if copy of one EPUB, print one JSON line.
+     --dump <bookDir> --chapters <id,id,…> --out <dir>
+                                          write the hydrated record's chapter bodies to
+                                          <out>/ch<id>.txt and <out>/dump.json, read-only.
    Test-only seams (not for operators)
      --parser-module <path>  the child imports that module's default export
                              instead of parseManuscript.
@@ -886,6 +889,73 @@ type ParseFn = (input: {
   extractorVersion: number;
 }) => Promise<ParsedLike>;
 
+/* ---- dump -------------------------------------------------------------- */
+
+/* The #2254 runner reads these files, so they must be the strings analysis and
+   GET /state read (a restructure held in manuscript-hints.json included), and
+   producing them must write nothing under the workspace (spec §4.4 step 2).
+   That rules out getOrHydrateManuscript: its book lookup applies the lazy
+   self-heal, which rewrites state.json from this process, outside the running
+   server's locks. So: read state.json (reads only), build the record. Neither
+   findBookBy* nor anything else in scan.ts is imported here. Bodies are written
+   exactly (utf8, no trim, no newline conversion): the runner and the
+   measurement normalise nothing (AC5 M-8). */
+
+export interface DumpChapterInfo {
+  id: number;
+  title: string;
+  length: number;
+  sha256: string;
+}
+
+export interface DumpManifest {
+  bookId: string;
+  manuscriptId: string;
+  hintsSource: string;
+  chapters: DumpChapterInfo[];
+}
+
+export async function dumpChapters(
+  bookDir: string,
+  chapterIds: number[],
+  outDir: string,
+): Promise<DumpManifest> {
+  const { readStateJsonWithRecovery } = await import('../src/workspace/state-migrate.js');
+  const { buildManuscriptRecord } = await import('../src/store/manuscripts.js');
+  const dir = resolve(bookDir);
+  const state = await readStateJsonWithRecovery(join(dir, '.audiobook', 'state.json'));
+  if (!state) throw new Error(`no state.json under ${dir}`);
+  const record = await buildManuscriptRecord(dir, state);
+  if (!record) throw new Error(`no manuscript record for ${dir}`);
+  if (chapterIds.length === 0) throw new Error('--chapters needs at least one chapter id');
+  /* Every id is resolved before the first write: an error writes nothing. */
+  const picked = chapterIds.map((id) => {
+    const hint = record.chapterHints.find((h) => h.id === id);
+    if (!hint) throw new Error(`unknown chapter id ${id}`);
+    return hint;
+  });
+  const target = resolve(outDir);
+  mkdirSync(target, { recursive: true });
+  const chapters: DumpChapterInfo[] = [];
+  for (const h of picked) {
+    writeFileSync(join(target, `ch${h.id}.txt`), h.body, 'utf8');
+    chapters.push({
+      id: h.id,
+      title: h.title,
+      length: h.body.length,
+      sha256: createHash('sha256').update(h.body, 'utf8').digest('hex'),
+    });
+  }
+  const manifest: DumpManifest = {
+    bookId: state.bookId,
+    manuscriptId: record.manuscriptId,
+    hintsSource: record.hintsSource ?? 'parse',
+    chapters,
+  };
+  writeFileSync(join(target, 'dump.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  return manifest;
+}
+
 /* ---- entry ------------------------------------------------------------- */
 
 function argValue(argv: string[], name: string): string | undefined {
@@ -902,6 +972,21 @@ export async function main(argv: string[]): Promise<number> {
       const { copy, closers } = await rewriteEpub(readFileSync(rewrite));
       writeFileSync(to, copy);
       report({ ok: true, closers });
+      return 0;
+    } catch (e) {
+      report({ ok: false, error: messageOf(e) });
+      return 1;
+    }
+  }
+  const dump = argValue(argv, '--dump');
+  if (dump) {
+    try {
+      const out = argValue(argv, '--out');
+      const ids = argValue(argv, '--chapters');
+      if (!out || !ids) throw new Error('--dump needs --chapters <id,id,…> and --out <dir>');
+      const parsed = ids.split(',').map((x) => (/^\d+$/.test(x.trim()) ? Number(x.trim()) : NaN));
+      if (parsed.some((n) => !Number.isInteger(n))) throw new Error(`bad --chapters: ${ids}`);
+      report({ ok: true, ...(await dumpChapters(dump, parsed, out)) });
       return 0;
     } catch (e) {
       report({ ok: false, error: messageOf(e) });
