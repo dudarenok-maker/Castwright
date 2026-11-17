@@ -307,3 +307,24 @@ describe('the next restructure replays an interrupted edits journal (#4227)', ()
     expect(readEdits()).toEqual(editsBefore);
   });
 });
+
+describe('the replay precedes the parse-fallback pairing check (#4227)', () => {
+  /* Red when: the replay call moves after judgeParsePairing. That check reads the
+     OLD-keyed edits first, so the pairing judges against stale evidence (and the
+     closure's sha backstop sees the replay's rewrite) and the rename no longer
+     answers 200 with the edits re-keyed. Needs a parse-fallback record (no hints
+     file), which P1's persisted-hints record never reaches. */
+  it('P4 a parse-fallback record pairs against the replayed edits', async () => {
+    await parkThenRestart();
+    writeFileSync(
+      join(bookDir, 'manuscript.md'),
+      '# Chapter One\n\nAlpha first.\nAlpha second.\nBeta first.\nBeta second.\n\n# Chapter Three\n\nGamma first.\nGamma second.\n',
+    );
+    rmSync(join(bookDir, '.audiobook', 'manuscript-hints.json'), { force: true });
+
+    const res = await rename1();
+    expect(res.status).toBe(200);
+    expect(readEdits().sentences.some((s) => s.chapterId === 3)).toBe(false);
+    expect(existsSync(journalPath())).toBe(false);
+  });
+});
