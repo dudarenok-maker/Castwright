@@ -77,7 +77,7 @@ import {
   AnalyzerReasoningUnavailableError,
   AnalyzerCapabilityRejectedError,
 } from '../analyzer/errors.js';
-import { classifyAnalysisFailure, isFsPathError } from './failure-taxonomy.js';
+import { classifyAnalysisFailure } from './failure-taxonomy.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -789,10 +789,11 @@ async function runDesignJob(
             break;
           }
           const message = (e as Error).message || 'Voice design failed.';
-          /* #4236 -- an fs error is classified by being one, before any message scan: its message embeds a
-             path, and a book / author / series titled "The Unreachable" would match SIDECAR_DOWN_RE and
-             halt the run as a sidecar restart. It falls through to the per-character failure below. */
-          if (!isFsPathError(e) && isSidecarRestartClass(e, message)) {
+          /* #4236 -- the restart scan reads the CURATED text, never the raw message: an fs error and a lock
+             timeout both embed a path (the lock key), and a book / author / series titled "The Unreachable"
+             would match SIDECAR_DOWN_RE and halt the run as a sidecar restart. Computed once -- it logs. */
+          const curated = requestFailureMessageFs(e, message);
+          if (isSidecarRestartClass(e, curated)) {
             /* Sidecar down/recycling/poison-restarting. Ride out the respawn
                and retry this character — unless we've exhausted the budget
                (genuinely dead) or the job was cancelled, in which case stop
@@ -821,7 +822,7 @@ async function runDesignJob(
             endJob(job, {
               type: 'error',
               code: 'sidecar_unavailable',
-              message: `${requestFailureMessageFs(e, message)} (${job.done} of ${job.total} designed before this happened.)`,
+              message: `${curated} (${job.done} of ${job.total} designed before this happened.)`,
             });
             return;
           }
@@ -856,7 +857,7 @@ async function runDesignJob(
              contention rather than implying the character itself is at fault.
              The same string on both surfaces so the live toast and the
              end-of-job `failures` list can't disagree. */
-          const reason = itemFailureReason(e, requestFailureMessageFs(e, message));
+          const reason = itemFailureReason(e, curated);
           job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',

@@ -2436,6 +2436,32 @@ describe('cast-design — #4236: the shared-GPU persona pre-pass and the sidecar
     expect(events.filter((e) => e.type === 'character_failed').map((e) => e.errorReason)).toEqual([FS_SENTENCE, FS_SENTENCE]);
     expect(JSON.stringify(events)).not.toContain('Unreachable');
   });
+
+  it('a lock timeout keyed on a path holding "Unreachable" is per-character contention, not a sidecar restart (#4236)', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const key = 'C:\\Users\\someone\\Castwright\\books\\Della Renwick\\The Unreachable\\The Unreachable\\.audiobook\\cast.json';
+    const ensureSpy = vi.spyOn(ensureMod, 'ensureSidecarEngineReady').mockResolvedValue(undefined);
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValue(new LockAcquisitionTimeoutError(key, 10_000));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+    errSpy.mockRestore();
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(ensureSpy).not.toHaveBeenCalled();
+    expect(designSpy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'character_failed').map((e) => e.errorReason)).toEqual([
+      LOCK_CONTENTION_ITEM_REASON,
+      LOCK_CONTENTION_ITEM_REASON,
+    ]);
+    expect(events.some((e) => e.type === 'idle')).toBe(true);
+    expect(JSON.stringify(events)).not.toContain('Unreachable');
+  });
 });
 
 describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {

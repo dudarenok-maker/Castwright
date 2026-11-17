@@ -731,7 +731,7 @@ Design rationale:
   `cast-design`'s job, and the catch-alls of `chapter-splice` and
   `chapter-qa-repair`, and the `unknown` fallback of `classifyFailure` in
   `failure-taxonomy`, which generation's `chapter_failed` reason goes through,
-  and, since #4236, `library`, `queue`, `series-cast`, `series-roster`,
+  and, since #4236, `config` (its `/prompts/:id` endpoints), `library`, `queue`, `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory`,
   `annotate-emotion`, `instruct-annotation`, `script-review`'s `chapter-failed`
   frames, `export`'s job `errorReason` (the raw error and the ffmpeg stderr go to
@@ -741,16 +741,16 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and thirty-one call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
-  `chapters-restructure` ×6, `cast-design` ×8
+  one hundred and thirty call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
   shared-GPU pre-pass's per-item reason, #4236; its sidecar-down terminal message is
-  curated too, and an fs error is classified ahead of the sidecar-down scan),
+  curated too, and the sidecar-down scan reads that curated text, so neither an fs error nor a lock timeout can be taken for a sidecar restart),
   `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
   handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×3,
   `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
-  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites keep their path on purpose), `script-review` ×5 (its three
+  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites keep their path pending the #4236 owner decision), `script-review` ×5 (its three
   start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
