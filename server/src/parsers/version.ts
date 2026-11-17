@@ -30,3 +30,9 @@ export const CHAPTER_TITLE_PARSER_VERSION = 2;
         are XML-entity-decoded (child 3). */
 export const LEGACY_EXTRACTOR_VERSION = 1;
 export const MANUSCRIPT_EXTRACTOR_VERSION = 2;
+
+/* The extractor version a book's source file is implicitly re-read with: its
+   `state.json` stamp, or 1 when the stamp is absent (every pre-#4217 book). */
+export function extractorVersionOf(state: { manuscriptExtractorVersion?: number }): number {
+  return state.manuscriptExtractorVersion ?? LEGACY_EXTRACTOR_VERSION;
+}
