@@ -484,8 +484,17 @@ export function classify(snapshot, now, thresholds) {
     if (prior && prior.startedAt === root.startedAt) {
       const elapsedMs = now - prior.sampledAt;
       if (elapsedMs >= thresholds.minSampleAgeMs) {
-        const deltaCpu = Math.max(0, cpuSecondsNow - prior.cpuSeconds);
-        cpuRatePerMin = deltaCpu / (elapsedMs / 60000);
+        // A subtree-sum delta is only a rate while the member set is stable. A
+        // forks pool recycles a worker per test file, and an exited worker's
+        // CPU leaves the sum, so a busy battery can read as ~0 (or negative).
+        // A member born after the prior sample, or a falling sum, means the
+        // delta is not a rate: leave it unknown, which every caller reads as
+        // "not provably stalled" (#4222 review).
+        const deltaCpu = cpuSecondsNow - prior.cpuSeconds;
+        const membersChurned = members.some((m) => m.startedAt > prior.sampledAt);
+        if (!membersChurned && deltaCpu >= 0) {
+          cpuRatePerMin = deltaCpu / (elapsedMs / 60000);
+        }
       }
     }
 

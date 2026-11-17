@@ -700,6 +700,40 @@ test('G8: the census log records spareReason for a spared root and null for a ki
   assert.equal(kr.spareReason, null);
 });
 
+test('G9: a forks battery recycling workers reads as rate-unknown, never stalled (#4222 review finding 2)', () => {
+  // Captured shape: vitest's forks pool recycles a worker per test file, so an
+  // exited worker's CPU leaves the subtree sum. Two workers carried 27.6 CPU-s
+  // at the prior sample; ten minutes later main grew 25 CPU-s but the current
+  // (NEW pids, started after the prior sample) workers hold 0.2 each, so the
+  // raw sum FELL. A rate computed from that delta reads a busy battery as dead.
+  const startedAt = NOW - 60 * MIN;
+  const sampledAt = NOW - 15 * MIN;
+  const processes = [
+    { pid: 9101, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
+    { pid: 9102, ppid: 9101, name: 'node.exe', commandLine: IN_CHECKOUT, cpuSeconds: 2.5, startedAt },
+    { pid: 9103, ppid: 9102, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0.2, startedAt: NOW - 20_000 },
+    { pid: 9104, ppid: 9102, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0.2, startedAt: NOW - 10_000 },
+  ];
+  const priorSamples = { 9101: { cpuSeconds: 27.6, sampledAt, startedAt } };
+  const v = verdictFor(classify({ processes, priorSamples, protectedPids: [] }, NOW, THRESHOLDS), 9101);
+  assert.equal(v.cpuRatePerMin, null, 'a member born after the prior sample makes the delta unreadable');
+  assert.ok(!v.reasons.includes('stalled-rate'));
+  const r = runGuard({ processes, priorSamples });
+  assert.deepEqual(r.killedPids, []);
+  assert.match(r.spared[0].reason, /rate unknown/);
+});
+
+test('G9b: a negative CPU delta (members exited) is rate-unknown, not clamped to a zero rate', () => {
+  const startedAt = NOW - 60 * MIN;
+  const processes = [
+    { pid: 9111, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
+    { pid: 9112, ppid: 9111, name: 'node.exe', commandLine: IN_CHECKOUT, cpuSeconds: 3, startedAt },
+  ];
+  const priorSamples = { 9111: { cpuSeconds: 27.6, sampledAt: NOW - 15 * MIN, startedAt } };
+  const v = verdictFor(classify({ processes, priorSamples, protectedPids: [] }, NOW, THRESHOLDS), 9111);
+  assert.equal(v.cpuRatePerMin, null);
+});
+
 test('runCli: report-only mode (no flags) never sets kill=true', () => {
   let seenKill;
   runCli([], {
