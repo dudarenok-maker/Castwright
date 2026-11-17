@@ -27,5 +27,5 @@
   { "name": "control: anchor covering the whole ZWJ family resolves", "text": "Home \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67 ok", "anchor": "Home \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67", "expectedTail": " ok" },
   { "name": "refused: anchor ends between the two halves of a regional-indicator flag", "text": "Vive \ud83c\uddeb\ud83c\uddf7 Paris", "anchor": "Vive \ud83c\uddeb", "expectedTail": null },
   { "name": "control: anchor covering the whole flag resolves", "text": "Vive \ud83c\uddeb\ud83c\uddf7 Paris", "anchor": "Vive \ud83c\uddeb\ud83c\uddf7", "expectedTail": " Paris" },
-  { "name": "folds: every code point of a run, a Prepend char clusters with the ellipsis", "text": "x ؀… y", "anchor": "x ؀...", "expectedTail": " y" }
+  { "name": "folds: every code point of a run, a Prepend char clusters with the ellipsis", "text": "x \u0600\u2026 y", "anchor": "x \u0600...", "expectedTail": " y" }
 ]
