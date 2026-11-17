@@ -213,6 +213,8 @@ separate human decision per the ticket). A genuine fix still needs a CTranslate2
 memory query or driver-level per-process accounting this box's WDDM cannot provide —
 follow-on scope for #3036 after #3267 lands this chain.
 
+> **Update 2026-11-13 (#3336):** the owner decided to delete `_own_process_used_mb`; the method and its unit tests were removed, so the "stays in the codebase" statement above no longer holds.
+
 ## Acceptance evidence map (for #3267 verification)
 
 - Acc #1 (on-box run, real CUDA model, `/debug/memory` before+after footprints, exact
