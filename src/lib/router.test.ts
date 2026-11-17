@@ -155,6 +155,14 @@ describe('stageToHash', () => {
       expect(stageEqual(mk({}), mk({ chapterExplicit: false }))).toBe(true);
       expect(stageEqual(mk({ chapterExplicit: true }), mk({ chapterExplicit: true }))).toBe(true);
     });
+
+    it('stageEqual: the flag only matters for chapter 3 (the URL cannot carry it elsewhere)', () => {
+      /* An in-app pick of chapter 5 stores false; the echoed ?chapter=5 reads back true. */
+      expect(
+        stageEqual(mk({ currentChapterId: 5, chapterExplicit: false }), mk({ currentChapterId: 5, chapterExplicit: true })),
+      ).toBe(true);
+      expect(stageEqual(mk({ currentChapterId: 5 }), mk({ currentChapterId: 5, chapterExplicit: true }))).toBe(true);
+    });
   });
 });
 

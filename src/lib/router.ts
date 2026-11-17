@@ -112,7 +112,11 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
       a.view === b.view &&
       a.currentChapterId === b.currentChapterId &&
       a.openProfileId === b.openProfileId &&
-      !!a.chapterExplicit === !!b.chapterExplicit
+      /* Only chapter 3 (the default) needs the flag: any other chapter is
+         always in the URL, so an in-app pick (false) and its echoed URL
+         (true) are the same stage and must not re-hydrate. */
+      (a.currentChapterId !== 3 || !!a.chapterExplicit) ===
+        (b.currentChapterId !== 3 || !!b.chapterExplicit)
     );
   }
   if (a.kind === 'confirm' && b.kind === 'confirm') {
