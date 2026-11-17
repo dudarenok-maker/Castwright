@@ -21,7 +21,7 @@ import { nanoid } from 'nanoid';
 import { existsSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseManuscript, UnsupportedFormatError, DrmProtectedError } from '../parsers/index.js';
+import { parseManuscript, UnsupportedFormatError, UnusableMediaError, DrmProtectedError } from '../parsers/index.js';
 import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD, countWords } from '../parsers/front-matter.js';
 import { putManuscript, withParseOrigin, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
@@ -180,7 +180,7 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
     if (e instanceof DrmProtectedError) {
       return res.status(415).json({ error: 'drm_protected', message: e.message });
     }
-    if (e instanceof UnsupportedFormatError) {
+    if (e instanceof UnsupportedFormatError || e instanceof UnusableMediaError) {
       return res.status(415).json({ error: e.message });
     }
     console.error('[import] parse failed', e);

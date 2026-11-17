@@ -433,7 +433,7 @@ describe('parseEpub — getChapter parity (#4239)', () => {
     // title stays the NCX label (the rewritten href pushes it past the bound).
     expect(out.chapters[0].title).toBe('Chapter 3');
     expect(out.chapters[0].body).toBe(
-      'Head Title Text\n\nChapter 3\nSUBTITLE[4]\nFirst line second line.\n\nEven skip-one = better than none.',
+      'Head Title Text\n\nChapter 3\nSUBTITLE[4]\nFirst line\u2029second line.\n\nEven skip-one = better than none.',
     );
   });
 });
@@ -457,6 +457,6 @@ describe('parseEpub — a throwing chapter sends the whole book to the raw-zip r
     );
     const out = await parseEpub(buf, { fileName: 'stored.epub' });
     expect(out.chapters).toHaveLength(2);
-    expect(out.chapters[1].body).toBe('Chapter 2\nFirst line second line.\n\nEven one = better than none.');
+    expect(out.chapters[1].body).toBe('Chapter 2\nFirst line\u2029second line.\n\nEven one = better than none.');
   });
 });

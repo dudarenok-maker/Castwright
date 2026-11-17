@@ -1,4 +1,4 @@
-/* Synthetic one-chapter EPUBs for the parser and import-route tests.
+/* Synthetic EPUBs for the parser and import-route tests.
    `buildEmptyHrefEpub`'s chapter contains <a href=""> — epub2's getChapter
    throws on it from inside an async zip callback (#4239).
    `buildSingleChapterEpub` takes any chapter XHTML (the parity fixture);
@@ -17,20 +17,24 @@ export function buildSingleChapterEpub(chapterXhtml: string, navLabel = 'One'): 
 
 /* `compress: false` stores every entry uncompressed, which makes adm-zip answer
    a chapter read synchronously (only DEFLATED entries go through the async
-   inflater) — the shape in which epub2's throw is catchable by the caller. */
+   inflater) — the shape in which epub2's throw is catchable by the caller.
+   `fileNames` overrides the chapter file names (real names; written XML-escaped
+   in the OPF and NCX), e.g. `Part 1 & More.xhtml`. */
 export function buildEpub(
   chapterXhtmls: string[],
-  opts: { navLabels?: string[]; compress?: boolean } = {},
+  opts: { navLabels?: string[]; compress?: boolean; fileNames?: string[] } = {},
 ): Promise<Buffer> {
   const compress = opts.compress ?? true;
+  const fileName = (i: number) => opts.fileNames?.[i] ?? `c${i + 1}.xhtml`;
+  const xmlName = (i: number) => fileName(i).replace(/&/g, '&amp;');
   const items = chapterXhtmls
-    .map((_, i) => `<item id="c${i + 1}" href="c${i + 1}.xhtml" media-type="application/xhtml+xml"/>`)
+    .map((_, i) => `<item id="c${i + 1}" href="${xmlName(i)}" media-type="application/xhtml+xml"/>`)
     .join('');
   const refs = chapterXhtmls.map((_, i) => `<itemref idref="c${i + 1}"/>`).join('');
   const nav = chapterXhtmls
     .map(
       (_, i) =>
-        `<navPoint id="np${i + 1}" playOrder="${i + 1}"><navLabel><text>${opts.navLabels?.[i] ?? `Part ${i + 1}`}</text></navLabel><content src="c${i + 1}.xhtml"/></navPoint>`,
+        `<navPoint id="np${i + 1}" playOrder="${i + 1}"><navLabel><text>${opts.navLabels?.[i] ?? `Part ${i + 1}`}</text></navLabel><content src="${xmlName(i)}"/></navPoint>`,
     )
     .join('');
   return new Promise((resolveBuf, reject) => {
@@ -63,7 +67,7 @@ export function buildEpub(
       'OEBPS/toc.ncx',
       { compress },
     );
-    chapterXhtmls.forEach((x, i) => zip.addBuffer(Buffer.from(x), `OEBPS/c${i + 1}.xhtml`, { compress }));
+    chapterXhtmls.forEach((x, i) => zip.addBuffer(Buffer.from(x), `OEBPS/${fileName(i)}`, { compress }));
     zip.end();
     const chunks: Buffer[] = [];
     zip.outputStream
