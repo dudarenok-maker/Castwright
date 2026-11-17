@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="130" data-publish-id="595924adceb2"></div>
+  <div hidden data-published-as="131" data-publish-id="a0f7ec072884"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">82</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">83</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->47<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->48<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">47 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">48 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -964,6 +964,19 @@
         <li><strong>Back-to-back designs keep VoiceDesign.</strong> Design two voices in a row on the tight card with the base-voices-only &quot;Design full cast&quot; scope (the Both scope mints each character&#39;s variants between designs, and a mint unloads VoiceDesign, so a second <code>Loading Qwen VoiceDesign</code> line is expected there). The log has no second <code>Loading Qwen VoiceDesign</code> line and no <code>Qwen VoiceDesign unloaded</code> line between the designs; the second design starts within seconds (no wait for the idle watchdog) and completes with no CUDA out-of-memory and no 503 line for <code>POST /qwen/design-voice</code> in the <code>logs/tts.log</code> count. Measure &quot;within seconds&quot; from the <code>qwen voice design: ... load_ms=... total_ms=...</code> line in <code>logs/tts.err.log</code>: it is timestamped when the design ends and <code>total_ms</code> excludes the admission wait, so the design&#39;s start is that line&#39;s timestamp minus its <code>total_ms</code>; subtract the first design&#39;s line timestamp to get the gap between the two, which is the admission wait plus any idle time you left. Also record <code>load_ms</code>, near 0 when VoiceDesign stayed warm. <code>Qwen VoiceDesign freed after &gt;120s idle (watchdog).</code> after a quiet pause is the idle watchdog and is fine; a plain <code>Qwen VoiceDesign unloaded (Base stays resident).</code> line is any VoiceDesign free, including an admission eviction, so it does not prove the watchdog. Record the <code>nvidia-smi</code> peak during a design. Known risk, not a failure of this row: the allocator cache a design leaves behind can make a design that follows within the 30 s per-card reclaim cooldown get a 503 and wait up to 30 s; a wait that ends at <code>freed after &gt;120s idle (watchdog)</code> is the idle-watchdog band instead (plan 264). To tell them apart, record <code>GET /health</code> <code>vram_reserved_mb</code> between the two designs.</li>
         </ul>
         <p class="src">the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4 &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4102">#4102</a> &#183; criteria in this row</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A127</span><span class="iname">An existing book keeps its old text and a new import keeps its paragraphs (extractor pin)</span><span class="risk">the operator&#39;s real EPUB corpus and live library (no GPU)</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests prove version 1&#39;s bytes on 12 repo EPUBs plus synthetic books, and version 2&#39;s behaviour on synthetic HTML. PR #4241&#39;s review showed why that is not enough: its synthetic fixtures were green while a differential over <strong>640 real EPUBs</strong> found 6 files (4 books, one of them fully produced in a live library) whose text had silently changed. Only that corpus and a real library can show these, and both live on the operator&#39;s box, not in this repo: version 1 is byte-identical to <code>main</code> on real books; version 2&#39;s breaks land where they should, with no empty paragraphs; an existing book really keeps its offsets after the upgrade. No GPU is needed. The observable surface is <code>state.json</code>&#39;s <code>manuscriptExtractorVersion</code> (absent on old books, <code>2</code> on new ones and on any book explicitly re-parsed or replaced), <code>parseManuscript({ buffer, fileName, extractorVersion })</code> and the book&#39;s Manuscript view. No bullet re-parses a live book, because a re-parse clears its cast and audio.</p>
+        <ul>
+        <li><strong>Version 1 is <code>main</code>, byte for byte, on the corpus.</strong> Run a scratch differential outside the repo over the same 640-file corpus PR #4241 used (63 + 577 real EPUBs, read in place, sha256-deduplicated within each set), plus any <code>.mobi</code>/<code>.azw3</code> in the library. For each file, compare <code>JSON.stringify(await parseManuscript({ buffer, fileName, extractorVersion: 1 }))</code> on this branch against <code>JSON.stringify(await parseManuscript({ buffer, fileName }))</code> on <code>main</code> at the branch&#39;s merge base, with errors compared by message. Observe: <strong>0 files differ</strong>. Record the identical / differ / error-on-both counts.</li>
+        <li><strong>What version 2 changes.</strong> Run the same files on this branch at version 1 and at version 2. Record how many files differ, and how many change chapter count. For the 5 files whose paragraph count rises most, open one changed chapter at each version. Observe: no chapter body contains <code>\n\n\n</code> or a paragraph that is only whitespace (<code>/\n\n\s*\n\n/</code>). Record that count; it must be 0. Then count the mid-sentence breaks version 2 added: a new break where the paragraph on the left has no terminal punctuation (<code>.</code>, <code>!</code>, <code>?</code>, a closing quote or bracket, <code>…</code> or <code>:</code>) and the paragraph on the right starts with a lowercase letter. That is a block closer used for an inline element, for example <code>&lt;div class=&quot;dropcap&quot;&gt;T&lt;/div&gt;he night was cold.</code>, which gives <code>T\n\nhe night was cold.</code> at version 2. Record that count and name every file where it is non-zero; open each hit and say whether the break is wrong. For the 3 corpus EPUBs whose manifest <code>href</code>s contain <code>&amp;amp;</code> (PR #4241 review pass 3), record whether their version-2 output differs from version 1. They are read by epub2, so no difference is expected from the entity decode.</li>
+        <li><strong>An existing book keeps its text after the upgrade.</strong> Before switching the server to this branch, pick one cast-confirmed EPUB book in the live library whose source bullet 2 shows changes at version 2. Note its <code>state.json</code> (no <code>manuscriptExtractorVersion</code> key), and the first and last sentence and speaker of one changed chapter in the Manuscript view. Restart the server on this branch and open the book. Observe: the same sentences, the same speakers, and still no <code>manuscriptExtractorVersion</code> key in <code>state.json</code>. Record the chapter and the sentences.</li>
+        <li><strong>A new import gets version 2.</strong> Import that same EPUB again under a new title (for example append <code> (v2 check)</code>). Observe: its <code>state.json</code> has <code>&quot;manuscriptExtractorVersion&quot;: 2</code>, and the chapter from bullet 3 shows the new paragraph breaks. Record the paragraph counts of that chapter in both books, then delete the test book.</li>
+        </ul>
+        <p class="src">the operator&#39;s real EPUB corpus (the 640 files of PR #4241, plus any <code>.mobi</code>/<code>.azw3</code>) and a live library with a cast-confirmed EPUB book; no GPU. &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4217">#4217</a> &#183; criteria in this row</p>
       </div>
     </details>
 

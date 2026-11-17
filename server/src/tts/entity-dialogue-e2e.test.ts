@@ -22,8 +22,8 @@ describe('#2310 — an entity-opened dialogue line reaches the engine as the gly
 
   for (const { lang, entity, glyph } of cases) {
     it(`${lang}: ${entity.slice(0, 12)}… normalises identically to the glyph form`, () => {
-      const fromEntity = normaliseForTts(stripHtml(`<p>${entity}</p>`), lang);
-      const fromGlyph = normaliseForTts(stripHtml(`<p>${glyph}</p>`), lang);
+      const fromEntity = normaliseForTts(stripHtml(`<p>${entity}</p>`, 1), lang);
+      const fromGlyph = normaliseForTts(stripHtml(`<p>${glyph}</p>`, 1), lang);
       expect(fromEntity).toBe(fromGlyph);
       /* Non-vacuity: equality alone would hold if BOTH sides were broken (e.g.
          if stripHtml stopped decoding and softenDashes stopped firing). Pin
@@ -34,7 +34,7 @@ describe('#2310 — an entity-opened dialogue line reaches the engine as the gly
   }
 
   it('the accented-letter case — the one that corrupts whole words, not just openers', () => {
-    const out = normaliseForTts(stripHtml('<p>&ndash; C&rsquo;est l&rsquo;&eacute;t&eacute;.</p>'), 'fr');
+    const out = normaliseForTts(stripHtml('<p>&ndash; C&rsquo;est l&rsquo;&eacute;t&eacute;.</p>', 1), 'fr');
     expect(out).not.toMatch(/&[a-zA-Z]+;/);
     expect(out).toContain('été');
   });
@@ -45,8 +45,8 @@ describe('#2310 — an entity-opened dialogue line reaches the engine as the gly
      the decode produced the WRONG dash. Assert on the pre-normalisation
      stripHtml output, where the two are still distinguishable. */
   it('the decoded dash is the RIGHT codepoint, not merely dash-like', () => {
-    expect(stripHtml('<p>&ndash; x</p>')).toBe('– x'); // U+2013 en
-    expect(stripHtml('<p>&mdash; x</p>')).toBe('— x'); // U+2014 em
+    expect(stripHtml('<p>&ndash; x</p>', 1)).toBe('– x'); // U+2013 en
+    expect(stripHtml('<p>&mdash; x</p>', 1)).toBe('— x'); // U+2014 em
   });
 
   /* The model-independent path (spec Finding 0). Chapter titles never reach

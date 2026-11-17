@@ -8,6 +8,7 @@ import type { Request, Response } from '../http.js';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { parseManuscript, UnsupportedFormatError, UnusableMediaError } from '../parsers/index.js';
+import { MANUSCRIPT_EXTRACTOR_VERSION } from '../parsers/version.js';
 import { putManuscript, withParseOrigin, type ManuscriptRecord } from '../store/manuscripts.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
@@ -25,10 +26,15 @@ manuscriptsRouter.post('/', upload.single('file'), async (req: Request, res: Res
         buffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
     } else if (typeof req.body?.text === 'string') {
       const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName : undefined;
-      parsed = await parseManuscript({ text: req.body.text, fileName });
+      parsed = await parseManuscript({
+        text: req.body.text,
+        fileName,
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
+      });
     } else {
       return res.status(400).json({ error: 'Provide either multipart `file` or JSON `text`.' });
     }
