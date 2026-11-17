@@ -98,16 +98,18 @@ function rebuildError(s: SerializedParseError): Error {
     tsx) the worker needs tsx's loader because plain Node cannot resolve the
     `.js` sibling specifiers to `.ts`; tsx is skipped when the parent already
     registered it (tsx watch). From compiled output (`.js`) no flags are needed,
-    so tsx is never required in production. */
-function resolveWorker(): { url: URL; execArgv: string[] } {
-  const base = [...process.execArgv];
+    so tsx is never required in production. `execArgv` is left undefined
+    whenever nothing needs adding: an explicit list makes Node reject V8 flags
+    (`--max-old-space-size`) with ERR_WORKER_INVALID_EXEC_ARGV, while default
+    inheritance accepts them. */
+function resolveWorker(): { url: URL; execArgv?: string[] } {
   if (!import.meta.url.endsWith('.ts')) {
-    return { url: new URL('./parse-worker.js', import.meta.url), execArgv: base };
+    return { url: new URL('./parse-worker.js', import.meta.url) };
   }
   const url = new URL('./parse-worker.ts', import.meta.url);
-  if (base.some((a) => a.includes('tsx'))) return { url, execArgv: base };
+  if (process.execArgv.some((a) => a.includes('tsx'))) return { url };
   const loader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
-  return { url, execArgv: [...base, '--import', loader] };
+  return { url, execArgv: ['--import', loader] };
 }
 
 export async function parseInWorker(
