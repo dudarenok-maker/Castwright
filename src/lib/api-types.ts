@@ -6857,6 +6857,19 @@ export interface components {
                 newChapterId: number;
                 newSentenceId: number;
             }[];
+            /**
+             * @description #4227 — the manuscript slice token (same shape and salt as
+             *     `BookStateResponse.sliceRevisions.manuscript`) of the
+             *     `manuscript-edits.json` this request read: after any interrupted
+             *     earlier restructure's journal was replayed, before this request's own
+             *     rewrite. `sentenceRemap` is computed from that file. A client whose
+             *     last-learned manuscript token differs from this one holds a copy the
+             *     edits have moved away from (the replay re-keyed the file in this
+             *     request, or at server start), so it must NOT apply `sentenceRemap` to
+             *     its own sentences: it takes the sentences of a fresh book-state read
+             *     instead. Absent on a mock.
+             */
+            editsRevisionBefore?: components["schemas"]["SliceRevision"];
             /** @description Non-fatal advisories (orphan recovery, empty-chapter prune and generic-title renumber counts). Empty on a clean operation. */
             warnings?: string[];
         };

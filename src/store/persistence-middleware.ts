@@ -437,7 +437,9 @@ export const dropRetainedSaves = (bookId: string, onFullRead = false) => ({
    it teaches nothing). Layout stamps a full read before issuing it: the
    dispatch returns the read's sequence number, and its later
    `learnSliceRevisions` is ignored for a field a PUT has landed on since,
-   because the read may predate that write (pass 7, C4). Not reducer actions. */
+   because the read may predate that write (pass 7, C4). Restructure's post-restructure re-read
+   also learns tokens, for the manuscript slice only, via `learnSliceRevisions(..., ['manuscript'])`
+   (#4227). Not reducer actions. */
 const BEGIN_FULL_READ = 'persistence/beginFullRead';
 export const beginFullRead = (bookId: string) => ({ type: BEGIN_FULL_READ, payload: bookId });
 const LEARN_REVISIONS = 'persistence/learnRevisions';
@@ -445,7 +447,20 @@ export const learnSliceRevisions = (
   bookId: string,
   revisions: Partial<Record<StateSlice, SliceRevision>> | undefined,
   readSeq: number,
-) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq } });
+  /* #4227 — the slices the caller took from the read; every other slice keeps the
+     token it knows. Omitted: all of them (Layout's full read hydrates every slice). */
+  only?: StateSlice[],
+) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq, only } });
+/* #4227 — the token the client last learned for a slice's fields, or an empty map
+   when it learned none. The Restructure view compares the manuscript's with the
+   one a restructure response names, to tell that the edits moved under it. Not a
+   reducer action; a store without this middleware hands the action object back
+   (not a token map), which reads as "nothing learned". */
+const KNOWN_REVISION = 'persistence/knownRevision';
+export const knownSliceRevision = (bookId: string, slice: StateSlice) => ({
+  type: KNOWN_REVISION,
+  payload: { bookId, slice },
+});
 /* #3827 — the `state` fields a PUT landed on since a full read was stamped. The
    book-meta hydrate of that read keeps them: the read may predate the landing,
    the same rule C4 applies to the tokens. Not a reducer action. */
@@ -804,6 +819,11 @@ export const persistenceMiddleware: Middleware = (store) => {
 
     if (type === BEGIN_FULL_READ) return ++clock;
 
+    if (type === KNOWN_REVISION) {
+      const { bookId: readBook, slice } = a.payload as { bookId: string; slice: StateSlice };
+      return { ...known.get(flushKey(readBook, slice)) };
+    }
+
     if (type === LANDED_SINCE) {
       const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
       const la = landedAt.get(flushKey(readBook, 'state')) ?? {};
@@ -823,14 +843,15 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === LEARN_REVISIONS) {
-      const { bookId: readBook, revisions, readSeq } = a.payload as {
+      const { bookId: readBook, revisions, readSeq, only } = a.payload as {
         bookId: string;
         revisions?: Partial<Record<StateSlice, SliceRevision>>;
         readSeq: number;
+        only?: StateSlice[];
       };
       /* C4 — every field the read covers, except one a PUT landed on since the
          read was stamped. */
-      for (const slice of LEARNED_SLICES) {
+      for (const slice of only ?? LEARNED_SLICES) {
         const key = flushKey(readBook, slice);
         const la = landedAt.get(key) ?? {};
         const kn = { ...known.get(key) };

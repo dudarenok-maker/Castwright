@@ -122,6 +122,40 @@ export function carryMergedAwayKeys(
   return out;
 }
 
+/** #4227 — rebuild a restructure's sentence rewrite from the pre-restructure
+    sentences and `result.remap` alone, so the edits-journal replay can redo the
+    `manuscript-edits.json` write after an interrupted restructure. Exact
+    because `remapSentences` pushes each new sentence and its remap entry in the
+    SAME loop (`{ ...s, chapterId: newChapterId, id: newSentenceId }`, with
+    `oldChapterId` the id the sentence had ON DISK, an orphan's original stale
+    id included, :315-337); the prune pass renumbers `chapterId` and the remap's
+    `newChapterId` with one map and leaves sentence ids alone (:600-623);
+    `postProcessRestructure` passes both through (:722-723); the identity
+    transforms return `sentences.slice()` with an identity remap. A sentence no
+    remap entry consumes is not emitted (the no-chapter drop, :258-263). A
+    remap entry matching no sentence throws, naming its `chapterId:sentenceId`
+    key. Pure: no I/O, the inputs are not mutated. */
+export function applySentenceRemap(
+  oldSentences: readonly RestructureSentence[],
+  remap: readonly SentenceRemap[],
+): RestructureSentence[] {
+  const queues = new Map<string, RestructureSentence[]>();
+  for (const s of oldSentences) {
+    const key = `${s.chapterId}:${s.id}`;
+    const queue = queues.get(key);
+    if (queue) queue.push(s);
+    else queues.set(key, [s]);
+  }
+  const out: RestructureSentence[] = [];
+  for (const r of remap) {
+    const key = `${r.oldChapterId}:${r.oldSentenceId}`;
+    const s = queues.get(key)?.shift();
+    if (!s) throw new Error(`applySentenceRemap: no sentence left for ${key}`);
+    out.push({ ...s, chapterId: r.newChapterId, id: r.newSentenceId });
+  }
+  return out;
+}
+
 /* -- helpers -------------------------------------------------------- */
 
 function chapterSlug(id: number, title: string): string {
