@@ -117,6 +117,31 @@ describe('restoreBackup — stale-evidence marker (plan 290, round 10)', () => {
     expect(after).not.toHaveProperty('sentencesPredateChapters');
   });
 
+  /* #4217 pass 1 -- the extractor stamp is the second thing the saved sentences
+     are keyed to: the v1 and v2 bodies of the same chapters split differently. */
+  it.each([
+    ['unstamped snapshot, re-parsed (v2) current', {}, { manuscriptExtractorVersion: 2 }],
+    ['v2 snapshot, unstamped current', { manuscriptExtractorVersion: 2 }, {}],
+  ] as const)('same chapters, differing extractor stamp (%s) + saved sentences: marker', async (_l, snap, cur) => {
+    const after = await restoreOnto(`stamp-${_l.length}`, snap, cur, EDITS);
+    expect(after.sentencesPredateChapters).toBe(true);
+  });
+
+  it('same chapters, same extractor stamp + saved sentences: no marker', async () => {
+    const after = await restoreOnto(
+      'stamp-same',
+      { manuscriptExtractorVersion: 2 },
+      { manuscriptExtractorVersion: 2 },
+      EDITS,
+    );
+    expect(after).not.toHaveProperty('sentencesPredateChapters');
+  });
+
+  it('a differing extractor stamp with no saved sentences: no marker', async () => {
+    const after = await restoreOnto('stamp-noedits', {}, { manuscriptExtractorVersion: 2 }, null);
+    expect(after).not.toHaveProperty('sentencesPredateChapters');
+  });
+
   it('no saved sentences: no marker even when the chapters differ', async () => {
     expect(await restoreOnto('absent', {}, { chapters: retitled }, null)).not.toHaveProperty('sentencesPredateChapters');
     expect(

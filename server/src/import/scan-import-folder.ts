@@ -501,7 +501,7 @@ export async function importPortableBundle(
            (corrupt / unreadable) counts as sentences. */
         const editsPredate = swapLeavesStaleEvidence(
           await readEditsForHintsCheck(targetDir),
-          state.chapters,
+          state,
           live,
         );
         await writeStagedState(bookId, baseTitle, manuscriptId, editsPredate);

@@ -220,6 +220,49 @@ describe('bundle overwrite — stale-evidence marker (plan 290, M27)', () => {
     }
   });
 
+  /* #4217 pass 1 -- the extractor stamp is the second thing the saved sentences
+     are keyed to. */
+  it('a same-chapters overwrite that changes the extractor stamp lands the marker (bundle unstamped, local v2)', async () => {
+    let target = '';
+    try {
+      target = await overwriteWithLocalEdits('Marker Overwrite Stamp Local', EDITS_WITH_SENTENCES, (s) => {
+        s.manuscriptExtractorVersion = 2;
+      });
+      expect(readState(target).sentencesPredateChapters).toBe(true);
+    } finally {
+      if (target) rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('a same-chapters overwrite that changes the extractor stamp lands the marker (bundle v2, local unstamped)', async () => {
+    const state = fixtureState('Marker Overwrite Stamp Bundle', { manuscriptExtractorVersion: 2 });
+    const target = targetDirFor(state);
+    try {
+      rmSync(target, { recursive: true, force: true });
+      await importPortableBundle(await makeBundle(fixtureState('Marker Overwrite Stamp Bundle')), { onConflict: 'fail' });
+      writeFileSync(manuscriptEditsJsonPath(target), EDITS_WITH_SENTENCES, 'utf8');
+      await importPortableBundle(await makeBundle(state), { onConflict: 'overwrite' });
+      expect(readState(target).sentencesPredateChapters).toBe(true);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('a same-chapters overwrite with the same extractor stamp stamps nothing', async () => {
+    const state = fixtureState('Marker Overwrite Stamp Same', { manuscriptExtractorVersion: 2 });
+    const target = targetDirFor(state);
+    try {
+      rmSync(target, { recursive: true, force: true });
+      const bundle = await makeBundle(state);
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      writeFileSync(manuscriptEditsJsonPath(target), EDITS_WITH_SENTENCES, 'utf8');
+      await importPortableBundle(bundle, { onConflict: 'overwrite' });
+      expect(readState(target)).not.toHaveProperty('sentencesPredateChapters');
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
   it('a same-chapters overwrite onto an already-marked book with saved sentences keeps the marker', async () => {
     let target = '';
     try {
