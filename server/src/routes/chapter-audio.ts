@@ -11,6 +11,8 @@
        when no preserved pair exists (first renders, or chapters that
        predate the rollback-preservation feature).
    GET /api/books/:bookId/chapters/:chapterId/audio/previous.mp3
+   GET /api/books/:bookId/chapters/:chapterId/audio/previous.m4a
+   GET /api/books/:bookId/chapters/:chapterId/audio/previous.ogg
      → binary preview of the preserved file with range-support.
    DELETE /api/books/:bookId/chapters/:chapterId/audio/previous
      → Plan 286 — moved to POST …/revisions/{id}/accept. Answers 410.
@@ -307,7 +309,7 @@ chapterAudioRouter.get(
        endpoint. */
     const lufs = await readLufsOrNull(found.lufsPath);
     res.json({
-      url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
+      url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
       durationSec: meta?.durationSec ?? 0,
       peaks,
       sampleRate: meta?.sampleRate ?? 24000,
@@ -317,7 +319,7 @@ chapterAudioRouter.get(
   },
 );
 
-function makeFileHandler(variant: AudioVariant = 'current') {
+function makeFileHandler(variant: AudioVariant = 'current', onlyExt?: string) {
   return async (req: Request, res: Response) => {
     const chapterId = Number.parseInt(req.params.chapterId, 10);
     if (!Number.isInteger(chapterId))
@@ -332,6 +334,9 @@ function makeFileHandler(variant: AudioVariant = 'current') {
         ? findChapterAudio(audioRoot, chapter.slug)
         : findPreviousAudio(audioRoot, chapter.slug);
     if (!audio) return res.status(404).json({ message: 'Chapter audio not found.' });
+    /* A previous-take route serves only a take of its own file type. */
+    if (onlyExt && audio.ext !== onlyExt)
+      return res.status(404).json({ message: 'Chapter audio not found.' });
     res.sendFile(
       audio.path,
       {
@@ -372,7 +377,15 @@ chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.m4a', makeFileHandler
 chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.ogg', makeFileHandler('current'));
 chapterAudioRouter.get(
   '/:bookId/chapters/:chapterId/audio/previous.mp3',
-  makeFileHandler('previous'),
+  makeFileHandler('previous', 'mp3'),
+);
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio/previous.m4a',
+  makeFileHandler('previous', 'm4a'),
+);
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio/previous.ogg',
+  makeFileHandler('previous', 'ogg'),
 );
 
 /* Plan 286 Task 29 — these two routes moved to the server-owned revision

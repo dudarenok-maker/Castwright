@@ -1856,7 +1856,9 @@ export interface paths {
          *     a regeneration replaced it. Same shape as `getChapterAudio`. The
          *     revision-diff player fetches both endpoints to drive its A vs B
          *     playback. 404 when no preserved pair exists (legacy chapters or
-         *     first renders).
+         *     first renders). The `url` names the preserved take's real file
+         *     extension: `…/audio/previous.mp3`, `…/audio/previous.m4a` or
+         *     `…/audio/previous.ogg`.
          */
         get: operations["getChapterAudioPrevious"];
         put?: never;
@@ -1870,6 +1872,75 @@ export interface paths {
          *     404 as success — does not read a retired route as a silent accept.
          */
         delete: operations["acceptChapterRevision"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous.mp3": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the preserved prior chapter audio (mp3)
+         * @description Binary stream of the preserved prior take, served only when that take
+         *     is a `.mp3` file (sent as `audio/mpeg`); 404 otherwise, including when
+         *     the preserved take has another file type. The metadata route's `url`
+         *     names the right one.
+         */
+        get: operations["getChapterAudioPreviousMp3"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous.m4a": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the preserved prior chapter audio (m4a)
+         * @description Binary stream of the preserved prior take, served only when that take
+         *     is a `.m4a` file (sent as `audio/mp4`); 404 otherwise, including when
+         *     the preserved take has another file type. The metadata route's `url`
+         *     names the right one.
+         */
+        get: operations["getChapterAudioPreviousM4a"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous.ogg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the preserved prior chapter audio (ogg)
+         * @description Binary stream of the preserved prior take, served only when that take
+         *     is a `.ogg` file (sent as `audio/ogg`); 404 otherwise, including when
+         *     the preserved take has another file type. The metadata route's `url`
+         *     names the right one.
+         */
+        get: operations["getChapterAudioPreviousOgg"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6665,6 +6736,13 @@ export interface components {
              *     Absent on never-rendered / legacy chapters.
              */
             audioQa?: components["schemas"]["ChapterQaVerdict"] | null;
+            /**
+             * @description The live take's id, mirrored from `segments.json` (#3456 §4.1).
+             *     Server-owned and derived: the server writes it, and a PUT never
+             *     accepts it from a client. Absent on a chapter with no live take
+             *     or a take not yet given an id.
+             */
+            readonly audioTakeId?: string;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
             excluded?: boolean;
             /** @description When true, the user explicitly removed this un-rendered chapter from the generation queue ("Not queued"). Unlike `excluded`, a held chapter stays part of the book and keeps any audio — it is simply not on the work queue and the auto-work resume must not re-enqueue it. Cleared when the user re-queues the chapter. Persisted so the choice survives reload. */
@@ -11141,6 +11219,96 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RevisionOpError"];
                 };
+            };
+        };
+    };
+    getChapterAudioPreviousMp3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preserved chapter audio bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mpeg": string;
+                };
+            };
+            /** @description No preserved audio of this file type for this chapter */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getChapterAudioPreviousM4a: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preserved chapter audio bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mp4": string;
+                };
+            };
+            /** @description No preserved audio of this file type for this chapter */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getChapterAudioPreviousOgg: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preserved chapter audio bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/ogg": string;
+                };
+            };
+            /** @description No preserved audio of this file type for this chapter */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

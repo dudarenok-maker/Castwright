@@ -2787,7 +2787,9 @@ paths:
         a regeneration replaced it. Same shape as `getChapterAudio`. The
         revision-diff player fetches both endpoints to drive its A vs B
         playback. 404 when no preserved pair exists (legacy chapters or
-        first renders).
+        first renders). The `url` names the preserved take's real file
+        extension: `…/audio/previous.mp3`, `…/audio/previous.m4a` or
+        `…/audio/previous.ogg`.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: chapterId, required: true, schema: { type: integer } }
@@ -2815,6 +2817,69 @@ paths:
         '410':
           description: 'Moved to `POST /api/books/{bookId}/revisions/{revisionId}/accept` or `/reject`.'
           content: { application/json: { schema: { $ref: '#/components/schemas/RevisionOpError' } } }
+
+  /api/books/{bookId}/chapters/{chapterId}/audio/previous.mp3:
+    get:
+      summary: Stream the preserved prior chapter audio (mp3)
+      operationId: getChapterAudioPreviousMp3
+      description: |
+        Binary stream of the preserved prior take, served only when that take
+        is a `.mp3` file (sent as `audio/mpeg`); 404 otherwise, including when
+        the preserved take has another file type. The metadata route's `url`
+        names the right one.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Preserved chapter audio bytes
+          content:
+            audio/mpeg:
+              schema: { type: string, format: binary }
+        '404':
+          description: No preserved audio of this file type for this chapter
+
+  /api/books/{bookId}/chapters/{chapterId}/audio/previous.m4a:
+    get:
+      summary: Stream the preserved prior chapter audio (m4a)
+      operationId: getChapterAudioPreviousM4a
+      description: |
+        Binary stream of the preserved prior take, served only when that take
+        is a `.m4a` file (sent as `audio/mp4`); 404 otherwise, including when
+        the preserved take has another file type. The metadata route's `url`
+        names the right one.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Preserved chapter audio bytes
+          content:
+            audio/mp4:
+              schema: { type: string, format: binary }
+        '404':
+          description: No preserved audio of this file type for this chapter
+
+  /api/books/{bookId}/chapters/{chapterId}/audio/previous.ogg:
+    get:
+      summary: Stream the preserved prior chapter audio (ogg)
+      operationId: getChapterAudioPreviousOgg
+      description: |
+        Binary stream of the preserved prior take, served only when that take
+        is a `.ogg` file (sent as `audio/ogg`); 404 otherwise, including when
+        the preserved take has another file type. The metadata route's `url`
+        names the right one.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Preserved chapter audio bytes
+          content:
+            audio/ogg:
+              schema: { type: string, format: binary }
+        '404':
+          description: No preserved audio of this file type for this chapter
 
   /api/books/{bookId}/chapters/{chapterId}/audio/previous/restore:
     post:
@@ -9444,6 +9509,14 @@ components:
             srv-27 — advisory post-synthesis QA verdict for this chapter's
             audio. Stamped on a successful render; drives the "Suspect" badge.
             Absent on never-rendered / legacy chapters.
+        audioTakeId:
+          type: string
+          readOnly: true
+          description: |
+            The live take's id, mirrored from `segments.json` (#3456 §4.1).
+            Server-owned and derived: the server writes it, and a PUT never
+            accepts it from a client. Absent on a chapter with no live take
+            or a take not yet given an id.
         excluded:
           {
             type: boolean,

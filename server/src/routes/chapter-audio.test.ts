@@ -139,6 +139,8 @@ function resetAudio() {
   rmIfExists(`${SLUG}.ogg`);
   rmIfExists(`${SLUG}.wav`);
   rmIfExists(`${SLUG}.previous.mp3`);
+  rmIfExists(`${SLUG}.previous.m4a`);
+  rmIfExists(`${SLUG}.previous.ogg`);
   rmIfExists(`${SLUG}.previous.segments.json`);
   rmIfExists(`${SLUG}.peaks.json`);
   rmIfExists(`${SLUG}.previous.peaks.json`);
@@ -534,6 +536,43 @@ describe('chapter-audio router', () => {
         expect(res.status).toBe(200);
         expect(res.headers['content-type']).toMatch(/audio\/mpeg/);
         expect(res.headers['accept-ranges']).toBe('bytes');
+      });
+
+      /* #4337 A1/A2: a previous take keeps its own file type end to end. */
+      describe.each([
+        ['m4a', 'audio/mp4', Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64, 0x43)])],
+        ['ogg', 'audio/ogg', Buffer.concat([Buffer.from('OggS'), Buffer.alloc(64, 0x44)])],
+      ] as const)('previous .%s take', (ext, mime, bytes) => {
+        beforeAll(() => {
+          resetAudio();
+          writeMp3();
+          writeFileSync(join(audioRoot, `${SLUG}.previous.${ext}`), bytes);
+          writePreviousSegments();
+        });
+
+        it(`meta url ends in /audio/previous.${ext} and the file is served as ${mime}`, async () => {
+          const meta = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
+          expect(meta.status).toBe(200);
+          expect(meta.body.url).toBe(
+            `/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.${ext}`,
+          );
+          const file = await request(app)
+            .get(meta.body.url)
+            .buffer(true)
+            .parse((r, cb) => {
+              const chunks: Buffer[] = [];
+              r.on('data', (c: Buffer) => chunks.push(c));
+              r.on('end', () => cb(null, Buffer.concat(chunks)));
+            });
+          expect(file.status).toBe(200);
+          expect(file.headers['content-type']).toMatch(new RegExp(mime.replace('/', '\\/')));
+          expect(Buffer.compare(file.body as Buffer, bytes)).toBe(0);
+        });
+
+        it('A3: previous.mp3 404s when the preserved take is not an mp3', async () => {
+          const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous.mp3`);
+          expect(res.status).toBe(404);
+        });
       });
 
       it('GET audio/previous 404s when nothing preserved', async () => {
