@@ -886,7 +886,7 @@ test('G9: a forks battery recycling workers reads as rate-unknown, never stalled
   const sampledAt = NOW - 15 * MIN;
   const processes = [
     { pid: 9101, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
-    { pid: 9102, ppid: 9101, name: 'node.exe', commandLine: IN_CHECKOUT, cpuSeconds: 2.5, startedAt },
+    { pid: 9102, ppid: 9101, name: 'node.exe', commandLine: IN_CHECKOUT, cpuSeconds: 27.5, startedAt },
     { pid: 9103, ppid: 9102, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0.2, startedAt: NOW - 20_000 },
     { pid: 9104, ppid: 9102, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0.2, startedAt: NOW - 10_000 },
   ];
