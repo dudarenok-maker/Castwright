@@ -7811,8 +7811,7 @@ until this row runs.
   command line naming a path under the pushing checkout. Start a real battery
   that will hang, launched from the checkout you will push from so its argv
   names that checkout (e.g.
-  `node <checkout>
-ode_modulesitestitest.mjs run <a test file that never resolves>`),
+  `node <checkout>\node_modules\vitest\vitest.mjs run <a test file that never resolves>`),
   orphan it by killing its owning terminal, and leave it idle. Run one
   `git push` from that checkout to record a first census sample, wait at least
   10 minutes, then run a second `git push`: the second push must print
