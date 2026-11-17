@@ -95,6 +95,7 @@ import { getOrHydrateManuscript, putManuscript, type ManuscriptRecord } from '..
 import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
+import { extractorVersionOf } from '../parsers/version.js';
 import { looksLikeTitle, MAX_SUBTITLE_LEN } from '../parsers/text.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -131,6 +132,8 @@ async function parseForLegacyTitleFlags(
       buffer: await readFile(manuscriptPath),
       fileName: state.manuscriptFile,
       sourcePath: manuscriptPath,
+      // #4217: an implicit re-read parses with the version the book's stamp names.
+      extractorVersion: extractorVersionOf(state),
     });
     return {
       titles: parsed.chapters.map((c) => c.title),
@@ -789,6 +792,8 @@ chaptersRestructureRouter.post(
             buffer,
             fileName: state.manuscriptFile,
             sourcePath: manuscriptPath,
+            // #4217: an implicit re-read parses with the version the book's stamp names.
+            extractorVersion: extractorVersionOf(state),
           });
           parsedTitles = parsed.chapters.map((c) => c.title);
           parsedTitleSynthesized = parsed.chapters.map((c) => c.titleSynthesized === true);

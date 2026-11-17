@@ -25,6 +25,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEpub } from '../server/src/parsers/epub.js';
+import { extractorVersionOf } from '../server/src/parsers/version.js';
 import {
   validateStage2Coverage,
   type Stage2CoverageVerdict,
@@ -62,6 +63,7 @@ function findStateFiles(root: string): string[] {
 }
 
 interface StateJson {
+  manuscriptExtractorVersion?: number;
   manuscriptId?: string;
   title?: string;
   author?: string;
@@ -129,7 +131,11 @@ async function main(): Promise<void> {
 
     let parsed;
     try {
-      parsed = await parseEpub(Buffer.alloc(0), { sourcePath: epub, fileName: 'manuscript.epub' });
+      parsed = await parseEpub(Buffer.alloc(0), {
+        sourcePath: epub,
+        fileName: 'manuscript.epub',
+        extractorVersion: extractorVersionOf(state), // #4217: parse with the book's stamped version
+      });
     } catch (err) {
       console.log(`⚠  ${label} — EPUB parse failed (${(err as Error).message}); skipped`);
       continue;
