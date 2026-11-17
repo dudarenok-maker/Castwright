@@ -34,8 +34,12 @@
 # No pool — which appends a log entry (every root's command line included, the
 # dataset the deferred concurrency-governor question needs) and, from pre-push,
 # reaps a tree only when it is orphaned (a dead parent, per classify()'s
-# reachability test) AND stalled-rate AND its argv is under the pushing checkout;
-# a busy orphan, or one under another worktree or a scratchpad, is spared (#4222). It never blocks
+# reachability test) AND stalled-rate (a trusted CPU rate; unknown when the
+# battery's workers were recycled) AND its argv names a path under the pushing
+# checkout and no location outside it. Judged from argv only (no cwd in the
+# snapshot), so when in doubt it spares: a busy or unknown-rate orphan, one
+# naming any other worktree, a nested worktree or a scratchpad (including via
+# a junctioned node_modules), or one naming no checkout path at all (#4222). It never blocks
 # the push: reap-stale-batteries.mjs's own CLI catches everything and always exits 0
 # (see runCli's try/catch and its "always returns 0, even when the census throws" test).
 #
