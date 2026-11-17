@@ -21,7 +21,7 @@ const seam = vi.hoisted(() => {
   const holds: Record<string, Hold | undefined> = {};
   /* Holds that were entered stay reachable here so cleanup can release them. */
   const entered: Hold[] = [];
-  const state = { revokeReady: false, renameCalls: 0 };
+  const state = { revokeReady: false, renameCalls: 0, builds: 0 };
   function arm(name: string): { entered: Promise<void>; release: () => void } {
     let enter!: () => void;
     let release!: () => void;
@@ -50,9 +50,11 @@ vi.mock('../export/build-mp3-zip.js', () => ({
     /* A progress tick replaces the jobs-map entry with a copy, as every real builder does. */
     opts.onProgress?.(0.5);
     await seam.maybeHold('builder');
-    writeFileSync(opts.outPath, Buffer.from('PK stub-zip'));
+    /* Different bytes per build so a test can tell which build the flat artifact holds. */
+    const bytes = Buffer.from(`PK stub-zip-${++seam.state.builds}`);
+    writeFileSync(opts.outPath, bytes);
     seam.state.revokeReady = !!seam.holds.revoke;
-    return { sizeBytes: 11, entries: ['stub'] };
+    return { sizeBytes: bytes.length, entries: ['stub'] };
   }),
   sanitiseForZip: (s: string) => s,
   ExportIncompleteError: class ExportIncompleteError extends Error {},
@@ -172,6 +174,7 @@ beforeEach(async () => {
   for (const k of Object.keys(seam.holds)) delete seam.holds[k];
   seam.state.revokeReady = false;
   seam.state.renameCalls = 0;
+  seam.state.builds = 0;
   rmSync(join(bookDir, 'exports'), { recursive: true, force: true });
   rmSync(join(bookDir, '.audiobook', 'export-manifests'), { recursive: true, force: true });
 });
@@ -270,18 +273,59 @@ describe('cancel seams (#4223)', () => {
     expect(manifestOf(job.id).errorReason).toBe('Cancelled by user.');
   });
 
-  it('a cancel during the rename into place removes the renamed artifact', async () => {
+  it('a cancel while a re-export builds keeps the previous export of that format byte-identical and downloadable (#4228)', async () => {
+    const first = await post('mp3-zip', 'download');
+    await awaitInFlightJobs();
+    const flat = join(exportsDir(), first.filename);
+    const firstBytes = readFileSync(flat);
+    expect(firstBytes.toString()).toBe('PK stub-zip-1');
+    const firstGet = (await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body;
+    expect(firstGet.status).toBe('done');
+    expect(firstGet.downloadUrl).toBeTruthy();
+
+    const builder = seam.arm('builder');
+    const second = await post('mp3-zip', 'download');
+    await builder.entered;
+    expect((await request(app).delete(`/api/books/${bookId}/exports/${second.id}`)).status).toBe(204);
+    builder.release();
+    await awaitInFlightJobs();
+
+    expect(readFileSync(flat).equals(firstBytes)).toBe(true);
+    expect((await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body.status).toBe('done');
+    const dl = await request(app)
+      .get(`/api/books/${bookId}/exports/${first.id}/download`)
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(dl.status).toBe(200);
+    expect(Buffer.from(dl.body).equals(firstBytes)).toBe(true);
+    expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('cancelled');
+    expect(ls(exportsDir()).filter((n) => n.includes('.partial-'))).toEqual([]);
+  });
+
+  it('a cancel during the rename into place is never undone: the second build stays as the newest export and nothing is deleted (#4228)', async () => {
+    const first = await post('mp3-zip', 'download');
+    await awaitInFlightJobs();
+    const flat = join(exportsDir(), first.filename);
+    expect(readFileSync(flat).toString()).toBe('PK stub-zip-1');
+
     const rename = seam.arm('rename');
-    const job = await post('mp3-zip', 'download');
+    const second = await post('mp3-zip', 'download');
     await rename.entered;
-    expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
+    expect((await request(app).delete(`/api/books/${bookId}/exports/${second.id}`)).status).toBe(204);
     rename.release();
     await awaitInFlightJobs();
 
-    expect(existsSync(join(exportsDir(), job.filename))).toBe(false);
-    expect(ls(exportsDir()).filter((n) => n.includes(job.id))).toEqual([]);
-    expect((await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body.status).toBe('cancelled');
-    expect(manifestOf(job.id).status).toBe('cancelled');
+    expect(existsSync(flat)).toBe(true);
+    expect(readFileSync(flat).toString()).toBe('PK stub-zip-2');
+    expect(ls(exportsDir()).filter((n) => n.includes('.partial-'))).toEqual([]);
+    expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('cancelled');
+    expect(manifestOf(second.id).status).toBe('cancelled');
+    expect(manifestOf(first.id).status).toBe('done');
+    expect((await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body.status).toBe('done');
   });
 
   it('an mp3-folder cancelled while the builder runs leaves no staging folder', async () => {

@@ -580,20 +580,17 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
     /* swallow */
   }
 
-  /* Plan 79 — best-effort cleanup of any partial artifact. For
-     single-file formats, runExportJob's catch already unlinks the
-     `.partial-<id>` tmp; this clears the final-path file too in case
-     the rename had already completed before cancel landed. For
-     mp3-folder, the builder writes per-chapter MP3s directly into the
-     destination folder so we rm-recursive it. Do NOT rm the exports/
-     parent — other completed exports of this book live there. */
-  if (job.filename) {
+  /* Plan 79 — best-effort cleanup of any partial artifact. Single-file
+     formats: nothing to do here. The job builds to a private
+     `.partial-<id>` that runExportJob's catch unlinks, and the flat final
+     name holds the PREVIOUS completed export until the job's own commit
+     rename, so DELETE never unlinks it (#4228). For mp3-folder, the builder
+     writes per-chapter MP3s directly into the destination folder so we
+     rm-recursive it. Do NOT rm the exports/ parent — other completed exports
+     of this book live there. */
+  if (job.filename && job.format === 'mp3-folder') {
     const artifact = resolveArtifactPath(located.bookDir, job);
-    if (job.format === 'mp3-folder') {
-      await rm(artifact, { recursive: true, force: true }).catch(() => {});
-    } else {
-      await unlink(artifact).catch(() => {});
-    }
+    await rm(artifact, { recursive: true, force: true }).catch(() => {});
   }
 
   return res.status(204).end();
@@ -736,10 +733,10 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
 /* A builder that resolves does not mean the export is still wanted: a zip
    builder registers every chapter up front and can finish after DELETE has
    already flipped the job to `cancelled`. Checked before each step that makes
-   the artifact visible (rename into place, sync-folder copy, `done`) so a
-   cancelled job ends cancelled and drops its own artifact — DELETE no longer
-   waits for the build, so its own artifact cleanup can run before the file
-   exists. Drops `artifact` (the file or, for mp3-folder, the folder) first.
+   the artifact visible (sync-folder copy, rename into place, `done`) so a
+   cancelled job ends cancelled. Drops `artifact` first, which must be a
+   job-private path (the `.partial-<id>` build or the mp3-folder staging
+   folder), never the flat final name that holds the previous export (#4228).
    One exception: an export cancelled after its sync-folder copy leaves that
    copy (single-file and mp3-folder alike), because the copy is renamed over
    the previous export's flat-named one (#4228). */
@@ -848,8 +845,27 @@ async function runExportJob(
           job.warning = (result as { warning?: string }).warning ?? null;
         }
         await bailIfCancelled(signal, { path: buildPath });
+        if (job.destination === 'sync-folder' && syncFolder) {
+          const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
+          /* Copies from the job-private build, not the flat artifact: the flat
+             name still holds the previous export until the commit rename. */
+          const synced = await writeToSyncFolder(buildPath, authoredSyncDir, job.filename);
+          job.syncPath = synced.syncPath;
+          /* The sync copy is renamed over the flat `<syncFolder>/<author>/<filename>`
+             name, where the previous completed export's copy lives, so it is left
+             in place (#4228). Only the private build is dropped. */
+          await bailIfCancelled(signal, { path: buildPath });
+        }
+        /* Commit step: the LAST thing that touches the flat name. Every cancel
+           check above ran before it; once it has started it is never undone
+           (we cannot restore the replaced file), so nothing below removes
+           outPath. A DELETE landing while this syscall is in flight cannot
+           stop it: the job still ends `cancelled` and the renamed file stays
+           as the newest valid export. */
         await renameWithRetry(buildPath, outPath);
-        await bailIfCancelled(signal, { path: outPath });
+        /* Synchronous, no rm: re-evaluates a cancel that landed during the
+           awaited rename and must stay directly before the `done` publish. */
+        signal.throwIfAborted();
       } catch (e) {
         /* On any failure (including cancel) the partial file is dropped
            so a `<bookDir>/exports/` listing never shows half-baked
@@ -859,15 +875,6 @@ async function runExportJob(
         throw e;
       }
 
-      if (job.destination === 'sync-folder' && syncFolder) {
-        const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
-        const synced = await writeToSyncFolder(outPath, authoredSyncDir, job.filename);
-        job.syncPath = synced.syncPath;
-        /* The sync copy is renamed over the flat `<syncFolder>/<author>/<filename>`
-           name, where the previous completed export's copy lives, so it is left
-           in place — same as the mp3-folder branch (#4228). */
-        await bailIfCancelled(signal, { path: outPath });
-      }
       job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     }
     job.status = 'done';
@@ -875,11 +882,11 @@ async function runExportJob(
     /* Publish `done` to the jobs map in the same synchronous step as the last
        cancel check, before any await: DELETE edits the map's copy, so until
        this runs a DELETE landing during the revoke below would read
-       `in_progress`, unlink the finished artifact, and the `finally` would
-       then write `done` + `downloadUrl` back over it. After this, a DELETE
-       sees `done` and is a no-op. Keep NO awaited step (setTimeout, await)
-       between the last cancel check and this publish: it would reopen the
-       gap, and no test pins the ordering. */
+       `in_progress` and the `finally` would then write `done` + `downloadUrl`
+       back over it. After this, a DELETE sees `done` and is a no-op. Rule:
+       every cancel check happens BEFORE the commit rename, the commit rename
+       is never undone, and nothing awaits between the final synchronous
+       `signal.throwIfAborted()` and this publish. */
     jobs.set(job.id, { ...job });
     /* Plan 79 — clobber-newest-wins on disk PLUS revoke any older
        manifest for the same (book, format). Together they keep the
