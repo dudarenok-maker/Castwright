@@ -123,7 +123,7 @@ export function normalizeSeparators(text) {
  *  attempted (see the Bash-detection doc comment below). Non-drive-letter
  *  roots (defensive only — every real root here is `C:\...`) fall back to
  *  the single normalized, lowercased root string. */
-export function pathSpellings(root) {
+function pathSpellings(root) {
   const normalized = normalizeSeparators(root).toLowerCase();
   const m = /^([a-z]):\/(.*)$/.exec(normalized);
   if (!m) return [normalized];

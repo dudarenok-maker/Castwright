@@ -2454,9 +2454,9 @@ const under = (line, root) => classifyBatteryLocation([line], root, [root]).inRo
 const U_ROOT = 'C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards';
 
 test('U1 classifyBatteryLocation (inRoot) matches every Windows spelling of the root', () => {
-  // Mutations: M2 (pathSpellings drops /c/ and /mnt/c/ forms) goes red on the
-  // Git Bash and WSL lines; M3 (drop .toLowerCase() on the command line) goes
-  // red on the mixed-case line.
+  // Mutations: M2 (classifyBatteryLocation drops its /c/ and /mnt/c/ rewrite)
+  // goes red on the Git Bash and WSL lines; M3 (drop .toLowerCase() on the
+  // command line) goes red on the mixed-case line.
   const lines = [
     'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs run',
     'NODE c:/claude/projects/WT-4222-PREPUSH-REAPER-GUARDS/node_modules/vitest/vitest.mjs',
@@ -2474,8 +2474,9 @@ test('U1 classifyBatteryLocation (inRoot) matches every Windows spelling of the 
 });
 
 test('U2 classifyBatteryLocation (inRoot) respects the path-component boundary', () => {
-  // Mutation M1 (containsPathAtBoundary becomes plain includes) makes the
-  // -followup line match, so this goes red.
+  // Mutation M1 (classifyBatteryLocation's owner match becomes a bare
+  // `token.startsWith(o)`, no separator) makes the -followup line match, so this
+  // goes red.
   const outside = [
     'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards-followup\\node_modules\\vitest\\vitest.mjs',
     'node C:\\Claude\\Projects\\Audiobook-Generator\\node_modules\\vitest\\vitest.mjs',

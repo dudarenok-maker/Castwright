@@ -568,7 +568,9 @@ const NEUTRAL_PATH_RE = /^[a-z]:\/(program|programdata|windows)(\/|$)|\/appdata\
  *  while its main vitest names its own path. Every absolute path literal is
  *  assigned to the MOST-SPECIFIC known checkout root containing it, so a path
  *  under `<primary>/.claude/worktrees/<name>` belongs to that worktree, not
- *  the primary. `inRoot`: some path is strictly under the pushing root.
+ *  the primary. Tokens are `..`-resolved first, and a token equal to the BARE
+ *  root counts as foreign (a look-alike is cut down to exactly it). `inRoot`:
+ *  some path is strictly under the pushing root.
  *  `foreign`: the first path that belongs to anything else (another known root,
  *  a nested worktree, or an absolute location outside every known root, e.g. a
  *  scratchpad). The caller spares on any `foreign`: a battery that cannot be
@@ -1162,8 +1164,10 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
 // ---------------------------------------------------------------------------
 
 /** Why a reap candidate must be SPARED under the pre-push guard, or null when
- *  every guard passes. Names every failed guard. Any subtree member's argv may
- *  satisfy the checkout test (the root is often a path-less `cmd.exe /c npx`). */
+ *  every guard passes. Names every failed guard. The checkout test is judged
+ *  over the WHOLE subtree's argv (the root is often a path-less `cmd.exe /c
+ *  npx`): some member must name a path under `root`, and NO member may name a
+ *  location outside it (any such member vetoes the kill). */
 function prePushSpareReason(v, processes, root, knownRoots = []) {
   const failures = [];
   if (!v.reasons.includes('orphaned-unreachable')) failures.push('not orphaned');
@@ -1191,12 +1195,14 @@ function prePushSpareReason(v, processes, root, knownRoots = []) {
  * is allowed to act on. The pre-push wiring additionally passes
  * `prePushGuard: { root }`, under which a reap verdict is killed only when ALL
  * THREE hold: orphaned-unreachable AND stalled-rate (a trusted CPU rate at or
- * under the dead-rate threshold) AND at least one subtree member's argv names a
- * path under `root` (the pushing checkout). The check is argv-only: the process
- * snapshot carries no cwd. Consequence: a battery whose argv names no path under
- * the pushing checkout is spared from pre-push, and so is one launched through a
- * `node_modules` junction that resolves to another checkout's path; only a
- * manual `npm run doctor -- --kill` can reap those. Spared candidates are
+ * under the dead-rate threshold) AND the whole subtree's argv places it in `root`
+ * (the pushing checkout): at least one member names a path under `root` and NO
+ * member names a location outside it (see `classifyBatteryLocation`). The check
+ * is argv-only: the process snapshot carries no cwd. Consequence: a battery whose
+ * argv names no path under the pushing checkout is spared from pre-push, and so
+ * is one with any member naming another checkout (e.g. fork workers launched
+ * through a `node_modules` junction that resolves to another checkout's path);
+ * only a manual `npm run doctor -- --kill` can reap those. Spared candidates are
  * returned in `spared` (`{rootPid, reason}`) and logged as `spareReason`.
  * `restrictTo` (a `Map<pid, {startedAt, approx}>`, verify-cache's timeout sweep)
  * narrows the kill set to roots the caller itself recorded; every other
