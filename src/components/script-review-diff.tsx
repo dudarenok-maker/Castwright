@@ -9,7 +9,7 @@ import type { Dispatch } from '@reduxjs/toolkit';
 import { useStore } from 'react-redux';
 import { Checkbox } from './primitives';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import {
   scriptReviewActions,
   selectActiveReview,
@@ -261,7 +261,7 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
      nothing. `store` is read in handlers: a flag raised after render is seen. */
   const store = useStore<RootState>();
   const editsLocked = useAppSelector(selectEditsLocked);
-  const refuseIfLocked = () => refuseIfEditsLocked(store.getState, dispatch);
+  const refuseIfLocked = () => refuseIfManuscriptEditsLocked(store.getState, dispatch);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bucket = useAppSelector((s) => selectActiveReview(s as any, bookId));
   const sentences = useAppSelector((s) => s.manuscript.sentences);
@@ -417,13 +417,17 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
         onBoundaryMove: (chapterId) =>
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
         isSameBook: () => stageBookIdRef.current === startBookId,
+        // #4098 — an era that rises mid-run drops the manuscript save; resolving
+        // the op anyway would lose the suggestion. Stop, toast, resolve nothing more.
+        shouldStop: () => refuseIfLocked(),
         onOpApplied: (op) => {
           if (!bucket) return;
           void resolveAppliedOps(dispatch, startBookId, bucket, [op]);
         },
       });
       if (aborted) {
-        // Book-switch guard tripped mid-batch (silent, no throw) — whatever
+        // Stopped mid-batch (no throw): the book-switch guard (silent) or the
+        // #4098 era stop (shouldStop, which toasts) — whatever
         // was already resolved via onOpApplied above stays resolved; hide,
         // don't discard the rest (design spec §6.5).
         setConfirm(null);

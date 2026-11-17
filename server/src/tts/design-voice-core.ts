@@ -98,6 +98,9 @@ export interface PostDesignAndCacheParams {
   cacheScope: string;
   /** Model key folded into the cached audition filename. */
   modelKey: TtsModelKey;
+  /** #4102 - `'mint'` for `/qwen/mint-variant`, so the capacity lever keeps the
+      resident 1.7B-Base the mint needs. Default `'design'`. */
+  purpose?: 'design' | 'mint';
   /** The audition line — also the cache-key text. */
   calibrationText: string;
   /** Finding 1 (#1842 review) — the SAME extra hash input the voice-library
@@ -132,6 +135,7 @@ export async function postDesignAndCacheAudition(
     outVoiceId,
     cacheScope,
     modelKey,
+    purpose = 'design',
     calibrationText,
     sidecarUrl,
     signal,
@@ -194,7 +198,7 @@ export async function postDesignAndCacheAudition(
              the design's, so without it a 0.6B book kept its 0.6B base
              resident and the design could never fit on an 8 GB card. */
           evictIdleTts: (deviceKey, quiet) =>
-            evictIdleQwenBase({ modelKey, purpose: 'design', deviceKey, signal: controller.signal, quiet }),
+            evictIdleQwenBase({ modelKey, purpose, deviceKey, signal: controller.signal, quiet }),
         },
       );
     } catch (e) {

@@ -24,7 +24,7 @@ import { persistenceMiddleware } from './persistence-middleware';
 import { castSlice, castActions } from './cast-slice';
 import { bookBusySlice } from './book-busy-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
-import { manuscriptSlice } from './manuscript-slice';
+import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice, uiActions } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
 import { changeLogSlice } from './change-log-slice';
@@ -413,6 +413,68 @@ describe('the release is state-driven (B2)', () => {
     expect(era(store, 'A')).toBeUndefined();
     expect(api.getBookState).not.toHaveBeenCalled();
     expect(api.getBookBusy).toHaveBeenCalledTimes(1);
+  });
+
+  /* #4098 — the re-read also restores the manuscript slice. */
+  const sent = (text: string) => ({ chapterId: 1, id: 1, text }) as never;
+  const bookState = (bookId: string) => ({ bookId, manuscriptId: `m-${bookId}`, title: bookId }) as never;
+  const holdEdit = (store: Store, bookId: string, text: string) =>
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({ state: bookState(bookId), sentences: [sent(text)] }),
+    );
+  const manuscriptRead = (bookId: string, text: string) => ({
+    state: bookState(bookId),
+    cast: { characters: [char('wren'), char('kestrel')] },
+    manuscriptEdits: { sentences: [sent(text)], mergedAwayKeys: ['1:9'] },
+  });
+
+  it('G1/G3 — the re-read restores the manuscript and the cast from ONE response, sending no manuscript PUT', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    holdEdit(store, 'A', 'edited mid-run');
+    api.getBookState.mockImplementationOnce(async () => manuscriptRead('A', 'persisted by the run') as never);
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    busy = { A: [] };
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.getBookState).toHaveBeenCalledTimes(1);
+    const m = store.getState().manuscript;
+    expect(m.sentences.map((x) => x.text)).toEqual(['persisted by the run']);
+    expect(m.mergedAwayKeys).toEqual(['1:9']);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['wren', 'kestrel']);
+    expect(era(store, 'A')).toBeUndefined();
+    expect(api.putBookState.mock.calls.filter(([, req]) => req.slice === 'manuscript')).toEqual([]);
+  });
+
+  it('G2 — slices that moved to another book while the read was out never receive the old book’s sentences', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    let answer!: (v: unknown) => void;
+    api.getBookState.mockImplementationOnce(() => new Promise((r) => (answer = r)) as never);
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    busy = { A: [] };
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.getBookState).toHaveBeenCalledTimes(1);
+    store.dispatch(manuscriptActions.resetForBook('B'));
+    answer(manuscriptRead('A', 'A disk text'));
+    await vi.advanceTimersByTimeAsync(5_000);
+    const m = store.getState().manuscript;
+    expect(m.bookId).toBe('B');
+    expect(m.sentences).toEqual([]);
+  });
+
+  it('G4 — while busy still lists analysis the manuscript is not re-read and the era stands', async () => {
+    disk.seed('A', { state: {}, cast: { characters: [char('wren')] } });
+    busy = { A: ['analysis'] };
+    const store = makeStore();
+    open(store, 'A', [char('wren')]);
+    holdEdit(store, 'A', 'edited mid-run');
+    store.dispatch(castActions.latchAnalysisEra({ bookId: 'A' }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(api.getBookState).not.toHaveBeenCalled();
+    expect(store.getState().manuscript.sentences.map((x) => x.text)).toEqual(['edited mid-run']);
+    expect(era(store, 'A')).toBeDefined();
   });
 });
 

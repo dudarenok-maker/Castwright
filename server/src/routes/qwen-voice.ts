@@ -2357,11 +2357,13 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
         target: string,
         fetchBody: string,
         outVoiceId: string,
+        purpose?: 'design' | 'mint',
       ): Promise<{ voiceId: string; url: string }> =>
         postDesignAndCacheAudition({
           target,
           fetchBody,
           outVoiceId,
+          purpose,
           cacheScope: p.sampleVoiceId,
           modelKey: p.modelKey,
           calibrationText,
@@ -2391,7 +2393,7 @@ export async function designQwenVoiceForCharacter(p: DesignQwenVoiceParams): Pro
         ...progressFields,
       });
       try {
-        return await postDesignAndCache(`${sidecarUrl}/qwen/mint-variant`, mintBody, voiceId);
+        return await postDesignAndCache(`${sidecarUrl}/qwen/mint-variant`, mintBody, voiceId, 'mint');
       } catch (e) {
         const err = e as SidecarDesignError;
         const isFallback = err?.name === 'SidecarDesignError' && err.status === 503 && err.code === 'base17-unavailable'

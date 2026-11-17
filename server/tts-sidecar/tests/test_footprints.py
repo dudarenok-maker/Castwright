@@ -243,3 +243,13 @@ def test_seed_parity_with_local_llm_doc():
     for k, v in parsed.items():
         actual = named_constants[k] if k in named_constants else main.SEED_FOOTPRINTS_MB[k]
         assert actual == v, f"{k}: seed {actual} != doc {v}"
+
+
+def test_spk_residency_splits_the_key_and_books_the_warm_seed():
+    # #4102: a resident SPK (ECAPA) books its incremental cost, not the cold seed.
+    assert main.FootprintTable._key("spk", None, {}, True) == "spk.warm"
+    assert main.FootprintTable._key("spk", None, {}, False) == "spk"
+    t = main.FootprintTable()
+    assert t.peak_mb("spk", None, {}, True) == 128
+    assert t.peak_mb("spk", None, {}, False) == 200
+    assert t.peak_mb("spk", None, {}, True) < t.peak_mb("spk", None, {}, False)

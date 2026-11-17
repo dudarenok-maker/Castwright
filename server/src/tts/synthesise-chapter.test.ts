@@ -16,8 +16,6 @@ import {
   buildSentenceGroups,
   synthesiseChapter,
   toVoiceLike,
-  resolveQwenTokenBudget,
-  DEFAULT_QWEN_BATCH_TOKEN_BUDGET,
   ChapterSynthTimeoutError,
   MissingDesignedVoiceError,
   RecycleStormError,
@@ -2757,29 +2755,6 @@ describe('synthesiseChapter — orphaned characterId falls back to narrator', ()
     ).rejects.toThrow(/radiy-pogodin/);
 
     warnSpy.mockRestore();
-  });
-});
-
-/* ── QWEN_BATCH_TOKEN_BUDGET env resolution (plan 136, shipped default 3600) ──
-   The shipped default is ON (3600); only an EXPLICIT `0` is the fixed-width
-   kill-switch. Pins the unset-vs-0 distinction the env IIFE depends on. */
-describe('resolveQwenTokenBudget', () => {
-  it('defaults to 3600 (token-budget ON) when unset or empty', () => {
-    expect(resolveQwenTokenBudget(undefined)).toBe(DEFAULT_QWEN_BATCH_TOKEN_BUDGET);
-    expect(resolveQwenTokenBudget(undefined)).toBe(3600);
-    expect(resolveQwenTokenBudget('')).toBe(3600);
-    expect(resolveQwenTokenBudget('   ')).toBe(3600);
-  });
-
-  it('treats an explicit 0 as the OFF kill-switch (not the default)', () => {
-    expect(resolveQwenTokenBudget('0')).toBe(0);
-  });
-
-  it('floors a positive value and rejects non-positive / non-numeric to OFF', () => {
-    expect(resolveQwenTokenBudget('2400')).toBe(2400);
-    expect(resolveQwenTokenBudget('3600.9')).toBe(3600);
-    expect(resolveQwenTokenBudget('-5')).toBe(0);
-    expect(resolveQwenTokenBudget('abc')).toBe(0);
   });
 });
 
