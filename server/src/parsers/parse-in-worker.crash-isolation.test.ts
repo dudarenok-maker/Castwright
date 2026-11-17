@@ -30,7 +30,7 @@ installCrashHandlers();
 const [, , workerUrl, sourcePath] = process.argv;
 try {
   await parseInWorker(
-    { format: 'epub', buffer: Buffer.alloc(0), fileName: 'x.epub', sourcePath: sourcePath || undefined },
+    { format: 'epub', buffer: Buffer.alloc(0), fileName: 'x.epub', sourcePath: sourcePath || undefined, extractorVersion: 1 },
     { workerUrl: new URL(workerUrl) },
   );
   console.log('RESOLVED');

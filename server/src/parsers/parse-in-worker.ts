@@ -15,6 +15,9 @@ export interface ParseWorkerRequest {
   buffer: Buffer;
   fileName?: string;
   sourcePath?: string;
+  /** Required, never defaulted: the worker must extract exactly as the
+      in-process parser would at this version (#4217, #4242). */
+  extractorVersion: number;
 }
 
 export type ParseWorkerMessage =

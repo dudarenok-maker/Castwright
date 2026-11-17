@@ -18,8 +18,15 @@ async function run(): Promise<ParseWorkerMessage> {
   try {
     const parsed =
       req.format === 'epub'
-        ? await parseEpub(buffer, { fileName: req.fileName, sourcePath: req.sourcePath })
-        : await parseMobi(buffer, { fileName: req.fileName });
+        ? await parseEpub(buffer, {
+            fileName: req.fileName,
+            sourcePath: req.sourcePath,
+            extractorVersion: req.extractorVersion,
+          })
+        : await parseMobi(buffer, {
+            fileName: req.fileName,
+            extractorVersion: req.extractorVersion,
+          });
     return { ok: true, parsed, threadId };
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));

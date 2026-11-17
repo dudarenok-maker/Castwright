@@ -41,7 +41,7 @@ import { mintEditEpoch } from '../workspace/slice-revision.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
-import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
+import { CHAPTER_TITLE_PARSER_VERSION, MANUSCRIPT_EXTRACTOR_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/store.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -91,13 +91,18 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         buffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
       originalFileName = req.file.originalname;
       byteSize = req.file.size;
       originalBuffer = req.file.buffer;
     } else if (typeof req.body?.text === 'string') {
       const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName : undefined;
-      parsed = await parseManuscript({ text: req.body.text, fileName });
+      parsed = await parseManuscript({
+        text: req.body.text,
+        fileName,
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
+      });
       originalFileName = fileName ?? null;
       byteSize = Buffer.byteLength(req.body.text, 'utf8');
       originalBuffer = Buffer.from(req.body.text, 'utf8');
@@ -452,6 +457,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         createdAt: now,
         updatedAt: now,
         chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+        manuscriptExtractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
         language,
         editEpoch: mintEditEpoch(),
       };

@@ -21,7 +21,7 @@ describe('parseManuscript runs EPUB/MOBI off the main thread', () => {
     const buffer = readFileSync(
       fileURLToPath(new URL('./__fixtures__/sample.epub', import.meta.url)),
     );
-    const out = await parseManuscript({ buffer, fileName: 'sample.epub' });
+    const out = await parseManuscript({ buffer, fileName: 'sample.epub', extractorVersion: 1 });
     expect(out.chapters.length).toBeGreaterThan(0);
     expect(vi.mocked(epubModule.parseEpub)).toHaveBeenCalledTimes(0);
   });
@@ -30,7 +30,7 @@ describe('parseManuscript runs EPUB/MOBI off the main thread', () => {
     const buffer = Buffer.alloc(256, 0);
     buffer.writeUInt32BE(96, 78);
     buffer.writeUInt16BE(2, 96 + 0x0c);
-    await expect(parseManuscript({ buffer, fileName: 'x.mobi' })).rejects.toBeInstanceOf(
+    await expect(parseManuscript({ buffer, fileName: 'x.mobi', extractorVersion: 1 })).rejects.toBeInstanceOf(
       DrmProtectedError,
     );
     expect(vi.mocked(mobiModule.parseMobi)).toHaveBeenCalledTimes(0);

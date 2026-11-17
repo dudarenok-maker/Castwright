@@ -26,11 +26,12 @@ describe('parseInWorker', () => {
     'parses %s off the main thread, identical to in-process',
     async (name) => {
       const buffer = fixture(name);
-      const expected = await parseEpub(buffer, { fileName: name });
+      const expected = await parseEpub(buffer, { fileName: name, extractorVersion: 1 });
       const { parsed, threadId } = await parseInWorkerWithThread({
         format: 'epub',
         buffer,
         fileName: name,
+        extractorVersion: 1,
       });
       expect(parsed).toStrictEqual(expected);
       expect(JSON.stringify(parsed)).toBe(JSON.stringify(expected));
@@ -42,9 +43,9 @@ describe('parseInWorker', () => {
   describe('error classes cross the thread', () => {
     it('a DRM EPUB rejects as UnusableEpubError with the in-process message', async () => {
       const buffer = fixture('sample-epub-drm.epub');
-      const inProcess = await parseEpub(buffer, { fileName: 'drm.epub' }).catch((e) => e);
+      const inProcess = await parseEpub(buffer, { fileName: 'drm.epub', extractorVersion: 1 }).catch((e) => e);
       expect(inProcess).toBeInstanceOf(UnusableEpubError);
-      const err = await parseInWorker({ format: 'epub', buffer, fileName: 'drm.epub' }).catch(
+      const err = await parseInWorker({ format: 'epub', buffer, fileName: 'drm.epub', extractorVersion: 1 }).catch(
         (e) => e,
       );
       expect(err).toBeInstanceOf(UnusableEpubError);
@@ -56,9 +57,9 @@ describe('parseInWorker', () => {
       const buffer = Buffer.alloc(256, 0);
       buffer.writeUInt32BE(96, 78);
       buffer.writeUInt16BE(2, 96 + 0x0c);
-      const inProcess = await parseMobi(buffer, { fileName: 'drm.mobi' }).catch((e) => e);
+      const inProcess = await parseMobi(buffer, { fileName: 'drm.mobi', extractorVersion: 1 }).catch((e) => e);
       expect(inProcess).toBeInstanceOf(DrmProtectedError);
-      const err = await parseInWorker({ format: 'mobi', buffer, fileName: 'drm.mobi' }).catch(
+      const err = await parseInWorker({ format: 'mobi', buffer, fileName: 'drm.mobi', extractorVersion: 1 }).catch(
         (e) => e,
       );
       expect(err).toBeInstanceOf(DrmProtectedError);
@@ -69,8 +70,8 @@ describe('parseInWorker', () => {
     it('an fs error keeps code and syscall and gets the fs sentence', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'parse-worker-'));
       const sourcePath = join(dir, 'missing.epub');
-      const req = { format: 'epub' as const, buffer: Buffer.alloc(0), sourcePath };
-      const inProcess = await parseEpub(req.buffer, { sourcePath }).catch((e) => e);
+      const req = { format: 'epub' as const, buffer: Buffer.alloc(0), sourcePath, extractorVersion: 1 };
+      const inProcess = await parseEpub(req.buffer, { sourcePath, extractorVersion: 1 }).catch((e) => e);
       const err = await parseInWorker(req).catch((e) => e);
       expect(err.code).toBe('ENOENT');
       expect(typeof err.syscall).toBe('string');
@@ -86,7 +87,7 @@ describe('parseInWorker', () => {
       async (name) => {
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
         const err = await parseInWorker(
-          { format: 'epub', buffer: Buffer.alloc(1) },
+          { format: 'epub', buffer: Buffer.alloc(1), extractorVersion: 1 },
           { workerUrl: workerFixture(name) },
         ).catch((e) => e);
         expect(err).toBeInstanceOf(UnusableEpubError);
@@ -100,7 +101,7 @@ describe('parseInWorker', () => {
     it('a MOBI crash is a plain UnusableMediaError with the MOBI sentence', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
       const err = await parseInWorker(
-        { format: 'mobi', buffer: Buffer.alloc(1) },
+        { format: 'mobi', buffer: Buffer.alloc(1), extractorVersion: 1 },
         { workerUrl: workerFixture('exit-silently.mjs') },
       ).catch((e) => e);
       expect(err).toBeInstanceOf(UnusableMediaError);
@@ -114,7 +115,7 @@ describe('parseInWorker', () => {
     it('a hang is stopped by the timeout', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
       const err = await parseInWorker(
-        { format: 'epub', buffer: Buffer.alloc(1) },
+        { format: 'epub', buffer: Buffer.alloc(1), extractorVersion: 1 },
         { workerUrl: workerFixture('hang.mjs'), timeoutMs: 200 },
       ).catch((e) => e);
       expect(err).toBeInstanceOf(UnusableEpubError);
@@ -123,7 +124,7 @@ describe('parseInWorker', () => {
 
     it('two parses at once are independent: one crashes, the other fulfils', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      const req = { format: 'epub' as const, buffer: Buffer.alloc(1) };
+      const req = { format: 'epub' as const, buffer: Buffer.alloc(1), extractorVersion: 1 };
       const [a, b] = await Promise.allSettled([
         parseInWorker(req, { workerUrl: workerFixture('throw-in-callback.mjs') }),
         parseInWorker(req, { workerUrl: workerFixture('slow-ok.mjs') }),

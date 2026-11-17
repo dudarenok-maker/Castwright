@@ -15,6 +15,7 @@ import {
   runStepProcess,
   _internals,
 } from '../verify-cache.mjs';
+import { runCensus } from '../reap-stale-batteries.mjs';
 import {
   HANG_FIXTURE_SELF_EXIT_MS,
   STEP_BUDGET_PAST_LAUNCH_MS,
@@ -691,6 +692,54 @@ test('runStepProcess re-sweep: an edge whose child started in the same ms as its
   try {
     await h.run();
     assert.ok(h.swept.includes(TIE), `an equal-start child is the parent's (taskkill /T's own tie rule): ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+
+test('runStepProcess timeout sweep: kills only the step\'s own orphans, never a foreign orphaned battery (#4222 review finding 3)', async () => {
+  const dir = mkTmp();
+  const h = resweepHarness(dir);
+  const FOREIGN = 987654320;
+  const OWN_CHILD = 987654321;
+  const T = Date.now() + 100;
+  const censusKilled = [];
+  // One machine-wide table: the step's own tree (root orphaned once its parent
+  // is gone) plus an unrelated orphaned battery that was never part of the step.
+  const snapshotFn = (rootPid) => [
+    { pid: rootPid, ppid: 1, name: 'node.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt: T },
+    { pid: OWN_CHILD, ppid: rootPid, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0, startedAt: T + 1 },
+    { pid: FOREIGN, ppid: 1, name: 'node.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt: T - 3_600_000 },
+  ];
+  const censusFn = (opts) =>
+    runCensus({
+      ...opts,
+      collectSnapshot: () => snapshotFn(h.child?.pid ?? process.pid + 1),
+      readPrior: () => ({}),
+      appendLog: () => {},
+      killFn: (pid) => {
+        censusKilled.push(pid);
+        return true;
+      },
+    });
+  try {
+    await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 500,
+      killTreeFn: h.killTreeFn,
+      snapshotFn,
+      censusFn,
+      logFn: h.logFn,
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      resweepMax: 1,
+      sweepKillFn: () => {},
+    });
+    assert.ok(!censusKilled.includes(FOREIGN), `a foreign orphan must survive the step's timeout sweep: ${JSON.stringify(censusKilled)}`);
+    assert.ok(censusKilled.includes(h.child.pid), `the step's own orphaned root is still swept: ${JSON.stringify(censusKilled)}`);
   } finally {
     h.cleanup();
   }

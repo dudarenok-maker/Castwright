@@ -1032,9 +1032,9 @@ describe('parser — #2289 es/fr dialogueOpen carries &ndash; alongside &mdash;'
      carries the load instead. Pin that the handover is real, so the shims can
      be retained as pure back-compat rather than silently doing the work. */
   it('#2310: the DECODED dash still opens dialogue in es and fr', () => {
-    expect(parseChapterStructure(stripHtml('<p>&ndash; Un momento.</p>'), esIdx)[0].kind)
+    expect(parseChapterStructure(stripHtml('<p>&ndash; Un momento.</p>', 1), esIdx)[0].kind)
       .toBe('dialogue');
-    expect(parseChapterStructure(stripHtml('<p>&mdash; Un instant.</p>'), frIdx)[0].kind)
+    expect(parseChapterStructure(stripHtml('<p>&mdash; Un instant.</p>', 1), frIdx)[0].kind)
       .toBe('dialogue');
   });
 });

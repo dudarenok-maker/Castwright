@@ -5,8 +5,10 @@
    For every .epub / .mobi / .azw3 under each directory (recursive,
    case-insensitive, sha256-deduplicated within each directory) it parses the
    book once IN-PROCESS (parseEpub / parseMobi) and once through the worker
-   (parseManuscript), and reports identical / differ / error-same /
-   error-differ / in-process-crash counts. Exit code 1 if differ +
+   (parseManuscript), at extractor version 1 AND 2 (#4217: the worker must
+   extract as the in-process parser does at whichever version the caller
+   pinned), and reports identical / differ / error-same / error-differ /
+   in-process-crash counts, one per book per version. Exit code 1 if differ +
    error-differ > 0, else 0.
 
    "Identical" is JSON.stringify(inProcess) === JSON.stringify(viaWorker). Two
@@ -71,11 +73,12 @@ async function inProcess(
   buf: Buffer,
   fileName: string,
   isMobi: boolean,
+  extractorVersion: number,
 ): Promise<Outcome | 'crash'> {
   const crash = new Promise<'crash'>((resolve) => {
     wakeCrash = () => resolve('crash');
   });
-  const run = settle(() => (isMobi ? parseMobi(buf, { fileName }) : parseEpub(buf, { fileName })));
+  const run = settle(() => (isMobi ? parseMobi(buf, { fileName, extractorVersion }) : parseEpub(buf, { fileName, extractorVersion })));
   const r = await Promise.race([run, crash]);
   wakeCrash = null;
   return r;
@@ -125,31 +128,33 @@ for (const dir of dirs) {
     const fileName = basename(file);
     const isMobi = extname(fileName).toLowerCase() !== '.epub';
 
-    const a = await inProcess(buf, fileName, isMobi);
-    const b = await settle(() => parseManuscript({ buffer: buf, fileName }));
+    for (const extractorVersion of [1, 2]) {
+      const a = await inProcess(buf, fileName, isMobi, extractorVersion);
+      const b = await settle(() => parseManuscript({ buffer: buf, fileName, extractorVersion }));
 
-    if (a === 'crash') {
-      counts.crash++;
-      const w = b.ok ? 'parsed' : `${b.name}: ${b.message.slice(0, 80)}`;
-      console.log(`IN-PROCESS-CRASH ${fileName} (worker: ${w})`);
-    } else if (a.ok && b.ok) {
-      if (a.json === b.json) counts.identical++;
-      else {
-        counts.differ++;
-        console.log(`DIFFER ${fileName}: ${firstDiff(a.value, b.value, a.json, b.json)}`);
-      }
-    } else if (!a.ok && !b.ok) {
-      if (a.name === b.name && a.message === b.message) counts.errorSame++;
-      else {
+      if (a === 'crash') {
+        counts.crash++;
+        const w = b.ok ? 'parsed' : `${b.name}: ${b.message.slice(0, 80)}`;
+        console.log(`IN-PROCESS-CRASH v${extractorVersion} ${fileName} (worker: ${w})`);
+      } else if (a.ok && b.ok) {
+        if (a.json === b.json) counts.identical++;
+        else {
+          counts.differ++;
+          console.log(`DIFFER v${extractorVersion} ${fileName}: ${firstDiff(a.value, b.value, a.json, b.json)}`);
+        }
+      } else if (!a.ok && !b.ok) {
+        if (a.name === b.name && a.message === b.message) counts.errorSame++;
+        else {
+          counts.errorDiffer++;
+          console.log(
+            `ERROR-DIFFER v${extractorVersion} ${fileName}: in-process ${a.name}: ${a.message.slice(0, 80)} | worker ${b.name}: ${b.message.slice(0, 80)}`,
+          );
+        }
+      } else {
         counts.errorDiffer++;
-        console.log(
-          `ERROR-DIFFER ${fileName}: in-process ${a.name}: ${a.message.slice(0, 80)} | worker ${b.name}: ${b.message.slice(0, 80)}`,
-        );
+        const side = (o: Outcome) => (o.ok ? 'parsed' : `${o.name}: ${o.message.slice(0, 80)}`);
+        console.log(`ERROR-DIFFER v${extractorVersion} ${fileName}: in-process ${side(a)} | worker ${side(b)}`);
       }
-    } else {
-      counts.errorDiffer++;
-      const side = (o: Outcome) => (o.ok ? 'parsed' : `${o.name}: ${o.message.slice(0, 80)}`);
-      console.log(`ERROR-DIFFER ${fileName}: in-process ${side(a)} | worker ${side(b)}`);
     }
   }
 }

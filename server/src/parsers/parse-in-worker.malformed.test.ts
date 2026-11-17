@@ -43,15 +43,15 @@ describe('parseManuscript: malformed EPUBs match in-process outcomes', () => {
       const buffer = await s.build();
       const fileName = `${s.name}.epub`;
       if (s.outcome === 'ok') {
-        const expected = await parseEpub(buffer, { fileName });
-        await expect(parseManuscript({ buffer, fileName })).resolves.toStrictEqual(expected);
+        const expected = await parseEpub(buffer, { fileName, extractorVersion: 1 });
+        await expect(parseManuscript({ buffer, fileName, extractorVersion: 1 })).resolves.toStrictEqual(expected);
       } else if (s.outcome === 'crash') {
-        const err = await parseManuscript({ buffer, fileName }).catch((e) => e);
+        const err = await parseManuscript({ buffer, fileName, extractorVersion: 1 }).catch((e) => e);
         expect(err).toBeInstanceOf(UnusableEpubError);
         expect((err as Error).message).toBe(CRASH_SENTENCE);
       } else {
-        const expected = await parseEpub(buffer, { fileName }).catch((e) => e);
-        const err = await parseManuscript({ buffer, fileName }).catch((e) => e);
+        const expected = await parseEpub(buffer, { fileName, extractorVersion: 1 }).catch((e) => e);
+        const err = await parseManuscript({ buffer, fileName, extractorVersion: 1 }).catch((e) => e);
         expect(expected).toBeInstanceOf(Error);
         expect(err).toBeInstanceOf(Error);
         expect((err as Error).constructor).toBe((expected as Error).constructor);
