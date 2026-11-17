@@ -46,7 +46,7 @@ history at cut time.
 ## 🎭 Cast and re-analysis
 
 - **A re-analysis no longer leaves a book without a narrator row when `cast.json` was rewritten during the run** (a first-upload job that was never registered, a tab without an analysis era, a hand edit on disk): the persist re-creates the narrator from the run's roster (no voice restored) and keeps its lines on it, drift-refused persists included. Every other row deleted mid-run still stays deleted (rule 13). (#4196)
-- **A re-analysis that retitles a rendered chapter no longer orphans its audio.** The analysis persist (main and subset job) keeps a chapter's existing slug whenever a live take (<slug>.mp3, .m4a or .ogg) exists at it, so only the title changes and the chapter still reads as rendered with its audio, segments and peaks at the original slug; a chapter with no take still gets the recomputed slug. Previously the persist recomputed every slug from the new title, so state.json pointed at a slug with nothing under it and the take was left behind (#4230).
+- **An analysis no longer orphans the audio of a rendered chapter whose title changed.** A chapter-title parser version bump retitles a rendered chapter in `state.json` while keeping its slug; the next analysis persist (main and subset job) then recomputed the slug from the new title. The persist now keeps a chapter's existing slug whenever a live take (`<slug>.mp3`, `.m4a` or `.ogg`) exists at it, so only the title changes and the chapter still reads as rendered with its audio, segments and peaks at the original slug; a chapter with no take still gets the recomputed slug. Previously `state.json` pointed at a slug with nothing under it and the take was left behind (#4306, closes #4230).
 
 ## ⚙️ Setup, prerequisites & dependencies
 
