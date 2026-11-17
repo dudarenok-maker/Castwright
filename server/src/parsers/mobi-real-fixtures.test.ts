@@ -52,13 +52,13 @@ if (!hasMobi || !hasAzw3) {
 describe.skipIf(!hasMobi)('parseMobi — real Calibre-generated sample.mobi', () => {
   it('parses the real Mobipocket binary without throwing', async () => {
     const buf = readFileSync(mobiPath);
-    const out = await parseMobi(buf, { fileName: 'sample.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.mobi' });
     expect(out.format).toBe('mobi');
   });
 
   it('extracts dc:title from the converted EPUB', async () => {
     const buf = readFileSync(mobiPath);
-    const out = await parseMobi(buf, { fileName: 'sample.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.mobi' });
     /* The source EPUB's <dc:title> is "The Solway Light"
        (scripts/gen-parser-fixtures.mjs#buildEpub). Calibre preserves
        this through ebook-convert. */
@@ -67,13 +67,13 @@ describe.skipIf(!hasMobi)('parseMobi — real Calibre-generated sample.mobi', ()
 
   it('extracts dc:creator as the author', async () => {
     const buf = readFileSync(mobiPath);
-    const out = await parseMobi(buf, { fileName: 'sample.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.mobi' });
     expect(out.author).toBe('Jane Doe');
   });
 
   it('produces at least one chapter with body text', async () => {
     const buf = readFileSync(mobiPath);
-    const out = await parseMobi(buf, { fileName: 'sample.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.mobi' });
     expect(out.chapters.length).toBeGreaterThanOrEqual(1);
     /* The EPUB chapters carry the phrase "The tower stood at the
        edge of the world." in chapter1. Calibre's MOBI conversion
@@ -86,25 +86,25 @@ describe.skipIf(!hasMobi)('parseMobi — real Calibre-generated sample.mobi', ()
 describe.skipIf(!hasAzw3)('parseMobi — real Calibre-generated sample.azw3', () => {
   it('parses the real KF8/AZW3 binary without throwing', async () => {
     const buf = readFileSync(azw3Path);
-    const out = await parseMobi(buf, { fileName: 'sample.azw3' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.azw3' });
     expect(out.format).toBe('mobi');
   });
 
   it('extracts dc:title from the converted EPUB', async () => {
     const buf = readFileSync(azw3Path);
-    const out = await parseMobi(buf, { fileName: 'sample.azw3' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.azw3' });
     expect(out.title).toBe('The Solway Light');
   });
 
   it('extracts dc:creator as the author', async () => {
     const buf = readFileSync(azw3Path);
-    const out = await parseMobi(buf, { fileName: 'sample.azw3' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.azw3' });
     expect(out.author).toBe('Jane Doe');
   });
 
   it('produces at least one chapter with body text', async () => {
     const buf = readFileSync(azw3Path);
-    const out = await parseMobi(buf, { fileName: 'sample.azw3' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'sample.azw3' });
     expect(out.chapters.length).toBeGreaterThanOrEqual(1);
     const allBody = out.chapters.map((c) => c.body).join('\n');
     expect(allBody).toMatch(/tower stood at the edge of the world/);

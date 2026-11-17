@@ -58,3 +58,20 @@ describe('POST /api/manuscripts — error status mapping', () => {
     expect(res.body.wordCount).toBeGreaterThan(0);
   });
 });
+
+/* I4 (#4217) — an in-memory upload extracts with the current version.
+   Mutation: pass LEGACY_EXTRACTOR_VERSION in manuscripts.ts and the div
+   paragraphs stay joined. */
+describe('POST /api/manuscripts — extractor v2 (#4217)', () => {
+  it('I4: splits div paragraphs in the returned sourceText', async () => {
+    const { buildEpub } = await import('../test-utils/empty-href-epub.js');
+    const chapter =
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body>' +
+      '<div class="p">First para one.</div><div class="p">First para two.</div></body></html>';
+    const res = await request(app)
+      .post('/api/manuscripts')
+      .attach('file', await buildEpub([chapter]), { filename: 'divs.epub', contentType: 'application/epub+zip' });
+    expect(res.status).toBe(200);
+    expect(res.body.sourceText).toContain('First para one.\n\nFirst para two.');
+  });
+});

@@ -213,6 +213,13 @@ export interface BookStateJson {
       analysis state, etc. are all preserved across the refresh. See
       `server/src/parsers/version.ts`. */
   chapterTitleParserVersion?: number;
+  /** The extractor version (`parsers/version.ts`) that produced this book's
+      chapter text. Absent means 1. Written when the book is created
+      (`POST /api/books`) and when the user explicitly re-parses or replaces the
+      manuscript (`applyReparse`); every other write carries it. Implicit
+      re-reads (hydrate, title refresh) use it so persisted offsets stay valid
+      (#4217). */
+  manuscriptExtractorVersion?: number;
   /* Editable audiobook metadata surfaced by the Listen view's metadata editor.
      Optional so older state.json files keep loading; absent fields fall back
      to library/cast defaults on the frontend. */
@@ -281,8 +288,9 @@ export interface BookStateJson {
      saved sentences survive it, and by the bundle overwrite and the backup
      restore, which leave the local edits file beside a swapped-in chapter
      list: those two stamp it only when the edits hold sentences (or cannot
-     be read) AND the chapter list differs from the current one or the book
-     is already marked (`swapLeavesStaleEvidence`); cleared only by the
+     be read) AND the chapter list differs from the current one, the
+     extractor stamp differs (#4217), or the book is already marked
+     (`swapLeavesStaleEvidence`); cleared only by the
      main analysis persist. Never written as `false` (true or absent); never
      on the PUT /state whitelist. Additive optional field —
      `CURRENT_STATE_SCHEMA` does NOT bump (plan 27 rename-vs-add policy). */

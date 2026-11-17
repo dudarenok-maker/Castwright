@@ -2,8 +2,8 @@
    stale-evidence marker `sentencesPredateChapters`. A restore swaps state.json
    only; manuscript-edits.json stays. So the restored state is marked when the
    local edits hold sentences (or cannot be read) AND the snapshot's chapter
-   list (ids + titles, in order) differs from the book's current one, or the
-   current state is already marked. The snapshot's own marker is never carried.
+   list (ids + titles, in order) or extractor stamp (#4217) differs from the
+   book's current one, or the current state is already marked. The snapshot's own marker is never carried.
 
    Same temp-workspace harness as auto-backup.test.ts. */
 
@@ -114,6 +114,31 @@ describe('restoreBackup — stale-evidence marker (plan 290, round 10)', () => {
 
   it("a snapshot carrying the marker onto the same chapters: the snapshot's marker is not carried", async () => {
     const after = await restoreOnto('snap-marked', { sentencesPredateChapters: true }, {}, EDITS);
+    expect(after).not.toHaveProperty('sentencesPredateChapters');
+  });
+
+  /* #4217 pass 1 -- the extractor stamp is the second thing the saved sentences
+     are keyed to: the v1 and v2 bodies of the same chapters split differently. */
+  it.each([
+    ['unstamped snapshot, re-parsed (v2) current', {}, { manuscriptExtractorVersion: 2 }],
+    ['v2 snapshot, unstamped current', { manuscriptExtractorVersion: 2 }, {}],
+  ] as const)('same chapters, differing extractor stamp (%s) + saved sentences: marker', async (_l, snap, cur) => {
+    const after = await restoreOnto(`stamp-${_l.length}`, snap, cur, EDITS);
+    expect(after.sentencesPredateChapters).toBe(true);
+  });
+
+  it('same chapters, same extractor stamp + saved sentences: no marker', async () => {
+    const after = await restoreOnto(
+      'stamp-same',
+      { manuscriptExtractorVersion: 2 },
+      { manuscriptExtractorVersion: 2 },
+      EDITS,
+    );
+    expect(after).not.toHaveProperty('sentencesPredateChapters');
+  });
+
+  it('a differing extractor stamp with no saved sentences: no marker', async () => {
+    const after = await restoreOnto('stamp-noedits', {}, { manuscriptExtractorVersion: 2 }, null);
     expect(after).not.toHaveProperty('sentencesPredateChapters');
   });
 

@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findBookByManuscriptId } from '../workspace/scan.js';
 import { parseManuscript } from '../parsers/index.js';
+import { extractorVersionOf } from '../parsers/version.js';
 import { hintsFromPersisted, readManuscriptHints, sha256Hex } from '../workspace/manuscript-hints.js';
 import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
 
@@ -163,6 +164,8 @@ async function hydrateFromDisk(manuscriptId: string): Promise<ManuscriptRecord |
   const parsed = await parseManuscript({
     buffer,
     fileName: book.state.manuscriptFile,
+    /* #4217: implicit re-read: unstamped = version 1, byte-stable. */
+    extractorVersion: extractorVersionOf(book.state),
   }).catch(() => null);
   if (!parsed) return undefined;
 

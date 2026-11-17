@@ -21,7 +21,7 @@ export function decodeNumericEntities(s: string): string {
     .replace(/&#(\d+);/g, (m, dec) => codePointOr(m, parseInt(dec, 10)));
 }
 
-function codePointOr(original: string, codePoint: number): string {
+export function codePointOr(original: string, codePoint: number): string {
   if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return original;
   try {
     return String.fromCodePoint(codePoint);
@@ -75,8 +75,17 @@ export function decodeNamedEntities(s: string): string {
 /* Strip HTML tags from a chapter body, decode common entities, and convert
    block-level breaks to plain-text newlines. Folds `<em>/<i>/<strong>` into
    `[emphasis]…[/emphasis]` tags via tagHtmlEmphasis before stripping so the
-   audio-tag information survives the strip. */
-export function stripHtml(html: string): string {
+   audio-tag information survives the strip.
+
+   `extractorVersion` is version-gated: see `parsers/version.ts`. At version 2+
+   (#4217) the named block closers `</div>`, `</li>`, `</blockquote>`,
+   `</h1>`-`</h6>`, `</dd>`, `</dt>`, `</section>` and `</article>` become
+   paragraph breaks (a blank line, like `</p>`), and the final whitespace trim
+   strips any non-newline whitespace (spaces, tabs, CR, U+00A0) on both sides
+   of every newline, so nested blocks collapse to single paragraph breaks with
+   no empty or indented paragraphs. Opening tags still add no break. Below 2
+   the code path is exactly the version-1 behaviour. */
+export function stripHtml(html: string, extractorVersion: number): string {
   let s = tagHtmlEmphasis(html)
     .replace(/<\s*br\s*\/?>/gi, '\n')
     /* #1679 — <hr> is the most common EPUB/MOBI scene-break glyph; the generic
@@ -85,6 +94,9 @@ export function stripHtml(html: string): string {
        a standalone paragraph unit rather than gluing it to adjacent prose. */
     .replace(/<\s*hr\s*[^>]*\/?>/gi, '\n\n* * *\n\n')
     .replace(/<\/p>/gi, '\n\n');
+  if (extractorVersion >= 2) {
+    s = s.replace(/<\/\s*(?:div|li|blockquote|h[1-6]|dd|dt|section|article)\s*>/gi, '\n\n');
+  }
   // Replace-until-stable: a single `<[^>]+>` pass can leave a reconstructed tag.
   let prev: string;
   do {
@@ -93,7 +105,7 @@ export function stripHtml(html: string): string {
   } while (s !== prev);
   s = decodeNamedEntities(s);
   return decodeNumericEntities(s)
-    .replace(/[ \t]+\n/g, '\n')
+    .replace(extractorVersion >= 2 ? /[^\S\n]*\n[^\S\n]*/g : /[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

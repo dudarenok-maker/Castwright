@@ -57,14 +57,28 @@ describe('swapLeavesStaleEvidence', () => {
         const expected = holdsSentences.has(editsKey) && (differs || marked);
         it(`edits ${editsKey}, chapters ${incomingKey}, current ${marked ? 'marked' : 'unmarked'} -> ${expected}`, () => {
           const current = { chapters: CH, ...(marked ? { sentencesPredateChapters: true as const } : {}) };
-          expect(swapLeavesStaleEvidence(edits, incoming, current)).toBe(expected);
+          expect(swapLeavesStaleEvidence(edits, { chapters: incoming }, current)).toBe(expected);
         });
       }
       /* An absent or unreadable current state counts as a different list. */
       const expectedNull = holdsSentences.has(editsKey);
       it(`edits ${editsKey}, chapters ${incomingKey}, current state null -> ${expectedNull}`, () => {
-        expect(swapLeavesStaleEvidence(edits, incoming, null)).toBe(expectedNull);
+        expect(swapLeavesStaleEvidence(edits, { chapters: incoming }, null)).toBe(expectedNull);
       });
     }
   }
+
+  /* #4217 -- the extractor stamp: same chapters, differing version. */
+  for (const [editsKey, edits] of Object.entries(EDITS)) {
+    it(`edits ${editsKey}, same chapters, stamp v2 vs unstamped -> ${holdsSentences.has(editsKey)}`, () => {
+      const stamped = { chapters: CH, manuscriptExtractorVersion: 2 };
+      expect(swapLeavesStaleEvidence(edits, stamped, { chapters: CH })).toBe(holdsSentences.has(editsKey));
+      expect(swapLeavesStaleEvidence(edits, { chapters: CH }, stamped)).toBe(holdsSentences.has(editsKey));
+    });
+  }
+  it('an explicit v1 stamp equals an absent one', () => {
+    expect(
+      swapLeavesStaleEvidence(EDITS.ok!, { chapters: CH, manuscriptExtractorVersion: 1 }, { chapters: CH }),
+    ).toBe(false);
+  });
 });

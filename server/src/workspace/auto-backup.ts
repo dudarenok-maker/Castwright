@@ -266,7 +266,7 @@ export async function restoreBackup(bookId: string, file: string): Promise<void>
         const current = await readStateJsonWithRecovery(sp).catch(() => null);
         const currentId = (current as { manuscriptId?: unknown } | null)?.manuscriptId;
         if (typeof currentId === 'string' && currentId) currentManuscriptId = currentId;
-        const stale = swapLeavesStaleEvidence(edits, parsed.chapters, current);
+        const stale = swapLeavesStaleEvidence(edits, parsed, current);
         await writeStateJsonAtomic(stateJsonPath(bookDir), {
           ...parsed,
           /* Never the snapshot's own marker: only the rule above decides

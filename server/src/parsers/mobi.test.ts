@@ -56,6 +56,7 @@ vi.mock('@lingo-reader/mobi-parser', () => ({
 }));
 
 import { parseMobi, DrmProtectedError, resolveMobiChapterTitle } from './mobi.js';
+import { parseManuscript } from './index.js';
 
 /* Build a minimal MOBI-shaped Buffer with a controllable encryption byte
    at the PalmDOC header position. PDB header is 78 bytes; record 0
@@ -84,20 +85,20 @@ beforeEach(() => {
 describe('parseMobi — DRM guard', () => {
   it('throws DrmProtectedError when encryption byte is 1 (old Mobipocket DRM)', async () => {
     const buf = mobiBufferWithEncryption(1);
-    await expect(parseMobi(buf, { fileName: 'book.mobi' })).rejects.toBeInstanceOf(
+    await expect(parseMobi(buf, { extractorVersion: 1, fileName: 'book.mobi' })).rejects.toBeInstanceOf(
       DrmProtectedError,
     );
   });
 
   it('throws DrmProtectedError when encryption byte is 2 (Kindle Store DRM)', async () => {
     const buf = mobiBufferWithEncryption(2);
-    await expect(parseMobi(buf, { fileName: 'book.mobi' })).rejects.toThrow(/DRM-protected/);
+    await expect(parseMobi(buf, { extractorVersion: 1, fileName: 'book.mobi' })).rejects.toThrow(/DRM-protected/);
   });
 
   it('does not invoke the library when DRM is detected', async () => {
     const buf = mobiBufferWithEncryption(2);
     chaptersMock = [{ id: 'c1', html: '<p>Body</p>' }];
-    await expect(parseMobi(buf, { fileName: 'book.mobi' })).rejects.toBeInstanceOf(
+    await expect(parseMobi(buf, { extractorVersion: 1, fileName: 'book.mobi' })).rejects.toBeInstanceOf(
       DrmProtectedError,
     );
     expect(lastInitMobiCalledWith).toBeNull();
@@ -107,7 +108,7 @@ describe('parseMobi — DRM guard', () => {
   it('proceeds when encryption byte is 0 (no DRM)', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>Hello world.</p>' }];
-    const out = await parseMobi(buf, { fileName: 'book.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'book.mobi' });
     expect(out.format).toBe('mobi');
     expect(out.chapters).toHaveLength(1);
   });
@@ -117,7 +118,7 @@ describe('parseMobi — ext routing', () => {
   it('uses initMobiFile for .mobi files', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>x</p>' }];
-    await parseMobi(buf, { fileName: 'book.mobi' });
+    await parseMobi(buf, { extractorVersion: 1, fileName: 'book.mobi' });
     expect(lastInitMobiCalledWith).not.toBeNull();
     expect(lastInitKf8CalledWith).toBeNull();
   });
@@ -125,7 +126,7 @@ describe('parseMobi — ext routing', () => {
   it('uses initKf8File for .azw3 files', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>x</p>' }];
-    await parseMobi(buf, { fileName: 'book.azw3' });
+    await parseMobi(buf, { extractorVersion: 1, fileName: 'book.azw3' });
     expect(lastInitKf8CalledWith).not.toBeNull();
     expect(lastInitMobiCalledWith).toBeNull();
   });
@@ -133,7 +134,7 @@ describe('parseMobi — ext routing', () => {
   it('falls back to initMobiFile when no filename is supplied', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>x</p>' }];
-    await parseMobi(buf, {});
+    await parseMobi(buf, { extractorVersion: 1 });
     expect(lastInitMobiCalledWith).not.toBeNull();
   });
 });
@@ -142,7 +143,7 @@ describe('parseMobi — metadata', () => {
   it('returns format: "mobi"', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>body</p>' }];
-    const out = await parseMobi(buf, { fileName: 'book.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'book.mobi' });
     expect(out.format).toBe('mobi');
   });
 
@@ -150,7 +151,7 @@ describe('parseMobi — metadata', () => {
     const buf = mobiBufferWithEncryption(0);
     metadataMock = { title: 'The Real Title' };
     chaptersMock = [{ id: 'c1', html: '<p>body</p>' }];
-    const out = await parseMobi(buf, { fileName: 'whatever.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'whatever.mobi' });
     expect(out.title).toBe('The Real Title');
   });
 
@@ -159,7 +160,7 @@ describe('parseMobi — metadata', () => {
     chaptersMock = [{ id: 'c1', html: '<p>body</p>' }];
     /* FILENAME_RE in text.ts expects `Author - Series N - Title` (space-N-
        space, not `#N`); see server/src/parsers/text.ts:139. */
-    const out = await parseMobi(buf, {
+    const out = await parseMobi(buf, { extractorVersion: 1,
       fileName: 'Tolkien - Lord of the Rings 2 - The Two Towers.mobi',
     });
     expect(out.title).toBe('The Two Towers');
@@ -172,7 +173,7 @@ describe('parseMobi — metadata', () => {
     const buf = mobiBufferWithEncryption(0);
     metadataMock = { title: 'X', author: ['Jane Doe', 'Co Author'] };
     chaptersMock = [{ id: 'c1', html: '<p>body</p>' }];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.author).toBe('Jane Doe');
   });
 });
@@ -184,14 +185,14 @@ describe('parseMobi — chapters', () => {
       { id: 'c1', html: '<p>First chapter body.</p>' },
       { id: 'c2', html: '<p>Second chapter body.</p>' },
     ];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters).toHaveLength(2);
   });
 
   it('strips HTML tags but keeps visible text', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>The tower stood at the edge of the world.</p>' }];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     const body = out.chapters[0].body;
     expect(body).toContain('The tower stood at the edge of the world.');
     expect(body).not.toContain('<p>');
@@ -203,7 +204,7 @@ describe('parseMobi — chapters', () => {
        `[emphatic] <body>` form (lead tag, no closing tag). */
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>She was <em>very</em> tired.</p>' }];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters[0].body).toMatch(/\[emphatic\]\s+very/);
   });
 
@@ -217,7 +218,7 @@ describe('parseMobi — chapters', () => {
       { id: 'c1', html: '<p>body 1</p>' },
       { id: 'c2', html: '<p>body 2</p>' },
     ];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters.map((c) => c.title)).toEqual([
       'The Berth at Liverpool',
       'Storm at Sea',
@@ -230,7 +231,7 @@ describe('parseMobi — chapters', () => {
     chaptersMock = [
       { id: 'c1', html: '<h1>The Berth at Liverpool</h1><p>body</p>' },
     ];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
   });
 
@@ -242,7 +243,7 @@ describe('parseMobi — chapters', () => {
     chaptersMock = [
       { id: 'c1', html: '<h1>The Berth at Liverpool</h1><p>It was a cold morning.</p>' },
     ];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
     expect(out.chapters[0].body).toBe('It was a cold morning.');
   });
@@ -250,7 +251,7 @@ describe('parseMobi — chapters', () => {
   it('falls back to "Chapter N" when neither TOC nor body heading is present', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '<p>bare body</p>' }];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters[0].title).toBe('Chapter 1');
   });
 
@@ -260,7 +261,7 @@ describe('parseMobi — chapters', () => {
       { id: 'c1', html: '' },
       { id: 'c2', html: '<p>real body</p>' },
     ];
-    const out = await parseMobi(buf, { fileName: 'x.mobi' });
+    const out = await parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' });
     expect(out.chapters).toHaveLength(1);
     expect(out.chapters[0].body).toContain('real body');
   });
@@ -268,7 +269,7 @@ describe('parseMobi — chapters', () => {
   it('throws when the spine yields no extractable text', async () => {
     const buf = mobiBufferWithEncryption(0);
     chaptersMock = [{ id: 'c1', html: '' }];
-    await expect(parseMobi(buf, { fileName: 'x.mobi' })).rejects.toThrow(
+    await expect(parseMobi(buf, { extractorVersion: 1, fileName: 'x.mobi' })).rejects.toThrow(
       /no extractable text/i,
     );
   });
@@ -311,9 +312,50 @@ describe('parseMobi — titleSynthesized wiring (#3628)', () => {
       { id: 'c2', html: '<p>More prose.</p>' },
     ];
     tocMock = [{ label: 'Real Heading', href: 'c2' }];
-    const out = await parseMobi(mobiBufferWithEncryption(0), { fileName: 'book.mobi' });
+    const out = await parseMobi(mobiBufferWithEncryption(0), { extractorVersion: 1, fileName: 'book.mobi' });
     expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Real Heading']);
     expect(out.chapters[0].titleSynthesized).toBe(true);
     expect('titleSynthesized' in out.chapters[1]).toBe(false);
+  });
+});
+
+/* #4217 — the extractorVersion option is threaded to stripHtml; version 1 is
+   the pre-#4217 extraction: block closers do not break. */
+describe('parseMobi — extractorVersion option (#4217)', () => {
+  it('extractorVersion: 1 keeps the pre-#4217 body (no break at a block closer)', async () => {
+    chaptersMock = [{ id: 'c1', html: '<div>A</div><div>B</div>' }];
+    const v1 = await parseMobi(mobiBufferWithEncryption(0), {
+      fileName: 'book.mobi',
+      extractorVersion: 1,
+    });
+    expect(v1.chapters).toHaveLength(1);
+    expect(v1.chapters[0].body).toBe('AB');
+  });
+});
+
+/* #4217 MB1. Mutation: call stripHtml at mobi.ts:178 without the version and
+   this goes red (the divs glue to `AB`). */
+describe('parseMobi — block-closer paragraphs at extractorVersion 2 (#4217)', () => {
+  it('MB1: <div>A</div><div>B</div> gives A\n\nB', async () => {
+    chaptersMock = [{ id: 'c1', html: '<div>A</div><div>B</div>' }];
+    const out = await parseMobi(mobiBufferWithEncryption(0), {
+      fileName: 'book.mobi',
+      extractorVersion: 2,
+    });
+    expect(out.chapters[0].body).toBe('A\n\nB');
+  });
+});
+
+/* #4217 pass 1 -- the version must survive the parseManuscript -> parseMobi
+   hop: a layer that drops it extracts at v1 while the book is stamped 2.
+   Mutation: remove `extractorVersion` from the MOBI arm of index.ts and the v2
+   case goes red (the divs glue to `AB`). */
+describe('parseManuscript -- MOBI arm threads extractorVersion (#4217)', () => {
+  it('v2 splits on a block closer, v1 does not', async () => {
+    chaptersMock = [{ id: 'c1', html: '<div>A</div><div>B</div>' }];
+    const run = (extractorVersion: number) =>
+      parseManuscript({ buffer: mobiBufferWithEncryption(0), fileName: 'book.mobi', extractorVersion });
+    expect((await run(2)).chapters[0].body).toBe('A\n\nB');
+    expect((await run(1)).chapters[0].body).toBe('AB');
   });
 });
