@@ -3,7 +3,7 @@
    Same real-workspace harness as analysis.title-source.test.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -675,5 +675,59 @@ ${lineFor(4)}
     const res = await start(await analysisApp(), manuscriptId);
     expect(res.status).toBe(200);
   }, 60_000);
+  },
+);
+
+const TAKE_MANUSCRIPT = `# Alpha Prime\n\nIt began.\n\n${lineFor(1)}\n\n# New Name\n\nIt began.\n\n${lineFor(2)}\n\n# Epilogue\n\nIt began.\n\n${lineFor(3)}\n`;
+
+describe.each(['main', 'subset'] as const)(
+  '#4230 — a completed %s analysis keeps a rendered chapter\'s slug when its title changes',
+  (kind) => {
+    it('keeps the slug (and the take) of a rendered retitled chapter; an unrendered one gets the new slug', async () => {
+      const { manuscriptId, bookDir } = await seedBook(`slug-${kind}`, TAKE_MANUSCRIPT, [
+        { title: 'Alpha', slug: '01-alpha' },
+        { title: 'Old Name', slug: '02-old-name' },
+        { title: 'Epilogue', slug: '03-epilogue' },
+      ]);
+      /* Dynamic imports: a static import would load paths.js before beforeAll
+         sets WORKSPACE_DIR and freeze the wrong workspace root for the file. */
+      const { audioDir } = await import('../workspace/paths.js');
+      const { chapterAudioExists } = await import('../workspace/chapter-audio-file.js');
+      const audio = audioDir(bookDir);
+      mkdirSync(audio, { recursive: true });
+      const bytes2 = Buffer.from('take-two-bytes');
+      const bytes3 = Buffer.from('take-three-bytes-longer');
+      writeFileSync(join(audio, '02-old-name.mp3'), bytes2);
+      writeFileSync(join(audio, '03-epilogue.m4a'), bytes3);
+
+      /* With equal chapter counts the hydrate takes hint titles from state.json
+         (hintsFromParse), so the headings alone cannot retitle. Retitle the cached
+         record's hints, which is what a re-parse of an edited manuscript yields. */
+      const { getOrHydrateManuscript } = await import('../store/manuscripts.js');
+      const record = (await getOrHydrateManuscript(manuscriptId))!;
+      record.chapterHints[0].title = 'Alpha Prime';
+      record.chapterHints[1].title = 'New Name';
+
+      await runAnalysis(manuscriptId, kind);
+      expect(readState(bookDir).analysisProvenance?.scope).toBe(kind === 'main' ? 'book' : 'subset');
+
+      const ch = readState(bookDir).chapters as Array<{ title: string; slug: string }>;
+      // Chapter 2: rendered + retitled -> title changes, slug kept, still reads as rendered.
+      expect(ch[1].title).toBe('New Name');
+      expect(ch[1].slug).toBe('02-old-name');
+      expect(chapterAudioExists(audio, ch[1].slug)).toBe(true);
+      expect(readFileSync(join(audio, '02-old-name.mp3'))).toEqual(bytes2);
+      // Chapter 3: rendered, title unchanged.
+      expect(ch[2].slug).toBe('03-epilogue');
+      expect(chapterAudioExists(audio, ch[2].slug)).toBe(true);
+      expect(readFileSync(join(audio, '03-epilogue.m4a'))).toEqual(bytes3);
+      // Chapter 1: NOT rendered, retitled -> recomputed slug.
+      expect(ch[0].title).toBe('Alpha Prime');
+      expect(ch[0].slug).toBe('01-alpha-prime');
+      expect(chapterAudioExists(audio, ch[0].slug)).toBe(false);
+      // Slugs unique; nothing moved or created under audio/.
+      expect(new Set(ch.map((c) => c.slug)).size).toBe(ch.length);
+      expect(readdirSync(audio).sort()).toEqual(['02-old-name.mp3', '03-epilogue.m4a']);
+    }, 60_000);
   },
 );
