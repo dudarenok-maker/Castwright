@@ -141,7 +141,7 @@ export function pathSpellings(root) {
  *  it as a reference to the wrong root. Mirrors `isUnderRoot`'s `+ sep`
  *  boundary check, adapted for scanning free-text instead of comparing two
  *  already-resolved paths. */
-export function containsPathAtBoundary(haystack, needle) {
+function containsPathAtBoundary(haystack, needle) {
   let idx = haystack.indexOf(needle);
   while (idx !== -1) {
     const next = haystack[idx + needle.length];

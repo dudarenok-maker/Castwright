@@ -35,7 +35,7 @@ import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
-import { containsPathAtBoundary, normalizeSeparators, pathSpellings } from './hooks/guard-worktree-write.mjs';
+import { listKnownCheckoutRoots, normalizeSeparators } from './hooks/guard-worktree-write.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, '..');
@@ -548,25 +548,58 @@ export function classify(snapshot, now, thresholds) {
 
 const isWindows = process.platform === 'win32';
 
-/** Does this process command line name a path under the checkout `root`?
- *  ARGV ONLY — the process snapshot carries no working directory (see
- *  `rowsToProcesses`), so a battery launched with relative paths only and no
- *  checkout path anywhere in its argv never matches (callers therefore spare
- *  it; a manual `npm run doctor -- --kill` can still reap it). Matches every
- *  Windows spelling of the root (backslash, forward slash, doubled backslash,
- *  Git Bash `/c/...`, WSL `/mnt/c/...`, any letter case) via the helpers shared
- *  with the worktree-write guard. The component-boundary check matters
- *  because sibling worktree names share prefixes (`wt-3243` vs
- *  `wt-3243-followup`): a plain substring match would treat the sibling's
- *  processes as ours. Fails closed: a non-string/empty command line or root
- *  is never "under" anything. */
-export function commandLineUnderRoot(commandLine, root) {
-  if (typeof commandLine !== 'string' || commandLine === '') return false;
-  if (typeof root !== 'string') return false;
-  const trimmedRoot = root.replace(/[\\/]+$/, '');
-  if (trimmedRoot === '') return false;
-  const haystack = normalizeSeparators(commandLine).toLowerCase();
-  return pathSpellings(trimmedRoot).some((spelling) => containsPathAtBoundary(haystack, spelling));
+// Path literals in a command line that say nothing about WHICH checkout a
+// battery belongs to: the node / shell install and the global npm prefix.
+const NEUTRAL_PATH_RE = /^[a-z]:\/(program|windows)|\/appdata\/roaming\/npm(\/|$)/;
+
+/** Verdict on where a battery's argv points, judged over ALL its members'
+ *  command lines. ARGV ONLY: the process snapshot carries no working directory
+ *  (see `rowsToProcesses`), so a battery whose argv names no path at all is
+ *  neither in nor foreign (callers spare it; only a manual `doctor -- --kill`
+ *  reaps it). Every spelling of a path is read (backslash, forward slash,
+ *  doubled backslash, Git Bash `/c/...`, WSL `/mnt/c/...`, any letter case). The
+ *  boundary is a real path separator after a root: `<root> - Copy`, `<root>+old`,
+ *  `<root>,v2` and `wt-3243-followup` are other directories, and a look-alike
+ *  must never read as the checkout because this verdict feeds a KILL. Judged
+ *  over every member, never one alone: a worktree whose node_modules is
+ *  junctioned from the primary has fork workers naming the primary's realpath
+ *  while its main vitest names its own path. Every absolute path literal is
+ *  assigned to the MOST-SPECIFIC known checkout root containing it, so a path
+ *  under `<primary>/.claude/worktrees/<name>` belongs to that worktree, not
+ *  the primary. `inRoot`: some path is strictly under the pushing root.
+ *  `foreign`: the first path that belongs to anything else (another known root,
+ *  a nested worktree, or an absolute location outside every known root, e.g. a
+ *  scratchpad). The caller spares on any `foreign`: a battery that cannot be
+ *  placed wholly in the pushing checkout is left alone. */
+export function classifyBatteryLocation(commandLines, root, knownRoots = []) {
+  if (typeof root !== 'string' || root.replace(/[\\/]+$/, '') === '') {
+    return { inRoot: false, foreign: '(no checkout root)' };
+  }
+  const norm = (r) => normalizeSeparators(r.replace(/[\\/]+$/, '')).toLowerCase();
+  const rootN = norm(root);
+  const owners = [...new Set([rootN, ...knownRoots.map(norm)])].sort((x, y) => y.length - x.length);
+  const nestedPrefix = rootN + '/.claude/worktrees/';
+  let inRoot = false;
+  let foreign = null;
+  for (const line of commandLines) {
+    if (typeof line !== 'string') continue;
+    const text = normalizeSeparators(line)
+      .toLowerCase()
+      .replace(/(^|[\s"'=])\/(?:mnt\/)?([a-z])\//g, '$1$2:/');
+    for (const m of text.matchAll(/[a-z]:\/[^\s"'`<>|*?,;]*/g)) {
+      const token = m[0].replace(/\/+$/, '');
+      const owner = owners.find((o) => token === o || token.startsWith(o + '/'));
+      if (owner === rootN) {
+        if (token.startsWith(nestedPrefix)) foreign ??= token;
+        else if (token !== rootN) inRoot = true;
+      } else if (owner) {
+        foreign ??= token;
+      } else if (!NEUTRAL_PATH_RE.test(token)) {
+        foreign ??= token;
+      }
+    }
+  }
+  return { inRoot, foreign };
 }
 
 /** Map raw JSON rows from `collectProcessSnapshot`'s PowerShell query into the
@@ -1126,7 +1159,7 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
 /** Why a reap candidate must be SPARED under the pre-push guard, or null when
  *  every guard passes. Names every failed guard. Any subtree member's argv may
  *  satisfy the checkout test (the root is often a path-less `cmd.exe /c npx`). */
-function prePushSpareReason(v, processes, root) {
+function prePushSpareReason(v, processes, root, knownRoots = []) {
   const failures = [];
   if (!v.reasons.includes('orphaned-unreachable')) failures.push('not orphaned');
   if (!v.reasons.includes('stalled-rate')) {
@@ -1137,8 +1170,13 @@ function prePushSpareReason(v, processes, root) {
     );
   }
   const members = new Set(v.subtreePids);
-  const underRoot = processes.some((p) => members.has(p.pid) && commandLineUnderRoot(p.commandLine, root));
-  if (!underRoot) failures.push(`not under checkout ${root}`);
+  const { inRoot, foreign } = classifyBatteryLocation(
+    processes.filter((p) => members.has(p.pid)).map((p) => p.commandLine),
+    root,
+    knownRoots,
+  );
+  if (foreign) failures.push(`battery names a location outside checkout ${root}: ${foreign}`);
+  else if (!inRoot) failures.push(`not under checkout ${root}`);
   return failures.length > 0 ? failures.join('; ') : null;
 }
 
@@ -1206,7 +1244,7 @@ export function runCensus({
       if (v.verdict !== 'reap') continue;
       if (!v.reasons.some((r) => killReasons.includes(r))) continue;
       if (prePushGuard) {
-        const spareReason = prePushSpareReason(v, processes, prePushGuard.root);
+        const spareReason = prePushSpareReason(v, processes, prePushGuard.root, prePushGuard.knownRoots ?? []);
         if (spareReason) {
           spared.push({ rootPid: v.rootPid, reason: spareReason });
           continue;
@@ -1277,7 +1315,14 @@ export function runCensus({
  * assertion about source text — pass a `runCensusFn` that throws and
  * confirm this still returns 0.
  */
-export function runCli(args, { runCensusFn = runCensus, checkoutRoot = REPO_ROOT } = {}) {
+export function runCli(
+  args,
+  {
+    runCensusFn = runCensus,
+    checkoutRoot = REPO_ROOT,
+    knownRootsFn = () => listKnownCheckoutRoots({ cwd: checkoutRoot }),
+  } = {},
+) {
   const wideKill = args.includes('--kill');
   const isPrePush = args.includes('--pre-push');
 
@@ -1293,7 +1338,7 @@ export function runCli(args, { runCensusFn = runCensus, checkoutRoot = REPO_ROOT
       // `--kill` (npm run doctor -- --kill) is the wider, human-invoked path
       // and is unchanged.
       killReasons: isPrePush && !wideKill ? ['orphaned-unreachable'] : ['orphaned-unreachable', 'stalled-rate'],
-      prePushGuard: isPrePush && !wideKill ? { root: checkoutRoot } : null,
+      prePushGuard: isPrePush && !wideKill ? { root: checkoutRoot, knownRoots: knownRootsFn() } : null,
     });
 
     if (isPrePush) {

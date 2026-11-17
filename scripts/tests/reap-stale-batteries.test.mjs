@@ -47,7 +47,7 @@ import {
   readPriorSamples,
   appendCensusLog,
   collectProcessSnapshot,
-  commandLineUnderRoot,
+  classifyBatteryLocation,
   REPO_ROOT,
   isBatteryInvocation,
   killTree,
@@ -641,7 +641,7 @@ test('G3: a stalled, orphaned, OUT-of-checkout battery survives (root guard alon
   const r = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }));
   assert.deepEqual(r.killedPids, []);
   assert.equal(r.spared.length, 1);
-  assert.match(r.spared[0].reason, /not under checkout/);
+  assert.match(r.spared[0].reason, /outside checkout/);
 });
 
 test('G4: a stalled, orphaned, IN-checkout battery IS killed, whatever the path spelling', () => {
@@ -679,11 +679,15 @@ test('G7: runCli passes prePushGuard only on the pure --pre-push path', () => {
     });
     return guard;
   };
-  assert.deepEqual(seen(['--pre-push'], { checkoutRoot: 'C:\\injected\\root' }), { root: 'C:\\injected\\root' });
+  const knownRootsFn = () => ['C:\\injected\\root', 'C:\\injected\\other'];
+  assert.deepEqual(seen(['--pre-push'], { checkoutRoot: 'C:\\injected\\root', knownRootsFn }), {
+    root: 'C:\\injected\\root',
+    knownRoots: ['C:\\injected\\root', 'C:\\injected\\other'],
+  });
   assert.equal(seen(['--kill']), null);
   assert.equal(seen(['--pre-push', '--kill']), null);
   assert.equal(seen([]), null);
-  assert.deepEqual(seen(['--pre-push']), { root: REPO_ROOT });
+  assert.deepEqual(seen(['--pre-push'], { knownRootsFn: () => [REPO_ROOT] }), { root: REPO_ROOT, knownRoots: [REPO_ROOT] });
 });
 
 test('G8: the census log records spareReason for a spared root and null for a killed one', () => {
@@ -698,6 +702,89 @@ test('G8: the census log records spareReason for a spared root and null for a ki
   const kr = killedLog[0].roots.find((x) => x.rootPid === 9001);
   assert.equal(kr.killed, true);
   assert.equal(kr.spareReason, null);
+});
+
+// --- #4222 review findings 1 and 4: "under the pushing checkout" is judged for the
+// battery as a whole, by the most-specific known root, at a real separator. ---
+
+const PRIMARY = 'C:\\Claude\\Projects\\Audiobook-Generator';
+const SCRATCH = 'C:/Users/dudar/AppData/Local/Temp/claude/sess/scratchpad/pr4315';
+
+// Captured verbatim from `npx vitest run` in a scratchpad worktree whose
+// node_modules is junctioned from the primary: the main vitest argv names the
+// run's own path, the fork worker's argv names the PRIMARY's realpath.
+function junctionBattery() {
+  const startedAt = NOW - 60 * MIN;
+  const p = (pid, ppid, name, commandLine, cpuSeconds) => ({ pid, ppid, name, commandLine, cpuSeconds, startedAt });
+  return {
+    processes: [
+      p(9201, 1, 'cmd.exe', `C:\\WINDOWS\\system32\\cmd.exe /d /s /c vitest run --root ${SCRATCH}/probe --pool=forks`, 0),
+      p(
+        9202,
+        9201,
+        'node.exe',
+        `"node"   "${SCRATCH.replace(/\//g, '\\')}\\node_modules\\.bin\\\\..\\vitest\\vitest.mjs" run --root ${SCRATCH}/probe`,
+        3,
+      ),
+      p(
+        9203,
+        9202,
+        'node.exe',
+        '"C:\\Program Files\\nodejs\\node.exe" --require C:/Claude/Projects/Audiobook-Generator/node_modules/vitest/suppress-warnings.cjs C:\\Claude\\Projects\\Audiobook-Generator\\node_modules\\vitest\\dist\\workers\\forks.js',
+        1,
+      ),
+    ],
+    priorSamples: { 9201: { cpuSeconds: 4.5, sampledAt: NOW - 15 * MIN, startedAt } },
+  };
+}
+
+test('J1: a scratchpad battery with junctioned node_modules is spared when pushing from the PRIMARY', () => {
+  const r = runGuard(junctionBattery(), { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] } });
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /outside checkout/);
+});
+
+test('J2: an orphaned stalled battery wholly under a NESTED worktree is spared when pushing from the primary', () => {
+  const nested = `${PRIMARY}\\.claude\\worktrees\\agent-a1b2`;
+  const fx = guardFixture({ childCommandLine: `node ${nested}\\node_modules\\vitest\\vitest.mjs run`, rate: 'stalled' });
+  // Even when git does not list the nested tree, a path under <root>\.claude\worktrees\ is not the primary's.
+  for (const knownRoots of [[PRIMARY, nested], [PRIMARY]]) {
+    const r = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots } });
+    assert.deepEqual(r.killedPids, [], JSON.stringify(knownRoots));
+  }
+  // Pushing FROM the nested worktree, its own battery is in-checkout and IS killed.
+  const own = runGuard(fx, { prePushGuard: { root: nested, knownRoots: [PRIMARY, nested] } });
+  assert.deepEqual(own.killedPids, [9001]);
+});
+
+test('J3: a root-name look-alike directory is not the checkout (Explorer copy, +old, ,v2, (2))', () => {
+  for (const sibling of [`${PRIMARY} - Copy`, `${PRIMARY}+old`, `${PRIMARY},v2`, `${PRIMARY} (2)`]) {
+    const line = `node ${sibling}\\node_modules\\vitest\\vitest.mjs run`;
+    assert.equal(classifyBatteryLocation([line], PRIMARY, [PRIMARY]).inRoot, false, line);
+    const r = runGuard(guardFixture({ childCommandLine: line, rate: 'stalled' }), {
+      prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] },
+    });
+    assert.deepEqual(r.killedPids, [], line);
+  }
+});
+
+test('J4: an unrelated in-checkout process OUTSIDE the candidate subtree is not evidence of membership', () => {
+  // Mutation: `members.has(p.pid) && ...` -> `true && ...` goes red here.
+  // The candidate's own argv names no path at all (relative paths only), so
+  // nothing but the unrelated process below could make it look in-checkout.
+  const fx = guardFixture({ childCommandLine: 'node vitest run', rate: 'stalled' });
+  fx.processes.push({
+    pid: 9300,
+    ppid: 4242,
+    name: 'node.exe',
+    commandLine: `node ${GUARD_ROOT}\\node_modules\\vite\\bin\\vite.js`,
+    cpuSeconds: 50,
+    startedAt: NOW - 120 * MIN,
+  });
+  const r = runGuard(fx);
+  assert.deepEqual(r.killedPids, []);
+  assert.match(r.spared.find((s) => s.rootPid === 9001).reason, /not under checkout|outside checkout/);
 });
 
 test('G9: a forks battery recycling workers reads as rate-unknown, never stalled (#4222 review finding 2)', () => {
@@ -2259,12 +2346,13 @@ test('pass 4: an empty result after the retry returns [] carrying snapshotError'
 });
 
 // ---------------------------------------------------------------------------
-// #4222 — commandLineUnderRoot: argv-only "is this under the checkout" check
+// #4222 — classifyBatteryLocation (inRoot): argv-only "is this under the checkout" check
 // ---------------------------------------------------------------------------
 
+const under = (line, root) => classifyBatteryLocation([line], root, [root]).inRoot;
 const U_ROOT = 'C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards';
 
-test('U1 commandLineUnderRoot matches every Windows spelling of the root', () => {
+test('U1 classifyBatteryLocation (inRoot) matches every Windows spelling of the root', () => {
   // Mutations: M2 (pathSpellings drops /c/ and /mnt/c/ forms) goes red on the
   // Git Bash and WSL lines; M3 (drop .toLowerCase() on the command line) goes
   // red on the mixed-case line.
@@ -2279,12 +2367,12 @@ test('U1 commandLineUnderRoot matches every Windows spelling of the root', () =>
   const roots = [U_ROOT, U_ROOT + '\\', 'C:/Claude/Projects/wt-4222-prepush-reaper-guards', 'C:/Claude/Projects/wt-4222-prepush-reaper-guards/'];
   for (const root of roots) {
     for (const line of lines) {
-      assert.equal(commandLineUnderRoot(line, root), true, `root ${root} should match: ${line}`);
+      assert.equal(under(line, root), true, `root ${root} should match: ${line}`);
     }
   }
 });
 
-test('U2 commandLineUnderRoot respects the path-component boundary', () => {
+test('U2 classifyBatteryLocation (inRoot) respects the path-component boundary', () => {
   // Mutation M1 (containsPathAtBoundary becomes plain includes) makes the
   // -followup line match, so this goes red.
   const outside = [
@@ -2293,16 +2381,16 @@ test('U2 commandLineUnderRoot respects the path-component boundary', () => {
     'node C:\\Users\\x\\scratchpad\\p2-4213\\server\\node_modules\\vitest\\vitest.mjs',
   ];
   for (const line of outside) {
-    assert.equal(commandLineUnderRoot(line, U_ROOT), false, `should not match: ${line}`);
+    assert.equal(under(line, U_ROOT), false, `should not match: ${line}`);
   }
 });
 
-test('U3 commandLineUnderRoot fails closed on empty or non-string input', () => {
+test('U3 classifyBatteryLocation (inRoot) fails closed on empty or non-string input', () => {
   // Mutation M4 (empty root returns true) turns the empty-root cases red.
   const line = 'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs';
-  assert.equal(commandLineUnderRoot('', U_ROOT), false);
-  assert.equal(commandLineUnderRoot(undefined, U_ROOT), false);
-  assert.equal(commandLineUnderRoot('node vitest run', U_ROOT), false);
-  assert.equal(commandLineUnderRoot(line, ''), false);
-  assert.equal(commandLineUnderRoot(line, undefined), false);
+  assert.equal(under('', U_ROOT), false);
+  assert.equal(under(undefined, U_ROOT), false);
+  assert.equal(under('node vitest run', U_ROOT), false);
+  assert.equal(under(line, ''), false);
+  assert.equal(under(line, undefined), false);
 });
