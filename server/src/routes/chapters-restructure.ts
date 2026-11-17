@@ -77,6 +77,10 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
+import {
+  clearRestructureEditsJournal,
+  writeRestructureEditsJournal,
+} from '../workspace/restructure-edits-journal.js';
 import { checkParseHintsPairing } from '../workspace/hints-proof.js';
 import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
 import {
@@ -602,11 +606,21 @@ async function applyRestructureClaimed(
       );
     }
 
-    // Write order: manuscript-hints.json -> state.json (rotating backup) ->
-    // manuscript-edits.json -> in-memory hints -> audio ops -> analysis cache.
-    // If any step throws past here, earlier writes are already on disk; partial
-    // state is recoverable via the reconciliation filter in
-    // book-state.ts:660-675 (the manuscript-edits/analysis-cache reconcile filter).
+    // Write order: manuscript-hints.json -> edits journal -> state.json (rotating
+    // backup) -> manuscript-edits.json -> journal cleared -> in-memory hints ->
+    // audio ops -> analysis cache.
+    // An interrupted restructure (a crash, or the edits write throwing) leaves the
+    // journal. The next restructure of the book, or the next server start, replays
+    // it and redoes the edits rewrite (#4227, workspace/restructure-edits-journal.ts).
+    // The in-memory record, audio ops, pending reconcile and cache after an
+    // interruption are NOT recovered by it (spec N16; #3456).
+    if (editsRead.kind === 'ok') {
+      await writeRestructureEditsJournal(bookDir, {
+        editsSha256: editsRead.sha256,
+        chapters: result.state.chapters.map((c) => ({ id: c.id, uuid: c.uuid! })),
+        remap: result.remap,
+      });
+    }
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
     /* A stale record means the manuscript on disk changed, so the kept entry
        does not validate against its sha today. The order is load-bearing: if the
@@ -626,6 +640,7 @@ async function applyRestructureClaimed(
         ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
         : {}),
     });
+    await clearRestructureEditsJournal(bookDir);
     return { early: null, result, editsPath, oldChapters, hintsWritten, parseChapterCount };
   });
   if (outcome.early) return outcome.early;
