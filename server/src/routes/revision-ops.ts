@@ -15,6 +15,7 @@ import {
   acceptPreviousAudio,
   findChapterAudio,
   findPreviousAudio,
+  reconcileSlug,
   restorePreviousAudio,
 } from '../workspace/chapter-take.js';
 import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
@@ -70,7 +71,8 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
     /* #3711 — book-op outermost (order: book-op -> revision-op -> revisions), held
        across all three steps so a folder rename queued behind this accept lands
        after the audio step and the revisions.json commit. */
-    const outcome = await withBookOp(bookId, ({ bookDir, state }) => {
+    const outcome = await withBookOp(bookId, (handle) => {
+    const { bookDir, state } = handle;
     const chapters: ChapterRef[] = state.chapters;
 
     return serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
@@ -89,6 +91,10 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
          rename). The recovery is to retry Reject. Read-only pre-check; the audio
          code itself is unchanged. The body's state is a fresh lock-free read. */
       const root = audioDir(bookDir);
+      /* §6.1 lazy migration, BEFORE the pre-check: a legacy chapter's wrong-named
+         file, missing take id or stale state members are fixed first. An error
+         falls to the catch-all, which answers a fixed text (no fs path). */
+      await reconcileSlug(handle, begin.chapter.slug);
       if (!findChapterAudio(root, begin.chapter.slug) && findPreviousAudio(root, begin.chapter.slug)) {
         const current = await readRevisions(bookDir, chapters);
         return res.status(409).json({
@@ -124,7 +130,8 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
   const { bookId, revisionId } = req.params;
   try {
     /* #3711 — book-op outermost; see accept above. */
-    const outcome = await withBookOp(bookId, ({ bookDir, state }) => {
+    const outcome = await withBookOp(bookId, (handle) => {
+    const { bookDir, state } = handle;
     const chapters: ChapterRef[] = state.chapters;
 
     return serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
@@ -146,6 +153,11 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
         });
       }
       const root = audioDir(bookDir);
+      /* §6.1 lazy migration BEFORE the restore: mints and re-stamps a legacy
+         chapter first, so the previous take keeps the id minted into its
+         `.previous.segments.json`. An error falls to the catch-all below, which
+         answers a fixed text (never the fs error's own path-bearing message). */
+      await reconcileSlug(handle, begin.chapter.slug);
       let outcome: 'restored' | 'none';
       try {
         outcome = await restorePreviousAudio(root, begin.chapter.slug);

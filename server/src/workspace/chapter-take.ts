@@ -23,8 +23,10 @@ import { existsSync } from 'node:fs';
 import { renameWithRetry } from './atomic-rename.js';
 import { assertHeld, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
-import { audioDir } from './paths.js';
+import { audioDir, stateJsonPath } from './paths.js';
+import type { BookStateJson } from './scan.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import {
   CHAPTER_AUDIO_EXTS,
   TAKE_STATE_FIELDS,
@@ -32,6 +34,7 @@ import {
   deriveTakeFields,
   findChapterAudio,
   findPreviousAudio,
+  healTakeFields,
   isTakeId,
   liveAudioFiles,
   liveAudioPath,
@@ -103,25 +106,38 @@ export async function stampStateFromLiveTake(
   assertHeld(handle, 'stampStateFromLiveTake');
   const root = audioDir(handle.bookDir);
   await updateStateAtDir(handle.bookDir, async (state) => {
-    const idx = state.chapters.findIndex((c) => c.slug === slug);
-    if (idx < 0) return null;
     const segments = await readJson<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
-    const derived: TakeFields = segments ? deriveTakeFields(segments) : {};
-    const before = state.chapters[idx] as Record<string, unknown>;
-    const next: Record<string, unknown> = { ...before };
-    for (const field of TAKE_STATE_FIELDS) {
-      const value = derived[field];
-      if (value !== undefined) {
-        next[field] = value;
-      } else if (opts.takeChanged && !(field === 'duration' && !segments)) {
-        delete next[field];
-      }
-    }
-    if (TAKE_STATE_FIELDS.every((f) => sameValue(before[f], next[f]))) return null;
-    const chapters = state.chapters.slice();
-    chapters[idx] = next as unknown as (typeof chapters)[number];
-    return { ...state, chapters };
+    return stampedState(state, slug, segments, opts.takeChanged);
   });
+}
+
+/* The pure half of the stamp: `state` with chapter `slug`'s take members set
+   from `segments`, or `null` when nothing changes. Shared by
+   `stampStateFromLiveTake` and `reconcileSlug`, which both run it INSIDE an
+   `updateStateAtDir` callback (a nested `updateStateAtDir` would deadlock). */
+function stampedState(
+  state: BookStateJson,
+  slug: string,
+  segments: TakeSegmentsView | null,
+  takeChanged: boolean,
+): BookStateJson | null {
+  const idx = state.chapters.findIndex((c) => c.slug === slug);
+  if (idx < 0) return null;
+  const derived: TakeFields = segments ? deriveTakeFields(segments) : {};
+  const before = state.chapters[idx] as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...before };
+  for (const field of TAKE_STATE_FIELDS) {
+    const value = derived[field];
+    if (value !== undefined) {
+      next[field] = value;
+    } else if (takeChanged && !(field === 'duration' && !segments)) {
+      delete next[field];
+    }
+  }
+  if (TAKE_STATE_FIELDS.every((f) => sameValue(before[f], next[f]))) return null;
+  const chapters = state.chapters.slice();
+  chapters[idx] = next as unknown as (typeof chapters)[number];
+  return { ...state, chapters };
 }
 
 /* ------------------------------------------------------------------ *
@@ -531,4 +547,66 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
     }
   }
   return report;
+}
+
+/* ------------------------------------------------------------------ *
+ * reconcileSlug (§6.1 steps 1-5, lazy migration)
+ * ------------------------------------------------------------------ */
+
+/* Step 5's legacy-reject shape: `state.json` records an `audioRenderedAt` that
+   is not the live segments' `synthesizedAt`. False with no live segments. */
+async function isLegacyReject(bookDir: string, root: string, slug: string): Promise<boolean> {
+  const segments = await readJson<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
+  if (!segments) return false;
+  const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+  const recorded = (state?.chapters.find((c) => c.slug === slug) as Record<string, unknown> | undefined)
+    ?.audioRenderedAt;
+  return typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
+}
+
+/** Bring one chapter slug's take up to the current model, under the caller's
+    book-op (the handle is asserted first): `migrateSlugFiles` (steps 1-3),
+    `ensureTakeIdentity` (step 4), then the `state.json` re-stamp (step 5).
+
+    The re-stamp is decided from a read INSIDE the `updateStateAtDir` lock. A
+    LEGACY REJECT (`state.json`'s `audioRenderedAt` differs from the live
+    segments' `synthesizedAt`: a reject restored a take the state never
+    learned of) is a full `stampedState(.., takeChanged: true)`, so a pending
+    entry that named the rejected take stops matching. Any other chapter gets a
+    FILL-ONLY pass (`healTakeFields`): absent members are filled, existing
+    values are never rewritten, so a healthy chapter is a no-op.
+
+    Phase 1 holds no journal replay; Phase 2 adds it before `migrateSlugFiles`.
+    Errors propagate: the route entry points curate them, the fsck logs them. */
+export async function reconcileSlug(handle: AnyBookHandle, slug: string): Promise<void> {
+  assertHeld(handle, 'reconcileSlug');
+  await migrateSlugFiles(handle, slug);
+  const root = audioDir(handle.bookDir);
+  /* The legacy-reject signal is read BEFORE step 4: `ensureTakeIdentity`'s state
+     mirror sets `audioRenderedAt` from the live segments, which would erase the
+     very mismatch step 5 looks for. The caller's book-op is held, so no other
+     writer moves the state between this read and the locked re-stamp below. */
+  const legacyBefore = await isLegacyReject(handle.bookDir, root, slug);
+  await ensureTakeIdentity(handle, slug);
+  await updateStateAtDir(handle.bookDir, async (state) => {
+    const idx = state.chapters.findIndex((c) => c.slug === slug);
+    if (idx < 0) return null;
+    const segments = await readJson<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
+    if (!segments) return null;
+    const before = state.chapters[idx] as Record<string, unknown>;
+    const recorded = before.audioRenderedAt;
+    const legacyReject =
+      legacyBefore ||
+      (typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt);
+    if (legacyReject) return stampedState(state, slug, segments, true);
+    const healed = healTakeFields(
+      before as { slug?: string } & TakeFields,
+      deriveTakeFields(segments),
+      new Set<string>(),
+    ) as Record<string, unknown>;
+    if (TAKE_STATE_FIELDS.every((f) => sameValue(before[f], healed[f]))) return null;
+    const chapters = state.chapters.slice();
+    chapters[idx] = healed as unknown as (typeof chapters)[number];
+    return { ...state, chapters };
+  });
 }

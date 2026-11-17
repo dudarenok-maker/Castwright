@@ -28,7 +28,7 @@
  * only ever rename / delete the `.previous.*` halves — the live audio
  * is never touched by this fsck. */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
@@ -40,8 +40,10 @@ import {
   liveAudioPath,
   livePartPath,
   previousPartPath,
+  reconcileSlug,
 } from './chapter-take.js';
-import { BOOKS_ROOT, audioDir, bookDirByDisplay } from './paths.js';
+import { BOOKS_ROOT, audioDir, bookDirByDisplay, stateJsonPath } from './paths.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 
 /* `<slug>.previous.<ext>` for every audio extension the take module knows. */
 const PREV_AUDIO_RE = new RegExp('^(.+)\\.previous\\.(?:' + CHAPTER_AUDIO_EXTS.join('|') + ')$', 'i');
@@ -141,6 +143,39 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
   return { recovered, errors };
 }
 
+/** File count and total bytes under `audio/.orphaned/`, recursively, or `null`
+    when the folder does not exist (§6.1 step 2: the fsck logs this per book on
+    every boot). Never throws: an unreadable entry is skipped. */
+export function orphanedSummary(audioRoot: string): { files: number; bytes: number } | null {
+  const dir = join(audioRoot, '.orphaned');
+  if (!existsSync(dir)) return null;
+  let files = 0;
+  let bytes = 0;
+  const walk = (d: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(d);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = join(d, name);
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) walk(full);
+        else {
+          files += 1;
+          bytes += st.size;
+        }
+      } catch {
+        /* vanished mid-walk: not counted */
+      }
+    }
+  };
+  walk(dir);
+  return { files, bytes };
+}
+
 /** Walk every book on disk and run the fsck against its `audio/` root.
     Called once on server startup via a fire-and-forget pattern in
     `server/src/index.ts`; safe to invoke from anywhere. Returns the
@@ -173,9 +208,31 @@ export async function fsckAllBooks(): Promise<FsckOrphanAudioResult> {
            review pass 3). */
         try {
           await withBookOpAtDir(walkedDir, async (handle) => {
+            /* §6.1: lazy migration for every chapter slug BEFORE cases 1 and 2.
+               A failure for one slug is logged and the sweep continues. */
+            let slugs: string[] = [];
+            try {
+              const st = await readStateJsonWithRecovery(stateJsonPath(handle.bookDir));
+              slugs = (st?.chapters ?? []).map((c) => c.slug).filter((x): x is string => typeof x === 'string');
+            } catch (err) {
+              console.warn('[fsck-orphan-audio] could not read chapter slugs; skipping migration', err);
+            }
+            for (const slug of slugs) {
+              try {
+                await reconcileSlug(handle, slug);
+              } catch (err) {
+                console.warn(`[fsck-orphan-audio] reconcile failed for ${slug}; continuing`, err);
+              }
+            }
             const result = await fsckOrphanAudio(audioDir(handle.bookDir));
             recovered.push(...result.recovered);
             errors.push(...result.errors);
+            const orphaned = orphanedSummary(audioDir(handle.bookDir));
+            if (orphaned) {
+              console.log(
+                `[fsck-orphan-audio] ${walkedDir}: .orphaned/ holds ${orphaned.files} file(s), ${orphaned.bytes} bytes`,
+              );
+            }
           });
         } catch (err) {
           console.warn('[fsck-orphan-audio] skipping a book this startup', err);

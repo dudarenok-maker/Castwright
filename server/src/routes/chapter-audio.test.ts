@@ -628,6 +628,13 @@ describe('chapter-audio router', () => {
         expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
         expect(existsSync(revisionsFile())).toBe(false);
       });
+      it('#4339: mints a take id into a legacy previous take before restoring it', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
+        const res = await request(app).post(RU());
+        expect(res.status).toBe(204);
+        const restored = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+        expect(restored.takeId).toMatch(/^[a-z2-7]{16}$/);
+      });
       it('404 no_previous_audio when nothing was preserved', async () => {
         resetAudio(); writeMp3();
         const res = await request(app).post(RU());

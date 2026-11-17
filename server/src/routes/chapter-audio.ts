@@ -43,6 +43,7 @@ import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import {
   findChapterAudio,
   findPreviousAudio,
+  reconcileSlug,
   restorePreviousAudio,
   livePartPath,
   previousPartPath,
@@ -445,9 +446,12 @@ chapterAudioRouter.post(
           return 'revisions-unreadable' as const;
         }
         const root = audioDir(located.bookDir);
-        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
-          restorePreviousAudio(root, chapter.slug),
-        );
+        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), async () => {
+          /* §6.1 lazy migration before the restore; an error answers the fixed
+             `restore_failed` text below, never its own message. */
+          await reconcileSlug(located, chapter.slug);
+          return restorePreviousAudio(root, chapter.slug);
+        });
       });
       outcome = done === BOOK_GONE ? 'not-found' : done;
     } catch (e) {

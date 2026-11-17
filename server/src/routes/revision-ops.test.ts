@@ -10,9 +10,11 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const { busy, failRestore, unlinkGate } = vi.hoisted(() => ({
+const { busy, failRestore, failMigrate, unlinkGate } = vi.hoisted(() => ({
   busy: { value: false },
   failRestore: { value: false },
+  /* #4339 I6: fail the migration's wrong-extension rename with a path-bearing fs error. */
+  failMigrate: { value: false },
   /* One-shot gate: the first unlink whose path matches parks until released. */
   unlinkGate: {
     match: null as null | ((p: string) => boolean),
@@ -47,6 +49,13 @@ vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
     ...real,
     renameWithRetry: async (src: string, dest: string) => {
       if (failRestore.value && src.endsWith('.previous.mp3')) throw new Error('EBUSY: simulated restore failure');
+      if (failMigrate.value && src.endsWith('01-one.mp3')) {
+        throw Object.assign(new Error("EPERM: operation not permitted, rename 'C:/SECRET-WORKSPACE/01-one.mp3'"), {
+          code: 'EPERM',
+          syscall: 'rename',
+          path: 'C:/SECRET-WORKSPACE/01-one.mp3',
+        });
+      }
       return real.renameWithRetry(src, dest);
     },
   };
@@ -128,6 +137,7 @@ beforeEach(async () => {
   unlinkGate.match = null;
   busy.value = false;
   failRestore.value = false;
+  failMigrate.value = false;
   rmSync(audioRoot, { recursive: true, force: true });
   mkdirSync(audioRoot, { recursive: true });
   rmSync(revisionsPath, { force: true });
@@ -632,5 +642,80 @@ describe('unexpected failures answer fixed sentences (plan 286, invariant 8)', (
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: text });
     expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+});
+
+/* #4339 — lazy migration (reconcileSlug) at Accept and Reject. */
+const M4A_BYTES = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(16)]);
+const MP3_BYTES = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(32)]);
+const statePath = () => join(bookDir, '.audiobook', 'state.json');
+function patchChapter(patch: Record<string, unknown>): void {
+  const st = JSON.parse(readFileSync(statePath(), 'utf8'));
+  st.chapters[0] = { ...st.chapters[0], ...patch };
+  writeFileSync(statePath(), JSON.stringify(st));
+}
+const chapterNow = () => JSON.parse(readFileSync(statePath(), 'utf8')).chapters[0] as Record<string, unknown>;
+const seg = (slug = '01-one') => join(audioRoot, `${slug}.segments.json`);
+const prevSeg = (slug = '01-one') => join(audioRoot, `${slug}.previous.segments.json`);
+
+describe('lazy migration at Accept / Reject (#4339)', () => {
+  it('I4: Reject on a legacy chapter mints and re-stamps before its audio step; the restored take keeps the id minted into .previous.segments.json', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '00:10', audioQa: { score: 0.9 } });
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 9, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(200);
+    /* The restored (previous) take is now live and carries a minted id. */
+    const restored = JSON.parse(readFileSync(seg(), 'utf8'));
+    expect(restored.synthesizedAt).toBe('T-A');
+    expect(restored.takeId).toMatch(/^[a-z2-7]{16}$/);
+    expect(existsSync(prevSeg())).toBe(false);
+    /* The re-stamp ran BEFORE the restore, from the take that was live then (B). */
+    const ch = chapterNow();
+    expect(ch.audioRenderedAt).toBe('T-B');
+    expect('audioQa' in ch).toBe(false);
+    expect(ch.audioTakeId).toMatch(/^[a-z2-7]{16}$/);
+    expect(ch.audioTakeId).not.toBe(restored.takeId);
+  });
+
+  it('I5: Accept on an m4a book whose live <slug>.mp3 holds AAC bytes renames it to <slug>.m4a first', async () => {
+    writeFileSync(live(), M4A_BYTES);
+    seed([entry(1, 'r1')]);
+
+    const res = await accept('r1');
+
+    expect(res.status).toBe(200);
+    expect(existsSync(live())).toBe(false);
+    expect(existsSync(join(audioRoot, '01-one.m4a'))).toBe(true);
+  });
+
+  it('I6: an fs error with an absolute path inside reconcileSlug at Reject answers a 500 with neither the path nor the raw message (M4 turns this red)', async () => {
+    failMigrate.value = true;
+    writeFileSync(live(), M4A_BYTES);
+    writeFileSync(prev(), MP3_BYTES);
+    seed([entry(1, 'r1')]);
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(500);
+    const text = JSON.stringify(res.body);
+    expect(text).not.toContain('SECRET-WORKSPACE');
+    expect(text).not.toContain('operation not permitted');
+    expect(res.body.error).toBe('Failed to reject revision.');
+    expect(existsSync(prev())).toBe(true);
+  });
+
+  it('I6: the same at Accept answers a curated 500', async () => {
+    failMigrate.value = true;
+    writeFileSync(live(), M4A_BYTES);
+    seed([entry(1, 'r1')]);
+    const res = await accept('r1');
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain('SECRET-WORKSPACE');
   });
 });
