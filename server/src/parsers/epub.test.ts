@@ -525,6 +525,17 @@ describe('parseEpub — XML-entity hrefs in the raw-zip reader (#4217)', () => {
     expect(v2.chapters.map((c) => c.body)).toEqual(['Plain prose, nothing odd.', 'Some prose with an empty link in it.']);
   });
 
+  /* X4 mutation (M5): decode the manifest href twice at the call site
+     (`decodeXmlEntities(decodeXmlEntities(href))`). The zip entry is literally
+     `a&amp;b.xhtml`, so the OPF carries `a&amp;amp;b.xhtml`; one decode yields
+     the entry name, a second yields `a&b.xhtml` and the chapter is not found.
+     X1 tests only the function in isolation. */
+  it('X4: an entry literally named a&amp;b.xhtml is found by decoding the href once', async () => {
+    const buf = await buildEpub([plain, emptyHref], { fileNames: ['a&amp;b.xhtml', 'c.xhtml'] });
+    const v2 = await parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 2 });
+    expect(v2.chapters.map((c) => c.body)).toEqual(['Plain prose, nothing odd.', 'Some prose with an empty link in it.']);
+  });
+
   it('X3: NCX labels still match the decoded chapter paths at version 2', async () => {
     const buf = await buildEpub([plain, emptyHref], { fileNames, navLabels: ['Opening', 'Closing'] });
     const v2 = await parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 2 });
