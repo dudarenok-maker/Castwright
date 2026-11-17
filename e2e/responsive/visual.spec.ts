@@ -112,6 +112,13 @@ const topbarMask = (page: Page) => [
   page.getByTestId('status-pill'),
 ];
 
+/* #4203 — the Generate view must not scroll on a plain load (#4199). The old
+   scroll started ~0.9 s after navigation, so wait past it, then pin the capture to the top. */
+const expectGenerateAtTop = async (page: Page) => {
+  await page.waitForTimeout(2000);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+};
+
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
   test('library', async ({ page }) => {
@@ -178,7 +185,7 @@ test.describe('visual baselines', () => {
     await page.goto('/#/books/sb/generate');
     /* "CH 01" only renders once the chapters slice has hydrated. */
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
-    await page.waitForTimeout(300);
+    await expectGenerateAtTop(page);
     await expect(page).toHaveScreenshot('generate.png', VISUAL_DIFF_OPTS);
   });
 
@@ -356,7 +363,7 @@ test.describe('visual baselines (dark theme)', () => {
        removes / weakens the override. */
     await page.goto('/#/books/sb/generate');
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
-    await page.waitForTimeout(300);
+    await expectGenerateAtTop(page);
     await expect(page).toHaveScreenshot('generate-dark.png', VISUAL_DIFF_OPTS);
   });
 
