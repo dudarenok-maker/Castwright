@@ -21,7 +21,10 @@ import { mkdir, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ZipFile } from 'yazl';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, type ChapterAudioExt } from '../workspace/chapter-take.js';
+
+/* The export entry name's extension (the file is the live mp3 take's bytes). */
+const MP3_EXT: ChapterAudioExt = 'mp3';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
 import { artistForExport } from './narrator-credit.js';
@@ -254,7 +257,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
       for (let i = 0; i < resolved.length; i++) {
         signal?.throwIfAborted();
         const { chapter, mp3Path } = resolved[i];
-        const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
+        const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${MP3_EXT}`;
         /* `entryName` is the pretty label written INTO the zip; the on-disk
            staging filename is the same string routed through sanitizeIdSegment
            so a `..`/separator that survived sanitiseForZip can't escape

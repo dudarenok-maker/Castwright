@@ -15,6 +15,7 @@ import {
   isTakeId,
   liveAudioFiles,
   liveAudioPath,
+  liveTakeParts,
   livePartPath,
   mintTakeId,
   previousAudioPath,
@@ -347,5 +348,42 @@ describe('leaf closure (R10-2)', () => {
     expect(extra).toEqual([]);
     expect(bare).toEqual([]);
     expect(files.has('workspace/take-fields.ts')).toBe(true);
+  });
+});
+
+describe('T9 liveTakeParts (#4330, F15)', () => {
+  it('returns audio then sidecars in suffix-table order, names from the table', () => {
+    touch('s.mp3');
+    touch('s.peaks.json');
+    touch('s.segments.json');
+    touch('s.lufs.json');
+    const parts = liveTakeParts(root, 's');
+    expect(parts.map((p) => [p.part, p.name])).toEqual([
+      ['audio', 's.mp3'],
+      ['segments', 's.segments.json'],
+      ['peaks', 's.peaks.json'],
+      ['lufs', 's.lufs.json'],
+    ]);
+    expect(parts[0].path).toBe(join(root, 's.mp3'));
+  });
+
+  it('never lists staged, previous, journal, tmp or orphaned files (mutation: list by prefix)', () => {
+    touch('s.mp3');
+    touch('s.segments.json');
+    touch('s.next-abc.mp3');
+    touch('s.next-abc.segments.json');
+    touch('s.discard-j1.prev.mp3');
+    touch('s.previous.mp3');
+    touch('s.previous.segments.json');
+    touch('s.take-journal.json');
+    touch('s.mp3.tmp-1-2');
+    expect(liveTakeParts(root, 's').map((p) => p.name)).toEqual(['s.mp3', 's.segments.json']);
+  });
+
+  it('reports only the first live audio when two extensions exist, and nothing for an absent take', () => {
+    touch('s.mp3');
+    touch('s.m4a');
+    expect(liveTakeParts(root, 's').map((p) => p.name)).toEqual(['s.mp3']);
+    expect(liveTakeParts(root, 'missing')).toEqual([]);
   });
 });

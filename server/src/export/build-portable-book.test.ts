@@ -539,3 +539,98 @@ describe('buildPortableBundle', () => {
     expect(lastZipFile!.outputStream.listenerCount('data')).toBe(0);
   }, 10_000);
 });
+
+/* #4330 (of #4319, spec §7 Phase 1 step 2): the portable export ships the
+   take module's LIVE parts only (F15). Fixtures here are one-chapter books
+   built per test so each case controls the audio directory exactly. */
+describe('buildPortableBundle ships live take parts only (#4330)', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'portable-live-parts-'));
+  });
+  afterAll(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const SLUG = '01-chapter-1';
+
+  async function bundleAudioNames(
+    name: string,
+    audioFiles: Record<string, string>,
+  ): Promise<string[]> {
+    const dir = join(tmp, name);
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+    const st: BookStateJson = {
+      ...makeFixtureState(),
+      chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG }],
+    };
+    await writeFile(join(dir, 'manuscript.txt'), 'ms');
+    await writeFile(stateJsonPath(dir), JSON.stringify(st));
+    for (const [rel, body] of Object.entries(audioFiles)) {
+      const p = join(audioDir(dir), rel);
+      mkdirSync(join(p, '..'), { recursive: true });
+      await writeFile(p, body);
+    }
+    const result = await buildPortableBundle(dir, st);
+    const entries = await readZipEntries(result.buffer);
+    return entries
+      .map((e) => e.name)
+      .filter((n) => n.startsWith('audio/'))
+      .sort();
+  }
+
+  it('X1: staged .next-*, .discard-*, .previous.*, .tmp-* and .orphaned/ files never ship', async () => {
+    const names = await bundleAudioNames('x1', {
+      [`${SLUG}.mp3`]: 'a',
+      [`${SLUG}.segments.json`]: '{}',
+      [`${SLUG}.peaks.json`]: '{}',
+      [`${SLUG}.next-abc.mp3`]: 'n',
+      [`${SLUG}.next-abc.segments.json`]: '{}',
+      [`${SLUG}.discard-j1.prev.mp3`]: 'd',
+      [`${SLUG}.previous.mp3`]: 'p',
+      [`${SLUG}.mp3.tmp-1-2`]: 't',
+      [`.orphaned/x/${SLUG}.mp3`]: 'o',
+    });
+    expect(names).toEqual([
+      `audio/${SLUG}.mp3`,
+      `audio/${SLUG}.peaks.json`,
+      `audio/${SLUG}.segments.json`,
+    ]);
+  });
+
+  it('X2: a clean mp3, m4a and ogg book ship live audio + segments + peaks, sorted', async () => {
+    for (const ext of ['mp3', 'm4a', 'ogg']) {
+      const names = await bundleAudioNames(`x2-${ext}`, {
+        [`${SLUG}.${ext}`]: 'a',
+        [`${SLUG}.segments.json`]: '{}',
+        [`${SLUG}.peaks.json`]: '{}',
+        /* lufs / embeddings / verdict sidecars stay out, as today. */
+        [`${SLUG}.lufs.json`]: '{}',
+        [`${SLUG}.embeddings.json`]: '{}',
+        [`${SLUG}.render-integrity.json`]: '{}',
+      });
+      expect(names).toEqual([
+        `audio/${SLUG}.${ext}`,
+        `audio/${SLUG}.peaks.json`,
+        `audio/${SLUG}.segments.json`,
+      ]);
+    }
+  });
+
+  it('X3: with <slug>.mp3 and <slug>.m4a both live, only the mp3 ships (§4.2 first hit)', async () => {
+    const names = await bundleAudioNames('x3', {
+      [`${SLUG}.mp3`]: 'a',
+      [`${SLUG}.m4a`]: 'b',
+    });
+    expect(names).toEqual([`audio/${SLUG}.mp3`]);
+  });
+
+  it('a <slug>.opus file is not a take part and does not ship', async () => {
+    const names = await bundleAudioNames('opus', {
+      [`${SLUG}.mp3`]: 'a',
+      [`${SLUG}.opus`]: 'o',
+    });
+    expect(names).toEqual([`audio/${SLUG}.mp3`]);
+  });
+});

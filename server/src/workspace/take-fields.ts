@@ -26,7 +26,7 @@
 
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { formatDuration } from '../audio/format-duration.js';
 import {
@@ -300,4 +300,30 @@ export function healTakeFields<C extends { slug?: string } & TakeFields>(
     }
   }
   return out;
+}
+
+/** One live part of a take that exists on disk. `name` is the file name
+    inside `audioRoot`; `path` is the full path. */
+export interface LiveTakePart {
+  part: 'audio' | TakeSidecarPart;
+  path: string;
+  name: string;
+}
+
+/** The live parts of a take that exist on disk (F15, §5.A "Readers"): the
+    first live audio hit (`findChapterAudio`) and each sidecar part's live
+    name. Names come from the suffix table and a directory is NEVER listed by
+    prefix, so `.previous.*`, `.next-*`, `.discard-*`, `.take-journal.*`,
+    `*.tmp-*` and `.orphaned/` can never appear. Audio first, then the
+    sidecars in suffix-table order. */
+export function liveTakeParts(audioRoot: string, slug: string): LiveTakePart[] {
+  const parts: LiveTakePart[] = [];
+  const audio = findChapterAudio(audioRoot, slug);
+  if (audio) parts.push({ part: 'audio', path: audio.path, name: basename(audio.path) });
+  const safeSlug = sanitizeIdSegment(slug);
+  for (const part of Object.keys(TAKE_SIDECAR_SUFFIXES) as TakeSidecarPart[]) {
+    const path = livePartPath(audioRoot, safeSlug, part);
+    if (existsSync(path)) parts.push({ part, path, name: basename(path) });
+  }
+  return parts;
 }
