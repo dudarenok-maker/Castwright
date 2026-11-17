@@ -21,7 +21,7 @@ const seam = vi.hoisted(() => {
   const holds: Record<string, Hold | undefined> = {};
   /* Holds that were entered stay reachable here so cleanup can release them. */
   const entered: Hold[] = [];
-  const state = { revokeReady: false, renameCalls: 0, builds: 0 };
+  const state = { revokeReady: false, renameCalls: 0, builds: 0, folderBuilds: 0 };
   function arm(name: string): { entered: Promise<void>; release: () => void } {
     let enter!: () => void;
     let release!: () => void;
@@ -64,8 +64,9 @@ vi.mock('../export/build-mp3-folder.js', () => ({
   buildMp3Folder: vi.fn(async (opts: { outDir: string }) => {
     await seam.maybeHold('folderBuild');
     mkdirSync(opts.outDir, { recursive: true });
-    writeFileSync(join(opts.outDir, '01.mp3'), Buffer.from('id3'));
-    return { totalBytes: 3, entries: [join(opts.outDir, '01.mp3')] };
+    /* Per-call bytes so a test can tell which build a folder holds. */
+    writeFileSync(join(opts.outDir, '01.mp3'), Buffer.from(`id3-${++seam.state.folderBuilds}`));
+    return { totalBytes: 5, entries: [join(opts.outDir, '01.mp3')] };
   }),
 }));
 
@@ -182,6 +183,7 @@ beforeEach(async () => {
   seam.state.revokeReady = false;
   seam.state.renameCalls = 0;
   seam.state.builds = 0;
+  seam.state.folderBuilds = 0;
   rmSync(join(bookDir, 'exports'), { recursive: true, force: true });
   rmSync(join(bookDir, '.audiobook', 'export-manifests'), { recursive: true, force: true });
 });
@@ -379,7 +381,9 @@ describe('cancel seams (#4223)', () => {
     expect((await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body.status).toBe('done');
   });
 
-  it('an mp3-folder cancelled while the builder runs leaves no staging folder', async () => {
+  const droppings = () => ls(exportsDir()).filter((n) => n.includes('.partial-') || n.includes('.old-'));
+
+  it('an mp3-folder cancelled while the builder runs with no earlier export leaves nothing behind', async () => {
     const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-folder-build-'));
     try {
       await writeUserSettings({ exportSyncFolder: syncRoot });
@@ -391,6 +395,7 @@ describe('cancel seams (#4223)', () => {
       await awaitInFlightJobs();
 
       expect(existsSync(join(exportsDir(), job.filename))).toBe(false);
+      expect(droppings()).toEqual([]);
       expect(ls(join(syncRoot, AUTHOR))).toEqual([]);
       expect((await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body.status).toBe('cancelled');
     } finally {
@@ -400,20 +405,79 @@ describe('cancel seams (#4223)', () => {
     }
   });
 
-  it('an mp3-folder cancelled during its sync copy ends cancelled and leaves the sync copy (#4228)', async () => {
+  it('an mp3-folder re-export cancelled while the builder runs keeps the previous flat folder and synced copy (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-folder-prev-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const first = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      const flat = join(exportsDir(), first.filename, '01.mp3');
+      const synced = join(syncRoot, AUTHOR, TITLE, '01.mp3');
+      expect(readFileSync(flat).toString()).toBe('id3-1');
+      expect(readFileSync(synced).toString()).toBe('id3-1');
+
+      const build = seam.arm('folderBuild');
+      const second = await post('mp3-folder', 'sync-folder');
+      await build.entered;
+      expect((await request(app).delete(`/api/books/${bookId}/exports/${second.id}`)).status).toBe(204);
+      build.release();
+      await awaitInFlightJobs();
+
+      expect(readFileSync(flat).toString()).toBe('id3-1');
+      expect(readFileSync(synced).toString()).toBe('id3-1');
+      expect((await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body.status).toBe('done');
+      expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('cancelled');
+      expect(droppings()).toEqual([]);
+    } finally {
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('an mp3-folder re-export cancelled during its sync copy keeps the previous flat folder and leaves the synced files (#4228)', async () => {
     const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-folder-sync-'));
     try {
       await writeUserSettings({ exportSyncFolder: syncRoot });
+      const first = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      const flat = join(exportsDir(), first.filename, '01.mp3');
+      const synced = join(syncRoot, AUTHOR, TITLE, '01.mp3');
+      expect(readFileSync(flat).toString()).toBe('id3-1');
+
       const copy = seam.arm('syncCopy');
-      const job = await post('mp3-folder', 'sync-folder');
+      const second = await post('mp3-folder', 'sync-folder');
       await copy.entered;
-      expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
+      expect((await request(app).delete(`/api/books/${bookId}/exports/${second.id}`)).status).toBe(204);
       copy.release();
       await awaitInFlightJobs();
 
-      expect(existsSync(join(exportsDir(), job.filename))).toBe(false);
-      expect(existsSync(join(syncRoot, AUTHOR, TITLE, '01.mp3'))).toBe(true);
-      expect((await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body.status).toBe('cancelled');
+      expect(readFileSync(flat).toString()).toBe('id3-1');
+      /* The sync folder merges per file, so the second build's copy stays. */
+      expect(readFileSync(synced).toString()).toBe('id3-2');
+      expect(droppings()).toEqual([]);
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body;
+      expect(mem.status).toBe('cancelled');
+      expect(manifestOf(second.id).syncPath).toBeTruthy();
+    } finally {
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('a second completed mp3-folder export replaces the flat folder and leaves no staging or .old- entries (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-folder-swap-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const first = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+      const second = await post('mp3-folder', 'sync-folder');
+      await awaitInFlightJobs();
+
+      expect(readFileSync(join(exportsDir(), first.filename, '01.mp3')).toString()).toBe('id3-2');
+      expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('done');
+      expect(droppings()).toEqual([]);
     } finally {
       await awaitInFlightJobs();
       rmSync(syncRoot, { recursive: true, force: true });

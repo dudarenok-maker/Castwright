@@ -586,18 +586,12 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
     /* swallow */
   }
 
-  /* Plan 79 — best-effort cleanup of any partial artifact. Single-file
-     formats: nothing to do here. The job builds to a private
-     `.partial-<id>` that runExportJob's catch unlinks, and the flat final
-     name holds the PREVIOUS completed export until the job's own commit
-     rename, so DELETE never unlinks it (#4228). For mp3-folder, the builder
-     writes per-chapter MP3s directly into the destination folder so we
-     rm-recursive it. Do NOT rm the exports/ parent — other completed exports
-     of this book live there. */
-  if (job.filename && job.format === 'mp3-folder') {
-    const artifact = resolveArtifactPath(located.bookDir, job);
-    await rm(artifact, { recursive: true, force: true }).catch(() => {});
-  }
+  /* Nothing is removed here (#4228). Every format builds into a job-private
+     path (`.partial-<id>` file, or the mp3-folder staging folder) that
+     runExportJob's own catch drops on the abort above, and the flat final
+     name holds the PREVIOUS completed export until the job's own commit.
+     Do NOT rm the exports/ parent: other completed exports of this book live
+     there. */
 
   return res.status(204).end();
     });
@@ -757,6 +751,26 @@ async function bailIfCancelled(
   signal.throwIfAborted();
 }
 
+/* A directory cannot be renamed over a non-empty directory, so the previous
+   flat folder is moved aside first, staging is renamed into place, and the
+   old copy is removed best-effort. If the second rename fails the old folder
+   is restored and the error rethrown. */
+async function swapFolderIntoPlace(
+  staging: string,
+  finalPath: string,
+  oldPath: string,
+): Promise<void> {
+  const hadPrevious = existsSync(finalPath);
+  if (hadPrevious) await renameWithRetry(finalPath, oldPath);
+  try {
+    await renameWithRetry(staging, finalPath);
+  } catch (e) {
+    if (hadPrevious) await renameWithRetry(oldPath, finalPath).catch(() => {});
+    throw e;
+  }
+  if (hadPrevious) await rm(oldPath, { recursive: true, force: true }).catch(() => {});
+}
+
 async function runExportJob(
   job: BookExportJob,
   bookDir: string,
@@ -771,32 +785,59 @@ async function runExportJob(
       jobs.set(job.id, { ...job });
     };
     if (job.format === 'mp3-folder') {
-      /* outPath is actually the staging folder for this format (one
-         sub-directory per book under the export id). The builder writes
-         per-chapter MP3s into it; the sync-folder branch then mirrors
-         each file into the user's target via writeFolderToSyncFolder. */
-      const folderResult = await buildMp3Folder({
-        bookDir,
-        state,
-        outDir: outPath,
-        onProgress,
-        signal,
-      });
-      job.sizeBytes = folderResult.totalBytes;
-      job.progress = 1;
-      await bailIfCancelled(signal, { path: outPath, folder: true });
+      /* Build into a job-private staging folder, never the flat `outPath`
+         that holds the previous export (#4228). The builder rm's and
+         recreates only `staging`; the sync-folder branch mirrors each file
+         from it via writeFolderToSyncFolder. The swap onto `outPath` is the
+         last step, after every cancel check. */
+      const staging = join(
+        bookExportsDir(bookDir),
+        `.${sanitizeIdSegment(job.filename)}.partial-${job.id}`,
+      );
+      let swapOld: string | null = null;
+      try {
+        const folderResult = await buildMp3Folder({
+          bookDir,
+          state,
+          outDir: staging,
+          onProgress,
+          signal,
+        });
+        job.sizeBytes = folderResult.totalBytes;
+        job.progress = 1;
+        await bailIfCancelled(signal, { path: staging, folder: true });
 
-      if (syncFolder) {
-        /* fs-54 — author-level nesting, applied to every sync-folder
-           destination (this branch AND the single-file branch below), not
-           just Audiobookshelf — keeps behavior consistent across every
-           export tile and needs no wire-protocol change: `state.author`
-           is already in scope here. */
-        const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
-        const bookSubfolder = sanitiseForZip(state.title);
-        const synced = await writeFolderToSyncFolder(outPath, authoredSyncDir, bookSubfolder);
-        job.syncPath = synced.syncPath;
-        await bailIfCancelled(signal, { path: outPath, folder: true });
+        if (syncFolder) {
+          /* fs-54 — author-level nesting, applied to every sync-folder
+             destination (this branch AND the single-file branch below), not
+             just Audiobookshelf — keeps behavior consistent across every
+             export tile and needs no wire-protocol change: `state.author`
+             is already in scope here. */
+          const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
+          const bookSubfolder = sanitiseForZip(state.title);
+          const synced = await writeFolderToSyncFolder(staging, authoredSyncDir, bookSubfolder);
+          job.syncPath = synced.syncPath;
+          /* A cancel after the sync copy drops only staging; the synced copy
+             and syncPath stay (never delete in the user's sync folder). */
+          await bailIfCancelled(signal, { path: staging, folder: true });
+        }
+        /* Commit step: swap staging onto the flat folder. Once started it is
+           never undone by deleting; a DELETE landing during these awaits
+           still ends `cancelled` and the swapped folder stays as the newest
+           valid export. */
+        swapOld = `${outPath}.old-${job.id}`;
+        await swapFolderIntoPlace(staging, outPath, swapOld);
+        swapOld = null;
+        /* Synchronous, deletes nothing: re-evaluates a cancel that landed
+           during the awaited swap and stays directly before the `done`
+           publish below. */
+        signal.throwIfAborted();
+      } catch (e) {
+        /* Drop the private staging folder on any failure or cancel; a stray
+           `.old-<id>` only when the swap itself failed. */
+        await rm(staging, { recursive: true, force: true }).catch(() => {});
+        if (swapOld) await rm(swapOld, { recursive: true, force: true }).catch(() => {});
+        throw e;
       }
       /* No downloadUrl for folder exports — the route-layer guard
          already refuses the format + download combo, so leaving the
