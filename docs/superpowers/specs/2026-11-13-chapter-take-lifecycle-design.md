@@ -2655,7 +2655,7 @@ as today. A crash in the window is undone the same way by replay.
     GET-side edits/cache reconciliation (`book-state.ts:598-606`, the filter at `:660-675`) covered it. It does not: that
     reconciliation drops edits by sentence-id range, not by chapter renumbering (pass 4). The claim
     is withdrawn, and the gap is listed under Remaining as a pre-existing, accepted residual whose
-    fix is #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) said
+    fix was #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) said
     partial state "is recoverable via the reconciliation filter". #4224 (merged at `33f3647c`)
     corrected only its anchor, to `book-state.ts:660-675`, where the filter keeps an edit whose id
     is still in the cache or above its maximum and drops the rest, by sentence-id range. That does
@@ -3953,7 +3953,7 @@ first.
    `buildAudioOps`' presence test as `audioRenderedAt` **or** a take on disk (R8-7); the restructure
    sentence for every code (R8-2, J12); the comment at `chapters-restructure.ts:605-609` corrected,
    unconditionally (already done by #4313, #4227). #4224 moved its anchor to `book-state.ts:660-675`, but its claim that partial
-   state "is recoverable via the reconciliation filter" is still false, because that filter drops
+   state "is recoverable via the reconciliation filter" was false, because that filter drops
    edits by sentence-id range and does not recover a renumbering (#4227, J13).
 2. Reject and `restore-unrecorded` refuse `book_busy` during an export (OD7).
 3. On-box register rows on all three surfaces:

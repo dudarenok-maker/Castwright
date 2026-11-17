@@ -437,7 +437,9 @@ export const dropRetainedSaves = (bookId: string, onFullRead = false) => ({
    it teaches nothing). Layout stamps a full read before issuing it: the
    dispatch returns the read's sequence number, and its later
    `learnSliceRevisions` is ignored for a field a PUT has landed on since,
-   because the read may predate that write (pass 7, C4). Not reducer actions. */
+   because the read may predate that write (pass 7, C4). Restructure's post-restructure re-read
+   also learns tokens, for the manuscript slice only, via `learnSliceRevisions(..., ['manuscript'])`
+   (#4227). Not reducer actions. */
 const BEGIN_FULL_READ = 'persistence/beginFullRead';
 export const beginFullRead = (bookId: string) => ({ type: BEGIN_FULL_READ, payload: bookId });
 const LEARN_REVISIONS = 'persistence/learnRevisions';
