@@ -31,6 +31,8 @@ let bookId: string;
 let putManuscript: typeof import('../store/manuscripts.js').putManuscript;
 let removeManuscript: typeof import('../store/manuscripts.js').removeManuscript;
 let isParagraphDegraded: ReturnType<typeof vi.fn>;
+let realIsParagraphDegraded: (body: string, language: string) => boolean | undefined;
+let NOTICE_LANGUAGES: readonly string[];
 
 type Ch = { id: number; title: string; slug: string; excluded?: boolean; titleOverridden?: boolean };
 const CHAPTERS: Ch[] = [
@@ -104,8 +106,14 @@ beforeAll(async () => {
   const manuscripts = await import('../store/manuscripts.js');
   putManuscript = manuscripts.putManuscript;
   removeManuscript = manuscripts.removeManuscript;
-  isParagraphDegraded = (await import('../analyzer/dialogue-structure/legibility.js'))
-    .isParagraphDegraded as unknown as ReturnType<typeof vi.fn>;
+  const legibility = await import('../analyzer/dialogue-structure/legibility.js');
+  isParagraphDegraded = legibility.isParagraphDegraded as unknown as ReturnType<typeof vi.fn>;
+  NOTICE_LANGUAGES = legibility.NOTICE_LANGUAGES;
+  realIsParagraphDegraded = (
+    await vi.importActual<typeof import('../analyzer/dialogue-structure/legibility.js')>(
+      '../analyzer/dialogue-structure/legibility.js',
+    )
+  ).isParagraphDegraded;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -150,6 +158,30 @@ describe('GET /:bookId/state paragraphsMergedChapters', () => {
     put();
     expect(await getMerged()).toBeUndefined();
   });
+
+  it.each([
+    ['null', null],
+    ['missing', undefined],
+  ] as const)(
+    'an unset (%s) language reads as not measured even if the default "en" were a notice language',
+    async (_label, language) => {
+      /* bookStateLanguage() defaults an unset language to 'en'. Make 'en' a
+         notice language and force every body to measure as degraded, so that
+         reading would emit ids; the null-aware reading must still omit the key. */
+      const notice = NOTICE_LANGUAGES as string[];
+      notice.push('en');
+      isParagraphDegraded.mockImplementation(() => true);
+      try {
+        writeState({ language });
+        put();
+        expect(await getMerged()).toBeUndefined();
+      } finally {
+        notice.splice(notice.indexOf('en'), 1);
+        isParagraphDegraded.mockReset();
+        isParagraphDegraded.mockImplementation(realIsParagraphDegraded);
+      }
+    },
+  );
 
   it('is absent when there is no usable manuscript record', async () => {
     /* No record in the store, and the hydrate fallback finds a one-chapter
