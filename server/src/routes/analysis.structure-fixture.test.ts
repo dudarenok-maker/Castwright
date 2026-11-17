@@ -322,3 +322,29 @@ describe('#2253 — a merged (paragraph-degraded) chapter keeps its speakers', (
     });
   }
 });
+
+/* #2254 §4.2 — the internal `structureOptions` seam reaches parseChapterStructure.
+   Same merged body and model output as above: with default recovery the engine
+   re-introduces the paragraph breaks and confirms the dash turns; with
+   recoverMidParagraphTurns:false it does not, so `deterministic` differs. */
+describe('#2254 — attributeChapterStage2 structureOptions seam', () => {
+  async function deterministicFor(structureOptions?: { recoverMidParagraphTurns: boolean }) {
+    const opts = baseOpts(mergedMockSentences());
+    opts.chapter = { ...opts.chapter, body: MERGED_NARRATION_BODY };
+    let deterministic: SentenceOutput[] | null = null;
+    await attributeChapterStage2({
+      ...opts,
+      structureOptions,
+      onStages: (stages) => { deterministic = stages.deterministic; },
+    });
+    if (!deterministic) throw new Error('onStages was not called');
+    return deterministic as SentenceOutput[];
+  }
+
+  it('recoverMidParagraphTurns:false yields a different deterministic output than the default', async () => {
+    const withRecovery = await deterministicFor();
+    const withoutRecovery = await deterministicFor({ recoverMidParagraphTurns: false });
+    expect(withRecovery.length).toBeGreaterThan(0);
+    expect(withoutRecovery).not.toEqual(withRecovery);
+  });
+});
