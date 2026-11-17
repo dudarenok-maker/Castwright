@@ -4,7 +4,7 @@
    (src/lib/script-review-apply.test.ts) loads the same file and asserts its
    `planApply` produces an identical result, so the two implementations can
    never silently drift apart. */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -136,5 +136,20 @@ describe('normalizeForMatch', () => {
 describe('buildNormIndex', () => {
   it('maps only run boundaries; positions inside the ellipsis fold are null (#4226)', () => {
     expect(buildNormIndex('Wait… no').origAt).toEqual([0, 1, 2, 3, 4, null, null, 5, 6, 7, 8]);
+  });
+});
+
+describe('without Intl.Segmenter (older browsers; #4226)', () => {
+  const real = Intl.Segmenter;
+  afterEach(() => {
+    (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter = real;
+    vi.resetModules();
+  });
+
+  it('loads the module and fails closed instead of throwing', async () => {
+    vi.resetModules();
+    delete (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    const mod = await import('./review-apply-core.js');
+    expect(mod.resolveAnchorOffset('He ran. Then stopped.', 'He ran.')).toBeNull();
   });
 });

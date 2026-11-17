@@ -22,7 +22,17 @@ export interface LiveSentence {
   vocalization?: boolean;
 }
 
-const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+let graphemes: Intl.Segmenter | undefined;
+
+/** Built lazily, never at module load: this module is in the app's eager import
+    graph, and a browser without Intl.Segmenter (Firefox < 125) must still start.
+    Absent => null, and resolveAnchorOffset fails closed. */
+function getGraphemes(): Intl.Segmenter | null {
+  if (graphemes) return graphemes;
+  if (typeof Intl.Segmenter !== 'function') return null;
+  graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  return graphemes;
+}
 
 /** Matching unit = a RUN: one extended grapheme cluster (a user-perceived
     character). That keeps a base with its combining marks (Mn, Mc and Me alike),
@@ -30,22 +40,25 @@ const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
     sequences and regional-indicator flag pairs together, so a match boundary can
     never fall inside one. */
 function splitRuns(text: string): string[] {
-  return Array.from(GRAPHEMES.segment(text), (s) => s.segment);
+  const g = getGraphemes();
+  if (!g) throw new Error('Intl.Segmenter is unavailable');
+  return Array.from(g.segment(text), (s) => s.segment);
 }
 
-/** A run's normalized form: the quote/dash/ellipsis fold applies to the run's
-    FIRST code point only, the remaining code points are kept, then the whole run
-    is NFC-normalized (so e + U+0301 composes to the same text as a precomposed é).
+/** A run's normalized form: the quote/dash/ellipsis fold applies to EVERY code
+    point of the run (a Prepend char can cluster with a following quote or
+    ellipsis), then the whole run is NFC-normalized (so e + U+0301 composes to the same text as a precomposed é).
     No whitespace collapse (it would desync positions — the plan-review bug). */
 function normRun(run: string): string {
-  const first = String.fromCodePoint(run.codePointAt(0)!);
-  const rest = run.slice(first.length);
-  let folded = first;
-  if (first === "‘" || first === "’") folded = "'";
-  else if (first === "“" || first === "”") folded = '"';
-  else if (first === "–" || first === "—") folded = '-';
-  else if (first === "…") folded = '...';
-  return (folded + rest).normalize('NFC');
+  let folded = '';
+  for (const ch of run) {
+    if (ch === "‘" || ch === "’") folded += "'";
+    else if (ch === "“" || ch === "”") folded += '"';
+    else if (ch === "–" || ch === "—") folded += '-';
+    else if (ch === "…") folded += '...';
+    else folded += ch;
+  }
+  return folded.normalize('NFC');
 }
 
 export function normalizeForMatch(text: string): string {
@@ -75,6 +88,7 @@ export function buildNormIndex(text: string): { norm: string; origAt: Array<numb
     null also when the match ends INSIDE a run (fail closed) — every raw occurrence
     still counts toward uniqueness. */
 export function resolveAnchorOffset(text: string, anchor: string): number | null {
+  if (!getGraphemes()) return null; // no Intl.Segmenter: fail closed
   const { norm, origAt } = buildNormIndex(text);
   const nAnchor = normalizeForMatch(anchor);
   if (!nAnchor) return null;

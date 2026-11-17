@@ -621,3 +621,29 @@ describe('dispatchAcceptedOps — validate_instruct (fs-58)', () => {
     expect(bumped).toEqual([]); // instruct-only effect → no false-stale
   });
 });
+
+describe('without Intl.Segmenter (older browsers; #4226)', () => {
+  const real = Intl.Segmenter;
+  afterEach(() => {
+    (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter = real;
+    vi.resetModules();
+  });
+
+  it('loads the module and fails closed instead of throwing', async () => {
+    vi.resetModules();
+    delete (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    const mod = await import('./script-review-apply');
+    expect(mod.resolveAnchorOffset('He ran. Then stopped.', 'He ran.')).toBeNull();
+    const { unappliable } = mod.planApply(
+      [{ id: 1, op: 'split', anchor: 'He ran.', rationale: 'r' }],
+      [{ id: 1, chapterId: 1, text: 'He ran. Then stopped.', characterId: 'narrator' }],
+    );
+    expect(unappliable).toHaveLength(1);
+  });
+
+  it('the eager app entry graph (toast-stack -> script-review-thunk) still imports', async () => {
+    vi.resetModules();
+    delete (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    await expect(import('../components/toast-stack')).resolves.toBeDefined();
+  });
+});

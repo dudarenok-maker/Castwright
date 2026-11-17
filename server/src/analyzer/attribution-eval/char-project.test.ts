@@ -310,7 +310,7 @@ describe('projectToChars (stripTags option)', () => {
     ]);
   });
 
-  // #4226 (q)-(v): matching is per combining-mark run; a boundary inside a run drops the unit.
+  // #4226 (q)-(v): matching is per grapheme cluster; a boundary inside a run drops the unit.
   const S1 = 'Ещё раз, — сказал он.';
   const S2 = ' Да.';
   const ONA = 'Она́ ушла.';
