@@ -719,26 +719,39 @@ Design rationale:
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim, or its sibling `requestFailureMessageFs`,
   which also answers a fixed path-free sentence for a node fs error (a `code`
-  plus `syscall`/`path`: write EBUSY / ENOSPC / EPERM embed the absolute path
-  too; ENOSPC / EACCES / EROFS get a sentence that does not promise a retry)
-  and is what the whole-request handlers in `book-state`,
+  plus `syscall`/`path`, but not a child-process spawn failure: `spawn ffmpeg
+  ENOENT` carries all three yet names a bare binary, so it keeps its message
+  rather than reading as a disk fault; write EBUSY / ENOSPC / EPERM embed the
+  absolute path too; ENOSPC / EACCES / EROFS get a sentence that does not promise
+  a retry) and is what the whole-request handlers in `book-state`,
   `chapters-restructure`, `cover`, `voice-library`, `voices`, `import`,
   `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link`,
   `cast-merge` and `cast-merge-suggestions` (its dismiss and accept) and
   `voice-match` (and `voice-style`'s single generate and the per-item reason in
   `cast-design`'s job, and the catch-alls of `chapter-splice` and
   `chapter-qa-repair`, and the `unknown` fallback of `classifyFailure` in
-  `failure-taxonomy`, which generation's `chapter_failed` reason goes through)
+  `failure-taxonomy`, which generation's `chapter_failed` reason goes through,
+  and, since #4236, `library`, `queue`, `series-cast`, `series-roster`,
+  `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory`,
+  `annotate-emotion`, `instruct-annotation`, `script-review`'s `chapter-failed`
+  frames, `export`'s job `errorReason` (the raw error and the ffmpeg stderr go to
+  `runExportJob`'s log) and `voice-sample`'s 502 body; the batch routes' per-item
+  reasons compose it inside `itemFailureReason` — `cast-series-patch`,
+  `voice-override-linked`, `voice-style`, `cast-design`)
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and sixteen call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
-  `chapters-restructure` ×6, `cast-design` ×5
+  one hundred and twenty-five call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  `chapters-restructure` ×6, `cast-design` ×6
   (both arms of its defensive outer plus the job's two terminal `error` events
-  and its per-item failure reason),
-  `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×3, `qwen-voice` ×3,
-  `voice-style` ×3, `single-design` ×3, `script-review` ×5 (the two `chapter-failed`
-  frames beside its start-failure and save-findings sites, #4236), `analysis` ×2,
+  and its per-item failure reason, plus the persona fallback's per-item reason, #4236),
+  `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
+  handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×3,
+  `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
+  `voice-override-linked` ×2, `voice-sample`, `script-review` ×5 (its three
+  start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
+  failure and the save-findings failure, which composes with `itemFailureReason`),
+  `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the

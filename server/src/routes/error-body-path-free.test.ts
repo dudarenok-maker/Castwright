@@ -81,7 +81,20 @@ const CASES: Array<{ name: string; send: (a: express.Express) => request.Test }>
   { name: 'GET /queue', send: (a) => request(a).get('/api/queue/') },
   { name: 'POST /queue/pause', send: (a) => request(a).post('/api/queue/pause').send({ paused: true }) },
   { name: 'POST /queue/reorder', send: (a) => request(a).post('/api/queue/reorder').send({ order: [] }) },
-  { name: 'POST /manuscripts', send: (a) => request(a).post('/api/manuscripts/').send({ text: 'hello' }) },
+  {
+    name: 'POST /queue/enqueue',
+    send: (a) =>
+      request(a)
+        .post('/api/queue/enqueue')
+        .send({ entries: [{ id: 'e1', bookId: 'b1', chapterId: 1, scope: 'this' }] }),
+  },
+  { name: 'POST /queue/clear', send: (a) => request(a).post('/api/queue/clear').send({}) },
+  { name: 'POST /queue/:id/start', send: (a) => request(a).post('/api/queue/e1/start') },
+  { name: 'POST /queue/:id/complete', send: (a) => request(a).post('/api/queue/e1/complete').send({}) },
+  { name: 'POST /queue/:id/retry', send: (a) => request(a).post('/api/queue/e1/retry') },
+  { name: 'POST /queue/:id/confirm-fallback', send: (a) => request(a).post('/api/queue/e1/confirm-fallback') },
+  { name: 'POST /queue/:id/skip-fallback', send: (a) => request(a).post('/api/queue/e1/skip-fallback') },
+  { name: 'DELETE /queue/:id', send: (a) => request(a).delete('/api/queue/e1') },  { name: 'POST /manuscripts', send: (a) => request(a).post('/api/manuscripts/').send({ text: 'hello' }) },
 ];
 
 describe('whole-request error bodies are path-free (#4236)', () => {

@@ -749,4 +749,21 @@ describe('voice-override-linked — per-item reason on a lock timeout (#2292)', 
     expect(res.body.failed).toHaveLength(1);
     expect(res.body.failed[0].error).toBe('simulated disk-full');
   });
+
+  /* #4236 -- a node fs error's message embeds the absolute cast.json path. */
+  it('a node fs error answers a path-free sentence, never the path', async () => {
+    const abs = 'C:\\Users\\someone\\Castwright\\books\\The Quota\\.audiobook\\cast.json';
+    const res = await assignWithThrowOnBookC(
+      Object.assign(new Error(`EPERM: operation not permitted, rename '${abs}.tmp' -> '${abs}'`), {
+        code: 'EPERM',
+        syscall: 'rename',
+        path: abs,
+      }),
+    );
+
+    expect(res.status).toBe(207);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].error).toBe('Files could not be read or written right now. Try again.');
+    expect(JSON.stringify(res.body)).not.toContain('Quota');
+  });
 });

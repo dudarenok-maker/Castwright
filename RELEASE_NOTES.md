@@ -14,7 +14,7 @@
 - **Re-recording a flagged chapter now matches each voice to a reference made at the same quality.** With Auto-fix voice mismatches on, the chapter's "Re-record the flagged lines" button only compares a new take against a stored voice reference recorded at the same voice quality. Where the reference doesn't match, or predates this update, those lines stay flagged for you instead of being re-recorded against the wrong sound.
 - **If Castwright's server ever stops on a serious internal error, it now leaves a diagnostic report in your logs folder,** so the cause can be tracked down.
 - **A failed re-record or chapter render no longer shows where your files live.** When "Re-record the flagged lines" or a chapter render hits a full disk, a locked file or a busy folder, the message now says what went wrong in plain words, without the full path to your files, and a locked file no longer gets mistaken for running out of memory.
-- **Error messages across the app no longer show where your files live.** If your library, queue, a manuscript upload, an export or a model removal hits a locked file or a full disk, Castwright now says what went wrong in plain words instead of printing the folder path. A book called "The Quota" is no longer mistaken for a rate-limit error.
+- **Error messages no longer show where your files live.** If your library, queue, a manuscript upload, an export, a voice change across a series or a model removal hits a locked file or a full disk, Castwright now says what went wrong in plain words instead of printing the folder path. And if a file problem struck while a book called "The Quota" was being analysed, it is no longer mistaken for a rate-limit error.
 
 # Castwright 1.15.0
 

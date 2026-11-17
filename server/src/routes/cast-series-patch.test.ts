@@ -570,4 +570,22 @@ describe('series-patch — per-item reason on a lock timeout (#2292)', () => {
     expect(res.body.failed).toHaveLength(1);
     expect(res.body.failed[0].error).toBe('simulated disk-full');
   });
+
+  /* #4236 -- a node fs error's message embeds the absolute cast.json path (the book folder keeps the
+     display title); the per-item reason answers the curated sentence, same 207 shape. */
+  it('a node fs error answers a path-free sentence, never the path', async () => {
+    const abs = join(workspaceRoot, 'books', AUTHOR, SERIES, TIDEWATCHER_BOOK, '.audiobook', 'cast.json');
+    const res = await patchWithThrowOnTidewatcher(
+      Object.assign(new Error(`EPERM: operation not permitted, rename '${abs}.tmp' -> '${abs}'`), {
+        code: 'EPERM',
+        syscall: 'rename',
+        path: abs,
+      }),
+    );
+
+    expect(res.status).toBe(207);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].error).toBe('Files could not be read or written right now. Try again.');
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+  });
 });

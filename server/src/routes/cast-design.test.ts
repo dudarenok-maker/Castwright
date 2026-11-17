@@ -559,6 +559,30 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
   });
 
+  /* #4236 -- the persona step's per-character reason: a node fs error's message embeds an absolute path. */
+  it('#4236: a persona-generation fs error is reported as a path-free sentence', async () => {
+    personaSharesGpuMock.mockReturnValue(false);
+    personaMock.mockReset();
+    const abs = 'C:\\Users\\someone\\Castwright\\books\\The Quota\\.audiobook\\cast.json';
+    personaMock.mockRejectedValueOnce(
+      Object.assign(new Error(`EPERM: operation not permitted, rename '${abs}.tmp' -> '${abs}'`), {
+        code: 'EPERM',
+        syscall: 'rename',
+        path: abs,
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    const failedEvent = events.find((e) => e.type === 'character_failed' && e.characterId === 'hart');
+    expect(failedEvent?.errorReason).toBe('Files could not be read or written right now. Try again.');
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures?.[0].error).toBe('Files could not be read or written right now. Try again.');
+    expect(JSON.stringify(events)).not.toContain('Quota');
+  });
   it('rides out a mid-bulk sidecar recycle: waits for respawn, retries the character, and completes', async () => {
     /* A recycle (committed/VRAM ceiling) mid-bulk makes ONE design fail with an
        "unreachable" error while the supervisor respawns. The job must wait for

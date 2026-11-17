@@ -633,7 +633,7 @@ async function runDesignJob(
              character_failed, and continue to the NEXT character. Do not
              rethrow — one persona failure must not fail the other N. */
           const message = (e as Error).message || 'Persona generation failed.';
-          const reason = itemFailureReason(e, message);
+          const reason = itemFailureReason(e, requestFailureMessageFs(e, message));
           job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',

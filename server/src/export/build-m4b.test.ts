@@ -27,6 +27,7 @@ import {
   buildConcatList,
   escapeConcatSingleQuotes,
   ExportIncompleteError,
+  probeDurationSec,
 } from './build-m4b.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -280,6 +281,21 @@ describeIfTools('buildM4b', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
+  /* #4236 -- ffprobe's stderr names the input path; the rejection's message must not, and the
+     stderr stays on the error for the export job's log. */
+  it('probeDurationSec rejects with a path-free message and keeps the stderr on the error', async () => {
+    const bad = join(tmpRoot, 'not-audio.mp3');
+    writeFileSync(bad, 'this is not an mp3 at all');
+    const err = await probeDurationSec(bad).then(
+      () => null,
+      (e: Error & { ffmpegStderr?: string }) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/^ffprobe exited with code \d+/);
+    expect(err!.message).not.toContain(tmpRoot);
+    expect(err!.message).not.toContain('not-audio.mp3');
+    expect(err!.ffmpegStderr).toContain('not-audio.mp3');
+  });
   it('produces an MP4 audio file with AAC mono 44.1 kHz and one chapter per non-excluded source', async () => {
     const result = await buildM4b({ bookDir, state: makeState(), outPath });
 

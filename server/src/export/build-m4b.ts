@@ -299,7 +299,7 @@ export function probeDurationSec(mp3Path: string): Promise<number> {
       const raw = Buffer.concat(stdoutChunks).toString('utf8').trim();
       const num = Number(raw);
       if (!Number.isFinite(num) || num <= 0) {
-        return reject(new Error(`ffprobe returned non-positive duration for ${mp3Path}: ${raw}`));
+        return reject(new Error(`ffprobe returned non-positive duration: ${raw}`));
       }
       resolve(num);
     });

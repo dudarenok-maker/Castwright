@@ -22,6 +22,7 @@ import {
 import { cloneStorageKey, isCloneEngine, manifestSlotFor } from '../tts/clone-engines.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 import {
@@ -352,6 +353,6 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
         : isRateLimit
           ? 'rate_limited'
           : 'tts_failed';
-    return res.status(status).json({ code, message: msg });
+    return res.status(status).json({ code, message: requestFailureMessageFs(err, msg) });
   }
 });
