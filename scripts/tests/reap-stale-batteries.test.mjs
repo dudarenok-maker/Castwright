@@ -799,6 +799,18 @@ test('J2: an orphaned stalled battery wholly under a NESTED worktree is spared w
   assert.deepEqual(own.killedPids, [9001]);
 });
 
+test('J5: a git worktree nested under the root OUTSIDE .claude/worktrees is foreign only via knownRoots', () => {
+  // The nested-prefix check cannot see this one; only the known-roots owner
+  // match decides it (the runCensus -> prePushSpareReason knownRoots plumbing).
+  const nested = `${PRIMARY}\\tmp\\wt-x`;
+  const fx = guardFixture({ childCommandLine: `node ${nested}\\node_modules\\vitest\\vitest.mjs run`, rate: 'stalled' });
+  const listed = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY, nested] } });
+  assert.deepEqual(listed.killedPids, []);
+  assert.match(listed.spared[0].reason, /outside checkout/);
+  const unlisted = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] } });
+  assert.deepEqual(unlisted.killedPids, [9001], 'control: the same battery reads as in-root when git does not list the worktree');
+});
+
 test('J3: a root-name look-alike directory is not the checkout (Explorer copy, +old, ,v2, (2))', () => {
   for (const sibling of [`${PRIMARY} - Copy`, `${PRIMARY}+old`, `${PRIMARY},v2`, `${PRIMARY} (2)`]) {
     const line = `node ${sibling}\\node_modules\\vitest\\vitest.mjs run`;
