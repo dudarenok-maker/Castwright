@@ -16,6 +16,8 @@ import { describe, expect, it } from 'vitest';
 import { buildEpub } from '../test-utils/empty-href-epub.js';
 import { stripHtml } from './html-utils.js';
 import { parseEpub } from './epub.js';
+import { parseMobi } from './mobi.js';
+import { parseManuscript } from './index.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
@@ -275,6 +277,10 @@ describe('version-1 extraction parity (#4217)', () => {
       void stripHtml("<p>x</p>");
       // @ts-expect-error -- extractorVersion is required
       void parseEpub(Buffer.alloc(0), { fileName: "x.epub" });
+      // @ts-expect-error -- extractorVersion is required
+      void parseMobi(Buffer.alloc(0), { fileName: "x.mobi" });
+      // @ts-expect-error -- extractorVersion is required
+      void parseManuscript({ text: "x", fileName: "x.txt" });
     };
     expect(never).toBeTypeOf("function");
   });
