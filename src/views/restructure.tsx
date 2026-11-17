@@ -23,7 +23,13 @@ import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
 import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
-import { flushBookPersistence, type BookFlushOutcome } from '../store/persistence-middleware';
+import {
+  beginFullRead,
+  flushBookPersistence,
+  knownSliceRevision,
+  learnSliceRevisions,
+  type BookFlushOutcome,
+} from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { BOOK_READ_TIMEOUT_MS, within } from '../lib/book-read';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
@@ -36,6 +42,17 @@ interface Props {
 
 const SAVE_FAILED_BEFORE_RESTRUCTURE =
   "Your last change couldn't be saved, so the chapters weren't changed. Try again.";
+
+const isTokenMap = (v: unknown): v is Record<string, string> =>
+  !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((t) => typeof t === 'string');
+
+/* #4227 — did manuscript-edits.json move away from this client's copy before the
+   restructure read it? `before` is the manuscript token of the file the route read
+   (after replaying an interrupted restructure's journal); `learned` is the one this
+   client last read or saved. A field the client holds no token for cannot be judged,
+   so it counts as not moved: the remap applies, as it did before the journal. */
+const editsMovedUnderClient = (learned: unknown, before: unknown): boolean =>
+  isTokenMap(learned) && isTokenMap(before) && Object.keys(before).some((f) => learned[f] !== undefined && learned[f] !== before[f]);
 
 export function RestructureView({ bookId }: Props) {
   const dispatch = useAppDispatch();
@@ -104,6 +121,10 @@ export function RestructureView({ bookId }: Props) {
       // manuscript-edits.json. The book-state GET handler runs the same
       // reconciliation that surface code expects on a normal page open.
       const requestSeq = store.getState().revisions.adoptSeq;
+      /* #4227 — the manuscript token this client holds, read before anything below can
+         change it, and a stamp for learning the fresh read's tokens (as Layout does). */
+      const learnedManuscript = dispatch(knownSliceRevision(bookId, 'manuscript')) as unknown;
+      const readSeq = dispatch(beginFullRead(bookId)) as unknown as number;
       /* #3967 — both re-reads run with the book's edit lock up, so each is bounded:
          one that never settles must not keep manuscript edits refused until reload. */
       const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -165,8 +186,15 @@ export function RestructureView({ bookId }: Props) {
         activeBookId(after) === bookId &&
         after.manuscript.bookId === bookId &&
         (after.manuscript.hydrateSeq ?? 0) === hydrateSeqAtStart;
-      let slicesTookIt = remapped;
-      if (remapped) {
+      /* #4227 — the route replayed an interrupted restructure's journal (in this request,
+         or at server start), so the edits on disk moved away from this copy and the remap
+         is keyed to sentences it does not hold: applying it would drop every line it does
+         not name, and the save that follows would write that over the repaired file. The
+         adopted re-read below takes the server's sentences instead; with no re-read the
+         copy is left alone and Layout's marked full read repairs it. */
+      const editsMoved = editsMovedUnderClient(learnedManuscript, res.editsRevisionBefore);
+      let slicesTookIt = remapped && !editsMoved;
+      if (remapped && !editsMoved) {
         dispatch(
           manuscriptActions.applyChapterRestructure({
             sentenceRemap: res.sentenceRemap ?? [],
@@ -185,6 +213,11 @@ export function RestructureView({ bookId }: Props) {
           }),
         );
         slicesTookIt = true;
+      }
+      /* #4227 — the slice now equals the disk the re-read saw, so its tokens are the
+         client's; left stale, the next restructure would read as moved-under-client. */
+      if (slicesTookIt && adoptedFresh && fresh) {
+        dispatch(learnSliceRevisions(bookId, fresh.sliceRevisions, readSeq));
       }
       /* #3967 — the mark is per book and writes no slice, so it must not sit behind the
          guards above that stop a cross-book slice write (leaving the book dropped it, and

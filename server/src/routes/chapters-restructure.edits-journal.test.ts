@@ -328,3 +328,70 @@ describe('the replay precedes the parse-fallback pairing check (#4227)', () => {
     expect(existsSync(journalPath())).toBe(false);
   });
 });
+
+/* #4227 pass 1 -- the replay re-keys manuscript-edits.json behind an open client, and
+   a client that then applies this response's remap to its OLD-keyed copy drops lines.
+   The response therefore names the manuscript slice token of the edits this request
+   read (after its own replay, before its own rewrite); a client whose learned token
+   differs knows the edits moved under it and adopts the re-read instead of remapping. */
+const exclude2 = () =>
+  request(app).post(`/api/books/${bookId}/chapters/exclude`).send({ chapterIds: [2], excluded: true });
+
+/* What a client learns at book open: GET /state's `sliceRevisions.manuscript`. */
+async function clientToken(): Promise<Record<string, string>> {
+  const res = await request(app).get(`/api/books/${bookId}/state`);
+  expect(res.status).toBe(200);
+  return (res.body as { sliceRevisions: { manuscript: Record<string, string> } }).sliceRevisions.manuscript;
+}
+
+describe('the response names the edits revision it read, so a stale client can adopt (#4227)', () => {
+  /* Red when: editsRevisionBefore is not returned, or is computed from anything but
+     the manuscript slice of the file the request read. */
+  it('R1 nothing moved: the response token equals the client token, so the client remaps', async () => {
+    const learned = await clientToken();
+    const res = await merge12();
+    expect(res.status).toBe(200);
+    expect(res.body.editsRevisionBefore).toEqual(learned);
+  });
+
+  /* Red when: the token is read before the replay instead of after it, or the replay
+     is skipped. Trigger 1: the replay runs inside this very request. The expected token
+     is what a sweep of the same parked book leaves on disk (same content, same salt):
+     the sweep runs first, then the parked files are put back for the request. */
+  it('R2 replay inside the request: the token is the re-keyed file, not the one the client holds', async () => {
+    const learned = await clientToken();
+    await parkThenRestart();
+    const parkedEdits = readFileSync(editsPath());
+    const parkedJournal = readFileSync(journalPath());
+    const { replayAllRestructureEditsJournals } = await import('../workspace/restructure-edits-journal.js');
+    expect((await replayAllRestructureEditsJournals()).replayed).toEqual([bookId]);
+    const rekeyed = await clientToken();
+    writeFileSync(editsPath(), parkedEdits);
+    writeFileSync(journalPath(), parkedJournal);
+
+    const res = await exclude2();
+    expect(res.status).toBe(200);
+    expect(res.body.editsRevisionBefore).toEqual(rekeyed);
+    expect(res.body.editsRevisionBefore).not.toEqual(learned);
+  });
+});
+
+describe('boot-sweep replay, stale client (#4227)', () => {
+  /* Red when: the token reflects only "this request replayed". The sweep re-keyed the
+     file before the request arrived, so the request itself replays nothing; the token
+     still differs from the one the client learned. */
+  it('R3 the sweep replayed before the request: the token equals the post-sweep file and differs from the client', async () => {
+    const learned = await clientToken();
+    await parkThenRestart();
+    const { replayAllRestructureEditsJournals } = await import('../workspace/restructure-edits-journal.js');
+    const sweep = await replayAllRestructureEditsJournals();
+    expect(sweep.replayed).toEqual([bookId]);
+    const afterSweep = await clientToken();
+    expect(afterSweep).not.toEqual(learned);
+
+    const res = await exclude2();
+    expect(res.status).toBe(200);
+    expect(res.body.editsRevisionBefore).toEqual(afterSweep);
+    expect(res.body.editsRevisionBefore).not.toEqual(learned);
+  });
+});

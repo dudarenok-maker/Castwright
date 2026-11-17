@@ -79,6 +79,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
+import { sliceRevision } from '../workspace/slice-revision.js';
 import {
   clearRestructureEditsJournal,
   replayRestructureEditsJournal,
@@ -440,6 +441,16 @@ async function applyRestructureClaimed(
         ? (editsRead.value as { sentences?: RestructureSentence[]; mergedAwayKeys?: string[] } | null)
         : null;
     const sentences = edits?.sentences ?? [];
+    /* #4227 -- the manuscript slice token of the edits this request read: after its own
+       replay, before its own rewrite. A client compares it with the token it learned at
+       its last read; a difference means the edits moved under it (a replay in this
+       request, or the boot sweep's before it) and its copy still has the old keys. The
+       salt is the one GET /state uses (the locked state's manuscriptId and editEpoch). */
+    const editsRevisionBefore = sliceRevision(
+      'manuscript',
+      (edits as Record<string, unknown> | null) ?? null,
+      { manuscriptId: freshState.manuscriptId, editEpoch: freshState.editEpoch },
+    );
 
     state = legacyParse
       ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
@@ -649,10 +660,10 @@ async function applyRestructureClaimed(
         : {}),
     });
     await clearRestructureEditsJournal(bookDir);
-    return { early: null, result, editsPath, oldChapters, hintsWritten, parseChapterCount };
+    return { early: null, result, editsPath, oldChapters, hintsWritten, parseChapterCount, editsRevisionBefore };
   });
   if (outcome.early) return outcome.early;
-  const { result, editsPath, oldChapters, hintsWritten, parseChapterCount } = outcome;
+  const { result, editsPath, oldChapters, hintsWritten, parseChapterCount, editsRevisionBefore } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
@@ -714,6 +725,7 @@ async function applyRestructureClaimed(
     body: {
       chapters: result.state.chapters,
       sentenceRemap: result.remap,
+      editsRevisionBefore,
       audioSummary, // not part of OpenAPI envelope — debug aid only
       // Non-fatal advisories: orphan recovery counts, prune-empty
       // counts, generic-title renumber counts. Empty array on clean ops.

@@ -446,6 +446,16 @@ export const learnSliceRevisions = (
   revisions: Partial<Record<StateSlice, SliceRevision>> | undefined,
   readSeq: number,
 ) => ({ type: LEARN_REVISIONS, payload: { bookId, revisions, readSeq } });
+/* #4227 — the token the client last learned for a slice's fields, or an empty map
+   when it learned none. The Restructure view compares the manuscript's with the
+   one a restructure response names, to tell that the edits moved under it. Not a
+   reducer action; a store without this middleware hands the action object back
+   (not a token map), which reads as "nothing learned". */
+const KNOWN_REVISION = 'persistence/knownRevision';
+export const knownSliceRevision = (bookId: string, slice: StateSlice) => ({
+  type: KNOWN_REVISION,
+  payload: { bookId, slice },
+});
 /* #3827 — the `state` fields a PUT landed on since a full read was stamped. The
    book-meta hydrate of that read keeps them: the read may predate the landing,
    the same rule C4 applies to the tokens. Not a reducer action. */
@@ -803,6 +813,11 @@ export const persistenceMiddleware: Middleware = (store) => {
     }
 
     if (type === BEGIN_FULL_READ) return ++clock;
+
+    if (type === KNOWN_REVISION) {
+      const { bookId: readBook, slice } = a.payload as { bookId: string; slice: StateSlice };
+      return { ...known.get(flushKey(readBook, slice)) };
+    }
 
     if (type === LANDED_SINCE) {
       const { bookId: readBook, readSeq } = a.payload as { bookId: string; readSeq: number };
