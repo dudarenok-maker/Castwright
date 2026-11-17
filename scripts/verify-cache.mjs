@@ -1864,9 +1864,11 @@ export async function runStepProcess(
         // re-sweep walks them from the dead root instead. POSIX: the group kill.
         if (!(windows && exitedAt != null)) killTreeFn(child);
         try {
-          // Provably-orphaned only (dead parent) — mirrors the pre-push
-          // reap's own narrow scope; a merely-slow-but-live subtree is not
-          // this sweep's job.
+          // Provably-orphaned only (dead parent) — a narrower scope than
+          // a manual doctor --kill, and deliberately without the pre-push
+          // reap's stalled-rate and in-checkout guards (#4222): this sweep
+          // follows this step's own just-killed timeout, not a foreign
+          // run; a merely-slow-but-live subtree is not this sweep's job.
           censusFn({ kill: true, killReasons: ['orphaned-unreachable'] });
         } catch {
           // Best-effort — never let the reaper sweep mask the timeout outcome.

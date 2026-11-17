@@ -78,6 +78,8 @@ history at cut time.
 
 ## 🧪 Test gates
 
+- **The pre-push stale-battery reaper no longer kills a busy orphaned test run, or any run outside the pushing checkout** (#4222). A `git push` from one checkout reaped a live vitest run belonging to another session (a PR review pass in that session's scratchpad, 2026-11-15): from pre-push the reap arm reaped any orphan (a dead parent) regardless of CPU rate, and a background battery routinely outlives the shell that launched it. A pre-push reap now needs all three together: orphaned, stalled-rate (subtree CPU at or under `deadRateCpuSecPerMin` over a trusted window) and a command line under the pushing checkout (`REPO_ROOT`, compared case- and slash-spelling-insensitively: backslash, forward slash, doubled backslash, Git Bash `/c/...`, WSL `/mnt/c/...`). A busy orphan, or one under another worktree or a scratchpad, is spared. Manual `npm run doctor -- --kill` and any run without `--pre-push` are unchanged. Limitation: the check is argv-only (the process snapshot carries no working directory), so a run whose command line names no path under the checkout is spared from pre-push; a manual `npm run doctor -- --kill` can still reap it.
+
 - **A version-only `__version__` bump of `server/tts-sidecar/version.py` is now exempt from the sidecar-acceptance gate** (content-checked, fails closed), and the release runbook routes the bump through a PR before the tag push (#4120). The gate's, `verify.yml`'s and `verify-cache`/pre-push's changed-file lists now use `--no-renames`, so a move out of `server/tts-sidecar/**` lists its source path.
 
 ## 🔌 Sync & server infrastructure
