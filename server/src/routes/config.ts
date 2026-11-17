@@ -374,8 +374,8 @@ configRouter.post('/env-cleanup', async (_req, res) => {
     await renameWithRetry(tmp, envPath);
   } catch (err) {
     /* If temp file exists (was created but not renamed), attempt cleanup.
-       Cleanup errors are swallowed since we're already reporting the original
-       error to the client. */
+       Cleanup errors are swallowed since the original error is already being
+       reported (logged below; the client gets a fixed sentence). */
     if (tmp !== undefined) {
       await unlink(tmp).catch(() => {});
     }
