@@ -253,7 +253,7 @@ def test_asr_warm_measurement_uses_the_device_free_delta(monkeypatch) -> None:
     # this module uses) so this test can tell "the device-wide delta was
     # recorded" apart from "fell through to the torch-allocator path" — the
     # latter reads 77 here, the former 100.
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     # before=2048 free, after=1948 free -> the forward took 100 MB.
     _patch_free_mb(monkeypatch, [2048, 1948])
 
@@ -281,7 +281,7 @@ def test_asr_warm_reservation_discards_when_the_after_reading_fails(monkeypatch)
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     _patch_free_mb(monkeypatch, [2048, None])  # after-reading fails
 
     async def body():
@@ -309,7 +309,7 @@ def test_asr_warm_reservation_discards_when_a_foreign_pid_is_present(monkeypatch
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     _patch_free_mb(monkeypatch, [2048, 1948])  # a real 100 MB delta
     fake = _FakePynvml([os.getpid(), os.getpid() + 999])  # a foreign PID
     monkeypatch.setattr(main, "_load_pynvml", lambda: fake)  # later setattr wins
@@ -337,7 +337,7 @@ def test_asr_warm_reservation_discards_when_nvml_is_unavailable(monkeypatch) -> 
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     _patch_free_mb(monkeypatch, [2048, 1948])  # a real 100 MB delta
     monkeypatch.setattr(main, "_load_pynvml", lambda: None)  # NVML unavailable
 
@@ -363,7 +363,7 @@ def test_asr_warm_reservation_discards_when_another_engine_holds_the_device(monk
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     _patch_free_mb(monkeypatch, [2048, 1948])  # a real 100 MB delta
 
     async def body():
@@ -395,7 +395,7 @@ def test_asr_warm_reservation_does_not_double_guard_non_positive_deltas(monkeypa
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     _patch_free_mb(monkeypatch, [1948, 2048])  # free went UP: raw delta -100
 
     async def body():
@@ -431,7 +431,7 @@ def test_asr_warm_reservation_discards_a_delta_above_the_seed_ceiling(monkeypatc
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     # before=10000 free, after=8000 free -> a 2000 MB delta, well above the
     # 400 MB "asr" cold seed used as the warm ceiling.
     _patch_free_mb(monkeypatch, [10000, 8000])
@@ -459,7 +459,7 @@ def test_asr_warm_reservation_keeps_a_delta_within_the_seed_ceiling(monkeypatch)
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     # before=2500 free, after=2100 free -> a 400 MB delta, exactly at the
     # "asr" cold seed ceiling — must still be kept, not discarded.
     _patch_free_mb(monkeypatch, [2500, 2100])
@@ -488,7 +488,7 @@ def test_asr_warm_reservation_ceiling_scales_with_configured_model_tier(monkeypa
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key, baseline_mb=None: 77))
     # before=3000 free, after=1200 free -> a 1800 MB delta: above the flat
     # 400 MB base seed, but under the large-model 2560 MB ceiling.
     _patch_free_mb(monkeypatch, [3000, 1200])

@@ -2,6 +2,7 @@
 
 **What's new in 1.16.0**
 
+- **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
@@ -14,6 +15,7 @@
 - **Re-recording a flagged chapter now matches each voice to a reference made at the same quality.** With Auto-fix voice mismatches on, the chapter's "Re-record the flagged lines" button only compares a new take against a stored voice reference recorded at the same voice quality. Where the reference doesn't match, or predates this update, those lines stay flagged for you instead of being re-recorded against the wrong sound.
 - **The speech-batching settings in Advanced Settings now actually apply.** Changing how many sentences Castwright packs into one batch, or the batch limits for the higher-quality voice model, used to be ignored until you set them another way; they now take effect on the next chapter you make.
 - **If Castwright's server ever stops on a serious internal error, it now leaves a diagnostic report in your logs folder,** so the cause can be tracked down.
+- **A failed re-record or chapter render no longer shows where your files live.** When "Re-record the flagged lines" or a chapter render hits a full disk, a locked file or a busy folder, the message now says what went wrong in plain words, without the full path to your files, and a locked file no longer gets mistaken for running out of memory.
 
 # Castwright 1.15.0
 

@@ -25,6 +25,7 @@
 
 import { spawn } from 'node:child_process';
 import { configValue } from '../config/resolver.js';
+import { ffmpegFailure } from './ffmpeg-failure.js';
 
 export interface LoudnormOptions {
   /** Target integrated loudness in LUFS. EBU R128 broadcast = -23; audiobook
@@ -271,9 +272,7 @@ export async function runLoudnormFirstPass(
     child.on('close', (code) => {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
       if (code !== 0) {
-        reject(
-          new Error(`ffmpeg loudnorm first pass exited with code ${code}: ${stderr.trim()}`),
-        );
+        reject(ffmpegFailure('ffmpeg loudnorm first pass', code, stderr));
         return;
       }
       const jsonBlock = extractTrailingJsonBlock(stderr);

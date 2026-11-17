@@ -726,10 +726,13 @@ Design rationale:
   `samples`, `qwen-voice`, `single-design`, `cast-decline-voice-link`,
   `cast-merge` and `cast-merge-suggestions` (its dismiss and accept) and
   `voice-match` (and `voice-style`'s single generate and the per-item reason in
-  `cast-design`'s job) whose fallback is the
+  `cast-design`'s job, and the catch-alls of `chapter-splice` and
+  `chapter-qa-repair`, and the `unknown` fallback of `classifyFailure` in
+  `failure-taxonomy`, which generation's `chapter_failed` reason goes through)
+  whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  eighty-five call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
+  eighty-nine call sites (`voice-library` ×16, `book-state` ×13, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×5
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason),
@@ -737,9 +740,15 @@ Design rationale:
   `voice-style` ×3, `single-design` ×3, `script-review` ×3, `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`,
+  `chapter-splice` and `chapter-qa-repair` (the catch-alls of their SSE jobs: the
+  `chapter_failed` frame keeps its `Splice failed: ` / `Audio-QA repair failed: `
+  prefix only for an ordinary error, #4233),
   `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
-  `cast-merge`, `voice-match`, `failure-taxonomy` (the persist-failure
-  sentence of `AnalysisPersistError`)),
+  `cast-merge`, `voice-match`, `setup-readiness` (`POST /setup/smoke`'s synth-stage
+  catch, whose mkdir / writeFile / encode readFile errors embed a path, #4233),
+  `failure-taxonomy` ×2 (the persist-failure
+  sentence of `AnalysisPersistError`, and `classifyFailure`'s unmapped-error
+  fallback)),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the
   merge-accept route's outer catch and of `restore-unrecorded` in `chapter-audio.ts` (the two
   legacy `…/audio/previous` routes there answer 410 unconditionally since
