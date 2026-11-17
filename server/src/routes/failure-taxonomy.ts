@@ -466,7 +466,7 @@ const ANALYSIS_SOURCES: ReadonlySet<FailureSource> = new Set(['analysis', 'both'
 /** A node fs error on a path. Net errors (TCP / named pipe) carry `address`, never
     `path`, so the `path` check alone excludes them. A spawn error carries the binary's
     `path` but is not an fs error on a book file: it still goes through the signature scan. */
-function isFsPathError(err: unknown): boolean {
+export function isFsPathError(err: unknown): boolean {
   const e = err as { syscall?: unknown; path?: unknown };
   return isFsError(err) && typeof e.path === 'string' && !/^spawn/.test(String(e.syscall));
 }

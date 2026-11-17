@@ -234,6 +234,24 @@ describe('voice-sample router', () => {
         'Files could not be read or written. Check free disk space and folder permissions.',
       );
     });
+
+    /* An fs error's message embeds the path; a folder titled "The Quota" must not read as a rate limit. */
+    it('answers 502 tts_failed, not 429 rate_limited, for an fs error on a path containing "quota"', async () => {
+      const abs = join(audioDir, 'The Quota', 'voice-sample-abc.mp3');
+      synthesize.mockRejectedValueOnce(
+        Object.assign(new Error(`EBUSY: resource busy or locked, open '${abs}'`), {
+          code: 'EBUSY',
+          syscall: 'open',
+          path: abs,
+        }),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_y/sample')
+        .send({ modelKey: 'coqui-xtts-v2', voice: { id: 'v_y', character: 'Y' }, text: 'Hi.' });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('tts_failed');
+      expect(res.body.message).not.toContain('Quota');
+    });
   });
 
   describe('evidence-driven sample text (no text in body)', () => {

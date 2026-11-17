@@ -23,6 +23,7 @@ import { cloneStorageKey, isCloneEngine, manifestSlotFor } from '../tts/clone-en
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { isFsPathError } from './failure-taxonomy.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 import {
@@ -307,6 +308,13 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       });
     }
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
+    /* #4236 — a node fs error's message embeds the path, so the regexes below
+       would read a folder titled "The Quota" as a rate limit. Classify it by
+       being an fs error, before any message scan: a plain 502 with the curated
+       sentence. */
+    if (isFsPathError(err)) {
+      return res.status(502).json({ code: 'tts_failed', message: requestFailureMessageFs(err, msg) });
+    }
     /* GATE 1 — the sidecar's `voice_language_unsupported` 409 (main.py's
        /synthesize handler): the voice IS cloned and its artifact loaded, the
        loaded XTTS model just doesn't list the requested language. Its detail
