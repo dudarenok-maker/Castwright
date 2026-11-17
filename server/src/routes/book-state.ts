@@ -12,7 +12,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { readFile, rm, writeFile, unlink } from 'node:fs/promises';
+import { readFile, readdir, rm, writeFile, unlink } from 'node:fs/promises';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -1093,6 +1093,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
   design: 'designing voices',
   'script-review': 'reviewing the script',
   export: 'exporting',
+  'unaddressed-sweep': 'a startup check of this folder',
 };
 
 export function busySentence(
@@ -1680,6 +1681,20 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   }
 });
 
+/** The reparse/replace wipe of `audio/` (R4-5, R5-5): every entry goes except
+ *  `.orphaned/`. One loop in one function, so the take guard sees the `rm`. */
+async function wipeAudioKeepingOrphaned(bookDir: string): Promise<void> {
+  const ad = audioDir(bookDir);
+  const entries = await readdir(ad).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === 'ENOENT') return [] as string[];
+    throw e;
+  });
+  for (const entry of entries) {
+    if (entry === '.orphaned') continue;
+    await rm(join(ad, entry), { recursive: true, force: true });
+  }
+}
+
 /* Shared post-parse core for reparse + replace-manuscript. Given a freshly
    parsed manuscript, regenerates the chapter list, snapshots the srv-13
    reuse/voice carryover, wipes the now-stale analysis cache / cast / audio,
@@ -1840,7 +1855,9 @@ async function applyReparse(
       if (isLockAcquisitionTimeout(e) || e instanceof UnsupportedSchemaError) throw e;
       throw new Error("Couldn't reset this book's A/B review history.");
     }),
-    existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
+    /* R4-5 / R5-5: wipe every entry of audio/ EXCEPT the quarantine folder
+       .orphaned/ (audio a boot check set aside; a reparse must not destroy it). */
+    existsSync(ad) ? wipeAudioKeepingOrphaned(bookDir) : Promise.resolve(),
   ]);
 
   if (preservedEditCount > 0) {

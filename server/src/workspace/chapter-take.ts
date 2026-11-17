@@ -19,7 +19,7 @@
 import { open, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { renameWithRetry } from './atomic-rename.js';
-import { assertHeld, type BookHandle } from './book-op-lock.js';
+import { assertHeld, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
 import { audioDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
@@ -93,7 +93,7 @@ function sameValue(a: unknown, b: unknown): boolean {
     A live take with no segments file (an unindexed take) clears every member
     except `duration`. A lock timeout propagates; the caller curates it. */
 export async function stampStateFromLiveTake(
-  handle: BookHandle,
+  handle: AnyBookHandle,
   slug: string,
   opts: { takeChanged: boolean },
 ): Promise<void> {
@@ -145,7 +145,7 @@ async function stampIdIntoJson(path: string, takeId: string): Promise<void> {
     mirror is logged and swallowed: the segments carry the id, and the scan heal
     repairs `state.json`. A PREVIOUS take whose `.previous.segments.json` lacks
     an id gets its own id (and its embeddings), with no live file touched. */
-export async function ensureTakeIdentity(handle: BookHandle, slug: string): Promise<void> {
+export async function ensureTakeIdentity(handle: AnyBookHandle, slug: string): Promise<void> {
   assertHeld(handle, 'ensureTakeIdentity');
   const root = audioDir(handle.bookDir);
 

@@ -172,8 +172,8 @@ export async function fsckAllBooks(): Promise<FsckOrphanAudioResult> {
            holder) skips THAT book only; the next startup retries it (PR #3714
            review pass 3). */
         try {
-          await withBookOpAtDir(walkedDir, async (bookDir) => {
-            const result = await fsckOrphanAudio(audioDir(bookDir));
+          await withBookOpAtDir(walkedDir, async (handle) => {
+            const result = await fsckOrphanAudio(audioDir(handle.bookDir));
             recovered.push(...result.recovered);
             errors.push(...result.errors);
           });

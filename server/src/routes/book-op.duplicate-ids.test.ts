@@ -122,7 +122,7 @@ describe('a duplicated bookId resolves to the first match everywhere it is resol
   it('peekBook and withBookOp agree with findBookByBookId after a hint-locked step on the second twin', async () => {
     const { twin1, twin2 } = seedTwins();
     /* withBookOpAtDir still runs on the walked folder itself... */
-    const ran = await bookOp.withBookOpAtDir(twin2, async (dir) => dir);
+    const ran = await bookOp.withBookOpAtDir(twin2, async (h) => h.bookDir);
     expect(ran).toBe(twin2);
     /* ...but leaves no trace on resolve-by-id. */
     expect((await bookOp.peekBook(BOOK_ID))?.bookDir).toBe(twin1);

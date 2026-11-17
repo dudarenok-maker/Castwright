@@ -238,7 +238,7 @@ interface AllowEntry {
 
 const ALLOWLIST: Record<string, AllowEntry> = {
   'import/scan-import-folder.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(stage): the audio/ directory itself, not a take part." },
-  'routes/book-state.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: §5.A Ownership: the reparse wipe stays allowlisted (applyReparse rm(ad, { recursive: true, force: true }), the audio/ directory itself, not a take part)." },
+  'routes/book-state.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: §5.A Ownership: the reparse wipe stays allowlisted (wipeAudioKeepingOrphaned: rm(join(ad, entry), { recursive: true, force: true }) over every audio/ entry except .orphaned/, not a take part)." },
   'routes/generation.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(bookDir): the audio/ directory itself, not a take part." },
 };
 
