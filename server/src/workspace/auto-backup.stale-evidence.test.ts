@@ -2,8 +2,8 @@
    stale-evidence marker `sentencesPredateChapters`. A restore swaps state.json
    only; manuscript-edits.json stays. So the restored state is marked when the
    local edits hold sentences (or cannot be read) AND the snapshot's chapter
-   list (ids + titles, in order) differs from the book's current one, or the
-   current state is already marked. The snapshot's own marker is never carried.
+   list (ids + titles, in order) or extractor stamp (#4217) differs from the
+   book's current one, or the current state is already marked. The snapshot's own marker is never carried.
 
    Same temp-workspace harness as auto-backup.test.ts. */
 

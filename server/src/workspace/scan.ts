@@ -281,8 +281,9 @@ export interface BookStateJson {
      saved sentences survive it, and by the bundle overwrite and the backup
      restore, which leave the local edits file beside a swapped-in chapter
      list: those two stamp it only when the edits hold sentences (or cannot
-     be read) AND the chapter list differs from the current one or the book
-     is already marked (`swapLeavesStaleEvidence`); cleared only by the
+     be read) AND the chapter list differs from the current one, the
+     extractor stamp differs (#4217), or the book is already marked
+     (`swapLeavesStaleEvidence`); cleared only by the
      main analysis persist. Never written as `false` (true or absent); never
      on the PUT /state whitelist. Additive optional field —
      `CURRENT_STATE_SCHEMA` does NOT bump (plan 27 rename-vs-add policy). */

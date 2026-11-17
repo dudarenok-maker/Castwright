@@ -494,9 +494,9 @@ export async function importPortableBundle(
             : await freshManuscriptId(ids);
         /* Plan 290 (#3837, round 10) -- a bundle never carries manuscript-edits.json
            and the overwrite leaves the local one in place. Its saved sentences are
-           stale only if the bundle's chapter list differs from the one they are
-           keyed to (the target's current state, `live`, read above under this
-           same hold), or the target is already marked. Read under this hold
+           stale only if the bundle's chapter list or extractor stamp (#4217) differs
+           from the one they are keyed to (the target's current state, `live`, read
+           above under this same hold), or the target is already marked. Read under this hold
            (book-op for an existing id -> the claim); unknown edits content
            (corrupt / unreadable) counts as sentences. */
         const editsPredate = swapLeavesStaleEvidence(
