@@ -302,6 +302,25 @@ def test_embed_gpu_no_fit_returns_503(monkeypatch, embed_client) -> None:
     assert body["neededMb"] == 200
 
 
+def test_embed_gpu_resident_no_fit_needs_only_the_warm_amount(monkeypatch, embed_client) -> None:
+    """#4102: a RESIDENT GPU SPK books `spk.warm` (128 MB), not the 200 MB cold seed."""
+    _install_speechbrain_stub(monkeypatch)
+    _stub_torch_cuda(monkeypatch)
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    _swap_spk(monkeypatch, "cuda")
+    monkeypatch.setattr(main._placement, "probe", lambda: NO_FIT_PROBE)
+    monkeypatch.setattr(
+        main._placement, "is_resident", lambda engine_id: "cuda:0" if engine_id == "spk" else None
+    )
+
+    r = embed_client.post("/embed", content=_pcm(seconds=0.5, sample_rate=16000), headers={"X-Sample-Rate": "16000"})
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["noCapacity"] is True
+    assert body["neededMb"] == 128
+
+
 def test_embed_gpu_steers_to_roomier_device(monkeypatch, embed_client) -> None:
     """SPK_DEVICE=cuda (unindexed, so unpinned) + flag ON + a probe favouring
     cuda:1 -> the reservation admits onto cuda:1 and that card is threaded into

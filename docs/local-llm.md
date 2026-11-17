@@ -167,9 +167,13 @@ down instead of ratcheting to a single worst-case spike forever.
 
 The two rare, heavy 1.7B **design-family** ops carry their own keys —
 `qwen.1.7b.mint` (the base+base co-load behind `/qwen/mint-variant`) and
-`qwen.1.7b.design` (`/qwen/design-voice`'s VoiceDesign load) — so they learn
-their own p95 instead of being diluted by the far-more-frequent plain 1.7B
-synth (`qwen.1.7b`, ~3915 MB) and getting its under-sized reservation (#1738).
+`qwen.1.7b.design` (`/qwen/design-voice`'s VoiceDesign load) — so a sample
+could never be diluted by the far-more-frequent plain 1.7B synth
+(`qwen.1.7b`, ~3915 MB) and its under-sized reservation (#1738). Since #4163's
+cold-only gate they in practice stay at the 6144 seed: both ops leave the
+0.6B-Base resident, so every later design or mint is warm and records nothing,
+and only an op that finds no Qwen model at all can add a sample (five are
+needed to supersede the seed).
 Both are measured on-box (8 GB 4070, per-op allocated peak): mint ~5654 MB
 (base+base) and design ~5440 MB (VoiceDesign-1.7B + 0.6B-Base audition, #1742),
 so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
@@ -225,6 +229,21 @@ guard set above against a same-process sibling reservation (e.g. a Kokoro
 inside the measurement window, which none of the four guards can see on its
 own.
 
+A resident GPU speaker model (SPK / ECAPA) books `spk.warm` (128 MB, unmeasured,
+not learned: #4163's cold-only gate records nothing for a warm op) instead of the 200 MB cold `spk` seed (#4102).
+
+A Qwen mint with the 1.7B-Base resident, and a design with VoiceDesign resident,
+book their FULL cold peak (`qwen.1.7b.mint` / `qwen.1.7b.design`); the resident
+weights are credited only in the request's own fit check (the #4079 shape), so a
+second admission nested inside is refused the way it is on `main` (#4102). A
+design's credit also includes the resident 0.6B audition base (it is part of the
+design's peak), so a warm design fits on an 8 GB card with at most about
+1.2 GB in use on it besides the sidecar's own models (the CUDA context and
+anything else). Above that, up to about 1.6 GB, it waits for the idle watchdog
+(~120-150 s at the default `QWEN_DESIGN_IDLE_TTL`) where an unprotected design
+would have reloaded VoiceDesign in seconds, and it fails with `noCapacity` if
+that TTL is above about 258 s.
+
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->
 <!-- footprint:qwen.1.7b=6144 -->
@@ -235,6 +254,7 @@ own.
 <!-- footprint:asr.warm=128 -->
 <!-- footprint:asr.large=2560 -->
 <!-- footprint:spk=200 -->
+<!-- footprint:spk.warm=128 -->
 
 **Load/unload path.** `POST /api/sidecar/load` (Node proxy
 `server/src/routes/sidecar-health.ts:325`, 90s budget) and `POST
