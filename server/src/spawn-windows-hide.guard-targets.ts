@@ -39,4 +39,7 @@ export const SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS = [
   'e2e/global-teardown.ts',
   'vite.config.ts',
   'launch.mjs',
+  /* Appended, not inserted: force-rerun-triggers.test.ts addresses entries by
+     index. The library scanner (#2254, R10-5) lives here and spawns children. */
+  'server/scripts/**',
 ] as const;
