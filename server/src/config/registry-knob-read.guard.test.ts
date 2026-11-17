@@ -229,15 +229,22 @@ function collectReadKeys(files: string[]): Set<string> {
   return keys;
 }
 
-/** #4238 — a column-0 `const|let|var NAME = … configValue(…)`/`getKnob(…)`
-    whose initialiser is a value, not a function. That runs at import, when the
-    user-settings cache is still cold, so only the shipped default (or an env
-    var) resolves and an Advanced Settings override is silently ignored. An
-    arrow/`function` initialiser defers the read to its call and is fine.
-    BLIND SPOT: only a single-line initialiser is seen; a read wrapped onto the
-    next line, or inside a top-level call/IIFE, is not. */
+/** #4238 — a column-0 `const|let|var NAME = … configValue(…)` (or a value read
+    off `getKnob(…)`, e.g. `.default`) whose initialiser is a value, not a
+    function. That runs at import, when the user-settings cache is still cold,
+    so only the shipped default (or an env var) resolves and an Advanced
+    Settings override is silently ignored. The exemption is anchored: it applies
+    only when the initialiser itself STARTS with an arrow or a `function`
+    (which defers the read to its call). `getKnob('x')` alone returns the knob's
+    METADATA, so `const KNOB = getKnob('x')!` is not a value read.
+    BLIND SPOTS: only a single-line, plain-identifier initialiser is seen. Not
+    seen: destructuring (`const [A, B] = [configValue(…), …]`), a read made
+    through a helper (`analyzer/analyzer-concurrency.ts:22`'s
+    `new CountSemaphore(resolveK())` — the same class, harmless there only
+    because the semaphore is resized per acquire), a read wrapped onto the next
+    line, or one inside a top-level call/IIFE. An AST walk would close these. */
 const MODULE_LOAD_READ_RE =
-  /^(?:export\s+)?(?:const|let|var)\s+\w+[^=\n]*=(?![^\n]*(?:=>|\bfunction\b))[^\n]*\b(?:configValue|getKnob)\b/gm;
+  /^(?:export\s+)?(?:const|let|var)\s+\w+[^=\n]*=(?!\s*(?:async\s+)?(?:function\b|(?:\([^)\n]*\)|\w+)\s*=>))[^\n]*\b(?:configValue\b|getKnob\([^)\n]*\)!?\??\.)/gm;
 
 function moduleLoadReads(source: string): string[] {
   return [...stripComments(source).matchAll(MODULE_LOAD_READ_RE)].map((m) => m[0].trim());
@@ -246,9 +253,17 @@ function moduleLoadReads(source: string): string[] {
 describe('registry knobs read at module load (#4238 guard)', () => {
   it('recognises a module-level value read and ignores a deferred one', () => {
     expect(moduleLoadReads("const SIZE = configValue<number>('tts.batch.size');")).toHaveLength(1);
-    expect(moduleLoadReads("export const X = getKnob('a.b');")).toHaveLength(1);
+    expect(moduleLoadReads("export const X = getKnob('a.b')?.default;")).toHaveLength(1);
     expect(moduleLoadReads("const ttl = () => clampTtlDays(configValue('a.b'));")).toEqual([]);
     expect(moduleLoadReads("  const inFn = configValue('a.b');")).toEqual([]);
+    // anchored exemption: a function/arrow only exempts when it STARTS the initialiser
+    expect(moduleLoadReads("const S = KEYS.map((k) => configValue<number>(k));")).toHaveLength(1);
+    expect(moduleLoadReads("const S = typeof f === 'function' ? f() : configValue<number>('a');")).toHaveLength(1);
+    expect(moduleLoadReads("const f = async (x: number) => configValue('a.b') + x;")).toEqual([]);
+    expect(moduleLoadReads("const f = function () { return configValue('a.b'); };")).toEqual([]);
+    // getKnob returns metadata: only a value read off it counts
+    expect(moduleLoadReads("const KNOB = getKnob('x')!;")).toEqual([]);
+    expect(moduleLoadReads("const D = getKnob('x')!.default;")).toHaveLength(1);
   });
 
   it('no non-test server source reads a registry key into a module-level constant', () => {

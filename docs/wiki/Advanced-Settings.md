@@ -268,11 +268,11 @@ app-pinnable, so it just reports what the daemon is currently doing.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Qwen batch size | Hard width cap for sentences packed per Qwen forward; 1 disables batching | 32 | integer, min 1 | restart · app | medium |
-| Qwen batch token budget | Variable-width packing budget; 0 = fixed-width only | 3600 | integer, min 0 | restart · app | medium |
-| Qwen 1.7B batch size | Hard width cap for the 1.7B Quality tier | 32 | integer, min 1 | restart · app | medium |
-| Qwen 1.7B batch token budget | Packing budget for the 1.7B tier | 3600 | integer, min 0 | restart · app | medium |
-| Qwen batch length bucketing | Sort batchable groups by length before slicing | `true` | boolean | restart · app | medium |
+| Qwen batch size | Hard width cap for sentences packed per Qwen forward; 1 disables batching | 32 | integer, min 1 | live | medium |
+| Qwen batch token budget | Variable-width packing budget; 0 = fixed-width only | 3600 | integer, min 0 | live | medium |
+| Qwen 1.7B batch size | Hard width cap for the 1.7B Quality tier | 32 | integer, min 1 | live | medium |
+| Qwen 1.7B batch token budget | Packing budget for the 1.7B tier | 3600 | integer, min 0 | live | medium |
+| Qwen batch length bucketing | Sort batchable groups by length before slicing | `true` | boolean | live | medium |
 | Generation workers | Chapters synthesised concurrently by the generation queue | 1 | integer, 1–4 | restart · app | medium |
 
 ## 7. Per-sentence QA gates

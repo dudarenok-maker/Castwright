@@ -131,19 +131,6 @@ const DEFAULT_SENTENCE_CONCURRENCY = 1;
    (3600, adopted 2026-05-30 after the plan-136 live A/B); an explicit `0` is
    the fixed-width kill-switch + back-compat path. Output-preserving (per-item
    prompts + index scatter-back), same as plan 128. */
-export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET = 3600;
-
-/** Resolve `QWEN_BATCH_TOKEN_BUDGET` from a raw env string. Unset / empty →
-    the shipped default (token-budget packing ON); an explicit `0` (or a
-    non-positive / non-numeric value) → `0` = OFF, the fixed-width kill-switch.
-    Exported for unit coverage so the unset-vs-0 parsing contract stays pinned.
-    The render-time read routes through the registry so env vars AND app
-    overrides take effect. */
-export function resolveQwenTokenBudget(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === '') return DEFAULT_QWEN_BATCH_TOKEN_BUDGET;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-}
 
 /* 1.7B tier-aware batch width. The packer applies these caps to the 1.7B bucket
    ONLY; 0.6B batches keep the defaults above (a mixed-tier chapter packs each
@@ -153,8 +140,6 @@ export function resolveQwenTokenBudget(raw: string | undefined): number {
    (measured peak ~5.7 GB, ~1.7 GB margin under the recycle line) at ~2× RT.
    These knobs remain the small-card safety valve — lower them if a 1.7B render
    trips the VRAM recycle on a < 8 GB card. */
-export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET_17B = 3600;
-
 /* Defensive per-call ceiling (plan 148) — defined in ./synth-call-timeout.ts
    (a leaf, so tts/gemini.ts can import it without an import cycle, #3724). */
 import { SYNTH_CALL_TIMEOUT_MS } from './synth-call-timeout.js';
@@ -784,18 +769,19 @@ export interface SynthesiseChapterOpts {
       default OOMs an 8 GB card mid-forward → recycle storm. The packer applies
       this to the 1.7B bucket only; 0.6B groups keep `qwenBatchSize`. Defaults to
       the `tts.batch.size17b` knob, read per render (env `QWEN_BATCH_SIZE_17B`, default
-      8). Clamped to >= 1. */
+      32). Clamped to >= 1. */
   qwenBatchSize17b?: number;
-  /** Token-budget for the 1.7B tier only (env `QWEN_BATCH_TOKEN_BUDGET_17B`,
-      default 1200 — far below the 0.6B `qwenBatchTokenBudget`). Keeps 1.7B
-      batches within an 8 GB card; `0` = exact fixed-width slicing on the 1.7B
+  /** Token-budget for the 1.7B tier only. Defaults to the
+      `tts.batch.tokenBudget17b` knob, read per render (env
+      `QWEN_BATCH_TOKEN_BUDGET_17B`, default 3600 — the same as the 0.6B
+      `qwenBatchTokenBudget`). Lower it to keep 1.7B batches within a small card; `0` = exact fixed-width slicing on the 1.7B
       tier (`qwenBatchSize17b` only). 0.6B groups keep `qwenBatchTokenBudget`. */
   qwenBatchTokenBudget17b?: number;
   /** Length-bucketing (plan 128): sort batchable Qwen groups by their
       normalised text length before slicing into batches, so similar-length
       sentences share a batch and the batched forward decodes to a tight
-      max-length (less padding waste). Defaults to `QWEN_BATCH_BUCKET` (env
-      `QWEN_BATCH_BUCKET`, default ON). Output-preserving — set `false` for the
+      max-length (less padding waste). Defaults to the `tts.batch.bucket`
+      knob, read per render (env `QWEN_BATCH_BUCKET`, default ON). Output-preserving — set `false` for the
       index-order baseline (tests assert byte-identity ON vs OFF). */
   qwenBatchBucket?: boolean;
   /** Token-budget packing (plan 136). The soft VRAM/compute budget in
