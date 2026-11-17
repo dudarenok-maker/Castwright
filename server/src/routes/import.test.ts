@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { detectManuscriptLanguage } from '../tts/detect-language.js';
+import { buildEmptyHrefEpub, buildEpub } from '../test-utils/empty-href-epub.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_EPUB = resolve(__dirname, '..', 'parsers', '__fixtures__', 'sample.epub');
@@ -794,6 +795,55 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
     expect(res.status).toBe(200);
     expect(res.body.candidate.series).toBe('Solway Bay');
     expect(res.body.candidate.seriesFromTitle).toBe(false);
+  });
+});
+
+/* #4239 — an EPUB with <a href=""> used to make epub2 throw from a zip callback,
+   an uncaughtException that exits the server. The import must now complete, and
+   a second import on the same app must also answer 200. */
+describe('POST /api/import — EPUB with an empty href (#4239)', () => {
+  it('imports it, and a following import also answers 200', async () => {
+    const epubBytes = await buildEmptyHrefEpub();
+    const res = await request(app)
+      .post('/api/import')
+      .attach('file', epubBytes, { filename: 'empty-href.epub', contentType: 'application/epub+zip' });
+    expect(res.status).toBe(200);
+    expect(res.body.candidate.chapters).toHaveLength(1);
+
+    const next = await request(app)
+      .post('/api/import')
+      .attach('file', await readFile(FIXTURE_EPUB), {
+        filename: 'sample.epub',
+        contentType: 'application/epub+zip',
+      });
+    expect(next.status).toBe(200);
+  });
+
+  /* Neither reader can read this book: epub2 throws on the empty href, and the
+     raw-zip fallback never decodes `&amp;` in the manifest href, so it cannot
+     resolve the chapter files. The route must answer 415 (an UnusableEpubError),
+     not 500, and the server must keep serving. */
+  it('answers 415 for an EPUB neither reader can read, and a following import answers 200', async () => {
+    const plain =
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Plain prose, nothing odd.</p></body></html>';
+    const empty =
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Some prose with an <a href="">empty link</a> in it.</p></body></html>';
+    const epubBytes = await buildEpub([plain, empty], {
+      fileNames: ['Part 1 & More.xhtml', 'Part 2 & More.xhtml'],
+    });
+    const res = await request(app)
+      .post('/api/import')
+      .attach('file', epubBytes, { filename: 'amp.epub', contentType: 'application/epub+zip' });
+    expect(res.status).toBe(415);
+    expect(res.body.error).toMatch(/readable text/);
+
+    const next = await request(app)
+      .post('/api/import')
+      .attach('file', await readFile(FIXTURE_EPUB), {
+        filename: 'sample.epub',
+        contentType: 'application/epub+zip',
+      });
+    expect(next.status).toBe(200);
   });
 });
 
