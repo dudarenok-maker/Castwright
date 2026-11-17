@@ -78,6 +78,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, type Dirent } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
 import { allKnobs } from './registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -229,25 +230,71 @@ function collectReadKeys(files: string[]): Set<string> {
   return keys;
 }
 
-/** #4238 — a column-0 `const|let|var NAME = … configValue(…)` (or a value read
-    off `getKnob(…)`, e.g. `.default`) whose initialiser is a value, not a
-    function. That runs at import, when the user-settings cache is still cold,
-    so only the shipped default (or an env var) resolves and an Advanced
-    Settings override is silently ignored. The exemption is anchored: it applies
-    only when the initialiser itself STARTS with an arrow or a `function`
-    (which defers the read to its call). `getKnob('x')` alone returns the knob's
-    METADATA, so `const KNOB = getKnob('x')!` is not a value read.
-    BLIND SPOTS: only a single-line, plain-identifier initialiser is seen. Not
-    seen: destructuring (`const [A, B] = [configValue(…), …]`), a read made
-    through a helper (`analyzer/analyzer-concurrency.ts:22`'s
-    `new CountSemaphore(resolveK())` — the same class, harmless there only
-    because the semaphore is resized per acquire), a read wrapped onto the next
-    line, or one inside a top-level call/IIFE. An AST walk would close these. */
-const MODULE_LOAD_READ_RE =
-  /^(?:export\s+)?(?:const|let|var)\s+\w+[^=\n]*=(?!\s*(?:async\s+)?(?:function\b|(?:\([^)\n]*\)|\w+)\s*=>))[^\n]*\b(?:configValue\b|getKnob\([^)\n]*\)!?\??\.)/gm;
+/** #4238 — a module-level `const|let|var NAME = <initialiser>` whose initialiser
+    READS a registry value when the module is imported: a call to
+    `configValue` / `resolveKnob` / `resolveAll`, or a property/element read off
+    `getKnob(…)` (`.default`, `.effective`, `['default']`, through `!`/`as`/
+    parens). At import the user-settings cache is still cold, so only the
+    shipped default (or an env var) resolves and an Advanced Settings override
+    is silently ignored. An initialiser that IS a function or arrow (typed,
+    generic or async) defers the read to its call and is exempt, as is
+    `getKnob('x')` alone, which is the knob's METADATA (`const KNOB =
+    getKnob('x')!`). Any other initialiser is walked in full, nested arrows
+    included, so `KEYS.map((k) => configValue(k))` (which runs at import) is
+    flagged. It is an AST walk, so comments, wrapped lines, `as` casts and the
+    two-line `const KNOB = getKnob(…)!; … resolveKnob(KNOB)` route are all seen.
+    BLIND SPOTS: only top-level variable statements are visited (not a bare
+    top-level call/IIFE statement, a class static, or destructuring's wrapper
+    beyond its initialiser), and a read made through a helper
+    (`analyzer/analyzer-concurrency.ts:22`'s `new CountSemaphore(resolveK())`,
+    the same class, harmless there only because the semaphore is resized per
+    acquire) is not followed. */
+const VALUE_READ_CALLEES = new Set(['configValue', 'resolveKnob', 'resolveAll']);
+
+function unwrap(node: ts.Expression): ts.Expression {
+  let n = node;
+  while (
+    ts.isParenthesizedExpression(n) ||
+    ts.isNonNullExpression(n) ||
+    ts.isAsExpression(n) ||
+    ts.isSatisfiesExpression(n) ||
+    ts.isTypeAssertionExpression(n)
+  ) {
+    n = n.expression;
+  }
+  return n;
+}
+
+function calleeName(call: ts.CallExpression): string | undefined {
+  const e = call.expression;
+  return ts.isIdentifier(e) ? e.text : undefined;
+}
+
+function readsRegistryValue(node: ts.Node): boolean {
+  if (ts.isCallExpression(node)) {
+    const name = calleeName(node);
+    if (name && VALUE_READ_CALLEES.has(name)) return true;
+  }
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    const target = unwrap(node.expression);
+    if (ts.isCallExpression(target) && calleeName(target) === 'getKnob') return true;
+  }
+  return ts.forEachChild(node, readsRegistryValue) ?? false;
+}
 
 function moduleLoadReads(source: string): string[] {
-  return [...stripComments(source).matchAll(MODULE_LOAD_READ_RE)].map((m) => m[0].trim());
+  const sf = ts.createSourceFile('x.ts', source, ts.ScriptTarget.ES2022, true);
+  const out: string[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (!decl.initializer) continue;
+      const init = unwrap(decl.initializer);
+      if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) continue;
+      if (readsRegistryValue(decl.initializer)) out.push(decl.getText(sf).replace(/\s+/g, ' '));
+    }
+  }
+  return out;
 }
 
 describe('registry knobs read at module load (#4238 guard)', () => {
@@ -255,8 +302,9 @@ describe('registry knobs read at module load (#4238 guard)', () => {
     expect(moduleLoadReads("const SIZE = configValue<number>('tts.batch.size');")).toHaveLength(1);
     expect(moduleLoadReads("export const X = getKnob('a.b')?.default;")).toHaveLength(1);
     expect(moduleLoadReads("const ttl = () => clampTtlDays(configValue('a.b'));")).toEqual([]);
-    expect(moduleLoadReads("  const inFn = configValue('a.b');")).toEqual([]);
-    // anchored exemption: a function/arrow only exempts when it STARTS the initialiser
+    // only a top-level declaration is a module-load read
+    expect(moduleLoadReads("function g() {\n  const inFn = configValue('a.b');\n}")).toEqual([]);
+    // a callback that runs at import is still a module-load read
     expect(moduleLoadReads("const S = KEYS.map((k) => configValue<number>(k));")).toHaveLength(1);
     expect(moduleLoadReads("const S = typeof f === 'function' ? f() : configValue<number>('a');")).toHaveLength(1);
     expect(moduleLoadReads("const f = async (x: number) => configValue('a.b') + x;")).toEqual([]);
@@ -264,6 +312,28 @@ describe('registry knobs read at module load (#4238 guard)', () => {
     // getKnob returns metadata: only a value read off it counts
     expect(moduleLoadReads("const KNOB = getKnob('x')!;")).toEqual([]);
     expect(moduleLoadReads("const D = getKnob('x')!.default;")).toHaveLength(1);
+  });
+
+  it('flags resolveKnob/resolveAll reads and the cast / bracket / two-line forms (review pass 2)', () => {
+    expect(moduleLoadReads("const STATE = resolveKnob(getKnob('k')!);")).toHaveLength(1);
+    expect(moduleLoadReads("const STATE = resolveKnob(getKnob('k')!).effective;")).toHaveLength(1);
+    expect(moduleLoadReads("const D = (getKnob('k') as ConfigKnob).default;")).toHaveLength(1);
+    expect(moduleLoadReads("const D = getKnob('k')!['default'];")).toHaveLength(1);
+    expect(moduleLoadReads("const ALL = resolveAll();")).toHaveLength(1);
+    // two-line route: the first line is metadata, the second reads the value at import
+    const twoLine = "const KNOB = getKnob('tts.batch.size')!;\nexport const SIZE = resolveKnob(KNOB).effective as number;";
+    expect(moduleLoadReads(twoLine)).toHaveLength(1);
+    // a read wrapped onto the next line, and a comment that merely names the call
+    expect(moduleLoadReads("const X =\n  configValue<number>('a.b');")).toHaveLength(1);
+    expect(moduleLoadReads("// const X = configValue('a.b');\nconst Y = 1;")).toEqual([]);
+  });
+
+  it('exempts every typed / generic / async deferred form (review pass 2)', () => {
+    expect(moduleLoadReads("export const getSize = (): number => configValue<number>('tts.batch.size');")).toEqual([]);
+    expect(moduleLoadReads("const f = async (): Promise<number> => configValue<number>('a.b');")).toEqual([]);
+    expect(moduleLoadReads("const f: () => number = () => configValue<number>('a.b');")).toEqual([]);
+    expect(moduleLoadReads("const f = <T,>(x: T) => configValue('a.b') ?? x;")).toEqual([]);
+    expect(moduleLoadReads("const f = (<T,>(x: T) => resolveKnob(getKnob('a.b')!))")).toEqual([]);
   });
 
   it('no non-test server source reads a registry key into a module-level constant', () => {
