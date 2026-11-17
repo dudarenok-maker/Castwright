@@ -1,0 +1,319 @@
+{
+  "sentences": [
+    {
+      "id": 1,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Здесь холодно"
+    },
+    {
+      "id": 2,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.35,
+      "text": "Тьма — это ещё не конец"
+    },
+    {
+      "id": 3,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Слушай меня внимательно"
+    },
+    {
+      "id": 4,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Это очень важно"
+    },
+    {
+      "id": 5,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.5,
+      "text": "Идём",
+      "priorCharacterId": "mairin",
+      "sceneBreakBefore": true
+    },
+    {
+      "id": 6,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Куда именно",
+      "priorCharacterId": "tobias"
+    },
+    {
+      "id": 7,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "На чердак"
+    },
+    {
+      "id": 8,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "Хорошо"
+    },
+    {
+      "id": 9,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "После тебя"
+    },
+    {
+      "id": 10,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Ты видела чужие следы",
+      "priorCharacterId": "tobias"
+    },
+    {
+      "id": 11,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Да, у маяка",
+      "priorCharacterId": "mairin"
+    },
+    {
+      "id": 12,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Значит, не одни",
+      "priorCharacterId": "gerrik"
+    },
+    {
+      "id": 13,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.5,
+      "text": "Тогда идём осторожно",
+      "priorCharacterId": "unknown-male"
+    },
+    {
+      "id": 14,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.5,
+      "text": "После вас",
+      "priorCharacterId": "unknown-female"
+    }
+  ],
+  "structureReport": null,
+  "raw": [
+    {
+      "id": 1,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Здесь холодно"
+    },
+    {
+      "id": 2,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.35,
+      "text": "Тьма — это ещё не конец"
+    },
+    {
+      "id": 3,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Слушай меня внимательно"
+    },
+    {
+      "id": 4,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Это очень важно"
+    },
+    {
+      "id": 5,
+      "chapterId": 1,
+      "characterId": "mairin",
+      "confidence": 0.9,
+      "text": "Идём"
+    },
+    {
+      "id": 6,
+      "chapterId": 1,
+      "characterId": "tobias",
+      "confidence": 0.9,
+      "text": "Куда именно"
+    },
+    {
+      "id": 7,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "На чердак"
+    },
+    {
+      "id": 8,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "Хорошо"
+    },
+    {
+      "id": 9,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "После тебя"
+    },
+    {
+      "id": 10,
+      "chapterId": 1,
+      "characterId": "tobias",
+      "confidence": 0.9,
+      "text": "Ты видела чужие следы"
+    },
+    {
+      "id": 11,
+      "chapterId": 1,
+      "characterId": "mairin",
+      "confidence": 0.9,
+      "text": "Да, у маяка"
+    },
+    {
+      "id": 12,
+      "chapterId": 1,
+      "characterId": "gerrik",
+      "confidence": 0.9,
+      "text": "Значит, не одни"
+    },
+    {
+      "id": 13,
+      "chapterId": 1,
+      "characterId": "unknown-male",
+      "confidence": 0.5,
+      "text": "Тогда идём осторожно"
+    },
+    {
+      "id": 14,
+      "chapterId": 1,
+      "characterId": "unknown-female",
+      "confidence": 0.5,
+      "text": "После вас"
+    }
+  ],
+  "deterministic": [
+    {
+      "id": 1,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Здесь холодно"
+    },
+    {
+      "id": 2,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.35,
+      "text": "Тьма — это ещё не конец"
+    },
+    {
+      "id": 3,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Слушай меня внимательно"
+    },
+    {
+      "id": 4,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.3,
+      "text": "Это очень важно"
+    },
+    {
+      "id": 5,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.5,
+      "text": "Идём",
+      "priorCharacterId": "mairin"
+    },
+    {
+      "id": 6,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Куда именно",
+      "priorCharacterId": "tobias"
+    },
+    {
+      "id": 7,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "На чердак"
+    },
+    {
+      "id": 8,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "Хорошо"
+    },
+    {
+      "id": 9,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.4,
+      "text": "После тебя"
+    },
+    {
+      "id": 10,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Ты видела чужие следы",
+      "priorCharacterId": "tobias"
+    },
+    {
+      "id": 11,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Да, у маяка",
+      "priorCharacterId": "mairin"
+    },
+    {
+      "id": 12,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.9,
+      "text": "Значит, не одни",
+      "priorCharacterId": "gerrik"
+    },
+    {
+      "id": 13,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.5,
+      "text": "Тогда идём осторожно",
+      "priorCharacterId": "unknown-male"
+    },
+    {
+      "id": 14,
+      "chapterId": 1,
+      "characterId": "narrator",
+      "confidence": 0.5,
+      "text": "После вас",
+      "priorCharacterId": "unknown-female"
+    }
+  ],
+  "reasons": []
+}
