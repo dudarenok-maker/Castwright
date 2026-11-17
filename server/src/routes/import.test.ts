@@ -1162,3 +1162,54 @@ describe('POST /api/books — titleSynthesized persistence (#3628)', () => {
     }
   });
 });
+
+describe('POST /api/import — merged-paragraph flag (#2254)', () => {
+  const RU_PROSE =
+    'Старый дом стоял на краю деревни, и в нём давно никто не жил. ' +
+    'Ветер гулял по пустым комнатам, а осенний дождь стучал в разбитые окна. ' +
+    'Путник остановился у калитки и долго смотрел на тёмные окна. ';
+  const ES_PROSE =
+    'La casa antigua estaba al borde del pueblo y nadie vivía en ella desde hacía muchos años. ' +
+    'El viento recorría las habitaciones vacías mientras la lluvia golpeaba los cristales rotos. ' +
+    'El viajero se detuvo junto a la verja y miró durante largo rato las ventanas oscuras. ';
+  const EN_PROSE =
+    'The old house stood at the edge of the village, and nobody had lived in it for many years. ' +
+    'The wind wandered through the empty rooms while the autumn rain beat on the broken windows. ' +
+    'The traveller stopped at the gate and looked for a long time at the dark windows. ';
+
+  const ru12 = (sep: string) => Array.from({ length: 12 }, () => 'Он кивнул. — Да.').join(sep);
+  const body = (prose: string, merged: string) =>
+    `# Book\n\n## Chapter One\n\n${prose}${prose}\n\n${merged}\n\n## Chapter Two\n\n${prose}${prose}${prose}\n`;
+
+  async function importChapters(text: string) {
+    const res = await request(app).post('/api/import').send({ text, fileName: 'merged.md' });
+    expect(res.status).toBe(200);
+    return res.body.candidate as {
+      language: string;
+      chapters: Array<Record<string, unknown>>;
+    };
+  }
+
+  it('flags only the degraded chapter of a Russian import', async () => {
+    const c = await importChapters(body(RU_PROSE, ru12(' ')));
+    expect(c.language).toBe('ru');
+    expect(c.chapters).toHaveLength(2);
+    expect(c.chapters[0].paragraphsMerged).toBe(true);
+    expect(c.chapters[1]).not.toHaveProperty('paragraphsMerged');
+  });
+
+  it('emits no key for a Russian import with one turn per line', async () => {
+    const c = await importChapters(body(RU_PROSE, ru12('\n\n')));
+    expect(c.language).toBe('ru');
+    for (const ch of c.chapters) expect(ch).not.toHaveProperty('paragraphsMerged');
+  });
+
+  it.each([
+    ['es', ES_PROSE],
+    ['en', EN_PROSE],
+  ])('emits no key outside a notice language (%s)', async (lang, prose) => {
+    const c = await importChapters(body(prose, ru12(' ')));
+    expect(c.language).toBe(lang);
+    for (const ch of c.chapters) expect(ch).not.toHaveProperty('paragraphsMerged');
+  });
+});

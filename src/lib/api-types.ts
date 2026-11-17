@@ -5033,6 +5033,8 @@ export interface components {
                 wordCount?: number;
                 /** @description seam 3b — server-computed flag (title-union OR wordCount ≤ 150). Replaces the client-side regex mirror. */
                 isLikelyFrontMatter?: boolean;
+                /** @description Set (true) only when the detected language is a notice language (ru) and the chapter imported text has a paragraph with ten or more mid-paragraph dialogue openers (MERGED_TURNS_DEGRADED); absent otherwise. */
+                paragraphsMerged?: boolean;
             }[];
         };
         ImportResponse: {

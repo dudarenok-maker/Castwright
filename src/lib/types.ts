@@ -228,7 +228,15 @@ export interface ImportCandidate {
      server builds didn't expose it. isLikelyFrontMatter is server-computed
      since seam 3b (title-union OR wordCount ≤ 150); optional so older server
      builds stay compatible. */
-  chapters: Array<{ id: number; title: string; wordCount?: number; isLikelyFrontMatter?: boolean }>;
+  chapters: Array<{
+    id: number;
+    title: string;
+    wordCount?: number;
+    isLikelyFrontMatter?: boolean;
+    /* Server field `paragraphsMerged` (#2254): true only for a notice-language
+       chapter whose imported body is degraded; absent otherwise. */
+    paragraphsMerged?: boolean;
+  }>;
 }
 
 export interface ImportResponse {
