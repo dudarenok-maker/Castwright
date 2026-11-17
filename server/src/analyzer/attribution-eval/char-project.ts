@@ -5,8 +5,8 @@
    [start,end) match can be mapped back to exact chapterText offsets. NEVER
    use scorer.ts's normalise() here — it collapses whitespace/strips bracket
    tags and has no positional correspondence back to the original text.
-   normalizeForMatch now works per combining-mark run, and a span boundary
-   inside a run drops the unit (counted in `dropped`) rather than rounding.
+   normalizeForMatch now works per grapheme cluster (a "run"), and a span
+   boundary inside a run drops the unit (counted in `dropped`) rather than rounding.
 
    `stripTags` (opt-in) additionally removes inline `[...]` annotation tags
    (`[emphatic]`, `[structure: …]`) from BOTH the chapterText basis and each
@@ -23,7 +23,7 @@ import { buildNormIndex, normalizeForMatch } from './review-apply-core.js';
 export interface CharProjection {
   speakerByChar: Array<string | null>; // length === chapterText.length
   spans: Array<{ start: number; end: number; speakerId: string }>; // [start,end) in chapterText
-  dropped: number; // units whose text was NOT located at/after the cursor (skipped, chars stay null)
+  dropped: number; // units NOT painted, chars stay null: text not located at/after the cursor, OR located but its start/end falls inside a run (grapheme cluster / ellipsis fold)
 }
 
 /** Removes inline `[...]` annotation tags from `text`, collapsing any run of
@@ -84,7 +84,7 @@ export function projectToChars(
 
   // Build the normalized basis + its index map ONCE with the run-based index
   // shared with review-apply-core.ts. origAt[k] = basis index after k normalized
-  // chars, but only at a combining-mark-run boundary; positions inside a run's
+  // chars, but only at a run (grapheme-cluster) boundary; positions inside a run's
   // normalized output are null, so a match boundary there is refused, not rounded.
   const { norm, origAt } = buildNormIndex(basis);
 

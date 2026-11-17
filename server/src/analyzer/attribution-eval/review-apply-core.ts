@@ -22,16 +22,15 @@ export interface LiveSentence {
   vocalization?: boolean;
 }
 
-/** Matching unit = a RUN: one code point plus every immediately following
-    combining mark (\p{M}). A mark always joins the run before it; only a mark at
-    the very start of a string starts a run of its own. */
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** Matching unit = a RUN: one extended grapheme cluster (a user-perceived
+    character). That keeps a base with its combining marks (Mn, Mc and Me alike),
+    Hangul jamo, emoji with a skin-tone modifier or variation selector, ZWJ
+    sequences and regional-indicator flag pairs together, so a match boundary can
+    never fall inside one. */
 function splitRuns(text: string): string[] {
-  const runs: string[] = [];
-  for (const ch of text) {
-    if (runs.length > 0 && /\p{M}/u.test(ch)) runs[runs.length - 1] += ch;
-    else runs.push(ch);
-  }
-  return runs;
+  return Array.from(GRAPHEMES.segment(text), (s) => s.segment);
 }
 
 /** A run's normalized form: the quote/dash/ellipsis fold applies to the run's

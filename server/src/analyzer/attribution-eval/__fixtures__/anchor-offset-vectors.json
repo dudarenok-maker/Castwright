@@ -16,5 +16,15 @@
   { "name": "astral: NFC-stable emoji", "text": "Go \ud83d\ude00 now. Stop.", "anchor": "\ud83d\ude00 now.", "expectedTail": " Stop." },
   { "name": "folds: smart quotes and em dash", "text": "He paused\u2014then ran. \u201cStop,\u201d she said.", "anchor": "ran. \"Stop,\"", "expectedTail": " she said." },
   { "name": "refused: not unique", "text": "he said, he said", "anchor": "he said", "expectedTail": null },
-  { "name": "refused: absent", "text": "totally different", "anchor": "ran.", "expectedTail": null }
+  { "name": "refused: absent", "text": "totally different", "anchor": "ran.", "expectedTail": null },
+  { "name": "refused: anchor ends before a spacing vowel sign (Mc, Devanagari)", "text": "\u0915\u093f \u092c\u093e\u0924", "anchor": "\u0915", "expectedTail": null },
+  { "name": "control: anchor keeping the spacing vowel sign resolves (Mc, Devanagari)", "text": "\u0915\u093f \u092c\u093e\u0924", "anchor": "\u0915\u093f", "expectedTail": " \u092c\u093e\u0924" },
+  { "name": "refused: decomposed Hangul syllable, anchor stops before the final jamo", "text": "\u1112\u1161\u11ab\u1100\u116e\u11a8 \u1109\u1161\u1105\u1161\u11b7", "anchor": "\ud558", "expectedTail": null },
+  { "name": "control: decomposed Hangul text, whole-syllable anchor resolves", "text": "\u1112\u1161\u11ab\u1100\u116e\u11a8 \u1109\u1161\u1105\u1161\u11b7", "anchor": "\ud55c\uad6d", "expectedTail": " \u1109\u1161\u1105\u1161\u11b7" },
+  { "name": "refused: anchor ends between an emoji and its skin-tone modifier", "text": "Nice \ud83d\udc4d\ud83c\udffd job", "anchor": "Nice \ud83d\udc4d", "expectedTail": null },
+  { "name": "control: anchor keeping the skin-tone modifier resolves", "text": "Nice \ud83d\udc4d\ud83c\udffd job", "anchor": "Nice \ud83d\udc4d\ud83c\udffd", "expectedTail": " job" },
+  { "name": "refused: anchor ends inside a ZWJ family sequence", "text": "Home \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67 ok", "anchor": "Home \ud83d\udc68\u200d\ud83d\udc69", "expectedTail": null },
+  { "name": "control: anchor covering the whole ZWJ family resolves", "text": "Home \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67 ok", "anchor": "Home \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67", "expectedTail": " ok" },
+  { "name": "refused: anchor ends between the two halves of a regional-indicator flag", "text": "Vive \ud83c\uddeb\ud83c\uddf7 Paris", "anchor": "Vive \ud83c\uddeb", "expectedTail": null },
+  { "name": "control: anchor covering the whole flag resolves", "text": "Vive \ud83c\uddeb\ud83c\uddf7 Paris", "anchor": "Vive \ud83c\uddeb\ud83c\uddf7", "expectedTail": " Paris" }
 ]
