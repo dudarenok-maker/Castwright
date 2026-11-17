@@ -1193,6 +1193,9 @@ function prePushSpareReason(v, processes, root, knownRoots = []) {
  * `node_modules` junction that resolves to another checkout's path; only a
  * manual `npm run doctor -- --kill` can reap those. Spared candidates are
  * returned in `spared` (`{rootPid, reason}`) and logged as `spareReason`.
+ * `restrictTo` (a `Map<pid, {startedAt, approx}>`, verify-cache's timeout sweep)
+ * narrows the kill set to roots the caller itself recorded; every other
+ * orphan on the machine is left alone and unlogged.
  * With `prePushGuard` null (manual runs) behaviour is unchanged. Before each kill, `findKillRefusalReason`
  * re-checks the root's real OS descendant closure (not classify()'s subtree)
  * and refuses rather than kills when that closure reaches anything protected
@@ -1216,6 +1219,7 @@ export function runCensus({
   kill = false,
   killReasons = ['orphaned-unreachable', 'stalled-rate'],
   prePushGuard = null,
+  restrictTo = null,
   thresholds = DEFAULT_THRESHOLDS,
   now = Date.now(),
   killFn = killTree,
@@ -1243,6 +1247,14 @@ export function runCensus({
     for (const v of verdicts) {
       if (v.verdict !== 'reap') continue;
       if (!v.reasons.some((r) => killReasons.includes(r))) continue;
+      if (restrictTo) {
+        // Kill only a root the caller itself recorded (pid AND start time, so a
+        // recycled pid never matches). Not logged as a spare: everything else
+        // in a machine-wide census is simply not this caller's to touch.
+        const own = restrictTo.get(v.rootPid);
+        const live = processes.find((p) => p.pid === v.rootPid);
+        if (!own || (!own.approx && own.startedAt !== live?.startedAt)) continue;
+      }
       if (prePushGuard) {
         const spareReason = prePushSpareReason(v, processes, prePushGuard.root, prePushGuard.knownRoots ?? []);
         if (spareReason) {

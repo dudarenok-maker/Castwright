@@ -1864,12 +1864,15 @@ export async function runStepProcess(
         // re-sweep walks them from the dead root instead. POSIX: the group kill.
         if (!(windows && exitedAt != null)) killTreeFn(child);
         try {
-          // Provably-orphaned only (dead parent) — a narrower scope than
-          // a manual doctor --kill, and deliberately without the pre-push
-          // reap's stalled-rate and in-checkout guards (#4222): this sweep
-          // follows this step's own just-killed timeout, not a foreign
-          // run; a merely-slow-but-live subtree is not this sweep's job.
-          censusFn({ kill: true, killReasons: ['orphaned-unreachable'] });
+          // Provably-orphaned only (dead parent), and ONLY roots from this
+          // step's own pre-kill closure (`known`): the census is machine-wide,
+          // and this sweep runs from pre-push (`--steps test:sidecar`), so an
+          // unscoped kill would reap every other lane's orphaned battery
+          // (#4222). Deliberately without the pre-push reap's stalled-rate
+          // guard: this step's own orphans were busy when the timeout killed
+          // their parent. POSIX has no `known` (group kill), so it restricts
+          // to nothing.
+          censusFn({ kill: true, killReasons: ['orphaned-unreachable'], restrictTo: known ?? new Map() });
         } catch {
           // Best-effort — never let the reaper sweep mask the timeout outcome.
         }
