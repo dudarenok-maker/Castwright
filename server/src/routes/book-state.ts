@@ -10,6 +10,7 @@
    middleware in Phase 5. A `'revisions'` slice is refused (400
    `revisions_server_owned`) — the server owns revisions.json (plan 286). */
 
+import { assertSlugBinding, SlugBoundError, SLUG_BOUND_SENTENCE } from '../workspace/put-slug-binding.js';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { readFile, readdir, rm, writeFile, unlink } from 'node:fs/promises';
@@ -1577,6 +1578,11 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            own output (what would land, language normalised as written) with the
            fresh read, for the fields the patch carries. */
         const buildNext = (state: BookStateJson, check = false): BookStateJson => {
+          if (check && patch.chapters) {
+            /* #4341 (R4-4, R5-8, R6-5) - decided on the locked fresh read,
+               before anything is written; nothing is written on refusal. */
+            assertSlugBinding(patch.chapters, state.chapters, audioDir(bookDir));
+          }
           const next = mergeState(state);
           if (check) {
             assertRevisionFresh(
@@ -1660,6 +1666,10 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   } catch (e) {
     const refusal = bookOpRefusal(e, 'rename');
     if (refusal) return res.status(refusal.status).json(refusal.body);
+    /* #4341 -- a slug-binding refusal (R4-4, R5-8, R6-5): fixed, path-free sentence; nothing written. */
+    if (e instanceof SlugBoundError) {
+      return res.status(409).json({ error: 'slug_bound', message: SLUG_BOUND_SENTENCE });
+    }
     /* Plan 289 -- a conditional write carrying a stale field. Fixed, path-free
        sentence; nothing was written. `fields` are names from the slice's fixed
        field list (they come from `staleFields`), never values, paths or lock text. */

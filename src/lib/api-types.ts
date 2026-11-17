@@ -13315,6 +13315,14 @@ export interface operations {
              *     and a field the write would change has moved on disk since that
              *     base. Nothing was written; re-read the book. A request without
              *     `baseRevision` is never refused this way.
+             *
+             *     #4341 — `slug_bound` (`{ error: 'slug_bound', message }`): a state
+             *     save carrying `chapters` is refused, and nothing is written, when it
+             *     changes a matched chapter's `slug` or `excluded`, gives an unmatched
+             *     chapter a slug a disk chapter holds or that has a take on disk, or
+             *     omits a disk chapter that has a take on disk (live or previous).
+             *     Chapters match by `uuid`, else `id`. Chapter files move only through
+             *     the chapter restructure tools. The message names no path.
              */
             409: {
                 headers: {
@@ -13323,6 +13331,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @description Present with `error: slug_bound`; a fixed, path-free sentence. */
+                        message?: string;
                         /** @enum {string} */
                         code?: "book_busy" | "book_path_taken" | "book_folder_in_use" | "stale_revision";
                         /** @description Present only with `code: stale_revision`: the carried fields whose base revision is stale (names from the slice's fixed field list). Never a path or lock text. */
