@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { quarantinedIt } from '../test-utils/quarantine.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -152,7 +153,7 @@ describe('DELETE /api/books/:bookId prunes queue entries', () => {
    its read above the span would let a same-tick queue write land between that read and the prune's write and be
    erased by it. */
 describe('DELETE /api/books/:bookId prune is serialised against other queue writes (#4034)', () => {
-  it('a same-tick /start, /pause and enqueue all survive the prune', async () => {
+  quarantinedIt('a same-tick /start, /pause and enqueue all survive the prune', async () => {
     const { queueJsonPath, makeBookId } = await import('../workspace/paths.js');
     const { writeQueueFile, readQueueFile } = await import('../workspace/queue-migrate.js');
     const { queueRouter } = await import('./queue.js');

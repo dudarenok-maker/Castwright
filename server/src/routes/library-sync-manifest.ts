@@ -26,6 +26,7 @@ import {
   buildSyncManifestBookDetail,
   type ChapterAudioFact,
 } from '../workspace/sync-manifest.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const syncManifestRouter = Router();
 
@@ -149,6 +150,6 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
     console.error('[sync-manifest] failed', e);
     res
       .status(500)
-      .json({ error: (e as Error).message || 'Failed to build sync manifest.' });
+      .json({ error: requestFailureMessageFs(e, (e as Error).message || 'Failed to build sync manifest.') });
   }
 });

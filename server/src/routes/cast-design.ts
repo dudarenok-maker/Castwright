@@ -348,9 +348,11 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu:
       if ((character.voiceStyle ?? '').trim()) continue;
       if (character.overrideTtsVoices?.qwen?.name) continue;
 
-      let persona: string;
       try {
-        persona = await generateVoiceStylePersona(character, { ...prep, signal: job.controller.signal });
+        const persona = await generateVoiceStylePersona(character, { ...prep, signal: job.controller.signal });
+        // Minimal-patch write so a concurrent edit to another character survives. Inside the same
+        // try as the generate, like the lazy path: an fs error here fails this character, not the run.
+        await writeVoiceStylePersona(job.bookDir, characterId, persona);
       } catch (err) {
         /* A pause aborted the call (the job signal reaches the transport): a clean stop, not a failure. */
         if (job.controller.signal.aborted) return;
@@ -370,18 +372,15 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu:
         }
         // Per-character failure: record + skip; the design loop will skip this char.
         const message = (err as Error).message || 'Persona generation failed.';
-        job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+        const reason = itemFailureReason(err, requestFailureMessageFs(err, message));
+        job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
         broadcast(job, {
           type: 'character_failed',
           characterId,
           name: character.name ?? characterId,
-          errorReason: message,
+          errorReason: reason,
         });
-        continue;
       }
-
-      // Minimal-patch write so a concurrent edit to another character survives.
-      await writeVoiceStylePersona(job.bookDir, characterId, persona);
     }
   } finally {
     clearInterval(beat);
@@ -633,7 +632,7 @@ async function runDesignJob(
              character_failed, and continue to the NEXT character. Do not
              rethrow — one persona failure must not fail the other N. */
           const message = (e as Error).message || 'Persona generation failed.';
-          const reason = itemFailureReason(e, message);
+          const reason = itemFailureReason(e, requestFailureMessageFs(e, message));
           job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',
@@ -790,7 +789,11 @@ async function runDesignJob(
             break;
           }
           const message = (e as Error).message || 'Voice design failed.';
-          if (isSidecarRestartClass(e, message)) {
+          /* #4236 -- the restart scan reads the CURATED text, never the raw message: an fs error and a lock
+             timeout both embed a path (the lock key), and a book / author / series titled "The Unreachable"
+             would match SIDECAR_DOWN_RE and halt the run as a sidecar restart. Computed once -- it logs. */
+          const curated = requestFailureMessageFs(e, message);
+          if (isSidecarRestartClass(e, curated)) {
             /* Sidecar down/recycling/poison-restarting. Ride out the respawn
                and retry this character — unless we've exhausted the budget
                (genuinely dead) or the job was cancelled, in which case stop
@@ -819,7 +822,7 @@ async function runDesignJob(
             endJob(job, {
               type: 'error',
               code: 'sidecar_unavailable',
-              message: `${message} (${job.done} of ${job.total} designed before this happened.)`,
+              message: `${curated} (${job.done} of ${job.total} designed before this happened.)`,
             });
             return;
           }
@@ -854,7 +857,7 @@ async function runDesignJob(
              contention rather than implying the character itself is at fault.
              The same string on both surfaces so the live toast and the
              end-of-job `failures` list can't disagree. */
-          const reason = itemFailureReason(e, requestFailureMessageFs(e, message));
+          const reason = itemFailureReason(e, curated);
           job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
           broadcast(job, {
             type: 'character_failed',
@@ -1098,7 +1101,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
       endJob(job, {
         type: 'error',
         code: classifyAnalysisFailure(e, 'Persona generation').code,
-        message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
+        message: requestFailureMessageFs(e, (e as Error).message || 'Cast design failed.'),
       });
     }
   });

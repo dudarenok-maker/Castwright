@@ -13,10 +13,12 @@ import {
   mkdirSync,
   statSync,
   existsSync,
+  readdirSync,
+  renameSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import sharp from 'sharp';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
@@ -25,8 +27,42 @@ import {
   buildConcatList,
   escapeConcatSingleQuotes,
   ExportIncompleteError,
+  probeDurationSec,
 } from './build-m4b.js';
 import type { BookStateJson } from '../workspace/scan.js';
+
+/* Seams for the #4223 snapshot tests. Both default to pass-through, so every
+   other test in this file runs against the real child_process / fs. */
+const seams = vi.hoisted(() => ({
+  onSpawn: null as null | ((cmd: string) => void),
+  linkFails: false,
+  onLink: null as null | (() => void),
+}));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: ((cmd: string, ...rest: unknown[]) => {
+      seams.onSpawn?.(cmd);
+      return (actual.spawn as (...a: unknown[]) => unknown)(cmd, ...rest);
+    }) as typeof actual.spawn,
+  };
+});
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    link: ((...a: Parameters<typeof actual.link>) => {
+      seams.onLink?.();
+      if (seams.linkFails) {
+        return Promise.reject(Object.assign(new Error('EXDEV'), { code: 'EXDEV' }));
+      }
+      return actual.link(...a);
+    }) as typeof actual.link,
+  };
+});
 
 const toolsPresent = (() => {
   try {
@@ -245,6 +281,49 @@ describeIfTools('buildM4b', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
+  /* #4236 -- ffprobe's stderr names the input path; the rejection's message must not, and the
+     stderr stays on the error for the export job's log. */
+  it('probeDurationSec rejects with a path-free message and keeps the stderr on the error', async () => {
+    const bad = join(tmpRoot, 'not-audio.mp3');
+    writeFileSync(bad, 'this is not an mp3 at all');
+    const err = await probeDurationSec(bad).then(
+      () => null,
+      (e: Error & { ffmpegStderr?: string }) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/^ffprobe exited with code \d+/);
+    expect(err!.message).not.toContain(tmpRoot);
+    expect(err!.message).not.toContain('not-audio.mp3');
+    expect(err!.ffmpegStderr).toContain('not-audio.mp3');
+  });
+
+  /* #4236 -- the non-positive-duration rejection must not carry the input path either. A WAV with a
+     header and no samples probes as a zero-length file: ffprobe exits 0 and reports duration 0. */
+  it('probeDurationSec rejects a zero-length file with a path-free message', async () => {
+    const empty = join(tmpRoot, 'empty-audio.wav');
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(36, 4);
+    header.write('WAVEfmt ', 8, 'ascii');
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(44100, 24);
+    header.writeUInt32LE(88200, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36, 'ascii');
+    header.writeUInt32LE(0, 40);
+    writeFileSync(empty, header);
+    const err = await probeDurationSec(empty).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/^ffprobe returned non-positive duration/);
+    expect(err!.message).not.toContain(tmpRoot);
+    expect(err!.message).not.toContain('empty-audio.wav');
+  });
   it('produces an MP4 audio file with AAC mono 44.1 kHz and one chapter per non-excluded source', async () => {
     const result = await buildM4b({ bookDir, state: makeState(), outPath });
 
@@ -368,9 +447,18 @@ describeIfTools('buildM4b', () => {
       /* Verbatim: ffmpeg sees the TS stream and the mux fails. */
       writeFileSync(coverPath, poisoned);
       expect(probeFormat(coverPath)).toContain('mpegts');
-      await expect(
-        buildM4b({ bookDir, state: makeState(), outPath: join(tmpRoot, 'poisoned.m4b') }),
-      ).rejects.toThrow(/ffmpeg exited/);
+      const failure = await buildM4b({
+        bookDir,
+        state: makeState(),
+        outPath: join(tmpRoot, 'poisoned.m4b'),
+      }).then(
+        () => null,
+        (e: Error & { ffmpegStderr?: string }) => e,
+      );
+      expect(failure?.message).toMatch(/^ffmpeg exited with code/);
+      /* #4236 -- the message is path-free; the full stderr rides on `ffmpegStderr`. */
+      expect(failure?.message).not.toContain(tmpRoot);
+      expect(failure?.ffmpegStderr).toBeTruthy();
 
       /* After the upload path's re-encode the same bytes mux cleanly. */
       writeFileSync(coverPath, await reencodeToJpeg(poisoned, { tolerant: true }));
@@ -528,6 +616,119 @@ describeIfTools('buildM4b', () => {
     const tags = ffprobeJson(out).format.tags ?? {};
     expect(tags.grouping).toBe('The Coalfall Saga');
     expect(tags.disc).toBe('2');
+  });
+});
+
+describeIfTools('buildM4b chapter-audio snapshot (#4223)', () => {
+  let tmpRoot: string;
+  let bookDir: string;
+  let outPath: string;
+
+  beforeEach(async () => {
+    seams.onSpawn = null;
+    seams.linkFails = false;
+    tmpRoot = mkdtempSync(join(tmpdir(), 'build-m4b-snap-'));
+    bookDir = join(tmpRoot, 'book');
+    mkdirSync(join(bookDir, 'audio'), { recursive: true });
+    outPath = join(tmpRoot, 'out.m4b');
+    for (const slug of ['01-chapter-1', '02-chapter-2', '04-chapter-3']) {
+      const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+      writeFileSync(join(bookDir, 'audio', `${slug}.mp3`), mp3);
+    }
+  });
+
+  afterAll(() => {
+    seams.onSpawn = null;
+    seams.linkFails = false;
+    seams.onLink = null;
+  });
+
+  const stagingLeft = () => readdirSync(tmpRoot).filter((n) => n.includes('.staging-'));
+
+  it('chapter marks match the audio that was concatenated when a live file is swapped after the probe', async () => {
+    /* A committing render replaces the live file (new file renamed over the
+       old path) with audio 5x longer, right as the concat ffmpeg spawns —
+       i.e. after every probe. */
+    const longer = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 1.0), 24_000, { quality: 9 });
+    let swapped = false;
+    seams.onSpawn = (cmd) => {
+      if (cmd !== 'ffmpeg' || swapped) return;
+      swapped = true;
+      const tmp = join(bookDir, 'audio', '01-chapter-1.mp3.new');
+      writeFileSync(tmp, longer);
+      renameSync(tmp, join(bookDir, 'audio', '01-chapter-1.mp3'));
+    };
+
+    await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(swapped).toBe(true);
+
+    const probe = ffprobeJson(outPath);
+    const lastEnd = Math.max(...probe.chapters.map((c) => Number(c.end_time)));
+    expect(Math.abs(Number(probe.format.duration) - lastEnd)).toBeLessThan(0.15);
+  });
+
+  it('chapter marks match the audio that was concatenated when a live file is swapped before the probe', async () => {
+    /* The mirror image of the swap above: the replacement lands right as the
+       FIRST ffprobe spawns, i.e. between the snapshot and the probes. Marks
+       derived by probing the live path would then come from the new take
+       while the concat still carries the snapshot's old audio. */
+    const longer = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 1.0), 24_000, { quality: 9 });
+    let swapped = false;
+    seams.onSpawn = (cmd) => {
+      if (cmd !== 'ffprobe' || swapped) return;
+      swapped = true;
+      const tmp = join(bookDir, 'audio', '01-chapter-1.mp3.new');
+      writeFileSync(tmp, longer);
+      renameSync(tmp, join(bookDir, 'audio', '01-chapter-1.mp3'));
+    };
+
+    await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(swapped).toBe(true);
+
+    const probe = ffprobeJson(outPath);
+    /* Each snapshot is 0.2 s. Marks probed from the swapped live file would
+       put chapter 2 at 1.0 s (the muxer then drops or clamps the marks past
+       the audio's end, so the last end alone cannot show it). */
+    expect(probe.chapters).toHaveLength(3);
+    probe.chapters.forEach((c, i) => {
+      expect(Math.abs(Number(c.start_time) - i * 0.2)).toBeLessThan(0.15);
+    });
+    const lastEnd = Math.max(...probe.chapters.map((c) => Number(c.end_time)));
+    expect(Math.abs(Number(probe.format.duration) - lastEnd)).toBeLessThan(0.15);
+  });
+
+  it('still builds when hard-linking is impossible (copy fallback)', async () => {
+    seams.linkFails = true;
+    const result = await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(result.chapterCount).toBe(3);
+    expect(statSync(outPath).size).toBeGreaterThan(0);
+  });
+
+  it('leaves no staging dir or snapshot behind on success', async () => {
+    await buildM4b({ bookDir, state: makeState(), outPath });
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  it('leaves no staging dir or snapshot behind when the export fails after snapshotting', async () => {
+    const ac = new AbortController();
+    seams.onSpawn = (cmd) => {
+      if (cmd === 'ffprobe') ac.abort();
+    };
+    await expect(
+      buildM4b({ bookDir, state: makeState(), outPath, signal: ac.signal }),
+    ).rejects.toThrow();
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  it('leaves no staging dir or snapshot behind when the export is aborted mid-snapshot', async () => {
+    const ac = new AbortController();
+    seams.onSpawn = null;
+    seams.onLink = () => ac.abort();
+    await expect(
+      buildM4b({ bookDir, state: makeState(), outPath, signal: ac.signal }),
+    ).rejects.toThrow();
+    seams.onLink = null;
+    expect(stagingLeft()).toEqual([]);
   });
 });
 

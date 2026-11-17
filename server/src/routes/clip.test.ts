@@ -10,7 +10,7 @@
    ffmpeg isn't installed the happy-path test skips with a clear banner;
    validation + 404 cases are independent of ffmpeg and always run. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -211,6 +211,18 @@ describe('share-clip route', () => {
       expect(res.status).toBe(200);
       /* Math.floor(1.4) === 1 → start label is 1s */
       expect(res.headers['content-disposition']).toMatch(/chapter-one-clip-1s\.mp3/);
+    });
+
+    /* #4236 -- ffmpeg's stderr names the input path; the 500 body is a path-free summary. */
+    it('a failing ffmpeg answers a 500 whose body carries no path', async () => {
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      writeFileSync(join(audioRoot, `${SLUG}.mp3`), 'this is not an mp3 at all');
+      const res = await request(app).get(`/api/books/${bookId}/chapters/1/clip?start=0&duration=0.5`);
+      quiet.mockRestore();
+      expect(res.status).toBe(500);
+      expect(res.body.message).toMatch(/^ffmpeg exited with code \d+/);
+      expect(res.text).not.toContain(workspaceRoot);
+      expect(res.text).not.toContain(TITLE);
     });
   });
 });

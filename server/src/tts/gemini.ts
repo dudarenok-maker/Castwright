@@ -10,6 +10,7 @@
    An ElevenLabs v3 adapter (when added) consumes them as documented tags. */
 
 import { GoogleGenAI } from '@google/genai';
+import { GEMINI_API_VERSION } from '../analyzer/catalog/gemini-catalog.js';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
 import { resolveGeminiModelId } from './model-keys.js';
 import { SYNTH_CALL_TIMEOUT_MS } from './synth-call-timeout.js';
@@ -30,7 +31,7 @@ export class GeminiTtsProvider implements TtsProvider {
   private readonly client: GoogleGenAI;
 
   constructor(opts: GeminiTtsOptions) {
-    this.client = new GoogleGenAI({ apiKey: opts.apiKey });
+    this.client = new GoogleGenAI({ apiKey: opts.apiKey, apiVersion: GEMINI_API_VERSION });
   }
 
   async synthesize({ text, voiceName, modelKey, signal }: SynthesizeInput): Promise<SynthesizeOutput> {

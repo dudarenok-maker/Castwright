@@ -33,7 +33,7 @@ import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import {
   ANALYSIS_RUNNING_REASON,
   RESTRUCTURING_REASON,
-  refuseIfEditsLocked,
+  refuseIfManuscriptEditsLocked,
   selectEditsLocked,
 } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
@@ -156,7 +156,7 @@ export function ManuscriptView({
      boundary_move log, markStale), so a refused edit is never recorded. */
   const appStore = useStore<RootState>();
   const editsLocked = useAppSelector(selectEditsLocked);
-  const refuseIfLocked = () => refuseIfEditsLocked(appStore.getState, dispatch);
+  const refuseIfLocked = () => refuseIfManuscriptEditsLocked(appStore.getState, dispatch);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   /* Plan 276 — disables "Approve cast & start generating" while
@@ -2074,7 +2074,7 @@ function SegmentRow({
                     title={editsLocked ? RESTRUCTURING_REASON : undefined}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (refuseIfEditsLocked(appStore.getState, dispatch)) return;
+                      if (refuseIfManuscriptEditsLocked(appStore.getState, dispatch)) return;
                       dispatch(manuscriptActions.setSentenceExcluded({ chapterId: s.chapterId, sentenceId: s.id, excluded: false }));
                       markStale({ id: s.characterId, name: char?.name ?? s.characterId });
                     }}

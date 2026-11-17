@@ -27,7 +27,7 @@ import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import {
   bookExportManifestsDir,
   bookExportsDir,
@@ -461,7 +461,7 @@ async function createExportJob(
     .catch(async (e) => {
       console.error(`[export] runExportJob rejected unexpectedly for ${job.id}:`, e);
       job.status = 'failed';
-      job.errorReason = (e as Error)?.message || 'Export failed unexpectedly.';
+      job.errorReason = requestFailureMessageFs(e, (e as Error)?.message || 'Export failed unexpectedly.');
       job.completedAt = new Date().toISOString();
       jobs.set(job.id, { ...job });
       jobControllers.delete(job.id);
@@ -733,6 +733,27 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
   return out;
 }
 
+/* A builder that resolves does not mean the export is still wanted: a zip
+   builder registers every chapter up front and can finish after DELETE has
+   already flipped the job to `cancelled`. Checked before each step that makes
+   the artifact visible (rename into place, sync-folder copy, `done`) so a
+   cancelled job ends cancelled and drops its own artifact — DELETE no longer
+   waits for the build, so its own artifact cleanup can run before the file
+   exists. Drops `artifact` (the file or, for mp3-folder, the folder) first.
+   One exception: an export cancelled after its sync-folder copy leaves that
+   copy (single-file and mp3-folder alike), because the copy is renamed over
+   the previous export's flat-named one (#4228). */
+async function bailIfCancelled(
+  signal: AbortSignal,
+  artifact?: { path: string; folder?: boolean },
+): Promise<void> {
+  if (!signal.aborted) return;
+  if (artifact) {
+    await rm(artifact.path, { recursive: artifact.folder === true, force: true }).catch(() => {});
+  }
+  signal.throwIfAborted();
+}
+
 async function runExportJob(
   job: BookExportJob,
   bookDir: string,
@@ -760,6 +781,7 @@ async function runExportJob(
       });
       job.sizeBytes = folderResult.totalBytes;
       job.progress = 1;
+      await bailIfCancelled(signal, { path: outPath, folder: true });
 
       if (syncFolder) {
         /* fs-54 — author-level nesting, applied to every sync-folder
@@ -771,6 +793,7 @@ async function runExportJob(
         const bookSubfolder = sanitiseForZip(state.title);
         const synced = await writeFolderToSyncFolder(outPath, authoredSyncDir, bookSubfolder);
         job.syncPath = synced.syncPath;
+        await bailIfCancelled(signal, { path: outPath, folder: true });
       }
       /* No downloadUrl for folder exports — the route-layer guard
          already refuses the format + download combo, so leaving the
@@ -824,7 +847,9 @@ async function runExportJob(
         if (job.format === 'captions') {
           job.warning = (result as { warning?: string }).warning ?? null;
         }
+        await bailIfCancelled(signal, { path: buildPath });
         await renameWithRetry(buildPath, outPath);
+        await bailIfCancelled(signal, { path: outPath });
       } catch (e) {
         /* On any failure (including cancel) the partial file is dropped
            so a `<bookDir>/exports/` listing never shows half-baked
@@ -838,11 +863,24 @@ async function runExportJob(
         const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
         const synced = await writeToSyncFolder(outPath, authoredSyncDir, job.filename);
         job.syncPath = synced.syncPath;
+        /* The sync copy is renamed over the flat `<syncFolder>/<author>/<filename>`
+           name, where the previous completed export's copy lives, so it is left
+           in place — same as the mp3-folder branch (#4228). */
+        await bailIfCancelled(signal, { path: outPath });
       }
       job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     }
     job.status = 'done';
     job.completedAt = new Date().toISOString();
+    /* Publish `done` to the jobs map in the same synchronous step as the last
+       cancel check, before any await: DELETE edits the map's copy, so until
+       this runs a DELETE landing during the revoke below would read
+       `in_progress`, unlink the finished artifact, and the `finally` would
+       then write `done` + `downloadUrl` back over it. After this, a DELETE
+       sees `done` and is a no-op. Keep NO awaited step (setTimeout, await)
+       between the last cancel check and this publish: it would reopen the
+       gap, and no test pins the ordering. */
+    jobs.set(job.id, { ...job });
     /* Plan 79 — clobber-newest-wins on disk PLUS revoke any older
        manifest for the same (book, format). Together they keep the
        queue de-duped: one row per format, always pointing at the
@@ -859,15 +897,26 @@ async function runExportJob(
       if (job.status !== 'cancelled') {
         job.status = 'cancelled';
         job.completedAt = new Date().toISOString();
-        job.errorReason = (e as Error)?.message || 'Cancelled.';
+        /* Only DELETE aborts the controller, so an aborted signal means the
+           user cancelled; its own status flip landed on the jobs map's copy,
+           not on this object. */
+        job.errorReason = signal.aborted ? 'Cancelled by user.' : (e as Error)?.message || 'Cancelled.';
       }
     } else {
       job.status = 'failed';
       job.errorReason =
         e instanceof ExportIncompleteError
           ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
-          : (e as Error).message;
+          : requestFailureMessageFs(e, (e as Error).message);
       job.completedAt = new Date().toISOString();
+      /* The client-facing reason above is curated (no workspace path); the
+         raw error — with ffmpeg/ffprobe stderr, which the scrubbed message
+         drops — goes to the log. */
+      console.error(
+        `[export] job ${job.id} failed:`,
+        e,
+        (e as { ffmpegStderr?: string })?.ffmpegStderr ?? '',
+      );
     }
   } finally {
     jobs.set(job.id, { ...job });

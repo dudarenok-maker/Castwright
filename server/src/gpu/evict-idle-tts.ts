@@ -207,7 +207,11 @@ export interface EvictIdleQwenBaseOpts {
       passes the BOOK's model key, which says nothing about what the design
       itself loads (the 1.7B VoiceDesign model), so this is what tells the
       lever a design needs neither Qwen base tier resident. */
-  purpose?: 'design';
+  purpose?: 'design' | 'mint';
+  /* #4102 — `'mint'` is a variant mint (`/qwen/mint-variant`): it needs the
+      1.7B-Base resident (its sidecar admission protects it), so the lever keeps
+      the 1.7B tier and frees only the 0.6B. It is still a heavy op: it reclaims
+      an on-GPU Kokoro and declines under another resident VoiceDesign. */
   /** #4066 — the device the blocked admission was denied on. A VoiceDesign
       resident on it makes a design/Quality op decline (`'declined'`). Absent
       means unknown, which declines on any resident VoiceDesign. */
@@ -319,10 +323,14 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
      op keeps the same elevate-only behaviour as before: it only reclaims
      the ONE tier it doesn't itself want. */
   const isQwenOp = engineForModelKey(modelKey) === 'qwen';
-  const isDesign = opts.purpose === 'design';
+  const isMint = opts.purpose === 'mint';
+  const isDesign = opts.purpose === 'design' || isMint;
   const wants17 = !isDesign && modelKey === 'qwen3-tts-1.7b';
-  const keep: ResidentTtsKeep =
-    isQwenOp && !isDesign ? { keep06: !wants17, keep17: wants17 } : { keep06: false, keep17: false };
+  const keep: ResidentTtsKeep = isMint
+    ? { keep06: false, keep17: true }
+    : isQwenOp && !isDesign
+      ? { keep06: !wants17, keep17: wants17 }
+      : { keep06: false, keep17: false };
 
   /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro. Residency
      is read up front only to decide that (and whether another design is

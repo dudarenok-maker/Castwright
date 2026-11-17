@@ -7,6 +7,10 @@ export interface ApplyProposedDeps {
   setSentenceCharacter: (chapterId: number, sentenceId: number, characterId: string) => void;
   onBoundaryMove: (chapterId: number) => void;
   isSameBook: () => boolean;
+  /** #4098 — re-checked before each op is applied (and again after its create's
+      await): true stops the run, so no further op is applied or resolved. The
+      caller surfaces why. Optional; absent never stops. */
+  shouldStop?: () => boolean;
   /** Fires immediately after EVERY successfully-applied op, including one
       that reused an existing/memoized id and never called createCharacter
       (design spec §6.5) — lets the caller resolve this op server-side
@@ -19,8 +23,11 @@ export interface ApplyProposedDeps {
 const norm = (s: string) => s.trim().toLowerCase();
 
 /* fs-58 Unit B — off-roster reattribute apply. INTERLEAVED create→reassign so a
-   cancel/failure leaves a self-consistent partial (no created member without a
-   line). Dedup by normalized name against roster ∪ createdThisBatch BEFORE the
+   cancel/failure leaves a self-consistent partial. One narrow window remains: a
+   stop (book switch, or #4098's era stop) right after the create's await leaves
+   a created member with no line. The server refuses creates mid-run (R55), so
+   it needs the era to land just after the create; it is recoverable, since the
+   ledger op is kept and re-applying it offers "Reattribute to «X»". Dedup by normalized name against roster ∪ createdThisBatch BEFORE the
    POST. Re-check isSameBook() after every await (concurrent-multi-book guard). */
 export async function applyProposedReattributions(
   proposed: ReviewOpWithChapter[],
@@ -31,6 +38,7 @@ export async function applyProposedReattributions(
   let created = 0;
   for (const op of proposed) {
     if (!op.proposed) continue;
+    if (deps.shouldStop?.()) return { created, createdCharacters, aborted: true };
     const key = norm(op.proposed.name);
     let id = deps.rosterByName.get(key)?.id ?? memo.get(key);
     if (!id) {
@@ -42,6 +50,7 @@ export async function applyProposedReattributions(
       createdCharacters.push({ id: c.id, name: c.name });
       created += 1;
     }
+    if (deps.shouldStop?.()) return { created, createdCharacters, aborted: true };
     deps.setSentenceCharacter(op.chapterId, op.id, id);
     deps.onBoundaryMove(op.chapterId);
     deps.onOpApplied(op);

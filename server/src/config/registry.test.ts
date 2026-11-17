@@ -23,6 +23,12 @@ describe('config registry', () => {
     ]);
   });
 
+  it('the five Qwen batching knobs are live (read per render, #4238)', () => {
+    for (const key of ['tts.batch.size', 'tts.batch.tokenBudget', 'tts.batch.size17b', 'tts.batch.tokenBudget17b', 'tts.batch.bucket']) {
+      expect(getKnob(key)?.apply, key).toBe('live');
+    }
+  });
+
   it('every knob has a unique key and a registered group', () => {
     const keys = new Set<string>();
     const groupIds = new Set(GROUPS.map((g) => g.id));

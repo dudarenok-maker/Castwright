@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,9 +25,17 @@ vi.mock('../tts/mp3.js', () => ({
   encodePcmToAudio: vi.fn().mockResolvedValue(Buffer.from([0xff])),
 }));
 
+/* #3712: the readiness probe must never run a real Python lookup. */
+vi.mock('../tts/python-discovery.js', () => ({ findPython312: () => null }));
+
 import { setupReadinessRouter } from './setup-readiness.js';
+import { _resetPythonProbeCacheForTests } from './setup-diagnosis.js';
 
 let audioDir: string;
+
+beforeEach(() => {
+  _resetPythonProbeCacheForTests();
+});
 
 beforeAll(() => {
   audioDir = mkdtempSync(join(tmpdir(), 'castwright-smoke-test-'));
@@ -88,5 +96,31 @@ describe('POST /api/setup/smoke', () => {
     expect(res.body.stage).toBe('synth');
     expect(typeof res.body.error).toBe('string');
     expect(res.body.error).toContain('sidecar down');
+  });
+
+  it('never puts an absolute path in the response when an fs step throws (#4233)', async () => {
+    const { encodePcmToAudio } = await import('../tts/mp3.js');
+    const secret = join(tmpdir(), 'Some Author', 'setup-smoke.mp3');
+    vi.mocked(encodePcmToAudio).mockRejectedValueOnce(
+      Object.assign(new Error(`EBUSY: resource busy or locked, open '${secret}'`), {
+        code: 'EBUSY',
+        syscall: 'open',
+        path: secret,
+      }),
+    );
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const app = express();
+      app.use('/api/setup', setupReadinessRouter);
+      const res = await request(app).post('/api/setup/smoke');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(false);
+      expect(res.body.stage).toBe('synth');
+      expect(res.body.error).not.toContain('Some Author');
+      expect(res.body.error).not.toContain(tmpdir());
+      expect(res.body.error).not.toContain('EBUSY');
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });

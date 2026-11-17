@@ -22,6 +22,15 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import { ZipFile } from 'yazl';
 
+/* Pass-through spy on node:fs/promises.writeFile so a test can inject a
+   part-way write failure (#4218); every other test sees the real function. */
+const fsMock = vi.hoisted(() => ({ writeFile: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  fsMock.writeFile.mockImplementation(actual.writeFile as never);
+  return { ...actual, writeFile: fsMock.writeFile };
+});
+
 const AUTHOR = 'Portable Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Portable Test Book';
@@ -158,6 +167,32 @@ describe('GET /api/books/:bookId/export/portable', () => {
     const localBytes = readFileSync(join(local, portable as string));
     const streamBytes = res.body as Buffer;
     expect(localBytes.length).toBe(streamBytes.length);
+  });
+
+  /* #4218: a part-way temp write (ENOSPC mid-file) must not strand the partial
+     `.tmp-*` in exports/; the local save stays best-effort, so the original error
+     surfaces in the warn log and the download still succeeds. */
+  it('unlinks the partial temp file when the local-copy write itself fails (#4218)', async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const enospc = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    fsMock.writeFile.mockImplementation(async (p: string, ...rest: unknown[]) => {
+      if (!String(p).includes('.tmp-')) return (actual.writeFile as (...a: unknown[]) => Promise<void>)(p, ...rest);
+      await actual.writeFile(p, 'partial');
+      throw enospc;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const exportsDir = join(bookDir, 'exports');
+    try {
+      const res = await request(app).get(
+        `/api/books/${encodeURIComponent(bookId)}/export/portable`,
+      );
+      expect(res.status).toBe(200);
+      expect(warn).toHaveBeenCalledWith('[portable-export] local copy failed (non-fatal)', enospc);
+    } finally {
+      warn.mockRestore();
+      fsMock.writeFile.mockImplementation(actual.writeFile as never);
+    }
+    expect(readdirSync(exportsDir).filter((n) => n.includes('.tmp-'))).toEqual([]);
   });
 });
 

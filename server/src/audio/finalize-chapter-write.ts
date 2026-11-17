@@ -11,7 +11,7 @@
    `routes/generation.ts` onto this same helper (see its call site there) —
    it no longer inlines its own tail. */
 
-import { rename, writeFile } from 'node:fs/promises';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
@@ -188,6 +188,27 @@ export type ReviewOutcome = 'recorded' | 'none' | 'failed';
 export async function finalizeChapterAudioWrite(
   input: FinalizeChapterAudioInput,
 ): Promise<FinalizeChapterAudioResult> {
+  const tmp = { path: null as string | null };
+  try {
+    return await finalizeChapterAudioWriteInner(input, tmp);
+  } catch (err) {
+    /* #4167 — any exit before the audio rename removes the temp file,
+       best-effort; a cleanup failure never masks the original error. */
+    if (tmp.path !== null) {
+      try {
+        await rm(tmp.path, { force: true });
+      } catch (rmErr) {
+        console.warn(`[splice] failed to remove temp audio for ${input.chapter.slug}: ${(rmErr as Error).message}`);
+      }
+    }
+    throw err;
+  }
+}
+
+async function finalizeChapterAudioWriteInner(
+  input: FinalizeChapterAudioInput,
+  tmp: { path: string | null },
+): Promise<FinalizeChapterAudioResult> {
   const { bookId, bookDir, chapter, pcm, sampleRate, durationSec, segments, cast, defaultEngine, modelKey, audioFormat } =
     input;
 
@@ -219,6 +240,7 @@ export async function finalizeChapterAudioWrite(
   if (input.onEncoded) await input.onEncoded();
 
   const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
+  tmp.path = tmpAudio;
   await writeFile(tmpAudio, audioBuffer);
 
   /* plan 274 T1 — hoist the single real ebur128 measurement to immediately
@@ -536,6 +558,8 @@ export async function finalizeChapterAudioWrite(
          best record of what it rendered under, so seed the freeze from it (a repair never moves
          the reference). Still no `renderedAt` — it keeps sorting oldest. */
       const frozenEngine = prior?.renderedEngine ?? prior?.voiceEngine;
+      // #4225: for a pre-2026-07-06 prior (no key of its own) `priorFile?.modelKey` is the chapter key, which a
+      // partial write by another character may already have moved; aggregate.ts then stamps the moved tier.
       const frozenModelKey = prior?.renderedModelKey ?? prior?.modelKey ?? priorFile?.modelKey;
       if (frozenEngine) snapshot.renderedEngine = frozenEngine;
       if (frozenModelKey) snapshot.renderedModelKey = frozenModelKey;
@@ -751,6 +775,7 @@ export async function finalizeChapterAudioWrite(
   const preserve = await preserveExistingAsPrevious(audioRoot, chapter.slug);
   await writeJsonAtomic(segPath, segmentsFile);
   await rename(tmpAudio, audioPath);
+  tmp.path = null;
   try {
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);
   } catch (err) {

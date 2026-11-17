@@ -5,6 +5,7 @@
 import { Router, type Request, type Response } from 'express';
 import { buildSeriesInputs } from '../workspace/scan.js';
 import { deriveSeriesMemory } from '../workspace/series-memory.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const seriesMemoryRouter = Router();
 
@@ -24,6 +25,7 @@ seriesMemoryRouter.get('/series-memory', async (req: Request, res: Response) => 
     }
     res.json(detail);
   } catch (e) {
-    res.status(500).json({ error: (e as Error).message || 'series-memory failed' });
+    console.error('[series-memory] failed', e);
+    res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'series-memory failed') });
   }
 });

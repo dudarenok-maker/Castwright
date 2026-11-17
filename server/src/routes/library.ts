@@ -23,6 +23,7 @@ import {
   buildContinueListening,
   type BookStatsInput,
 } from '../workspace/listen-stats-aggregate.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const libraryRouter = Router();
 
@@ -89,7 +90,7 @@ libraryRouter.get('/', async (_req: Request, res: Response) => {
     res.json(library);
   } catch (e) {
     console.error('[library] scan failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Library scan failed.' });
+    res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'Library scan failed.') });
   }
 });
 
@@ -99,7 +100,7 @@ libraryRouter.get('/active-analyses', async (_req: Request, res: Response) => {
     res.json({ snapshots });
   } catch (e) {
     console.error('[library] active-analyses scan failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Active-analyses scan failed.' });
+    res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message || 'Active-analyses scan failed.') });
   }
 });
 
@@ -108,7 +109,7 @@ libraryRouter.get('/stats', async (_req: Request, res: Response) => {
     res.json(buildLibraryStats(await assembleBookInputs()));
   } catch (e) {
     console.error('[library] GET stats failed', e);
-    res.status(500).json({ error: (e as Error).message });
+    res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
   }
 });
 
@@ -117,6 +118,6 @@ libraryRouter.get('/continue-listening', async (_req: Request, res: Response) =>
     res.json(buildContinueListening(await assembleBookInputs()));
   } catch (e) {
     console.error('[library] GET continue-listening failed', e);
-    res.status(500).json({ error: (e as Error).message });
+    res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
   }
 });

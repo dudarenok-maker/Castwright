@@ -36,7 +36,7 @@ import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { itemFailureReason } from '../workspace/file-lock.js';
+import { itemFailureReason, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { declinesVoice } from '../store/declined-voice.js';
@@ -134,7 +134,10 @@ voiceOverrideLinkedRouter.post(
         failed.push({
           bookId: w.bookId,
           bookTitle: w.bookTitle,
-          error: itemFailureReason(err, err instanceof Error ? err.message : String(err)),
+          error: itemFailureReason(
+            err,
+            requestFailureMessageFs(err, err instanceof Error ? err.message : String(err)),
+          ),
           ...(err instanceof CloneProtectedError ? { reason: 'clone_protected' as const } : {}),
         });
       }
@@ -277,7 +280,10 @@ voiceOverrideLinkedRouter.post(
         failed.push({
           bookId: siblingBookId,
           bookTitle,
-          error: itemFailureReason(err, err instanceof Error ? err.message : String(err)),
+          error: itemFailureReason(
+            err,
+            requestFailureMessageFs(err, err instanceof Error ? err.message : String(err)),
+          ),
         });
       }
     }

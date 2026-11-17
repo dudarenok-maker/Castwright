@@ -1550,3 +1550,153 @@ describe('classifyAnalysisFailure - an authoritative persist write failed (#4031
     }
   });
 });
+
+describe('classifyFailure -- an unmapped node fs error is curated, not echoed (#4233)', () => {
+  const ABS = 'C:\\Users\\someone\\Castwright\\books\\Author\\Title\\audio\\chapter-01.mp3';
+  const fsErr = (code: string) =>
+    Object.assign(new Error(`${code}: resource busy or locked, rename '${ABS}.tmp' -> '${ABS}'`), {
+      code,
+      syscall: 'rename',
+      path: `${ABS}.tmp`,
+      dest: ABS,
+    });
+
+  it.each(['EBUSY', 'EPERM'])('%s answers the curated fs sentence with no path', (code) => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = classifyFailure(fsErr(code));
+      expect(c.code).toBe('unknown');
+      expect(c.fatal).toBe(false);
+      expect(c.userMessage).not.toContain('C:\\Users');
+      expect(c.userMessage).not.toContain('chapter-01');
+      expect(c.userMessage.length).toBeGreaterThan(0);
+      expect(c.raw).toContain(ABS); // the log keeps the detail
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('a plain error with a stray code is still passed through verbatim', () => {
+    const c = classifyFailure(Object.assign(new Error('weird thing'), { code: 'X1' }));
+    expect(c.userMessage).toBe('weird thing');
+  });
+
+  /* The fs error's own message embeds the book folder, which is the display title.
+     A title's words must not reach the signature regexes (oom `\bkilled\b`,
+     vram-spill `VRAM`, model-not-loaded `loading.*model`, all fatal). */
+  describe('a book title in the path does not trip a signature', () => {
+    const titled = (title: string, code: string) => {
+      const dest = `C:\\Users\\someone\\Castwright\\books\\Some Author\\${title}\\audio\\chapter-01.mp3`;
+      return Object.assign(new Error(`${code}: resource busy or locked, rename '${dest}.tmp' -> '${dest}'`), {
+        code,
+        syscall: 'rename',
+        path: `${dest}.tmp`,
+        dest,
+      });
+    };
+    const TITLES = ['The Man Who Killed Don Quixote', 'Who Killed Palomino Molero', 'VRAM Diaries', 'Loading the Model'];
+
+    it.each(TITLES)('%s: EBUSY and EPERM stay the curated, non-fatal fs outcome', (title) => {
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        for (const code of ['EBUSY', 'EPERM']) {
+          const c = classifyFailure(titled(title, code));
+          expect(c.code).toBe('unknown');
+          expect(c.fatal).toBe(false);
+          expect(c.userMessage).toBe('Files could not be read or written right now. Try again.');
+        }
+      } finally {
+        quiet.mockRestore();
+      }
+    });
+
+    it.each(TITLES)('%s: ENOSPC is disk-full, not oom / vram-spill / model-not-loaded', (title) => {
+      const c = classifyFailure(titled(title, 'ENOSPC'));
+      expect(c.code).toBe('disk-full');
+      expect(c.userMessage).not.toContain('Some Author');
+      expect(c.raw).toContain(title); // the log keeps the detail
+    });
+
+    it('a spawn error that carries a path still reaches its signature, not the fs outcome', () => {
+      const c = classifyFailure(
+        Object.assign(new Error('spawn C:\\bin\\ffmpeg.exe ENOENT (CUDA out of memory)'), {
+          code: 'ENOENT',
+          syscall: 'spawn C:\\bin\\ffmpeg.exe',
+          path: 'C:\\bin\\ffmpeg.exe',
+        }),
+      );
+      expect(c.userMessage).not.toBe('Files could not be read or written right now. Try again.');
+      expect(c.code).not.toBe('unknown');
+    });
+
+    it('a network error with a code and syscall still reaches its signature', () => {
+      const c = classifyFailure(
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9000'), {
+          code: 'ECONNREFUSED',
+          syscall: 'connect',
+          address: '127.0.0.1',
+          port: 9000,
+        }),
+      );
+      expect(c.code).not.toBe('unknown');
+    });
+  });
+});
+
+describe('classifyAnalysisError / classifyAnalysisFailure -- an fs error is classified by code, not echoed (#4236)', () => {
+  const titled = (title: string, code: string) => {
+    const path = `C:\\Users\\someone\\Castwright\\books\\Some Author\\${title}\\.audiobook\\state.json`;
+    return Object.assign(new Error(`${code}: resource busy or locked, open '${path}'`), {
+      code,
+      syscall: 'open',
+      path,
+    });
+  };
+  const FS_SENTENCE = 'Files could not be read or written right now. Try again.';
+  /* The title's words reach the rate-limit (`quota`, `rate limit`), auth (`API key`,
+     `invalid key`) and `ENOSPC`/`no space left` signatures through the message's path. */
+  const TITLES = ['The Quota', 'Rate Limit Rules', 'The API Key', 'Invalid Key', 'No Space Left'];
+
+  it.each(TITLES)('%s: EBUSY stays the curated, non-fatal fs outcome (not rate-limit / auth / disk-full)', (title) => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = classifyAnalysisError(titled(title, 'EBUSY'));
+      expect(c.code).toBe('unknown');
+      expect(c.fatal).toBe(false);
+      expect(c.userMessage).toBe(FS_SENTENCE);
+      expect(c.raw).toContain('EBUSY'); // the log keeps the detail
+      const run = classifyAnalysisFailure(titled(title, 'EBUSY'), 'Gemini');
+      expect(run.code).toBe('unknown');
+      expect(run.userMessage).toBe(FS_SENTENCE);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it.each(TITLES)('%s: ENOSPC is disk-full', (title) => {
+    const c = classifyAnalysisError(titled(title, 'ENOSPC'));
+    expect(c.code).toBe('disk-full');
+    expect(c.userMessage).not.toContain('Some Author');
+    expect(classifyAnalysisFailure(titled(title, 'ENOSPC'), 'Gemini').code).toBe('disk-full');
+  });
+
+  it('classifyAnalysisFailure never echoes the path of an unmapped fs error', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = classifyAnalysisFailure(titled('Plain Title', 'EPERM'), 'Gemini');
+      expect(r.userMessage).toBe(FS_SENTENCE);
+      expect(JSON.stringify(r)).not.toMatch(/Users|Some Author|state\.json/);
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('a plain error with a stray code is still passed through verbatim', () => {
+    const c = classifyAnalysisError(Object.assign(new Error('weird thing'), { code: 'X1' }));
+    expect(c.userMessage).toBe('weird thing');
+  });
+
+  it('a genuine quota message (no fs path) still classifies as a rate limit', () => {
+    expect(classifyAnalysisError(new Error('quota exceeded')).code).toBe('analyzer-rate-limit');
+  });
+});

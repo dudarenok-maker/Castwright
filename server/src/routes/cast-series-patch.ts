@@ -38,7 +38,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { itemFailureReason } from '../workspace/file-lock.js';
+import { itemFailureReason, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { refuseUnreadRepairedBooks } from '../workspace/repaired-book-gate.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import type { LibraryCastCharacter } from '../workspace/library-cast-scan.js';
@@ -172,7 +172,7 @@ castSeriesPatchRouter.post(
       } catch (err) {
         /* Same per-book `failed` shape as a sibling (see the loop below). */
         const message = err instanceof Error ? err.message : String(err);
-        failed.push({ bookId, bookTitle: source.state.title, error: itemFailureReason(err, message) });
+        failed.push({ bookId, bookTitle: source.state.title, error: itemFailureReason(err, requestFailureMessageFs(err, message)) });
       }
       return { siblingTargets, series: { author: source.state.author, series: source.state.series } };
     });
@@ -202,7 +202,7 @@ castSeriesPatchRouter.post(
            the reason names contention instead of implying that book's cast is
            broken. */
         const message = err instanceof Error ? err.message : String(err);
-        failed.push({ bookId: t.bookId, bookTitle: t.bookTitle, error: itemFailureReason(err, message) });
+        failed.push({ bookId: t.bookId, bookTitle: t.bookTitle, error: itemFailureReason(err, requestFailureMessageFs(err, message)) });
       }
     }
 

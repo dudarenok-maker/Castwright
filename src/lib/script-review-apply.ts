@@ -90,9 +90,12 @@ export function resolveAnchorOffset(text: string, anchor: string): number | null
   // Build normalized string + a map from each normalized index to the original index AFTER it.
   let norm = '';
   const origEndForNormLen: number[] = [0]; // origEndForNormLen[k] = original index after k normalized chars
-  for (let i = 0; i < text.length; i++) {
-    const piece = normChar(text[i]);
-    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i + 1);
+  let i = 0; // UTF-16 offset into the original text
+  for (const ch of text) {
+    // Walk by code point (as normalizeForMatch does) so NFC never splits a surrogate pair.
+    i += ch.length;
+    const piece = normChar(ch);
+    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i);
     norm += piece;
   }
   const nAnchor = normalizeForMatch(anchor);

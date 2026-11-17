@@ -22,6 +22,30 @@ describe('resolveAnchorOffset', () => {
   });
   it('null when not unique', () => expect(resolveAnchorOffset('he said, he said', 'he said')).toBeNull());
   it('null when absent (TOCTOU edit)', () => expect(resolveAnchorOffset('totally different', 'ran.')).toBeNull());
+  it('resolves an anchor containing an NFC-changing astral char (#4219)', () => {
+    const text = 'Он сказал \u{2F800} и ушёл.';
+    const off = resolveAnchorOffset(text, '\u{2F800} и');
+    expect(off).not.toBeNull();
+    expect(text.slice(off!)).toBe(' ушёл.');
+  });
+  it('resolves an anchor after an NFC-changing astral char to the exact original offset (#4219)', () => {
+    const text = 'a \u{2F800} b. c';
+    const off = resolveAnchorOffset(text, 'b.');
+    expect(off).not.toBeNull();
+    expect(text.slice(off!)).toBe(' c');
+  });
+  it('still resolves an NFC-stable astral char (emoji)', () => {
+    const text = 'Go \u{1F600} now. Stop.';
+    const off = resolveAnchorOffset(text, '\u{1F600} now.');
+    expect(off).not.toBeNull();
+    expect(text.slice(off!)).toBe(' Stop.');
+  });
+  it('resolves a decomposed BMP accent (e + U+0301)', () => {
+    const text = 'café au lait.';
+    const off = resolveAnchorOffset(text, 'café');
+    expect(off).not.toBeNull();
+    expect(text.slice(off!)).toBe(' au lait.');
+  });
 });
 
 /* Shared no-drift vector (task-1, script-review-eval): the SAME fixture is

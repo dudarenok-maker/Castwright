@@ -22,6 +22,8 @@ import {
 import { cloneStorageKey, isCloneEngine, manifestSlotFor } from '../tts/clone-engines.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { isFsPathError } from './failure-taxonomy.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
 import {
@@ -306,6 +308,15 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
       });
     }
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
+    /* #4236 — a node fs error's message embeds the path, so the regexes below
+       would read it as a rate limit: the sample cache path carries the book's id slug
+       (`char-<bookId>__<characterId>`), so a book titled "The Quota" matches /quota/, and a
+       character id such as `pirate` matches /rate/ with no book involved. Classify it by
+       being an fs error, before any message scan: a plain 502 with the curated
+       sentence. */
+    if (isFsPathError(err)) {
+      return res.status(502).json({ code: 'tts_failed', message: requestFailureMessageFs(err, msg) });
+    }
     /* GATE 1 — the sidecar's `voice_language_unsupported` 409 (main.py's
        /synthesize handler): the voice IS cloned and its artifact loaded, the
        loaded XTTS model just doesn't list the requested language. Its detail
@@ -352,6 +363,6 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
         : isRateLimit
           ? 'rate_limited'
           : 'tts_failed';
-    return res.status(status).json({ code, message: msg });
+    return res.status(status).json({ code, message: requestFailureMessageFs(err, msg) });
   }
 });

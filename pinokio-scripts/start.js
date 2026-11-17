@@ -54,8 +54,10 @@ module.exports = {
         env: { NODE_ENV: 'production' },
         // `cd server &&` (not `path: 'server'`) so CONDA's relative env path
         // still resolves against APP_ROOT — only the node process's own cwd
-        // moves to server/, so its cwd-relative server/.env load works.
-        message: 'cd server && node dist/index.js',
+        // moves to server/, so its cwd-relative server/.env load works. The two
+        // --report-exclude-* flags keep secrets out of a fatal-error report; the
+        // server leaves reports off without them (server/src/crash-logging.ts).
+        message: 'cd server && node --report-exclude-env --report-exclude-network dist/index.js',
         // Match http://localhost:8080 (default) OR https://localhost:8443 (LAN
         // sharing). Capture group 1 is the exact URL, consumed below as
         // input.event[1] per the gepeto "Critical Pattern Lock".

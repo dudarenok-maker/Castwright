@@ -28,6 +28,7 @@ import {
   getResolvedGeminiApiKey,
 } from '../workspace/user-settings.js';
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { toUuidForm, needsUuidTranslation } from './gpu-uuid.js';
 import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-sidecar-devices.js';
 import { ensureGpuDeviceListWarm } from '../gpu/ensure-gpu-device-list-warm.js';
@@ -394,7 +395,7 @@ configRouter.get('/prompts/:id', async (req, res) => {
     const state = await readPrompt(id);
     res.json(state);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: requestFailureMessageFs(err, (err as Error).message) });
   }
 });
 
@@ -414,7 +415,7 @@ configRouter.put('/prompts/:id', async (req, res) => {
     const state = await readPrompt(id);
     res.json({ ok: true, ...state });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: requestFailureMessageFs(err, (err as Error).message) });
   }
 });
 
@@ -429,6 +430,6 @@ configRouter.post('/prompts/:id/reset', async (req, res) => {
     const state = await readPrompt(id);
     res.json({ ok: true, ...state });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: requestFailureMessageFs(err, (err as Error).message) });
   }
 });

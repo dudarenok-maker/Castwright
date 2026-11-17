@@ -7293,7 +7293,7 @@ export interface components {
             revisions: components["schemas"]["RevisionsState"] | null;
             /** @description Plan 286 — present only when revisions.json could not be read. A fixed, path-free user-facing sentence (or, for a newer-schema file, the server's own "upgrade the server" sentence); the client toasts it verbatim. */
             revisionsError?: string;
-            /** @description Slugs of chapters that already have an audio file on disk. */
+            /** @description Slugs of chapters whose live audio take (<slug>.mp3, .m4a or .ogg) exists on disk. A preserved earlier take (<slug>.previous.*) does not count. */
             completedSlugs: string[];
             /**
              * @description Plan 289 — per-field revision tokens of the four `PUT /state`
@@ -13134,6 +13134,12 @@ export interface operations {
              *     `{ error, code: book_busy }` while an analysis job is registered
              *     for the book: the cast is read-only until the run ends. The check
              *     runs before any read or write, so nothing is persisted. Re-read the book from disk once the run has finished.
+             *
+             *     #4098 — a whole-slice `manuscript` write is refused the same way while an
+             *     analysis job is registered: both analysis jobs rewrite manuscript-edits.json
+             *     at the end of the run and would revert it. The check runs before the patch is
+             *     validated and before any read or write. Re-read the book from disk once the
+             *     run has finished.
              *
              *     Plan 289: `stale_revision` — the request carried a `baseRevision`
              *     and a field the write would change has moved on disk since that

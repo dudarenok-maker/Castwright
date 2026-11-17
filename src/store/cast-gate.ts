@@ -24,7 +24,8 @@
      stale running snapshot here only. Once busy lists no `analysis` and the
      snapshot is not running, `rehydrateCastAfterAnalysis` re-reads the cast
      from disk and clears the era. No terminal frame and no action releases
-     it on its own.
+     it on its own. Since #4098 the same re-read also restores the manuscript
+     slice (its edits are read-only during the era too).
 
    "Open" has two senses here, as in open-book.ts: the gate is evaluated for
    the book the stage names (where the persistence middleware sends saves);
@@ -33,6 +34,7 @@
 import type { Middleware, ThunkAction, UnknownAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { castActions, type CastApplyMeta } from './cast-slice';
+import { manuscriptActions } from './manuscript-slice';
 import { analysisActions, ANALYSIS_STREAM_LIVE_QUERY, type AnalysisStreamSnapshot } from './analysis-slice';
 import { beginFullRead, castWrittenSince, flushBookPersistence } from './persistence-middleware';
 import { notificationsActions } from './notifications-slice';
@@ -73,7 +75,8 @@ const rehydrateFlights = new WeakMap<object, Map<string, Promise<void>>>();
     Single-flight per book. Records the era's epoch; waits until busy lists
     no `analysis` and the snapshot is not running (polling when it must);
     sends and waits for the book's queued saves (`castWrittenSince`); reads
-    the book and hydrates the cast only when the slices hold it; then clears
+    the book and hydrates the cast only when the slices hold it (since #4098
+    the same response also restores the manuscript slice); then clears
     the era for that epoch. An analysis apply that moved the epoch meanwhile
     runs it again. For a book the stage does not name it only clears the era
     and reads nothing: the layout's next full read of it is the reload (R26).
@@ -136,6 +139,15 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
         }
         if (res && holdsBook(getState(), bookId)) {
           dispatch(castActions.hydrateCharacters(res.cast?.characters ?? []));
+          dispatch(
+            manuscriptActions.hydrateFromBookState({
+              state: res.state,
+              sentences: res.manuscriptEdits?.sentences ?? null,
+              wordCount: res.manuscript?.wordCount ?? null,
+              format: res.manuscript?.format ?? null,
+              mergedAwayKeys: res.manuscriptEdits?.mergedAwayKeys,
+            }),
+          );
         }
         if (epoch !== undefined) dispatch(castActions.clearAnalysisEra({ bookId, epoch }));
         return;

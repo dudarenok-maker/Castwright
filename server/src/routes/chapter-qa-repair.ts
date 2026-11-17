@@ -23,7 +23,11 @@ import type { Request, Response } from '../http.js';
 import { bookStateAudioFormat, requireBookStateLanguage, bookStateLanguageOrNull, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
-import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
+import {
+  LOCK_CONTENTION_REQUEST_ERROR,
+  isLockAcquisitionTimeout,
+  requestFailureMessageFs,
+} from '../workspace/file-lock.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
@@ -43,7 +47,7 @@ import {
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
-import { currentCastVoiceName } from '../audio/render-integrity/current-voice.js';
+import { currentCastModelKey, currentCastVoiceName } from '../audio/render-integrity/current-voice.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict } from '../tts/segment-qa.js';
 import {
   verifySegmentTranscript,
@@ -454,11 +458,17 @@ chapterQaRepairRouter.post(
          scoring and this repair resolves through cast-id history to its live row
          and is judged on that row's current voice; only an id with NO live row at
          all has no current voice → auditionCentroidUsableForCurrent returns false
-         (conservative drop). The model key is left on the
-         snapshot/segFile fallback (unchanged): a same-engine voice reassignment leaves it
-         valid and an engine change is caught by the voice-name mismatch above —
-         except a Qwen tier change (per-character elevation or a repair at a different
-         tier), which keeps the old tier's centroid; known gap, #3518. After this filter a filtered-out character behaves exactly like "no
+         (conservative drop). The model key is derived from the current cast plus
+         the run key, the same way the voice is — currentCastModelKey(c, engine,
+         modelKey), never the snapshot — so a Qwen tier change (per-character
+         elevation or a repair at another tier) drops the old tier's audition
+         centroid (#3518). An in-book row is pooled from anchors in EVERY chapter, so
+         it carries the tier scoreBook stamped on it (`inBookModelKey`: the one
+         key all its anchors share, or "mixed"); it is kept only when that
+         equals the current key, and a mixed, absent (a row from before the
+         stamp) or unknown-tier row is dropped — never inferred from this
+         chapter's snapshot. After this filter a
+         filtered-out character behaves exactly like "no
          centroid" at every downstream `centroids?.[charId]` site. An in-book row is
          kept only when it recorded no `inBookVoiceName` (legacy) or that name
          equals the current cast voice; one built from an older voice is dropped
@@ -469,12 +479,8 @@ chapterQaRepairRouter.post(
           Object.entries(readCentroidsMap).filter(([charId, row]) => {
             const current = castResolver.resolve(charId)?.character;
             const currentVoiceName = current ? currentCastVoiceName(current, engine) : undefined;
-            const snap = segFile.characterSnapshots?.[charId];
-            return auditionCentroidUsableForCurrent(
-              row,
-              currentVoiceName,
-              snap?.modelKey ?? segFile.modelKey,
-            );
+            const currentModelKey = current ? currentCastModelKey(current, engine, modelKey) : undefined;
+            return auditionCentroidUsableForCurrent(row, currentVoiceName, currentModelKey);
           }),
         );
       /* #3362 pass-4 fix (🟠D / owner design b) — centroids/verdict rows are
@@ -918,7 +924,9 @@ chapterQaRepairRouter.post(
       });
       res.end();
     } catch (err) {
-      fail(`Audio-QA repair failed: ${(err as Error).message}`);
+      /* #4233 -- as the splice route: no absolute path in the SSE frame. */
+      console.error('[qa-repair] failed', err);
+      fail(requestFailureMessageFs(err, `Audio-QA repair failed: ${(err as Error).message}`));
     } finally {
       releaseSlot?.();
     }

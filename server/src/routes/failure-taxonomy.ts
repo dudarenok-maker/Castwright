@@ -63,6 +63,7 @@ import { configValue } from '../config/resolver.js';
 import {
   FS_FAILURE_REQUEST_ERROR,
   FS_PERMANENT_FAILURE_REQUEST_ERROR,
+  isFsError,
   isLockAcquisitionTimeout,
   LOCK_CONTENTION_REQUEST_ERROR,
   requestFailureMessageFs,
@@ -462,10 +463,21 @@ function scanSignatures(
 const GENERATION_SOURCES: ReadonlySet<FailureSource> = new Set(['generation', 'both']);
 const ANALYSIS_SOURCES: ReadonlySet<FailureSource> = new Set(['analysis', 'both']);
 
-/** Classify a synthesis/analysis error into the structured taxonomy. First
-    matching signature wins; an unmapped error returns `code: 'unknown'` with
-    the (trimmed) raw message as `userMessage` and a generic remediation,
-    `fatal: false`. */
+/** A node fs error on a path. Net errors (TCP / named pipe) carry `address`, never
+    `path`, so the `path` check alone excludes them. A spawn error carries the binary's
+    `path` but is not an fs error on a book file: it still goes through the signature scan. */
+export function isFsPathError(err: unknown): boolean {
+  const e = err as { syscall?: unknown; path?: unknown };
+  return isFsError(err) && typeof e.path === 'string' && !/^spawn/.test(String(e.syscall));
+}
+
+/** Classify a synthesis/analysis error into the structured taxonomy. A node fs
+    error is classified by its `code` (ENOSPC is `disk-full`, anything else the
+    curated fs sentence) before the signature scan, because its message embeds
+    the path. Otherwise the first matching signature wins; an unmapped error
+    returns `code: 'unknown'` with the (trimmed) raw message as `userMessage` and
+    a generic remediation, `fatal: false` (an fs-shaped error with no `path` skips
+    the pre-check and, if unmapped, gets the curated fs sentence from the fallback). */
 export function classifyFailure(err: unknown, engine?: string): ClassifiedFailure {
   /* #3625 — finalizeChapterAudioWrite takes the per-book state-json lock
      (#3700), so a chapter failure can be a lock timeout. `withStateJsonLock`
@@ -479,12 +491,31 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
       raw: rawOf(err),
     };
   }
-  const hit = scanSignatures(err, GENERATION_SOURCES, engine);
-  if (hit) return hit;
+  if (isFsPathError(err)) {
+    /* #4233 -- the fs error's message embeds the absolute path, and a book folder
+       keeps the display title, so "The Man Who Killed ..." or "VRAM Diaries" would
+       match the fatal oom / vram-spill signatures. The `code` is the whole story. */
+    if ((err as { code: string }).code === 'ENOSPC') {
+      const copy = FAILURE_REMEDIATIONS['disk-full'];
+      return {
+        code: 'disk-full',
+        userMessage: copy.userMessage,
+        remediation: copy.remediation,
+        fatal: true,
+        raw: rawOf(err),
+      };
+    }
+  } else {
+    const hit = scanSignatures(err, GENERATION_SOURCES, engine);
+    if (hit) return hit;
+  }
   const raw = rawOf(err);
   return {
     code: 'unknown',
-    userMessage: trimRaw(raw),
+    /* #4233 -- an unmapped node fs error (EBUSY / EPERM on the finalize rename)
+       embeds the absolute book path, and this reason is broadcast over SSE and
+       persisted as generationError. Curated; `raw` keeps the detail for the log. */
+    userMessage: requestFailureMessageFs(err, trimRaw(raw)),
     remediation: FAILURE_REMEDIATIONS.unknown.remediation,
     fatal: false,
     raw,
@@ -496,12 +527,26 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
     describeError envelope parsing on top and falls back to this scan; exported
     for that fallback and for direct unit tests. */
 export function classifyAnalysisError(err: unknown): ClassifiedFailure {
-  const hit = scanSignatures(err, ANALYSIS_SOURCES);
-  if (hit) return hit;
+  /* #4236 -- same pre-scan as classifyFailure: a node fs error's message embeds the
+     absolute book path, whose folder keeps the title's words ("The Quota" would match
+     the rate-limit / quota / auth signatures), so classify it by `code` instead. */
+  if (!isFsPathError(err)) {
+    const hit = scanSignatures(err, ANALYSIS_SOURCES);
+    if (hit) return hit;
+  } else if ((err as { code: string }).code === 'ENOSPC') {
+    const copy = FAILURE_REMEDIATIONS['disk-full'];
+    return {
+      code: 'disk-full',
+      userMessage: copy.userMessage,
+      remediation: copy.remediation,
+      fatal: true,
+      raw: rawOf(err),
+    };
+  }
   const raw = rawOf(err);
   return {
     code: 'unknown',
-    userMessage: trimRaw(raw),
+    userMessage: requestFailureMessageFs(err, trimRaw(raw)),
     remediation: FAILURE_REMEDIATIONS.unknown.remediation,
     fatal: false,
     raw,
@@ -1388,7 +1433,8 @@ export function classifyAnalysisFailure(
   if (scanned.code !== 'unknown') {
     return { code: scanned.code, userMessage: scanned.userMessage, remediation: scanned.remediation };
   }
-  return withCopy('unknown', raw || 'Analysis failed.');
+  /* #4236 -- an unmapped node fs error (EBUSY / EPERM) embeds the absolute path. */
+  return withCopy('unknown', requestFailureMessageFs(err, raw || 'Analysis failed.'));
 }
 
 /** #3084 P23 — the SSE error event for ANY error selection throws, coded through

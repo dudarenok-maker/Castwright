@@ -1522,3 +1522,40 @@ describe('POST /:bookId/chapters/:chapterId/splice — unset book language (Task
   });
 });
 
+
+/* #4233 — the catch-all's `chapter_failed` frame must never carry a node fs
+   error's or a lock timeout's own message: both embed the absolute workspace
+   path, and this app is served over LAN HTTPS. */
+describe('POST /:bookId/chapters/:chapterId/splice — curated failure frame (#4233)', () => {
+  const ABS = 'C:/Users/secret/books/x/chapter-one.mp3';
+
+  async function failFinalizeWith(err: unknown): Promise<string> {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    vi.mocked(finalizeMod.finalizeChapterAudioWrite).mockRejectedValueOnce(err);
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
+    const failed = parseSse(res.text).find((e) => e.type === 'chapter_failed');
+    expect(failed, `expected chapter_failed, got ${res.text}`).toBeTruthy();
+    return failed!.errorReason as string;
+  }
+
+  it.each(['EBUSY', 'ENOSPC'])('an fs %s error carrying an absolute path answers a path-free sentence', async (code) => {
+    const err = Object.assign(new Error(`${code}: operation failed, open '${ABS}'`), { code, syscall: 'open', path: ABS });
+    const reason = await failFinalizeWith(err);
+    expect(reason).not.toContain(ABS);
+    expect(reason).not.toMatch(/secret|[A-Za-z]:/);
+    expect(reason).not.toContain(code);
+  });
+
+  it('a lock acquisition timeout answers the curated contention sentence', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const reason = await failFinalizeWith(new LockAcquisitionTimeoutError(`state-json:${ABS}`, 10_000));
+    expect(reason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(reason).not.toContain(ABS);
+  });
+
+  it('a plain error keeps its own message behind the Splice failed prefix', async () => {
+    expect(await failFinalizeWith(new Error('encoder exploded'))).toBe('Splice failed: encoder exploded');
+  });
+});

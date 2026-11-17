@@ -52,6 +52,7 @@ import {
 } from '../tts/engine-health.js';
 import { classifyPackageFault } from '../tts/models-status.js';
 import type { AnalysisEngine } from '../analyzer/model-id.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -559,7 +560,8 @@ modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) =>
         remediation: 'Stop the sidecar (or Unload the model) and retry.',
       });
     }
-    return res.status(500).json({ error: err.message || 'Removal failed.' });
+    console.error('[models-inventory] removal failed', err);
+    return res.status(500).json({ error: requestFailureMessageFs(err, err.message || 'Removal failed.') });
   }
 });
 

@@ -2423,6 +2423,52 @@ describe('script-review — per-chapter reason on a lock timeout (#2292)', () =>
     expect(failed?.message).toBe('Failed to save findings: simulated disk-full');
   });
 });
+describe('script-review -- a chapter-failed frame never carries a path (#4236)', () => {
+  const ABS = 'C:\\Users\\someone\\books\\The Quota\\.audiobook\\script-review.json';
+  const fsErr = () =>
+    Object.assign(new Error(`EBUSY: resource busy or locked, open '${ABS}'`), {
+      code: 'EBUSY',
+      syscall: 'open',
+      path: ABS,
+    });
+  const CURATED = 'Files could not be read or written right now. Try again.';
+
+  it('an analyzer-side fs error is curated', async () => {
+    writeBook(SENTENCES);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    runReview.mockImplementation((_m: string, chapterId: number): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.reject(fsErr());
+      return Promise.resolve({ ops: [] });
+    });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    quiet.mockRestore();
+    const failed = parseSse(res.text).find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed?.message).toBe(CURATED);
+    expect(res.text).not.toContain('Quota');
+    expect(res.text).not.toContain('script-review.json');
+  });
+
+  it('a ledger-save fs error is curated and keeps the route framing', async () => {
+    writeBook(SENTENCES);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    runReview.mockImplementation((_m: string, chapterId: number): Promise<ScriptReviewOutput> => {
+      if (chapterId === 1) return Promise.resolve(CANNED_OPS);
+      return Promise.resolve({ ops: [] });
+    });
+    const ledger = await import('../workspace/script-review-ledger.js');
+    const spy = vi.spyOn(ledger, 'upsertChapterEntry').mockRejectedValue(fsErr());
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+      const failed = parseSse(res.text).find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+      expect(failed?.message).toBe(`Failed to save findings: ${CURATED}`);
+      expect(res.text).not.toContain('Quota');
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
+  });
+});
+
 describe('POST /api/books/:bookId/script-review — unset book language (Task 6 #2246)', () => {
   it('emits a per-chapter chapter-failed (never a whole-request 409) when the book has no language', async () => {
     writeBook(SENTENCES);

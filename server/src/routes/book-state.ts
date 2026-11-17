@@ -12,7 +12,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { readFile, readdir, rm, writeFile, unlink } from 'node:fs/promises';
+import { readFile, rm, writeFile, unlink } from 'node:fs/promises';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -113,7 +113,7 @@ import {
   carryTitleSynthesized,
   carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
-import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
+import { CHAPTER_AUDIO_EXTS, chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import {
   putManuscript,
   getManuscript,
@@ -781,10 +781,8 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     // can render true progress on re-open. Matches chapters by slug.
     let completedSlugs: string[] = [];
     try {
-      const files = existsSync(audioDir(bookDir)) ? await readdir(audioDir(bookDir)) : [];
-      const audioFiles = files.filter((f) => /\.(mp3|m4a|opus)$/i.test(f));
       completedSlugs = state.chapters
-        .filter((c) => audioFiles.some((f) => f.startsWith(c.slug)))
+        .filter((c) => chapterAudioExists(audioDir(bookDir), c.slug))
         .map((c) => c.slug);
     } catch {
       /* fall through with empty list */
@@ -1094,7 +1092,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
 
 export function busySentence(
   kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore' | 'cast-save',
+  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore' | 'cast-save' | 'manuscript-save',
 ): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
@@ -1123,6 +1121,10 @@ export function busySentence(
   /* #4031 — a whole-slice cast PUT is refused while an analysis runs. */
   if (action === 'cast-save') {
     return `This book is busy (${what}). Its cast is read-only until the analysis finishes, so this change was not saved.`;
+  }
+  /* #4098 — a manuscript PUT is refused while an analysis runs: the job rewrites manuscript-edits.json wholesale at its persist. */
+  if (action === 'manuscript-save') {
+    return `This book is busy (${what}). Its manuscript is read-only until the analysis finishes, so this change was not saved.`;
   }
   /* #3717 — reparse / replace-manuscript are refused like the movers: both
      delete cast.json and the audio/ directory under a job still writing them. */
@@ -1299,6 +1301,14 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         break;
       }
       case 'manuscript': {
+        /* #4098 — while an analysis job is registered the manuscript is read-only,
+           because both jobs rewrite `manuscript-edits.json` wholesale at their persist
+           and would revert this write. Checked inside book-op before any read or
+           write, so a refusal touches nothing. */
+        const kinds = bookJobKinds(book.bookId);
+        if (kinds.includes('analysis')) {
+          return { status: 409, body: { error: busySentence(kinds, 'manuscript-save'), code: 'book_busy' } };
+        }
         const parsed = manuscriptPatchSchema.safeParse(body.patch);
         if (!parsed.success) {
           return { status: 400, body: { error: `Malformed manuscript patch: ${parsed.error.message}` } };

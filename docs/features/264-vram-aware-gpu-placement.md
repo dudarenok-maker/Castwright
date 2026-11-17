@@ -307,6 +307,20 @@ OOM — see the status header:
   > well under the ~6659 headroom — so the interim conservative 7168 design seed
   > was dropped back to 6144. Refutes the review's "design might exceed 6144 →
   > OOM" concern with a real number.
+  >
+  > **Follow-up #4163 CLOSED.** The #1737 reset alone left everything already
+  > allocated on the card inside the peak, so that note's "that op's own peak"
+  > was not yet true: a learned footprint absorbed co-resident engines' weights.
+  > Each reservation now subtracts the `memory_allocated` it read at the reset,
+  > and a sample is learned only from a cold op (the engine had no model
+  > resident at admission; for Qwen, none of its four models), because warm ops
+  > share the cold op's key and would collapse its p95 to activations only.
+  > Residuals: (1) torch's peak counter is per device, so an overlapping op on
+  > the same card can still truncate or inflate a sample; (2) memory another op
+  > frees during the window can push a sample below the op's own weights (down
+  > to 0), which was not reachable before because the sample always included
+  > the op's own resident allocation. Coverage:
+  > `tests/test_op_own_footprint.py`.
 - **`persona-gpu-plan.ts`'s `unloadResidentSidecar` + `GpuBusyForPersonaError`
   are now dead code** (the reverse-evict was removed); deletion candidates.
 - **`engine-vram-cost.ts` is provably dead** (its registry weights are deleted) —
@@ -436,7 +450,7 @@ Two things distinguish the Coqui step from the others:
    refused, which matters on cards large enough to hold both. A credited
    refusal reports `neededMb = peak - weights` on the credited card, so Node's
    analyzer/endpoint levers compare against that card's raw free memory.
-   Mint, GPU ASR and GPU SPK are not covered (#4102).
+   The same protection now covers a mint (protected like the plain synth: the resident 1.7B-Base weights are credited in its own fit check only, and the ledger books the FULL `qwen.1.7b.mint` peak, so a second admission nested inside it is refused as on `main`), a design with VoiceDesign resident (`qwen.design` protected, the same full-peak booking and fit-only credit; weights measured at load, fallback 3400 MB, plus the resident 0.6B audition base `design_voice` always leaves loaded, fallback 1200 MB; a mint gets no 0.6B credit, #4237), GPU ASR and GPU SPK (protected, restricted to the resident card, booking `asr.warm` / `spk.warm`) (#4102). A full booking also covers a reload, so the idle watchdog is not blocked: if it frees the base between a mint's admission and its claim, the cold reload still fits inside the booking. Node's capacity lever is told a mint is a mint (`purpose: 'mint'`: keep the 1.7B tier, free only the 0.6B), so its retry never posts `/unload {model:'1.7b'}`. **Known limitation of the design credit (pass 3, G):** a warm design is admitted when the usage outside the sidecar's own models (CUDA context plus anything else) is at most about 1235 MB, where `main`'s cold path (the ladder evicts VoiceDesign, the lever frees the 0.6B) fits up to about 1635 MB. In that ~400 MB band (VoiceDesign's reserved-over-measured gap plus the 0.6B's own) the warm design is refused, Node's design lever declines (it sees VoiceDesign resident), and the design waits for the idle watchdog (~120-150 s) where `main` reloads in seconds. With `QWEN_DESIGN_IDLE_TTL` above about 258 s the retry budget runs out and it fails with `NoCapacityError`. Closing the band needs evicting and reloading VoiceDesign, which the owner ruled out.
 2. **Real idle TTL.** It is the only step that uses a non-zero idle TTL —
    `_coqui_idle_ttl()` (`:8288`, 30 s default, env `COQUI_IDLE_TTL`,
    registry key `sidecar.coquiIdleTtl` at `server/src/config/registry.ts:848`)
