@@ -810,6 +810,54 @@ test('J3: a root-name look-alike directory is not the checkout (Explorer copy, +
   }
 });
 
+// --- #4222 pass-2 finding B: kill-direction gaps in classifyBatteryLocation ---
+
+const PRIMARY_WORKER = `"C:\\Program Files\\nodejs\\node.exe" ${PRIMARY}\\node_modules\\vitest\\dist\\workers\\forks.js`;
+
+test('BL1: a look-alike that parses down to the BARE root is foreign, even beside a worker naming the primary', () => {
+  // The path parse stops at a space, `,`, `;` or `'`, so each sibling below
+  // collapses to a token equal to the root itself. It must be counted as
+  // foreign (ambiguous), not ignored: the junctioned worker alongside it makes
+  // inRoot true, which used to be enough to kill.
+  for (const sibling of [`${PRIMARY} - Copy`, `${PRIMARY} (2)`, `${PRIMARY},v2`, `${PRIMARY};x`, `${PRIMARY}'s copy`]) {
+    const lines = [`node ${sibling}\\node_modules\\vitest\\vitest.mjs run`, PRIMARY_WORKER];
+    const loc = classifyBatteryLocation(lines, PRIMARY, [PRIMARY]);
+    assert.ok(loc.foreign, `foreign for ${sibling}`);
+    const fx = guardFixture({ childCommandLine: lines[0], rate: 'stalled' });
+    fx.processes.push({ pid: 9003, ppid: 9002, name: 'node.exe', commandLine: PRIMARY_WORKER, cpuSeconds: 1, startedAt: NOW - 60 * MIN });
+    const r = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] } });
+    assert.deepEqual(r.killedPids, [], sibling);
+  }
+});
+
+test('BL2: a parent-directory segment is resolved before the owner match', () => {
+  const line = `node ${PRIMARY}\\..\\other-wt\\node_modules\\vitest\\vitest.mjs run`;
+  const loc = classifyBatteryLocation([line, PRIMARY_WORKER], PRIMARY, [PRIMARY]);
+  assert.ok(loc.foreign, 'resolves to a sibling directory of the root');
+  // Control: a `..` that stays inside the checkout is still in it.
+  const inside = classifyBatteryLocation([`node ${PRIMARY}\\a\\..\\node_modules\\vitest\\vitest.mjs run`], PRIMARY, [PRIMARY]);
+  assert.deepEqual(inside, { inRoot: true, foreign: null });
+});
+
+test('BL3: the neutral install-path allowance has a component boundary', () => {
+  for (const dir of ['C:\\Programming', 'C:\\Programs', 'C:\\Windowsx', 'C:\\ProgramDatax']) {
+    const loc = classifyBatteryLocation([`node ${dir}\\x\\vitest.mjs run`, PRIMARY_WORKER], PRIMARY, [PRIMARY]);
+    assert.ok(loc.foreign, dir);
+  }
+  // Controls: the real neutral locations (incl. `Program Files` truncated at its
+  // space, and the global npm prefix) stay neutral.
+  for (const neutral of [
+    '"C:\\Program Files\\nodejs\\node.exe"',
+    '"C:\\Program Files (x86)\\nodejs\\node.exe"',
+    'C:\\ProgramData\\x\\y.exe',
+    'C:\\Windows\\System32\\cmd.exe',
+    'C:\\Users\\dudar\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js',
+  ]) {
+    const loc = classifyBatteryLocation([`${neutral} ${PRIMARY}\\node_modules\\vitest\\vitest.mjs run`], PRIMARY, [PRIMARY]);
+    assert.deepEqual(loc, { inRoot: true, foreign: null }, neutral);
+  }
+});
+
 test('J4: an unrelated in-checkout process OUTSIDE the candidate subtree is not evidence of membership', () => {
   // Mutation: `members.has(p.pid) && ...` -> `true && ...` goes red here.
   // The candidate's own argv names no path at all (relative paths only), so

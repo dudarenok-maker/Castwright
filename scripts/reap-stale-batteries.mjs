@@ -550,7 +550,9 @@ const isWindows = process.platform === 'win32';
 
 // Path literals in a command line that say nothing about WHICH checkout a
 // battery belongs to: the node / shell install and the global npm prefix.
-const NEUTRAL_PATH_RE = /^[a-z]:\/(program|windows)|\/appdata\/roaming\/npm(\/|$)/;
+// `c:/program` is how `C:\Program Files\...` reads once the token is cut at its
+// space; the boundary keeps `C:\Programming` / `C:\Programs` from reading neutral.
+const NEUTRAL_PATH_RE = /^[a-z]:\/(program|programdata|windows)(\/|$)|\/appdata\/roaming\/npm(\/|$)/;
 
 /** Verdict on where a battery's argv points, judged over ALL its members'
  *  command lines. ARGV ONLY: the process snapshot carries no working directory
@@ -587,11 +589,14 @@ export function classifyBatteryLocation(commandLines, root, knownRoots = []) {
       .toLowerCase()
       .replace(/(^|[\s\x22\x27=])\/(?:mnt\/)?([a-z])\//g, '$1$2:/');
     for (const m of text.matchAll(/[a-z]:\/[^\s\x22\x27\x60<>|*?,;]*/g)) {
-      const token = m[0].replace(/\/+$/, '');
+      // Resolve `..` / `//` first: `<root>/../other-wt/x` is not under the root.
+      const token = posix.normalize(m[0]).replace(/\/+$/, '');
       const owner = owners.find((o) => token === o || token.startsWith(o + '/'));
       if (owner === rootN) {
-        if (token.startsWith(nestedPrefix)) foreign ??= token;
-        else if (token !== rootN) inRoot = true;
+        // A token that is the BARE root is ambiguous: the parse cuts a look-alike
+        // (`<root> - Copy`, `<root>,v2`, `<root>'s copy`) down to exactly it.
+        if (token === rootN || token.startsWith(nestedPrefix)) foreign ??= token;
+        else inRoot = true;
       } else if (owner) {
         foreign ??= token;
       } else if (!NEUTRAL_PATH_RE.test(token)) {
