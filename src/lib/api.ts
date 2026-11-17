@@ -5906,6 +5906,12 @@ export interface ChapterRestructureResponse {
     newChapterId: number;
     newSentenceId: number;
   }>;
+  /** #4227 — the manuscript slice token of the edits the route read (after
+      replaying an interrupted restructure's journal, before its own rewrite).
+      When it differs from the token the client last learned, the edits moved
+      under the client and `sentenceRemap` must not be applied to its copy.
+      Absent from the mock, which has no disk. */
+  editsRevisionBefore?: Record<string, string>;
   /** Non-fatal advisories from the post-process passes (plan 70a):
       orphan recovery counts, empty-chapter prune counts, generic-title
       renumber counts. Empty / absent when the operation was clean.

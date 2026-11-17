@@ -51,6 +51,7 @@ import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
 import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
+import { replayAllRestructureEditsJournals } from './workspace/restructure-edits-journal.js';
 import { sweepStaleStaging } from './workspace/portable-staging.js';
 import { sweepOrphanVariantFiles, sweepStaleDesignStaging } from './routes/qwen-voice.js';
 import { repairDuplicateBookIds } from './workspace/duplicate-bookid-sweep.js';
@@ -565,6 +566,23 @@ async function main(): Promise<void> {
       }
     })
     .catch((err) => console.warn('[fsck] sweep skipped:', err));
+
+  /* #4227 — redo the manuscript-edits.json rewrite of any restructure that died
+     between its state.json and edits writes. Starts after the duplicate-bookId
+     sweep for the same reason as the fsck: it reads and rewrites state-adjacent files. */
+  void replayAllRestructureEditsJournals()
+    .then((r) => {
+      if (r.replayed.length > 0 || r.discarded.length > 0) {
+        console.log(
+          `[restructure-edits-journal] boot sweep: ${r.replayed.length} replayed, ` +
+            `${r.discarded.length} discarded, ${r.skipped.length} skipped.`,
+        );
+      }
+      for (const e of r.errors) {
+        console.warn(`[restructure-edits-journal] replay failed for ${e.bookId}: ${e.message}`);
+      }
+    })
+    .catch((err) => console.warn('[restructure-edits-journal] sweep skipped:', err));
 
   const warn = lanExposureWarning();
   if (warn) console.warn(warn);

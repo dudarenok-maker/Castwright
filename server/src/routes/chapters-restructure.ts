@@ -6,6 +6,8 @@
    2. Atomically write manuscript-hints.json (the restructured chapter bodies,
       #3703; first, so its failure changes nothing), state.json (rotating
       backup) and manuscript-edits.json.
+      The edits rewrite is journalled first, and replayed at the next
+      restructure or server start (#4227).
    3. Replace the in-memory ManuscriptRecord (putManuscript) so subsequent
       analysis / generation calls see the new structure.
    4. Apply the audio op plan via rewriteChapterSlugs (delete content-
@@ -77,6 +79,12 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { writeJsonAtomic } from '../workspace/state-io.js';
+import { sliceRevision } from '../workspace/slice-revision.js';
+import {
+  clearRestructureEditsJournal,
+  replayRestructureEditsJournal,
+  writeRestructureEditsJournal,
+} from '../workspace/restructure-edits-journal.js';
 import { checkParseHintsPairing } from '../workspace/hints-proof.js';
 import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
 import {
@@ -359,6 +367,11 @@ async function applyRestructureClaimed(
 }> {
   const { bookDir } = book;
   let { state } = book;
+  /* Redoes the edits rewrite of an interrupted earlier restructure (#4227). It must
+     precede the pairing check and the closure's sha backstop (judgeParsePairing,
+     the edits-sha 409 check), because it rewrites the file they read. Lock nesting:
+     book-op -> gate -> book -> state-json. */
+  await replayRestructureEditsJournal(book.bookDir, book.bookId);
   /* PR #3714 review passes 4-5 -- the record is the current one for the
      manuscript the LOCKED state names (`manuscriptId` is `book.state`'s, resolved
      under book-op), never the one `prepareRestructure` hydrated: an op this one
@@ -431,6 +444,16 @@ async function applyRestructureClaimed(
         ? (editsRead.value as { sentences?: RestructureSentence[]; mergedAwayKeys?: string[] } | null)
         : null;
     const sentences = edits?.sentences ?? [];
+    /* #4227 -- the manuscript slice token of the edits this request read: after its own
+       replay, before its own rewrite. A client compares it with the token it learned at
+       its last read; a difference means the edits moved under it (a replay in this
+       request, or the boot sweep's before it) and its copy still has the old keys. The
+       salt is the one GET /state uses (the locked state's manuscriptId and editEpoch). */
+    const editsRevisionBefore = sliceRevision(
+      'manuscript',
+      (edits as Record<string, unknown> | null) ?? null,
+      { manuscriptId: freshState.manuscriptId, editEpoch: freshState.editEpoch },
+    );
 
     state = legacyParse
       ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
@@ -605,11 +628,21 @@ async function applyRestructureClaimed(
       );
     }
 
-    // Write order: manuscript-hints.json -> state.json (rotating backup) ->
-    // manuscript-edits.json -> in-memory hints -> audio ops -> analysis cache.
-    // If any step throws past here, earlier writes are already on disk; partial
-    // state is recoverable via the reconciliation filter in
-    // book-state.ts:660-675 (the manuscript-edits/analysis-cache reconcile filter).
+    // Write order: manuscript-hints.json -> edits journal -> state.json (rotating
+    // backup) -> manuscript-edits.json -> journal cleared -> in-memory hints ->
+    // audio ops -> analysis cache.
+    // An interrupted restructure (a crash, or the edits write throwing) leaves the
+    // journal. The next restructure of the book, or the next server start, replays
+    // it and redoes the edits rewrite (#4227, workspace/restructure-edits-journal.ts).
+    // The in-memory record, audio ops, pending reconcile and cache after an
+    // interruption are NOT recovered by it (spec N16; #3456).
+    if (editsRead.kind === 'ok') {
+      await writeRestructureEditsJournal(bookDir, {
+        editsSha256: editsRead.sha256,
+        chapters: result.state.chapters.map((c) => ({ id: c.id, uuid: c.uuid! })),
+        remap: result.remap,
+      });
+    }
     await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
     /* A stale record means the manuscript on disk changed, so the kept entry
        does not validate against its sha today. The order is load-bearing: if the
@@ -629,10 +662,11 @@ async function applyRestructureClaimed(
         ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
         : {}),
     });
-    return { early: null, result, editsPath, oldChapters, hintsWritten, parseChapterCount };
+    await clearRestructureEditsJournal(bookDir);
+    return { early: null, result, editsPath, oldChapters, hintsWritten, parseChapterCount, editsRevisionBefore };
   });
   if (outcome.early) return outcome.early;
-  const { result, editsPath, oldChapters, hintsWritten, parseChapterCount } = outcome;
+  const { result, editsPath, oldChapters, hintsWritten, parseChapterCount, editsRevisionBefore } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
@@ -694,6 +728,7 @@ async function applyRestructureClaimed(
     body: {
       chapters: result.state.chapters,
       sentenceRemap: result.remap,
+      editsRevisionBefore,
       audioSummary, // not part of OpenAPI envelope — debug aid only
       // Non-fatal advisories: orphan recovery counts, prune-empty
       // counts, generic-title renumber counts. Empty array on clean ops.
