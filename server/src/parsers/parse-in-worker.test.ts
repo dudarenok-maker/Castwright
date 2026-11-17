@@ -1,5 +1,7 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
+import type { Worker } from 'node:worker_threads';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -113,14 +115,26 @@ describe('parseInWorker', () => {
       );
     }, 30_000);
 
-    it('a hang is stopped by the timeout', async () => {
+    it('a hang is stopped by the timeout, and the worker is actually terminated', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
+      let worker: Worker | undefined;
+      let exited = false;
       const err = await parseInWorker(
         { format: 'epub', buffer: Buffer.alloc(1), extractorVersion: 1 },
-        { workerUrl: workerFixture('hang.mjs'), timeoutMs: 200 },
+        {
+          workerUrl: workerFixture('hang.mjs'),
+          timeoutMs: 200,
+          onWorker: (w) => {
+            worker = w;
+            w.once('exit', () => (exited = true));
+          },
+        },
       ).catch((e) => e);
       expect(err).toBeInstanceOf(UnusableEpubError);
       expect(err.message).toBe(TIMEOUT);
+      /* hang.mjs holds a setInterval forever: only terminate() ends it. */
+      if (!exited) await Promise.race([once(worker!, 'exit'), new Promise((r) => setTimeout(r, 3000))]);
+      expect(exited).toBe(true);
     }, 10_000);
 
     describe('the per-parse scratch dir is removed whatever the outcome', () => {
