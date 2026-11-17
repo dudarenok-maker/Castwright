@@ -37,6 +37,13 @@ describe('mock API reads per-book revisions (plan 286, D7)', () => {
     expect(await _mockGetChapterAudioPrevious({ bookId: 'sb', chapterId: 3, duration: '11:31' })).not.toBeNull();
     expect(await _mockGetChapterAudioPrevious({ bookId: 'sb', chapterId: 4, duration: '11:31' })).toBeNull();
   });
+  it('an m4a-seeded book answers its previous take with an .m4a url; the default stays mp3', async () => {
+    const mp3 = await _mockGetChapterAudioPrevious({ bookId: 'sb', chapterId: 3, duration: '11:31' });
+    expect(mp3?.url).toMatch(/\.mp3/);
+    seedMockRevisions('sb', { previousChapterIds: [3], audioExt: 'm4a' });
+    const m4a = await _mockGetChapterAudioPrevious({ bookId: 'sb', chapterId: 3, duration: '11:31' });
+    expect(m4a?.url).toBe('/mock-audio/sb/3/audio/previous.m4a');
+  });
 });
 
 describe('mock renders record pending (plan 286)', () => {
