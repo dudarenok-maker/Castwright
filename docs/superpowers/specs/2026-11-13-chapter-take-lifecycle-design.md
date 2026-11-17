@@ -1,15 +1,61 @@
 ---
 status: draft
-revision: 10 (assumption-checker pass 9 on PR #4189 folded, 2026-11-17, around the owner's binding decisions E13 to E15; revision 9 folded pass 8 around E11 and E12; revision 8 folded pass 7 around E9 and E10; revision 7 folded pass 6 around E8; revision 6 folded pass 5 around E7; revision 5 folded pass 4 around E5-E6; revision 4 folded pass 3 around E1-E4; revision 3 folded passes A and 1 around D1-D4; revision 2 folded the manual check F1-F24, V2-V4, D)
+revision: 11, final (the owner's binding decisions E16 to E18 folded, 2026-11-17, with the owner's approval to merge with no further check; revision 10 folded assumption-checker pass 9 on PR #4189 around E13 to E15; revision 9 folded pass 8 around E11 and E12; revision 8 folded pass 7 around E9 and E10; revision 7 folded pass 6 around E8; revision 6 folded pass 5 around E7; revision 5 folded pass 4 around E5-E6; revision 4 folded pass 3 around E1-E4; revision 3 folded passes A and 1 around D1-D4; revision 2 folded the manual check F1-F24, V2-V4, D)
 issue: 3456
 refs: [3400, 3397, 3457, 3518, 3524, 3704, 3711, 3717, 3774, 4166, 4167, 4195, 4204, 4205, 4206, 4211, 4220, 4223, 4224, 4227, 4230, 4233, 4234, 4235, 4236]
-verified-at: deb3fafa (since 08742125, #4205 and #4214 merged. Of the cited files only server/src/routes/book-state.ts moved, by #4205: +4 lines after :1124 and +12 after :1299; §1 onward is re-anchored to match. #4214 touches the sidecar only. The changelogs and earlier decision lists keep the anchors they were written against)
-decisions: OD1-OD8 accepted by the owner 2026-11-14; D1-D4, E1-E4 and E5-E6 binding 2026-11-15; E7 and E8 binding 2026-11-16; E9 to E15 binding 2026-11-17 (E11 and E12 restate the reach of E9 and E10; E13, E14 and E15 restate the reach of E11, E12 and R9-1); revision 9's decisions and R9-7 confirmed by the owner 2026-11-17; the items under "Decisions made in revision 3" to "Decisions made in revision 8", and under "Decisions made in revision 10", are owed owner confirmation
+verified-at: 02059252 (since deb3fafa, #4208, #4184, #4245 and #4240 merged. Of the files this spec cites with a line anchor only server/src/gpu/evict-idle-tts.ts changed, by #4208, at :207 onward; its cited `keepForRunStart` at :141-150 did not move. #4240 changed server/src/routes/qwen-voice.ts, which is cited by name only. #4184 is docs only. No anchor moved. At deb3fafa, #4205 had moved server/src/routes/book-state.ts by +4 lines after :1124 and +12 after :1299. The changelogs and earlier decision lists keep the anchors they were written against)
+decisions: OD1-OD8 accepted by the owner 2026-11-14; D1-D4, E1-E4 and E5-E6 binding 2026-11-15; E7 and E8 binding 2026-11-16; E9 to E18 binding 2026-11-17 (E11 and E12 restate the reach of E9 and E10; E13, E14 and E15 restate the reach of E11, E12 and R9-1; E16 confirms E15's tie rule); revision 9's decisions and R9-7 confirmed by the owner 2026-11-17; revision 10 accepted by the owner as a whole 2026-11-17, apart from what E17 and E18 add, so its decisions and the items under "Decisions made in revision 3" to "Decisions made in revision 8" are confirmed; revision 11's choices sit inside E16 to E18 and are covered by the owner's approval to merge it with no further check. Nothing is owed owner confirmation
 ---
 
 # Chapter take lifecycle: who owns a chapter's live and `.previous` audio (#3456)
 
+## Revision 11 changelog
+
+This is the final revision. On 2026-11-17 the owner accepted revision 10 as a whole, apart from two
+gaps that pass 9 listed as not folded. The owner decided those gaps as E16 to E18 (binding, quoted
+under "Owner decisions") and approved merging this revision with no further check. So this revision
+adds no open question, and every choice it makes sits inside E16 to E18 (R11-1 to R11-4, below).
+Every anchor was re-checked against `origin/main` (`02059252`). Since `deb3fafa`:
+- **#4208** (merged, #4102) changes `gpu/evict-idle-tts.ts` from `:207` onward. The anchor this spec
+  cites there, `keepForRunStart` at `:141-150`, did not move.
+- **#4240** (merged, #4238) changes `routes/qwen-voice.ts`, which this spec cites by name only.
+- **#4245** (merged) changes a server test only. **#4184** (merged) is a docs spec.
+
+No cited anchor moved.
+
+| Item | Resolution in revision 11 |
+|---|---|
+| **E16 (owner): E15's tie rule** | Confirmed. Two different equal-size copies that nothing tells apart are both quarantined, and the part is recorded in `lost`. The take is incomplete, never mixed, and the slug is not blocked. Revision 10's other choices are confirmed too: the identical-copy rule, the name `take-fields.ts`, skipping a book's whole heal when one of its journals cannot be read or parsed, and step 8 stopping at the first failed unlink. All of them move from "Decisions made in revision 10" to "Owner decisions". Because revision 10 was accepted as a whole, the lists under "Decisions made in revision 3" to "Decisions made in revision 8" are confirmed too |
+| **E17 (owner): the excluded-chapter gap** (pass 9's not-folded gap) | A render's chapter-start span re-reads `excluded` after its journal replay and inside the same span. If replay has now set `excluded: true` (a drop journal rolled forward, E12, E18), the chapter is skipped before anything is staged. It writes no take and no state. It sends no per-chapter frame, which is what the existing excluded-chapter skip sends (`generation.ts:1143-1149`, `:1287-1288`, `:1308-1311`), and it is never a failure. This is the in-lock re-check, and the caller's filter stays as it is. A test case is added, with the mutation "drop the post-replay re-check" (§4.1, §5.A Exclude, Tests, §7 Phase 4 step 1, where drop journals land) |
+| **E18 (owner): Accept and drop journals' replay direction** (pass 9's not-folded gap, pre-existing) | Both get the rule that commit and `replace` journals already follow: before `installed` a journal rolls back, and at or after `installed` it rolls forward to completion. The rule is stated in the Journal rules' replay list, with each journal's phases in its own section. It was checked against E12, E14 and the drop journal's `.orphaned/<iso-date>-<jid>/` target. It applies to all three once R11-1 to R11-3 are in place. Test cases are added (§5.A Journal rules, Accept, Exclude, Tests, §7 Phases 3 and 4) |
+| Pass 9's other not-folded notes: the gate's fail-closed test hook, and R9-2's per-part re-probe cost | Moved to the new §7.1, **Implementation notes (plan-level, not design-level)**. The hook needs no new export: the test stubs the leaf gate's own unregistered answers. The re-probe costs at most `RENAME_RETRY_WORST_CASE_MS` (about 3.6 s) per step, and only for a part that is absent at its first probe. Neither is a design question |
+| Housekeeping | "Remaining", §8.3 and §8.4 are restated so that each holds only accepted residuals, pre-existing gaps with their own ticket, or on-box acceptance, and no open question of this design. §8.1 gains E16 to E18. `verified-at` is refreshed |
+
+## Choices made in revision 11 (inside E16 to E18; covered by the owner's approval to merge)
+
+- **R11-1 (where `installed` sits for Accept and drop).** Neither journal installs anything, so
+  `installed` is the phase each one journals once every move has landed. That is the point where
+  the spec already says a journal is "past its moves" (E12). Before it, replay undoes the moves. At
+  or after it, replay runs the remaining record steps.
+- **R11-2 (the drop target's date).** A drop journal records its event folder's name,
+  `<iso-date>-<jid>`, when it is written. A rollback on a later day moves the only-copy part back
+  from that recorded folder and never recomputes the date.
+- **R11-3 (no collision in a drop's event folder).** When replay quarantines a foreign copy for a
+  drop journal, the copy goes to that event folder's `foreign/` subfolder. So it can never take
+  the name of the only-copy part the drop itself moved into the folder, which a rollback still has
+  to move back. This is the nearest rule that keeps E18 as stated, never overwrites (OD8), and
+  never leaves a mixed or half-excluded chapter.
+- **R11-4 (where E17's re-check sits).** The re-check runs after `reconcileBook` and
+  `reconcileSlug` and before `ensureTakeIdentity`, so a skipped chapter gets no mint either. It
+  runs at chapter start only. A commit's step 0 cannot meet a new drop journal, because exclude is
+  refused while the render is registered (#3774, `book-state.ts:2350-2359`). Any drop journal that
+  existed before then was settled at chapter start: rolled back, rolled forward and skipped by E17,
+  or the chapter ended after its record-step budget.
+
 ## Revision 10 changelog
+
+Kept for history. Where revision 11 changed a resolution (the "Not folded" row below, and the
+"owner to confirm" status of revision 10's decisions), the revision 11 changelog above wins.
 
 `assumption-checker` pass 9 ran on revision 9 at head `f74c69fd` (PR #4189 comment "Assumption-checker
 pass 9"). It cleared the gate: 0 Critical, 0 Significant and 7 Minors (L1–L7), plus non-gate notes.
@@ -38,20 +84,9 @@ decision, and this revision settles them (R10-1 to R10-4). Every anchor was re-c
 | Not folded (pass 9's other gaps and notes) | Accept and drop journals still have no stated replay direction (pre-existing). E12 lets a drop journal's replay succeed on a later chapter-start attempt and set `excluded: true`, and the span is not said to re-check `excluded` afterwards. The fail-closed test hook for the gate, and R9-2's per-part re-probe cost, are not named. None is in L1–L7 |
 | Questions 1–3 | Q1 answered by E13, Q2 by E14, Q3 by E15 (§8.1) |
 
-## Decisions made in revision 10 (owner to confirm)
+## Decisions made in revision 10 (confirmed by the owner 2026-11-17, E16)
 
-E13 to E15 left these open. Each item takes the narrowest option that is safe.
-
-- **E15's undecided copies (both quarantined, the part lost).** A refusal was the other option, with
-  its own sentence naming the two files (pass 9's question 3). It was not taken. A refusal freezes
-  whatever the two copies left at the live name, which can be the mixed take E15 rules out, and a
-  user cannot tell two equal-size copies apart either. Both copies survive in the journal's
-  `.orphaned/` event folder.
-- **E15's identical copies.** Two copies at two slug names that are byte-identical are treated as the
-  protocol's: the copy at the target counts, and the other is quarantined, never unlinked.
-- **R10-2 (`workspace/take-fields.ts`).** The name is new. The heal skips the whole book for that scan
-  when the leaf cannot read or parse one of the book's journals.
-- **R10-3 (step 8 stops at the first failed unlink).**
+Confirmed by E16 and now listed under "Owner decisions", with their reasons.
 
 ## Revision 9 changelog
 
@@ -136,7 +171,7 @@ them (R8-1 to R8-9). Every anchor was re-checked against `origin/main` (`33f3647
 | Note: R7-4's anchor | `RETRYABLE_CODES` is `atomic-rename.ts:41-47`: EPERM, EBUSY, ENOENT, EACCES and EIO |
 | Questions 1–3 | Q1 answered by E9, Q2 by E10, Q3 by R8-1 and R8-2 (§8.1) |
 
-## Decisions made in revision 8 (owner to confirm)
+## Decisions made in revision 8 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
 
 E9 and E10 left these open. Pass 7 gave each one's shape. Each item takes the narrowest option
 that is safe.
@@ -200,7 +235,7 @@ everything else, which this revision does (R7-1 to R7-13). Every anchor was re-c
 | Notes: row Q's rename-away half; #4230 | **R7-13.** Row Q records both halves from this box (NTFS): with ffmpeg holding a hard-link snapshot, renaming a new take over the live name succeeded, **and** renaming the live file away to `.previous` succeeded. With ffmpeg holding the live file directly, the controls failed EPERM and EBUSY. Commit step 5 starts with a rename-away, so the claim that the m4b leaves the ffmpeg-holder list once #4224 merges rests on the second half. #4230 is cited in §8.3, Remaining and `refs:` (OD7, §7 Phase 4, §8.3) |
 | Questions 1–3 | Q1's first half answered by E8. Q1's second half (queued passes) settled by E8 too. Q2 by R7-2 and R7-3; Q3 by R7-4 and R7-5 (§8.1) |
 
-## Decisions made in revision 7 (owner to confirm)
+## Decisions made in revision 7 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
 
 E8 left these open. Pass 6 said revision 7 could settle them without the owner. Each item takes the
 narrowest option that is safe.
@@ -291,7 +326,7 @@ every Minor, which this revision does (R6-1 to R6-12). Every anchor was re-check
 | Gap: the chapter-start span's cost is not budgeted | Counted under Span length: one more `withBookOp` resolve per chapter of a render, beside the registration's own resolve (§5.A Span length). |
 | Questions 1–3 | Q1 answered by E7; Q2 by R6-3; Q3 by R6-4 (§8.1). |
 
-## Decisions made in revision 6 (owner to confirm)
+## Decisions made in revision 6 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
 
 E7 left these open. Pass 5 said revision 6 could settle them without the owner. Each item takes the
 narrowest option that is safe.
@@ -409,7 +444,7 @@ settles itself (R5-1 to R5-5). Every anchor was re-checked against `origin/main`
 | Gap: whether a failed `reconcileBook` blocks unrelated slugs | No (R5-3). |
 | Questions 1–3 | Q1 answered by E5, Q2 by E6, Q3 by R5-1 to R5-5 (§8.1). |
 
-## Decisions made in revision 5 (owner to confirm)
+## Decisions made in revision 5 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
 
 E5 and E6 left these open. Pass 4 said revision 5 could settle B1 and B2 without the owner. Each
 item takes the narrowest option that is safe.
@@ -524,7 +559,7 @@ contradictions/gaps and three owner questions. The owner answered all three on 2
 | Live-take predicate: finder or readdir + regex? | **The finder** (`chapterAudioExists` / `findChapterAudio`), the same as exports and PR #4206. On a case-insensitive filesystem `<slug>.MP3` is live, so every reader agrees (§4.2, decision R4-1). |
 | §2.3 lacks `scan.ts`'s `completedChapters` | Added as R-l (`scan.ts:749-752`; #4206 routes it through `chapterAudioExists`). |
 
-## Decisions made in revision 4 (owner to confirm)
+## Decisions made in revision 4 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
 
 E1–E4 left these open. Each takes the option most consistent with them.
 
@@ -619,7 +654,7 @@ anchors still hold, except where a row below corrects one.
 | §8 questions answered from code (1) | Folded into §8: the attempted marker is existence-only; verdict keys survive carry-forward. |
 | Pass A owed questions 1–3; pass 1 owed questions 1–3 | Answered in §8.1, one line each, by D1–D4. |
 
-## Decisions made in revision 3 (owner to confirm)
+## Decisions made in revision 3 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
 
 D1–D4 left these open. Each takes the option most consistent with them.
 
@@ -784,9 +819,43 @@ D1–D4 left these open. Each takes the option most consistent with them.
 >   swap until the `replace` supersedes it, and so does a carried drop journal (E14). Any other
 >   carried journal stuck on record steps refuses the import with the curated 500.
 >
-> Pass 9 cleared the `assumption-checker` gate on revision 9, and the owner approved this revision
-> as the design of record without a further pass (2026-11-17). Row Q's OneDrive cells must run on
-> the box before Phase 2 (the NTFS cells are recorded, §5.A Windows).
+> **Binding 2026-11-17 (E16–E18), with revision 11 (the owner accepted revision 10 as a whole,
+> apart from the two gaps that E17 and E18 close):**
+> - **E16 (confirms revision 10's E15 tie rule).** "Two different equal-size copies that can't be
+>   told apart: quarantine both and record the part as `lost`. The take is incomplete, never mixed,
+>   and the slug is not blocked." Revision 10's other choices are confirmed with it: the
+>   identical-copy rule, the name `take-fields.ts`, skipping the whole book's heal if a journal
+>   can't be read, and the step-8 stop.
+> - **E17 (the excluded-chapter gap).** A render's chapter-start journal replay can set
+>   `excluded: true`, for example through a pending drop journal under E12. "After replay, the
+>   render re-reads `excluded` within the same lock span. If the chapter is now excluded, it aborts
+>   before staging anything. It writes no take and no state, and it reports the chapter as skipped
+>   and excluded, not failed," matching the existing excluded-chapter skip. It is the in-lock
+>   re-check, not a replacement for the caller's skip (§4.1).
+> - **E18 (Accept and drop journals get a replay direction).** "The rule matches the others: before
+>   `installed` a journal rolls back, and at or after `installed` it rolls forward to completion."
+>   Where the rule cannot apply as stated, the nearest consistent rule is taken, the one that never
+>   leaves a mixed or half-excluded state, and recorded as an R11 choice (R11-1 to R11-3; §5.A
+>   Journal rules).
+>
+> **Confirmed 2026-11-17, with revision 11 (revision 10's decisions, moved here from "Decisions made
+> in revision 10"; E16):**
+> - **E15's undecided copies (both quarantined, the part lost).** The other option was a refusal
+>   with its own sentence naming the two files (pass 9's question 3). It was not taken. A refusal
+>   freezes whatever the two copies left at the live name, which can be the mixed take E15 rules
+>   out, and a user cannot tell two equal-size copies apart either. Both copies survive in the
+>   journal's `.orphaned/` event folder.
+> - **E15's identical copies.** Two byte-identical copies at two slug names are treated as the
+>   protocol's: the copy at the target counts, and the other is quarantined, never unlinked.
+> - **R10-2 (`workspace/take-fields.ts`).** The name is new. The heal skips the whole book for that
+>   scan when the leaf cannot read or parse one of the book's journals.
+> - **R10-3 (step 8 stops at the first failed unlink).**
+>
+> Pass 9 cleared the `assumption-checker` gate on revision 9, and the owner approved revision 10 as
+> the design of record without a further pass (2026-11-17). The owner then approved merging
+> revision 11, which folds E16 to E18, with no further check (2026-11-17). Row Q's OneDrive cells
+> must run on the box before Phase 2 (the NTFS cells are recorded, §5.A Windows). That is on-box
+> acceptance, not a design question (§8.4).
 
 **OD1 — Which component owns a chapter's take files, and how is everything else fenced?**
 Three options are costed in §5. **Accepted: Option A.**
@@ -1056,6 +1125,31 @@ still owes:
   this span and two more in fresh spans after 1 s and 2 s. If the third fails, the chapter ends
   `chapter_failed` before synthesis, with `requestFailureMessageFs`' sentence for the last error.
   `code` chooses that sentence and nothing else: it never decides whether to retry (pass 7, J2).
+
+**The span re-checks `excluded` after replay (E17, revision 11).** A drop journal that the render
+cannot supersede (E12) can still finish during this span, in its first attempt or in a later one
+of the record-step budget. It rolls forward from `installed` (E18) and writes `excluded: true`. The
+caller chose its chapters from the lease's state before that write (`generation.ts:1143-1149`), so
+the chapter is still in the run. Each attempt of the span therefore re-reads the chapter's
+`excluded` from a fresh `state.json` read, after `reconcileBook` and `reconcileSlug` and before
+`ensureTakeIdentity` (R11-4). If it is now excluded, the chapter is skipped:
+- **nothing is staged or written.** No synthesis runs, there is no `.next-*` part, no mint, no
+  `startTakeId`, no `generationState*` stamp and no attempted marker. The only writes are the ones
+  the drop journal's own replay made;
+- **it reports what the existing excluded-chapter skip reports**, which is nothing for that
+  chapter. On `main` an excluded chapter is filtered out of `targetChapters` before the loop
+  (`generation.ts:1143-1149`), the catch-up replay skips it (`:1287-1288`), and a POST left with no
+  target answers only `idle` (`:1308-1311`). Here `processOneChapter` returns with no frame, as its
+  early returns for an aborted or fatal run do (`:1502-1503`). The loop goes on to the next target,
+  and the job ends with its usual `idle`. So a single-chapter queue POST sends exactly the frames
+  a POST for an already-excluded chapter sends on `main`. There is no `chapter_failed` and no
+  `chapter_complete`, the queue-entry mark and `afterChapterFinalized` do not run, and the skip is
+  logged;
+- **it is the in-lock re-check, not a replacement.** The caller's filter still decides the run's
+  chapters from the lease's state, as on `main`. The re-check only covers a chapter that replay
+  excluded after that decision. A commit's step 0 needs no second re-check: exclude is refused
+  while the render is registered (#3774, `book-state.ts:2350-2359`), so no drop journal can appear
+  after this span, and every one that existed before it was settled here (R11-4).
 
 `ensureTakeIdentity`'s own failures never stop a full render. Its `state.json` mirror is swallowed
 (State-write sites), and a failed mint into the live segments leaves the take id-less, so the render
@@ -1919,7 +2013,7 @@ moves one site and adds eight (revision 5 splits the replay row):
 |---|---|---|
 | `commitTake` step 7 stamp (moved from finalize's `:791`) | **fail-loud**, deferred | D2. Parked, rethrown after cleanup; the review record waits for a successful stamp (E6); the journal keeps both owed |
 | `restoreTake` `stamp` phase (Reject, `restore-unrecorded`) | **fail-loud**, deferred | New: today's reject does not stamp. Parked, rethrown after cleanup of the discard set; the journal stays at `stamp` |
-| journal replay's stamp (commit and restore roll-forward, R3-5's promotion, replace), at an entry point that has a terminal outcome | **fail-loud** to that entry point | The journal stays. It is a record step, so it never answers 409 `take_repair_pending`, which is only for a move step (R7-4). At a quick op: the curated 500 at once. At a render's chapter-start span and a commit's step 0: a journal on E12's supersedable list (§4.1, with E14's `replace` journals) is logged and then superseded by the commit (E10); at a bundle overwrite, a carried journal on that list, or a carried drop journal (E14), is superseded by the `replace` journal; any other gets the record-step budget of three attempts and then ends the chapter with `requestFailureMessageFs`' sentence (R8-2). Its class never depends on `code` (§4.1, Commit step 0) |
+| journal replay's stamp (commit and restore roll-forward, R3-5's promotion, replace; and a drop journal's roll-forward `state.json` write, E18, which is the same replay site), at an entry point that has a terminal outcome | **fail-loud** to that entry point | The journal stays. It is a record step, so it never answers 409 `take_repair_pending`, which is only for a move step (R7-4). At a quick op: the curated 500 at once. At a render's chapter-start span and a commit's step 0: a journal on E12's supersedable list (§4.1, with E14's `replace` journals) is logged and then superseded by the commit (E10); at a bundle overwrite, a carried journal on that list, or a carried drop journal (E14), is superseded by the `replace` journal; any other gets the record-step budget of three attempts and then ends the chapter with `requestFailureMessageFs`' sentence (R8-2). Its class never depends on `code` (§4.1, Commit step 0) |
 | journal replay's stamp at the **boot fsck** (fire-and-forget, `index.ts:549-555`) | **swallow** (logged), revision 5 | Nothing to fail into. The journal stays, and the next entry point on the slug repeats the replay |
 | journal replay's stamp in **R4-2's background `reconcileBook` retries** | **swallow** (logged), revision 5 | The request already answered its fixed 500. The journal stays, and the next attempt or entry point repeats it |
 | `reconcileBookTakes` (backup restore, R3-9) | **fail-loud**, deferred | Otherwise restored take fields describe absent audio (N12). Parked across chapters, rethrown after the last |
@@ -2016,6 +2110,33 @@ adds the fsck and background replay rows, which also cover `dropEntry` there).
     the review record from the journal's `review` and `entry` inputs (E6); then cleanup), parking
     errors as step 7 does.
   - **a restore**: as in the reject table below.
+  - **an Accept or a drop (E18, revision 11):** the same rule as a commit. Before `installed`, roll
+    back. From `installed` on, roll forward to completion. Neither journal installs anything, so
+    its `installed` is the phase it journals once every move has landed, the point E12 calls "past
+    its moves" (R11-1). Accept's phases are in its table and drop's in Exclude's (both below):
+    - **rolling back** moves each part from its discard name back to its slug name, the audio
+      last, deciding each part by the rows below. For a drop that includes the only-copy part,
+      which comes back from the event folder the journal recorded when it was written (R11-2). A
+      rolled-back Accept leaves the previous take whole and the entry pending, so the user's retry
+      runs it again. A rolled-back drop leaves the chapter not excluded, with its takes whole and
+      its take fields unchanged. A part recorded as lost on the way is the only exception, as for
+      every journal (below). Nothing is half-moved and nothing is half-excluded;
+    - **rolling forward** runs the remaining record steps. For Accept that is its `revisions.json`
+      write recording `accepted`, then cleanup. For a drop it is the `state.json` write that sets
+      `excluded: true` and clears the take fields, then `dropEntry`, then cleanup. A record-step
+      failure keeps E12's block-and-retry: the record-step budget in a job, the curated 500 at a
+      quick op. A carried drop journal at the bundle overwrite may instead be superseded by the
+      `replace` (E14), which runs only from `installed` on, as every supersession does;
+    - **E18 checked against E12, E14 and the drop target.** E12 is about record-step failures past
+      the moves, which is the roll-forward half, so nothing in it changes. E14 supersedes only a
+      carried drop journal stuck on record steps, so it too is at or after `installed`. Before
+      `installed` a carried drop journal rolls back in the pre-claim replay, and a move-step failure
+      there refuses the import, as for any journal. The drop target under
+      `audio/.orphaned/<iso-date>-<jid>/` is journal-unique, so its rollback takes the "source
+      journal-unique" row. Two things are added so that the rule applies as stated. The event
+      folder's name is recorded at write time, so a later day's replay finds it (R11-2). And a
+      foreign copy that replay quarantines for a drop goes to the folder's `foreign/` subfolder, so
+      it never takes the only-copy part's name before that part moves back (R11-3);
   - **a relabel**: resume at its cursor (Restructure, below). Never roll back once `state.json` has
     landed (E1).
 - **Idempotence of per-slug journals.** For a commit, replace, restore, accept or drop journal,
@@ -2148,6 +2269,16 @@ take A, so Accept meets the converge row below. Accept **changes no take field**
 | the entry's `previousTakeId` (A), or, when that is `null`, a take whose segments' `synthesizedAt` is present and equals the entry's `previousRenderedAt`, which is present too (R9-4, R10-4) | **a reject's audio step already ran**. Accept and reject converge: the entry is removed, `rejected` (the truth) is appended, and the answer is 409 `revision_gone` with the state |
 | anything else | `revision_gone`, entry kept as today |
 
+The first row's journal is `op:'accept'`. Its phases and what a replay does at each (E18, revision
+11; R11-1):
+
+| Phase | Action | Replay |
+|---|---|---|
+| `discard-prev` | move each `.previous.*` part to `.discard-<jid>.prev.*`, the audio first | roll back: move them back to `.previous.*` |
+| `installed` | journalled once every move has landed | roll forward from here |
+| `record` | the `revisions.json` write that records `accepted` and removes the entry | roll forward |
+| `cleanup` | unlink the discard set, then the journal | roll forward |
+
 **Reject** (`restoreTake`). Journal `op:'restore'`. The phases, with what a replay does at each:
 
 | Phase | Action | Replay before the next phase |
@@ -2238,6 +2369,21 @@ Legacy entries with no stamps are unchanged. **`revision-op` is retired** (N10).
 - **if there is no live take**, the previous take (the only copy) moves to `audio/.orphaned/`
   instead of being deleted. This rule is reachable, because `dropAllTakes`'s step 0 never promotes
   (§4.2).
+
+The drop journal's phases and what a replay does at each (E18, revision 11; R11-1 to R11-3):
+
+| Phase | Action | Replay |
+|---|---|---|
+| `discard` | move the live take (audio first), the previous take and every sidecar to `.discard-<jid>.*`, or the only copy to the event folder `audio/.orphaned/<iso-date>-<jid>/` that the journal names | roll back: move every part back to its slug name, the only copy from the recorded folder (R11-2); a foreign copy at a slug name goes to that folder's `foreign/` subfolder (R11-3) |
+| `installed` | journalled once every move has landed | roll forward from here |
+| `state` | the one `state.json` write that sets `excluded: true` and clears `TAKE_STATE_FIELDS` | roll forward |
+| `dropEntry` | drop the pending entry | roll forward |
+| `cleanup` | unlink the discard set, then the journal; the only copy stays in `.orphaned/` | roll forward |
+
+So a drop either never happened (rolled back: not excluded, takes whole apart from any part
+recorded as lost) or completes (rolled
+forward: excluded, takes gone or quarantined). A render that meets the forward half at its chapter
+start skips the chapter (E17, §4.1).
 
 **Restructure** (`relabelTakes`; N16; E1). **Once `state.json` has landed, a relabel only rolls
 forward.**
@@ -2508,8 +2654,8 @@ as today. A crash in the window is undone the same way by replay.
   - A crash between the state write and the edits write leaves today's gap. Revision 4 said the
     GET-side edits/cache reconciliation (`book-state.ts:598-606`, the filter at `:660-675`) covered it. It does not: that
     reconciliation drops edits by sentence-id range, not by chapter renumbering (pass 4). The claim
-    is withdrawn, and the gap is listed under Remaining as pre-existing and owing a design pass
-    (#4227, §8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) still says
+    is withdrawn, and the gap is listed under Remaining as a pre-existing, accepted residual whose
+    fix is #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) still says
     partial state "is recoverable via the reconciliation filter". #4224 (merged at `33f3647c`)
     corrected only its anchor, to `book-state.ts:660-675`, where the filter keeps an edit whose id
     is still in the cache or above its maximum and drops the rest, by sentence-id range. That does
@@ -2930,7 +3076,9 @@ What the protocol does with each:
 H12–H14, H16 (via OD2), H17, H18, H19 (server entries), H20, H22, F2, N1, N2, N4 (it degrades to a
 reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
 
-**Remaining:**
+**Remaining** (revision 11: every item is an accepted residual of this design. Each is
+pre-existing on `main`, out of scope with its own ticket, or accepted by an owner decision. None is
+an open question of this design):
 - reader skew within one rename window;
 - legacy client entries (H19);
 - a commit wedged mid-rename inside the filesystem. Nothing interrupts a syscall; a server restart
@@ -2943,7 +3091,8 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
   `manuscript-edits.json` keyed to the pre-restructure chapters. This is pre-existing on `main`, and
   it is **not** covered by the GET-side reconciliation, which drops edits by sentence-id range
   (revision 5 withdraws revision 4's claim). The design keeps it from spreading: a parked edits
-  write skips the cache rebuild (§5.A Restructure). Closing it owes a design pass (#4227, §8.3);
+  write skips the cache rebuild (§5.A Restructure). Closing it is #4227's own design pass, outside
+  this design (§8.3);
 - **a file the OS refuses to rename under every name** keeps the slugs a stuck journal names
   blocked, and only those, until the user removes the cause and tries again (R5-3, R5-4, R6-3);
 - **stray Qwen tiers after a pass that does not reconcile** (E7, E8, E9, E11, E13): a tier that a
@@ -2990,7 +3139,7 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
 - **a re-analysis that retitles a rendered chapter** leaves its take at the old slug, as on `main`
   (W16; §8.3; #4230).
 
-**Blast radius (F24; corrected).** About **66–72 non-test server files** (revision 8 adds two, revision 10 one), plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`. Revision 5 drops `chapter-job-coordination.ts` again (E5: no exit hook) and adds `test-utils/guard-scan.ts` (rule 3's resolver). Its other changes land in files already listed: `audio/segments-io.ts` (the shared classifier predicate), `routes/chapters-restructure.ts` (no cache rebuild after a parked edits write) and `import/scan-import-folder.ts` (the handles, R5-7). Revision 6 adds `routes/analysis.ts` (W16's carry, R6-4). Its other changes land in files already listed: `routes/generation.ts` (trigger `source`, the per-key pending list, no reconcile for partial passes), `routes/backup.ts` and `workspace/auto-backup.ts` (the handle), `routes/book-state.ts` (the PUT's `chapters` checks and replay), `routes/chapters-restructure.ts` and `workspace/restructure.ts` (`relabelJid`, the plan-driven pending-entry reconcile, step 0's `reconcileSlug`), `workspace/scan.ts` (`relabelJid` in the state type; the heal's read-then-check order) and `audio/segments-io.ts` (the name set as a predicate input). Revision 7 adds no file. Its changes land in files already listed: `routes/generation.ts` (the at-once rule, E8; pending entries by `uuid`, R7-12), `workspace/book-op-lock.ts` (`{ backfill: false }`, R7-8), `workspace/chapter-uuid.ts` (the field-list parameter, R7-6), `routes/chapter-splice.ts` and `routes/chapter-qa-repair.ts` (curated frames, R7-5) and `routes/chapters-restructure.ts` (step 0's slug plan, R7-3). Revision 8 added `routes/chapter-job-coordination.ts` back (`hasInFlightSpliceForBook`, E9) and `workspace/book-state-update.ts` (the canonical directory key, R8-4). Revision 9 drops `routes/chapter-job-coordination.ts` again (E11 reads the leaf gate instead) and adds `workspace/book-dir-key.ts` (new, R9-6), so the count is unchanged. #4234 merged, so its files no longer join (R7-5). Revision 10 adds `workspace/take-fields.ts` (new, R10-2); its other changes land in files already listed: `routes/generation.ts` (E13's start sample), `import/scan-import-folder.ts` (E14's supersession of a carried drop journal) and `workspace/scan.ts` (the imports from the leaf). Revision 8's other changes land in files already listed: `routes/generation.ts` (the resume re-check, now E11's `isAnyGenerationActive()` and epoch, the synchronous hand-off, chapters without a `uuid`), `workspace/restructure.ts` (the presence OR, R8-7), `routes/chapters-restructure.ts` (step 0 outside `book`, R8-3), `workspace/auto-backup.ts` (releasing `book`, the pre-restore `duration`, R8-3), `workspace/scan.ts` (the heal's key and set check, R8-4), `import/scan-import-folder.ts` (carried journals replayed before the claim, R8-5) and `workspace/chapter-uuid.ts` (`carryTakeStateFields`):
+**Blast radius (F24; corrected).** About **66–72 non-test server files** (revision 8 adds two, revision 10 one), plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`. Revision 5 drops `chapter-job-coordination.ts` again (E5: no exit hook) and adds `test-utils/guard-scan.ts` (rule 3's resolver). Its other changes land in files already listed: `audio/segments-io.ts` (the shared classifier predicate), `routes/chapters-restructure.ts` (no cache rebuild after a parked edits write) and `import/scan-import-folder.ts` (the handles, R5-7). Revision 6 adds `routes/analysis.ts` (W16's carry, R6-4). Its other changes land in files already listed: `routes/generation.ts` (trigger `source`, the per-key pending list, no reconcile for partial passes), `routes/backup.ts` and `workspace/auto-backup.ts` (the handle), `routes/book-state.ts` (the PUT's `chapters` checks and replay), `routes/chapters-restructure.ts` and `workspace/restructure.ts` (`relabelJid`, the plan-driven pending-entry reconcile, step 0's `reconcileSlug`), `workspace/scan.ts` (`relabelJid` in the state type; the heal's read-then-check order) and `audio/segments-io.ts` (the name set as a predicate input). Revision 7 adds no file. Its changes land in files already listed: `routes/generation.ts` (the at-once rule, E8; pending entries by `uuid`, R7-12), `workspace/book-op-lock.ts` (`{ backfill: false }`, R7-8), `workspace/chapter-uuid.ts` (the field-list parameter, R7-6), `routes/chapter-splice.ts` and `routes/chapter-qa-repair.ts` (curated frames, R7-5) and `routes/chapters-restructure.ts` (step 0's slug plan, R7-3). Revision 8 added `routes/chapter-job-coordination.ts` back (`hasInFlightSpliceForBook`, E9) and `workspace/book-state-update.ts` (the canonical directory key, R8-4). Revision 9 drops `routes/chapter-job-coordination.ts` again (E11 reads the leaf gate instead) and adds `workspace/book-dir-key.ts` (new, R9-6), so the count is unchanged. #4234 merged, so its files no longer join (R7-5). Revision 10 adds `workspace/take-fields.ts` (new, R10-2); its other changes land in files already listed: `routes/generation.ts` (E13's start sample), `import/scan-import-folder.ts` (E14's supersession of a carried drop journal) and `workspace/scan.ts` (the imports from the leaf). Revision 11 adds no file: E17's re-check lands in `routes/generation.ts`'s chapter-start span, and E18's Accept and drop phases in `workspace/chapter-take.ts`. Revision 8's other changes land in files already listed: `routes/generation.ts` (the resume re-check, now E11's `isAnyGenerationActive()` and epoch, the synchronous hand-off, chapters without a `uuid`), `workspace/restructure.ts` (the presence OR, R8-7), `routes/chapters-restructure.ts` (step 0 outside `book`, R8-3), `workspace/auto-backup.ts` (releasing `book`, the pre-restore `duration`, R8-3), `workspace/scan.ts` (the heal's key and set check, R8-4), `import/scan-import-folder.ts` (carried journals replayed before the claim, R8-5) and `workspace/chapter-uuid.ts` (`carryTakeStateFields`):
 
 | Area | Files |
 |---|---|
@@ -3346,7 +3495,8 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
 - **Lost parts in per-slug journals (R8-1, J1; re-probe R9-2):** a commit journal stopped
   mid-preserve, a restore stopped mid-promote, and an accept and a drop journal each stopped after
   their first rename, with one listed part then deleted under both names. Replay records the part
-  in `lost` only after its re-probe schedule, finishes, and unblocks the slug; the next render of
+  in `lost` only after its re-probe schedule, finishes (the accept and drop journals, before
+  `installed`, by rolling back, E18), and unblocks the slug; the next render of
   the chapter commits, and a backup restore of the book is not refused. The same with the part
   deleted between replay's probe and its rename (an injected `ENOENT` from the rename): replay
   re-probes and records it as lost. **A part that drops back** (absent at the first probe, present
@@ -3367,8 +3517,10 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
     old previous take is whole. The mutation that must fail: revision 8's row (quarantine the copy
     at the source name), and the genuine discarded part is quarantined while the planted copy stays
     as the previous take's audio;
-  - **a discard with a refilled source name:** an Accept stopped after its `.previous.*` rename,
-    with a copy planted at `.previous.*`. Replay quarantines the planted copy and finishes;
+  - **a discard with a refilled source name:** an Accept stopped after its `.previous.*` rename
+    and before `installed`, with a copy planted at `.previous.*`. Replay rolls back (E18): it
+    quarantines the planted copy, moves the discarded part back, and the previous take is whole
+    with the entry still pending;
   - **two slug names, segments:** a commit stopped mid-preserve with a foreign
     `.previous.segments.json` planted. Replay keeps the copy carrying `liveTakeId` and quarantines
     the other;
@@ -3441,6 +3593,46 @@ reported wait or a reported failure, never a mixed take), N6–N9, N11–N16.
     ends with `requestFailureMessageFs`' sentence before synthesis. The drop's `excluded: true` is
     never reversed. The mutation that must fail: put drop on the list, and the render clears the
     exclude.
+- **The post-replay `excluded` re-check (E17, revision 11):** a drop journal at `installed` whose
+  `state.json` write fails on its first attempt only (injected), so the chapter is not yet
+  excluded. A single-chapter queue POST for the chapter selects it. The chapter-start span's first
+  attempt fails the record step, and the second, 1 s later, rolls the drop forward and writes
+  `excluded: true`. The span's re-check then skips the chapter: the synth stub is called **zero**
+  times, no `.next-*` part exists, `ensureTakeIdentity` is not called, the render writes nothing
+  to `state.json` (the drop's write is the only one), and no attempted marker or scoring trigger
+  follows. The SSE frames are compared with a POST for an already-excluded chapter on the same
+  fixture, and both are `idle` alone, with no `chapter_failed` and no `chapter_complete`.
+  Separately, a `*` render over two chapters, where the first meets the same journal, skips the
+  first and renders the second. The mutation that must fail: drop the post-replay re-check, and
+  the synth stub is called and a take is committed onto an excluded chapter.
+- **Accept and drop replay directions (E18, revision 11):**
+  - an Accept journal stopped mid-`discard-prev`, before `installed`: replay rolls back. The
+    previous take is whole at `.previous.*`, the entry is still pending, and a retried Accept
+    succeeds;
+  - an Accept journal at `installed` whose `revisions.json` write failed (injected, then lifted):
+    replay rolls forward. It records `accepted`, removes the entry and unlinks the discard set, and
+    the previous take never comes back;
+  - a drop journal stopped mid-`discard`, before `installed`, over a chapter whose only copy had
+    already moved to its event folder: replay rolls back. The chapter is not excluded, its take
+    fields are unchanged, and both takes are whole, the only copy back at `.previous.*`. The
+    replay runs with the clock set to the next day, and the part still comes back from the
+    folder the journal recorded (R11-2). With a foreign copy planted at `.previous.mp3`, that copy
+    goes to the folder's `foreign/` subfolder and the only copy comes back, with neither file
+    overwritten (R11-3);
+  - a drop journal at `installed` whose `state.json` write failed (injected, then lifted): replay
+    rolls forward. It writes `excluded: true`, clears the take fields, drops the entry and unlinks
+    the discard set. The only copy stays in `.orphaned/`;
+  - a carried drop journal before `installed` at a bundle overwrite rolls back in the pre-claim
+    replay, and one at `installed` stuck on its `state.json` write is superseded by the `replace`
+    (E14).
+
+  The mutations that must fail: roll an Accept or drop journal back from `installed` on (the drop
+  case then puts the takes back on a chapter the user asked to exclude, and the Accept case
+  brings back a previous take the user accepted away); roll one forward from before `installed` (the first and third cases then end
+  accepted and excluded instead of whole and pending); recompute the drop's event folder from the replay's
+  date (the next-day case leaves the only copy stranded in a folder nothing names); and
+  quarantine a drop's foreign copy into the event folder itself (the planted case collides with
+  the only copy's name, and the quarantine refuses).
 - **The slug plan under step 0 (R8-7, J7):** a restructure over a chapter whose only take is an
   unindexed previous take, and separately one with a legacy-reject shape. Step 0 promotes or
   re-stamps it, the closure's assertion does not fire, and the promoted take moves with its
@@ -3723,8 +3915,9 @@ first.
 
 **Phase 3: fidelity, retry recognition, scoring.**
 1. `restoreTake` with its journal phases, and R3-5's promotion (§6.1 step 6), which replaces fsck
-   case 1; `acceptTake` with the live-token table, and the `live_audio_missing` pre-check removed
-   (R4-3), and commit step 4's interim only-copy rule removed; entries gain
+   case 1; `acceptTake` with the live-token table, its journal phases and their replay direction
+   (E18, R11-1), and the `live_audio_missing` pre-check removed (R4-3), and commit step 4's interim
+   only-copy rule removed; entries gain
    `takeId`/`previousTakeId`/`previousRenderedAt`; `entryMatchesChapter` widens to
    `audioRenderedAt ∈ {renderedAt, previousRenderedAt}`, and the Accept/Reject tables read the live
    segments' `takeId` (E6); the promotion's and the replace's `dropEntry` step (R6-8), landing with
@@ -3741,7 +3934,11 @@ first.
    `generation.ts:295` goes through it.
 
 **Phase 4: remaining fences.**
-1. `dropAllTakes` for exclude (OD6, the take-field clear); `relabelTakes` for restructure renames and
+1. `dropAllTakes` for exclude (OD6, the take-field clear), with its journal phases and their replay
+   direction, the event folder recorded at write time and replay's `foreign/` subfolder (E18,
+   R11-1 to R11-3). The render's post-replay `excluded` re-check (E17, R11-4) lands in
+   `routes/generation.ts`'s chapter-start span in the same step, because the drop journal is what
+   can set `excluded` during a replay; no earlier phase has one. `relabelTakes` for restructure renames and
    delete ops (R7-3), with the cursor journal, the pre-state rollback window over hints only, forward-only
    replay, the parked rethrow and R4-2's background retries (E1); per-part idempotence with `lost`
    (R5-1); run-time `clearStalePrevious` probing (R6-2); `onlyCopy` and `parts` read after step 0,
@@ -3785,9 +3982,40 @@ Each PR carries:
 - the regression plan `docs/features/<n>-chapter-take-lifecycle.md`;
 - an `INDEX.md` row.
 
+### 7.1 Implementation notes (plan-level, not design-level)
+
+These are inputs for the implementation plan. They are **not** design questions. The design
+settles the behaviour, and each note only names how the plan meets it or what it costs. Pass 9
+listed both as not named (revision 10 changelog), and revision 11 moves them here.
+
+- **The gate's fail-closed test hook (§5.A Tests, case 4, "fail closed").** No new export is added
+  to `gpu/active-generation-gate.ts`. The gate has no unregister function. Its own tests reach the
+  unregistered state through `vi.resetModules()` and a fresh import
+  (`active-generation-gate.test.ts:11-19`). That route is closed to the scoring test, because
+  importing `routes/generation.ts` registers the providers (`generation.ts:682-683`). So the
+  scoring test replaces the leaf with `vi.mock` for that case. Its `isAnyGenerationActive` returns
+  `true` and its `readSpliceEpoch` returns `null`, which are the answers the gate itself gives when
+  unregistered (`:139-142`, `:128-131`). The assertion stays the case's own: the seam is called
+  zero times.
+- **The cost of R9-2's per-part re-probe.** It is paid only for a part that is absent under both
+  names at its first probe, and for a rename that throws `ENOENT`. On a healthy disk that is never,
+  and each part costs one probe of two names, as today. When it is paid, a part is probed once and
+  then again after each of `RENAME_RETRY_DELAYS_MS`' five delays (`atomic-rename.ts:22`), so six
+  probes of two names. That takes 1.8 s on the base schedule, and at most
+  `RENAME_RETRY_WORST_CASE_MS`, about 3.6 s, with full jitter (`:26`). A rename that throws
+  `ENOENT` has already spent up to that much inside `renameWithRetry`, so that part costs at most
+  about 7.2 s. **The plan runs one shared schedule per step:** E15 already has a step probe every
+  part before it renames any, so the step re-probes all of its absent parts together. The cost is
+  then about 3.6 s per step however many parts are absent, inside book-op's 10 s acquisition budget
+  for any other operation waiting on the book. Probing one part after another would cost up to
+  about 3.6 s per part. A take has seven parts (§4.3), and a commit journal can list the live,
+  previous and staged takes, so replaying it would cost up to about 21 × 3.6 s, about 76 s,
+  inside one span. With the shared schedule, a drop's `discard` step, which moves two takes, still costs one
+  schedule.
+
 ## 8. Questions
 
-### 8.1 Owed questions from all nine passes, answered
+### 8.1 Owed questions from all nine passes and the revision 11 decisions, answered
 
 | Question | Answer |
 |---|---|
@@ -3811,7 +4039,10 @@ Each PR carries:
 | What does replay do when both names are present and the target is a slug name? What happens to a journal superseded by one that is itself superseded? (pass 8, Q3) | By name kind: the slug-name copy is foreign when the other side is journal-unique; at two slug names a segments part is decided by `takeId`, and anything else refused (R9-1), until E15 decided it by recorded size (pass 9). Chains absorb: `supersedes` is a list, unlinked oldest first, and replay reads every journal of a slug first (R9-3) (§5.A Journal rules, Commit). |
 | E11's epoch sees only registrations made after the pass starts. Should the re-check also sample `isAnyGenerationActive()` at the start? (pass 9, Q1) | E13: yes. Both samples, at the start and before the reconcile, must read idle, and the epoch must not move. A job already running at the start is seen (§5.A Scoring). |
 | Should a `replace` journal past `installed` join E12's list, and may a bundle `replace` supersede a carried drop journal? (pass 9, Q2) | E14: yes to both. A carried Accept journal still refuses the import (§4.1, §5.A Ownership, Commit step 0). |
-| Should a non-segments part found at two slug names stay a refusal, or should the journal's recorded sizes decide it? (pass 9, Q3) | E15: sizes, with the `takeId` for the parts that carry one, and a byte compare at equal size. Two different copies nothing decides are both quarantined and the part is recorded as lost, so no replay path leaves a mixed take and no refusal is left for this shape (§5.A Journal rules; decision under "Decisions made in revision 10"). |
+| Should a non-segments part found at two slug names stay a refusal, or should the journal's recorded sizes decide it? (pass 9, Q3) | E15: sizes, with the `takeId` for the parts that carry one, and a byte compare at equal size. Two different copies nothing decides are both quarantined and the part is recorded as lost, so no replay path leaves a mixed take and no refusal is left for this shape (§5.A Journal rules; confirmed by E16 under "Owner decisions"). |
+| Is E15's tie rule (both quarantined, the part lost) confirmed, with revision 10's other choices? (revision 11) | E16: yes. The take is incomplete, never mixed, and the slug is not blocked. The identical-copy rule, `take-fields.ts`, the whole-book heal skip and the step-8 stop are confirmed with it. |
+| A drop journal's replay can set `excluded: true` during a render's chapter start. Does the render re-check it? (pass 9, not folded; revision 11) | E17: yes, inside the same span after replay. An excluded chapter is skipped before anything is staged, with no write and no frame, which is what the existing skip reports (`generation.ts:1143-1149`). It is the in-lock re-check, beside the caller's filter (§4.1). |
+| Which way do Accept and drop journals replay? (pass 9, not folded; revision 11) | E18: back before `installed` and forward to completion from `installed` on, as commit and `replace` journals do. `installed` is the phase each journals once its moves have landed (R11-1). The drop's event folder is recorded at write time (R11-2), and replay's foreign copies for a drop go to its `foreign/` subfolder (R11-3) (§5.A Journal rules, Accept, Exclude). |
 | Where does the canonical `takeSeq` live, and what exact equality does the commit test? Should Accept bump it? (A1, 1-1) | Nowhere: it is dropped (D1). The commit tests `live segments.takeId === base`. Accept bumps nothing. |
 | A failed stamp after `installed`: swallow or rethrow? Which source decides "committed"? (A2) | Rethrow (D2). The journal at `installed` or later, or the live segments' `takeId`, decides; never `state.json` (`takeCommitted`). |
 | Must the module own every whole-book and whole-state writer, and every book of any age, with minting and liveness enforced at its own entry points? (A3, 1-3) | Yes (D3): W13–W15 go through module entry points; `ensureTakeIdentity` and the §4.2 predicate run at every entry point. (Revision 3 also claimed that guard rule 3 sees zip-relative and variable-suffix writers. E4 withdraws that claim: they are listed blind spots, and every such site on `main` folds into the module.) |
@@ -3826,7 +4057,11 @@ Each PR carries:
 - **ffprobe tolerance:** the header estimate usually falls through to mtime, so it is replaced by a
   full decode (§6.1 step 2).
 
-### 8.3 Still open
+### 8.3 Outside this design (pre-existing on `main`, each with its own ticket)
+
+Neither item is an open question of this design. Each is a gap that exists on `main` today, and
+this design neither closes it nor widens it. Each has its own ticket, and that ticket holds the
+decision it owes. In this design both are accepted residuals (§5.A Remaining).
 
 - **The edits/cache gap after restructure's state write (design pass owed, #4227).** A crash, or a
   parked failure, between restructure's `state.json` write and its `manuscript-edits.json` write
@@ -3846,7 +4081,11 @@ Each PR carries:
   options. Revision 7's carry (R7-6) matches on `id` and `slug`, so a chapter whose slug changes
   drops its take fields; that fits either option.
 
-### 8.4 Still open (on-box)
+### 8.4 On-box acceptance owed (not a design question)
+
+What is owed here is a measurement on the box, recorded before Phase 2, as §7's Phase 2 heading and Phase 4 step 3 say.
+The design's answer holds as written. Only a measurement that contradicts it would reopen anything,
+and that would go through a new ticket.
 
 - **Row Q, OneDrive cells and timings** (§7 Phase 4). If OneDrive also blocks a rename-away under a
   Node holder, a commit would also wait during playback. The retry path covers it, but OD7 would
