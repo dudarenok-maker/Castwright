@@ -12,7 +12,7 @@
    Modes
      --library <dir> --out <scratchDir>   walk <dir>, write <out>/scan.json and
                                           <out>/scan.md; nothing outside <out>.
-     --child <file>                       parse one file, print one JSON line.
+     --child <file>                       parse one file, measure it, print one JSON line.
    Test-only seams (not for operators)
      --parser-module <path>  the child imports that module's default export
                              instead of parseManuscript.
@@ -23,6 +23,14 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync, writeSync } from '
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SUPPORTED_MANUSCRIPT_EXTENSIONS } from '../src/parsers/index.js';
+import {
+  countTurnOpeners,
+  measureChapterLegibility,
+  MERGED_TURNS_DEGRADED,
+  turnInParagraphRegex,
+} from '../src/analyzer/dialogue-structure/legibility.js';
+import { conventionsFor } from '../src/analyzer/dialogue-structure/lang/index.js';
+import { detectManuscriptLanguageFromChapters } from '../src/tts/detect-language.js';
 
 export const PER_FILE_TIMEOUT_MS = 60_000;
 
@@ -154,6 +162,52 @@ export function scanLibrary(library: string, opts: ParseOptions = {}): ScanRepor
   return { library, build: buildId(), entries };
 }
 
+function measurementOf(e: ScanEntry): BookMeasurement | null {
+  const r = e.result as Partial<BookMeasurement> | undefined;
+  return r && r.language && r.lineWrap && r.dialogue ? (r as BookMeasurement) : null;
+}
+
+function renderMeasured(parsed: ScanEntry[]): string[] {
+  const rows = parsed
+    .map((e) => ({ e, m: measurementOf(e) }))
+    .filter((x): x is { e: ScanEntry; m: BookMeasurement } => x.m !== null)
+    .sort((a, b) => (b.m.bookMax ?? -1) - (a.m.bookMax ?? -1));
+  const lines = [`## Books by worst-paragraph turn openers (${rows.length})`, ''];
+  if (!rows.length) lines.push('None.');
+  for (const { e, m } of rows) {
+    const flags = [
+      m.lineWrap.wrapped ? `line-wrapped (${m.lineWrap.arms.join('+')})` : '',
+      m.dialogue.dense ? 'dialogue-dense' : '',
+    ].filter(Boolean);
+    lines.push(
+      `- ${e.path}: max ${m.bookMax ?? 'not measured'}; lang ${m.language.detected}` +
+        ` (declared ${m.language.declared ?? 'none'}); wrap ${m.lineWrap.continuationLines}/${m.lineWrap.nonBlankLines}` +
+        ` (${(m.lineWrap.share * 100).toFixed(1)}%); dash turns ${m.dialogue.dashTurns ?? 'n/a'}` +
+        ` (${m.dialogue.per1000Words === null ? 'n/a' : m.dialogue.per1000Words.toFixed(1)}/1000 words)` +
+        (flags.length ? `; ${flags.join(', ')}` : ''),
+    );
+    for (const c of m.chapters) {
+      if (c.worstParagraph) {
+        lines.push(
+          `  - chapter ${c.id} "${c.title}" at ${c.legibility}: ${JSON.stringify(c.worstParagraph.text)}`,
+        );
+      }
+    }
+  }
+  const cyr = rows.filter((x) => x.m.nonRuCyrillic);
+  lines.push('', `## Non-ru Cyrillic books (${cyr.length})`, '');
+  lines.push(
+    ...(cyr.length
+      ? cyr.map(
+          (x) =>
+            `- ${x.e.path} (detected ${x.m.language.detected}, declared ${x.m.language.declared ?? 'none'})`,
+        )
+      : ['None.']),
+  );
+  lines.push('');
+  return lines;
+}
+
 export function renderSummary(report: ScanReport): string {
   const by = (s: FileStatus): ScanEntry[] => report.entries.filter((e) => e.status === s);
   const parsed = by('parsed');
@@ -167,6 +221,7 @@ export function renderSummary(report: ScanReport): string {
     '',
     `Files: ${report.entries.length} (parsed ${parsed.length}, unparsed ${unparsed.length}, unsupported ${unsupported.length})`,
     '',
+    ...renderMeasured(parsed),
     `## Unparsed (${unparsed.length})`,
     '',
     ...(unparsed.length ? unparsed.map((e) => `- ${e.path}: ${e.reason}`) : ['None.']),
@@ -185,6 +240,196 @@ export function writeReport(report: ScanReport, out: string): void {
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, 'scan.json'), JSON.stringify(report, null, 2) + '\n', 'utf8');
   writeFileSync(join(out, 'scan.md'), renderSummary(report), 'utf8');
+}
+
+/* ---- measurements (spec §4.4 step 1: R7-5, R7-6, Decision 4) ------------ */
+
+/** Share of non-blank lines that are continuation lines at or above which a
+    book counts as line-wrapped (share arm; owner decision 13). */
+export const LINE_WRAP_SHARE = 0.02;
+/** Continuation-line count at or above which a book counts as line-wrapped
+    (count arm). */
+export const LINE_WRAP_COUNT = 10;
+/** Dialogue-dense: dash turns per 1,000 words AND total dash turns (R7-5). */
+export const DENSE_PER_1000_WORDS = 25;
+export const DENSE_MIN_TURNS = 1000;
+/** Languages written in Cyrillic other than ru (Decision 4). */
+const NON_RU_CYRILLIC = new Set(['uk', 'bg', 'be', 'sr', 'mk', 'kk', 'ky', 'mn', 'tg']);
+
+export interface MeasuredChapter {
+  id: number;
+  title: string;
+  /** false: the language has no paragraph-dash conventions ("not measured", never 0). */
+  measured: boolean;
+  legibility: number | null;
+  turnOpeners: number | null;
+  dashParagraphs: number | null;
+  /** Only for a chapter at >= MERGED_TURNS_DEGRADED. */
+  worstParagraph?: { count: number; text: string };
+}
+
+export interface BookMeasurement {
+  language: {
+    detected: string;
+    detectedSource: 'detectManuscriptLanguageFromChapters';
+    declared: string | null;
+    declaredSource: 'metadata.opf' | null;
+  };
+  chapters: MeasuredChapter[];
+  bookMax: number | null;
+  lineWrap: {
+    wrapped: boolean;
+    arms: Array<'pdf' | 'share' | 'count'>;
+    continuationLines: number;
+    nonBlankLines: number;
+    share: number;
+  };
+  dialogue: {
+    dashTurns: number | null;
+    words: number;
+    per1000Words: number | null;
+    dense: boolean | null;
+  };
+  nonRuCyrillic: boolean;
+}
+
+export interface ParsedLike {
+  format: string;
+  chapters: Array<{ id?: number; title?: string; body?: string }>;
+  author?: string | null;
+  title?: string | null;
+}
+
+/** The `<dc:language>` of a Calibre `metadata.opf` next to `file`, else null. */
+export function declaredLanguageOf(file: string): string | null {
+  try {
+    const opf = readFileSync(join(dirname(file), 'metadata.opf'), 'utf8');
+    const m = /<dc:language[^>]*>\s*([^<\s][^<]*?)\s*<\/dc:language>/iu.exec(opf);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Dash-turn density bars, in integers (no float edge at exactly 25). */
+export function isDialogueDense(dashTurns: number, words: number): boolean {
+  return dashTurns >= DENSE_MIN_TURNS && dashTurns * 1000 >= DENSE_PER_1000_WORDS * words;
+}
+
+/** A continuation line directly follows another non-blank line (a single \n)
+    and starts with a lowercase letter. */
+export function countContinuationLines(body: string): { continuation: number; nonBlank: number } {
+  const lines = body.split('\n');
+  let continuation = 0;
+  let nonBlank = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    nonBlank++;
+    if (i > 0 && lines[i - 1].trim() && /^\s*\p{Ll}/u.test(lines[i])) continuation++;
+  }
+  return { continuation, nonBlank };
+}
+
+function worstParagraphOf(body: string): { count: number; text: string } | undefined {
+  let best: { count: number; text: string } | undefined;
+  for (const paragraph of body.split('\n')) {
+    if (!paragraph.trim()) continue;
+    const count = (paragraph.match(turnInParagraphRegex()) ?? []).length;
+    if (!best || count > best.count) best = { count, text: paragraph.slice(0, 400) };
+  }
+  return best;
+}
+
+function wordCount(body: string): number {
+  return (body.match(/[\p{L}\p{N}]+/gu) ?? []).length;
+}
+
+export function measureBook(
+  parsed: ParsedLike,
+  opts: { declaredLanguage?: string | null; language?: string } = {},
+): BookMeasurement {
+  const chapters = parsed.chapters.map((c, i) => ({
+    id: c.id ?? i + 1,
+    title: c.title ?? '',
+    body: c.body ?? '',
+  }));
+  const detected =
+    opts.language ??
+    detectManuscriptLanguageFromChapters(chapters, { author: parsed.author, title: parsed.title })
+      .language;
+  const declared = opts.declaredLanguage ?? null;
+  const conventions = conventionsFor(detected);
+
+  let bookMax: number | null = null;
+  let dashTurns = 0;
+  let words = 0;
+  let continuation = 0;
+  let nonBlank = 0;
+  const measuredChapters: MeasuredChapter[] = chapters.map((c) => {
+    words += wordCount(c.body);
+    const wrap = countContinuationLines(c.body);
+    continuation += wrap.continuation;
+    nonBlank += wrap.nonBlank;
+    const legibility = conventions ? measureChapterLegibility(c.body, conventions) : undefined;
+    if (!conventions || legibility === undefined) {
+      return {
+        id: c.id,
+        title: c.title,
+        measured: false,
+        legibility: null,
+        turnOpeners: null,
+        dashParagraphs: null,
+      };
+    }
+    const openers = countTurnOpeners(c.body);
+    const open = conventions.dialogueOpen as RegExp;
+    const dashParagraphs = c.body.split('\n').filter((l) => l.trim() && open.test(l)).length;
+    dashTurns += dashParagraphs + openers;
+    bookMax = bookMax === null ? legibility : Math.max(bookMax, legibility);
+    const out: MeasuredChapter = {
+      id: c.id,
+      title: c.title,
+      measured: true,
+      legibility,
+      turnOpeners: openers,
+      dashParagraphs,
+    };
+    if (legibility >= MERGED_TURNS_DEGRADED) out.worstParagraph = worstParagraphOf(c.body);
+    return out;
+  });
+
+  const arms: Array<'pdf' | 'share' | 'count'> = [];
+  if (parsed.format === 'pdf') arms.push('pdf');
+  if (nonBlank > 0 && continuation / nonBlank >= LINE_WRAP_SHARE) arms.push('share');
+  if (continuation >= LINE_WRAP_COUNT) arms.push('count');
+
+  const dialogueMeasured = measuredChapters.some((c) => c.measured);
+  const cyr = (l: string | null): boolean =>
+    !!l && NON_RU_CYRILLIC.has(l.toLowerCase().split(/[-_]/u)[0]);
+  return {
+    language: {
+      detected,
+      detectedSource: 'detectManuscriptLanguageFromChapters',
+      declared,
+      declaredSource: declared ? 'metadata.opf' : null,
+    },
+    chapters: measuredChapters,
+    bookMax,
+    lineWrap: {
+      wrapped: arms.length > 0,
+      arms,
+      continuationLines: continuation,
+      nonBlankLines: nonBlank,
+      share: nonBlank > 0 ? continuation / nonBlank : 0,
+    },
+    dialogue: {
+      dashTurns: dialogueMeasured ? dashTurns : null,
+      words,
+      per1000Words: dialogueMeasured && words > 0 ? (dashTurns * 1000) / words : null,
+      dense: dialogueMeasured ? isDialogueDense(dashTurns, words) : null,
+    },
+    nonRuCyrillic: cyr(detected) || cyr(declared),
+  };
 }
 
 /* ---- child ------------------------------------------------------------- */
@@ -211,17 +456,19 @@ export async function runChild(file: string, parserModule?: string): Promise<voi
       : ((await import('../src/parsers/index.js')) as { parseManuscript: ParseFn }).parseManuscript;
     const buffer = readFileSync(file);
     const parsed = await parse({ buffer, fileName: basename(file) });
-    report({ ok: true, format: parsed.format, chapterCount: parsed.chapters.length });
+    report({
+      ok: true,
+      format: parsed.format,
+      chapterCount: parsed.chapters.length,
+      ...measureBook(parsed, { declaredLanguage: declaredLanguageOf(file) }),
+    });
     process.exit(0);
   } catch (e) {
     fail(e);
   }
 }
 
-type ParseFn = (input: { buffer: Buffer; fileName: string }) => Promise<{
-  format: string;
-  chapters: unknown[];
-}>;
+type ParseFn = (input: { buffer: Buffer; fileName: string }) => Promise<ParsedLike>;
 
 /* ---- entry ------------------------------------------------------------- */
 
