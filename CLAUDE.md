@@ -750,7 +750,7 @@ Design rationale:
   `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
   handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×3,
   `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
-  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites keep their path pending the #4236 owner decision), `script-review` ×5 (its three
+  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites answer fixed relative-name sentences directly, not through this seam, #4236), `script-review` ×5 (its three
   start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
