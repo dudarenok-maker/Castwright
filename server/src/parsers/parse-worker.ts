@@ -4,9 +4,10 @@
    main thread's crash handler. Wraps the parser entry points only: it changes
    no extraction logic. */
 import { parentPort, threadId, workerData } from 'node:worker_threads';
-import { parseEpub } from './epub.js';
-import { parseMobi } from './mobi.js';
-import type { ParseWorkerRequest, ParseWorkerMessage } from './parse-in-worker.js';
+import { parseEpub, UnusableEpubError } from './epub.js';
+import { UnusableMediaError } from './errors.js';
+import { parseMobi, DrmProtectedError } from './mobi.js';
+import type { ParseWorkerRequest, ParseWorkerMessage, SerializedParseError } from './parse-in-worker.js';
 
 async function run(): Promise<ParseWorkerMessage> {
   const req = workerData as ParseWorkerRequest;
@@ -22,7 +23,22 @@ async function run(): Promise<ParseWorkerMessage> {
     return { ok: true, parsed, threadId };
   } catch (err) {
     const e = err instanceof Error ? err : new Error(String(err));
-    return { ok: false, error: { name: e.name, message: e.message } };
+    /* Most specific class first: DRM and Epub both extend UnusableMediaError. */
+    const kind: SerializedParseError['kind'] =
+      e instanceof DrmProtectedError
+        ? 'DrmProtectedError'
+        : e instanceof UnusableEpubError
+          ? 'UnusableEpubError'
+          : e instanceof UnusableMediaError
+            ? 'UnusableMediaError'
+            : 'Error';
+    const error: SerializedParseError = { kind, name: e.name, message: e.message, stack: e.stack };
+    const f = e as Error & { code?: unknown; syscall?: unknown; path?: unknown; errno?: unknown };
+    if (typeof f.code === 'string') error.code = f.code;
+    if (typeof f.syscall === 'string') error.syscall = f.syscall;
+    if (typeof f.path === 'string') error.path = f.path;
+    if (typeof f.errno === 'number') error.errno = f.errno;
+    return { ok: false, error };
   }
 }
 

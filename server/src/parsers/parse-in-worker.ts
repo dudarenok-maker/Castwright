@@ -6,6 +6,9 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type { ParsedManuscript } from './index.js';
+import { UnusableEpubError } from './epub.js';
+import { UnusableMediaError } from './errors.js';
+import { DrmProtectedError } from './mobi.js';
 
 export interface ParseWorkerRequest {
   format: 'epub' | 'mobi';
@@ -16,11 +19,66 @@ export interface ParseWorkerRequest {
 
 export type ParseWorkerMessage =
   | { ok: true; parsed: ParsedManuscript; threadId: number }
-  | { ok: false; error: { name: string; message: string } };
+  | { ok: false; error: SerializedParseError };
+
+/** A parser rejection flattened for the thread hop. `kind` picks the class the
+    main side rebuilds; `code`/`syscall`/`path`/`errno` are the Node fs fields a
+    structured clone of an Error would not reliably keep. */
+export interface SerializedParseError {
+  kind: 'UnusableEpubError' | 'DrmProtectedError' | 'UnusableMediaError' | 'Error';
+  name: string;
+  message: string;
+  stack?: string;
+  code?: string;
+  syscall?: string;
+  path?: string;
+  errno?: number;
+}
 
 export interface ParseInWorkerOptions {
   /** Test seam: run a different worker entry. */
   workerUrl?: URL;
+  /** Hang bound; defaults to PARSE_WORKER_TIMEOUT_MS. */
+  timeoutMs?: number;
+}
+
+/* Bounds how long a hung worker can stall a parse. Precedent:
+   MEASURE_TIMEOUT_MS in audio/measure-loudness.ts:66-75, which exists purely
+   to bound how long a hang can stall a one-shot child. */
+export const PARSE_WORKER_TIMEOUT_MS = 120_000;
+
+const CRASH_MESSAGE: Record<'epub' | 'mobi', string> = {
+  epub: 'This EPUB could not be read: the file appears to be malformed.',
+  mobi: 'This MOBI/AZW3 file could not be read: the file appears to be malformed.',
+};
+const TIMEOUT_MESSAGE = 'This book took too long to read and was stopped.';
+
+/** Fixed, path-free error for a crash, silent exit or timeout. The raw cause
+    goes to console.error only (a crash message can embed an absolute path). */
+function unusable(format: 'epub' | 'mobi', message: string): UnusableMediaError {
+  if (format === 'epub') return new UnusableEpubError(message);
+  const e = new UnusableMediaError(message);
+  e.name = 'UnusableMediaError';
+  return e;
+}
+
+function rebuildError(s: SerializedParseError): Error {
+  let e: Error;
+  if (s.kind === 'DrmProtectedError') e = new DrmProtectedError(s.message);
+  else if (s.kind === 'UnusableEpubError') e = new UnusableEpubError(s.message);
+  else if (s.kind === 'UnusableMediaError') {
+    e = new UnusableMediaError(s.message);
+    e.name = s.name;
+  } else {
+    e = new Error(s.message);
+    e.name = s.name;
+    const fs = e as Error & { code?: string; syscall?: string; path?: string; errno?: number };
+    if (s.code !== undefined) fs.code = s.code;
+    if (s.syscall !== undefined) fs.syscall = s.syscall;
+    if (s.path !== undefined) fs.path = s.path;
+    if (s.errno !== undefined) fs.errno = s.errno;
+  }
+  return e;
 }
 
 /** Resolve the worker entry beside this module. From source (`.ts`: vitest or
@@ -55,28 +113,41 @@ export function parseInWorkerWithThread(
 ): Promise<{ parsed: ParsedManuscript; threadId: number }> {
   const resolved = resolveWorker();
   const url = opts.workerUrl ?? resolved.url;
+  const timeoutMs = opts.timeoutMs ?? PARSE_WORKER_TIMEOUT_MS;
+  const { format } = request;
   return new Promise((resolve, reject) => {
     let settled = false;
     const worker = new Worker(url, { workerData: request, execArgv: resolved.execArgv });
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       void worker.terminate();
       fn();
     };
-    worker.on('error', (err) => settle(() => reject(err)));
+    const timer = setTimeout(() => {
+      settle(() => {
+        console.error(`[parse-worker] ${format} timeout after ${timeoutMs} ms`);
+        reject(unusable(format, TIMEOUT_MESSAGE));
+      });
+    }, timeoutMs);
+    worker.on('error', (err) =>
+      settle(() => {
+        console.error(`[parse-worker] ${format} crash`, err);
+        reject(unusable(format, CRASH_MESSAGE[format]));
+      }),
+    );
     worker.on('message', (msg: ParseWorkerMessage) =>
       settle(() => {
         if (msg.ok) resolve({ parsed: msg.parsed, threadId: msg.threadId });
-        else {
-          const e = new Error(msg.error.message);
-          e.name = msg.error.name;
-          reject(e);
-        }
+        else reject(rebuildError(msg.error));
       }),
     );
     worker.on('exit', (code) =>
-      settle(() => reject(new Error(`parse worker exited (code ${code}) without a result`))),
+      settle(() => {
+        console.error(`[parse-worker] ${format} exit ${code} without a result`);
+        reject(unusable(format, CRASH_MESSAGE[format]));
+      }),
     );
   });
 }
