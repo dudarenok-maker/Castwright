@@ -149,7 +149,7 @@ jobs:
     needs: changes
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend_e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -180,10 +180,18 @@ jobs:
       - name: E2E Mobile
         run: npm run test:e2e:mobile
 
-      - name: Upload Playwright report on failure
+      # Mobile/tablet visual baselines run HERE (twice-weekly cron/release tag),
+      # never in verify.yml: they are off the PR path by owner decision (#4203).
+      # Serial (--workers=1) because visual.spec.ts uses mode: 'serial'.
+      - name: E2E Mobile visual baselines
+        run: npm run test:e2e:mobile:visual
+
+      - name: Upload Playwright report + test results on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-mobile
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7

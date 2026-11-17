@@ -61,6 +61,7 @@
     "doctor": "node scripts/reap-stale-batteries.mjs",
     "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
     "test:e2e:mobile": "playwright test --project=mobile-chrome --project=tablet-chrome --workers=2 --grep-invert=\"visual baselines\"",
+    "test:e2e:mobile:visual": "playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1",
     "test:e2e:all": "playwright test",
     "test:e2e:visual": "playwright test --project=chromium --workers=1 e2e/responsive/visual.spec.ts",
     "test:e2e:quarantine": "playwright test --project=chromium --grep=@quarantine --pass-with-no-tests",
