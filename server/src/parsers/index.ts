@@ -4,8 +4,7 @@
 
 import { parseText, type ParsedManuscript } from './text.js';
 import { parsePdf } from './pdf.js';
-import { parseEpub } from './epub.js';
-import { parseMobi } from './mobi.js';
+import { parseInWorker } from './parse-in-worker.js';
 
 export type { ParsedManuscript };
 export { UnusableMediaError } from './errors.js';
@@ -57,14 +56,19 @@ export async function parseManuscript(input: {
     return parsePdf(input.buffer, { fileName: input.fileName });
   }
   if (format === 'epub' || input.mimeType === 'application/epub+zip') {
-    return parseEpub(input.buffer, { fileName: input.fileName, sourcePath: input.sourcePath });
+    return parseInWorker({
+      format: 'epub',
+      buffer: input.buffer,
+      fileName: input.fileName,
+      sourcePath: input.sourcePath,
+    });
   }
   if (
     format === 'mobi' ||
     input.mimeType === 'application/x-mobipocket-ebook' ||
     input.mimeType === 'application/vnd.amazon.ebook'
   ) {
-    return parseMobi(input.buffer, { fileName: input.fileName });
+    return parseInWorker({ format: 'mobi', buffer: input.buffer, fileName: input.fileName });
   }
   if (format === 'markdown' || format === 'plaintext') {
     return parseText(input.buffer.toString('utf8'), { fileName: input.fileName, format });

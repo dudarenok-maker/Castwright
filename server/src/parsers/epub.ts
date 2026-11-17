@@ -185,7 +185,7 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
     derived from it — is kept (#4239). `getChapter` rewrites each `href` from
     inside the zip's async inflate callback and throws
     `linkparts.shift is not a function` on `<a href="">`; there the throw is an
-    uncaughtException no try/await can catch, and the server exits. Over a proxy
+    uncaughtException no try/await can catch, and, before #4242, the server exited; the parse now runs in a worker (`parse-in-worker.ts`), so it ends that worker instead. Over a proxy
     whose `getChapterRaw` answers synchronously the same code runs in this
     call's own stack, so the throw is catchable. It is deliberately not caught
     here: it propagates to {@link tryEpub2Parse}'s catch and the whole book goes
