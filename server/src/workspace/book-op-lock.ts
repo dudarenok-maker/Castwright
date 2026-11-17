@@ -500,7 +500,11 @@ export function withBookPathClaim<T>(fn: () => Promise<T>, timeoutMs?: number): 
 
 /* ---- the sanctioned movers ---------------------------------------------------- */
 
-function assertHeld(book: BookHandle, what: string): void {
+/** The live-handle check: throws unless `book` is the object a still-running
+ *  `withBookOp*` callback was handed. Shared by the movers below and by the
+ *  chapter take module (`chapter-take.ts`), whose entry points refuse a stale
+ *  or hand-built handle the same way. */
+export function assertHeld(book: BookHandle, what: string): void {
   if (!book.held || !liveHandles.has(book)) {
     throw new Error(`${what}: book handle is not held -- a mover must run inside withBookOp`);
   }
