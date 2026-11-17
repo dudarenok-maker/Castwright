@@ -704,6 +704,47 @@ test('G8: the census log records spareReason for a spared root and null for a ki
   assert.equal(kr.spareReason, null);
 });
 
+// --- #4222 pass-2 finding A: the timeout sweep's `restrictTo` matches pid AND an
+// EXACT start time. An `approx` entry (the step root had already exited, or the
+// pre-kill snapshot failed) never matches: while the genuine root lives its
+// parent is verify-cache, which is protected, so a match is only a recycled pid. ---
+
+function runSweep(restrictTo, startedAtOfLive) {
+  const processes = [
+    { pid: 5000, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /d /s /c vitest run', cpuSeconds: 0, startedAt: startedAtOfLive },
+    { pid: 5001, ppid: 5000, name: 'node.exe', commandLine: OUT_OF_CHECKOUT, cpuSeconds: 100, startedAt: startedAtOfLive },
+  ];
+  const killedPids = [];
+  const result = runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => ({ 5000: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: startedAtOfLive } }),
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    restrictTo,
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: (pid) => {
+      killedPids.push(pid);
+      return true;
+    },
+  });
+  return { ...result, killedPids };
+}
+
+test('A1: an approx restrictTo entry never matches, so a recycled pid in another checkout is not killed', () => {
+  const r = runSweep(new Map([[5000, { startedAt: NOW - 30 * MIN, approx: true }]]), NOW - 2 * MIN);
+  assert.deepEqual(r.killed, []);
+  assert.deepEqual(r.killedPids, []);
+});
+
+test('A2: an exact restrictTo entry whose live start time differs is not killed; an equal one is', () => {
+  const differs = runSweep(new Map([[5000, { startedAt: NOW - 30 * MIN, approx: false }]]), NOW - 2 * MIN);
+  assert.deepEqual(differs.killedPids, []);
+  const same = runSweep(new Map([[5000, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
+  assert.deepEqual(same.killedPids, [5000], 'control: the exact match is still reaped (the fixture is a real orphan)');
+});
+
 // --- #4222 review findings 1 and 4: "under the pushing checkout" is judged for the
 // battery as a whole, by the most-specific known root, at a real separator. ---
 

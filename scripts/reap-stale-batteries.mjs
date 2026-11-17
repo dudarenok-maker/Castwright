@@ -1248,12 +1248,16 @@ export function runCensus({
       if (v.verdict !== 'reap') continue;
       if (!v.reasons.some((r) => killReasons.includes(r))) continue;
       if (restrictTo) {
-        // Kill only a root the caller itself recorded (pid AND start time, so a
-        // recycled pid never matches). Not logged as a spare: everything else
-        // in a machine-wide census is simply not this caller's to touch.
+        // Kill only a root the caller itself recorded: pid AND an exact start
+        // time. An `approx` entry (its root had already exited, or the pre-kill
+        // snapshot failed, so its start time is unreliable) never matches: while
+        // the genuine root lives its parent is the caller, which is protected, so
+        // a pid match could only be a recycled pid. Not logged as a spare:
+        // everything else in a machine-wide census is simply not this caller's
+        // to touch.
         const own = restrictTo.get(v.rootPid);
         const live = processes.find((p) => p.pid === v.rootPid);
-        if (!own || (!own.approx && own.startedAt !== live?.startedAt)) continue;
+        if (!own || own.approx || own.startedAt !== live?.startedAt) continue;
       }
       if (prePushGuard) {
         const spareReason = prePushSpareReason(v, processes, prePushGuard.root, prePushGuard.knownRoots ?? []);
