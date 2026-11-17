@@ -216,6 +216,20 @@ describe('parseInWorker', () => {
         expect(mobi.code).toBe('ENOENT');
       });
 
+      it('the real worker forwards scratchDir to both parsers (not tmpdir())', async () => {
+        const workerUrl = workerFixture('real-worker-missing-scratch.mjs');
+        const epub = await parseInWorker(
+          { format: 'epub', buffer: fixture('sample.epub'), fileName: 'sample.epub', extractorVersion: 1 },
+          { workerUrl, scratchRoot: freshRoot() },
+        ).catch((e) => e);
+        expect(epub.code).toBe('ENOENT');
+        const mobi = await parseInWorker(
+          { format: 'mobi', buffer: buildMinimalMobi('<p>A</p>'), fileName: 'a.mobi', extractorVersion: 1 },
+          { workerUrl, scratchRoot: freshRoot() },
+        ).catch((e) => e);
+        expect(mobi.code).toBe('ENOENT');
+      }, 30_000);
+
       it('a successful real parse leaves nothing behind either', async () => {
         const scratchRoot = freshRoot();
         await parseInWorker(
