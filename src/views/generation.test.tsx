@@ -435,6 +435,24 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
     navigateTo('/books/b1/generate?chapter=8');
     expect(scrollSpy).not.toHaveBeenCalled();
   });
+  /* #4310 pass 3 E — the ref reset must fire whenever the URL's chapter is not
+     the stage's (every in-place change), not only when the URL drops the
+     param: chapter 8 has no row, so it never scrolls and never overwrites the
+     ref, and only the reset lets the return to 5 scroll again. */
+  it('re-scrolls to chapter 5 when a mounted ?chapter=5 visits a chapter with no row and returns', () => {
+    const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
+    navigateTo('/books/b1/generate?chapter=8');
+    act(() => {
+      store.dispatch(uiSlice.actions.setCurrentChapterId(8));
+    });
+    navigateTo('/books/b1/generate?chapter=5');
+    act(() => {
+      store.dispatch(uiSlice.actions.setCurrentChapterId(5));
+    });
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
+    expect(scrollSpy.mock.contexts[1]).toBe(document.getElementById('chapter-5'));
+  });
   it('does not scroll to chapter 3 when a mounted ?chapter=5 is edited in place to a malformed value', () => {
     const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
     expect(scrollSpy).toHaveBeenCalledTimes(1);

@@ -413,7 +413,8 @@ export function GenerationView({
      neither dep below changes once the chapter rows load, and the effect's
      last run found no row. `targetRowLoaded` re-runs it when the row appears;
      `scrolledForChapter` keeps a target row that leaves the list and returns
-     from scrolling again, and its reset (URL no longer names a chapter) lets a
+     from scrolling again, and its reset (the URL's chapter is not the stage's,
+     which covers a dropped param and every in-place chapter change) lets a
      re-navigation to the same chapter scroll. */
   const targetRowLoaded = chapters.some((c) => c.id === currentChapterId);
   const scrolledForChapter = useRef<number | null>(null);
