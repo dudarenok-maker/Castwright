@@ -276,6 +276,44 @@ describe('ExportAudiobookModal', () => {
       });
     });
 
+    it('keeps following a cancelled job whose sync copy is in flight, then toasts the landed sync path', async () => {
+      /* The real ordering: DELETE returns while the un-cancellable copy runs, so
+         the first read has no syncPath; a later read has it. */
+      mockedApi.getBookExport
+        .mockResolvedValueOnce(
+          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: null, syncCopyInFlight: true }),
+        )
+        .mockResolvedValue(
+          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: '/sync/A/Book', syncCopyInFlight: false }),
+        );
+      const store = makeStore();
+      await cancelRunning(store);
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+      await waitFor(
+        () => {
+          const toasts = store.getState().notifications.toasts;
+          expect(toasts).toHaveLength(1);
+          expect(toasts[0].message).toContain('/sync/A/Book');
+        },
+        { timeout: 4000 },
+      );
+      expect(mockedApi.getBookExport).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows no toast when the in-flight copy finishes without landing a sync path', async () => {
+      mockedApi.getBookExport
+        .mockResolvedValueOnce(
+          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: null, syncCopyInFlight: true }),
+        )
+        .mockResolvedValue(
+          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: null, syncCopyInFlight: false }),
+        );
+      const store = makeStore();
+      await cancelRunning(store);
+      await waitFor(() => expect(mockedApi.getBookExport).toHaveBeenCalledTimes(2), { timeout: 4000 });
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+    });
+
     it('shows no toast when the cancelled job has no sync path', async () => {
       mockedApi.getBookExport.mockResolvedValue(
         makeJob({ id: 'exp_run', status: 'cancelled', syncPath: undefined }),

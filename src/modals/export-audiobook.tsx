@@ -93,6 +93,11 @@ interface TileHint {
   formatOptions?: Array<{ id: FormatId; label: string }>;
 }
 
+/* How a cancelled export is followed while its sync-folder copy is still in
+   flight (#4228): poll every second, give up after ten minutes. */
+const SYNC_FOLLOW_INTERVAL_MS = 1000;
+const SYNC_FOLLOW_MAX_POLLS = 600;
+
 const TILE_HINTS: Record<TileHintKey, TileHint> = {
   voice: {
     format: 'm4b',
@@ -375,11 +380,18 @@ export function ExportAudiobookModal({
     } catch {
       /* server may already be gone; local dismiss still wins */
     }
-    /* A cancel that lands after the sync-folder copy leaves the synced
-       files in place (#4228). Read the job once and say so. A failed
-       read never blocks dismissal, same as the cancel above. */
+    dispatch(exportsActions.exportDismissed({ bookId, exportId: idAtClick }));
+    /* A cancel cannot stop a sync-folder copy that is already running, and it
+       leaves the synced files in place (#4228). The server marks such a copy
+       `syncCopyInFlight` and publishes `syncPath` only once it lands, so keep
+       following the job after dismissal until the copy's outcome is known, then
+       say so. A failed read never blocks anything, same as the cancel above. */
     try {
-      const job = await api.getBookExport(bookId, idAtClick);
+      let job = await api.getBookExport(bookId, idAtClick);
+      for (let n = 0; n < SYNC_FOLLOW_MAX_POLLS && job.syncCopyInFlight; n++) {
+        await new Promise((r) => setTimeout(r, SYNC_FOLLOW_INTERVAL_MS));
+        job = await api.getBookExport(bookId, idAtClick);
+      }
       if (job.status === 'cancelled' && job.syncPath) {
         dispatch(
           notificationsActions.pushToast({
@@ -390,9 +402,8 @@ export function ExportAudiobookModal({
         );
       }
     } catch {
-      /* unreadable job: nothing to report, dismissal still proceeds */
+      /* unreadable job: nothing to report */
     }
-    dispatch(exportsActions.exportDismissed({ bookId, exportId: idAtClick }));
   };
 
   /* Retry from FAILED: drop the failed job from the slice and re-submit
