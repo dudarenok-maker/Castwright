@@ -7811,7 +7811,10 @@ until this row runs.
   recycled since that sample reads as unknown, not stalled) AND the tree's
   command lines name a path under the pushing checkout and none outside it. Start a real battery
   that will hang, launched from the checkout you will push from so its argv
-  names that checkout (e.g.
+  names that checkout, and from a checkout whose `node_modules` is NOT
+  junctioned (the primary, or a `wt-new.mjs` worktree with its own install):
+  from a junctioned worktree the fork workers name the primary, the battery is
+  spared by design, and you would record a false FAIL (e.g.
   `node <checkout>\node_modules\vitest\vitest.mjs run --testTimeout=0 <a test file whose test never resolves>`,
   or a file with a top-level `await new Promise(() => {})` so collection itself
   hangs; a test that merely fails at its timeout lets the run exit long before
