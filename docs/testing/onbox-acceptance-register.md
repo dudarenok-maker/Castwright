@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 49 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**83 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**84 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
 >
@@ -1950,7 +1952,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A128 -->
+<!-- next-id: A129 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6681,6 +6683,17 @@ The automated tests prove version 1's bytes on 12 repo EPUBs plus synthetic book
 - **A new import gets version 2.** Import that same EPUB again under a new title (for example append ` (v2 check)`). Observe: its `state.json` has `"manuscriptExtractorVersion": 2`, and the chapter from bullet 3 shows the new paragraph breaks. Record the paragraph counts of that chapter in both books, then delete the test book.
 
 *Needs:* the operator's real EPUB corpus (the 640 files of PR #4241, plus any `.mobi`/`.azw3`) and a live library with a cast-confirmed EPUB book; no GPU. *Criteria:* this row. Clears when each bullet's counts, key and sentences are recorded.
+
+### A128 · EPUB and MOBI books read the same through the parse worker as in-process ([#4242](https://github.com/dudarenok-maker/Castwright/issues/4242)) · **the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed)**
+
+The automated tests prove byte-identical output on the repo's seven EPUB fixtures and the synthetic builders, and contained crashes on the malformed corpus. They do not prove parity on real publisher books, which PR #4241's review showed differ in ways synthetic fixtures miss (6 of 640 books once differed through a change no fixture caught). Since #4242 every in-process EPUB and MOBI/AZW3 parse (import, re-parse, restructure, samples, hydrate-from-disk) runs in a worker thread. Only the real library shows whether that changes what a book reads as.
+
+- **Parity over the real library.** From the repo root at the merged commit, run `node server/node_modules/tsx/dist/cli.mjs server/scripts/parse-worker-parity.ts "<set 1>" "<set 2>"` over the same two directories PR #4241's review used (63 + 577 EPUBs), plus any directory of MOBI/AZW3 books. The harness runs every book at extractor version 1 and at version 2 (#4217), so counts are per book per version: two books show as 4. Observe the summary line: `differ 0` and `error-differ 0`. Truncated zips are not crashes: they error identically on both sides and count as `error-same` (PR #4241 found 2 of the 640). After #4241 the real corpus is expected to have zero `in-process-crash` books. Record the summary line and the date.
+- **The server stays up on a crasher.** The real corpus should hold no crasher, so use a synthetic one: write a broken-OPF EPUB with `buildBrokenOpfEpub()` from `server/src/test-utils/empty-href-epub.ts` (a one-line tsx script that writes its Buffer to `broken-opf.epub`) and import it through the running app (Upload). Observe a 415 message, not a server exit; the server log has `[parse-worker]` and no `FATAL uncaughtException`; and no `parse-scratch-*` directory is left in the temp folder.
+- **Re-parse after a restart.** Open a fully produced EPUB book after a server restart (the `hydrateFromDisk` path) and observe its chapters and text unchanged.
+
+*Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
+
 
 ## Group B — local Ollama analyzer only
 

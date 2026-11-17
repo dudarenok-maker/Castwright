@@ -32,7 +32,14 @@ import { UnusableMediaError } from './errors.js';
 /** `extractorVersion` selects the extraction behaviour; see `version.ts`. It is
     required: a caller that omits it must fail typecheck rather than extract at
     v1 under a book stamped 2 (#4217). */
-type EpubOpts = { fileName?: string; sourcePath?: string; extractorVersion: number };
+/** `scratchDir`: a directory the caller owns and removes (the parse worker's
+    per-parse scratch, #4242); temp files go inside it instead of `tmpdir()`. */
+type EpubOpts = {
+  fileName?: string;
+  sourcePath?: string;
+  extractorVersion: number;
+  scratchDir?: string;
+};
 
 /** Raw metadata both parse paths produce before the shared title/series
     resolution in {@link assembleManuscript}. */
@@ -69,7 +76,7 @@ export async function parseEpub(buffer: Buffer, opts: EpubOpts): Promise<ParsedM
   if (opts.sourcePath) {
     filePath = opts.sourcePath;
   } else {
-    tmp = await mkdtemp(join(tmpdir(), 'epub-'));
+    tmp = await mkdtemp(join(opts.scratchDir ?? tmpdir(), 'epub-'));
     filePath = join(tmp, safeSegment(basename(opts.fileName ?? 'book.epub')));
     await writeFile(filePath, buffer);
   }
@@ -189,7 +196,7 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
     derived from it — is kept (#4239). `getChapter` rewrites each `href` from
     inside the zip's async inflate callback and throws
     `linkparts.shift is not a function` on `<a href="">`; there the throw is an
-    uncaughtException no try/await can catch, and the server exits. Over a proxy
+    uncaughtException no try/await can catch, and, before #4242, the server exited; the parse now runs in a worker (`parse-in-worker.ts`), so it ends that worker instead. Over a proxy
     whose `getChapterRaw` answers synchronously the same code runs in this
     call's own stack, so the throw is catchable. It is deliberately not caught
     here: it propagates to {@link tryEpub2Parse}'s catch and the whole book goes

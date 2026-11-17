@@ -112,7 +112,7 @@ interface MobiLikeParser {
 
 export async function parseMobi(
   buffer: Buffer,
-  opts: { fileName?: string; extractorVersion: number },
+  opts: { fileName?: string; extractorVersion: number; scratchDir?: string },
 ): Promise<ParsedManuscript> {
   /* DRM guard. Runs before any parser library call so we can surface a
      specific actionable error message. */
@@ -134,7 +134,7 @@ export async function parseMobi(
   /* The library writes any extracted image resources to disk. We don't
      need the images, but we want them landing in a temp dir we can clean
      up, not in the cwd's `./images`. */
-  const resourceDir = await mkdtemp(join(tmpdir(), 'mobi-resources-'));
+  const resourceDir = await mkdtemp(join(opts.scratchDir ?? tmpdir(), 'mobi-resources-'));
   let parser: MobiLikeParser | null = null;
   try {
     const data = new Uint8Array(buffer);

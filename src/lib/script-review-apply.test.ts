@@ -92,6 +92,45 @@ describe('planApply — shared no-drift vector (server review-apply-core)', () =
   }
 });
 
+const ANCHOR_VECTORS_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'server',
+  'src',
+  'analyzer',
+  'attribution-eval',
+  '__fixtures__',
+  'anchor-offset-vectors.json',
+);
+
+interface AnchorVector {
+  name: string;
+  text: string;
+  anchor: string;
+  expectedTail: string | null;
+  forms?: { text: 'NFC' | 'NFD'; anchor: 'NFC' | 'NFD' };
+}
+
+describe('resolveAnchorOffset — shared anchor vectors (#4226, server review-apply-core)', () => {
+  const vectors: AnchorVector[] = JSON.parse(readFileSync(ANCHOR_VECTORS_PATH, 'utf8'));
+  const other = (f: 'NFC' | 'NFD'): 'NFC' | 'NFD' => (f === 'NFC' ? 'NFD' : 'NFC');
+
+  for (const vector of vectors) {
+    it(vector.name, () => {
+      if (vector.forms) {
+        expect(vector.text.normalize(vector.forms.text)).toBe(vector.text);
+        expect(vector.text.normalize(other(vector.forms.text))).not.toBe(vector.text);
+        expect(vector.anchor.normalize(vector.forms.anchor)).toBe(vector.anchor);
+        expect(vector.anchor.normalize(other(vector.forms.anchor))).not.toBe(vector.anchor);
+      }
+      const off = resolveAnchorOffset(vector.text, vector.anchor);
+      if (vector.expectedTail === null) expect(off).toBeNull();
+      else expect(vector.text.slice(off!)).toBe(vector.expectedTail);
+    });
+  }
+});
+
 describe('planApply', () => {
   const live = [
     { id: 5, chapterId: 3, text: 'The hall was dark.', characterId: 'narrator' },
@@ -580,5 +619,31 @@ describe('dispatchAcceptedOps — validate_instruct (fs-58)', () => {
     expect(dispatched.some((a) => a.type.endsWith('setSentenceInstruct'))).toBe(true);
     expect(dispatched.some((a) => a.type.endsWith('setSentenceText'))).toBe(false);
     expect(bumped).toEqual([]); // instruct-only effect → no false-stale
+  });
+});
+
+describe('without Intl.Segmenter (older browsers; #4226)', () => {
+  const real = Intl.Segmenter;
+  afterEach(() => {
+    (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter = real;
+    vi.resetModules();
+  });
+
+  it('loads the module and fails closed instead of throwing', async () => {
+    vi.resetModules();
+    delete (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    const mod = await import('./script-review-apply');
+    expect(mod.resolveAnchorOffset('He ran. Then stopped.', 'He ran.')).toBeNull();
+    const { unappliable } = mod.planApply(
+      [{ id: 1, op: 'split', anchor: 'He ran.', rationale: 'r' }],
+      [{ id: 1, chapterId: 1, text: 'He ran. Then stopped.', characterId: 'narrator' }],
+    );
+    expect(unappliable).toHaveLength(1);
+  });
+
+  it('the eager app entry graph (toast-stack -> script-review-thunk) still imports', async () => {
+    vi.resetModules();
+    delete (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    await expect(import('../components/toast-stack')).resolves.toBeDefined();
   });
 });

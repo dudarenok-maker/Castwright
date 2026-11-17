@@ -26,6 +26,7 @@ export function applyOpsToCharArray(
   finalSentences: FinalSentenceForApply[],
   finalSpans: FinalSpanForApply[],
   acceptedOps: ScriptReviewOp[],
+  chapterText: string,
 ): Array<string | null> {
   const reviewed = finalByChar.slice();
   const sentenceById = new Map(finalSentences.map((s) => [s.id, s]));
@@ -37,6 +38,10 @@ export function applyOpsToCharArray(
     if (!span || !sentence) continue; // target id missing from this projection
     const { start, end } = span;
     if (end <= start) continue; // degenerate span
+    // Anchors resolve against the chapter slice, NOT sentence.text: `start` is a
+    // chapterText coordinate, and the sentence can be spelled differently from its
+    // slice (NFC/NFD, `...` vs the real ellipsis), which shifts every offset.
+    const slice = chapterText.slice(start, end);
 
     if (op.op === 'reattribute') {
       // Off-roster `proposed` reattributions are dumped by the CLI (Task 7),
@@ -49,7 +54,7 @@ export function applyOpsToCharArray(
     if (op.op === 'split') {
       const pieces = op.pieceCharacterIds;
       if (!pieces || pieces.length < 2) continue; // same-speaker default -> no-op
-      const off = resolveAnchorOffset(sentence.text, op.anchor ?? '');
+      const off = resolveAnchorOffset(slice, op.anchor ?? '');
       if (off == null) continue;
       const splitAt = start + off;
       if (splitAt <= start || splitAt >= end) continue; // degenerate/inverted piece
@@ -61,8 +66,8 @@ export function applyOpsToCharArray(
     if (op.op === 'extract_dialogue') {
       const pieces = op.pieceCharacterIds;
       if (!pieces || pieces.length < 2) continue;
-      const offStart = resolveAnchorOffset(sentence.text, op.anchor ?? '');
-      const offEnd = resolveAnchorOffset(sentence.text, op.anchorEnd ?? '');
+      const offStart = resolveAnchorOffset(slice, op.anchor ?? '');
+      const offEnd = resolveAnchorOffset(slice, op.anchorEnd ?? '');
       if (offStart == null || offEnd == null) continue;
       const midStart = start + offStart;
       const midEnd = start + offEnd;

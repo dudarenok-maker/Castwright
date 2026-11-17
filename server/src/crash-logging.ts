@@ -228,8 +228,10 @@ export interface FatalErrorReportHooks {
  *  launcher passes them on the command line (scripts/start-app-prod.mjs,
  *  server/package.json `start`, pinokio-scripts/start.js, scripts/dev-server.mjs),
  *  and the dev launcher and start-app-prod.mjs also put them in the child's
- *  `NODE_OPTIONS` (scripts/lib/report-exclusion.mjs). The prod server starts no
- *  Worker today. Socket addresses (`libuv[]` `localEndpoint`/`remoteEndpoint`)
+ *  `NODE_OPTIONS` (scripts/lib/report-exclusion.mjs). The EPUB/MOBI parse
+ *  worker (parsers/parse-in-worker.ts) is covered because it inherits these
+ *  flags by default `execArgv` inheritance; an explicit `execArgv` there would
+ *  undo that. Socket addresses (`libuv[]` `localEndpoint`/`remoteEndpoint`)
  *  stay in a report either way. */
 const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-network'] as const;
 
