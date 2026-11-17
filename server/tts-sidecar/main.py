@@ -5201,9 +5201,10 @@ class PlacementController:
         # failure path, so a stranded pool can never by itself cause a refusal.
         if device_key is not None:
             await self._reclaim_stranded_cache(device_key)
+            probed = self.probe()
             live = self._live_credit(engine, model, cfg, protect, credit_card, credit_mb)
             key = self.ledger.best_fit(
-                self._credit_candidates(self._gpu_candidates(self.probe(), constraint), credit_card, live),
+                self._credit_candidates(self._gpu_candidates(probed, constraint), credit_card, live),
                 peak, reserve_cap,
             )
             if key is not None:

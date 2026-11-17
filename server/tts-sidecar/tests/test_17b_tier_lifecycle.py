@@ -402,7 +402,7 @@ def test_d4_design_resolver(monkeypatch):
     unmeasured_base = _fake_qwen(resident=False, design_mb=3900, base_mb=1)
     unmeasured_base._base_weights_mb = 0
     monkeypatch.setitem(main.ENGINES, "qwen", unmeasured_base)
-    assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == 3900 + main._QWEN_BASE_WEIGHTS_MB
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == 3900 + 1200
     # a mint never gets the 0.6B credit (#4237 owns that decision)
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=3900, base_mb=BASE_MB))
     assert main._own_resident_tier("qwen", "1.7b", MINT)[1] == 3900
@@ -411,13 +411,13 @@ def test_d4_design_resolver(monkeypatch):
     unmeasured = _fake_qwen(resident=False, design_mb=1)
     unmeasured._design_weights_mb = 0
     monkeypatch.setitem(main.ENGINES, "qwen", unmeasured)
-    assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == main._QWEN_DESIGN_WEIGHTS_MB
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == 3400
 
 
 def test_d5_warm_design_on_an_8188_card_is_admitted_without_evicting_voicedesign(monkeypatch):
     """Review pass 2 (A): the design's peak includes the 0.6B audition base that
     `design_voice` always leaves resident, so crediting only VoiceDesign refused a
-    warm design by ~900 MB (neededMb 2544), left the Node design lever to decline
+    warm design by 465 MB (neededMb 2544; 2488 + 3600 - 409 = 5679 against a 6144 peak), left the Node design lever to decline
     (it sees VoiceDesign resident) and cost the back-to-back design the ~2 min
     idle watchdog. Probe-style figures: 8188 card, context 400, VoiceDesign 4000
     reserved / 3600 measured, 0.6B 1300, seed 6144, cushion 409."""
@@ -447,6 +447,40 @@ def test_b1_a_credited_model_freed_during_a_ladder_step_is_not_counted_twice(mon
     adm, booked = _mint(pc)
     assert "noCapacity" in adm
     assert booked == 0
+
+
+def test_b1_admit_a_credited_model_freed_during_a_ladder_step_is_not_counted_twice(monkeypatch):
+    """B1's twin through `admit()`'s own `_fits` (review pass 3, H): the model
+    freed by a ladder step is already in the re-probe's free memory."""
+    qwen = _fake_qwen(weights_mb=3900)
+    steps = lambda device_key, engine: [
+        main.EvictStep("other", None, lambda: setattr(qwen, "_base17", None) or True)
+    ]
+    pc = _wire(monkeypatch, qwen, _one_card(qwen, other_mb=2500), steps=steps)
+    out = asyncio.run(pc.admit("qwen", "1.7b", MINT, cpu_capable=False, heavy=True))
+    assert "noCapacity" in out
+
+
+def test_b1_admit_a_model_freed_before_the_reclaim_retry_is_not_counted_twice(monkeypatch):
+    """The same through `admit()`'s reclaim retry, which probes BEFORE it reads
+    the live credit: the model is freed just before that probe runs, so the probe
+    sees the freed weights and the credit read afterwards is 0 (reading the
+    credit first would still see it resident and add it a second time)."""
+    qwen = _fake_qwen(weights_mb=3900)
+    pc = _wire(monkeypatch, qwen, _one_card(qwen, other_mb=2500), steps=lambda dk, eng: [])
+    inner = pc.probe
+    armed = []
+
+    def probe():
+        if armed and qwen._base17 is not None:
+            qwen._base17 = None  # the idle watchdog's thread, landing here
+        return inner()
+
+    monkeypatch.setattr(pc, "probe", probe)
+    monkeypatch.setattr(pc, "reclaim", lambda dk: armed.append(dk) or False)
+    out = asyncio.run(pc.admit("qwen", "1.7b", MINT, cpu_capable=False, heavy=True))
+    assert armed, "the reclaim retry did not run"
+    assert "noCapacity" in out
 
 
 def test_design_weights_are_measured_at_load(monkeypatch):
