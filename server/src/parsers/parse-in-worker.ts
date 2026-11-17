@@ -5,7 +5,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import type { ParsedManuscript } from './index.js';
+import type { ParsedManuscript } from './text.js';
 import { UnusableEpubError } from './epub.js';
 import { UnusableMediaError } from './errors.js';
 import { DrmProtectedError } from './mobi.js';
