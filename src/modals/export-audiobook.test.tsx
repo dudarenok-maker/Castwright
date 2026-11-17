@@ -15,6 +15,7 @@ import { Provider } from 'react-redux';
 import { exportsSlice, exportsActions } from '../store/exports-slice';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import type { BookExportJob } from '../lib/types';
 
 /* qrcode resolves to a data: URL via a real toDataURL — keep it real, the
@@ -27,6 +28,7 @@ vi.mock('../lib/api', async () => {
     api: {
       createBookExport: vi.fn(),
       cancelBookExport: vi.fn(async () => undefined),
+      getBookExport: vi.fn(),
       getExportLanUrls: vi.fn(async () => ({ urls: ['http://192.168.1.42:8080'], port: 8080 })),
       getUserSettings: vi.fn(async () => ({}) as unknown),
       putUserSettings: vi.fn(),
@@ -50,6 +52,7 @@ import { api, ExportIncompleteError } from '../lib/api';
 const mockedApi = api as unknown as {
   createBookExport: ReturnType<typeof vi.fn>;
   cancelBookExport: ReturnType<typeof vi.fn>;
+  getBookExport: ReturnType<typeof vi.fn>;
   getExportLanUrls: ReturnType<typeof vi.fn>;
   putUserSettings: ReturnType<typeof vi.fn>;
   testSyncFolderPath: ReturnType<typeof vi.fn>;
@@ -62,6 +65,7 @@ function makeStore() {
       exports: exportsSlice.reducer,
       account: accountSlice.reducer,
       ui: uiSlice.reducer,
+      notifications: notificationsSlice.reducer,
     },
   });
 }
@@ -233,6 +237,64 @@ describe('ExportAudiobookModal', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('export-active-job')).toBeNull();
       expect(screen.getByTestId('export-submit')).toBeInTheDocument();
+    });
+  });
+
+  describe('cancel after a sync-folder copy (#4228)', () => {
+    async function cancelRunning(store: ReturnType<typeof makeStore>) {
+      mockedApi.createBookExport.mockResolvedValue(
+        makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }),
+      );
+      render(
+        <Provider store={store}>
+          <ExportAudiobookModal open={true} bookId="demo__sa__test" onClose={vi.fn()} />
+        </Provider>,
+      );
+      const submit = await waitFor(() => {
+        const btn = screen.getByTestId('export-submit');
+        if ((btn as HTMLButtonElement).disabled) throw new Error('still disabled');
+        return btn;
+      });
+      fireEvent.click(submit);
+      fireEvent.click(await screen.findByTestId('export-cancel'));
+      await waitFor(() => {
+        expect(screen.queryByTestId('export-active-job')).toBeNull();
+        expect(screen.getByTestId('export-submit')).toBeInTheDocument();
+      });
+    }
+
+    it('toasts the sync path when the cancelled job already has one', async () => {
+      mockedApi.getBookExport.mockResolvedValue(
+        makeJob({ id: 'exp_run', status: 'cancelled', syncPath: '/sync/A/Book' }),
+      );
+      const store = makeStore();
+      await cancelRunning(store);
+      await waitFor(() => {
+        const toasts = store.getState().notifications.toasts;
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0].message).toContain('/sync/A/Book');
+      });
+    });
+
+    it('shows no toast when the cancelled job has no sync path', async () => {
+      mockedApi.getBookExport.mockResolvedValue(
+        makeJob({ id: 'exp_run', status: 'cancelled', syncPath: undefined }),
+      );
+      const store = makeStore();
+      await cancelRunning(store);
+      await waitFor(() => expect(mockedApi.getBookExport).toHaveBeenCalled());
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+    });
+
+    it('still dismisses with no toast when the job read fails', async () => {
+      mockedApi.getBookExport.mockRejectedValue(new Error('gone'));
+      const store = makeStore();
+      await cancelRunning(store);
+      await waitFor(() => {
+        const jobs = store.getState().exports.byBookId['demo__sa__test'] ?? [];
+        expect(jobs.find((j) => j.id === 'exp_run')).toBeUndefined();
+      });
+      expect(store.getState().notifications.toasts).toHaveLength(0);
     });
   });
 

@@ -375,6 +375,23 @@ export function ExportAudiobookModal({
     } catch {
       /* server may already be gone; local dismiss still wins */
     }
+    /* A cancel that lands after the sync-folder copy leaves the synced
+       files in place (#4228). Read the job once and say so. A failed
+       read never blocks dismissal, same as the cancel above. */
+    try {
+      const job = await api.getBookExport(bookId, idAtClick);
+      if (job.status === 'cancelled' && job.syncPath) {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'info',
+            message: `Export cancelled, but its files were already copied to your sync folder (${job.syncPath}).`,
+            dedupeKey: 'export-cancel-synced',
+          }),
+        );
+      }
+    } catch {
+      /* unreadable job: nothing to report, dismissal still proceeds */
+    }
     dispatch(exportsActions.exportDismissed({ bookId, exportId: idAtClick }));
   };
 
