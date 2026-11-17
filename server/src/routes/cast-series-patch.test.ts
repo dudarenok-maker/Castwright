@@ -588,4 +588,36 @@ describe('series-patch — per-item reason on a lock timeout (#2292)', () => {
     expect(res.body.failed[0].error).toBe('Files could not be read or written right now. Try again.');
     expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
   });
+
+  /* #4236 -- the SOURCE book's own failure is a separate `failed.push` from the sibling loop's. */
+  it('a node fs error on the SOURCE book answers a path-free sentence too', async () => {
+    const castLock = await import('../workspace/cast-lock.js');
+    const { withCastLock: original } = await vi.importActual<typeof import('../workspace/cast-lock.js')>(
+      '../workspace/cast-lock.js',
+    );
+    const abs = join(workspaceRoot, 'books', AUTHOR, SERIES, KEEPER_BOOK, '.audiobook', 'cast.json');
+    const spy = vi
+      .spyOn(castLock, 'withCastLock')
+      .mockImplementation(async <T,>(dir: string, fn: () => Promise<T>): Promise<T> => {
+        if (dir.endsWith(KEEPER_BOOK)) {
+          throw Object.assign(new Error(`EPERM: operation not permitted, rename '${abs}.tmp' -> '${abs}'`), {
+            code: 'EPERM',
+            syscall: 'rename',
+            path: abs,
+          });
+        }
+        return original(dir, fn) as Promise<T>;
+      });
+    let res;
+    try {
+      res = await callPatch(keeperBookId, 'wren', { gender: 'female' });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(207);
+    const sourceFailure = res.body.failed.find((f: { bookId: string }) => f.bookId === keeperBookId);
+    expect(sourceFailure?.error).toBe('Files could not be read or written right now. Try again.');
+    expect(JSON.stringify(res.body)).not.toContain(workspaceRoot);
+  });
 });

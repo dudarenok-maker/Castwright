@@ -766,4 +766,37 @@ describe('voice-override-linked — per-item reason on a lock timeout (#2292)', 
     expect(res.body.failed[0].error).toBe('Files could not be read or written right now. Try again.');
     expect(JSON.stringify(res.body)).not.toContain('Quota');
   });
+
+  /* #4236 -- the sibling loop's own catch (a book-op acquisition or anything outside the per-book write)
+     is a separate `failed.push` from the one around the write. */
+  it('a node fs error out of the sibling book-op answers a path-free sentence', async () => {
+    const abs = 'C:\\Users\\someone\\Castwright\\books\\The Quota\\.audiobook\\cast.json';
+    const bookOpLock = await import('../workspace/book-op-lock.js');
+    const { withBookOp: original } = await vi.importActual<typeof import('../workspace/book-op-lock.js')>(
+      '../workspace/book-op-lock.js',
+    );
+    const spy = vi
+      .spyOn(bookOpLock, 'withBookOp')
+      .mockImplementation(((id: string, fn: never) => {
+        if (id === bookC) {
+          throw Object.assign(new Error(`EPERM: operation not permitted, rename '${abs}.tmp' -> '${abs}'`), {
+            code: 'EPERM',
+            syscall: 'rename',
+            path: abs,
+          });
+        }
+        return original(id, fn);
+      }) as typeof original);
+    let res;
+    try {
+      res = await callLinked(bookA, 'wren', { override: { engine: 'qwen', name: 'wren-designed' } });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(207);
+    expect(res.body.failed).toHaveLength(1);
+    expect(res.body.failed[0].error).toBe('Files could not be read or written right now. Try again.');
+    expect(JSON.stringify(res.body)).not.toContain('Quota');
+  });
 });

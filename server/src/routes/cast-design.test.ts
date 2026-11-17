@@ -2357,6 +2357,87 @@ describe('cast-design — a node fs error out of a character’s design is curat
   });
 });
 
+describe('cast-design — #4236: the shared-GPU persona pre-pass and the sidecar-down regex never leak an fs path', () => {
+  const ABS = 'C:\\Users\\someone\\Castwright\\books\\The Quota\\.audiobook\\cast.json';
+  const FS_SENTENCE = 'Files could not be read or written right now. Try again.';
+  const fsErr = (p: string) =>
+    Object.assign(new Error(`EPERM: operation not permitted, rename '${p}.tmp' -> '${p}'`), {
+      code: 'EPERM',
+      syscall: 'rename',
+      path: p,
+    });
+  afterEach(() => {
+    personaSharesGpuMock.mockReturnValue(false);
+    personaMock.mockReset();
+    personaMock.mockResolvedValue('a bright, quick-witted teenage boy');
+  });
+
+  it('shared-GPU: a persona-generation fs error is a path-free per-character reason', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+    personaMock.mockReset();
+    personaMock.mockRejectedValueOnce(fsErr(ABS));
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+    const events = parseSse(res.text);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'hart');
+    expect(failed?.errorReason).toBe(FS_SENTENCE);
+    expect(events.find((e) => e.type === 'idle')?.failures?.[0].error).toBe(FS_SENTENCE);
+    expect(JSON.stringify(events)).not.toContain('Quota');
+  });
+
+  it('shared-GPU: an fs error in the persona WRITE fails that character and the run continues', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+    personaMock.mockResolvedValue('A persona.');
+    const castLockMod = await import('../workspace/cast-lock.js');
+    vi.spyOn(castLockMod, 'withCastLock').mockImplementationOnce(async () => {
+      throw fsErr(ABS);
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+    errSpy.mockRestore();
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'character_failed' && e.characterId === 'hart')?.errorReason).toBe(FS_SENTENCE);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
+    expect(JSON.stringify(events)).not.toContain('Quota');
+  });
+
+  it('a wholesale pre-pass failure that is an fs error reaches the terminal event path-free', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+    const planMod = await import('../tts/persona-gpu-plan.js');
+    vi.mocked(planMod.preparePersonaBatch).mockRejectedValueOnce(fsErr(ABS));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+    errSpy.mockRestore();
+    const events = parseSse(res.text);
+    const terminal = events.find((e) => e.type === 'error');
+    expect(terminal?.message).toBe(FS_SENTENCE);
+    expect(JSON.stringify(events)).not.toContain('Quota');
+  });
+
+  it('an fs error on a path holding "Unreachable" is a per-character failure, not a sidecar restart', async () => {
+    const p = 'C:\\Users\\someone\\Castwright\\books\\Della Renwick\\The Unreachable\\The Unreachable\\.audiobook\\cast.json';
+    const ensureSpy = vi.spyOn(ensureMod, 'ensureSidecarEngineReady').mockResolvedValue(undefined);
+    const designSpy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockRejectedValue(fsErr(p));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+    errSpy.mockRestore();
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(ensureSpy).not.toHaveBeenCalled();
+    expect(designSpy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'character_failed').map((e) => e.errorReason)).toEqual([FS_SENTENCE, FS_SENTENCE]);
+    expect(JSON.stringify(events)).not.toContain('Unreachable');
+  });
+});
+
 describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {
   it('reports the curated contention reason, not the raw lock-timeout message, on a persona-write lock timeout', async () => {
     personaSharesGpuMock.mockReturnValue(false);

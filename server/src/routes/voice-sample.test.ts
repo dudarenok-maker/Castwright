@@ -216,12 +216,13 @@ describe('voice-sample router', () => {
     /* #4236 -- the cache write (`writeFile(filePath, mp3)`) failing, or any fs fault under the route, reaches the
        same catch; a node fs error's message embeds the absolute cache path. */
     it('answers a path-free 502 tts_failed message when an fs error reaches the catch', async () => {
-      const abs = join(audioDir, 'voice-sample-abc.mp3');
+      /* The real Node shape of a write-syscall failure (an fd write): code + syscall, NO `path`, and no
+         path in the message -- so it skips the early `isFsPathError` arm and only the final
+         `requestFailureMessageFs` curates it. */
       synthesize.mockRejectedValueOnce(
-        Object.assign(new Error(`ENOSPC: no space left on device, write '${abs}'`), {
+        Object.assign(new Error('ENOSPC: no space left on device, write'), {
           code: 'ENOSPC',
           syscall: 'write',
-          path: abs,
         }),
       );
       const res = await request(app)

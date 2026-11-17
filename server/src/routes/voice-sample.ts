@@ -309,7 +309,9 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     }
     const msg = (err as Error).message ?? 'TTS synthesis failed.';
     /* #4236 — a node fs error's message embeds the path, so the regexes below
-       would read a folder titled "The Quota" as a rate limit. Classify it by
+       would read it as a rate limit: the sample cache path carries the book's id slug
+       (`char-<bookId>__<characterId>`), so a book titled "The Quota" matches /quota/, and a
+       character id such as `pirate` matches /rate/ with no book involved. Classify it by
        being an fs error, before any message scan: a plain 502 with the curated
        sentence. */
     if (isFsPathError(err)) {

@@ -77,7 +77,7 @@ import {
   AnalyzerReasoningUnavailableError,
   AnalyzerCapabilityRejectedError,
 } from '../analyzer/errors.js';
-import { classifyAnalysisFailure } from './failure-taxonomy.js';
+import { classifyAnalysisFailure, isFsPathError } from './failure-taxonomy.js';
 import { preparePersonaBatch } from '../tts/persona-gpu-plan.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
@@ -348,9 +348,11 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu:
       if ((character.voiceStyle ?? '').trim()) continue;
       if (character.overrideTtsVoices?.qwen?.name) continue;
 
-      let persona: string;
       try {
-        persona = await generateVoiceStylePersona(character, { ...prep, signal: job.controller.signal });
+        const persona = await generateVoiceStylePersona(character, { ...prep, signal: job.controller.signal });
+        // Minimal-patch write so a concurrent edit to another character survives. Inside the same
+        // try as the generate, like the lazy path: an fs error here fails this character, not the run.
+        await writeVoiceStylePersona(job.bookDir, characterId, persona);
       } catch (err) {
         /* A pause aborted the call (the job signal reaches the transport): a clean stop, not a failure. */
         if (job.controller.signal.aborted) return;
@@ -370,18 +372,15 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[], sharesGpu:
         }
         // Per-character failure: record + skip; the design loop will skip this char.
         const message = (err as Error).message || 'Persona generation failed.';
-        job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+        const reason = itemFailureReason(err, requestFailureMessageFs(err, message));
+        job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
         broadcast(job, {
           type: 'character_failed',
           characterId,
           name: character.name ?? characterId,
-          errorReason: message,
+          errorReason: reason,
         });
-        continue;
       }
-
-      // Minimal-patch write so a concurrent edit to another character survives.
-      await writeVoiceStylePersona(job.bookDir, characterId, persona);
     }
   } finally {
     clearInterval(beat);
@@ -790,7 +789,10 @@ async function runDesignJob(
             break;
           }
           const message = (e as Error).message || 'Voice design failed.';
-          if (isSidecarRestartClass(e, message)) {
+          /* #4236 -- an fs error is classified by being one, before any message scan: its message embeds a
+             path, and a book / author / series titled "The Unreachable" would match SIDECAR_DOWN_RE and
+             halt the run as a sidecar restart. It falls through to the per-character failure below. */
+          if (!isFsPathError(e) && isSidecarRestartClass(e, message)) {
             /* Sidecar down/recycling/poison-restarting. Ride out the respawn
                and retry this character — unless we've exhausted the budget
                (genuinely dead) or the job was cancelled, in which case stop
@@ -819,7 +821,7 @@ async function runDesignJob(
             endJob(job, {
               type: 'error',
               code: 'sidecar_unavailable',
-              message: `${message} (${job.done} of ${job.total} designed before this happened.)`,
+              message: `${requestFailureMessageFs(e, message)} (${job.done} of ${job.total} designed before this happened.)`,
             });
             return;
           }
@@ -1098,7 +1100,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
       endJob(job, {
         type: 'error',
         code: classifyAnalysisFailure(e, 'Persona generation').code,
-        message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
+        message: requestFailureMessageFs(e, (e as Error).message || 'Cast design failed.'),
       });
     }
   });

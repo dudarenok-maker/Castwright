@@ -173,4 +173,22 @@ describe('export job failure reason is path-free (#4236)', () => {
     expect(logged).toContain('Invalid data found when processing input');
     expect(logged).toContain('ffmpeg exited with code 1');
   });
+
+  /* The backstop `.catch` in the route handler: a rejection that escapes runExportJob's own catch. The only
+     way to give it a path-carrying fs error is for that catch's own `console.error` to throw one. */
+  it('the backstop for a rejection escaping runExportJob answers the curated sentence', async () => {
+    seam.build = new Error('ordinary failure text');
+    errSpy.mockImplementationOnce(() => {
+      throw fsError('EBUSY', 'rename');
+    });
+    const create = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' });
+    expect(create.status).toBe(201);
+    await awaitInFlightJobs();
+    const res = await request(app).get(`/api/books/${bookId}/exports/${create.body.id as string}`);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.errorReason).toBe('Files could not be read or written right now. Try again.');
+    expect(JSON.stringify(res.body)).not.toContain('someone');
+  });
 });
