@@ -44,7 +44,7 @@ export function measureChapterLegibility(
 /** Merged-turn count at or above which a chapter's paragraph structure is
     treated as degraded. PROVISIONAL (owner decision 3, 2026-11-15): calibrated
     on one real clean ru book plus the authored fixtures (#2267 §2.2). The
-    library-wide false-positive scan of a new Group B on-box register row
+    library-wide false-positive scan of on-box register row B110
     (added at the end of the #2254 chain) is the calibration that will confirm
     it; the provisional label is dropped only when that scan finds no breach in
     any scanned book AND at least one clean, dialogue-dense ru dash book

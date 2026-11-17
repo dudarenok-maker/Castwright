@@ -743,7 +743,7 @@ row this register still carries. Keep the table even when it is empty.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 49 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 17 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**84 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**85 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-18 (#2254), 84 → 85.** Row **B110** (the library legibility scan and the Ночной дозор 1A measurement for the paragraph-degradation signal) added. Group B 10 → 11. `next-id` bumped B110 → B111 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
 >
@@ -6697,7 +6699,7 @@ The automated tests prove byte-identical output on the repo's seven EPUB fixture
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B110 -->
+<!-- next-id: B111 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6877,6 +6879,34 @@ Plan 291 replaced four fresh-to-prior matchers with one (`matchFreshToPrior`) an
 - stop a second run partway and resume it: the result matches a straight run, and edits stay paused until the cast reloads.
 
 Run sheet: [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §12 (the per-step `Result:` lines). *Needs:* a real local Ollama analyzer (and per-phase models for the second pass), the Qwen TTS sidecar with VoiceDesign weights for the mid-run design, and a real voiced book with the three conditions above. *Criteria:* plan 291 "Manual acceptance walkthrough". Clears when every observation is recorded for both passes; if the book cannot be made to show an ambiguous name, record that step as not run.
+
+### B110 · Does recovery fix merged paragraphing on a real book? ([#2254](https://github.com/dudarenok-maker/Castwright/issues/2254)) · **local Ollama analyzer (model recorded), the owner's library on the box; no TTS**
+
+**Prerequisite:** a local Ollama analyzer on the owner's default analysis model (passed to the runner as `--model` and recorded), `analyzer.structure.enabled = true`, `allowCloudFallback: false`, escalation at the default, no TTS, and the owner's library on the box. No re-imports: the tools write only their reports, captures and text dumps, to a scratch directory outside the workspace, and read the workspace without the scan's self-heal. Record the build the run used. The threshold of 10 (`MERGED_TURNS_DEGRADED`) is provisional until step 1 runs, and blocker 1 closes only on step 2's 1A verdict.
+
+**Observe:**
+1. The library legibility scan over every format, on the **imported** text. Record:
+   - each book's maximum legibility, and the worst imported paragraph of each flagged chapter (count and first 400 characters) judged **merged** or **clean**;
+   - every chapter judged clean at 10 or more (a **breach** of the provisional threshold), with its chapter, count and format;
+   - chapters labelled **extractor-merged (#4217)**, listed as true positives;
+   - line-wrapped books of any format, with the arm that flagged them (share or count), and their breaches counted;
+   - the stray-break check of every book with continuation lines, line-wrapped or not;
+   - files that could not be parsed, with their error messages, and unsupported files listed apart by extension, on the build recorded;
+   - each book's dash-turn density (total and per 1,000 words);
+   - the clean dialogue-dense ru dash books by title (the provisional label needs at least one), and non-ru Cyrillic books listed separately;
+   - the 26 books of the #2254 corpus comment, each marked scanned or not.
+2. Ночной дозор, the 3 chapters with the most hidden turns that clear the 80% alignment floor, one live capture each, one at a time; a chapter below the floor is swapped for the next by hidden-turn count (at most two swaps). Record:
+   - each chapter's alignment, `flagOnly` and status (picked, swapped out, captured but not used, or superseded), and the replay control (pass or void);
+   - the sentences whose post-crossExamine speaker recovery changed, on vs off, per model sentence (1A): the counts over all sentences and over turn sentences, the narrator share on vs off, and each changed sentence's class;
+   - swapped-out and captured-but-not-used chapters' 1A counts, apart and outside the verdict;
+   - the confident decisions on turn sentences by class and reason, including the engine's `narration-demote` overrides (a report, no verdict);
+   - one blind hand-check of up to 30 sentences, with `n`, `I`, `R` and `U` (and the seed and p-values for a sample).
+
+**Wall-clock:** none for (1). For (2), per capture round, about 1.1–2.8 h with no swap, about 1.6–3.9 h with the likely first swap (ch7), about 5.3 h at worst (ch7 and ch1); about 10.6 h at worst with the one re-roll; estimated, on the 2026-09-05 model.
+
+**Outcome (not a pass bar):** 1A *improves the speakers*, *makes them worse*, *no clear direction* or *changes no speaker*, decided by the counts when 30 or fewer sentences changed (*improves* at `I − R ≥ 3`, *worse* at `R − I ≥ 1`), otherwise by an exact finite-population test of the same claims (one-sided 0.025 for *improves*, 0.10 for *worse*). A **void** 1A (any captured chapter's control failed), or one **not computed** (no chapter cleared the floor), does not discharge. Every re-capture uses the same analyzer model and settings as the first capture; the runner refuses another `--model`. A not-computed 1A is recorded and the captures are checked for a defect. If one is found, it is fixed and the chapters it affects are captured again; if none is, one re-roll is made. Either way the pick re-walks the candidates from the head, reusing every non-defective capture, with the swap cap reset. A not-computed 1A with no defect found once the re-roll is spent is recorded with its reason, and the run stops for the owner; the row stays open. Swapped-out and captured-but-not-used chapters stay outside the verdict.
+
+Run sheet: [`paragraph-degradation-onbox-acceptance.md`](paragraph-degradation-onbox-acceptance.md) (the per-step `Result:` lines). *Needs:* the owner's library (Calibre and the workspace) on the box and a local Ollama model, no TTS sidecar. *Criteria:* [`paragraph-degradation-onbox-acceptance.md`](paragraph-degradation-onbox-acceptance.md). Clears when every outcome except a void or not-computed 1A is recorded (the scan tables, the verdict, the class report, who and when) and posted on #2254.
 
 ---
 

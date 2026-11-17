@@ -84,7 +84,7 @@ Run in mock mode (`npm run dev:mock`) for steps 1–4.
 2. **Change the form's language to English** → the box disappears.
 3. **Save the book and open its manuscript view** (`#/books/<id>/manuscript`) → the caption shows on the flagged chapter only, not on clean or excluded chapters.
 4. **Toggle a flagged chapter to excluded** → its caption goes away without a reload.
-5. **On-box acceptance** is a new Group B register row, added by the last task of this chain (owner-run: false-positive scan, then 1A on Ночной дозор). Its ID is named here once it exists.
+5. **On-box acceptance** is Group B register row **B110** ([`onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md); owner-run: false-positive scan, then 1A on Ночной дозор). Its run sheet is [`paragraph-degradation-onbox-acceptance.md`](../testing/paragraph-degradation-onbox-acceptance.md).
 
 ## Out of scope
 
