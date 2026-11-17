@@ -208,6 +208,12 @@ export function manuscriptEditsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'manuscript-edits.json');
 }
 
+/* The edits rewrite's input, persisted before a restructure's state.json write so
+   an interrupted restructure can redo the manuscript-edits.json rewrite (#4227). */
+export function restructureEditsJournalPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'restructure-edits-journal.json');
+}
+
 /* #3703 — the restructured chapter bodies, so a server restart hydrates them
    instead of re-parsing a manuscript that knows nothing about the restructure. */
 export function manuscriptHintsJsonPath(bookDir: string): string {
