@@ -5,6 +5,7 @@
 import { decodeHTMLStrict } from 'entities';
 import { tagHtmlEmphasis } from './audio-tags.js';
 import { nonEnglishHeadingLexicon } from '../tts/language-registry.js';
+import { LEGACY_EXTRACTOR_VERSION } from './version.js';
 
 /* Decode numeric character references — both hex (`&#x27;`) and decimal
    (`&#39;`). EPUB serializers very commonly emit the HEX apostrophe
@@ -75,8 +76,14 @@ export function decodeNamedEntities(s: string): string {
 /* Strip HTML tags from a chapter body, decode common entities, and convert
    block-level breaks to plain-text newlines. Folds `<em>/<i>/<strong>` into
    `[emphasis]…[/emphasis]` tags via tagHtmlEmphasis before stripping so the
-   audio-tag information survives the strip. */
-export function stripHtml(html: string): string {
+   audio-tag information survives the strip.
+
+   `_extractorVersion` is version-gated: see `parsers/version.ts`. Nothing reads
+   it yet; version 1 is the only behaviour. */
+export function stripHtml(
+  html: string,
+  _extractorVersion: number = LEGACY_EXTRACTOR_VERSION,
+): string {
   let s = tagHtmlEmphasis(html)
     .replace(/<\s*br\s*\/?>/gi, '\n')
     /* #1679 — <hr> is the most common EPUB/MOBI scene-break glyph; the generic

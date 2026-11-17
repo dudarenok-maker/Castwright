@@ -112,7 +112,7 @@ interface MobiLikeParser {
 
 export async function parseMobi(
   buffer: Buffer,
-  opts: { fileName?: string },
+  opts: { fileName?: string; extractorVersion?: number },
 ): Promise<ParsedManuscript> {
   /* DRM guard. Runs before any parser library call so we can surface a
      specific actionable error message. */
@@ -175,7 +175,7 @@ export async function parseMobi(
       // Drop the leading title heading so it isn't spoken twice (title beat +
       // body opening line) — see {@link stripTitleHeading}.
       const body = tagHesitantDialog(
-        tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(html, chTitle)))),
+        tagExcitedDialog(tagShoutingDialog(stripHtml(stripTitleHeading(html, chTitle), opts.extractorVersion))),
       );
       if (!body) continue;
       chapters.push({

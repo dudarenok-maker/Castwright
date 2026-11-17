@@ -317,3 +317,19 @@ describe('parseMobi — titleSynthesized wiring (#3628)', () => {
     expect('titleSynthesized' in out.chapters[1]).toBe(false);
   });
 });
+
+/* #4217 — the extractorVersion option is threaded to stripHtml; version 1 is
+   the pre-#4217 extraction, so passing it explicitly changes nothing. */
+describe('parseMobi — extractorVersion option (#4217)', () => {
+  it('extractorVersion: 1 gives the same body as no option', async () => {
+    chaptersMock = [{ id: 'c1', html: '<div>A</div><div>B</div>' }];
+    const plain = await parseMobi(mobiBufferWithEncryption(0), { fileName: 'book.mobi' });
+    const v1 = await parseMobi(mobiBufferWithEncryption(0), {
+      fileName: 'book.mobi',
+      extractorVersion: 1,
+    });
+    expect(plain.chapters).toHaveLength(1);
+    expect(v1.chapters.map((c) => c.body)).toEqual(plain.chapters.map((c) => c.body));
+    expect(v1.sourceText).toBe(plain.sourceText);
+  });
+});

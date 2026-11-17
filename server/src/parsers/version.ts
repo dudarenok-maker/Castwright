@@ -15,3 +15,15 @@
    - 2: subtitle merge in text/markdown, EPUB <h1>/<h2> body fallback,
         PDF outline-based title replacement. */
 export const CHAPTER_TITLE_PARSER_VERSION = 2;
+
+/* Which extraction a manuscript's source file is read with (#4217). Unlike
+   `CHAPTER_TITLE_PARSER_VERSION` this stamp PINS: a book keeps the extraction
+   it was imported with, because persisted sentence offsets index into the
+   extracted text. The value is threaded as the `extractorVersion` option from
+   `parseManuscript` down to `stripHtml` and the raw-zip EPUB reader.
+
+   History:
+   - 1: the extraction before #4217. Implicit when the field is absent: only
+        `</p>`, `<br>` and `<hr>` break, and raw-zip EPUB `href`/`src` values
+        are not entity-decoded. */
+export const LEGACY_EXTRACTOR_VERSION = 1;
