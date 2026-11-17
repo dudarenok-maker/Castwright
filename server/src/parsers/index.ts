@@ -41,10 +41,10 @@ export async function parseManuscript(input: {
       and produces sporadic "Invalid/missing file" errors. Other parsers
       ignore this field. */
   sourcePath?: string;
-  /** Which extraction behaviour to use for EPUB and MOBI (see
-      `parsers/version.ts`). Absent behaves as version 1. `parseText` and
+  /** Which extraction behaviour to use for EPUB and MOBI. Required: every
+      caller decides (#4217); see `parsers/version.ts`. `parseText` and
       `parsePdf` ignore it. */
-  extractorVersion?: number;
+  extractorVersion: number;
 }): Promise<ParsedManuscript> {
   if (input.text !== undefined && !input.buffer) {
     const ext = extOf(input.fileName);

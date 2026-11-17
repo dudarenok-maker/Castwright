@@ -347,6 +347,7 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
       ? await parseManuscript({
           text: buffer.toString('utf8'),
           fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+          extractorVersion: extractorVersionOf(state),
         })
       : await parseManuscript({
           buffer,
@@ -2102,6 +2103,7 @@ async function prepareReparse(
       parsed = await parseManuscript({
         text: buffer.toString('utf8'),
         fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
     } else {
       parsed = await parseManuscript({

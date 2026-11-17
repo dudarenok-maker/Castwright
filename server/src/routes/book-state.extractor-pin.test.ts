@@ -132,3 +132,16 @@ describe('implicit title refresh uses the book own stamp', () => {
     expect(parseManuscriptMock).toHaveBeenCalledWith(expect.objectContaining({ sourcePath: expect.any(String), extractorVersion: 2 }));
   });
 });
+
+describe('PUT /state whitelist never moves the stamp', () => {
+  /* I2 — mutation: let the `state` slice copy `manuscriptExtractorVersion` from
+     the patch and this reads 1. */
+  it('I2: a state patch carrying manuscriptExtractorVersion 1 leaves a stamped-2 book at 2', async () => {
+    writeState({ manuscriptExtractorVersion: 2 });
+    const res = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'state', patch: { title: TITLE, manuscriptExtractorVersion: 1 } });
+    expect(res.status).toBe(200);
+    expect(readState().manuscriptExtractorVersion).toBe(2);
+  });
+});

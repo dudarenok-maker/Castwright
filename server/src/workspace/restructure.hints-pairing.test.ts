@@ -117,6 +117,7 @@ describe('every shipped sample pairs with its state under the title check', () =
       const parsed = await parseManuscript({
         buffer: readFileSync(join(dir, state.manuscriptFile)),
         fileName: state.manuscriptFile,
+        extractorVersion: 1,
       });
       expect(() =>
         assertHintsPairWithState(
