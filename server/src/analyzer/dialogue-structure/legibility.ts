@@ -1,4 +1,5 @@
 import type { LanguageConventions } from './types.js';
+import { conventionsFor } from './lang/index.js';
 
 const DASH = String.raw`(?:&mdash;|&ndash;|[-–—])`;
 /* A dialogue turn opening mid-paragraph: sentence-final punctuation (or a
@@ -38,4 +39,60 @@ export function measureChapterLegibility(
     if (n > worst) worst = n;
   }
   return worst;
+}
+
+/** Merged-turn count at or above which a chapter's paragraph structure is
+    treated as degraded. PROVISIONAL (owner decision 3, 2026-11-15): calibrated
+    on one real clean ru book plus the authored fixtures (#2267 §2.2). The
+    library-wide false-positive scan of a new Group B on-box register row
+    (added at the end of the #2254 chain) is the calibration that will confirm
+    it; the provisional label is dropped only when that scan finds no breach in
+    any scanned book AND at least one clean, dialogue-dense ru dash book
+    (owner decisions 13, 15, 17, 21). */
+export const MERGED_TURNS_DEGRADED = 10;
+
+/** Languages the degradation notice applies to: ru only (Decision 4). es and fr
+    are uncalibrated and stay operator-log only (TURN_IN_PARAGRAPH needs
+    whitespace after the dash, so `—Hola —dijo—.` can never match). uk/bg and
+    other Cyrillic books reach it only through detection's >= 30% Cyrillic rule
+    and sit under the provisional label. Mirrored in `src/lib/` for the confirm
+    view. */
+export const NOTICE_LANGUAGES: readonly string[] = ['ru'];
+
+/** `true` when the worst paragraph has >= MERGED_TURNS_DEGRADED merged turns,
+    `false` when measured and below it, `undefined` when not measured (absent
+    is not clean, #2267): no language, a language outside NOTICE_LANGUAGES, or
+    one with no conventions table. The base tag is normalised the way
+    `conventionsFor` does it, so `ru-RU` measures like `ru`. */
+export function isParagraphDegraded(
+  body: string,
+  language: string | null | undefined,
+): boolean | undefined {
+  if (!language) return undefined;
+  const base = language.toLowerCase().split(/[-_]/u)[0];
+  if (!NOTICE_LANGUAGES.includes(base)) return undefined;
+  const conventions = conventionsFor(language);
+  if (!conventions) return undefined;
+  const worst = measureChapterLegibility(body, conventions);
+  return worst === undefined ? undefined : worst >= MERGED_TURNS_DEGRADED;
+}
+
+/** A fresh RegExp for the turn-in-paragraph pattern on every call, so no
+    caller shares `lastIndex` on a `g` regex. */
+export function turnInParagraphRegex(): RegExp {
+  return new RegExp(TURN_IN_PARAGRAPH.source, TURN_IN_PARAGRAPH.flags);
+}
+
+/** Total turn openers inside paragraphs over the chapter (a sum, unlike
+    `measureChapterLegibility`'s maximum). Counted per `
+`-split line, so a
+    match never spans a line break and the result is always >= the ru maximum.
+    Takes no conventions: hidden-turn counts for the scanner and runner. */
+export function countTurnOpeners(body: string): number {
+  let total = 0;
+  for (const paragraph of body.split('\n')) {
+    if (!paragraph.trim()) continue;
+    total += (paragraph.match(TURN_IN_PARAGRAPH) ?? []).length;
+  }
+  return total;
 }
