@@ -45,9 +45,9 @@ describe('slugKeepingTake', () => {
     expect(slugKeepingTake(prev2, audioRoot, 2, '02-new')).toBe('02-new');
   });
 
-  it('returns computed when prev slug equals computed, without needing the audio root (red if the equality short-circuit is removed and the probe throws/misbehaves)', () => {
-    const missing = join(audioRoot, 'does-not-exist');
-    expect(slugKeepingTake(prev2, missing, 2, '02-old')).toBe('02-old');
+  it('returns the shared slug when prev equals computed and a take exists (red if the keep branch returns anything but prev.slug)', () => {
+    touch('02-old.mp3');
+    expect(slugKeepingTake(prev2, audioRoot, 2, '02-old')).toBe('02-old');
   });
 
   it('returns computed when no previous chapter has that id (red if the lookup ignores id)', () => {

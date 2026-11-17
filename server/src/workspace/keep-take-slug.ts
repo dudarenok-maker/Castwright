@@ -26,7 +26,7 @@ export function slugKeepingTake(
   computedSlug: string,
 ): string {
   const prev = prevChapters.find((c) => c.id === id);
-  if (!prev || typeof prev.slug !== 'string' || prev.slug === '' || prev.slug === computedSlug) {
+  if (!prev || typeof prev.slug !== 'string' || prev.slug === '') {
     return computedSlug;
   }
   if (chapterAudioExists(audioRoot, prev.slug)) return prev.slug;
