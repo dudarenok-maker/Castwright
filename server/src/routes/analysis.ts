@@ -113,12 +113,14 @@ import type {
   Stage1ChapterOutput,
 } from '../handoff/schemas.js';
 import {
+  audioDir,
   castJsonPath,
   changeLogJsonPath,
   manuscriptEditsJsonPath,
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
+import { slugKeepingTake } from '../workspace/keep-take-slug.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restructure-gate.js';
 import { rollManuscriptEdits, type RollSnapshot } from '../workspace/edits-roll.js';
@@ -8609,7 +8611,15 @@ export async function runMainAnalyzerJob(
                   (getManuscript(job.manuscriptId) ?? record).chapterHints.map((h) => ({
                     id: h.id,
                     title: h.title,
-                    slug: `${String(h.id).padStart(2, '0')}-${slug(h.title)}`,
+                    /* A chapter with a live take keeps its slug when its title
+                       changes, so the take is not orphaned (#4230); a chapter
+                       without one gets the recomputed slug. */
+                    slug: slugKeepingTake(
+                      prev.chapters,
+                      audioDir(writeDir),
+                      h.id,
+                      `${String(h.id).padStart(2, '0')}-${slug(h.title)}`,
+                    ),
                     duration: durationPlaceholder(),
                     excluded: prevExcludedById.get(h.id) || undefined,
                     held: prevHeldById.get(h.id) || undefined,
@@ -10746,7 +10756,15 @@ export async function runSubsetAnalyzerJob(
                   (getManuscript(job.manuscriptId) ?? record).chapterHints.map((h) => ({
                     id: h.id,
                     title: h.title,
-                    slug: `${String(h.id).padStart(2, '0')}-${slug(h.title)}`,
+                    /* A chapter with a live take keeps its slug when its title
+                       changes, so the take is not orphaned (#4230); a chapter
+                       without one gets the recomputed slug. */
+                    slug: slugKeepingTake(
+                      prev.chapters,
+                      audioDir(writeDir),
+                      h.id,
+                      `${String(h.id).padStart(2, '0')}-${slug(h.title)}`,
+                    ),
                     duration: durationPlaceholder(),
                     excluded: prevExcludedById.get(h.id) || undefined,
                     held: prevHeldById.get(h.id) || undefined,
