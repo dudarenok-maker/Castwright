@@ -7,6 +7,7 @@
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
 - **Castwright now tells you when a Russian book's dialogue is run together.** If the imported text packs many lines of dialogue into one paragraph, the import screen names those chapters and suggests that a different copy or format of the book may give a better result, and the manuscript view marks each of those chapters, so books already in your library are covered too.
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
+- **A link to chapter 3 on the Generate page now keeps its chapter.** The address keeps `?chapter=3`, so the link opens at that chapter, and so does reloading it, while a plain Generate link still opens at the top.
 - **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
 - **Opus books show their progress.** Reopening an Opus book now shows the chapters you've already made as done, the Library card counts them too, and a chapter that only has an earlier take left over is no longer marked finished.
 - **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, a cover, or a chapter's loudness or waveform data, the half-written file is cleaned up instead of lingering.

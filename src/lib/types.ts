@@ -1090,6 +1090,10 @@ export type Stage =
       view: View;
       currentChapterId: number;
       openProfileId: string | null;
+      /** #4212 — true only when the chapter was named by a numeric `?chapter=` in the URL,
+       *  so `stageToHash` keeps `?chapter=3`. Absent means false (stages persisted before
+       *  #4212 have no key). */
+      chapterExplicit?: boolean;
     }
   | { kind: 'voices' }
   | { kind: 'changelog' }
