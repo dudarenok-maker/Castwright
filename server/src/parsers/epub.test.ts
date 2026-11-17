@@ -536,6 +536,18 @@ describe('parseEpub — XML-entity hrefs in the raw-zip reader (#4217)', () => {
     expect(v2.chapters.map((c) => c.body)).toEqual(['Plain prose, nothing odd.', 'Some prose with an empty link in it.']);
   });
 
+  /* X5 mutation: decode the NCX src twice (`decodeXmlEntities(decodeXmlEntities(m[2]))`).
+     The NCX src for the entry `a&amp;b.xhtml` is `a&amp;amp;b.xhtml`; a second
+     decode yields `a&b.xhtml`, which misses the chapter path and loses its title. */
+  it('X5: NCX src of an entry literally named a&amp;b.xhtml is decoded once', async () => {
+    const buf = await buildEpub([plain, emptyHref], {
+      fileNames: ['a&amp;b.xhtml', 'c.xhtml'],
+      navLabels: ['Opening', 'Closing'],
+    });
+    const v2 = await parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 2 });
+    expect(v2.chapters.map((c) => c.title)).toEqual(['Opening', 'Closing']);
+  });
+
   it('X3: NCX labels still match the decoded chapter paths at version 2', async () => {
     const buf = await buildEpub([plain, emptyHref], { fileNames, navLabels: ['Opening', 'Closing'] });
     const v2 = await parseEpub(buf, { fileName: 'amp.epub', extractorVersion: 2 });
