@@ -8,6 +8,7 @@
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **A link to chapter 3 on the Generate page now keeps its chapter.** The address keeps `?chapter=3`, so the link opens at that chapter, and so does reloading it, while a plain Generate link still opens at the top.
 - **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
+- **Reject restores the original take correctly on M4A and Opus books.** The original recording now comes back in its own format instead of being misnamed.
 - **Opus books show their progress.** Reopening an Opus book now shows the chapters you've already made as done, the Library card counts them too, and a chapter that only has an earlier take left over is no longer marked finished.
 - **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, a cover, or a chapter's loudness or waveform data, the half-written file is cleaned up instead of lingering.
 - **The right voice on dialogue in books with emoji.** In Russian, Spanish and French dash-dialogue books where several turns were run together into one paragraph, an emoji earlier in the paragraph no longer gives a line the wrong voice. Ordinary symbols like ★, ♥ and © were never the problem.
