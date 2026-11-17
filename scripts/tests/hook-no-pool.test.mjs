@@ -65,7 +65,8 @@ const ALLOWED_LINE_PATTERNS = [
   /^printf '%s\\n' "\$PUSH_REFS" \| node scripts\/guard-protected-push\.mjs "\$@" \|\| exit 1$/,
   /^printf '%s\\n' "\$PUSH_REFS" \| node scripts\/guard-commit-subjects\.mjs "\$@" \|\| exit 1$/,
   // ops-71 (#3047): the census is ONE Win32_Process query (no pool) that
-  // appends a log entry and kills only provably-orphaned trees; up to one
+  // appends a log entry and, from pre-push, kills only orphaned AND stalled-rate
+  // trees whose argv is under the pushing checkout (#4222); up to one
   // retry, on either a transient empty result (#3238) or a spawnSync timeout
   // (#3331) — never both in the same run, so at most 2 spawn calls total;
   // its own CLI always exits 0, so it is never itself a source of a blocked

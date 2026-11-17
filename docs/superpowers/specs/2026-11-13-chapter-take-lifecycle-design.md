@@ -232,7 +232,7 @@ everything else, which this revision does (R7-1 to R7-13). Every anchor was re-c
 | Gap: R6-6's canonical key does not normalise Unicode | **R7-11.** Stated as out of scope. On darwin, an NFC display name and an NFD name on disk miss each other in the set, so the fence fails open for that book. Listed under Remaining (§5.A Ownership) |
 | Gap: a queued pass starts after the in-flight pass's token is released, so a restructure can renumber `justFinalizedSlugs` first | **R7-12.** A pending entry records its chapters by `uuid`, and maps them to slugs from the chapters it re-reads when it starts. A chapter that no longer exists is skipped (§5.A Scoring) |
 | Gap: the E7 test's parenthetical | Rewritten under E8. The test states that no pass is in flight, so the partial trigger starts at once. It asserts the call count, so it fails whatever `keep` the mutation passes |
-| Notes: row Q's rename-away half; #4230 | **R7-13.** Row Q records both halves from this box (NTFS): with ffmpeg holding a hard-link snapshot, renaming a new take over the live name succeeded, **and** renaming the live file away to `.previous` succeeded. With ffmpeg holding the live file directly, the controls failed EPERM and EBUSY. Commit step 5 starts with a rename-away, so the claim that the m4b leaves the ffmpeg-holder list once #4224 merges rests on the second half. #4230 is cited in §8.3, Remaining and `refs:` (OD7, §7 Phase 4, §8.3) |
+| Notes: row Q's rename-away half; #4230 | **R7-13.** Row Q records both halves from this box (NTFS): with ffmpeg holding a hard-link snapshot, renaming a new take over the live name succeeded, **and** renaming the live file away to `.previous` succeeded. With ffmpeg holding the live file directly, the controls failed EPERM and EBUSY. Commit step 5 starts with a rename-away, so the claim that the m4b leaves the ffmpeg-holder list once #4224 merges rests on the second half. #4230 is described in the W16 row (§2) and §4.3, and cited in `refs:` |
 | Questions 1–3 | Q1's first half answered by E8. Q1's second half (queued passes) settled by E8 too. Q2 by R7-2 and R7-3; Q3 by R7-4 and R7-5 (§8.1) |
 
 ## Decisions made in revision 7 (confirmed by the owner 2026-11-17, with revision 10 as a whole)
@@ -310,7 +310,7 @@ every Minor, which this revision does (R6-1 to R6-12). Every anchor was re-check
 | C2 (m): a merged re-run carries one `runModelKey`, so one side's characters audition at the other side's tier | **R6-1.** Triggers merge only when their `runModelKey` is equal. A trigger at another key queues its own pending pass. A merged pass reconciles only when one of its triggers is a render's, against the OR of the render triggers' `keep` (§5.A Scoring). |
 | C3 (m): plan-time `parts` record lost parts on ordinary reorders and merges; `drop`'s only-copy rule is re-derived at replay; `land` leaves foreign audio live | **R6-2.** `clear-stale-previous` lists slugs only and probes their `.previous.*` parts **when it runs**, as today's Phase 1c does, so a part another group moved is never "lost". `drop` records `onlyCopy` per slug **at plan time**, and replay obeys it. `land` moves each source's segments **first**. Until a source's segments have landed, any part found at its target is foreign and is quarantined, audio included (§5.A Restructure). |
 | C4 (m): a stuck journal's sentence and class are wrong for stamp/lock failures, corrupt parts and an unparseable book journal; splice and QA repair cannot answer 409 | **R6-3.** A replay failure has two classes. Only a **rename** failure blocks a slug with 409 `take_repair_pending`. A **stamp or lock** failure answers the existing curated 500 (and is retryable cause 3 at a commit's step 0), which reconciles the State-write sites table with R5-3/R5-4. The `metadata` group skips an unparseable part, as today's Phase 3 does, and records it. An unparseable journal of either kind is **quarantined**, not fail-closed. Splice and QA repair refuse with a `chapter_failed` frame carrying the code. R5-4's sentence no longer promises an automatic finish (§5.A Ownership, Restructure, State-write sites). |
-| C5 (m): the analysis persist rebuilds `state.json`'s chapters and drops every take field; it is in no inventory | **R6-4.** The analysis persist (`routes/analysis.ts:8602-8620`, subset job `:10739-10755`) is **W16**, a D3 writer. It carries `TAKE_STATE_FIELDS` across its chapter rebuild through `carryServerOwnedChapterFields`, the PUT's own function, from the fresh state it already reads under `book` → `state-json`. `healTakeFields` keeps "never `audioTakeId`". R5-8's "slugs now move only through restructure" is corrected: the persist also recomputes slugs, which is pre-existing and listed in §8.3 (§2.2, §4.3). |
+| C5 (m): the analysis persist rebuilds `state.json`'s chapters and drops every take field; it is in no inventory | **R6-4.** The analysis persist (`routes/analysis.ts:8604-8630`, subset job `:10749-10775`) is **W16**, a D3 writer. It carries `TAKE_STATE_FIELDS` across its chapter rebuild through `carryServerOwnedChapterFields`, the PUT's own function, from the fresh state it already reads under `book` → `state-json`. `healTakeFields` keeps "never `audioTakeId`". R5-8's "slugs now move only through restructure" is corrected: the persist also recomputes slugs, which is pre-existing; the persist keeps the slug of a chapter with a live take (#4230; the W16 row in §2 and §4.3). |
 | C6 (m): the PUT can still orphan a take (an omitted chapter, `excluded`, a map change at cursor `planned`) | **R6-5.** A PUT that sends `chapters` replays book journals first (it joins R5-5's whole-book writers). It answers 409 `slug_bound` when it omits a chapter that has a take on disk, or changes a matched chapter's `excluded`. A relabel's "did `state.json` land?" no longer compares chapter maps: the restructure's state write stamps the journal's id (`relabelJid`), which every later writer carries through (§4.3, §5.A Restructure). |
 | C7 (m): R5-7's set needs a `finally` and a canonical key; backup restore re-locates the book without its handle | **R6-6.** Registration in the set is removed in a `finally`. The key is the canonical directory (resolved, `/`-separated, lower-cased on win32 and darwin), and a `BookHandle`'s directory is canonicalised the same way. Backup restore threads its `withBookOp` handle into `restoreBackup`, which uses the handle's directory instead of locating the book again (§5.A Ownership). |
 | C8 (m): R5-5's replay runs under the workspace-wide path claim | **R6-7.** The bundle overwrite replays **before** it takes `withBookPathClaim`: under book-op in the `withBookOp` branch, and under its registered `UnaddressedBookHandle` in the other. Per-slug journals on slugs the bundle replaces are not replayed; they are discarded with the take, and lazy migration is skipped for those slugs (§5.A Ownership). |
@@ -996,7 +996,7 @@ Book-level scoring files (centroids, pending-attempts) are not take parts (§4.3
 | W13 | **Bundle-import overwrite** | `import/scan-import-folder.ts:518-535` | `book-op`; `state-json` around the rename loop; refused while jobs run | Renames the bundle's zip-named audio, segments and peaks over live files and **leaves every other local part** (`:15-19`): a mixed take (N11). The ids it brings are not checked. |
 | W14 | **Backup restore** | `routes/backup.ts:37-55` → `workspace/auto-backup.ts:209-270` | `book-op`; refused while jobs run | Swaps an old `state.json` in, take fields included, while the audio on disk stays current (N12). |
 | W15 | **PUT `/state` chapter passthrough** | `workspace/chapter-uuid.ts:121-170` (`carryServerOwnedChapterFields`) | `book-op` → `book` → `state-json` | Only the five fields in `SERVER_OWNED_CHAPTER_FIELDS` come from disk. Any new take field (`audioTakeId`) would **pass through from the client** (N13). |
-| W16 | **Analysis persist chapter rebuild** (revision 6, C5) | `routes/analysis.ts:8602-8620` (main job), `:10739-10755` (subset job), inside `updateStateAtDir` (`:8580`, `:10721`) | A long job: no book-op; `book` → `state-json` around the rebuild | Rebuilds `chapters` from the record's hints. It recomputes every `slug` with restructure's formula (`restructure.ts:127`), carries only `excluded`, `held`, `uuid` and `titleOverridden`, and resets `duration` to the placeholder. Every other take field is dropped and left for the heal, which never fills `audioTakeId`. Where a hint's title differs from the slug's source, the chapter's take is left at its old slug (pre-existing; §8.3, #4230). |
+| W16 | **Analysis persist chapter rebuild** (revision 6, C5) | `routes/analysis.ts:8604-8630` (main job), `:10749-10775` (subset job), inside `updateStateAtDir` (`:8582`, `:10731`) | A long job: no book-op; `book` → `state-json` around the rebuild | Rebuilds `chapters` from the record's hints. It recomputes a `slug` with restructure's formula (`restructure.ts:127`) only for a chapter with no live take (below), and carries only `excluded`, `held`, `uuid` and `titleOverridden`, and resets `duration` to the placeholder. Every other take field is dropped and left for the heal, which never fills `audioTakeId`. The persist keeps the previous chapter's slug (matched by `id`) when a live take exists at it, through `slugKeepingTake` (`server/src/workspace/keep-take-slug.ts`), and recomputes it only for a chapter with no live take (#4230). |
 
 ### 2.3 Readers
 
@@ -1245,9 +1245,8 @@ rule, the rule is stated over the list, never as a second list:
     the other whole-book writers do (R5-5), and refuses with `take_repair_pending` while a book
     journal stays stuck on a move-step failure.
   - Revision 5 said "slugs now move only through restructure". That is not true: the analysis
-    persist (W16) recomputes every slug. Where a re-analysis retitles a chapter whose take is on disk,
-    `main` leaves the take at the old slug. That is pre-existing, and it is listed in §8.3 with the
-    decision it owes.
+    persist (W16) recomputes the slug for a chapter with no live take. For a chapter with a live take
+    it keeps the slug (#4230), so the take is never left behind by a retitle.
 - **Restructure's carry** is a rule over the list, and keeps today's behaviour: `duration` is
   carried unconditionally (`restructure.ts:394`); every other member, `audioTakeId` included, is
   carried only when the content is unchanged (`restructure.ts:409-416`).
@@ -1268,12 +1267,13 @@ rule, the rule is stated over the list, never as a second list:
 
   So:
   - a re-analysis still clears every chapter's failure stamps, as on `main`, where the rebuilt
-    chapters never carry them (`analysis.ts:8602-8620,10739-10755`). That is wanted: a re-analysis
+    chapters never carry them (`analysis.ts:8604-8630,10749-10775`). That is wanted: a re-analysis
     can change the cast that a failure came from, so the old failure no longer describes the
     chapter;
   - an unmatched chapter keeps the rebuild's own values, its placeholder `duration` included;
-  - a chapter whose slug the persist changes matches nothing, and its members drop, as today (#4230,
-    §8.3);
+  - a chapter with a live take keeps its slug (#4230), so it matches and its take fields carry; a
+    chapter with no live take whose slug changes still matches nothing, and its members drop, which
+    is harmless because it has no take;
   - the carry writes only values it read in the same locked read, so it can never fill a member
     from the wrong take.
 
@@ -2655,12 +2655,13 @@ as today. A crash in the window is undone the same way by replay.
     GET-side edits/cache reconciliation (`book-state.ts:598-606`, the filter at `:660-675`) covered it. It does not: that
     reconciliation drops edits by sentence-id range, not by chapter renumbering (pass 4). The claim
     is withdrawn, and the gap is listed under Remaining as a pre-existing, accepted residual whose
-    fix is #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) still says
+    fix was #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) said
     partial state "is recoverable via the reconciliation filter". #4224 (merged at `33f3647c`)
     corrected only its anchor, to `book-state.ts:660-675`, where the filter keeps an edit whose id
     is still in the cache or above its maximum and drops the rest, by sentence-id range. That does
-    not recover a renumbering, so the claim is still false. Phase 4 corrects the claim itself,
-    unconditionally (pass 7, J13).
+    not recover a renumbering, so the claim was false. PR #4313 (#4227) has since rewritten that
+    comment (pass 7, J13).
+    **Update (2026-11-17, #4227):** narrowed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
   - Pending entries are not reconciled by replay. A server-recorded entry carries `chapterUuid` and
     its render times, so `entryMatchesChapter` refuses it on the wrong chapter
     (`revisions-store.ts:199-203`, widened as in Retry recognition).
@@ -3091,8 +3092,10 @@ an open question of this design):
   `manuscript-edits.json` keyed to the pre-restructure chapters. This is pre-existing on `main`, and
   it is **not** covered by the GET-side reconciliation, which drops edits by sentence-id range
   (revision 5 withdraws revision 4's claim). The design keeps it from spreading: a parked edits
-  write skips the cache rebuild (§5.A Restructure). Closing it is #4227's own design pass, outside
-  this design (§8.3);
+  write skips the cache rebuild (§5.A Restructure). Closing it was #4227's own design pass, outside
+  this design (§8.3). **Update (2026-11-18, #4227):** narrowed by #4227's edits journal, which
+  replays the edits rewrite at the next restructure or at server start. A failed edits save followed
+  by a script edit before the next chapter change still leaves the gap, as on `main`;
 - **a file the OS refuses to rename under every name** keeps the slugs a stuck journal names
   blocked, and only those, until the user removes the cause and tries again (R5-3, R5-4, R6-3);
 - **stray Qwen tiers after a pass that does not reconcile** (E7, E8, E9, E11, E13): a tier that a
@@ -3135,9 +3138,7 @@ an open question of this design):
   fails too;
 - **an unparseable journal** quarantines the takes it was moving, so those chapters read unrendered
   until a person restores them from `.orphaned/` (R6-3). Journals are written atomically, so only
-  damage from outside the protocol produces this;
-- **a re-analysis that retitles a rendered chapter** leaves its take at the old slug, as on `main`
-  (W16; §8.3; #4230).
+  damage from outside the protocol produces this.
 
 **Blast radius (F24; corrected).** About **66–72 non-test server files** (revision 8 adds two, revision 10 one), plus tests. Revision 4 adds `book-jobs.ts`, `book-op-lock.ts`, `chapter-job-coordination.ts` and `embeddings-io.ts`, and drops `verdicts-io.ts`. Revision 5 drops `chapter-job-coordination.ts` again (E5: no exit hook) and adds `test-utils/guard-scan.ts` (rule 3's resolver). Its other changes land in files already listed: `audio/segments-io.ts` (the shared classifier predicate), `routes/chapters-restructure.ts` (no cache rebuild after a parked edits write) and `import/scan-import-folder.ts` (the handles, R5-7). Revision 6 adds `routes/analysis.ts` (W16's carry, R6-4). Its other changes land in files already listed: `routes/generation.ts` (trigger `source`, the per-key pending list, no reconcile for partial passes), `routes/backup.ts` and `workspace/auto-backup.ts` (the handle), `routes/book-state.ts` (the PUT's `chapters` checks and replay), `routes/chapters-restructure.ts` and `workspace/restructure.ts` (`relabelJid`, the plan-driven pending-entry reconcile, step 0's `reconcileSlug`), `workspace/scan.ts` (`relabelJid` in the state type; the heal's read-then-check order) and `audio/segments-io.ts` (the name set as a predicate input). Revision 7 adds no file. Its changes land in files already listed: `routes/generation.ts` (the at-once rule, E8; pending entries by `uuid`, R7-12), `workspace/book-op-lock.ts` (`{ backfill: false }`, R7-8), `workspace/chapter-uuid.ts` (the field-list parameter, R7-6), `routes/chapter-splice.ts` and `routes/chapter-qa-repair.ts` (curated frames, R7-5) and `routes/chapters-restructure.ts` (step 0's slug plan, R7-3). Revision 8 added `routes/chapter-job-coordination.ts` back (`hasInFlightSpliceForBook`, E9) and `workspace/book-state-update.ts` (the canonical directory key, R8-4). Revision 9 drops `routes/chapter-job-coordination.ts` again (E11 reads the leaf gate instead) and adds `workspace/book-dir-key.ts` (new, R9-6), so the count is unchanged. #4234 merged, so its files no longer join (R7-5). Revision 10 adds `workspace/take-fields.ts` (new, R10-2); its other changes land in files already listed: `routes/generation.ts` (E13's start sample), `import/scan-import-folder.ts` (E14's supersession of a carried drop journal) and `workspace/scan.ts` (the imports from the leaf). Revision 11 adds no file: E17's re-check lands in `routes/generation.ts`'s chapter-start span, and E18's Accept and drop phases in `workspace/chapter-take.ts`. Revision 8's other changes land in files already listed: `routes/generation.ts` (the resume re-check, now E11's `isAnyGenerationActive()` and epoch, the synchronous hand-off, chapters without a `uuid`), `workspace/restructure.ts` (the presence OR, R8-7), `routes/chapters-restructure.ts` (step 0 outside `book`, R8-3), `workspace/auto-backup.ts` (releasing `book`, the pre-restore `duration`, R8-3), `workspace/scan.ts` (the heal's key and set check, R8-4), `import/scan-import-folder.ts` (carried journals replayed before the claim, R8-5) and `workspace/chapter-uuid.ts` (`carryTakeStateFields`):
 
@@ -3951,8 +3952,8 @@ first.
    and the restructure refusal (R5-3, R5-4); no cache rebuild after a parked edits write;
    `buildAudioOps`' presence test as `audioRenderedAt` **or** a take on disk (R8-7); the restructure
    sentence for every code (R8-2, J12); the comment at `chapters-restructure.ts:605-609` corrected,
-   unconditionally. #4224 moved its anchor to `book-state.ts:660-675`, but its claim that partial
-   state "is recoverable via the reconciliation filter" is still false, because that filter drops
+   unconditionally (already done by #4313, #4227). #4224 moved its anchor to `book-state.ts:660-675`, but its claim that partial
+   state "is recoverable via the reconciliation filter" was false, because that filter drops
    edits by sentence-id range and does not recover a renumbering (#4227, J13).
 2. Reject and `restore-unrecorded` refuse `book_busy` during an export (OD7).
 3. On-box register rows on all three surfaces:
@@ -4057,29 +4058,24 @@ listed both as not named (revision 10 changelog), and revision 11 moves them her
 - **ffprobe tolerance:** the header estimate usually falls through to mtime, so it is replaced by a
   full decode (§6.1 step 2).
 
-### 8.3 Outside this design (pre-existing on `main`, each with its own ticket)
+### 8.3 Outside this design (pre-existing on `main`, with its own ticket)
 
-Neither item is an open question of this design. Each is a gap that exists on `main` today, and
-this design neither closes it nor widens it. Each has its own ticket, and that ticket holds the
-decision it owes. In this design both are accepted residuals (§5.A Remaining).
+The one item here is not an open question of this design. It was a gap that existed on `main`, and
+this design neither closes it nor widens it. It shipped through its own ticket, #4227's edits
+journal, which narrowed it; one residual remains (below). In this design it is an accepted
+residual (§5.A Remaining).
 
-- **The edits/cache gap after restructure's state write (design pass owed, #4227).** A crash, or a
+- **The edits/cache gap after restructure's state write (shipped via #4227's edits journal, narrowed; one gap remains).** A crash, or a
   parked failure, between restructure's `state.json` write and its `manuscript-edits.json` write
   leaves the saved sentences keyed to the pre-restructure chapters. `main` has the same gap after a
   crash there, and the GET-side reconciliation does not close it (§5.A Restructure). The decision
   owed is which behaviour is right: replaying the edits rewrite from a journal (its payload is every
-  sentence), marking the saved sentences stale, or discarding them. #4227 holds those three options.
+  sentence), marking the saved sentences stale, or discarding them. #4227 chose the journal.
   This design only keeps the cache rebuild from compounding it.
-- **A re-analysis that retitles a rendered chapter (design pass owed, #4230; new in revision 6).** The
-  analysis persist (W16) recomputes every slug from the hints' titles with restructure's formula
-  (`restructure.ts:127`). Where a hint's title differs from the slug's source, the chapter's take
-  is left at its old slug, bound to nothing. That is pre-existing on `main`; revision 6's carry
-  (R6-4) neither closes nor widens it. The decision owed is which behaviour is right: keep a matched
-  chapter's disk slug when it has a take (so title and slug can diverge, as R5-8 already lets them
-  for the PUT), or move the take with the new slug through `relabelTakes` (a restructure inside an
-  analysis job, which holds no book-op today). That decision is filed as #4230, which holds both
-  options. Revision 7's carry (R7-6) matches on `id` and `slug`, so a chapter whose slug changes
-  drops its take fields; that fits either option.
+  **Remaining gap:** a failed edits save followed by a script edit before the next chapter change
+  still leaves the gap, as on `main` (the client's save changes the edits file's sha, so the
+  journal is discarded rather than applied).
+  **Update (2026-11-17, #4227):** narrowed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
 
 ### 8.4 On-box acceptance owed (not a design question)
 

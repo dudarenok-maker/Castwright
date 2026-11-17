@@ -41,6 +41,10 @@ export async function parseManuscript(input: {
       and produces sporadic "Invalid/missing file" errors. Other parsers
       ignore this field. */
   sourcePath?: string;
+  /** Which extraction behaviour to use for EPUB and MOBI. Required: every
+      caller decides (#4217); see `parsers/version.ts`. `parseText` and
+      `parsePdf` ignore it. */
+  extractorVersion: number;
 }): Promise<ParsedManuscript> {
   if (input.text !== undefined && !input.buffer) {
     const ext = extOf(input.fileName);
@@ -57,14 +61,21 @@ export async function parseManuscript(input: {
     return parsePdf(input.buffer, { fileName: input.fileName });
   }
   if (format === 'epub' || input.mimeType === 'application/epub+zip') {
-    return parseEpub(input.buffer, { fileName: input.fileName, sourcePath: input.sourcePath });
+    return parseEpub(input.buffer, {
+      fileName: input.fileName,
+      sourcePath: input.sourcePath,
+      extractorVersion: input.extractorVersion,
+    });
   }
   if (
     format === 'mobi' ||
     input.mimeType === 'application/x-mobipocket-ebook' ||
     input.mimeType === 'application/vnd.amazon.ebook'
   ) {
-    return parseMobi(input.buffer, { fileName: input.fileName });
+    return parseMobi(input.buffer, {
+      fileName: input.fileName,
+      extractorVersion: input.extractorVersion,
+    });
   }
   if (format === 'markdown' || format === 'plaintext') {
     return parseText(input.buffer.toString('utf8'), { fileName: input.fileName, format });

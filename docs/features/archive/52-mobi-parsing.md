@@ -76,6 +76,13 @@ owner: null
   `openapi.yaml:1497` / `:1575`, and the `inferFormat` map in
   `src/lib/api.ts:65` all carry `'mobi'`. Any new format must touch all
   five.
+- **Extractor version pin (#4217).** A book whose `state.json` has no
+  `manuscriptExtractorVersion` is re-read implicitly (hydrate, title refresh,
+  restructure, samples) with version 1, byte for byte. New books, and an
+  explicit re-parse or manuscript replace, get version 2 and the stamp: named
+  closers break. Pinned by `parsers/extractor-version.parity.test.ts`,
+  `store/manuscripts.extractor-pin.test.ts` and
+  `routes/book-state.extractor-pin.test.ts`.
 
 ## Test plan
 

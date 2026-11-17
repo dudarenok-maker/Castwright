@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**82 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**83 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
+> **Last change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
 >
 > **Previous change: 2026-11-13 (#4163), 80 → 81.** Row **A126** (a cold model load learns its own weights, a warm op learns nothing: the per-op VRAM footprint fix) added. Group A 45 → 46. `next-id` bumped A125 → A127 in the same change; A125 is reserved for #4102's row. Row is owed; not run here.
 >
@@ -1948,7 +1950,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A127 -->
+<!-- next-id: A128 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6669,6 +6671,17 @@ The automated tests prove the admission decisions with a fake probe and fake eng
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4. *Criteria:* this row. Clears when each bullet is recorded with the log line or number it produced.
 
+### A127 · An existing book keeps its old text and a new import keeps its paragraphs (extractor pin) ([#4217](https://github.com/dudarenok-maker/Castwright/issues/4217)) · **the operator's real EPUB corpus and live library (no GPU)**
+
+The automated tests prove version 1's bytes on 12 repo EPUBs plus synthetic books, and version 2's behaviour on synthetic HTML. PR #4241's review showed why that is not enough: its synthetic fixtures were green while a differential over **640 real EPUBs** found 6 files (4 books, one of them fully produced in a live library) whose text had silently changed. Only that corpus and a real library can show these, and both live on the operator's box, not in this repo: version 1 is byte-identical to `main` on real books; version 2's breaks land where they should, with no empty paragraphs; an existing book really keeps its offsets after the upgrade. No GPU is needed. The observable surface is `state.json`'s `manuscriptExtractorVersion` (absent on old books, `2` on new ones and on any book explicitly re-parsed or replaced), `parseManuscript({ buffer, fileName, extractorVersion })` and the book's Manuscript view. No bullet re-parses a live book, because a re-parse clears its cast and audio.
+
+- **Version 1 is `main`, byte for byte, on the corpus.** Run a scratch differential outside the repo over the same 640-file corpus PR #4241 used (63 + 577 real EPUBs, read in place, sha256-deduplicated within each set), plus any `.mobi`/`.azw3` in the library. For each file, compare `JSON.stringify(await parseManuscript({ buffer, fileName, extractorVersion: 1 }))` on this branch against `JSON.stringify(await parseManuscript({ buffer, fileName }))` on `main` at the branch's merge base, with errors compared by message. Observe: **0 files differ**. Record the identical / differ / error-on-both counts.
+- **What version 2 changes.** Run the same files on this branch at version 1 and at version 2. Record how many files differ, and how many change chapter count. For the 5 files whose paragraph count rises most, open one changed chapter at each version. Observe: no chapter body contains `\n\n\n` or a paragraph that is only whitespace (`/\n\n\s*\n\n/`). Record that count; it must be 0. Then count the mid-sentence breaks version 2 added: a new break where the paragraph on the left has no terminal punctuation (`.`, `!`, `?`, a closing quote or bracket, `…` or `:`) and the paragraph on the right starts with a lowercase letter. That is a block closer used for an inline element, for example `<div class="dropcap">T</div>he night was cold.`, which gives `T\n\nhe night was cold.` at version 2. Record that count and name every file where it is non-zero; open each hit and say whether the break is wrong. For the 3 corpus EPUBs whose manifest `href`s contain `&amp;` (PR #4241 review pass 3), record whether their version-2 output differs from version 1. They are read by epub2, so no difference is expected from the entity decode.
+- **An existing book keeps its text after the upgrade.** Before switching the server to this branch, pick one cast-confirmed EPUB book in the live library whose source bullet 2 shows changes at version 2. Note its `state.json` (no `manuscriptExtractorVersion` key), and the first and last sentence and speaker of one changed chapter in the Manuscript view. Restart the server on this branch and open the book. Observe: the same sentences, the same speakers, and still no `manuscriptExtractorVersion` key in `state.json`. Record the chapter and the sentences.
+- **A new import gets version 2.** Import that same EPUB again under a new title (for example append ` (v2 check)`). Observe: its `state.json` has `"manuscriptExtractorVersion": 2`, and the chapter from bullet 3 shows the new paragraph breaks. Record the paragraph counts of that chapter in both books, then delete the test book.
+
+*Needs:* the operator's real EPUB corpus (the 640 files of PR #4241, plus any `.mobi`/`.azw3`) and a live library with a cast-confirmed EPUB book; no GPU. *Criteria:* this row. Clears when each bullet's counts, key and sentences are recorded.
+
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B110 -->
@@ -7802,13 +7815,50 @@ until this row runs.
 
 **What to observe, concretely**, on a Windows dev box:
 
-- Start a real, long-running battery (e.g. `npm run test:server`), then kill
-  its owning terminal so the whole subtree is
-  orphaned but stays busy or idle past the reaper's thresholds. Run a real
-  `git push` and confirm its pre-push census reaps the orphan, printing
+- **Positive case (reaped).** *This bullet changed on 2026-11-17 for #4222:*
+  it used to say to orphan a battery that "stays busy or idle" and expect the
+  push to reap it. From pre-push that is no longer the rule: a battery is
+  reaped only when it is orphaned AND stalled-rate (subtree CPU at or under
+  2 CPU-s/min, judged against a prior census sample at least 10 minutes old, so
+  a first-ever sighting is never reaped, and a battery whose workers were
+  recycled since that sample reads as unknown, not stalled) AND the tree's
+  command lines name a path under the pushing checkout and none outside it. Start a real battery
+  that will hang, launched from the checkout you will push from so its argv
+  names that checkout, and from a checkout whose `node_modules` is NOT
+  junctioned (the primary, or a `wt-new.mjs` worktree with its own install):
+  from a junctioned worktree the fork workers name the primary, the battery is
+  spared by design, and you would record a false FAIL (e.g.
+  `node <checkout>\node_modules\vitest\vitest.mjs run --testTimeout=0 <a test file whose test never resolves>`,
+  or a file with a top-level `await new Promise(() => {})` so collection itself
+  hangs; a test that merely fails at its timeout lets the run exit long before
+  the 10-minute second push), orphan it by killing its owning terminal, and leave it idle. Run one
+  `git push` from that checkout to record a first census sample, wait at least
+  10 minutes, then run a second `git push`: the second push must print
   `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` on
-  stderr — not `KILL FAILED` — and confirm via `Get-Process` that every PID
-  the census recorded for that root is actually gone afterward.
+  stderr (not `KILL FAILED`), and `Get-Process` must show every PID the census
+  recorded for that root gone.
+- **Negative control 1 (busy orphan survives).** The same shape, but the
+  battery is CPU-busy (a test that spins), still orphaned and in-checkout. Two
+  pushes 10+ minutes apart print NO `KILLED` line and the battery is still
+  running; the `logs/reaper-census.jsonl` entry for its root carries a
+  `spareReason` naming the busy rate.
+- **Negative control 2 (other checkout survives).** The push origin matters, so
+  run both: (a) a stalled orphan whose argv is under a DIFFERENT worktree or a
+  scratchpad, pushed from this checkout, is not killed; (b) the same stalled
+  orphan run in a scratchpad or worktree whose `node_modules` is junctioned
+  from the primary checkout, pushed FROM THE PRIMARY, is not killed either (its
+  fork workers name the primary's path, its main vitest names the run's own).
+  Each census log entry's `spareReason` says the battery names a location
+  outside the checkout.
+- **Observation answered 2026-11-17 (PR #4315 review; re-confirm on the box).**
+  With a junctioned `node_modules`, the main vitest process's argv carries the
+  run's own path (via the `node_modules\.bin\..\vitest\vitest.mjs` shim), while
+  each fork worker's argv carries the PRIMARY checkout's realpath
+  (`...\Audiobook-Generator\node_modules\vitest\dist\workers\forks.js`). The
+  reaper therefore judges the battery as a whole and spares one naming any
+  location outside the pushing checkout, so a worktree's own junctioned orphan
+  is also spared from its own push (only a manual `doctor -- --kill` reaps it).
+  Record anything that differs.
 - If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
   line), record it — the fixed code path no longer depends on it being zero,
   but the real-world value is still useful corroboration.

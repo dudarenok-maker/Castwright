@@ -23,7 +23,12 @@ export type OpenRevision =
   | { kind: 'server'; revisionId: string; chapterId: number }
   | { kind: 'preview-stub' };
 
-const READY_DEFAULTS = { currentChapterId: 3, openProfileId: null as string | null };
+/* #4212 — chapterExplicit false: stages built in-app never name a chapter in the URL. */
+const READY_DEFAULTS = {
+  currentChapterId: 3,
+  chapterExplicit: false,
+  openProfileId: null as string | null,
+};
 
 export interface RegenCharacterCtx {
   characterId: string;
@@ -374,6 +379,8 @@ export const uiSlice = createSlice({
     setCurrentChapterId: (s, a: PayloadAction<number>) => {
       if (s.stage.kind !== 'ready') return;
       s.stage.currentChapterId = a.payload;
+      // #4212 — an in-app pick never names chapter 3 in the URL.
+      s.stage.chapterExplicit = false;
     },
     setOpenProfileId: (s, a: PayloadAction<string | null>) => {
       /* Drawer is reachable from cast-confirmation too — clicking a card on

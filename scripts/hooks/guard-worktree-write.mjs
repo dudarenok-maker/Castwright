@@ -112,7 +112,7 @@ function isUnderRoot(absPath, root) {
  *  mixed within one path). Order matters: collapse doubled backslashes to a
  *  single one FIRST, then unify every remaining run of `/`/`\` to a single
  *  `/` — reversing the order would turn `\\` into `//` instead of `/`. */
-function normalizeSeparators(text) {
+export function normalizeSeparators(text) {
   return text.replace(/\\\\/g, '\\').replace(/[\\/]+/g, '/');
 }
 

@@ -8,7 +8,18 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeToSyncFolder, writeFolderToSyncFolder } from './sync-folder.js';
+import {
+  writeFolderToSyncFolder,
+  stageToSyncFolder,
+  commitSyncStage,
+  discardSyncStage,
+} from './sync-folder.js';
+
+/* The production path is always stage -> (cancel check) -> commit; these
+   suites drive the two stages back to back. */
+async function writeToSyncFolder(srcPath: string, destDir: string, filename: string) {
+  return commitSyncStage(await stageToSyncFolder(srcPath, destDir, filename), destDir);
+}
 
 /* Pass-through spy on node:fs/promises.copyFile so a test can inject a
    part-way copy failure (#4218); every other test sees the real function. */
@@ -176,6 +187,40 @@ describe('writeToSyncFolder — Drive hint wrapping', () => {
     }
   });
 
+  it.each([
+    ['stage', 'My Drive'],
+    ['stage', 'OneDrive'],
+    ['folder copy', 'My Drive'],
+  ])('a hinted %s failure under %s carries no absolute path in its message (#4228)', async (kind, dir) => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-leak-test-'));
+    try {
+      const src = join(root, 'src.bin');
+      writeFileSync(src, 'x');
+      const srcDir = join(root, 'staging');
+      mkdirSync(srcDir, { recursive: true });
+      writeFileSync(join(srcDir, '01.mp3'), 'x');
+      fsMock.copyFile.mockImplementationOnce(async (s: unknown, d: unknown) => {
+        throw Object.assign(
+          new Error(`EPERM: operation not permitted, copyfile '${String(s)}' -> '${String(d)}'`),
+          { code: 'EPERM', syscall: 'copyfile', path: String(s) },
+        );
+      });
+      const dest = join(root, dir, 'Audiobooks');
+      const err = await (kind === 'stage'
+        ? stageToSyncFolder(src, dest, 'book.zip', 'job1')
+        : writeFolderToSyncFolder(srcDir, dest, 'Book')
+      ).catch((e: unknown) => e);
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/Drive|OneDrive/);
+      expect(msg).toContain('EPERM');
+      expect(msg).not.toContain(root);
+      expect(msg).not.toMatch(/copyfile/i);
+      expect((err as { code?: string }).code).toBe('EPERM');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('wraps a folder-copy failure under a Drive path with the hint, keeping code and cause (#4218)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sync-copyhint-dir-test-'));
     try {
@@ -280,5 +325,55 @@ describe('writeFolderToSyncFolder', () => {
     expect(result.copied).toBe(2);
     expect(result.syncPath.startsWith(destDir)).toBe(true);
     expect(existsSync(join(tmpRoot, 'escape'))).toBe(false);
+  });
+});
+
+describe('stage / commit / discard (#4228)', () => {
+  let tmpRoot: string;
+  let srcPath: string;
+  let dest: string;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'sync-stage-'));
+    srcPath = join(tmpRoot, 'src.bin');
+    writeFileSync(srcPath, Buffer.from('new build'));
+    dest = join(tmpRoot, 'sync');
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, 'book.zip'), 'earlier copy');
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('stage leaves the earlier final file untouched and writes a .tmp-<tag> beside it', async () => {
+    const stage = await stageToSyncFolder(srcPath, dest, 'book.zip', 'job1');
+    expect(stage.finalPath).toBe(join(dest, 'book.zip'));
+    expect(stage.tmpPath).toBe(join(dest, 'book.zip.tmp-job1'));
+    expect(readFileSync(stage.tmpPath, 'utf8')).toBe('new build');
+    expect(readFileSync(stage.finalPath, 'utf8')).toBe('earlier copy');
+  });
+
+  it('commit replaces the final file and leaves no tmp', async () => {
+    const stage = await stageToSyncFolder(srcPath, dest, 'book.zip', 'job1');
+    const r = await commitSyncStage(stage, dest);
+    expect(r.syncPath).toBe(join(dest, 'book.zip'));
+    expect(readFileSync(r.syncPath, 'utf8')).toBe('new build');
+    expect(readdirSync(dest)).toEqual(['book.zip']);
+  });
+
+  it('discard removes only the tmp, never the final file or anything else', async () => {
+    writeFileSync(join(dest, 'other.txt'), 'users own file');
+    const stage = await stageToSyncFolder(srcPath, dest, 'book.zip', 'job1');
+    await discardSyncStage(stage);
+    expect(readdirSync(dest).sort()).toEqual(['book.zip', 'other.txt']);
+    expect(readFileSync(join(dest, 'book.zip'), 'utf8')).toBe('earlier copy');
+    await discardSyncStage(stage); // already gone: best-effort, no throw
+  });
+
+  it('stage with a traversal filename stays contained', async () => {
+    const stage = await stageToSyncFolder(srcPath, dest, '../escape.zip', 'job1');
+    expect(stage.tmpPath.startsWith(dest)).toBe(true);
+    expect(existsSync(join(tmpRoot, 'escape.zip.tmp-job1'))).toBe(false);
   });
 });

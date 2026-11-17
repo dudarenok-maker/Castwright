@@ -504,7 +504,11 @@ wrote it, except that a lapsed decision now keeps only its title (revision
 - **R5-8 · The #4217 what-if is a rewritten EPUB copy, EPUB only.** It
   reuses the import path unchanged, rather than rebuilding the per-chapter
   HTML in the scanner. MOBI's HTML is inside a compressed binary, so its
-  what-if is reported as not computed.
+  what-if is reported as not computed. The what-if's closer list is now
+  extractor version 2's list (adding `</dd>`, `</dt>`, `</section>` and
+  `</article>`), and it applies only to a book without
+  `manuscriptExtractorVersion` (a version-2 book has no dropped named
+  closers).
 - **R5-9 · Line-wrap is a continuation test.** A hard wrap breaks lines
   mid-sentence, so the next line usually starts lowercase. A paragraph-per-line
   file starts each line with a capital or a dash. The 20% cut is a planning
@@ -598,7 +602,11 @@ wrote it, except that a lapsed decision now keeps only its title (revision
   and re-measures legibility as if they were breaks. A flagged chapter whose
   count falls below 10 under that what-if is labelled **extractor-merged
   (#4217)**. The what-if lives only in the scanner and changes no production
-  extraction (that is #4217's own design pass).
+  extraction (that is #4217's own design pass). The what-if's closer list is
+  now extractor version 2's list (adding `</dd>`, `</dt>`, `</section>` and
+  `</article>`), and it applies only to a book without
+  `manuscriptExtractorVersion` (a version-2 book has no dropped named
+  closers).
 
 ## Revision 3 changelog (history)
 
@@ -1076,18 +1084,25 @@ openapi, or used by the client. Nothing runs it at all.
 - **F2 (chore): discharged on `main`** by #4165's PR (§1.4 item 3, R5-13).
   Nothing is owed.
 - **F3 (dead code):** `assessParagraphStructure`. Phase 0, per Decision 5.
-- **F4 = #4217 (open, needs a design pass):** `stripHtml`
-  (`parsers/html-utils.ts:79-97`) converts only `<br>`, `<hr>` and `</p>` to
+- **F4 = #4217 (decided 2026-11-17 in #4217):** `stripHtml`
+  (`parsers/html-utils.ts:79-97`) converted only `<br>`, `<hr>` and `</p>` to
   line breaks. Every other block closer (`</div>`, `</li>`, `</blockquote>`,
-  `</h*>`) is stripped silently, which merges paragraphs in EPUB/MOBI sources
-  whose paragraphs are `<div>`s. It is not fixed here because the fix changes
-  the chapter bodies of books already in the library. `hydrateFromDisk`
-  re-parses the source file (`store/manuscripts.ts:155-167`), so persisted
-  sentence offsets would shift under existing books. **The decision owed (in
-  #4217):** which block closers become paragraph breaks, and how existing
-  books are migrated or pinned to the old extraction. Until then, Decision 2's
-  wording keeps the notices true for these merges, and owner decision 6 makes
-  them true positives in the register row's scan.
+  `</h*>`) was stripped silently, which merged paragraphs in EPUB/MOBI sources
+  whose paragraphs are `<div>`s. The fix changes the chapter bodies of books
+  already in the library, and `hydrateFromDisk` re-parses the source file
+  (`store/manuscripts.ts:155-167`), so persisted sentence offsets would shift
+  under existing books. **The outcome:** `</div>`, `</li>`, `</blockquote>`,
+  `</h1>`–`</h6>`, `</dd>`, `</dt>`, `</section>` and `</article>` now break
+  paragraphs (extractor version 2), and nested blocks collapse to single
+  breaks. A book without `manuscriptExtractorVersion` in `state.json` is
+  pinned to version 1 for every implicit re-read (hydrate, title refresh,
+  restructure, samples, the repair scripts), so its offsets do not move. A
+  new import, and an explicit re-parse or manuscript replace, get version 2
+  and the stamp. This shipped on branch
+  `fix/server-4217-block-closer-paragraphs`. The notices' wording is
+  unchanged, because it still claims only that the imported text runs
+  dialogue together, and a pinned book can still carry extractor merges, so
+  owner decision 6's "true positive" ruling still applies to it.
 
 ## 2 · Measure and threshold
 
