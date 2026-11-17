@@ -939,6 +939,23 @@ describe('book-state router — POST /chapters/:chapterId/exclude', () => {
     expect(existsSync(join(audioRoot, `01-dedication.${ext}`))).toBe(false);
   });
 
+  it('R1: an m4a chapter: live audio + segments go; .previous.mp3 and lufs survive (H22, fixed in Phase 4) (#4331)', async () => {
+    seedTwoChapters();
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    for (const n of ['01-dedication.m4a', '01-dedication.segments.json', '01-dedication.previous.mp3', '01-dedication.lufs.json']) {
+      writeFileSync(join(audioRoot, n), '{}');
+    }
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(audioRoot, '01-dedication.m4a'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-dedication.segments.json'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-dedication.previous.mp3'))).toBe(true);
+    expect(existsSync(join(audioRoot, '01-dedication.lufs.json'))).toBe(true);
+  });
+
   it('400s on a non-boolean excluded payload', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/chapters/1/exclude`)

@@ -113,7 +113,12 @@ import {
   carryTitleSynthesized,
   carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
-import { CHAPTER_AUDIO_EXTS, chapterAudioExists } from '../workspace/chapter-audio-file.js';
+import {
+  CHAPTER_AUDIO_EXTS,
+  chapterAudioExists,
+  liveAudioPath,
+  livePartPath,
+} from '../workspace/chapter-take.js';
 import {
   putManuscript,
   getManuscript,
@@ -804,7 +809,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     try {
       if (existsSync(audioDir(bookDir))) {
         for (const ch of state.chapters) {
-          const lufsPath = join(audioDir(bookDir), `${ch.slug}.lufs.json`);
+          const lufsPath = livePartPath(audioDir(bookDir), ch.slug, 'lufs');
           if (!existsSync(lufsPath)) {
             chapterLufs[ch.id] = null;
             continue;
@@ -2418,9 +2423,9 @@ bookStateRouter.post(
          sentence attribution. */
         if (excluded) {
           const audioRoot = audioDir(bookDir);
-          const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+          const segmentsPath = livePartPath(audioRoot, current.slug, 'segments');
           const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
-            join(audioRoot, `${current.slug}.${ext}`),
+            liveAudioPath(audioRoot, current.slug, ext),
           );
           for (const p of [segmentsPath, ...audioCandidates]) {
             if (existsSync(p)) {

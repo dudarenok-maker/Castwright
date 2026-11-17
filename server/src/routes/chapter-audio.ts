@@ -34,12 +34,16 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
+import {
+  findChapterAudio,
+  livePartPath,
+  previousPartPath,
+  type ChapterAudioFile,
+} from '../workspace/chapter-take.js';
 import { restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
 import { withKeyLock, isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -221,16 +225,16 @@ async function locateChapterAudio(
   if (!audio) return null;
   const segPath =
     variant === 'current'
-      ? `${root}/${chapter.slug}.segments.json`
-      : `${root}/${chapter.slug}.previous.segments.json`;
+      ? livePartPath(root, chapter.slug, 'segments')
+      : previousPartPath(root, chapter.slug, 'segments');
   const peaksPath =
     variant === 'current'
-      ? join(root, `${chapter.slug}.peaks.json`)
-      : join(root, `${chapter.slug}.previous.peaks.json`);
+      ? livePartPath(root, chapter.slug, 'peaks')
+      : previousPartPath(root, chapter.slug, 'peaks');
   const lufsPath =
     variant === 'current'
-      ? join(root, `${chapter.slug}.lufs.json`)
-      : join(root, `${chapter.slug}.previous.lufs.json`);
+      ? livePartPath(root, chapter.slug, 'lufs')
+      : previousPartPath(root, chapter.slug, 'lufs');
   return { audio, segPath, peaksPath, lufsPath, chapterId, chapterTitle: chapter.title };
 }
 

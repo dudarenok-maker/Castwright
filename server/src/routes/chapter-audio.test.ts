@@ -135,6 +135,8 @@ function rmIfExists(name: string) {
 
 function resetAudio() {
   rmIfExists(`${SLUG}.mp3`);
+  rmIfExists(`${SLUG}.m4a`);
+  rmIfExists(`${SLUG}.ogg`);
   rmIfExists(`${SLUG}.wav`);
   rmIfExists(`${SLUG}.previous.mp3`);
   rmIfExists(`${SLUG}.previous.segments.json`);
@@ -239,6 +241,21 @@ function writeChapterSegments(segments: unknown[], name = `${SLUG}.segments.json
 }
 
 describe('chapter-audio router', () => {
+  describe.each(['mp3', 'm4a', 'ogg'] as const)('R4: live meta for a .%s book (#4331)', (ext) => {
+    beforeAll(() => {
+      resetAudio();
+      writeFileSync(join(audioRoot, `${SLUG}.${ext}`), Buffer.alloc(64, 1));
+    });
+    afterAll(() => resetAudio());
+
+    it('returns the same url suffix and the live segments', async () => {
+      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+      expect(res.status).toBe(200);
+      expect(res.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio.${ext}`);
+      expect(res.body.segments).toHaveLength(2);
+    });
+  });
+
   describe('mp3 chapter', () => {
     beforeAll(() => {
       resetAudio();

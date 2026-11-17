@@ -12,7 +12,6 @@
 
 import { Router } from 'express';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
@@ -20,7 +19,7 @@ import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { updateStateJsonLocked } from '../workspace/state-migrate.js';
 import { withLocatedBook } from '../workspace/book-state-update.js';
 import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, livePartPath } from '../workspace/chapter-take.js';
 import {
   buildSyncManifestIndex,
   buildSyncManifestBookDetail,
@@ -102,7 +101,7 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
           let durationSec: number | undefined;
           try {
             const seg = JSON.parse(
-              readFileSync(join(audioRoot, `${c.slug}.segments.json`), 'utf8'),
+              readFileSync(livePartPath(audioRoot, c.slug, 'segments'), 'utf8'),
             ) as { durationSec?: number };
             if (typeof seg.durationSec === 'number' && Number.isFinite(seg.durationSec)) {
               durationSec = seg.durationSec;

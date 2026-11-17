@@ -29,7 +29,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { spawn } from 'node:child_process';
 import { findBookByBookId } from '../workspace/scan.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio } from '../workspace/chapter-take.js';
 import { audioDir } from '../workspace/paths.js';
 import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
 

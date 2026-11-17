@@ -11,7 +11,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { audioDir } from '../workspace/paths.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio } from '../workspace/chapter-take.js';
 import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
 import {
   acceptPreviousAudio,
