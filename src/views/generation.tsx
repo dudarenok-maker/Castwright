@@ -404,12 +404,17 @@ export function GenerationView({
     s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
   );
   const [searchParams] = useSearchParams();
-  const chapterNamedInUrl = parseChapterParam(searchParams.get('chapter')) != null;
+  /* #4310 pass 2 — this effect runs before ReadyRoute hydrates the stage from a
+     URL edited in place, so also require the stage chapter to agree with the
+     URL's, or its first run scrolls to the old chapter. */
+  const chapterNamedInUrl =
+    parseChapterParam(searchParams.get('chapter')) === currentChapterId && currentChapterId != null;
   /* #4212 — a reload rehydrates the stage straight to the URL's chapter, so
      neither dep below changes once the chapter rows load, and the effect's
      last run found no row. `targetRowLoaded` re-runs it when the row appears;
-     `scrolledForChapter` keeps later list updates (generation ticks) from
-     scrolling again. */
+     `scrolledForChapter` keeps a target row that leaves the list and returns
+     from scrolling again, and its reset (URL no longer names a chapter) lets a
+     re-navigation to the same chapter scroll. */
   const targetRowLoaded = chapters.some((c) => c.id === currentChapterId);
   const scrolledForChapter = useRef<number | null>(null);
   useEffect(() => {

@@ -387,6 +387,54 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
     rerender(view(chs.map((c) => ({ ...c }))));
     expect(scrollSpy).toHaveBeenCalledTimes(1);
   });
+  /* Kills the ref reset: the ref still holds 3 from the first scroll, and
+     hydrating ?chapter=3 does not change the stage id, so only the reset lets
+     the re-navigation scroll again. */
+  it('re-scrolls to chapter 3 when ?chapter=3 is dropped and then named again on a mounted view', () => {
+    const { navigateTo } = renderMounted('/books/b1/generate?chapter=3', 3);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    navigateTo('/books/b1/generate');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    navigateTo('/books/b1/generate?chapter=3');
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+  });
+  /* Kills the once-only check and the ref write: the target row leaving the
+     list and coming back re-runs the effect via `targetRowLoaded`, and only
+     the ref stops a second scroll. */
+  it('does not re-scroll when the target row leaves the list and comes back', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(5));
+    const view = (list: Chapter[]) => (
+      <Provider store={store}>
+        <HostedGenerationView
+          initialEntry="/books/b1/generate?chapter=5"
+          chapters={list}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>
+    );
+    const { rerender } = render(view(chs));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    rerender(view(chs.filter((c) => c.id !== 5)));
+    rerender(view(chs));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+  /* #4310 pass 2 D — the view's effect runs before ReadyRoute hydrates the
+     stage, so its first run pairs the new URL with the old stage chapter. */
+  it('does not scroll to the old stage chapter when the URL is edited in place to a chapter with no row', () => {
+    const { navigateTo } = renderMounted('/books/b1/generate', 3);
+    navigateTo('/books/b1/generate?chapter=8');
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
   it('does not scroll to chapter 3 when a mounted ?chapter=5 is edited in place to a malformed value', () => {
     const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
     expect(scrollSpy).toHaveBeenCalledTimes(1);
