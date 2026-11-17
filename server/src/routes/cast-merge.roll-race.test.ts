@@ -56,15 +56,15 @@ let bookDir: string;
 let bookId: string;
 let app: Express;
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const editsPath = () => join(bookDir, '.audiobook', 'manuscript-edits.json');
 
 async function until(cond: () => boolean, timeoutMs = 5000): Promise<void> {
-  const t0 = Date.now();
-  while (!cond()) {
-    if (Date.now() - t0 > timeoutMs) throw new Error('until: timed out');
-    await sleep(5);
-  }
+  await vi.waitFor(
+    () => {
+      if (!cond()) throw new Error('until: condition not met');
+    },
+    { timeout: timeoutMs, interval: 5 },
+  );
 }
 
 beforeAll(async () => {
