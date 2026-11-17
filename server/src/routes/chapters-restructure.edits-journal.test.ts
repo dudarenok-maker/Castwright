@@ -230,3 +230,80 @@ describe('restructure journals the edits rewrite (#4227)', () => {
     expect(readFileSync(editsPath()).equals(editsBefore)).toBe(true);
   });
 });
+
+const rename1 = () =>
+  request(app).post(`/api/books/${bookId}/chapters/1/rename`).send({ title: 'Opening' });
+
+/* Parks the edits write: the merge answers 500 with state.json on the new chapter
+   list, the journal on disk and the edits still keyed to the OLD chapters. Then
+   clears the failure flag and drops the in-memory record, as a restart would. */
+async function parkThenRestart(): Promise<void> {
+  spy.editsFail = true;
+  const res = await merge12();
+  expect(res.status).toBe(500);
+  expect(existsSync(journalPath())).toBe(true);
+  expect(readEdits().sentences.some((s) => s.chapterId === 3)).toBe(true);
+  spy.editsFail = false;
+  const { removeManuscript } = await import('../store/manuscripts.js');
+  removeManuscript(MANUSCRIPT_ID);
+}
+
+describe('the next restructure replays an interrupted edits journal (#4227)', () => {
+  /* Red when: the replayRestructureEditsJournal call is deleted from
+     applyRestructureClaimed (chapterId === 3 survives), or moved after
+     judgeParsePairing (the sha backstop answers 409 / edits stay old-keyed). */
+  it('P1 a parked edits write, then replay -> edits keyed to the new chapters', async () => {
+    await parkThenRestart();
+
+    const res = await rename1();
+    expect(res.status).toBe(200);
+
+    const sentences = readEdits().sentences;
+    expect([...new Set(sentences.map((s) => s.chapterId))].sort()).toEqual([1, 2]);
+    expect(sentences.some((s) => s.chapterId === 3)).toBe(false);
+    const ch1 = sentences.filter((s) => s.chapterId === 1);
+    expect(ch1.map((s) => [s.id, s.text])).toEqual([
+      [1, 'Alpha first.'],
+      [2, 'Alpha second.'],
+      [3, 'Beta first.'],
+      [4, 'Beta second.'],
+    ]);
+    expect(ch1[3].characterId).toBe('sam');
+    expect(ch1.slice(0, 3).every((s) => s.characterId === 'narr')).toBe(true);
+    const ch2 = sentences.filter((s) => s.chapterId === 2);
+    expect(ch2.map((s) => [s.id, s.text])).toEqual([
+      [1, 'Gamma first.'],
+      [2, 'Gamma second.'],
+    ]);
+    expect(existsSync(journalPath())).toBe(false);
+  });
+
+  /* Red when: the sha guard (editsSha256 compare) is deleted from the replay, so a
+     journal is applied to edits it was not computed from. */
+  it('P2 a stale journal is discarded, not applied', async () => {
+    await parkThenRestart();
+    const edited = readEdits();
+    edited.sentences[0].text = 'Alpha first, edited by a client save.';
+    writeFileSync(editsPath(), JSON.stringify(edited));
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+
+    await rename1();
+
+    expect(existsSync(journalPath())).toBe(false);
+    /* The rename's own restructure rewrites the file pretty-printed, so compare the
+       parsed content: the client's edit survives and nothing was re-keyed. */
+    expect(readEdits()).toEqual(edited);
+    expect(readEdits().sentences.some((s) => s.chapterId === 3)).toBe(true);
+  });
+
+  /* Red when: the replay call breaks the no-journal path (throws, or rewrites
+     edits it has no journal for). */
+  it('P3 a clean book is unaffected', async () => {
+    const editsBefore = readEdits();
+    const res = await rename1();
+    expect(res.status).toBe(200);
+    expect(existsSync(journalPath())).toBe(false);
+    expect(readEdits()).toEqual(editsBefore);
+  });
+});

@@ -6,6 +6,8 @@
    2. Atomically write manuscript-hints.json (the restructured chapter bodies,
       #3703; first, so its failure changes nothing), state.json (rotating
       backup) and manuscript-edits.json.
+      The edits rewrite is journalled first, and replayed at the next
+      restructure or server start (#4227).
    3. Replace the in-memory ManuscriptRecord (putManuscript) so subsequent
       analysis / generation calls see the new structure.
    4. Apply the audio op plan via rewriteChapterSlugs (delete content-
@@ -79,6 +81,7 @@ import {
 import { writeJsonAtomic } from '../workspace/state-io.js';
 import {
   clearRestructureEditsJournal,
+  replayRestructureEditsJournal,
   writeRestructureEditsJournal,
 } from '../workspace/restructure-edits-journal.js';
 import { checkParseHintsPairing } from '../workspace/hints-proof.js';
@@ -360,6 +363,11 @@ async function applyRestructureClaimed(
 }> {
   const { bookDir } = book;
   let { state } = book;
+  /* Redoes the edits rewrite of an interrupted earlier restructure (#4227). It must
+     precede the pairing check and the closure's sha backstop (judgeParsePairing,
+     the edits-sha 409 check), because it rewrites the file they read. Lock nesting:
+     book-op -> gate -> book -> state-json. */
+  await replayRestructureEditsJournal(book.bookDir, book.bookId);
   /* PR #3714 review passes 4-5 -- the record is the current one for the
      manuscript the LOCKED state names (`manuscriptId` is `book.state`'s, resolved
      under book-op), never the one `prepareRestructure` hydrated: an op this one
