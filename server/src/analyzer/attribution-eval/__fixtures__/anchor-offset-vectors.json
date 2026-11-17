@@ -1,0 +1,20 @@
+[
+  { "name": "equivalent spellings: composed text, decomposed anchor (Russian yo)", "text": "\u2014 \u0415\u0449\u0451 \u0440\u0430\u0437, \u2014 \u0441\u043a\u0430\u0437\u0430\u043b \u043e\u043d.", "anchor": "\u2014 \u0415\u0449\u0435\u0308 \u0440\u0430\u0437,", "expectedTail": " \u2014 \u0441\u043a\u0430\u0437\u0430\u043b \u043e\u043d.", "forms": { "text": "NFC", "anchor": "NFD" } },
+  { "name": "equivalent spellings: decomposed text, composed anchor (Russian yo)", "text": "\u2014 \u0415\u0449\u0435\u0308 \u0440\u0430\u0437, \u2014 \u0441\u043a\u0430\u0437\u0430\u043b \u043e\u043d.", "anchor": "\u2014 \u0415\u0449\u0451 \u0440\u0430\u0437,", "expectedTail": " \u2014 \u0441\u043a\u0430\u0437\u0430\u043b \u043e\u043d.", "forms": { "text": "NFD", "anchor": "NFC" } },
+  { "name": "equivalent spellings: composed text, decomposed anchor (cafe)", "text": "caf\u00e9 au lait.", "anchor": "cafe\u0301", "expectedTail": " au lait.", "forms": { "text": "NFC", "anchor": "NFD" } },
+  { "name": "equivalent spellings: decomposed text, composed anchor (cafe)", "text": "cafe\u0301 au lait.", "anchor": "caf\u00e9", "expectedTail": " au lait.", "forms": { "text": "NFD", "anchor": "NFC" } },
+  { "name": "refused: anchor ends just before a combining mark", "text": "\u041e\u043d\u0430\u0301 \u0443\u0448\u043b\u0430.", "anchor": "\u041e\u043d\u0430", "expectedTail": null },
+  { "name": "control: anchor that keeps the combining mark resolves", "text": "\u041e\u043d\u0430\u0301 \u0443\u0448\u043b\u0430.", "anchor": "\u041e\u043d\u0430\u0301", "expectedTail": " \u0443\u0448\u043b\u0430." },
+  { "name": "refused (fail closed): a split-mark occurrence still counts toward uniqueness", "text": "\u041e\u043d\u0430\u0301 \u0443\u0448\u043b\u0430. \u041e\u043d\u0430 \u043f\u0440\u0438\u0448\u043b\u0430.", "anchor": "\u041e\u043d\u0430", "expectedTail": null },
+  { "name": "refused: anchor ends inside the ellipsis fold", "text": "Wait\u2026 no", "anchor": "Wait.", "expectedTail": null },
+  { "name": "refused: anchor ends two dots into the ellipsis fold", "text": "Wait\u2026 no", "anchor": "Wait..", "expectedTail": null },
+  { "name": "control: anchor covering the whole ellipsis fold resolves", "text": "Wait\u2026 no", "anchor": "Wait...", "expectedTail": " no" },
+  { "name": "control: anchor with the real ellipsis resolves", "text": "Wait\u2026 no", "anchor": "Wait\u2026", "expectedTail": " no" },
+  { "name": "refused: anchor ends between the two halves of an astral character", "text": "Go \ud83d\ude00 now.", "anchor": "Go \ud83d", "expectedTail": null },
+  { "name": "astral: anchor containing an NFC-changing astral char (#4219)", "text": "\u041e\u043d \u0441\u043a\u0430\u0437\u0430\u043b \ud87e\udc00 \u0438 \u0443\u0448\u0451\u043b.", "anchor": "\ud87e\udc00 \u0438", "expectedTail": " \u0443\u0448\u0451\u043b." },
+  { "name": "astral: anchor after an NFC-changing astral char (#4219)", "text": "a \ud87e\udc00 b. c", "anchor": "b.", "expectedTail": " c" },
+  { "name": "astral: NFC-stable emoji", "text": "Go \ud83d\ude00 now. Stop.", "anchor": "\ud83d\ude00 now.", "expectedTail": " Stop." },
+  { "name": "folds: smart quotes and em dash", "text": "He paused\u2014then ran. \u201cStop,\u201d she said.", "anchor": "ran. \"Stop,\"", "expectedTail": " she said." },
+  { "name": "refused: not unique", "text": "he said, he said", "anchor": "he said", "expectedTail": null },
+  { "name": "refused: absent", "text": "totally different", "anchor": "ran.", "expectedTail": null }
+]

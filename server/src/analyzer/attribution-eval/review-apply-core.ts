@@ -22,40 +22,66 @@ export interface LiveSentence {
   vocalization?: boolean;
 }
 
-/** NFC + quote/dash/ellipsis folds ONLY — every fold maps 1 original char to a
-    known number of normalized chars, so an index map is exact. No whitespace
-    collapse (it would desync positions — the plan-review bug). */
-function normChar(c: string): string {
-  if (c === "‘" || c === "’") return "'";
-  if (c === "“" || c === "”") return '"';
-  if (c === "–" || c === "—") return '-';
-  if (c === "…") return '...';
-  return c.normalize('NFC');
-}
-export function normalizeForMatch(text: string): string {
-  let out = '';
-  for (const ch of text) out += normChar(ch);
-  return out;
+/** Matching unit = a RUN: one code point plus every immediately following
+    combining mark (\p{M}). A mark always joins the run before it; only a mark at
+    the very start of a string starts a run of its own. */
+function splitRuns(text: string): string[] {
+  const runs: string[] = [];
+  for (const ch of text) {
+    if (runs.length > 0 && /\p{M}/u.test(ch)) runs[runs.length - 1] += ch;
+    else runs.push(ch);
+  }
+  return runs;
 }
 
-/** Returns the ORIGINAL-text offset of the END of a unique anchor match, or null. */
-export function resolveAnchorOffset(text: string, anchor: string): number | null {
-  // Build normalized string + a map from each normalized index to the original index AFTER it.
+/** A run's normalized form: the quote/dash/ellipsis fold applies to the run's
+    FIRST code point only, the remaining code points are kept, then the whole run
+    is NFC-normalized (so e + U+0301 composes to the same text as a precomposed é).
+    No whitespace collapse (it would desync positions — the plan-review bug). */
+function normRun(run: string): string {
+  const first = String.fromCodePoint(run.codePointAt(0)!);
+  const rest = run.slice(first.length);
+  let folded = first;
+  if (first === "‘" || first === "’") folded = "'";
+  else if (first === "“" || first === "”") folded = '"';
+  else if (first === "–" || first === "—") folded = '-';
+  else if (first === "…") folded = '...';
+  return (folded + rest).normalize('NFC');
+}
+
+export function normalizeForMatch(text: string): string {
+  return splitRuns(text).map(normRun).join('');
+}
+
+/** Normalized text plus an offset map with norm.length + 1 entries. Only a run
+    BOUNDARY has an original offset; every position strictly inside a run's
+    normalized output (inside an ellipsis fold, between an astral char's halves,
+    between a base and its mark) is null, so a match ending there is refused,
+    never rounded. origAt[0] = 0. */
+export function buildNormIndex(text: string): { norm: string; origAt: Array<number | null> } {
   let norm = '';
-  const origEndForNormLen: number[] = [0]; // origEndForNormLen[k] = original index after k normalized chars
-  let i = 0; // UTF-16 offset into the original text
-  for (const ch of text) {
-    // Walk by code point (as normalizeForMatch does) so NFC never splits a surrogate pair.
-    i += ch.length;
-    const piece = normChar(ch);
-    for (let j = 0; j < piece.length; j++) origEndForNormLen.push(i);
-    norm += piece;
+  const origAt: Array<number | null> = [0];
+  let i = 0; // UTF-16 offset into the original text, just after the current run
+  for (const run of splitRuns(text)) {
+    i += run.length;
+    const p = normRun(run);
+    for (let j = 0; j < p.length - 1; j++) origAt.push(null);
+    origAt.push(i);
+    norm += p;
   }
+  return { norm, origAt };
+}
+
+/** Returns the ORIGINAL-text offset of the END of a unique anchor match, or null.
+    null also when the match ends INSIDE a run (fail closed) — every raw occurrence
+    still counts toward uniqueness. */
+export function resolveAnchorOffset(text: string, anchor: string): number | null {
+  const { norm, origAt } = buildNormIndex(text);
   const nAnchor = normalizeForMatch(anchor);
   if (!nAnchor) return null;
   const first = norm.indexOf(nAnchor);
   if (first < 0 || first !== norm.lastIndexOf(nAnchor)) return null;
-  return origEndForNormLen[first + nAnchor.length];
+  return origAt[first + nAnchor.length] ?? null;
 }
 
 export function planApply(
