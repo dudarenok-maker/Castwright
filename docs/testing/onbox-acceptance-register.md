@@ -7802,13 +7802,37 @@ until this row runs.
 
 **What to observe, concretely**, on a Windows dev box:
 
-- Start a real, long-running battery (e.g. `npm run test:server`), then kill
-  its owning terminal so the whole subtree is
-  orphaned but stays busy or idle past the reaper's thresholds. Run a real
-  `git push` and confirm its pre-push census reaps the orphan, printing
+- **Positive case (reaped).** *This bullet changed on 2026-11-17 for #4222:*
+  it used to say to orphan a battery that "stays busy or idle" and expect the
+  push to reap it. From pre-push that is no longer the rule: a battery is
+  reaped only when it is orphaned AND stalled-rate (subtree CPU at or under
+  2 CPU-s/min, judged against a prior census sample at least 10 minutes old, so
+  a first-ever sighting is never reaped) AND some process of the tree has a
+  command line naming a path under the pushing checkout. Start a real battery
+  that will hang, launched from the checkout you will push from so its argv
+  names that checkout (e.g.
+  `node <checkout>
+ode_modulesitestitest.mjs run <a test file that never resolves>`),
+  orphan it by killing its owning terminal, and leave it idle. Run one
+  `git push` from that checkout to record a first census sample, wait at least
+  10 minutes, then run a second `git push`: the second push must print
   `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` on
-  stderr — not `KILL FAILED` — and confirm via `Get-Process` that every PID
-  the census recorded for that root is actually gone afterward.
+  stderr (not `KILL FAILED`), and `Get-Process` must show every PID the census
+  recorded for that root gone.
+- **Negative control 1 (busy orphan survives).** The same shape, but the
+  battery is CPU-busy (a test that spins), still orphaned and in-checkout. Two
+  pushes 10+ minutes apart print NO `KILLED` line and the battery is still
+  running; the `logs/reaper-census.jsonl` entry for its root carries a
+  `spareReason` naming the busy rate.
+- **Negative control 2 (other checkout survives).** A stalled orphan whose argv
+  is under a DIFFERENT worktree or a scratchpad, pushed from this checkout, is
+  not killed, and its census log entry's `spareReason` says it is not under the
+  checkout.
+- **Open observation (record, do not assume).** Does a real vitest battery's
+  `node.exe` argv actually carry a path under the worktree? The code matches
+  argv only and the snapshot has no cwd. If a worktree run resolves through a
+  `node_modules` junction to the primary checkout's path, record what was seen,
+  because that decides whether pre-push can ever reap a worktree's own orphan.
 - If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
   line), record it — the fixed code path no longer depends on it being zero,
   but the real-world value is still useful corroboration.
