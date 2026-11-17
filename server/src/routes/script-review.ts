@@ -45,7 +45,7 @@ import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
-import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
+import { itemFailureReason, requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import {
@@ -1043,7 +1043,8 @@ async function runScriptReviewJob(
                 overflowErr = err;
                 break;
               }
-              send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+              console.error('[script-review] chapter failed', chapterId, err);
+              send({ kind: 'chapter-failed', chapterId, message: requestFailureMessageFs(err, (err as Error).message) });
             }
             // Intra-chapter creep: only advances the bar for multi-chunk (local)
             // chapters; single-chunk / cloud chapters rely on the client timer.
@@ -1134,7 +1135,7 @@ async function runScriptReviewJob(
           send({
             kind: 'chapter-failed',
             chapterId,
-            message: `Failed to save findings: ${itemFailureReason(err, (err as Error).message)}`,
+            message: `Failed to save findings: ${itemFailureReason(err, requestFailureMessageFs(err, (err as Error).message))}`,
           });
         }
       }

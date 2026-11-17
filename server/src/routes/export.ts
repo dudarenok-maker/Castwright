@@ -27,7 +27,7 @@ import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import { runBookJob, type BookJobLease } from '../workspace/book-jobs.js';
-import { requestFailureMessage } from '../workspace/file-lock.js';
+import { requestFailureMessage, requestFailureMessageFs } from '../workspace/file-lock.js';
 import {
   bookExportManifestsDir,
   bookExportsDir,
@@ -461,7 +461,7 @@ async function createExportJob(
     .catch(async (e) => {
       console.error(`[export] runExportJob rejected unexpectedly for ${job.id}:`, e);
       job.status = 'failed';
-      job.errorReason = (e as Error)?.message || 'Export failed unexpectedly.';
+      job.errorReason = requestFailureMessageFs(e, (e as Error)?.message || 'Export failed unexpectedly.');
       job.completedAt = new Date().toISOString();
       jobs.set(job.id, { ...job });
       jobControllers.delete(job.id);
@@ -907,8 +907,16 @@ async function runExportJob(
       job.errorReason =
         e instanceof ExportIncompleteError
           ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
-          : (e as Error).message;
+          : requestFailureMessageFs(e, (e as Error).message);
       job.completedAt = new Date().toISOString();
+      /* The client-facing reason above is curated (no workspace path); the
+         raw error — with ffmpeg/ffprobe stderr, which the scrubbed message
+         drops — goes to the log. */
+      console.error(
+        `[export] job ${job.id} failed:`,
+        e,
+        (e as { ffmpegStderr?: string })?.ffmpegStderr ?? '',
+      );
     }
   } finally {
     jobs.set(job.id, { ...job });

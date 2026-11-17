@@ -466,7 +466,7 @@ const ANALYSIS_SOURCES: ReadonlySet<FailureSource> = new Set(['analysis', 'both'
 /** A node fs error on a path. Net errors (TCP / named pipe) carry `address`, never
     `path`, so the `path` check alone excludes them. A spawn error carries the binary's
     `path` but is not an fs error on a book file: it still goes through the signature scan. */
-function isFsPathError(err: unknown): boolean {
+export function isFsPathError(err: unknown): boolean {
   const e = err as { syscall?: unknown; path?: unknown };
   return isFsError(err) && typeof e.path === 'string' && !/^spawn/.test(String(e.syscall));
 }
@@ -527,12 +527,26 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
     describeError envelope parsing on top and falls back to this scan; exported
     for that fallback and for direct unit tests. */
 export function classifyAnalysisError(err: unknown): ClassifiedFailure {
-  const hit = scanSignatures(err, ANALYSIS_SOURCES);
-  if (hit) return hit;
+  /* #4236 -- same pre-scan as classifyFailure: a node fs error's message embeds the
+     absolute book path, whose folder keeps the title's words ("The Quota" would match
+     the rate-limit / quota / auth signatures), so classify it by `code` instead. */
+  if (!isFsPathError(err)) {
+    const hit = scanSignatures(err, ANALYSIS_SOURCES);
+    if (hit) return hit;
+  } else if ((err as { code: string }).code === 'ENOSPC') {
+    const copy = FAILURE_REMEDIATIONS['disk-full'];
+    return {
+      code: 'disk-full',
+      userMessage: copy.userMessage,
+      remediation: copy.remediation,
+      fatal: true,
+      raw: rawOf(err),
+    };
+  }
   const raw = rawOf(err);
   return {
     code: 'unknown',
-    userMessage: trimRaw(raw),
+    userMessage: requestFailureMessageFs(err, trimRaw(raw)),
     remediation: FAILURE_REMEDIATIONS.unknown.remediation,
     fatal: false,
     raw,
@@ -1419,7 +1433,8 @@ export function classifyAnalysisFailure(
   if (scanned.code !== 'unknown') {
     return { code: scanned.code, userMessage: scanned.userMessage, remediation: scanned.remediation };
   }
-  return withCopy('unknown', raw || 'Analysis failed.');
+  /* #4236 -- an unmapped node fs error (EBUSY / EPERM) embeds the absolute path. */
+  return withCopy('unknown', requestFailureMessageFs(err, raw || 'Analysis failed.'));
 }
 
 /** #3084 P23 — the SSE error event for ANY error selection throws, coded through

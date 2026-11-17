@@ -183,6 +183,20 @@ describeIf('applyId3v24Tags', () => {
     expect(true).toBe(true);
   });
 
+  /* #4236 -- ffmpeg's stderr names the input / output paths; the Error's message must not. */
+  it('a failing ffmpeg rejects with a path-free message and keeps the stderr on the error', async () => {
+    const bad = join(tmpDir, 'not-audio.mp3');
+    writeFileSync(bad, 'this is not an mp3 at all');
+    const err = await applyId3v24Tags(bad, join(tmpDir, 'bad-out.mp3'), { title: 'X', album: 'A', artist: 'B', albumArtist: 'C', track: 1, trackTotal: 1 }).then(
+      () => null,
+      (e: Error & { ffmpegStderr?: string }) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/^ffmpeg exited with code \d+/);
+    expect(err!.message).not.toContain(tmpDir);
+    expect(err!.ffmpegStderr).toContain('not-audio.mp3');
+  });
+
   it('writes the comment tag when tags.comment is set', async () => {
     const destPath = join(tmpDir, 'with-comment.mp3');
     await applyId3v24Tags(srcPath, destPath, {

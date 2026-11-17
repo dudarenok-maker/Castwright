@@ -305,6 +305,27 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     expect(events.find((e) => e.kind === 'result')).toMatchObject({ annotatedChapters: 1 });
   });
 
+  it('a chapter-failed frame for a node fs error carries the curated sentence, never the path (#4236)', async () => {
+    writeBook(SENTENCES);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fsErr = () =>
+      Object.assign(
+        new Error("EBUSY: resource busy or locked, open 'C:\\Users\\someone\\books\\The Quota\\.audiobook\\state.json'"),
+        { code: 'EBUSY', syscall: 'open', path: 'C:\\Users\\someone\\books\\The Quota\\.audiobook\\state.json' },
+      );
+    runEmotion.mockImplementation((_m, chapterId): Promise<EmotionAnnotationOutput> => {
+      if (chapterId === 1) return Promise.reject(fsErr());
+      return Promise.resolve({ annotations: [{ sentenceId: 3, emotion: 'sad' }] });
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    quiet.mockRestore();
+    const failed = parseSse(res.text).find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed?.message).toBe('Files could not be read or written right now. Try again.');
+    expect(res.text).not.toContain('Quota');
+    expect(res.text).not.toContain('state.json');
+  });
+
   it('chunks a large chapter across calls and emits each sentence annotation exactly once', async () => {
     // Force local engine + small num_ctx → chapterChunkBudget derives a finite budget
     // that splits a large chapter into ≥2 chunks (gemini's MAX_SAFE_INTEGER never splits).

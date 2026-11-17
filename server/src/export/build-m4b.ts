@@ -23,6 +23,7 @@ import { copyFile, link, mkdir, stat, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
 import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -291,14 +292,14 @@ export function probeDurationSec(mp3Path: string): Promise<number> {
     child.on('close', (code) => {
       if (code !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-        return reject(
-          new Error(`ffprobe exited with code ${code} for ${mp3Path}: ${stderr || '(no stderr)'}`),
-        );
+        /* #4236 -- stderr and mp3Path are absolute paths; the message is path-free, the
+           full stderr rides on `ffmpegStderr`. */
+        return reject(ffmpegFailure('ffprobe', code, stderr));
       }
       const raw = Buffer.concat(stdoutChunks).toString('utf8').trim();
       const num = Number(raw);
       if (!Number.isFinite(num) || num <= 0) {
-        return reject(new Error(`ffprobe returned non-positive duration for ${mp3Path}: ${raw}`));
+        return reject(new Error(`ffprobe returned non-positive duration: ${raw}`));
       }
       resolve(num);
     });
@@ -436,7 +437,7 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
       }
       if (code === 0) return resolve();
       const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-      reject(new Error(`ffmpeg exited with code ${code}: ${stderr || '(no stderr)'}`));
+      reject(ffmpegFailure('ffmpeg', code, stderr));
     });
   });
 }

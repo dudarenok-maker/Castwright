@@ -49,6 +49,7 @@ import {
 } from '../workspace/queue-io.js';
 import { resolveChapterEngineStamp } from '../workspace/queue-engine-stamp.js';
 import { parseReviewRequest, INVALID_REVIEW } from './review-request.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const queueRouter = Router();
 
@@ -64,7 +65,7 @@ queueRouter.get('/', async (_req: Request, res: Response) => {
     res.json({ entries: file.entries, paused: file.paused, recycling });
   } catch (e) {
     console.error('[queue] GET failed', e);
-    res.status(500).json({ error: (e as Error).message });
+    res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
   }
 });
 
@@ -159,7 +160,7 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
       /* Duplicate-id rejection from enqueue() lands here. The frontend
          should re-mint and retry; surface 409 so it knows the difference
          from a 500. */
-      res.status(409).json({ error: (e as Error).message });
+      res.status(409).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -182,7 +183,7 @@ queueRouter.post('/reorder', async (req: Request, res: Response) => {
     } catch (e) {
       /* Mismatch = client raced a concurrent enqueue. 409 so the
          frontend can refetch + retry without surfacing as a 500. */
-      res.status(409).json({ error: (e as Error).message });
+      res.status(409).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -204,7 +205,7 @@ queueRouter.post('/pause', async (req: Request, res: Response) => {
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -232,7 +233,7 @@ queueRouter.post('/clear', async (req: Request, res: Response) => {
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -271,7 +272,7 @@ queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -298,7 +299,7 @@ queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -317,7 +318,7 @@ queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -338,7 +339,7 @@ queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Respons
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -357,7 +358,7 @@ queueRouter.post('/:entryId/skip-fallback', async (req: Request, res: Response) 
       await writeQueueFile(queueJsonPath(), after);
       res.json({ entries: after.entries, paused: after.paused });
     } catch (e) {
-      res.status(500).json({ error: (e as Error).message });
+      res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });
@@ -380,7 +381,7 @@ queueRouter.delete('/:entryId', async (req: Request, res: Response) => {
     } catch (e) {
       /* in_progress rejection from cancel() (force not set) — 409 because the
          user must Pause first for a normally-cancellable in-flight entry. */
-      res.status(409).json({ error: (e as Error).message });
+      res.status(409).json({ error: requestFailureMessageFs(e, (e as Error).message) });
     }
   });
 });

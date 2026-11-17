@@ -212,6 +212,47 @@ describe('voice-sample router', () => {
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');
     });
+
+    /* #4236 -- the cache write (`writeFile(filePath, mp3)`) failing, or any fs fault under the route, reaches the
+       same catch; a node fs error's message embeds the absolute cache path. */
+    it('answers a path-free 502 tts_failed message when an fs error reaches the catch', async () => {
+      /* The real Node shape of a write-syscall failure (an fd write): code + syscall, NO `path`, and no
+         path in the message -- so it skips the early `isFsPathError` arm and only the final
+         `requestFailureMessageFs` curates it. */
+      synthesize.mockRejectedValueOnce(
+        Object.assign(new Error('ENOSPC: no space left on device, write'), {
+          code: 'ENOSPC',
+          syscall: 'write',
+        }),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_y/sample')
+        .send({ modelKey: 'coqui-xtts-v2', voice: { id: 'v_y', character: 'Y' }, text: 'Hi.' });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('tts_failed');
+      expect(res.body.message).not.toContain(audioDir);
+      expect(res.body.message).toBe(
+        'Files could not be read or written. Check free disk space and folder permissions.',
+      );
+    });
+
+    /* An fs error's message embeds the path; a folder titled "The Quota" must not read as a rate limit. */
+    it('answers 502 tts_failed, not 429 rate_limited, for an fs error on a path containing "quota"', async () => {
+      const abs = join(audioDir, 'The Quota', 'voice-sample-abc.mp3');
+      synthesize.mockRejectedValueOnce(
+        Object.assign(new Error(`EBUSY: resource busy or locked, open '${abs}'`), {
+          code: 'EBUSY',
+          syscall: 'open',
+          path: abs,
+        }),
+      );
+      const res = await request(app)
+        .post('/api/voices/v_y/sample')
+        .send({ modelKey: 'coqui-xtts-v2', voice: { id: 'v_y', character: 'Y' }, text: 'Hi.' });
+      expect(res.status).toBe(502);
+      expect(res.body.code).toBe('tts_failed');
+      expect(res.body.message).not.toContain('Quota');
+    });
   });
 
   describe('evidence-driven sample text (no text in body)', () => {

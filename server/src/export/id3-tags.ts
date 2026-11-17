@@ -23,6 +23,7 @@
      cover (opt)  → APIC (embedded JPEG/PNG, attached_pic disposition) */
 
 import { spawn } from 'node:child_process';
+import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
 
 export interface Id3Tags {
   title: string;
@@ -109,7 +110,7 @@ export async function applyId3v24Tags(
     child.on('close', (code) => {
       if (code === 0) return resolve();
       const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-      reject(new Error(`ffmpeg exited with code ${code}: ${stderr || '(no stderr)'}`));
+      reject(ffmpegFailure('ffmpeg', code, stderr));
     });
   });
 }

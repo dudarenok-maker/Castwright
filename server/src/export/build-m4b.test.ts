@@ -27,6 +27,7 @@ import {
   buildConcatList,
   escapeConcatSingleQuotes,
   ExportIncompleteError,
+  probeDurationSec,
 } from './build-m4b.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -280,6 +281,49 @@ describeIfTools('buildM4b', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
+  /* #4236 -- ffprobe's stderr names the input path; the rejection's message must not, and the
+     stderr stays on the error for the export job's log. */
+  it('probeDurationSec rejects with a path-free message and keeps the stderr on the error', async () => {
+    const bad = join(tmpRoot, 'not-audio.mp3');
+    writeFileSync(bad, 'this is not an mp3 at all');
+    const err = await probeDurationSec(bad).then(
+      () => null,
+      (e: Error & { ffmpegStderr?: string }) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/^ffprobe exited with code \d+/);
+    expect(err!.message).not.toContain(tmpRoot);
+    expect(err!.message).not.toContain('not-audio.mp3');
+    expect(err!.ffmpegStderr).toContain('not-audio.mp3');
+  });
+
+  /* #4236 -- the non-positive-duration rejection must not carry the input path either. A WAV with a
+     header and no samples probes as a zero-length file: ffprobe exits 0 and reports duration 0. */
+  it('probeDurationSec rejects a zero-length file with a path-free message', async () => {
+    const empty = join(tmpRoot, 'empty-audio.wav');
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(36, 4);
+    header.write('WAVEfmt ', 8, 'ascii');
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(44100, 24);
+    header.writeUInt32LE(88200, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36, 'ascii');
+    header.writeUInt32LE(0, 40);
+    writeFileSync(empty, header);
+    const err = await probeDurationSec(empty).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/^ffprobe returned non-positive duration/);
+    expect(err!.message).not.toContain(tmpRoot);
+    expect(err!.message).not.toContain('empty-audio.wav');
+  });
   it('produces an MP4 audio file with AAC mono 44.1 kHz and one chapter per non-excluded source', async () => {
     const result = await buildM4b({ bookDir, state: makeState(), outPath });
 
@@ -403,9 +447,18 @@ describeIfTools('buildM4b', () => {
       /* Verbatim: ffmpeg sees the TS stream and the mux fails. */
       writeFileSync(coverPath, poisoned);
       expect(probeFormat(coverPath)).toContain('mpegts');
-      await expect(
-        buildM4b({ bookDir, state: makeState(), outPath: join(tmpRoot, 'poisoned.m4b') }),
-      ).rejects.toThrow(/ffmpeg exited/);
+      const failure = await buildM4b({
+        bookDir,
+        state: makeState(),
+        outPath: join(tmpRoot, 'poisoned.m4b'),
+      }).then(
+        () => null,
+        (e: Error & { ffmpegStderr?: string }) => e,
+      );
+      expect(failure?.message).toMatch(/^ffmpeg exited with code/);
+      /* #4236 -- the message is path-free; the full stderr rides on `ffmpegStderr`. */
+      expect(failure?.message).not.toContain(tmpRoot);
+      expect(failure?.ffmpegStderr).toBeTruthy();
 
       /* After the upload path's re-encode the same bytes mux cleanly. */
       writeFileSync(coverPath, await reencodeToJpeg(poisoned, { tolerant: true }));

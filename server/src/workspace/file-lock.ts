@@ -254,7 +254,9 @@ export function isFsError(err: unknown): boolean {
  *  deliberate user-facing ones included, still passes through verbatim. */
 export function requestFailureMessageFs(err: unknown, fallback: string): string {
   if (isLockAcquisitionTimeout(err)) return LOCK_CONTENTION_REQUEST_ERROR;
-  if (isFsError(err)) {
+  /* #4236 -- a child-process spawn failure (`spawn ffmpeg ENOENT`) has a code and
+     a syscall too, but names a binary, not a file: it keeps the caller's message. */
+  if (isFsError(err) && !/^spawn/.test(String((err as { syscall?: unknown }).syscall))) {
     console.error('[file-lock] fs error curated out of a response body', err);
     return PERMANENT_FS_CODES.has((err as { code: string }).code)
       ? FS_PERMANENT_FAILURE_REQUEST_ERROR

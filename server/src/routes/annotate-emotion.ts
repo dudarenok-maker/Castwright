@@ -34,6 +34,7 @@ import {
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
 import { resolveCapacity } from '../analyzer/capacity.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import {
   buildCharsByChapter,
   chapterPacingPhaseFields,
@@ -331,7 +332,8 @@ annotateEmotionRouter.post(
           }
           /* One bad chapter shouldn't kill the whole pass — report it and
              carry on so the rest of the book still gets annotated. */
-          send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+          console.error('[annotate-emotion] chapter failed', chapterId, err);
+          send({ kind: 'chapter-failed', chapterId, message: requestFailureMessageFs(err, (err as Error).message) });
         } finally {
           /* A failed chapter still took real wall-clock time — count it
              toward the pacing rate so the next chapter's ETA stays honest. */

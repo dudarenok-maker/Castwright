@@ -33,6 +33,7 @@ import {
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
 import { resolveCapacity } from '../analyzer/capacity.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import {
   buildCharsByChapter,
   chapterPacingPhaseFields,
@@ -330,7 +331,8 @@ instructAnnotationRouter.post(
           }
           /* One bad chapter shouldn't kill the whole pass — report it and
              carry on so the rest of the book still gets annotated. */
-          send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
+          console.error('[instruct-annotation] chapter failed', chapterId, err);
+          send({ kind: 'chapter-failed', chapterId, message: requestFailureMessageFs(err, (err as Error).message) });
         } finally {
           ({ actualMsTotal, actualCharsTotal } = accumulateChapterPacing(
             { actualMsTotal, actualCharsTotal },
