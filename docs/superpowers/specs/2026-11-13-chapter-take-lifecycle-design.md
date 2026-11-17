@@ -2655,13 +2655,13 @@ as today. A crash in the window is undone the same way by replay.
     GET-side edits/cache reconciliation (`book-state.ts:598-606`, the filter at `:660-675`) covered it. It does not: that
     reconciliation drops edits by sentence-id range, not by chapter renumbering (pass 4). The claim
     is withdrawn, and the gap is listed under Remaining as a pre-existing, accepted residual whose
-    fix is #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) still says
+    fix is #4227's own design pass, outside this design (§8.3). The restructure's own comment (`chapters-restructure.ts:605-609`) said
     partial state "is recoverable via the reconciliation filter". #4224 (merged at `33f3647c`)
     corrected only its anchor, to `book-state.ts:660-675`, where the filter keeps an edit whose id
     is still in the cache or above its maximum and drops the rest, by sentence-id range. That does
-    not recover a renumbering, so the claim is still false. Phase 4 corrects the claim itself,
-    unconditionally (pass 7, J13).
-    **Update (2026-11-17, #4227):** closed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
+    not recover a renumbering, so the claim was false. PR #4313 (#4227) has since rewritten that
+    comment (pass 7, J13).
+    **Update (2026-11-17, #4227):** narrowed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
   - Pending entries are not reconciled by replay. A server-recorded entry carries `chapterUuid` and
     its render times, so `entryMatchesChapter` refuses it on the wrong chapter
     (`revisions-store.ts:199-203`, widened as in Retry recognition).
@@ -3092,8 +3092,10 @@ an open question of this design):
   `manuscript-edits.json` keyed to the pre-restructure chapters. This is pre-existing on `main`, and
   it is **not** covered by the GET-side reconciliation, which drops edits by sentence-id range
   (revision 5 withdraws revision 4's claim). The design keeps it from spreading: a parked edits
-  write skips the cache rebuild (§5.A Restructure). Closing it is #4227's own design pass, outside
-  this design (§8.3);
+  write skips the cache rebuild (§5.A Restructure). Closing it was #4227's own design pass, outside
+  this design (§8.3). **Update (2026-11-18, #4227):** narrowed by #4227's edits journal, which
+  replays the edits rewrite at the next restructure or at server start. A failed edits save followed
+  by a script edit before the next chapter change still leaves the gap, as on `main`;
 - **a file the OS refuses to rename under every name** keeps the slugs a stuck journal names
   blocked, and only those, until the user removes the cause and tries again (R5-3, R5-4, R6-3);
 - **stray Qwen tiers after a pass that does not reconcile** (E7, E8, E9, E11, E13): a tier that a
@@ -3950,7 +3952,7 @@ first.
    and the restructure refusal (R5-3, R5-4); no cache rebuild after a parked edits write;
    `buildAudioOps`' presence test as `audioRenderedAt` **or** a take on disk (R8-7); the restructure
    sentence for every code (R8-2, J12); the comment at `chapters-restructure.ts:605-609` corrected,
-   unconditionally. #4224 moved its anchor to `book-state.ts:660-675`, but its claim that partial
+   unconditionally (already done by #4313, #4227). #4224 moved its anchor to `book-state.ts:660-675`, but its claim that partial
    state "is recoverable via the reconciliation filter" is still false, because that filter drops
    edits by sentence-id range and does not recover a renumbering (#4227, J13).
 2. Reject and `restore-unrecorded` refuse `book_busy` during an export (OD7).
@@ -4058,18 +4060,22 @@ listed both as not named (revision 10 changelog), and revision 11 moves them her
 
 ### 8.3 Outside this design (pre-existing on `main`, with its own ticket)
 
-The one item here is not an open question of this design. It is a gap that exists on `main` today,
-and this design neither closes it nor widens it. It has its own ticket, and that ticket holds the
-decision it owes. In this design it is an accepted residual (§5.A Remaining).
+The one item here is not an open question of this design. It was a gap that existed on `main`, and
+this design neither closes it nor widens it. It shipped through its own ticket, #4227's edits
+journal, which narrowed it; one residual remains (below). In this design it is an accepted
+residual (§5.A Remaining).
 
-- **The edits/cache gap after restructure's state write (design pass owed, #4227).** A crash, or a
+- **The edits/cache gap after restructure's state write (shipped via #4227's edits journal, narrowed; one gap remains).** A crash, or a
   parked failure, between restructure's `state.json` write and its `manuscript-edits.json` write
   leaves the saved sentences keyed to the pre-restructure chapters. `main` has the same gap after a
   crash there, and the GET-side reconciliation does not close it (§5.A Restructure). The decision
   owed is which behaviour is right: replaying the edits rewrite from a journal (its payload is every
-  sentence), marking the saved sentences stale, or discarding them. #4227 holds those three options.
+  sentence), marking the saved sentences stale, or discarding them. #4227 chose the journal.
   This design only keeps the cache rebuild from compounding it.
-  **Update (2026-11-17, #4227):** closed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
+  **Remaining gap:** a failed edits save followed by a script edit before the next chapter change
+  still leaves the gap, as on `main` (the client's save changes the edits file's sha, so the
+  journal is discarded rather than applied).
+  **Update (2026-11-17, #4227):** narrowed on `main` by a separate edits journal (`.audiobook/restructure-edits-journal.json`, `workspace/restructure-edits-journal.ts`), written before the state write and replayed at the next restructure or at server start; it adds no `state.json` field and is independent of the relabel journal above.
 
 ### 8.4 On-box acceptance owed (not a design question)
 
