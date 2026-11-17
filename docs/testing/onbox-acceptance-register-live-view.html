@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="127" data-publish-id="fd9c37bd2c90"></div>
+  <div hidden data-published-as="128" data-publish-id="7f07af425057"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">81</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">82</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->46<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->47<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">46 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">47 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -950,6 +950,20 @@
         <li><strong>Then keep the evidence.</strong> Copy the files above to a folder outside any worktree before tearing anything down.</li>
         </ul>
         <p class="src">the GPU box on Windows with the real sidecar (the exit-code line comes from it) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4054">#4054</a> &#183; criteria in this row</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A125</span><span class="iname">A model the admission is for is not evicted by its own admission</span><span class="risk">single 8 GB card, real Qwen sidecar</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests prove the admission decisions with a fake probe and fake engines: a mint, a design, a GPU ASR op and a GPU speaker op never run the idle-evict step for the model they are about to use. A mint and a design book their FULL peak and credit the resident weights only in their own fit check, so no second admission is let into VRAM they have yet to allocate; a resident ASR or speaker model books its warm amount. They cannot show that the decisions are safe on real VRAM. In particular whether a real mint (the 0.6B base plus decode beside the resident 1.7B-Base) and a real design (VoiceDesign plus the audition base) fit without a CUDA out-of-memory. Only a real GPU, a real Qwen sidecar and real mints and designs show that. Sidecar logs are in <code>logs/tts.err.log</code>. A refusal (<code>noCapacity</code>) leaves no line there and the server retries it silently, so count refusals in the append-only <code>logs/tts.log</code> instead, which holds uvicorn&#39;s access lines, for example <code>&quot;POST /qwen/design-voice HTTP/1.1&quot; 503</code>. From the repo root, before the run: <code>$n = @(Get-Content logs/tts.log).Count</code>. After it: <code>Get-Content logs/tts.log | Select-Object -Skip $n | Select-String &#39;POST /qwen/(mint-variant|design-voice) HTTP/1\.1&quot; 503&#39;</code>. Record the number of matching lines per route (<code>/qwen/mint-variant</code> for mints, <code>/qwen/design-voice</code> for designs). &quot;No <code>noCapacity</code>&quot; below means zero such lines for the route that bullet exercises.</p>
+        <ul>
+        <li><strong>Back-to-back mints keep the 1.7B-Base.</strong> On a fresh sidecar, render one Quality line so the 1.7B-Base is resident, then mint three emotion takes in a row for one designed voice. <code>logs/tts.err.log</code> has no <code>Qwen 1.7B-Base unloaded (evicted for admission).</code> and no second <code>Qwen 1.7B-Base loaded.</code> between the takes; each take completes; there is no CUDA out-of-memory and no 503 line for <code>POST /qwen/mint-variant</code> in the <code>logs/tts.log</code> count above. Record the peak <code>nvidia-smi</code> used memory (MB) during a take. A take run with the 0.6B base also resident (take 2 onward, after a design or an earlier mint) can be refused once (one <code>/qwen/mint-variant</code> 503 line, then the mint lever frees the 0.6B and the retry completes): that is the known residual tracked in #4237, not this row failing. Record the 503 count and the &quot;unloaded to free VRAM&quot; notice naming the 0.6B base; the 1.7B-Base must still not unload. Nothing logs the refusal&#39;s <code>neededMb</code>, so do not try to record it.</li>
+        <li><strong>A tight card refuses the mint without unloading the base.</strong> Make the 1.7B-Base resident FIRST (render one Quality line), THEN press Load for the 0.6B and for Kokoro on the GPU, so the card is otherwise filled (loading them first and the 1.7B-Base after is undone by the Quality line&#39;s own capacity lever, which frees the 0.6B and Kokoro). Start a mint. It either completes or is refused for capacity (a 503 line for <code>POST /qwen/mint-variant</code> in the <code>logs/tts.log</code> count, which the server retries). Afterwards <code>GET /health</code> still reports the 1.7B-Base loaded, the log has no <code>Qwen 1.7B-Base unloaded (evicted for admission).</code> line and no second <code>Qwen 1.7B-Base loaded.</code> line, and the TTS notices show no &quot;unloaded to free VRAM&quot; notice that names the 1.7B base. Record which outcome you saw and the 503 count.</li>
+        <li><strong>GPU ASR keeps its model.</strong> Set <code>ASR_DEVICE=cuda</code> (Settings, Content-QA device; changing it restarts the sidecar) and <code>SEG_ASR_ENABLED=true</code> (ASR QA enabled), then render a chapter. <code>Whisper ASR model unloaded.</code> never appears within a few seconds before a <code>Loading Whisper ASR model=... device=cuda</code> line during the render. A single load line at the first QA check is expected; record how many load lines the render logged.</li>
+        <li><strong>GPU speaker check keeps its model.</strong> Set <code>SPK_DEVICE=cuda</code> (Settings, Voice-QA device; restarts the sidecar) with the speaker check on (<code>qa.speaker.enabled</code>), then render a chapter with two or more voices. <code>ECAPA speaker model unloaded.</code> never appears during the render (the sidecar has no ECAPA load log line, so confirm residency with <code>nvidia-smi</code>: the sidecar&#39;s used memory does not drop and re-rise by about 200 MB between checks). <code>ECAPA speaker model freed after &gt;Ns idle (watchdog).</code> after the render is the idle watchdog and is fine.</li>
+        <li><strong>Back-to-back designs keep VoiceDesign.</strong> Design two voices in a row on the tight card with the base-voices-only &quot;Design full cast&quot; scope (the Both scope mints each character&#39;s variants between designs, and a mint unloads VoiceDesign, so a second <code>Loading Qwen VoiceDesign</code> line is expected there). The log has no second <code>Loading Qwen VoiceDesign</code> line and no <code>Qwen VoiceDesign unloaded</code> line between the designs; the second design starts within seconds (no wait for the idle watchdog) and completes with no CUDA out-of-memory and no 503 line for <code>POST /qwen/design-voice</code> in the <code>logs/tts.log</code> count. Measure &quot;within seconds&quot; from the <code>qwen voice design: ... load_ms=... total_ms=...</code> line in <code>logs/tts.err.log</code>: it is timestamped when the design ends and <code>total_ms</code> excludes the admission wait, so the design&#39;s start is that line&#39;s timestamp minus its <code>total_ms</code>; subtract the first design&#39;s line timestamp to get the gap between the two, which is the admission wait plus any idle time you left. Also record <code>load_ms</code>, near 0 when VoiceDesign stayed warm. <code>Qwen VoiceDesign freed after &gt;120s idle (watchdog).</code> after a quiet pause is the idle watchdog and is fine; a plain <code>Qwen VoiceDesign unloaded (Base stays resident).</code> line is any VoiceDesign free, including an admission eviction, so it does not prove the watchdog. Record the <code>nvidia-smi</code> peak during a design. Known risk, not a failure of this row: the allocator cache a design leaves behind can make a design that follows within the 30 s per-card reclaim cooldown get a 503 and wait up to 30 s; a wait that ends at <code>freed after &gt;120s idle (watchdog)</code> is the idle-watchdog band instead (plan 264). To tell them apart, record <code>GET /health</code> <code>vram_reserved_mb</code> between the two designs.</li>
+        </ul>
+        <p class="src">the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed; GPU ASR and GPU speaker check for bullets 3-4 &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4102">#4102</a> &#183; criteria in this row</p>
       </div>
     </details>
 

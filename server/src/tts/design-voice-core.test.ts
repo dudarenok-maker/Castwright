@@ -219,6 +219,31 @@ describe('runVoiceDesign', () => {
     expect(mockEvictIdleQwenBase.mock.calls[0][0].quiet).toBe(q);
   });
 
+  it('#4102 — a mint target hands the lever purpose "mint" (keeps the 1.7B-Base); the default stays "design"', async () => {
+    const { postDesignAndCacheAudition } = await import('./design-voice-core.js');
+    const seen: Array<string | undefined> = [];
+    mockWithCapacityRetry.mockImplementation(async (_doPost, opts) => {
+      mockEvictIdleQwenBase.mockClear();
+      const q: QuietPollState = { minGapMs: 0, sawRepair: false, idleSince: null, epoch: null };
+      await opts.evictIdleTts!('cuda:0', q);
+      seen.push(mockEvictIdleQwenBase.mock.calls[0][0].purpose);
+      throw new Error('stop');
+    });
+    const base = {
+      target: 'http://sidecar/qwen/mint-variant',
+      fetchBody: '{}',
+      outVoiceId: 'v',
+      cacheScope: 's',
+      modelKey: 'qwen3-tts-1.7b' as const,
+      calibrationText: 't',
+      sidecarUrl: 'http://sidecar',
+      logContext: 'x',
+    };
+    await expect(postDesignAndCacheAudition({ ...base, purpose: 'mint' })).rejects.toBeTruthy();
+    await expect(postDesignAndCacheAudition(base)).rejects.toBeTruthy();
+    expect(seen).toEqual(['mint', 'design']);
+  });
+
   it("#1839 finding 4 — a capacity failure's own message (naming the blocking model) reaches the caller, not a generic fallback", async () => {
     const blockers = [{ model: 'Coqui XTTS', remedy: 'Use its Stop button, at the top of the window.' }];
     mockWithCapacityRetry.mockRejectedValue(
