@@ -33,7 +33,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import pytest
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
