@@ -239,7 +239,6 @@ interface AllowEntry {
 const ALLOWLIST: Record<string, AllowEntry> = {
   'audio/finalize-chapter-write.ts': { count: 13, removedBy: 4333, reason: "job writer builds and writes the live take" },
   'audio/previous-audio.ts': { count: 7, removedBy: 4334, reason: "preserve/restore/revisions builds previous-take paths" },
-  'audio/qa-report.ts': { count: 1, removedBy: 4329, reason: "scan/heal reads and writes take parts" },
   'audio/render-integrity/aggregate.ts': { count: 3, removedBy: 4332, reason: "audio/tts/scoring helper builds or writes take parts" },
   'audio/render-integrity/verdicts-io.ts': { count: 2, removedBy: 4332, reason: "audio/tts/scoring helper builds or writes take parts" },
   'audio/segments-io.ts': { count: 1, removedBy: 4332, reason: "audio/tts/scoring helper builds or writes take parts" },
@@ -258,7 +257,6 @@ const ALLOWLIST: Record<string, AllowEntry> = {
   'tts/voice-sample-cache.ts': { count: 1, removedBy: 4332, reason: "rule-1 false positive: a voice-sample cache file name (<scope>-<model>-<hash>.mp3), not a take path; #4332 narrows or reroutes it" },
   'workspace/fsck-orphan-audio.ts': { count: 8, removedBy: 4335, reason: "fsck probes and removes take files" },
   'workspace/preserve-previous-audio.ts': { count: 7, removedBy: 4334, reason: "preserve/restore/revisions builds previous-take paths" },
-  'workspace/scan.ts': { count: 1, removedBy: 4329, reason: "scan/heal reads and writes take parts" },
 };
 
 /* ---------------------------------------------------------------------------
@@ -324,8 +322,8 @@ describe('chapter take guard (#4328, spec §5.A) - tree scan', () => {
   it('the scan is real: it walks many files and finds the known sites (a scan that finds nothing proves nothing)', () => {
     expect(collectSourceFiles(SRC_ROOT).length).toBeGreaterThan(300);
     const found = scanTree();
-    expect(found.size).toBeGreaterThan(20);
-    for (const rel of ['audio/finalize-chapter-write.ts', 'routes/book-state.ts', 'workspace/scan.ts']) {
+    expect(found.size).toBeGreaterThan(2); // the permanent entries alone are 3
+    for (const rel of ['routes/book-state.ts', 'routes/generation.ts', 'import/scan-import-folder.ts']) {
       expect(found.has(rel), `${rel}: expected take-path hits`).toBe(true);
     }
   });
