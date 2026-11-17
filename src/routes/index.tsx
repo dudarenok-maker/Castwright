@@ -966,15 +966,16 @@ export function ReadyRoute() {
   const { bookId = '', view: rawView } = useParams<{ bookId: string; view: string }>();
   const [searchParams] = useSearchParams();
   const view: View = (VALID_VIEWS as string[]).includes(rawView ?? '') ? (rawView as View) : 'cast';
-  const currentChapterId = parseChapterParam(searchParams.get('chapter')) ?? 3;
+  const namedChapter = parseChapterParam(searchParams.get('chapter'));
+  const currentChapterId = namedChapter ?? 3;
+  // #4212 — true only when a numeric ?chapter= named it, so stageToHash keeps ?chapter=3.
+  const chapterExplicit = namedChapter != null;
   const openProfileId = searchParams.get('profile');
 
-  useHydrateStage({ kind: 'ready', bookId, view, currentChapterId, openProfileId }, [
-    bookId,
-    view,
-    currentChapterId,
-    openProfileId,
-  ]);
+  useHydrateStage(
+    { kind: 'ready', bookId, view, currentChapterId, chapterExplicit, openProfileId },
+    [bookId, view, currentChapterId, chapterExplicit, openProfileId],
+  );
 
   return <ReadyViewSwitch view={view} bookId={bookId} currentChapterId={currentChapterId} />;
 }
