@@ -692,7 +692,7 @@ describe.each(['main', 'subset'] as const)(
       /* Dynamic imports: a static import would load paths.js before beforeAll
          sets WORKSPACE_DIR and freeze the wrong workspace root for the file. */
       const { audioDir } = await import('../workspace/paths.js');
-      const { chapterAudioExists } = await import('../workspace/chapter-audio-file.js');
+      const { chapterAudioExists } = await import('../workspace/chapter-take.js');
       const audio = audioDir(bookDir);
       mkdirSync(audio, { recursive: true });
       const bytes2 = Buffer.from('take-two-bytes');

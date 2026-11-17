@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio } from '../workspace/chapter-take.js';
 import { applyExclude, applyMerge, applyReorder, applySplit, staleTakeClearSlugs } from '../workspace/restructure.js';
 import type { BookStateJson } from '../workspace/scan.js';
 

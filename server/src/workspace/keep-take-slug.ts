@@ -17,7 +17,7 @@
    Read-only fs (at most three existsSync probes), so it is safe inside the
    persist's `updateStateAtDir` callback and takes no lock. */
 
-import { chapterAudioExists } from './chapter-audio-file.js';
+import { chapterAudioExists } from './chapter-take.js';
 
 export function slugKeepingTake(
   prevChapters: readonly { id: number; slug: string }[],

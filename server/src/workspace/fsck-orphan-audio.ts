@@ -1,26 +1,26 @@
 /* Sibling fsck for the chapter-audio rollback-preservation pair (plan 20).
  *
  * The preserve helper (`preserveExistingAsPrevious`, `chapter-take.ts`) renames two files —
- * `<slug>.mp3` and `<slug>.segments.json` — to `<slug>.previous.*` before
+ * `<slug>.{mp3,m4a,ogg}` and `<slug>.segments.json` — to `<slug>.previous.*` before
  * a regen clobbers the live render. The renames are sequential, not
  * atomic: a crash between them leaves a half-preserved state.
  *
  * Three recovery cases this fsck handles, run once on server startup:
  *
- *   (1) `<slug>.previous.mp3` exists, no live `<slug>.{mp3,m4a,ogg}` does.
+ *   (1) `<slug>.previous.{mp3,m4a,ogg}` exists, no live `<slug>.{mp3,m4a,ogg}` does.
  *       — Interpretation: the rename succeeded but the new render never
  *         landed (regen aborted / crashed before writing the new audio).
  *         Recovery: promote the preserved take back to live so the user
  *         doesn't see the chapter as missing audio.
  *
- *   (2) `<slug>.previous.segments.json` exists, `<slug>.previous.mp3`
- *       does NOT.
+ *   (2) `<slug>.previous.segments.json` exists, no `<slug>.previous.<ext>`
+ *       of any extension does.
  *       — Interpretation: orphan segments file. The audio was either
  *         already promoted out (accept/reject path) or the audio rename
  *         failed first. Either way the segments file is dead state.
  *         Recovery: delete the orphan.
  *
- *   (3) `<slug>.previous.mp3` exists alongside a live take of any
+ *   (3) `<slug>.previous.<ext>` exists alongside a live take of any
  *       supported extension (`<slug>.{mp3,m4a,ogg}`).
  *       — Interpretation: valid pending-revision state. Leave alone.
  *
@@ -33,10 +33,18 @@ import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
 import { withBookOpAtDir } from './book-op-lock.js';
-import { findChapterAudio } from './chapter-audio-file.js';
+import {
+  CHAPTER_AUDIO_EXTS,
+  findChapterAudio,
+  findPreviousAudio,
+  liveAudioPath,
+  livePartPath,
+  previousPartPath,
+} from './chapter-take.js';
 import { BOOKS_ROOT, audioDir, bookDirByDisplay } from './paths.js';
 
-const PREV_MP3_RE = /^(.+)\.previous\.mp3$/i;
+/* `<slug>.previous.<ext>` for every audio extension the take module knows. */
+const PREV_AUDIO_RE = new RegExp('^(.+)\\.previous\\.(?:' + CHAPTER_AUDIO_EXTS.join('|') + ')$', 'i');
 const PREV_SEGMENTS_RE = /^(.+)\.previous\.segments\.json$/i;
 
 export interface FsckOrphanAudioResult {
@@ -67,12 +75,12 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
     return { recovered, errors };
   }
 
-  const prevMp3Slugs = new Set<string>();
+  const prevAudioSlugs = new Set<string>();
   const prevSegmentsSlugs = new Set<string>();
   for (const name of entries) {
-    const mp3 = PREV_MP3_RE.exec(name);
-    if (mp3) {
-      prevMp3Slugs.add(mp3[1]);
+    const audio = PREV_AUDIO_RE.exec(name);
+    if (audio) {
+      prevAudioSlugs.add(audio[1]);
       continue;
     }
     const seg = PREV_SEGMENTS_RE.exec(name);
@@ -82,17 +90,20 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
   /* Case 1: previous audio alive without a live counterpart → promote
      it back to live. The corresponding segments file (if any) is
      promoted alongside. */
-  for (const slug of prevMp3Slugs) {
-    const livePath = join(audioRoot, `${slug}.mp3`);
+  for (const slug of prevAudioSlugs) {
     /* Any supported extension counts as live (#3457): an m4a/ogg book's
        live take is never `<slug>.mp3`. */
     if (findChapterAudio(audioRoot, slug)) continue; // case 3 — leave the pair alone
+    /* The previous take keeps its real file type: `.previous.m4a` is promoted
+       to `<slug>.m4a`, never to `<slug>.mp3` (H13). */
+    const previous = findPreviousAudio(audioRoot, slug);
+    if (!previous) continue;
     try {
-      await renameWithRetry(join(audioRoot, `${slug}.previous.mp3`), livePath);
+      await renameWithRetry(previous.path, liveAudioPath(audioRoot, slug, previous.ext));
       if (prevSegmentsSlugs.has(slug)) {
         await renameWithRetry(
-          join(audioRoot, `${slug}.previous.segments.json`),
-          join(audioRoot, `${slug}.segments.json`),
+          previousPartPath(audioRoot, slug, 'segments'),
+          livePartPath(audioRoot, slug, 'segments'),
         );
         prevSegmentsSlugs.delete(slug);
       }
@@ -111,9 +122,8 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
      → drop. We re-check disk state because case 1 may have just
      promoted the matching previous segments. */
   for (const slug of prevSegmentsSlugs) {
-    const previousMp3 = join(audioRoot, `${slug}.previous.mp3`);
-    if (existsSync(previousMp3)) continue; // pair survived — leave alone
-    const orphan = join(audioRoot, `${slug}.previous.segments.json`);
+    if (findPreviousAudio(audioRoot, slug)) continue; // pair survived — leave alone
+    const orphan = previousPartPath(audioRoot, slug, 'segments');
     if (!existsSync(orphan)) continue; // already cleaned
     try {
       await unlink(orphan);

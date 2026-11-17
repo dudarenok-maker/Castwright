@@ -156,4 +156,88 @@ describe('fsckOrphanAudio', () => {
     expect(existsSync(join(audioRoot, '09-chapter-9.mp3'))).toBe(true);
     expect(existsSync(join(audioRoot, '09-chapter-9.previous.mp3'))).toBe(true);
   });
+
+  /* #4335 — the fsck promotes with the previous take's REAL extension (H13). */
+  it('F1: a lone .previous.m4a plus its segments is promoted to <slug>.m4a and <slug>.segments.json', async () => {
+    seedFile('11-chapter-11.previous.m4a', 'm4a bytes');
+    seedFile('11-chapter-11.previous.segments.json', '{"segments":[]}');
+
+    const result = await fsckOrphanAudio(audioRoot);
+
+    expect(result.errors).toEqual([]);
+    expect(result.recovered).toEqual([
+      { audioRoot, slug: '11-chapter-11', action: 'promoted-previous-to-live' },
+    ]);
+    expect(readFileSync(join(audioRoot, '11-chapter-11.m4a'), 'utf8')).toBe('m4a bytes');
+    expect(existsSync(join(audioRoot, '11-chapter-11.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '11-chapter-11.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '11-chapter-11.previous.m4a'))).toBe(false);
+    expect(existsSync(join(audioRoot, '11-chapter-11.previous.segments.json'))).toBe(false);
+  });
+
+  it('F2: the same with ogg', async () => {
+    seedFile('12-chapter-12.previous.ogg', 'ogg bytes');
+    seedFile('12-chapter-12.previous.segments.json', '{"segments":[]}');
+
+    const result = await fsckOrphanAudio(audioRoot);
+
+    expect(result.errors).toEqual([]);
+    expect(result.recovered).toEqual([
+      { audioRoot, slug: '12-chapter-12', action: 'promoted-previous-to-live' },
+    ]);
+    expect(readFileSync(join(audioRoot, '12-chapter-12.ogg'), 'utf8')).toBe('ogg bytes');
+    expect(existsSync(join(audioRoot, '12-chapter-12.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '12-chapter-12.segments.json'))).toBe(true);
+  });
+
+  it('F3: an mp3 book behaves as before (pin)', async () => {
+    seedFile('13-chapter-13.previous.mp3', 'mp3 bytes');
+    seedFile('13-chapter-13.previous.segments.json', '{"segments":[]}');
+
+    const result = await fsckOrphanAudio(audioRoot);
+
+    expect(result.errors).toEqual([]);
+    expect(result.recovered).toEqual([
+      { audioRoot, slug: '13-chapter-13', action: 'promoted-previous-to-live' },
+    ]);
+    expect(readFileSync(join(audioRoot, '13-chapter-13.mp3'), 'utf8')).toBe('mp3 bytes');
+    expect(existsSync(join(audioRoot, '13-chapter-13.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '13-chapter-13.previous.mp3'))).toBe(false);
+  });
+
+  it('F4: a live take of one extension beside a previous of another is left alone, both directions (#3457)', async () => {
+    seedFile('14-chapter-14.ogg', 'live ogg');
+    seedFile('14-chapter-14.previous.mp3', 'prev mp3');
+    seedFile('15-chapter-15.mp3', 'live mp3');
+    seedFile('15-chapter-15.previous.m4a', 'prev m4a');
+
+    const result = await fsckOrphanAudio(audioRoot);
+
+    expect(result.errors).toEqual([]);
+    expect(result.recovered).toEqual([]);
+    expect(existsSync(join(audioRoot, '14-chapter-14.ogg'))).toBe(true);
+    expect(existsSync(join(audioRoot, '14-chapter-14.previous.mp3'))).toBe(true);
+    expect(existsSync(join(audioRoot, '14-chapter-14.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '15-chapter-15.mp3'))).toBe(true);
+    expect(existsSync(join(audioRoot, '15-chapter-15.previous.m4a'))).toBe(true);
+    expect(existsSync(join(audioRoot, '15-chapter-15.m4a'))).toBe(false);
+  });
+
+  it('F5: an orphan previous segments file beside .previous.ogg survives; with no previous audio of any extension it is dropped', async () => {
+    seedFile('16-chapter-16.mp3', 'live'); // live take, so case 1 does not promote
+    seedFile('16-chapter-16.previous.ogg', 'prev ogg');
+    seedFile('16-chapter-16.previous.segments.json', '{"segments":[]}');
+    seedFile('17-chapter-17.mp3', 'live');
+    seedFile('17-chapter-17.previous.segments.json', '{"segments":[]}');
+
+    const result = await fsckOrphanAudio(audioRoot);
+
+    expect(result.errors).toEqual([]);
+    expect(result.recovered).toEqual([
+      { audioRoot, slug: '17-chapter-17', action: 'dropped-orphan-segments' },
+    ]);
+    expect(existsSync(join(audioRoot, '16-chapter-16.previous.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '16-chapter-16.previous.ogg'))).toBe(true);
+    expect(existsSync(join(audioRoot, '17-chapter-17.previous.segments.json'))).toBe(false);
+  });
 });
