@@ -764,12 +764,13 @@ export interface SynthesiseChapterOpts {
       splitting without touching process env. Clamped to >= 1. Only Qwen
       sentences are ever batched — see the dispatch partition below. */
   qwenBatchSize?: number;
-  /** Hard width cap for the 1.7B Quality tier specifically (8 GB OOM guard).
-      The 1.7B-Base is ~3.4 GB resident, so a 1.7B batch as wide as the 0.6B
-      default OOMs an 8 GB card mid-forward → recycle storm. The packer applies
-      this to the 1.7B bucket only; 0.6B groups keep `qwenBatchSize`. Defaults to
-      the `tts.batch.size17b` knob, read per render (env `QWEN_BATCH_SIZE_17B`, default
-      32). Clamped to >= 1. */
+  /** Hard width cap for the 1.7B Quality tier specifically (small-card OOM guard).
+      The 1.7B-Base is ~3.4 GB resident; since #1162 evicts the unused 0.6B base
+      first, the default 32 fits an 8 GB card, but a batch that wide can still OOM
+      a card smaller than that mid-forward → recycle storm, so lower it there. The
+      packer applies this to the 1.7B bucket only; 0.6B groups keep `qwenBatchSize`.
+      Defaults to the `tts.batch.size17b` knob, read per render (env
+      `QWEN_BATCH_SIZE_17B`, default 32). Clamped to >= 1. */
   qwenBatchSize17b?: number;
   /** Token-budget for the 1.7B tier only. Defaults to the
       `tts.batch.tokenBudget17b` knob, read per render (env
