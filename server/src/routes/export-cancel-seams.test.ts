@@ -119,7 +119,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.readdir(...a);
   }) as typeof actual.readdir;
-  return { ...actual, readdir, default: { ...actual, readdir } };
+  /* `cancelRm` holds the first removal of a job-private `.partial-` path: that is
+     bailIfCancelled's own rm, reached right after the post-copy syncPath patch
+     and before the job's catch/finally rewrite the map entry. */
+  const rm = (async (...a: Parameters<typeof actual.rm>) => {
+    if (seam.holds.cancelRm && String(a[0]).includes('.partial-')) await seam.maybeHold('cancelRm');
+    return actual.rm(...a);
+  }) as typeof actual.rm;
+  return { ...actual, readdir, rm, default: { ...actual, readdir, rm } };
 });
 
 const AUTHOR = 'Seam Author';
@@ -309,6 +316,76 @@ describe('cancel seams (#4223)', () => {
     }
   });
 
+  const SYNC_SENTENCE = 'Cancelled by user. The files were already copied to the sync folder.';
+
+  it('a cancel after the sync commit records the sync-folder sentence, publishes syncPath to the map before the job settles, and does not revert the cancel (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-sync-reason-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      const commit = seam.arm('syncCommit');
+      const bail = seam.arm('cancelRm');
+      const job = await post('mp3-zip', 'sync-folder');
+      await commit.entered;
+      expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
+      commit.release();
+      /* The job is now inside bailIfCancelled's rm: the syncPath patch has run, but
+         the job's own catch/finally have not yet rewritten the map entry. What
+         the map holds here is only what the patch did, so a patch that copied
+         the job's own in_progress object over it would show up as a revert. */
+      await bail.entered;
+      const syncFile = join(syncRoot, AUTHOR, job.filename);
+      const midway = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(midway.status).toBe('cancelled');
+      expect(midway.syncPath).toBe(syncFile);
+      expect(midway.errorReason).toBe(SYNC_SENTENCE);
+      bail.release();
+      await awaitInFlightJobs();
+
+      const mem = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(mem.status).toBe('cancelled');
+      expect(mem.syncPath).toBe(syncFile);
+      expect(mem.errorReason).toBe(SYNC_SENTENCE);
+      expect(manifestOf(job.id).status).toBe('cancelled');
+      expect(manifestOf(job.id).syncPath).toBe(syncFile);
+      expect(manifestOf(job.id).errorReason).toBe(SYNC_SENTENCE);
+      expect(existsSync(syncFile)).toBe(true);
+    } finally {
+      seam.releaseAll();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
+  it('an mp3-folder cancelled during the swap after its sync copy: DELETE already reads the sync-folder sentence and the synced copy stays (#4228)', async () => {
+    const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-folder-reason-'));
+    try {
+      await writeUserSettings({ exportSyncFolder: syncRoot });
+      /* `rename` is the staging->flat swap, entered after the sync copy and its patch. */
+      const swap = seam.arm('rename');
+      const job = await post('mp3-folder', 'sync-folder');
+      await swap.entered;
+      expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
+      const syncDir = join(syncRoot, AUTHOR, TITLE);
+      const afterDelete = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
+      expect(afterDelete.status).toBe('cancelled');
+      expect(afterDelete.syncPath).toBe(syncDir);
+      expect(afterDelete.errorReason).toBe(SYNC_SENTENCE);
+      swap.release();
+      await awaitInFlightJobs();
+
+      expect(manifestOf(job.id).status).toBe('cancelled');
+      expect(manifestOf(job.id).syncPath).toBe(syncDir);
+      expect(manifestOf(job.id).errorReason).toBe(SYNC_SENTENCE);
+      expect(readFileSync(join(syncDir, '01.mp3')).toString()).toBe('id3-1');
+    } finally {
+      seam.releaseAll();
+      await awaitInFlightJobs();
+      rmSync(syncRoot, { recursive: true, force: true });
+      await writeUserSettings({ exportSyncFolder: null });
+    }
+  });
+
   it('a cancel while the builder runs never reaches the rename, leaves no partial, and the reason reads "Cancelled by user." in memory and in the manifest', async () => {
     const builder = seam.arm('builder');
     const job = await post('mp3-zip', 'download');
@@ -322,6 +399,7 @@ describe('cancel seams (#4223)', () => {
     const mem = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
     expect(mem.status).toBe('cancelled');
     expect(mem.errorReason).toBe('Cancelled by user.');
+    expect(mem.syncPath ?? null).toBeNull();
     expect(manifestOf(job.id).status).toBe('cancelled');
     expect(manifestOf(job.id).errorReason).toBe('Cancelled by user.');
   });
@@ -458,7 +536,8 @@ describe('cancel seams (#4223)', () => {
       expect(droppings()).toEqual([]);
       const mem = (await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body;
       expect(mem.status).toBe('cancelled');
-      expect(manifestOf(second.id).syncPath).toBeTruthy();
+      expect(manifestOf(second.id).syncPath).toBe(join(syncRoot, AUTHOR, TITLE));
+      expect(manifestOf(second.id).errorReason).toBe(SYNC_SENTENCE);
     } finally {
       await awaitInFlightJobs();
       rmSync(syncRoot, { recursive: true, force: true });

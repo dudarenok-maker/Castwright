@@ -571,7 +571,7 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
      overwrite with 'failed', so the order matters. */
   job.status = 'cancelled';
   job.completedAt = new Date().toISOString();
-  job.errorReason = 'Cancelled by user.';
+  job.errorReason = cancelReason(job.syncPath);
   jobs.set(job.id, { ...job });
 
   const controller = jobControllers.get(job.id);
@@ -740,6 +740,30 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
    One exception: an export cancelled after its sync-folder copy leaves that
    copy (single-file and mp3-folder alike), because the copy is renamed over
    the previous export's flat-named one (#4228). */
+/* Reason recorded on a cancelled job. A cancel that lands after the sync-folder
+   copy leaves the copy and `syncPath` (never delete in the user's sync folder),
+   so the record says so instead of reading like nothing was written (#4228). */
+function cancelReason(syncPath: string | null): string {
+  return syncPath
+    ? 'Cancelled by user. The files were already copied to the sync folder.'
+    : 'Cancelled by user.';
+}
+
+/* Publish a freshly set `syncPath` to the jobs map without copying
+   runExportJob's own object over the entry: DELETE may already have flipped the
+   map entry to `cancelled`, and `{ ...job }` here would revert it to
+   `in_progress`. Patches only the field (and the reason, when the entry is
+   already cancelled and was written before the path was known). Synchronous. */
+function publishSyncPath(job: BookExportJob): void {
+  const cur = jobs.get(job.id);
+  if (!cur) return;
+  jobs.set(job.id, {
+    ...cur,
+    syncPath: job.syncPath,
+    errorReason: cur.status === 'cancelled' ? cancelReason(job.syncPath) : cur.errorReason,
+  });
+}
+
 async function bailIfCancelled(
   signal: AbortSignal,
   artifact?: { path: string; folder?: boolean },
@@ -817,6 +841,7 @@ async function runExportJob(
           const bookSubfolder = sanitiseForZip(state.title);
           const synced = await writeFolderToSyncFolder(staging, authoredSyncDir, bookSubfolder);
           job.syncPath = synced.syncPath;
+          publishSyncPath(job);
           /* A cancel after the sync copy drops only staging; the synced copy
              and syncPath stay (never delete in the user's sync folder). */
           await bailIfCancelled(signal, { path: staging, folder: true });
@@ -911,6 +936,7 @@ async function runExportJob(
           const synced = await commitSyncStage(stage, authoredSyncDir);
           staged = null;
           job.syncPath = synced.syncPath;
+          publishSyncPath(job);
           /* A cancel after the sync commit leaves the synced copy and syncPath
              (it already replaced the previous copy and cannot be restored).
              Only the private build is dropped, so the local rename below is
@@ -969,7 +995,12 @@ async function runExportJob(
         /* Only DELETE aborts the controller, so an aborted signal means the
            user cancelled; its own status flip landed on the jobs map's copy,
            not on this object. */
-        job.errorReason = signal.aborted ? 'Cancelled by user.' : (e as Error)?.message || 'Cancelled.';
+        job.errorReason = signal.aborted ? cancelReason(job.syncPath) : (e as Error)?.message || 'Cancelled.';
+      } else if (signal.aborted) {
+        /* `job` IS the map entry here (no progress tick replaced it), so DELETE
+           already flipped it and wrote its reason before `syncPath` was known.
+           Refresh the reason now that the copy's outcome is. */
+        job.errorReason = cancelReason(job.syncPath);
       }
     } else {
       job.status = 'failed';

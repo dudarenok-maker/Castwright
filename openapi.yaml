@@ -9716,13 +9716,13 @@ components:
           {
             type: string,
             nullable: true,
-            description: "Absolute path the archive was copied to when destination === 'sync-folder'.",
+            description: "Absolute path the archive was copied to when destination === 'sync-folder'. A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted).",
           }
         errorReason:
           {
             type: string,
             nullable: true,
-            description: "Human-readable failure reason; populated when status === 'failed'.",
+            description: "Human-readable reason; populated when status === 'failed' or 'cancelled'. A cancelled job whose sync-folder copy had already landed reads 'Cancelled by user. The files were already copied to the sync folder.'",
           }
         createdAt: { type: string, description: 'ISO timestamp' }
         completedAt:

@@ -6876,9 +6876,9 @@ export interface components {
             progress?: number | null;
             /** @description Set once status === 'done' AND destination === 'download'. */
             downloadUrl?: string | null;
-            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. */
+            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted). */
             syncPath?: string | null;
-            /** @description Human-readable failure reason; populated when status === 'failed'. */
+            /** @description Human-readable reason; populated when status === 'failed' or 'cancelled'. A cancelled job whose sync-folder copy had already landed reads 'Cancelled by user. The files were already copied to the sync folder.' */
             errorReason?: string | null;
             /** @description ISO timestamp */
             createdAt: string;
