@@ -1,7 +1,7 @@
-import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { writeJsonAtomic } from '../../workspace/state-io.js';
 import { audioDir } from '../../workspace/paths.js';
+import { livePartPath } from '../../workspace/take-fields.js';
 
 export type Verdict = 'voice-match' | 'voice-mismatch' | 'inconclusive';
 
@@ -62,7 +62,7 @@ export async function mergeVerdictRows(
  *  per-chapter loop (the writer, in aggregate.ts) and `deriveBookOutline`
  *  (the reader, below) can't drift on the naming convention. */
 export function attemptedPath(root: string, slug: string): string {
-  return join(root, `${slug}.render-integrity-attempted.json`);
+  return livePartPath(root, slug, 'attempted');
 }
 
 /** Write an "attempted" sentinel for a chapter's render-integrity pass.
@@ -128,7 +128,7 @@ export async function deriveBookOutline(
   const verdictCharactersByChapter = new Map<number, Set<string>>();
 
   for (const ch of chapters) {
-    const path = join(root, `${ch.slug}.render-integrity.json`);
+    const path = livePartPath(root, ch.slug, 'verdicts');
     const [attempted, rows] = await Promise.all([
       readAttempted(attemptedPath(root, ch.slug)),
       readVerdicts(path),

@@ -239,16 +239,11 @@ interface AllowEntry {
 const ALLOWLIST: Record<string, AllowEntry> = {
   'audio/finalize-chapter-write.ts': { count: 13, removedBy: 4333, reason: "job writer builds and writes the live take" },
   'audio/previous-audio.ts': { count: 7, removedBy: 4334, reason: "preserve/restore/revisions builds previous-take paths" },
-  'audio/render-integrity/aggregate.ts': { count: 3, removedBy: 4332, reason: "audio/tts/scoring helper builds or writes take parts" },
-  'audio/render-integrity/verdicts-io.ts': { count: 2, removedBy: 4332, reason: "audio/tts/scoring helper builds or writes take parts" },
-  'audio/segments-io.ts': { count: 1, removedBy: 4332, reason: "audio/tts/scoring helper builds or writes take parts" },
   'import/scan-import-folder.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(stage): the audio/ directory itself, not a take part." },
   'routes/book-state.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: §5.A Ownership: the reparse wipe stays allowlisted (applyReparse rm(ad, { recursive: true, force: true }), the audio/ directory itself, not a take part)." },
   'routes/chapter-qa-repair.ts': { count: 6, removedBy: 4333, reason: "job writer builds and writes the live take" },
   'routes/chapter-splice.ts': { count: 1, removedBy: 4333, reason: "job writer builds and writes the live take" },
   'routes/generation.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(bookDir): the audio/ directory itself, not a take part." },
-  'tts/mp3.ts': { count: 1, removedBy: 4332, reason: "rule-1 false positive: a temp encode name (audiobook-encode-<pid>-<ts>.mp3), not a take path; #4332 narrows or reroutes it" },
-  'tts/voice-sample-cache.ts': { count: 1, removedBy: 4332, reason: "rule-1 false positive: a voice-sample cache file name (<scope>-<model>-<hash>.mp3), not a take path; #4332 narrows or reroutes it" },
   'workspace/fsck-orphan-audio.ts': { count: 8, removedBy: 4335, reason: "fsck probes and removes take files" },
   'workspace/preserve-previous-audio.ts': { count: 7, removedBy: 4334, reason: "preserve/restore/revisions builds previous-take paths" },
 };
