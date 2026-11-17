@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,9 @@ import {
   type PickFile,
   type MeasurementReport,
   isTurnSentence,
+  classifySentence,
+  confidentReasonOf,
+  type ChapterReplay,
 } from '../../server/scripts/paragraph-degradation-ab.mts';
 import { conventionsFor } from '../../server/src/analyzer/dialogue-structure/lang/index.ts';
 import { runStructureEngine } from '../../server/src/routes/analysis.ts';
@@ -592,4 +595,180 @@ test('1A replay: --from-captures constructs no analyzer and a failed measurement
   const bad = ['--from-captures', '--manifest', r.manifestPath, '--scratch', r.scratch, '--language', 'xx'];
   assert.equal(await main(bad, noAnalyzerDeps()), 1);
   assert.deepEqual(files(), before);
+});
+
+/* ---- Phase 7c step 3: the confident-decision class report (spec §4.3, R5-3, R6-4, R6-6, R7-8) ---- */
+
+const TEN_TURNS = '— Привет, — сказал Антон. — Как дела? — Хорошо. — Отлично. — Да. — Нет. — Ладно. — Идём. — Стой. — Жди. — Всё.';
+
+/** One ru chapter captured for real (mock analyzer returning `sentences`, real engine). */
+async function classRun(body: string, sentences: Array<[string, string]>) {
+  process.env.ATTRIBUTION_ESCALATION = 'local';
+  process.env.STAGE2_COVERAGE_RETRIES = '0';
+  const { dir, manifest } = fixtureDir(1);
+  writeFileSync(manifest[0]!.chapterTextPath, body);
+  const scratch = scratchOf(dir);
+  const analyzer = {
+    runStage2Chapter: () =>
+      Promise.resolve({
+        sentences: sentences.map(([characterId, text], i) => ({ id: i + 1, chapterId: 1, characterId, confidence: 0.9, text })),
+      }),
+    runAttributionEscalation: () => Promise.resolve(null),
+  } as unknown as Analyzer;
+  const { deps } = fakeDeps({ makeAnalyzer: () => analyzer, capture: captureChapterStages });
+  assert.equal(await runCapture({ manifest, model: 'A', scratch, language: 'ru' }, deps), 0);
+  const manifestPath = join(dir, 'manifest.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  return { dir, scratch, manifest, manifestPath };
+}
+
+/** Measures a classRun and returns the one chapter's replay (picked or outside). */
+async function classReport(r: { scratch: string; manifestPath: string }) {
+  assert.equal(await main(FROM_CAPTURES(r), noAnalyzerDeps()), 0);
+  const rep = reportOf(r.scratch);
+  const ch = [...rep.picked, ...rep.outside][0]!;
+  return { rep, ch };
+}
+
+/** The non-zero cells of a class x reason table, as `class:reason` -> count. */
+const cells = (c: ChapterReplay['confident']): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(c).flatMap(([cls, by]) => Object.entries(by).filter(([, n]) => n > 0).map(([reason, n]) => [`${cls}:${reason}`, n])),
+  );
+
+test('confident class (a): a recovered line scored tag-correct is counted in (a), matched by the tag-correct prefix', async () => {
+  const r = await classRun('Борис промолчал. — Тогда идём, — сказал Борис. — Хорошо.', [
+    ['narrator', 'Борис промолчал.'],
+    ['olga', '— Тогда идём,'],
+  ]);
+  const { ch } = await classReport(r);
+  assert.deepEqual(cells(ch.confident), { 'a:tag-correct': 1 });
+});
+
+test('confident class (b): a narration-demote run in an unrescued narration-open paragraph, and a narration-confirm, are counted in (b) by reason', async () => {
+  const r = await classRun('Борис промолчал. — Тогда идём. — Хорошо.\nАнтон кивнул. — Да.', [
+    ['narrator', 'Борис промолчал.'],
+    ['unknown-male', '— Тогда идём.'], // an unknown bucket is not a speaker the #2253 rescue keeps
+    ['unknown-female', '— Хорошо.'],
+    ['narrator', 'Антон кивнул.'],
+    ['narrator', '— Да.'],
+  ]);
+  const { ch } = await classReport(r);
+  assert.deepEqual(cells(ch.confident), { 'b:narration-demote': 1, 'b:narration-confirm': 1 });
+});
+
+test('confident class (c): a dash-open paragraph with ten turn openers, tag anchoring over the wrong speaker, is (c)', async () => {
+  const r = await classRun(TEN_TURNS, [
+    ['olga', '— Привет,'],
+    ['boris', '— Как дела?'],
+  ]);
+  const { ch } = await classReport(r);
+  const c = cells(ch.confident);
+  assert.ok((c['c:tag-correct'] ?? 0) >= 1, JSON.stringify(c));
+  assert.equal(Object.keys(c).filter((k) => !k.startsWith('c:')).length, 0, `nothing outside (c): ${JSON.stringify(c)}`);
+});
+
+test('confident class: an ordinary dash paragraph with one resumption is not (c), it is (d)', async () => {
+  const r = await classRun('— Привет, — сказал Антон. — Как дела?', [['olga', '— Привет,']]);
+  const { ch } = await classReport(r);
+  assert.deepEqual(cells(ch.confident), { 'd:tag-correct': 1 });
+});
+
+test('confident class: a recovered line whose own text is dash-open with ten openers is (a), not (c)', async () => {
+  const r = await classRun(`Борис промолчал. ${TEN_TURNS}`, [
+    ['narrator', 'Борис промолчал.'],
+    ['olga', '— Привет,'],
+  ]);
+  const { ch } = await classReport(r);
+  assert.deepEqual(cells(ch.confident), { 'a:tag-correct': 1 });
+});
+
+test('classifySentence: a sentence crossing a line break, touching a recovered line and a degraded dash-open line, is (a)', () => {
+  const ru = conventionsFor('ru')!;
+  const body = `${TEN_TURNS}\nА теперь он молчал. — Ладно.`;
+  const lineEnd = TEN_TURNS.length;
+  const cut = lineEnd + 1 + 'А теперь он молчал. '.length; // the recovered line starts at the second dash
+  const span = (kind: 'speech' | 'tag' | 'narration', start: number, end: number) => ({ kind, start, end });
+  const dash = (start: number, end: number) => ({ start, end, kind: 'dialogue' as const, spans: [span('speech', start + 2, end)] });
+  const offParas = [dash(0, lineEnd), { start: lineEnd + 1, end: body.length, kind: 'narration' as const, spans: [span('narration', lineEnd + 1, body.length)] }];
+  const onParas = [
+    offParas[0]!,
+    { start: lineEnd + 1, end: cut - 1, kind: 'narration' as const, spans: [span('narration', lineEnd + 1, cut - 1)] },
+    dash(cut, body.length),
+  ];
+  const across = [span('speech', lineEnd - 5, lineEnd), span('speech', cut + 2, cut + 8)];
+  const view = (paras: typeof offParas, spans: typeof across) => ({ paras, aligned: [{ spans }] });
+  assert.equal(classifySentence(0, view(onParas, across), view(offParas, across.slice(0, 1)), body, ru), 'a');
+  // the same sentence on the degraded line alone, nothing recovered, is (c)
+  assert.equal(classifySentence(0, view(onParas, across.slice(0, 1)), view(offParas, across.slice(0, 1)), body, ru), 'c');
+});
+
+test('classifySentence: an unaligned sentence is (d)', () => {
+  const ru = conventionsFor('ru')!;
+  assert.equal(classifySentence(0, { paras: [], aligned: [{ spans: [] }] }, { paras: [], aligned: [{ spans: [] }] }, '', ru), 'd');
+});
+
+test('confident reasons: prefix for the two :<id> forms, exact for the rest, nothing else', () => {
+  assert.equal(confidentReasonOf('tag-confirm:anton'), 'tag-confirm');
+  assert.equal(confidentReasonOf('tag-correct:boris'), 'tag-correct');
+  assert.equal(confidentReasonOf('tag-span-narrator'), 'tag-span-narrator');
+  assert.equal(confidentReasonOf('narration-confirm'), 'narration-confirm');
+  assert.equal(confidentReasonOf('narration-demote'), 'narration-demote');
+  assert.equal(confidentReasonOf('narration-demote:first'), null);
+  assert.equal(confidentReasonOf('tag-span-narrator:x'), null);
+  assert.equal(confidentReasonOf('pronoun-confirm:anton'), null);
+});
+
+test('confident count: a sentence whose index is in flags is not counted, whatever its reason bucket says', async () => {
+  const r = await classRun('— Привет, — сказал Антон. — Как дела?', [['olga', '— Привет,']]);
+  assert.deepEqual(cells((await classReport(r)).ch.confident), { 'd:tag-correct': 1 });
+  editCapture(r.scratch, 1, (c) => {
+    c.flags.push({ index: 0, reason: 'tag-correct:anton' }); // the reason's bucket stays `corrected`
+  });
+  assert.deepEqual(cells((await classReport(r)).ch.confident), {});
+});
+
+test('confident count: an unknown confident reason fails the measurement, the capture survives byte for byte, --from-captures re-runs without an analyzer', async () => {
+  const r = await classRun('— Привет, — сказал Антон. — Как дела?', [['olga', '— Привет,']]);
+  await classReport(r);
+  rmSync(join(r.scratch, 'report.json'));
+  rmSync(join(r.scratch, 'report.md'));
+  const file = join(r.scratch, captureFileName(1));
+  const good = readFileSync(file);
+  editCapture(r.scratch, 1, (c) => {
+    c.reasons[0]!.reason = 'pronoun-confirm:anton'; // confidence stays 0.9, unflagged
+  });
+  const bad = readFileSync(file);
+  const err: string[] = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((s: string) => (err.push(String(s)), true)) as typeof process.stderr.write;
+  let code: number;
+  try {
+    code = await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  } finally {
+    process.stderr.write = realWrite;
+  }
+  assert.equal(code, 1);
+  assert.match(err.join(''), /ch1 sentence 0: unknown confident reason "pronoun-confirm:anton"/);
+  assert.ok(!existsSync(join(r.scratch, 'report.json')) && !existsSync(join(r.scratch, 'report.md')), 'no report written');
+  assert.ok(readFileSync(file).equals(bad), 'the capture file is untouched');
+  writeFileSync(file, good); // the fix: the reason is back among the five
+  assert.equal(await main(FROM_CAPTURES(r), noAnalyzerDeps()), 0);
+  assert.ok(existsSync(join(r.scratch, 'report.json')));
+});
+
+test('confident report: the class x reason table and the changed-sentence class column reach report.json and report.md', async () => {
+  const r = await classRun('Борис промолчал. — Тогда идём, — сказал Борис. — Хорошо.', [
+    ['narrator', 'Борис промолчал.'],
+    ['olga', '— Тогда идём,'],
+  ]);
+  const { rep, ch } = await classReport(r);
+  assert.equal(rep.picked.length, 1, 'the chapter is picked');
+  assert.equal(rep.totals.confident.a['tag-correct'], 1);
+  assert.equal(rep.outsideTotals.confident.a['tag-correct'], 0);
+  assert.ok(ch.changed.every((c) => ['a', 'b', 'c', 'd'].includes(c.cls)));
+  const md = readFileSync(join(r.scratch, 'report.md'), 'utf8');
+  assert.match(md, /Confident decisions on turn sentences, by class and reason/);
+  assert.match(md, /\| \(a\) recovery-split line \| 1 \|/);
+  assert.match(md, /1A changed sentences \(picked chapters\), with class/);
 });

@@ -32,6 +32,11 @@
    (recoverMidParagraphTurns: false). A capture does not store the chapter text, so the
    manifest supplies it (the same string the capture read). Writes report.json / report.md.
 
+   Phase 7c step 3 (§4.3 "The confident-decision report", owner decisions 5, 8, 14; R5-3, R6-4,
+   R6-6, R7-8): the engine's confident decisions on turn sentences are counted by class (a)-(d) and
+   by reason, with no verdict, and 1A's changed sentences carry the same class. An unknown
+   confident reason fails the measurement before anything is written (saved captures untouched).
+
    Harness vs production (§4.3): capacity comes from resolveCapacity for the
    owner's real engine ('local' for Ollama); --model is required, with no default;
    ONE structureBudget, seeded from analyzer.structure.maxWindowsPerBook, is shared
@@ -46,7 +51,8 @@ import { buildRosterSnapshot } from '../src/analyzer/attribution-eval/capture.js
 import type { RosterSnapshot } from '../src/analyzer/attribution-eval/roster-schema.js';
 import { OllamaAnalyzer } from '../src/analyzer/ollama.js';
 import type { Analyzer, StageCall } from '../src/analyzer/index.js';
-import { countTurnOpeners, turnInParagraphRegex } from '../src/analyzer/dialogue-structure/legibility.js';
+import { countTurnOpeners, turnInParagraphRegex, MERGED_TURNS_DEGRADED } from '../src/analyzer/dialogue-structure/legibility.js';
+import type { ParagraphEvidence, SpanEvidence } from '../src/analyzer/dialogue-structure/types.js';
 import { conventionsFor } from '../src/analyzer/dialogue-structure/lang/index.js';
 import { runStructureEngine } from '../src/routes/analysis.js';
 import { resolveCapacity } from '../src/analyzer/capacity.js';
@@ -433,6 +439,84 @@ export interface ChapterReplay {
   chunks: CapturedChapter['chunks'];
   /** Ids escalation changed: `final` vs `deterministic`. */
   escalationChanged: number;
+  /** The engine's confident decisions on turn sentences, class x reason (counts only, owner decision 14). */
+  confident: ConfidentCounts;
+  /** Every sentence whose speaker differs, on vs off, with its class (same rule, same parses). */
+  changed: ChangedSentence[];
+}
+
+/* ---- the confident-decision report (§4.3) ---- */
+
+export type DecisionClass = 'a' | 'b' | 'c' | 'd';
+export const DECISION_CLASSES: readonly DecisionClass[] = ['a', 'b', 'c', 'd'];
+/** The five reasons a confident (>= 0.9, unflagged) decision can carry at 7d97f15f. */
+export const CONFIDENT_REASONS = ['tag-confirm', 'tag-correct', 'tag-span-narrator', 'narration-confirm', 'narration-demote'] as const;
+export type ConfidentReason = (typeof CONFIDENT_REASONS)[number];
+export const CONFIDENT_MIN_CONFIDENCE = 0.9;
+export type ConfidentCounts = Record<DecisionClass, Record<ConfidentReason, number>>;
+export interface ChangedSentence {
+  index: number;
+  turn: boolean;
+  cls: DecisionClass;
+  onId: string;
+  offId: string;
+}
+
+/** Prefix match for the two `:<id>` forms, exact for the rest. `null` = not one of the five. */
+export function confidentReasonOf(reason: string): ConfidentReason | null {
+  if (reason.startsWith('tag-confirm:')) return 'tag-confirm';
+  if (reason.startsWith('tag-correct:')) return 'tag-correct';
+  if (reason === 'tag-span-narrator' || reason === 'narration-confirm' || reason === 'narration-demote') return reason;
+  return null;
+}
+
+export const emptyConfident = (): ConfidentCounts =>
+  Object.fromEntries(
+    DECISION_CLASSES.map((c) => [c, Object.fromEntries(CONFIDENT_REASONS.map((r) => [r, 0]))]),
+  ) as ConfidentCounts;
+
+export function addConfident(into: ConfidentCounts, from: ConfidentCounts): void {
+  for (const c of DECISION_CLASSES) for (const r of CONFIDENT_REASONS) into[c][r] += from[c][r];
+}
+
+interface ParseView {
+  paras: ParagraphEvidence[];
+  aligned: Array<{ spans: SpanEvidence[] }>;
+}
+
+/** The line (paragraph) holding `offset`, or undefined. Lines are newline-split, so none overlap. */
+const lineAt = (paras: ParagraphEvidence[], offset: number): ParagraphEvidence | undefined =>
+  paras.find((p) => offset >= p.start && offset <= p.end);
+
+/** R6-6, R7-8: first match wins. (a) and (b) read the recovery-on parse, (c) the recovery-off parse. */
+export function classifySentence(
+  i: number,
+  on: ParseView,
+  off: ParseView,
+  body: string,
+  conventions: Conventions,
+): DecisionClass {
+  const onSpans = on.aligned[i]?.spans ?? [];
+  if (onSpans.length === 0) return 'd'; // unaligned: no line
+  // Recovery is length-preserving, so a recovered line is an on-parse line whose start is not an off-parse line start.
+  const offStarts = new Set(off.paras.map((p) => p.start));
+  const recovered = (s: SpanEvidence): boolean => {
+    const line = lineAt(on.paras, s.start);
+    return line !== undefined && !offStarts.has(line.start);
+  };
+  const isA = (): boolean => onSpans.some(recovered);
+  const isB = (): boolean => onSpans.every((s) => s.kind === 'narration') && lineAt(on.paras, onSpans[0]!.start)?.kind === 'narration';
+  const isC = (): boolean => {
+    const first = off.aligned[i]?.spans[0];
+    const line = first ? lineAt(off.paras, first.start) : undefined;
+    if (!line) return false;
+    const text = body.slice(line.start, line.end);
+    return (conventions.dialogueOpen?.test(text) ?? false) && (text.match(turnInParagraphRegex())?.length ?? 0) >= MERGED_TURNS_DEGRADED;
+  };
+  if (isA()) return 'a';
+  if (isB()) return 'b';
+  if (isC()) return 'c';
+  return 'd';
 }
 
 const armOf = (r: EngineRun): ArmReport => ({
@@ -492,6 +576,27 @@ export function replayChapter(saved: SavedCapture, body: string, conventions: Co
   let escalationChanged = 0;
   const m = Math.min(saved.final.length, saved.deterministic.length);
   for (let i = 0; i < m; i++) if (saved.final[i]!.characterId !== saved.deterministic[i]!.characterId) escalationChanged++;
+  const onView: ParseView = { paras: control.paras, aligned: control.alignment.aligned };
+  const offView: ParseView = { paras: off.paras, aligned: off.alignment.aligned };
+  const confident = emptyConfident();
+  const changed: ChangedSentence[] = [];
+  const flagged = new Set(saved.flags.map((f) => f.index)); // R6-4: `flags` is the only flag marker
+  for (let i = 0; i < n; i++) {
+    const turn = isTurnSentence(saved.raw[i]?.text ?? onS[i]!.text, conventions);
+    let cls: DecisionClass | null = null;
+    const classOf = (): DecisionClass => (cls ??= classifySentence(i, onView, offView, body, conventions));
+    if (onS[i]!.characterId !== offS[i]!.characterId) {
+      changed.push({ index: i, turn, cls: classOf(), onId: onS[i]!.characterId, offId: offS[i]!.characterId });
+    }
+    const det = saved.deterministic[i];
+    if (!turn || !det || det.confidence < CONFIDENT_MIN_CONFIDENCE || flagged.has(i)) continue;
+    const reason = saved.reasons[i]?.reason ?? '';
+    const key = confidentReasonOf(reason);
+    // R5-3: a confident reason outside the five gets a class decision before it is counted.
+    if (key === null) throw new Error(`ch${saved.chapterId} sentence ${i}: unknown confident reason "${reason}" (confidence ${det.confidence}); add a class decision for it`);
+    if (saved.final[i]?.characterId !== det.characterId) continue; // escalation overrode the engine
+    confident[classOf()][key]++;
+  }
   return {
     chapterId: saved.chapterId,
     status,
@@ -506,13 +611,22 @@ export function replayChapter(saved: SavedCapture, body: string, conventions: Co
     off: armOf(off),
     chunks: saved.chunks,
     escalationChanged,
+    confident,
+    changed,
   };
 }
 
 const COUNT_KEYS = [
   'sentences', 'turnSentences', 'changedAll', 'changedTurn', 'narratorTurnOn', 'narratorTurnOff', 'escalationChanged',
 ] as const;
-export type Totals = Record<(typeof COUNT_KEYS)[number], number> & { chapters: number; on: ArmReport; off: ArmReport };
+export type Totals = Record<(typeof COUNT_KEYS)[number], number> & {
+  chapters: number;
+  on: ArmReport;
+  off: ArmReport;
+  confident: ConfidentCounts;
+  /** 1A's changed sentences by class (turn sentences and others together). */
+  changedByClass: Record<DecisionClass, number>;
+};
 
 /** Sums over the chapters given: the caller decides which chapters count (picked only, R9-3). */
 export function sumReplays(rs: ChapterReplay[]): Totals {
@@ -522,8 +636,13 @@ export function sumReplays(rs: ChapterReplay[]): Totals {
     flagged: rs.reduce((n, r) => n + r[k].flagged, 0),
     unresolved: rs.reduce((n, r) => n + r[k].unresolved, 0),
   });
-  const t = { chapters: rs.length, on: arm('on'), off: arm('off') } as Totals;
+  const t = { chapters: rs.length, on: arm('on'), off: arm('off'), confident: emptyConfident() } as Totals;
   for (const k of COUNT_KEYS) t[k] = rs.reduce((n, r) => n + r[k], 0);
+  t.changedByClass = { a: 0, b: 0, c: 0, d: 0 };
+  for (const r of rs) {
+    addConfident(t.confident, r.confident);
+    for (const c of r.changed) t.changedByClass[c.cls]++;
+  }
   return t;
 }
 
@@ -538,6 +657,8 @@ export interface MeasurementReport {
   /** Picked chapters' 1A: the only chapters in the verdict, `n`, the blind sheet and every total. */
   picked: ChapterReplay[];
   totals: Totals;
+  /** The same class report over the swapped-out and captured-not-used chapters, kept apart (R9-3). */
+  outsideTotals: Totals;
   /** Swapped-out and captured-not-used chapters, kept outside every total (R9-3, R10-2). */
   outside: ChapterReplay[];
   /** Every control's result, across all current captures (superseded ones are not read). */
@@ -576,6 +697,7 @@ export function measureCaptures(opts: {
     pickOutcome: pick?.outcome ?? null,
     picked,
     totals: sumReplays(picked),
+    outsideTotals: sumReplays(outside),
     outside,
     controls: replays.map((r) => ({ chapterId: r.chapterId, status: r.status, control: r.control })),
     verdict: voids.length > 0 ? { state: 'void', void: voids } : { state: 'ready' },
@@ -599,6 +721,28 @@ const TABLE_HEAD = [
   '|---|---|---|---|---|---|---|---|---|---|---|',
 ];
 
+const CLASS_NAMES: Record<DecisionClass, string> = {
+  a: '(a) recovery-split line',
+  b: '(b) unsplit dash turn',
+  c: '(c) degraded dash-open paragraph',
+  d: '(d) other',
+};
+function confidentTable(t: Totals): string[] {
+  const rows = DECISION_CLASSES.map((c) => {
+    const by = t.confident[c];
+    const total = CONFIDENT_REASONS.reduce((n, k) => n + by[k], 0);
+    return `| ${CLASS_NAMES[c]} | ${total} | ${CONFIDENT_REASONS.map((k) => by[k]).join(' | ')} |`;
+  });
+  return [`| class | total | ${CONFIDENT_REASONS.join(' | ')} |`, `|---|---|${CONFIDENT_REASONS.map(() => '---').join('|')}|`, ...rows];
+}
+function changedTable(rs: ChapterReplay[]): string[] {
+  const rows = rs.flatMap((r) =>
+    r.changed.map((c) => `| ch${r.chapterId} | ${c.index} | ${c.turn ? 'turn' : 'other'} | ${c.cls} | ${c.onId} | ${c.offId} |`),
+  );
+  if (rows.length === 0) return ['No sentence changed.'];
+  return ['| chapter | sentence | kind | class | on | off |', '|---|---|---|---|---|---|', ...rows];
+}
+
 export function renderReport(r: MeasurementReport): string {
   const L: string[] = [`# #2254 1A engine replay (${r.language}${r.model ? `, model ${r.model}` : ''})`, ''];
   L.push(`Pick outcome: ${r.pickOutcome ?? 'no pick.json'}`, '', '## Chapter status and control', '', '| chapter | status | control |', '|---|---|---|');
@@ -609,9 +753,11 @@ export function renderReport(r: MeasurementReport): string {
     '',
     `Totals over ${t.chapters} picked chapter(s): ${t.sentences} sentences, ${t.turnSentences} turn sentences, changed ${t.changedAll} (all) / ${t.changedTurn} (turn).`,
   );
+  L.push('', '## Confident decisions on turn sentences, by class and reason (picked chapters; counts only, no verdict)', '', ...confidentTable(t));
+  L.push('', '## 1A changed sentences (picked chapters), with class', '', ...changedTable(r.picked));
   L.push('', '## Outside the verdict: swapped-out and captured-not-used (in no total)', '');
   if (r.outside.length === 0) L.push('None.');
-  else L.push(...TABLE_HEAD, ...chapterRows(r.outside));
+  else L.push(...TABLE_HEAD, ...chapterRows(r.outside), '', 'Confident decisions, outside chapters (separate from the table above):', '', ...confidentTable(r.outsideTotals), '', ...changedTable(r.outside));
   L.push('', '## Verdict state', '');
   if (r.verdict.state === 'ready') L.push('`ready` (the hand-check is a later step).');
   else {
