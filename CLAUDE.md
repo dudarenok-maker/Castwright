@@ -536,8 +536,9 @@ Design rationale:
   `openProfileId` living _inside_ the `ready` variant. Don't flatten.
 - **Hash router grammar** (`src/lib/router.ts`) — pure `stageToHash`/`stageEqual`
   (URL → stage is derived in `ReadyRoute`, which sets the `ready` stage's optional `chapterExplicit` flag),
-  installed against the store via the `RouterStore` adapter so the router stays
-  decoupled. Same URL grammar as the original prototype.
+  driven by react-router's `createHashRouter`, so the router stays decoupled from
+  components. The grammar is the original prototype's plus `?chapter=3` when the
+  stage's `chapterExplicit` is set (#4212).
 - **OpenAPI is the type source of truth** — `Character`/`Chapter`/`Sentence` etc.
   come from `src/lib/api-types.ts` (generated). Don't hand-write them.
 - **Design tokens are CSS custom properties** — `src/styles.css` declares

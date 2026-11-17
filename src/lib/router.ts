@@ -1,7 +1,8 @@
 import type { Stage } from './types';
 
-/* Stage ↔ hash URL serialization. URL grammar (unchanged from the
-   hand-rolled router, now driven by react-router's createHashRouter):
+/* Stage ↔ hash URL serialization. URL grammar (the hand-rolled router's,
+   plus `?chapter=3` for an explicit chapter 3 since #4212; now driven by
+   react-router's createHashRouter):
 
      #/                                  → { kind: 'books' }
      #/new                               → { kind: 'upload' }
