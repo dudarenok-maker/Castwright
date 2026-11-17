@@ -61,7 +61,8 @@ import { configValue } from '../src/config/resolver.js';
 
 export const USAGE =
   'usage: paragraph-degradation-ab.mts --manifest <file.json> --model <name> --scratch <dir> [--language ru] [--resume | --recapture <ids> --reason <text> | --reroll --reason <text>]\n' +
-  '       paragraph-degradation-ab.mts --from-captures --manifest <file.json> --scratch <dir> --language ru\n';
+  '       paragraph-degradation-ab.mts --from-captures --manifest <file.json> --scratch <dir> --language ru\n' +
+  '       paragraph-degradation-ab.mts --score <filled-sheet.md> --scratch <dir>\n';
 
 export interface ManifestEntry {
   chapterId: number;
@@ -958,7 +959,7 @@ export function writeBlindSheet(
     return { item: i + 1, chapterId: it.chapterId, sentenceIndex: it.index, onId: c.onId, offId: c.offId, class: c.cls };
   });
   writeAtomic(sheet, renderSheet(roster, rec, sections));
-  writeAtomic(key, JSON.stringify({ n: rec.n, mode: rec.mode, seed: rec.seed, items: keyItems }, null, 2));
+  writeAtomic(key, JSON.stringify({ n: rec.n, mode: rec.mode, seed: rec.seed, roster: roster.map((r) => r.id), items: keyItems }, null, 2));
 }
 
 /** Measures from the saved files and writes report.json and report.md beside them. Nothing here
@@ -979,9 +980,312 @@ export function runMeasurement(opts: { scratch: string; language: string; manife
     if (m) for (const ch of rosterFrom(m.rosterPath).characters) if (!roster.has(ch.id)) roster.set(ch.id, { id: ch.id, name: ch.name });
   }
   writeBlindSheet(scratch, report, bodyOf, [...roster.values()]);
+  // A new measurement can change the sheet, so a score read from the old one is stale.
+  if (existsSync(join(scratch, SCORE_FILE))) rmSync(join(scratch, SCORE_FILE));
   writeAtomic(join(scratch, 'report.json'), JSON.stringify(report, null, 2));
   writeAtomic(join(scratch, 'report.md'), renderReport(report));
   return report;
+}
+
+/* ---- Phase 7c step 5: --score and the 1A verdict (§4.3 `--score`, §4.4 "Verdict", R7-1, R7-2, R7-11, R8-3, R9-4) ---- */
+
+export const SCORE_FILE = 'score.json';
+/** §4.4: the census margins, kept by the sample test. */
+export const IMPROVES_MARGIN = 3;
+export const WORSE_MARGIN = 1;
+/** One-sided levels of the sample test (§4.4): the looser one is for harm. */
+export const IMPROVES_LEVEL = 0.025;
+export const WORSE_LEVEL = 0.1;
+export const CANT_TELL = "can't tell";
+export const TWO_SPEAKERS = 'two speakers';
+
+export type Verdict =
+  | 'void'
+  | 'not computed'
+  | 'recovery changes no speaker'
+  | 'recovery improves the speakers'
+  | 'recovery makes them worse'
+  | 'no clear direction';
+
+const lnFactCache: number[] = [0];
+function lnFact(k: number): number {
+  for (let i = lnFactCache.length; i <= k; i++) lnFactCache[i] = lnFactCache[i - 1]! + Math.log(i);
+  return lnFactCache[k]!;
+}
+const lnChoose = (n: number, k: number): number => (k < 0 || k > n ? -Infinity : lnFact(n) - lnFact(k) - lnFact(n - k));
+
+/** P(sample I - R >= d) for a draw of `m` from a population of `n` holding `a` improvements and `b` regressions
+    (the rest neutral): the multivariate hypergeometric distribution, exact. Roles swap for the other claim:
+    hyperTail(n, b, a, d) is P(sample R - I >= d). */
+export function hyperTail(n: number, a: number, b: number, d: number, m: number = SHEET_CAP): number {
+  const c = n - a - b;
+  const denom = lnChoose(n, m);
+  let p = 0;
+  for (let i = 0; i <= Math.min(a, m); i++) {
+    for (let r = 0; r <= Math.min(b, m - i); r++) {
+      if (i - r < d) continue;
+      const u = m - i - r;
+      if (u > c) continue;
+      p += Math.exp(lnChoose(a, i) + lnChoose(b, r) + lnChoose(c, u) - denom);
+    }
+  }
+  return Math.min(1, p);
+}
+
+/** Largest p over every split the null `I_n - R_n <= 2` allows. P rises with improvements and falls with
+    regressions, so any split in the null moves, without lowering P, onto I_n - R_n = 2 (a neutral becomes an
+    improvement, or with no neutral left a regression becomes a neutral): only that boundary is searched. The
+    test file cross-checks this against every split at n = 31 and 40. */
+export function pImproves(n: number, observedDiff: number, m: number = SHEET_CAP): number {
+  let best = 0;
+  for (let b = 0; 2 * b + IMPROVES_MARGIN - 1 <= n; b++) best = Math.max(best, hyperTail(n, b + IMPROVES_MARGIN - 1, b, observedDiff, m));
+  return best;
+}
+
+/** Largest p over every split the null `R_n <= I_n` allows, by the mirror argument: the boundary is R_n = I_n. */
+export function pWorse(n: number, observedDiff: number, m: number = SHEET_CAP): number {
+  let best = 0;
+  for (let a = 0; 2 * a <= n; a++) best = Math.max(best, hyperTail(n, a, a, observedDiff, m));
+  return best;
+}
+
+export interface VerdictInput {
+  /** Any captured chapter's replay control void (R7-7). */
+  controlVoid: boolean;
+  /** pick.json's outcome; `not-computed` and `stopped-for-owner` mean no chapter cleared the floor. */
+  pickOutcome: PickOutcome | null;
+  n: number;
+  /** Judged counts: all n in a census, the 30 drawn in a sample. */
+  I: number;
+  R: number;
+  U: number;
+}
+export interface VerdictResult {
+  verdict: Verdict;
+  mode: 'census' | 'sample' | null;
+  /** One-sided p-values of the two sample claims; null in a census or when not computed. */
+  pImproves: number | null;
+  pWorse: number | null;
+}
+
+/** §4.4 "Verdict": the rule, in order. Void and not-computed outrank every count. */
+export function decideVerdict(v: VerdictInput): VerdictResult {
+  const none = { mode: null, pImproves: null, pWorse: null } as const;
+  if (v.controlVoid) return { verdict: 'void', ...none };
+  if (v.pickOutcome === 'not-computed' || v.pickOutcome === 'stopped-for-owner') return { verdict: 'not computed', ...none };
+  if (v.n === 0) return { verdict: 'recovery changes no speaker', ...none };
+  if (v.n <= SHEET_CAP) {
+    const verdict: Verdict =
+      v.I - v.R >= IMPROVES_MARGIN ? 'recovery improves the speakers' : v.R - v.I >= WORSE_MARGIN ? 'recovery makes them worse' : 'no clear direction';
+    return { verdict, mode: 'census', pImproves: null, pWorse: null };
+  }
+  const pi = pImproves(v.n, v.I - v.R);
+  const pw = pWorse(v.n, v.R - v.I);
+  const improves = pi < IMPROVES_LEVEL;
+  const worse = pw < WORSE_LEVEL;
+  if (improves && worse) throw new Error(`both sample claims accepted at n = ${v.n}, I - R = ${v.I - v.R}: impossible by §4.4, the test is wrong`);
+  const verdict: Verdict = improves ? 'recovery improves the speakers' : worse ? 'recovery makes them worse' : 'no clear direction';
+  return { verdict, mode: 'sample', pImproves: pi, pWorse: pw };
+}
+
+export interface BlindKey {
+  n: number;
+  mode: 'census' | 'sample';
+  seed: number | null;
+  /** The pinned roster's ids, as the sheet was written. */
+  roster: string[];
+  items: Array<{ item: number; chapterId: number; sentenceIndex: number; onId: string; offId: string; class: DecisionClass }>;
+}
+
+export interface SheetEntry { item: number; speaker: string; mixed: boolean }
+
+/** Reads the filled sheet: each `## Item <k>` section's `Speaker:` and `Mixed:` values. A missing field reads as empty. */
+export function parseSheet(text: string): SheetEntry[] {
+  const parts = text.split(/^## Item (\d+)[ \t]*$/m);
+  const out: SheetEntry[] = [];
+  for (let i = 1; i < parts.length; i += 2) {
+    const body = parts[i + 1] ?? '';
+    const field = (name: string): string => {
+      const all = [...body.matchAll(new RegExp(`^${name}:[ \\t]*(.*?)[ \\t]*\\r?$`, 'gm'))];
+      return all.length > 0 ? all[all.length - 1]![1]! : '';
+    };
+    out.push({ item: Number(parts[i]), speaker: field('Speaker'), mixed: field('Mixed') !== '' });
+  }
+  return out;
+}
+
+/** The normal form of a judged value: the two phrases are case-insensitive and take a typographic apostrophe. */
+function judgedValue(raw: string, roster: ReadonlySet<string>): string | null {
+  const v = raw.trim();
+  if (roster.has(v)) return v;
+  const low = v.toLowerCase().replace(/[’ʼ]/g, "'");
+  if (low === 'narrator' || low === CANT_TELL || low === TWO_SPEAKERS) return low;
+  return null;
+}
+
+/** R9-4: every judged value must be a pinned roster id, `narrator`, `can't tell` or `two speakers`. The `Mixed:`
+    field is not part of the check. Returns one message per bad item, and one per item the key expects but the sheet lacks. */
+export function checkSheet(entries: SheetEntry[], key: BlindKey): string[] {
+  const roster = new Set(key.roster);
+  const errors: string[] = [];
+  const seen = new Set<number>();
+  for (const e of entries) {
+    if (seen.has(e.item)) errors.push(`Item ${e.item}: appears more than once on the sheet`);
+    seen.add(e.item);
+    if (!key.items.some((k) => k.item === e.item)) {
+      errors.push(`Item ${e.item}: not an item of this sheet`);
+      continue;
+    }
+    if (judgedValue(e.speaker, roster) === null) {
+      errors.push(`Item ${e.item}: judged value ${JSON.stringify(e.speaker)} is not a roster id, narrator, ${CANT_TELL} or ${TWO_SPEAKERS}`);
+    }
+  }
+  for (const k of key.items) if (!seen.has(k.item)) errors.push(`Item ${k.item}: missing from the sheet`);
+  return errors;
+}
+
+export type Judgement = 'improvement' | 'regression' | 'neutral';
+export interface Scored {
+  I: number;
+  R: number;
+  U: number;
+  /** Sentences marked mixed, two-speaker ones excluded (two speakers outranks mixed, R9-4). */
+  mixed: number;
+  twoSpeakers: number;
+  judgements: Array<{ item: number; judged: string; judgement: Judgement; mixed: boolean }>;
+}
+
+/** §4.4 step 2: improvement = on's id is the judged speaker and off's is not; regression = the reverse; else neutral. */
+export function scoreEntries(entries: SheetEntry[], key: BlindKey): Scored {
+  const roster = new Set(key.roster);
+  const byItem = new Map(entries.map((e) => [e.item, e] as const));
+  const s: Scored = { I: 0, R: 0, U: 0, mixed: 0, twoSpeakers: 0, judgements: [] };
+  for (const k of key.items) {
+    const e = byItem.get(k.item)!;
+    const judged = judgedValue(e.speaker, roster)!;
+    const two = judged === TWO_SPEAKERS;
+    let judgement: Judgement = 'neutral';
+    if (!two && judged !== CANT_TELL) {
+      if (judged === k.onId && judged !== k.offId) judgement = 'improvement';
+      else if (judged === k.offId && judged !== k.onId) judgement = 'regression';
+    }
+    if (judgement === 'improvement') s.I++;
+    else if (judgement === 'regression') s.R++;
+    else s.U++;
+    if (two) s.twoSpeakers++;
+    else if (e.mixed) s.mixed++;
+    s.judgements.push({ item: k.item, judged, judgement, mixed: e.mixed });
+  }
+  return s;
+}
+
+const VERDICT_HEADING = '## 1A verdict';
+
+function renderVerdict(score: ScoreFile): string {
+  const L = [VERDICT_HEADING, '', `**${score.verdict}**`, ''];
+  if (score.verdict === 'void') L.push('A replay control did not reproduce the live snapshot; no verdict is computed on the chapters that passed.');
+  else if (score.verdict === 'not computed') L.push(`No captured chapter cleared the floor (pick outcome: ${score.pickOutcome}).`);
+  else {
+    L.push(`${score.mode}, n = ${score.n}, judged ${score.judged}: I = ${score.I}, R = ${score.R}, U = ${score.U}.`);
+    if (score.mode === 'sample') {
+      L.push(
+        `One-sided p: improves ${score.pImproves!.toPrecision(4)} (needs < ${IMPROVES_LEVEL}), makes them worse ${score.pWorse!.toPrecision(4)} (needs < ${WORSE_LEVEL}).`,
+        `Estimated over all ${score.n}: improved ${score.estimate!.improved.toFixed(1)}, regressed ${score.estimate!.regressed.toFixed(1)}.`,
+      );
+    } else if (score.n > 0) L.push(`Exact: ${score.I} improved, ${score.R} regressed.`);
+    L.push(`Mixed ${score.mixed}; two speakers ${score.twoSpeakers}.`);
+    if (score.byClass) L.push('', `Changed sentences by class: ${(['a', 'b', 'c', 'd'] as const).map((c) => `(${c}) ${score.byClass![c]}`).join(', ')}.`);
+    if (score.narratorShare) L.push(`Narrator share of turn sentences: on ${score.narratorShare.on} / ${score.narratorShare.turnSentences}, off ${score.narratorShare.off} / ${score.narratorShare.turnSentences}.`);
+  }
+  if (score.outside.length > 0) {
+    L.push('', 'Outside the verdict (swapped-out and captured-not-used chapters, 1A counts only):', '', '| chapter | status | changed (all) | changed (turn) |', '|---|---|---|---|');
+    for (const o of score.outside) L.push(`| ch${o.chapterId} | ${o.status} | ${o.changedAll} | ${o.changedTurn} |`);
+  }
+  return `${L.join('\n')}\n`;
+}
+
+export interface ScoreFile {
+  verdict: Verdict;
+  mode: 'census' | 'sample' | null;
+  pickOutcome: PickOutcome | null;
+  n: number;
+  /** Sentences judged: n in a census, the sample size in a sample. */
+  judged: number;
+  seed: number | null;
+  I: number;
+  R: number;
+  U: number;
+  mixed: number;
+  twoSpeakers: number;
+  pImproves: number | null;
+  pWorse: number | null;
+  /** Sample only: `n x I / 30` and `n x R / 30`. */
+  estimate: { improved: number; regressed: number } | null;
+  byClass: Totals['changedByClass'] | null;
+  narratorShare: { on: number; off: number; turnSentences: number } | null;
+  /** Swapped-out and captured-not-used chapters' 1A counts, in no total above. */
+  outside: Array<{ chapterId: number; status: ChapterStatus; changedAll: number; changedTurn: number }>;
+  judgements: Scored['judgements'];
+}
+
+/** `--score <sheet> --scratch <dir>`. Returns the exit code. A roster failure writes no score and removes a stale one. */
+export function runScore(opts: { scratch: string; sheetPath: string }, deps: Pick<RunnerDeps, 'log'>): number {
+  const scratch = resolve(opts.scratch);
+  const scorePath = join(scratch, SCORE_FILE);
+  const reportPath = join(scratch, 'report.json');
+  if (!existsSync(reportPath)) throw new Error(`${scratch} has no report.json: run --from-captures first`);
+  const report = JSON.parse(readFileSync(reportPath, 'utf8')) as MeasurementReport;
+  const controlVoid = report.verdict.state === 'void';
+  const notComputed = report.pickOutcome === 'not-computed' || report.pickOutcome === 'stopped-for-owner';
+  const n = report.handCheck?.n ?? 0;
+  const base: Omit<ScoreFile, 'verdict' | 'mode' | 'pImproves' | 'pWorse' | 'estimate'> = {
+    pickOutcome: report.pickOutcome,
+    n,
+    judged: 0,
+    seed: report.handCheck?.seed ?? null,
+    I: 0, R: 0, U: 0, mixed: 0, twoSpeakers: 0,
+    byClass: controlVoid ? null : report.totals.changedByClass,
+    narratorShare: controlVoid ? null : { on: report.totals.narratorTurnOn, off: report.totals.narratorTurnOff, turnSentences: report.totals.turnSentences },
+    outside: report.outside.map((r) => ({ chapterId: r.chapterId, status: r.status, changedAll: r.changedAll, changedTurn: r.changedTurn })),
+    judgements: [],
+  };
+  let scored: Scored | null = null;
+  // Void, not-computed and n = 0 need no judgement: the sheet is read only when a count can decide.
+  if (!controlVoid && !notComputed && n > 0) {
+    if (!existsSync(opts.sheetPath)) throw new Error(`sheet not found: ${opts.sheetPath}`);
+    const keyPath = join(scratch, KEY_FILE);
+    if (!existsSync(keyPath)) throw new Error(`${scratch} has no ${KEY_FILE}: it pairs the sheet's items with the engine's ids`);
+    const key = JSON.parse(readFileSync(keyPath, 'utf8')) as BlindKey;
+    const entries = parseSheet(readFileSync(opts.sheetPath, 'utf8'));
+    const errors = checkSheet(entries, key);
+    if (errors.length > 0) {
+      if (existsSync(scorePath)) rmSync(scorePath);
+      for (const e of errors) process.stderr.write(`error: ${e}\n`);
+      process.stderr.write('error: no score written; fix the sheet and run --score again\n');
+      return 1;
+    }
+    scored = scoreEntries(entries, key);
+  }
+  const counts = scored ?? { I: 0, R: 0, U: 0, mixed: 0, twoSpeakers: 0, judgements: [] };
+  const judged = scored ? scored.judgements.length : 0;
+  const d = decideVerdict({ controlVoid, pickOutcome: report.pickOutcome, n, I: counts.I, R: counts.R, U: counts.U });
+  const score: ScoreFile = {
+    ...base,
+    ...counts,
+    judged,
+    verdict: d.verdict,
+    mode: d.mode,
+    pImproves: d.pImproves,
+    pWorse: d.pWorse,
+    estimate: d.mode === 'sample' ? { improved: (n * counts.I) / judged, regressed: (n * counts.R) / judged } : null,
+  };
+  writeAtomic(scorePath, JSON.stringify(score, null, 2));
+  const mdPath = join(scratch, 'report.md');
+  const md = existsSync(mdPath) ? readFileSync(mdPath, 'utf8') : '';
+  const cut = md.indexOf(VERDICT_HEADING);
+  writeAtomic(mdPath, `${(cut >= 0 ? md.slice(0, cut) : md).replace(/\n*$/, '\n')}\n${renderVerdict(score)}`);
+  deps.log(`scored: ${score.verdict}${score.mode ? ` (${score.mode}, n = ${n}, I = ${score.I}, R = ${score.R}, U = ${score.U})` : ''}`);
+  return 0;
 }
 
 function argValue(argv: string[], name: string): string | undefined {
@@ -993,6 +1297,19 @@ export async function main(argv: string[], deps: RunnerDeps = defaultDeps()): Pr
   const manifestPath = argValue(argv, '--manifest');
   const model = argValue(argv, '--model');
   const scratch = argValue(argv, '--scratch');
+  if (argv.includes('--score')) {
+    const sheetPath = argValue(argv, '--score');
+    if (!sheetPath || sheetPath.startsWith('--') || !scratch) {
+      process.stderr.write(USAGE);
+      return 2;
+    }
+    try {
+      return runScore({ scratch, sheetPath: resolve(sheetPath) }, deps);
+    } catch (e) {
+      process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+      return 1;
+    }
+  }
   if (argv.includes('--from-captures')) {
     const language = argValue(argv, '--language');
     if (!manifestPath || !scratch || !language) {

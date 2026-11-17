@@ -32,6 +32,18 @@ import {
   WINDOW,
   MARK_OPEN,
   MARK_CLOSE,
+  decideVerdict,
+  hyperTail,
+  pImproves,
+  pWorse,
+  parseSheet,
+  scoreEntries,
+  IMPROVES_LEVEL,
+  WORSE_LEVEL,
+  SHEET_CAP,
+  type BlindKey,
+  type SheetEntry,
+  type ScoreFile,
 } from '../../server/scripts/paragraph-degradation-ab.mts';
 import { conventionsFor } from '../../server/src/analyzer/dialogue-structure/lang/index.ts';
 import { locateSentenceRanges } from '../../server/src/analyzer/dialogue-structure/aligner.ts';
@@ -892,4 +904,230 @@ test("blind sheet: a swapped-out chapter's changed sentences never appear on the
   const key = keyOf(r.scratch);
   assert.deepEqual([...new Set(key.items.map((k) => k.chapterId))].sort(), [1, 3]);
   assert.equal(key.n, rep.picked.reduce((n, p) => n + p.changed.length, 0));
+});
+
+/* ---- Phase 7c step 5: --score and the 1A verdict (spec §4.3 `--score`, §4.4 "Verdict", "The bars", "Reach", R7-1, R7-2, R9-4) ---- */
+
+const scoreOf = (scratch: string) => JSON.parse(readFileSync(join(scratch, 'score.json'), 'utf8')) as ScoreFile;
+const SCORE = (r: { scratch: string }, sheet: string) => ['--score', sheet, '--scratch', r.scratch];
+
+/** Writes a filled copy of the generated sheet; `fill` gives each item's Speaker and Mixed values. */
+function fillSheet(scratch: string, fill: (k: ReturnType<typeof keyOf>['items'][number]) => { speaker: string; mixed?: string }): string {
+  const key = keyOf(scratch);
+  const lines = sheetOf(scratch).split('\n');
+  let cur: (typeof key.items)[number] | undefined;
+  const out = lines.map((l) => {
+    const m = /^## Item (\d+)$/.exec(l);
+    if (m) cur = key.items.find((k) => k.item === Number(m[1]));
+    if (cur && l === 'Speaker: ') return `Speaker: ${fill(cur).speaker}`;
+    if (cur && l === 'Mixed: ') return `Mixed: ${fill(cur).mixed ?? ''}`;
+    return l;
+  });
+  const file = join(scratch, 'filled-sheet.md');
+  writeFileSync(file, out.join('\n'));
+  return file;
+}
+/** Runs main() and returns what it wrote to stderr. */
+async function withStderr(run: () => Promise<number>): Promise<{ code: number; err: string }> {
+  const orig = process.stderr.write.bind(process.stderr);
+  let err = '';
+  process.stderr.write = ((c: string | Uint8Array) => ((err += String(c)), true)) as typeof process.stderr.write;
+  try {
+    return { code: await run(), err };
+  } finally {
+    process.stderr.write = orig;
+  }
+}
+
+test('verdict, census: I - R = 2 reads no clear direction and 3 improves; R - I = 0 reads no clear direction and 1 makes them worse', () => {
+  const v = (I: number, R: number, U = 0) => decideVerdict({ controlVoid: false, pickOutcome: 'three', n: I + R + U, I, R, U });
+  assert.equal(v(2, 0).verdict, 'no clear direction');
+  assert.equal(v(3, 0).verdict, 'recovery improves the speakers');
+  assert.equal(v(5, 3).verdict, 'no clear direction');
+  assert.equal(v(6, 3).verdict, 'recovery improves the speakers');
+  assert.equal(v(3, 3).verdict, 'no clear direction');
+  assert.equal(v(3, 4).verdict, 'recovery makes them worse');
+  assert.equal(v(0, 1).verdict, 'recovery makes them worse');
+  assert.equal(v(18, 8).verdict, 'recovery improves the speakers', "AC6's census of 18 / 8");
+  assert.equal(v(1, 6).verdict, 'recovery makes them worse', "AC6's census of 1 / 6");
+  assert.equal(v(2, 0).mode, 'census');
+  assert.equal(v(30, 0).mode, 'census', 'n = 30 is still a census');
+});
+
+test('verdict, sample: the critical values at n = 31 and 40 match the Reach table, with the p-values printed', () => {
+  const crit = (n: number) => {
+    let ci: number | null = null;
+    let cw: number | null = null;
+    for (let d = -SHEET_CAP; d <= SHEET_CAP; d++) {
+      if (ci === null && pImproves(n, d) < IMPROVES_LEVEL) ci = d;
+      if (cw === null && pWorse(n, d) < WORSE_LEVEL) cw = d;
+    }
+    console.log(`n = ${n}: improves first decides at I - R = ${ci} (p = ${pImproves(n, ci!).toFixed(5)}), makes them worse at R - I = ${cw} (p = ${pWorse(n, cw!).toFixed(5)})`);
+    return [ci, cw];
+  };
+  assert.deepEqual(crit(31), [4, 2]);
+  assert.deepEqual(crit(40), [8, 5]);
+  assert.deepEqual(crit(100), [11, 7]);
+  // decideVerdict reads the same table: one step below the bar is no clear direction, the bar itself decides.
+  const at = (n: number, I: number, R: number) => decideVerdict({ controlVoid: false, pickOutcome: 'three', n, I, R, U: SHEET_CAP - I - R });
+  assert.equal(at(40, 19, 11).verdict, 'recovery improves the speakers');
+  assert.equal(at(40, 18, 11).verdict, 'no clear direction');
+  assert.equal(at(40, 10, 18).verdict, 'recovery makes them worse');
+  assert.equal(at(40, 10, 14).verdict, 'no clear direction');
+  assert.equal(at(40, 19, 11).mode, 'sample');
+});
+
+test("verdict, sample: the exact test at n = 500 (the table's 11 and 8) is fast; the two claims are never both accepted", () => {
+  const t0 = Date.now();
+  const first = (p: (n: number, d: number) => number, level: number) => {
+    for (let d = -SHEET_CAP; d <= SHEET_CAP; d++) if (p(500, d) < level) return d;
+    return null;
+  };
+  assert.equal(first(pImproves, IMPROVES_LEVEL), 11);
+  assert.equal(first(pWorse, WORSE_LEVEL), 8);
+  const ms = Date.now() - t0;
+  console.log(`n = 500: both critical values found over d = -30..30 in ${ms} ms`);
+  assert.ok(ms < 10000);
+  for (const n of [31, 32, 40, 64, 100]) {
+    for (let I = 0; I <= SHEET_CAP; I++) {
+      for (let R = 0; I + R <= SHEET_CAP; R += 3) {
+        assert.doesNotThrow(() => decideVerdict({ controlVoid: false, pickOutcome: 'three', n, I, R, U: SHEET_CAP - I - R }), `n=${n} I=${I} R=${R}`);
+      }
+    }
+  }
+});
+
+test('verdict, sample: maximising over the boundary of the null equals maximising over every split, at n = 31 and 40', () => {
+  for (const n of [31, 40]) {
+    for (let d = -SHEET_CAP; d <= SHEET_CAP; d++) {
+      let bruteImproves = 0;
+      let bruteWorse = 0;
+      for (let a = 0; a <= n; a++) {
+        for (let b = 0; a + b <= n; b++) {
+          if (a - b <= 2) bruteImproves = Math.max(bruteImproves, hyperTail(n, a, b, d));
+          if (b <= a) bruteWorse = Math.max(bruteWorse, hyperTail(n, b, a, d));
+        }
+      }
+      assert.ok(Math.abs(bruteImproves - pImproves(n, d)) < 1e-12, `improves n=${n} d=${d}: every split ${bruteImproves}, boundary ${pImproves(n, d)}`);
+      assert.ok(Math.abs(bruteWorse - pWorse(n, d)) < 1e-12, `worse n=${n} d=${d}: every split ${bruteWorse}, boundary ${pWorse(n, d)}`);
+    }
+  }
+});
+
+test('verdict: void and not-computed outrank any counts; n = 0 reads recovery changes no speaker', () => {
+  const big = { n: 20, I: 20, R: 0, U: 0 };
+  assert.equal(decideVerdict({ controlVoid: true, pickOutcome: 'three', ...big }).verdict, 'void');
+  assert.equal(decideVerdict({ controlVoid: true, pickOutcome: 'not-computed', ...big }).verdict, 'void', 'void first');
+  assert.equal(decideVerdict({ controlVoid: false, pickOutcome: 'not-computed', ...big }).verdict, 'not computed');
+  assert.equal(decideVerdict({ controlVoid: false, pickOutcome: 'stopped-for-owner', ...big }).verdict, 'not computed');
+  assert.equal(decideVerdict({ controlVoid: false, pickOutcome: 'not-computed', n: 0, I: 0, R: 0, U: 0 }).verdict, 'not computed');
+  assert.equal(decideVerdict({ controlVoid: false, pickOutcome: 'three', n: 0, I: 0, R: 0, U: 0 }).verdict, 'recovery changes no speaker');
+  assert.equal(decideVerdict({ controlVoid: false, pickOutcome: 'fewer-than-three: 2', ...big }).verdict, 'recovery improves the speakers');
+});
+
+const KEY: BlindKey = {
+  n: 4, mode: 'census', seed: null, roster: ['anton', 'olga'],
+  items: [1, 2, 3, 4].map((item) => ({ item, chapterId: 1, sentenceIndex: item, onId: 'anton', offId: 'olga', class: 'a' as const })),
+};
+const entry = (item: number, speaker: string, mixed = false): SheetEntry => ({ item, speaker, mixed });
+
+test('scoring: on-id is an improvement, off-id a regression, anything else neutral; two speakers is neutral and outranks mixed', () => {
+  const s = scoreEntries([entry(1, 'anton'), entry(2, 'olga'), entry(3, 'narrator'), entry(4, "can't tell")], KEY);
+  assert.deepEqual([s.I, s.R, s.U], [1, 1, 2]);
+  const two = scoreEntries([entry(1, 'two speakers'), entry(2, 'two speakers', true), entry(3, 'anton', true), entry(4, 'narrator')], KEY);
+  assert.deepEqual([two.I, two.R, two.U], [1, 0, 3], 'a two-speaker sentence scores neutral');
+  assert.equal(two.twoSpeakers, 2, 'a sentence that is also mixed is counted as two speakers');
+  assert.equal(two.mixed, 1, 'and not as mixed: only the plain mixed sentence is counted there');
+});
+
+test('parseSheet reads the generated sheet: Speaker and Mixed per item, a blank field as empty', async () => {
+  const r = await threeChapterRun();
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const blank = parseSheet(sheetOf(r.scratch));
+  assert.equal(blank.length, keyOf(r.scratch).items.length);
+  assert.ok(blank.every((e) => e.speaker === '' && !e.mixed));
+  const filled = parseSheet(readFileSync(fillSheet(r.scratch, () => ({ speaker: 'olga', mixed: 'x' })), 'utf8'));
+  assert.ok(filled.every((e) => e.speaker === 'olga' && e.mixed));
+});
+
+test('--score: a judged id not in the pinned roster fails, names that item, and writes no score.json', async () => {
+  const r = await threeChapterRun();
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const key = keyOf(r.scratch);
+  assert.ok(key.items.length >= 2);
+  const sheet = fillSheet(r.scratch, (k) => ({ speaker: k.item === 2 ? 'antnon' : k.onId }));
+  writeFileSync(join(r.scratch, 'bad-sheet.md'), readFileSync(sheet, 'utf8'));
+  const { code, err } = await withStderr(() => main(SCORE(r, sheet), noAnalyzerDeps()));
+  assert.equal(code, 1);
+  assert.match(err, /Item 2: judged value "antnon" is not a roster id/);
+  assert.doesNotMatch(err, /Item 1:/);
+  assert.ok(!existsSync(join(r.scratch, 'score.json')), 'no score is written');
+  // fixing the typo scores
+  assert.equal(await main(SCORE(r, fillSheet(r.scratch, (k) => ({ speaker: k.onId }))), noAnalyzerDeps()), 0);
+  assert.ok(existsSync(join(r.scratch, 'score.json')));
+  // a later bad sheet removes the now-stale score
+  assert.equal((await withStderr(() => main(SCORE(r, join(r.scratch, 'bad-sheet.md')), noAnalyzerDeps()))).code, 1);
+  assert.ok(!existsSync(join(r.scratch, 'score.json')));
+});
+
+test('--score: an unfilled sheet is refused: a blank Speaker is not a roster id', async () => {
+  const r = await threeChapterRun();
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const { code, err } = await withStderr(() => main(SCORE(r, join(r.scratch, 'blind-sheet.md')), noAnalyzerDeps()));
+  assert.equal(code, 1);
+  assert.match(err, /Item 1: judged value "" is not a roster id/);
+  assert.ok(!existsSync(join(r.scratch, 'score.json')));
+});
+
+test('--score: a sheet marked mixed with a roster id as its value passes the roster check, and the report counts it mixed', async () => {
+  const r = await threeChapterRun();
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const n = keyOf(r.scratch).items.length;
+  const sheet = fillSheet(r.scratch, (k) => ({ speaker: k.onId, mixed: 'x' }));
+  assert.equal(await main(SCORE(r, sheet), noAnalyzerDeps()), 0);
+  const sc = scoreOf(r.scratch);
+  assert.deepEqual([sc.mixed, sc.twoSpeakers, sc.I, sc.R, sc.U], [n, 0, n, 0, 0]);
+  assert.equal(sc.verdict, n >= 3 ? 'recovery improves the speakers' : 'no clear direction');
+  assert.equal(sc.mode, 'census');
+  assert.match(readFileSync(join(r.scratch, 'report.md'), 'utf8'), /## 1A verdict\n\n\*\*/);
+});
+
+test('--score: two-speaker sentences score neutral through the whole run, and the exact counts sit beside the verdict', async () => {
+  const r = await threeChapterRun();
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const key = keyOf(r.scratch);
+  const sheet = fillSheet(r.scratch, (k) => (k.item === 1 ? { speaker: 'two speakers', mixed: 'x' } : { speaker: k.offId }));
+  assert.equal(await main(SCORE(r, sheet), noAnalyzerDeps()), 0);
+  const sc = scoreOf(r.scratch);
+  assert.deepEqual([sc.I, sc.R, sc.U, sc.twoSpeakers, sc.mixed], [0, key.items.length - 1, 1, 1, 0]);
+  assert.equal(sc.verdict, 'recovery makes them worse');
+  assert.equal(sc.n, key.n);
+  assert.equal(sc.byClass!.a + sc.byClass!.b + sc.byClass!.c + sc.byClass!.d, key.n);
+  assert.ok(sc.narratorShare && sc.narratorShare.turnSentences > 0);
+  // re-measuring drops the score it made stale
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  assert.ok(!existsSync(join(r.scratch, 'score.json')));
+});
+
+test('--score: a void measurement and a not-computed pick score without a sheet, whatever the counts', async () => {
+  const r = await threeChapterRun();
+  editCapture(r.scratch, 2, (c) => {
+    c.deterministic[1]!.characterId = 'boris';
+  });
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  assert.equal(await main(SCORE(r, join(r.scratch, 'no-such-sheet.md')), noAnalyzerDeps()), 0);
+  assert.equal(scoreOf(r.scratch).verdict, 'void');
+
+  const r2 = await threeChapterRun();
+  editPick(r2.scratch, (p) => {
+    p.outcome = 'not-computed';
+  });
+  await main(FROM_CAPTURES(r2), noAnalyzerDeps());
+  assert.equal(await main(SCORE(r2, join(r2.scratch, 'no-such-sheet.md')), noAnalyzerDeps()), 0);
+  assert.equal(scoreOf(r2.scratch).verdict, 'not computed');
+});
+
+test('--score: no sheet argument or no scratch is a usage error', async () => {
+  assert.equal((await withStderr(() => main(['--score'], noAnalyzerDeps()))).code, 2);
+  assert.equal((await withStderr(() => main(['--score', 'x.md'], noAnalyzerDeps()))).code, 2);
 });
