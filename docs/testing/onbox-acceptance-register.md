@@ -7815,13 +7815,50 @@ until this row runs.
 
 **What to observe, concretely**, on a Windows dev box:
 
-- Start a real, long-running battery (e.g. `npm run test:server`), then kill
-  its owning terminal so the whole subtree is
-  orphaned but stays busy or idle past the reaper's thresholds. Run a real
-  `git push` and confirm its pre-push census reaps the orphan, printing
+- **Positive case (reaped).** *This bullet changed on 2026-11-17 for #4222:*
+  it used to say to orphan a battery that "stays busy or idle" and expect the
+  push to reap it. From pre-push that is no longer the rule: a battery is
+  reaped only when it is orphaned AND stalled-rate (subtree CPU at or under
+  2 CPU-s/min, judged against a prior census sample at least 10 minutes old, so
+  a first-ever sighting is never reaped, and a battery whose workers were
+  recycled since that sample reads as unknown, not stalled) AND the tree's
+  command lines name a path under the pushing checkout and none outside it. Start a real battery
+  that will hang, launched from the checkout you will push from so its argv
+  names that checkout, and from a checkout whose `node_modules` is NOT
+  junctioned (the primary, or a `wt-new.mjs` worktree with its own install):
+  from a junctioned worktree the fork workers name the primary, the battery is
+  spared by design, and you would record a false FAIL (e.g.
+  `node <checkout>\node_modules\vitest\vitest.mjs run --testTimeout=0 <a test file whose test never resolves>`,
+  or a file with a top-level `await new Promise(() => {})` so collection itself
+  hangs; a test that merely fails at its timeout lets the run exit long before
+  the 10-minute second push), orphan it by killing its owning terminal, and leave it idle. Run one
+  `git push` from that checkout to record a first census sample, wait at least
+  10 minutes, then run a second `git push`: the second push must print
   `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` on
-  stderr — not `KILL FAILED` — and confirm via `Get-Process` that every PID
-  the census recorded for that root is actually gone afterward.
+  stderr (not `KILL FAILED`), and `Get-Process` must show every PID the census
+  recorded for that root gone.
+- **Negative control 1 (busy orphan survives).** The same shape, but the
+  battery is CPU-busy (a test that spins), still orphaned and in-checkout. Two
+  pushes 10+ minutes apart print NO `KILLED` line and the battery is still
+  running; the `logs/reaper-census.jsonl` entry for its root carries a
+  `spareReason` naming the busy rate.
+- **Negative control 2 (other checkout survives).** The push origin matters, so
+  run both: (a) a stalled orphan whose argv is under a DIFFERENT worktree or a
+  scratchpad, pushed from this checkout, is not killed; (b) the same stalled
+  orphan run in a scratchpad or worktree whose `node_modules` is junctioned
+  from the primary checkout, pushed FROM THE PRIMARY, is not killed either (its
+  fork workers name the primary's path, its main vitest names the run's own).
+  Each census log entry's `spareReason` says the battery names a location
+  outside the checkout.
+- **Observation answered 2026-11-17 (PR #4315 review; re-confirm on the box).**
+  With a junctioned `node_modules`, the main vitest process's argv carries the
+  run's own path (via the `node_modules\.bin\..\vitest\vitest.mjs` shim), while
+  each fork worker's argv carries the PRIMARY checkout's realpath
+  (`...\Audiobook-Generator\node_modules\vitest\dist\workers\forks.js`). The
+  reaper therefore judges the battery as a whole and spares one naming any
+  location outside the pushing checkout, so a worktree's own junctioned orphan
+  is also spared from its own push (only a manual `doctor -- --kill` reaps it).
+  Record anything that differs.
 - If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
   line), record it — the fixed code path no longer depends on it being zero,
   but the real-world value is still useful corroboration.

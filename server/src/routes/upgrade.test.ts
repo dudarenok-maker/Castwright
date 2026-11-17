@@ -29,6 +29,9 @@ const h = vi.hoisted(() => ({
      call(s) — which start after that count — fail. */
   writeFileSyncFailPath: null as null | string,
   writeFileSyncFailAfterCalls: null as null | number,
+  /* #4236 — the error the injected failure throws; null keeps the plain
+     disk-full Error above. */
+  writeFileSyncFailError: null as null | Error,
 }));
 let stateWriteCallCount = 0;
 
@@ -61,7 +64,7 @@ vi.mock('node:fs', async () => {
           h.writeFileSyncFailAfterCalls !== null &&
           stateWriteCallCount > h.writeFileSyncFailAfterCalls
         ) {
-          throw new Error('simulated disk-full writing upgrade state.json');
+          throw h.writeFileSyncFailError ?? new Error('simulated disk-full writing upgrade state.json');
         }
       }
       return actual.writeFileSync(...args);
@@ -98,6 +101,7 @@ beforeEach(async () => {
   h.applyThrows = null;
   h.writeFileSyncFailPath = null;
   h.writeFileSyncFailAfterCalls = null;
+  h.writeFileSyncFailError = null;
   stateWriteCallCount = 0;
 
   const { upgradeRouter } = await import('./upgrade.js');
@@ -149,6 +153,32 @@ describe('POST /api/upgrade/stage', () => {
     expect(res.body.candidateVersion).toBe('1.6.0');
     expect(res.body.requiresPipInstall).toBe(true); // new-hash != old-hash
     expect(readState().phase).toBe('staged');
+  });
+
+  /* #4236 — writeState() sits inside the route's try, so an fs failure
+     recording the staged state reached the client as the raw error, whose
+     message embeds the absolute staging path (the app is served over LAN
+     HTTPS). The body must be the curated path-free sentence; the raw error
+     goes to the log. */
+  it('answers an fs error from the state write with a path-free 400 and logs the raw error', async () => {
+    h.validate = async () => ({ ok: true, code: 'ok', candidateVersion: '1.6.0', reqHash: 'h', topDir: 'castwright-v1.6.0', isDowngrade: false });
+    const stateFile = (h.paths as Record<string, unknown>).stateFile as string;
+    h.writeFileSyncFailPath = stateFile;
+    h.writeFileSyncFailAfterCalls = 0;
+    h.writeFileSyncFailError = Object.assign(
+      new Error(`ENOSPC: no space left on device, open '${stateFile}'`),
+      { code: 'ENOSPC', syscall: 'open', path: stateFile },
+    );
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app).post('/api/upgrade/stage').attach('zip', Buffer.from('PK'), 'x.zip');
+      expect(res.status).toBe(400);
+      expect(res.body.error).not.toContain(stagingDir);
+      expect(res.body.error).not.toContain('state.json');
+      expect(errorSpy.mock.calls.some((args: unknown[]) => args.includes(h.writeFileSyncFailError))).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 

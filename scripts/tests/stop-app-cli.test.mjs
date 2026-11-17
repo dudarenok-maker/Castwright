@@ -54,7 +54,10 @@ test('stop-app.mjs CLI defaults: really kills the recorded pid, logs it, and pro
     await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
     assert.equal(pidIsAlive(child.pid), false, 'the default kill must really kill the recorded pid');
     assert.equal(existsSync(join(runDir, 'server.pid')), false, 'runDirPath default: the pidfile in APP_RUN_DIR was consumed');
-    assert.match(stdout, new RegExp(`\\[WARN\\] still listening on :${port}\\b`), `real probe + still-listening push: ${stdout}`);
+    // The CLI also probes this checkout's PORT (shell env, else server/.env; a
+    // worktree's slot port, e.g. :8090), and an unrelated server may be listening there,
+    // so the list can read `:8090, :<port>`. Assert only the port this test owns.
+    assert.match(stdout, new RegExp(`\\[WARN\\] still listening on :(?:\\d+, :)*${port}\\b`), `real probe + still-listening push: ${stdout}`);
     assert.doesNotMatch(stdout, /\[OK\]/, 'a still-listening port must suppress the OK summary');
   } finally {
     if (pidIsAlive(child.pid)) spawnSync(process.execPath, ['-e', `process.kill(${child.pid})`], { windowsHide: true });
