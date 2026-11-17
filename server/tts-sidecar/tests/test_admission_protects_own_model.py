@@ -61,6 +61,7 @@ def _wire(monkeypatch, asr, spk, base_free):
 
     pc = main._placement
     monkeypatch.setattr(pc, "is_resident", resident_card)
+    monkeypatch.setattr(pc, "any_model_resident", lambda engine_id: resident_card(engine_id) is not None)
     monkeypatch.setattr(pc, "probe", probe)
     monkeypatch.setattr(pc, "footprints", main.FootprintTable())
     monkeypatch.setattr(pc, "ledger", main.ReservationLedger())
@@ -192,10 +193,22 @@ def _idle_asr():
     return asr
 
 
+def _stub_peak(monkeypatch):
+    # Torch-less CI: `_reset_peak_mb` would answer None (no baseline) for every
+    # op, so give a cold op a baseline and let the observation honour it the
+    # way the real `_observed_mb` does (#4163: no baseline, no sample).
+    monkeypatch.setattr(main.PlacementController, "_reset_peak_mb", staticmethod(lambda device_key: 100))
+    monkeypatch.setattr(
+        main.PlacementController,
+        "_observed_mb",
+        staticmethod(lambda device_key, baseline_mb=None: 500 if baseline_mb is not None else 0),
+    )
+
+
 def test_s5_resident_spk_observation_is_not_learned(monkeypatch):
-    # #4102: a resident SPK op's torch-allocator peak already includes the
-    # resident ECAPA weights, so recording it would drag "spk.warm" back up.
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 500))
+    # #4102: a resident SPK op is warm, so #4163's cold-only gate voids its
+    # baseline and nothing is recorded; "spk.warm" stays at its seed.
+    _stub_peak(monkeypatch)
     spk = FakeEngine("cuda:0", 300)
     pc = _wire(monkeypatch, _idle_asr(), spk, {0: 6000})
     assert _admit_spk(pc) == {"device": "cuda:0"}
@@ -203,7 +216,7 @@ def test_s5_resident_spk_observation_is_not_learned(monkeypatch):
 
 
 def test_s6_cold_spk_observation_is_still_learned(monkeypatch):
-    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 500))
+    _stub_peak(monkeypatch)
     spk = FakeEngine("cuda:0", 300, resident=False)
     pc = _wire(monkeypatch, _idle_asr(), spk, {0: 6000})
     assert _admit_spk(pc) == {"device": "cuda:0"}

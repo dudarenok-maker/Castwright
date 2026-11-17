@@ -97,7 +97,15 @@ export class ExportIncompleteError extends Error {
    accepted rather than chased further: the per-chapter loop's own
    `signal?.throwIfAborted()` check still stops the loop from registering
    any MORE chapters once a signal trips, which bounds the residual cost to
-   whatever chapter was already in flight. */
+   whatever chapter was already in flight.
+
+   An optional `signal` passed to createZipWritePipeline covers the span the
+   loop's check cannot: once every chapter is registered (buildCodecZip
+   registers all of them in milliseconds, then only awaits `donePromise`)
+   nothing else observes an abort. The signal's `abort` event calls
+   `rejectBuild`, so `donePromise` rejects, the write stream is torn down
+   and the build fails as cancelled instead of resolving and being reported
+   `done`. Source-side reads already in flight still run on, as above. */
 export interface ZipWritePipeline {
   /** Reject the pipeline (idempotent — a second call is a no-op) and tear
       down the write stream so nothing keeps writing once this returns. */
@@ -110,7 +118,11 @@ export interface ZipWritePipeline {
   donePromise: Promise<number>;
 }
 
-export function createZipWritePipeline(outPath: string, zip: ZipFile): ZipWritePipeline {
+export function createZipWritePipeline(
+  outPath: string,
+  zip: ZipFile,
+  signal?: AbortSignal,
+): ZipWritePipeline {
   const ws = createWriteStream(outPath);
   let settled = false;
   let bytes = 0;
@@ -126,9 +138,12 @@ export function createZipWritePipeline(outPath: string, zip: ZipFile): ZipWriteP
     bytes += chunk.length;
   };
 
+  const onAbort = (): void => rejectBuild(signal?.reason ?? new Error('aborted'));
+
   const rejectBuild = (reason?: unknown): void => {
     if (settled) return;
     settled = true;
+    signal?.removeEventListener('abort', onAbort);
     rejectDone(reason ?? new Error('zip write failed'));
     /* Stop the WRITE side doing any further I/O now that we've decided to
        fail — this does NOT stop source-side reads already in flight; see
@@ -161,8 +176,11 @@ export function createZipWritePipeline(outPath: string, zip: ZipFile): ZipWriteP
   ws.on('close', () => {
     if (settled) return;
     settled = true;
+    signal?.removeEventListener('abort', onAbort);
     resolveDone(bytes);
   });
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
 
   return {
     rejectBuild,
@@ -230,7 +248,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
        so a caller can trust nothing is still writing to disk once it
        settles. `signal?.throwIfAborted()` below is what actually stops a
        cancelled build from registering any more chapters. */
-    const pipeline = createZipWritePipeline(outPath, zip);
+    const pipeline = createZipWritePipeline(outPath, zip, signal);
 
     try {
       for (let i = 0; i < resolved.length; i++) {

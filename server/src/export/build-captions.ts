@@ -197,7 +197,7 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
      once a signal trips. The pipeline itself forwards every yazl/write-
      stream error into one rejection that also tears down the write
      stream, and resolves only once it's genuinely closed. */
-  const pipeline = createZipWritePipeline(outPath, zip);
+  const pipeline = createZipWritePipeline(outPath, zip, signal);
   try {
     for (let i = 0; i < resolved.length; i++) {
       signal?.throwIfAborted();

@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -56,7 +56,7 @@ export function PromoteFirstSentenceButton({
 
   async function handleConfirm() {
     if (disabled || !bookId || !firstSentence) return;
-    if (refuseIfEditsLocked(store.getState, dispatch)) return;
+    if (refuseIfManuscriptEditsLocked(store.getState, dispatch)) return;
     setPhase('busy');
     try {
       await api.renameChapter(bookId, chapterId, cleaned);

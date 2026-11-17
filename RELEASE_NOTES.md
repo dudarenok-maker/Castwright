@@ -2,6 +2,7 @@
 
 **What's new in 1.16.0**
 
+- **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
@@ -9,10 +10,13 @@
 - **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, a cover, or a chapter's loudness or waveform data, the half-written file is cleaned up instead of lingering.
 - **The right voice on dialogue in books with emoji.** In Russian, Spanish and French dash-dialogue books where several turns were run together into one paragraph, an emoji earlier in the paragraph no longer gives a line the wrong voice. Ordinary symbols like ★, ♥ and © were never the problem.
 - **Your narrator survives a re-analysis.** If the cast is changed while a book is being analysed, the narrator is always there at the end, with its lines, instead of going missing until you start fresh. Give it a voice again if it lost one.
+- **An audiobook (.m4b) exported while a chapter was being re-rendered keeps its chapter markers in the right place,** and the AAC/M4A and Opus chapter-zip exports no longer fail if a chapter is re-rendered mid-export. Cancelling an audiobook export now really cancels it; the one thing it leaves behind is a copy that already reached your sync folder.
 - **Merged sentences stay merged.** Joining two sentences in the manuscript, or removing a sentence you turned into a chapter title, now survives a re-analysis and merging two characters, instead of quietly coming back on the next reload.
 - **Re-recording a flagged chapter now matches each voice to a reference made at the same quality.** With Auto-fix voice mismatches on, the chapter's "Re-record the flagged lines" button only compares a new take against a stored voice reference recorded at the same voice quality. Where the reference doesn't match, or predates this update, those lines stay flagged for you instead of being re-recorded against the wrong sound.
 - **If Castwright's server ever stops on a serious internal error, it now leaves a diagnostic report in your logs folder,** so the cause can be tracked down.
 - **Emotion takes no longer reload the high-quality voice.** Making several emotion takes in a row keeps the higher-quality voice model loaded instead of unloading and reloading it for each one, designing several voices in a row keeps the voice-design model loaded, and speech checks running on your graphics card keep their own model when memory is tight.
+- **Manuscript edits made while a book is re-analysed are no longer silently undone.** Castwright now tells you the manuscript is read-only until the analysis finishes, and refuses the change on the spot, so nothing else (a Script Review suggestion, a change-log entry, an Undo) is recorded for an edit that didn't happen. It shows you the finished result when the run ends.
+- **A failed re-record or chapter render no longer shows where your files live.** When "Re-record the flagged lines" or a chapter render hits a full disk, a locked file or a busy folder, the message now says what went wrong in plain words, without the full path to your files, and a locked file no longer gets mistaken for running out of memory.
 
 # Castwright 1.15.0
 

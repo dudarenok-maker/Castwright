@@ -47,6 +47,8 @@ export async function ingestCloneSample(
   try {
     pcm = await decodeAudioToPcm(input, sampleRate);
   } catch (e) {
+    // #4233: the rewrap below keeps only the path-free message; log the original (full ffmpeg stderr).
+    console.error('[clone-ingest] decode failed', e);
     throw new CloneIngestError(`Could not decode the audio: ${(e as Error).message}`);
   }
   // Cap to MAX_SECONDS (s16le mono → 2 bytes/sample).
