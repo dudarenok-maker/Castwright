@@ -103,6 +103,7 @@ import {
   sha256Hex,
 } from '../workspace/manuscript-hints.js';
 import { pairWithParse } from '../workspace/title-align.js';
+import { paragraphsMergedChapterIds } from '../workspace/paragraphs-merged.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -936,11 +937,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
           : DEFAULT_NARRATOR_CREDIT,
     };
 
+    /* #2254 -- chapters whose hydrated body is merged-turn degraded (derived,
+       memoised per record; exclusion and pairing applied per request). */
+    const paragraphsMergedChapters = paragraphsMergedChapterIds(state, rec);
+
     res.json({
       state: stateView,
       sliceRevisions,
       cast,
       manuscript,
+      ...(paragraphsMergedChapters ? { paragraphsMergedChapters } : {}),
       manuscriptEdits: edits,
       revisions: revs,
       ...(revisionsError ? { revisionsError } : {}),

@@ -7283,6 +7283,15 @@ export interface components {
             cast: {
                 characters: components["schemas"]["Character"][];
             } | null;
+            /**
+             * @description Ids of the non-excluded chapters whose hydrated body has merged
+             *     dialogue turns (the paragraph-degradation signal, #2254). Absent
+             *     when it was not measured (no book language, a language outside the
+             *     notice list, no hydrated manuscript, or hints that do not pair with
+             *     state.json) and when nothing is flagged. Derived on read; never
+             *     persisted.
+             */
+            paragraphsMergedChapters?: number[];
             /** @description Lightweight manuscript meta pulled from the in-memory ManuscriptRecord. */
             manuscript: {
                 wordCount: number;
