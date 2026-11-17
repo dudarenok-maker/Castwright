@@ -240,6 +240,12 @@ describe('cast merge vs an analysis registering mid-merge (#4099, unreachable si
           expect(bookJobKinds(bookId)).not.toContain('analysis'); // R1b
         } finally {
           release();
+          // Settle the merge and the registered run before leaving, so a red case cannot leak
+          // into the next one (or past afterAll's rmSync). `.catch` keeps the test's own error.
+          await mergeP.catch(() => {});
+          await Promise.resolve(regP)
+            .then((reg) => (typeof reg === 'object' && reg !== null && 'done' in reg ? reg.done : undefined))
+            .catch(() => {});
         }
 
         const mergeRes = await mergeP;
