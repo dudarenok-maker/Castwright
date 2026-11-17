@@ -43,7 +43,7 @@
    across the book's chapters. Chapter text is read as-is (AC5 M-8). */
 
 import { isDeepStrictEqual } from 'node:util';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { captureChapterStages, type CapturedChapter } from '../src/analyzer/attribution-eval/run-eval.js';
@@ -54,6 +54,7 @@ import type { Analyzer, StageCall } from '../src/analyzer/index.js';
 import { countTurnOpeners, turnInParagraphRegex, MERGED_TURNS_DEGRADED } from '../src/analyzer/dialogue-structure/legibility.js';
 import type { ParagraphEvidence, SpanEvidence } from '../src/analyzer/dialogue-structure/types.js';
 import { conventionsFor } from '../src/analyzer/dialogue-structure/lang/index.js';
+import { locateSentenceRanges } from '../src/analyzer/dialogue-structure/aligner.js';
 import { runStructureEngine } from '../src/routes/analysis.js';
 import { resolveCapacity } from '../src/analyzer/capacity.js';
 import { configValue } from '../src/config/resolver.js';
@@ -454,12 +455,19 @@ export const CONFIDENT_REASONS = ['tag-confirm', 'tag-correct', 'tag-span-narrat
 export type ConfidentReason = (typeof CONFIDENT_REASONS)[number];
 export const CONFIDENT_MIN_CONFIDENCE = 0.9;
 export type ConfidentCounts = Record<DecisionClass, Record<ConfidentReason, number>>;
+export interface Span { start: number; end: number }
 export interface ChangedSentence {
   index: number;
   turn: boolean;
   cls: DecisionClass;
   onId: string;
   offId: string;
+  /** The model sentence's text (the blind sheet shows it). */
+  text: string;
+  /** Its own located raw range (locateSentenceRanges), or null when not located (R10-4). */
+  range: Span | null;
+  /** The recovery-off line holding the start of the first span it aligns to, with the line either side (R7-8); null = unaligned. */
+  lines: { prev: Span | null; cur: Span; next: Span | null } | null;
 }
 
 /** Prefix match for the two `:<id>` forms, exact for the rest. `null` = not one of the five. */
@@ -581,12 +589,26 @@ export function replayChapter(saved: SavedCapture, body: string, conventions: Co
   const confident = emptyConfident();
   const changed: ChangedSentence[] = [];
   const flagged = new Set(saved.flags.map((f) => f.index)); // R6-4: `flags` is the only flag marker
+  // Both arms share one located range per sentence: it depends only on the body and the sentence list (R10-4).
+  let ranges: Array<Span | null> | null = null;
+  const rangeOf = (i: number): Span | null =>
+    (ranges ??= locateSentenceRanges(saved.raw, body, conventions.dialogueOpen !== null))[i] ?? null;
+  const offLinesOf = (i: number): ChangedSentence['lines'] => {
+    const first = offView.aligned[i]?.spans[0];
+    const at = first ? offView.paras.findIndex((p) => first.start >= p.start && first.start <= p.end) : -1;
+    if (at < 0) return null;
+    const sp = (k: number): Span | null => (offView.paras[k] ? { start: offView.paras[k]!.start, end: offView.paras[k]!.end } : null);
+    return { prev: sp(at - 1), cur: sp(at)!, next: sp(at + 1) };
+  };
   for (let i = 0; i < n; i++) {
     const turn = isTurnSentence(saved.raw[i]?.text ?? onS[i]!.text, conventions);
     let cls: DecisionClass | null = null;
     const classOf = (): DecisionClass => (cls ??= classifySentence(i, onView, offView, body, conventions));
     if (onS[i]!.characterId !== offS[i]!.characterId) {
-      changed.push({ index: i, turn, cls: classOf(), onId: onS[i]!.characterId, offId: offS[i]!.characterId });
+      changed.push({
+        index: i, turn, cls: classOf(), onId: onS[i]!.characterId, offId: offS[i]!.characterId,
+        text: saved.raw[i]?.text ?? onS[i]!.text, range: rangeOf(i), lines: offLinesOf(i),
+      });
     }
     const det = saved.deterministic[i];
     if (!turn || !det || det.confidence < CONFIDENT_MIN_CONFIDENCE || flagged.has(i)) continue;
@@ -664,6 +686,8 @@ export interface MeasurementReport {
   /** Every control's result, across all current captures (superseded ones are not read). */
   controls: Array<{ chapterId: number; status: ChapterStatus; control: ControlResult }>;
   verdict: { state: 'void'; void: VoidChapter[] } | { state: 'ready' };
+  /** The blind sheet's plan: `n`, census or sample, the seed. Null when the measurement is void (no sheet). */
+  handCheck: HandCheckRecord | null;
 }
 
 /** Reads the saved captures and pick.json and replays each chapter. Constructs no analyzer.
@@ -701,6 +725,7 @@ export function measureCaptures(opts: {
     outside,
     controls: replays.map((r) => ({ chapterId: r.chapterId, status: r.status, control: r.control })),
     verdict: voids.length > 0 ? { state: 'void', void: voids } : { state: 'ready' },
+    handCheck: voids.length > 0 ? null : planHandCheck(picked),
   };
 }
 
@@ -759,7 +784,11 @@ export function renderReport(r: MeasurementReport): string {
   if (r.outside.length === 0) L.push('None.');
   else L.push(...TABLE_HEAD, ...chapterRows(r.outside), '', 'Confident decisions, outside chapters (separate from the table above):', '', ...confidentTable(r.outsideTotals), '', ...changedTable(r.outside));
   L.push('', '## Verdict state', '');
-  if (r.verdict.state === 'ready') L.push('`ready` (the hand-check is a later step).');
+  if (r.verdict.state === 'ready') {
+    L.push('`ready`.');
+    const h = r.handCheck;
+    if (h) L.push('', `Hand-check: n = ${h.n}, ${h.mode}${h.seed === null ? '' : `, seed ${h.seed}`}; ${h.items.length} sentence(s) on ${SHEET_FILE}.`);
+  }
   else {
     L.push('`void`: a replay control did not reproduce the live snapshot.', '');
     for (const v of r.verdict.void) {
@@ -771,20 +800,185 @@ export function renderReport(r: MeasurementReport): string {
   return `${L.join('\n')}\n`;
 }
 
+/* ---- Phase 7c step 4: the blind 1A hand-check sheet (§4.3, §4.4 step 2, R7-11, R8-3, R9-4, R10-4) ---- */
+
+export const SHEET_FILE = 'blind-sheet.md';
+export const KEY_FILE = 'blind-key.json';
+/** §4.4 step 2: a census up to 30; above that, 30 drawn uniformly without replacement. */
+export const SHEET_CAP = 30;
+/** The fixed seed the report records for the draw. */
+export const SHEET_SEED = 2254;
+/** A line longer than this is shown as a window (R9-4). */
+export const LONG_LINE = 1200;
+/** Characters shown either side of the located range in a window. */
+export const WINDOW = 400;
+export const MARK_OPEN = '⟦';
+export const MARK_CLOSE = '⟧';
+
+export interface HandCheckRecord {
+  /** 1A's changed sentences across the picked chapters only (R9-3, R10-2). */
+  n: number;
+  mode: 'census' | 'sample';
+  /** The seed of the draw; null for a census (nothing is drawn). */
+  seed: number | null;
+  /** The sentences on the sheet, in sheet order. */
+  items: Array<{ chapterId: number; index: number }>;
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Census when `all.length <= SHEET_CAP`; else SHEET_CAP drawn uniformly without replacement (partial
+    Fisher-Yates over a seeded generator), kept in their original order so the order leaks nothing. */
+export function selectSheetItems<T>(all: T[], seed: number = SHEET_SEED): { mode: 'census' | 'sample'; seed: number | null; picked: T[] } {
+  if (all.length <= SHEET_CAP) return { mode: 'census', seed: null, picked: [...all] };
+  const rnd = mulberry32(seed);
+  const idx = all.map((_, i) => i);
+  for (let i = 0; i < SHEET_CAP; i++) {
+    const j = i + Math.floor(rnd() * (idx.length - i));
+    [idx[i], idx[j]] = [idx[j]!, idx[i]!];
+  }
+  const chosen = idx.slice(0, SHEET_CAP).sort((a, b) => a - b);
+  return { mode: 'sample', seed, picked: chosen.map((i) => all[i]!) };
+}
+
+const oneLine = (t: string): string => t.replace(/\s*\n\s*/g, ' ↵ ');
+
+/** A neighbouring line: whole if short, else the 400 characters nearest the sentence's line. */
+function neighbour(body: string, s: Span | null, side: 'prev' | 'next'): string {
+  if (!s) return '(none)';
+  const t = body.slice(s.start, s.end);
+  if (t.length <= LONG_LINE) return t;
+  return side === 'prev' ? `…${t.slice(-WINDOW)}` : `${t.slice(0, WINDOW)}…`;
+}
+
+/** One item's section. Shows no speaker from either arm or from the engine. */
+export function renderSheetItem(k: number, body: string, c: Pick<ChangedSentence, 'text' | 'range' | 'lines'>): string {
+  const L: string[] = [`## Item ${k}`, `Sentence: ${oneLine(c.text)}`];
+  if (c.lines === null) {
+    L.push('Shown as: text alone (unaligned: this sentence aligns to no line)');
+  } else if (c.range === null) {
+    L.push('Shown as: text alone (unlocated: its own place in the text could not be found)');
+  } else {
+    const line = c.lines.cur;
+    const rs = Math.max(c.range.start, line.start);
+    const re = Math.min(c.range.end, line.end);
+    const long = line.end - line.start > LONG_LINE;
+    const ws = long ? Math.max(line.start, rs - WINDOW) : line.start;
+    const we = long ? Math.min(line.end, re + WINDOW) : line.end;
+    const shown = body.slice(ws, we);
+    const needle = body.slice(c.range.start, c.range.end);
+    let times = 0;
+    for (let at = needle ? shown.indexOf(needle) : -1; at >= 0; at = shown.indexOf(needle, at + needle.length)) times++;
+    L.push(`Line before: ${neighbour(body, c.lines.prev, 'prev')}`);
+    if (re <= rs) {
+      L.push(`Line: ${long ? `${ws > line.start ? '…' : ''}${shown}${we < line.end ? '…' : ''}` : shown}`);
+      L.push('Shown as: its located range lies outside this line, so it is not marked');
+    } else {
+      const marked = `${body.slice(ws, rs)}${MARK_OPEN}${body.slice(rs, re)}${MARK_CLOSE}${body.slice(re, we)}`;
+      L.push(`Line: ${ws > line.start && long ? '…' : ''}${marked}${we < line.end && long ? '…' : ''}`);
+      L.push(
+        long
+          ? `Shown as: a window of ${WINDOW} characters either side of the marked sentence, cut from a line of ${line.end - line.start} characters; the sentence starts at offset ${rs - line.start} in the line`
+          : `Shown as: the whole line; the sentence starts at offset ${rs - line.start} in the line`,
+      );
+      L.push(`Occurrences of the marked text in what is shown: ${times}`);
+    }
+    L.push(`Line after: ${neighbour(body, c.lines.next, 'next')}`);
+  }
+  L.push('Speaker: ', 'Mixed: ');
+  return L.join('\n');
+}
+
+export interface SheetRoster { id: string; name: string }
+
+/** The header: rubric and the pinned roster's ids. The only place a roster id or `narrator` appears. */
+export function renderSheetHeader(roster: SheetRoster[], rec: HandCheckRecord): string {
+  return [
+    '# #2254 1A hand-check (blind)',
+    '',
+    `${rec.items.length} sentence(s) (${rec.mode}${rec.mode === 'sample' ? `, seed ${rec.seed}` : ''}). Each shows the sentence and its line in the text as imported, with the line either side. No answer from either arm or from the engine is shown.`,
+    '',
+    '## How to fill in an item',
+    '',
+    '- `Speaker:` the true speaker: a roster id from the list below, or `narrator`; or `can\'t tell`; or `two speakers`.',
+    '- A mixed sentence (narration plus a turn, such as `Антон обернулся. — Ты кто?`): write the **turn\'s** speaker and put `x` in `Mixed:`.',
+    '- A sentence holding two different speakers\' turns (`— Да? — Нет.`): write `two speakers`. It outranks mixed; leave `Mixed:` empty.',
+    '- `Mixed:` is a separate field; filling it never changes what `Speaker:` holds.',
+    '',
+    '## Roster (the pinned roster)',
+    '',
+    ...roster.map((r) => `- ${r.id}: ${r.name}`),
+  ].join('\n');
+}
+
+/** The whole sheet: header, then one `## Item <k>` section per sentence, k from 1. */
+export function renderSheet(roster: SheetRoster[], rec: HandCheckRecord, sections: string[]): string {
+  return `${renderSheetHeader(roster, rec)}\n\n${sections.join('\n\n')}\n`;
+}
+
+/** Every changed sentence of the picked chapters, in chapter then sentence order. */
+const pickedChanged = (picked: ChapterReplay[]): Array<{ chapterId: number; c: ChangedSentence }> =>
+  [...picked].sort((a, b) => a.chapterId - b.chapterId).flatMap((r) => r.changed.map((c) => ({ chapterId: r.chapterId, c })));
+
+/** What goes on the sheet, from the picked chapters only. */
+export function planHandCheck(picked: ChapterReplay[]): HandCheckRecord {
+  const all = pickedChanged(picked);
+  const sel = selectSheetItems(all);
+  return { n: all.length, mode: sel.mode, seed: sel.seed, items: sel.picked.map((p) => ({ chapterId: p.chapterId, index: p.c.index })) };
+}
+
+/** Writes blind-sheet.md and blind-key.json for a non-void measurement; removes stale copies when void. */
+export function writeBlindSheet(
+  scratch: string,
+  report: MeasurementReport,
+  bodyOf: (chapterId: number) => string,
+  roster: SheetRoster[],
+): void {
+  const sheet = join(scratch, SHEET_FILE);
+  const key = join(scratch, KEY_FILE);
+  const rec = report.handCheck;
+  if (report.verdict.state !== 'ready' || rec === null) {
+    for (const f of [sheet, key]) if (existsSync(f)) rmSync(f);
+    return;
+  }
+  const byKey = new Map(pickedChanged(report.picked).map((p) => [`${p.chapterId}:${p.c.index}`, p.c] as const));
+  const sections: string[] = [];
+  const keyItems = rec.items.map((it, i) => {
+    const c = byKey.get(`${it.chapterId}:${it.index}`)!;
+    sections.push(renderSheetItem(i + 1, bodyOf(it.chapterId), c));
+    return { item: i + 1, chapterId: it.chapterId, sentenceIndex: it.index, onId: c.onId, offId: c.offId, class: c.cls };
+  });
+  writeAtomic(sheet, renderSheet(roster, rec, sections));
+  writeAtomic(key, JSON.stringify({ n: rec.n, mode: rec.mode, seed: rec.seed, items: keyItems }, null, 2));
+}
+
 /** Measures from the saved files and writes report.json and report.md beside them. Nothing here
     writes a capture file, so a failure never touches a saved capture (R6-5). */
 export function runMeasurement(opts: { scratch: string; language: string; manifest: ManifestEntry[] }): MeasurementReport {
   const paths = new Map(opts.manifest.map((m) => [m.chapterId, m.chapterTextPath] as const));
-  const report = measureCaptures({
-    scratch: opts.scratch,
-    language: opts.language,
-    bodyOf: (id) => {
-      const p = paths.get(id);
-      if (!p) throw new Error(`chapter ${id} has a saved capture but is not in the manifest`);
-      return readFileSync(p, 'utf8'); // as-is, the string the capture read
-    },
-  });
+  const bodyOf = (id: number): string => {
+    const p = paths.get(id);
+    if (!p) throw new Error(`chapter ${id} has a saved capture but is not in the manifest`);
+    return readFileSync(p, 'utf8'); // as-is, the string the capture read
+  };
+  const report = measureCaptures({ scratch: opts.scratch, language: opts.language, bodyOf });
   const scratch = resolve(opts.scratch);
+  // The pinned roster: the union of the picked chapters' rosters, first definition of an id wins.
+  const roster = new Map<string, SheetRoster>();
+  for (const r of report.picked) {
+    const m = opts.manifest.find((e) => e.chapterId === r.chapterId);
+    if (m) for (const ch of rosterFrom(m.rosterPath).characters) if (!roster.has(ch.id)) roster.set(ch.id, { id: ch.id, name: ch.name });
+  }
+  writeBlindSheet(scratch, report, bodyOf, [...roster.values()]);
   writeAtomic(join(scratch, 'report.json'), JSON.stringify(report, null, 2));
   writeAtomic(join(scratch, 'report.md'), renderReport(report));
   return report;

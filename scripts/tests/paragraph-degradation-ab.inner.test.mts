@@ -24,8 +24,17 @@ import {
   classifySentence,
   confidentReasonOf,
   type ChapterReplay,
+  renderSheetItem,
+  planHandCheck,
+  selectSheetItems,
+  SHEET_SEED,
+  LONG_LINE,
+  WINDOW,
+  MARK_OPEN,
+  MARK_CLOSE,
 } from '../../server/scripts/paragraph-degradation-ab.mts';
 import { conventionsFor } from '../../server/src/analyzer/dialogue-structure/lang/index.ts';
+import { locateSentenceRanges } from '../../server/src/analyzer/dialogue-structure/aligner.ts';
 import { runStructureEngine } from '../../server/src/routes/analysis.ts';
 import { configValue } from '../../server/src/config/resolver.ts';
 import { captureChapterStages } from '../../server/src/analyzer/attribution-eval/run-eval.ts';
@@ -771,4 +780,116 @@ test('confident report: the class x reason table and the changed-sentence class 
   assert.match(md, /Confident decisions on turn sentences, by class and reason/);
   assert.match(md, /\| \(a\) recovery-split line \| 1 \|/);
   assert.match(md, /1A changed sentences \(picked chapters\), with class/);
+});
+
+/* ---- Phase 7c step 4: the blind 1A hand-check sheet (spec §4.3, §4.4 step 2, R7-11, R8-3, R9-4, R10-4) ---- */
+
+const sheetOf = (scratch: string): string => readFileSync(join(scratch, 'blind-sheet.md'), 'utf8');
+const keyOf = (scratch: string) =>
+  JSON.parse(readFileSync(join(scratch, 'blind-key.json'), 'utf8')) as {
+    n: number; mode: string; seed: number | null;
+    items: Array<{ item: number; chapterId: number; sentenceIndex: number; onId: string; offId: string; class: string }>;
+  };
+/** The item sections only: everything from the first `## Item` on. */
+const itemsOf = (sheet: string): string => sheet.slice(sheet.indexOf('## Item 1'));
+const fakeChange = (index: number): ChapterReplay['changed'][number] => ({
+  index, turn: true, cls: 'a', onId: 'x', offId: 'y', text: `s${index}`, range: null, lines: null,
+});
+
+test('blind sheet: a non-void run writes a sheet with no speaker id in any item, and the recovery-off line with the sentence marked', async () => {
+  const r = await threeChapterRun();
+  assert.equal(await main(FROM_CAPTURES(r), noAnalyzerDeps()), 0);
+  const sheet = sheetOf(r.scratch);
+  const header = sheet.slice(0, sheet.indexOf('## Item 1'));
+  for (const id of ['anton', 'olga', 'boris']) assert.match(header, new RegExp(`- ${id}: `), 'the roster legend lists the pinned ids');
+  assert.match(header, /narrator/);
+  const items = itemsOf(sheet);
+  assert.doesNotMatch(items, /anton|olga|boris|narrator/i, 'no roster id and no narrator outside the header');
+  assert.match(items, /Line: .*⟦.+⟧/);
+  assert.match(items, /\nSpeaker: \nMixed: /);
+  const key = keyOf(r.scratch);
+  const rep = reportOf(r.scratch);
+  assert.ok(key.items.length > 0 && key.items.length === (items.match(/^## Item /gm) ?? []).length);
+  assert.deepEqual(rep.handCheck, { n: rep.totals.changedAll, mode: 'census', seed: null, items: rep.handCheck!.items });
+  assert.equal(key.n, rep.totals.changedAll);
+  assert.ok(key.items.every((k) => k.onId !== k.offId && ['a', 'b', 'c', 'd'].includes(k.class)));
+});
+
+test('blind sheet: a sentence inside a long line is marked around its own text only, window 400 either side, offset relative to the line', () => {
+  const sentence = '— Да, вполне.';
+  const before = 'Слово '.repeat(300);
+  const after = 'Дело '.repeat(300);
+  const line = `${before}${sentence} ${after}`;
+  const body = `Короткая.\n${line}\nКонец.`;
+  const lineStart = body.indexOf(line);
+  const s = lineStart + before.length;
+  const e = s + sentence.length;
+  const out = renderSheetItem(1, body, {
+    text: sentence,
+    range: { start: s, end: e },
+    lines: { prev: { start: 0, end: 9 }, cur: { start: lineStart, end: lineStart + line.length }, next: null },
+  });
+  assert.ok(line.length > LONG_LINE);
+  const lineRow = out.split('\n').find((l) => l.startsWith('Line: '))!;
+  assert.equal(lineRow, `Line: …${body.slice(s - WINDOW, s)}${MARK_OPEN}${sentence}${MARK_CLOSE}${body.slice(e, e + WINDOW)}…`);
+  assert.equal((out.match(/⟦/g) ?? []).length, 1);
+  assert.match(out, new RegExp(`starts at offset ${before.length} in the line`));
+});
+
+test('blind sheet: a sentence that repeats its text in its line is marked at its own occurrence, with the recurrence noted', () => {
+  const body = '— Да. — Да. — Нет.';
+  const ranges = locateSentenceRanges([{ text: '— Да.' }, { text: '— Да.' }, { text: '— Нет.' }], body, true);
+  assert.ok(ranges[0] && ranges[1] && ranges[1].start > ranges[0].start, 'the order-aware search places the second after the first');
+  const out = renderSheetItem(2, body, { text: '— Да.', range: ranges[1]!, lines: { prev: null, cur: { start: 0, end: body.length }, next: null } });
+  assert.match(out, /^Line: — Да\. ⟦— Да\.⟧ — Нет\.$/m);
+  assert.match(out, /Occurrences of the marked text in what is shown: 2/);
+});
+
+test('blind sheet: an unlocated sentence and an unaligned sentence are each shown as text alone, saying which', () => {
+  const line = { prev: null, cur: { start: 0, end: 5 }, next: null };
+  const unlocated = renderSheetItem(1, 'Текст.', { text: '— Где я?', range: null, lines: line });
+  const unaligned = renderSheetItem(2, 'Текст.', { text: '— Где я?', range: { start: 0, end: 5 }, lines: null });
+  assert.match(unlocated, /text alone \(unlocated/);
+  assert.match(unaligned, /text alone \(unaligned/);
+  for (const o of [unlocated, unaligned]) assert.doesNotMatch(o, /⟦|Line:|Line before/);
+});
+
+test('blind sheet: n <= 30 is a census; n = 40 writes exactly 30, the same 30 for the same seed, and records the seed', () => {
+  const mk = (n: number): ChapterReplay[] => [{ chapterId: 1, changed: Array.from({ length: n }, (_, i) => fakeChange(i)) } as unknown as ChapterReplay];
+  const c30 = planHandCheck(mk(30));
+  assert.deepEqual([c30.n, c30.mode, c30.seed, c30.items.length], [30, 'census', null, 30]);
+  assert.equal(planHandCheck(mk(7)).items.length, 7);
+  const a = planHandCheck(mk(40));
+  const b = planHandCheck(mk(40));
+  assert.deepEqual([a.n, a.mode, a.items.length, a.seed], [40, 'sample', 30, SHEET_SEED]);
+  assert.deepEqual(a.items, b.items, 'the same seed draws the same 30');
+  assert.equal(new Set(a.items.map((i) => i.index)).size, 30, 'without replacement');
+  const range = Array.from({ length: 40 }, (_, i) => i);
+  assert.notDeepEqual(selectSheetItems(range, 1).picked, selectSheetItems(range, 2).picked);
+});
+
+test('blind sheet: a void measurement writes no sheet and removes a stale one', async () => {
+  const r = await threeChapterRun();
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  assert.ok(existsSync(join(r.scratch, 'blind-sheet.md')));
+  editCapture(r.scratch, 2, (c) => {
+    c.deterministic[1]!.characterId = 'boris';
+  });
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  assert.equal(reportOf(r.scratch).verdict.state, 'void');
+  assert.equal(reportOf(r.scratch).handCheck, null);
+  assert.ok(!existsSync(join(r.scratch, 'blind-sheet.md')) && !existsSync(join(r.scratch, 'blind-key.json')));
+});
+
+test("blind sheet: a swapped-out chapter's changed sentences never appear on the sheet", async () => {
+  const r = await threeChapterRun();
+  editPick(r.scratch, (p) => {
+    p.chapters['2']!.status = 'swapped-out';
+  });
+  await main(FROM_CAPTURES(r), noAnalyzerDeps());
+  const rep = reportOf(r.scratch);
+  assert.ok(rep.outside[0]!.changed.length > 0, 'the swapped-out chapter has changed sentences of its own');
+  const key = keyOf(r.scratch);
+  assert.deepEqual([...new Set(key.items.map((k) => k.chapterId))].sort(), [1, 3]);
+  assert.equal(key.n, rep.picked.reduce((n, p) => n + p.changed.length, 0));
 });
