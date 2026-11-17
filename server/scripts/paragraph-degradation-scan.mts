@@ -16,7 +16,10 @@
    Test-only seams (not for operators)
      --parser-module <path>  the child imports that module's default export
                              instead of parseManuscript.
-     --timeout-ms <n>        per-file limit in ms instead of 60 000. */
+     --timeout-ms <n>        per-file limit in ms instead of 60 000.
+   Optional input
+     --judgements <file.json>  { "<file path>#<chapterId>": "merged" | "clean" } for
+                             chapters at >= 10; the summary then states the label outcome. */
 
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
@@ -208,7 +211,93 @@ function renderMeasured(parsed: ScanEntry[]): string[] {
   return lines;
 }
 
-export function renderSummary(report: ScanReport): string {
+/* ---- calibration candidates and the label outcome (spec §2, §4.4 step 1) -- */
+
+/** The owner's verdict on a chapter at >= MERGED_TURNS_DEGRADED, keyed `<file path>#<chapterId>`. */
+export type Judgements = Record<string, 'merged' | 'clean'>;
+
+export interface SummaryOptions {
+  judgements?: Judgements;
+  /** Hook for the extractor-merged (#4217) label: such a chapter is a true
+      positive, never a breach, even when the owner judged it clean. */
+  isExtractorMerged?: (path: string, chapterId: number) => boolean;
+}
+
+export function judgementKey(path: string, chapterId: number): string {
+  return `${path}#${chapterId}`;
+}
+
+export function renderCandidates(parsed: ScanEntry[]): string[] {
+  const rows = parsed
+    .map((e) => ({ e, m: measurementOf(e) }))
+    .filter((x): x is { e: ScanEntry; m: BookMeasurement } => x.m !== null);
+  const cands = rows.filter((x) => x.m.calibrationCandidate);
+  const lines = [`## Clean, dialogue-dense ru dash books (${cands.length})`, ''];
+  lines.push(...(cands.length ? cands.map((x) => `- ${x.e.path}`) : ['None.']));
+  const checked = rows.filter((x) => (x.m.strayBreaks?.checked ?? 0) > 0);
+  lines.push('', `## Stray-break check (${checked.length} books with continuation lines)`, '');
+  if (!checked.length) lines.push('None.');
+  for (const { e, m } of checked) {
+    const s = m.strayBreaks;
+    const arm = m.lineWrap.arms.length ? m.lineWrap.arms.join('+') : 'none';
+    const iso =
+      s.isolation === 'pass'
+        ? 'isolation pass'
+        : `isolation fail (chapter ${s.isolation.chapterId} line ${s.isolation.line}: ${s.isolation.why})`;
+    lines.push(
+      `- ${e.path}: flagged by ${arm}; ${s.checked} continuation lines; ${iso};` +
+        ` largest window ${s.largestWindow}; ${s.pass ? 'candidate-eligible' : 'disqualified'}`,
+    );
+  }
+  lines.push('');
+  return lines;
+}
+
+export function renderLabelOutcome(parsed: ScanEntry[], opts: SummaryOptions = {}): string[] {
+  const rows = parsed
+    .map((e) => ({ e, m: measurementOf(e) }))
+    .filter((x): x is { e: ScanEntry; m: BookMeasurement } => x.m !== null);
+  const high: Array<{ path: string; chapterId: number; count: number; format: string }> = [];
+  for (const { e, m } of rows) {
+    for (const c of m.chapters) {
+      if ((c.legibility ?? -1) >= MERGED_TURNS_DEGRADED) {
+        high.push({ path: e.path, chapterId: c.id, count: c.legibility as number, format: String(e.result?.format ?? '') });
+      }
+    }
+  }
+  const lines = [`## Label outcome (${MERGED_TURNS_DEGRADED} is provisional)`, ''];
+  const j = opts.judgements;
+  const unjudged = high.filter((h) => !j || j[judgementKey(h.path, h.chapterId)] === undefined);
+  if (!j || unjudged.length) {
+    lines.push('label: pending owner judgement');
+    lines.push(
+      ...(unjudged.length
+        ? unjudged.map((h) => `- to judge: ${h.path} chapter ${h.chapterId} at ${h.count} (${h.format})`)
+        : ['- no judgements file given (--judgements <file.json>)']),
+    );
+    lines.push('');
+    return lines;
+  }
+  const breaches = high.filter(
+    (h) =>
+      j[judgementKey(h.path, h.chapterId)] === 'clean' &&
+      !(opts.isExtractorMerged?.(h.path, h.chapterId) ?? false),
+  );
+  const cands = rows.filter((x) => x.m.calibrationCandidate);
+  if (!breaches.length && cands.length) {
+    lines.push(`label may drop: no breach in any scanned book; candidate ${cands[0].e.path}`);
+  } else {
+    lines.push('label stays provisional');
+    for (const b of breaches) {
+      lines.push(`- breach: ${b.path} chapter ${b.chapterId} at ${b.count} (${b.format})`);
+    }
+    if (!cands.length) lines.push('- no clean, dialogue-dense ru dash book');
+  }
+  lines.push('');
+  return lines;
+}
+
+export function renderSummary(report: ScanReport, opts: SummaryOptions = {}): string {
   const by = (s: FileStatus): ScanEntry[] => report.entries.filter((e) => e.status === s);
   const parsed = by('parsed');
   const unparsed = by('unparsed');
@@ -222,6 +311,8 @@ export function renderSummary(report: ScanReport): string {
     `Files: ${report.entries.length} (parsed ${parsed.length}, unparsed ${unparsed.length}, unsupported ${unsupported.length})`,
     '',
     ...renderMeasured(parsed),
+    ...renderCandidates(parsed),
+    ...renderLabelOutcome(parsed, opts),
     `## Unparsed (${unparsed.length})`,
     '',
     ...(unparsed.length ? unparsed.map((e) => `- ${e.path}: ${e.reason}`) : ['None.']),
@@ -236,10 +327,10 @@ export function renderSummary(report: ScanReport): string {
   return lines.join('\n');
 }
 
-export function writeReport(report: ScanReport, out: string): void {
+export function writeReport(report: ScanReport, out: string, opts: SummaryOptions = {}): void {
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, 'scan.json'), JSON.stringify(report, null, 2) + '\n', 'utf8');
-  writeFileSync(join(out, 'scan.md'), renderSummary(report), 'utf8');
+  writeFileSync(join(out, 'scan.md'), renderSummary(report, opts), 'utf8');
 }
 
 /* ---- measurements (spec §4.4 step 1: R7-5, R7-6, Decision 4) ------------ */
@@ -291,6 +382,40 @@ export interface BookMeasurement {
     dense: boolean | null;
   };
   nonRuCyrillic: boolean;
+  /** Spec §4.4 step 1 "stray breaks": the fail-closed check on every continuation line. */
+  strayBreaks: StrayBreakResult;
+  /** Whether the book may calibrate the threshold (a clean, dialogue-dense ru dash book). */
+  calibrationCandidate: boolean;
+  /** Why not, when `calibrationCandidate` is false. */
+  calibrationReason?: CalibrationReason;
+}
+
+export type CalibrationReason =
+  | 'pdf'
+  | 'share-arm'
+  | 'not ru'
+  | 'not dialogue-dense'
+  | 'stray-break check'
+  | 'chapter >= 10'
+  | 'unparsed';
+
+export interface StrayBreakResult {
+  /** Continuation lines checked (0: the check passes trivially). */
+  checked: number;
+  /** Every one of them is an isolated stray break (the strict reading), else the first failure. */
+  isolation:
+    | 'pass'
+    | {
+        chapterId: number;
+        line: number;
+        why: 'adjacent' | 'within two lines';
+      };
+  /** Largest TURN_IN_PARAGRAPH count over every neighbour window (null: none checked). */
+  largestWindow: number | null;
+  /** Every window holds fewer than MERGED_TURNS_DEGRADED matches. */
+  windowPass: boolean;
+  /** Isolation passes and windowPass: the book stays a candidate. */
+  pass: boolean;
 }
 
 export interface ParsedLike {
@@ -328,6 +453,58 @@ export function countContinuationLines(body: string): { continuation: number; no
     if (i > 0 && lines[i - 1].trim() && /^\s*\p{Ll}/u.test(lines[i])) continuation++;
   }
   return { continuation, nonBlank };
+}
+
+/** Indices (into `body.split('\n')`) of the continuation lines. */
+function continuationIndices(lines: string[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() && lines[i - 1].trim() && /^\s*\p{Ll}/u.test(lines[i])) out.push(i);
+  }
+  return out;
+}
+
+/** The fail-closed stray-break check (spec §4.4 step 1; owner decisions 15, 21).
+    For each continuation line `i` the fragment is lines i-1..i. Isolation: no
+    other continuation line within two lines of the fragment (i-3..i+2), which
+    also covers the lines directly before (i-2) and after (i+1) it; two adjacent
+    continuation lines therefore always fail. Window: lines i-2..i+1 joined with
+    ONE space (restoring a match a break destroyed at an edge) hold fewer than
+    MERGED_TURNS_DEGRADED TURN_IN_PARAGRAPH matches. */
+export function checkStrayBreaks(chapters: Array<{ id: number; body: string }>): StrayBreakResult {
+  let checked = 0;
+  let largest: number | null = null;
+  let isolation: StrayBreakResult['isolation'] = 'pass';
+  for (const c of chapters) {
+    const lines = c.body.split('\n');
+    const cont = continuationIndices(lines);
+    const set = new Set(cont);
+    for (const i of cont) {
+      checked++;
+      if (isolation === 'pass') {
+        if (set.has(i - 1) || set.has(i + 1)) {
+          isolation = { chapterId: c.id, line: i + 1, why: 'adjacent' };
+        } else if (set.has(i - 2) || set.has(i + 2) || set.has(i - 3)) {
+          isolation = { chapterId: c.id, line: i + 1, why: 'within two lines' };
+        }
+      }
+      const window = lines.slice(Math.max(0, i - 2), i + 2).join(' ');
+      const n = (window.match(turnInParagraphRegex()) ?? []).length;
+      if (largest === null || n > largest) largest = n;
+    }
+  }
+  const windowPass = largest === null || largest < MERGED_TURNS_DEGRADED;
+  return {
+    checked,
+    isolation,
+    largestWindow: largest,
+    windowPass,
+    pass: isolation === 'pass' && windowPass,
+  };
+}
+
+function isRu(l: string | null): boolean {
+  return !!l && l.toLowerCase().split(/[-_]/u)[0] === 'ru';
 }
 
 function worstParagraphOf(body: string): { count: number; text: string } | undefined {
@@ -404,6 +581,16 @@ export function measureBook(
   if (continuation >= LINE_WRAP_COUNT) arms.push('count');
 
   const dialogueMeasured = measuredChapters.some((c) => c.measured);
+  const strayBreaks = checkStrayBreaks(chapters);
+  const dense = dialogueMeasured ? isDialogueDense(dashTurns, words) : null;
+  const hasMergedChapter = measuredChapters.some((c) => (c.legibility ?? -1) >= MERGED_TURNS_DEGRADED);
+  let calibrationReason: CalibrationReason | undefined;
+  if (arms.includes('pdf')) calibrationReason = 'pdf';
+  else if (arms.includes('share')) calibrationReason = 'share-arm';
+  else if (!isRu(detected) && !isRu(declared)) calibrationReason = 'not ru';
+  else if (!dense) calibrationReason = 'not dialogue-dense';
+  else if (!strayBreaks.pass) calibrationReason = 'stray-break check';
+  else if (hasMergedChapter) calibrationReason = 'chapter >= 10';
   const cyr = (l: string | null): boolean =>
     !!l && NON_RU_CYRILLIC.has(l.toLowerCase().split(/[-_]/u)[0]);
   return {
@@ -426,9 +613,12 @@ export function measureBook(
       dashTurns: dialogueMeasured ? dashTurns : null,
       words,
       per1000Words: dialogueMeasured && words > 0 ? (dashTurns * 1000) / words : null,
-      dense: dialogueMeasured ? isDialogueDense(dashTurns, words) : null,
+      dense,
     },
     nonRuCyrillic: cyr(detected) || cyr(declared),
+    strayBreaks,
+    calibrationCandidate: calibrationReason === undefined,
+    ...(calibrationReason ? { calibrationReason } : {}),
   };
 }
 
@@ -494,7 +684,11 @@ export async function main(argv: string[]): Promise<number> {
     parserModule: argValue(argv, '--parser-module'),
     timeoutMs: t ? Number(t) : undefined,
   });
-  writeReport(rep, resolve(out));
+  const jfile = argValue(argv, '--judgements');
+  const judgements = jfile
+    ? (JSON.parse(readFileSync(resolve(jfile), 'utf8')) as Judgements)
+    : undefined;
+  writeReport(rep, resolve(out), { judgements });
   return 0;
 }
 

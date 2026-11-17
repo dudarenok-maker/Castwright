@@ -334,3 +334,169 @@ test('the summary sorts books by their maximum, shows the flags and lists non-ru
   assert.ok(md.indexOf('/high.md') < md.indexOf('/low.md'));
   assert.match(md, /Non-ru Cyrillic books \(1\)[\s\S]*\/ua\.md/);
 });
+
+/* ---- stray-break check, calibration candidates, label outcome (#2254 Phase 7a step 4) ---- */
+
+/** A line holding `n` TURN_IN_PARAGRAPH matches (and no dash at its start). */
+const rich = (n: number): string => 'Он.' + ' — Да.'.repeat(n);
+const FILLER = Array.from({ length: 6 }, () => '— Да.');
+
+/** Dense ru dash text (>= 1,000 turns, 1,000 per 1,000 words) with `blocks`
+    placed deliberately, each followed by filler dash lines. */
+function strayBook(blocks: string[][], format = 'plaintext'): ParsedLike {
+  const lines: string[] = Array.from({ length: 1100 }, () => '— Да.');
+  for (const b of blocks) lines.push(...b, ...FILLER);
+  return { format, chapters: [{ id: 1, title: 'c', body: lines.join('\n') }] };
+}
+
+/** An isolated stray break whose neighbour window holds a + b + c matches. */
+const stray = (a: number, b: number, c: number): string[] => [
+  rich(a),
+  rich(b),
+  'продолжение строки.',
+  rich(c),
+];
+const many = (n: number, mk: () => string[]): string[][] => Array.from({ length: n }, mk);
+const measureRu = (p: ParsedLike): BookMeasurement => measureBook(p, { language: 'ru' });
+const whyOf = (m: BookMeasurement): string | null =>
+  m.strayBreaks.isolation === 'pass' ? null : m.strayBreaks.isolation.why;
+
+test('a count-arm book (>= 10 isolated stray breaks, under 2%) is a candidate at window 9 and not at 10', () => {
+  const nine = measureRu(strayBook(many(10, () => stray(3, 3, 3))));
+  assert.deepEqual(nine.lineWrap.arms, ['count']);
+  assert.equal(nine.dialogue.dense, true);
+  assert.equal(nine.strayBreaks.checked, 10);
+  assert.equal(nine.strayBreaks.largestWindow, 9);
+  assert.equal(nine.strayBreaks.isolation, 'pass');
+  assert.equal(nine.calibrationCandidate, true);
+  const ten = measureRu(strayBook(many(10, () => stray(3, 3, 4))));
+  assert.equal(ten.strayBreaks.largestWindow, 10);
+  assert.equal(ten.calibrationCandidate, false);
+  assert.equal(ten.calibrationReason, 'stray-break check');
+});
+
+test('4-7 isolated continuation lines, which no arm flags, are still checked (owner decision 21)', () => {
+  const bad = measureRu(strayBook([...many(4, () => stray(3, 3, 3)), stray(4, 3, 3)]));
+  assert.deepEqual(bad.lineWrap.arms, []);
+  assert.equal(bad.strayBreaks.checked, 5);
+  assert.equal(bad.strayBreaks.largestWindow, 10);
+  assert.equal(bad.calibrationCandidate, false);
+  assert.equal(bad.calibrationReason, 'stray-break check');
+  const ok = measureRu(strayBook(many(5, () => stray(3, 3, 3))));
+  assert.deepEqual(ok.lineWrap.arms, []);
+  assert.equal(ok.strayBreaks.largestWindow, 9);
+  assert.equal(ok.calibrationCandidate, true);
+});
+
+test('a book with no continuation line passes the check trivially', () => {
+  const m = measureRu(strayBook([]));
+  assert.equal(m.strayBreaks.checked, 0);
+  assert.equal(m.strayBreaks.largestWindow, null);
+  assert.equal(m.strayBreaks.pass, true);
+  assert.equal(m.calibrationCandidate, true);
+});
+
+test('a break before the dash is restored by the space join and counted', () => {
+  const split = (): string[] => [rich(4), rich(5), 'продолжение строки. —', 'Да. Конец.'];
+  const m = measureRu(strayBook(many(5, split)));
+  assert.equal(m.strayBreaks.largestWindow, 10);
+  assert.equal(m.calibrationCandidate, false);
+  assert.equal(m.calibrationReason, 'stray-break check');
+});
+
+test('two adjacent continuation lines disqualify the book, and so do two within two lines', () => {
+  const adjacent = measureRu(strayBook([[rich(1), 'продолжение один.', 'продолжение два.', rich(1)]]));
+  assert.equal(adjacent.strayBreaks.checked, 2);
+  assert.equal(whyOf(adjacent), 'adjacent');
+  assert.equal(adjacent.calibrationCandidate, false);
+  const near = measureRu(
+    strayBook([[rich(1), 'продолжение один.', 'Он.', 'продолжение два.', rich(1)]]),
+  );
+  assert.equal(near.strayBreaks.checked, 2);
+  assert.equal(whyOf(near), 'within two lines');
+  assert.equal(near.calibrationCandidate, false);
+  assert.equal(near.calibrationReason, 'stray-break check');
+});
+
+test('a share-arm book is never a candidate, nor is a PDF', () => {
+  const share = measureRu(strayBook(many(40, () => stray(0, 0, 0))));
+  assert.ok(share.lineWrap.arms.includes('share'));
+  assert.equal(share.strayBreaks.pass, true);
+  assert.equal(share.calibrationCandidate, false);
+  assert.equal(share.calibrationReason, 'share-arm');
+  const pdf = measureRu(strayBook([], 'pdf'));
+  assert.equal(pdf.calibrationCandidate, false);
+  assert.equal(pdf.calibrationReason, 'pdf');
+});
+
+test('a candidate must be ru, dense and free of chapters at >= 10', () => {
+  const clean = strayBook([]);
+  assert.equal(measureBook(clean, { language: 'en' }).calibrationReason, 'not ru');
+  /* declared ru passes the language bar, but a detected en has no dash conventions to measure */
+  assert.equal(
+    measureBook(clean, { language: 'en', declaredLanguage: 'ru' }).calibrationReason,
+    'not dialogue-dense',
+  );
+  const sparse: ParsedLike = {
+    format: 'plaintext',
+    chapters: [{ id: 1, title: 'c', body: '— Да.\nТекст.' }],
+  };
+  assert.equal(measureRu(sparse).calibrationReason, 'not dialogue-dense');
+  const merged: ParsedLike = {
+    format: 'plaintext',
+    chapters: [...clean.chapters, { id: 2, title: 'm', body: rich(12) }],
+  };
+  assert.equal(measureRu(merged).calibrationReason, 'chapter >= 10');
+});
+
+function entry(path: string, p: ParsedLike): ScanEntry {
+  return { path, extension: 'txt', status: 'parsed', result: { format: p.format, ...measureRu(p) } };
+}
+const candidateBook = (): ScanEntry => entry('/cand.txt', strayBook([]));
+/** A line-wrapped (count arm) book holding one chapter at >= 10. */
+function wrappedMergedBook(): ScanEntry {
+  const p = strayBook(many(10, () => stray(1, 1, 1)));
+  p.chapters.push({ id: 2, title: 'm', body: rich(12) });
+  return entry('/wrapped.txt', p);
+}
+const label = (entries: ScanEntry[], judgements?: Record<string, 'merged' | 'clean'>): string =>
+  renderSummary({ library: 'L', build: 'b', entries }, { judgements });
+
+test('the summary lists the clean dialogue-dense ru dash books and the stray-break detail', () => {
+  const md = label([candidateBook(), entry('/q.txt', strayBook(many(5, () => stray(3, 3, 4))))]);
+  assert.match(md, /Clean, dialogue-dense ru dash books \(1\)\s+- \/cand\.txt/);
+  assert.match(
+    md,
+    /\/q\.txt: flagged by none; 5 continuation lines; isolation pass; largest window 10; disqualified/,
+  );
+});
+
+test('label: no --judgements is pending owner judgement, listing what is left to judge', () => {
+  const md = label([candidateBook(), wrappedMergedBook()]);
+  assert.match(md, /label: pending owner judgement/);
+  assert.match(md, /to judge: \/wrapped\.txt chapter 2 at 12/);
+  assert.match(label([candidateBook(), wrappedMergedBook()], {}), /label: pending owner judgement/);
+});
+
+test('label: a breach in a line-wrapped book keeps the label provisional', () => {
+  const md = label([candidateBook(), wrappedMergedBook()], { '/wrapped.txt#2': 'clean' });
+  assert.match(md, /label stays provisional/);
+  assert.match(md, /breach: \/wrapped\.txt chapter 2 at 12/);
+  assert.doesNotMatch(md, /label may drop/);
+});
+
+test('label: all-merged judgements plus a candidate say the label may drop, naming the book', () => {
+  const md = label([candidateBook(), wrappedMergedBook()], { '/wrapped.txt#2': 'merged' });
+  assert.match(md, /label may drop[^\n]*\/cand\.txt/);
+});
+
+test('label: no candidate keeps it provisional; an extractor-merged chapter is never a breach', () => {
+  const md = label([wrappedMergedBook()], { '/wrapped.txt#2': 'merged' });
+  assert.match(md, /label stays provisional/);
+  assert.match(md, /no clean, dialogue-dense ru dash book/);
+  const hooked = renderSummary(
+    { library: 'L', build: 'b', entries: [candidateBook(), wrappedMergedBook()] },
+    { judgements: { '/wrapped.txt#2': 'clean' }, isExtractorMerged: () => true },
+  );
+  assert.match(hooked, /label may drop/);
+});
