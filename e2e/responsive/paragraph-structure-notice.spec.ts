@@ -79,4 +79,66 @@ test.describe('#2254 notice A at phone width', () => {
   });
 });
 
-// notice B (manuscript caption) — added by a later child
+/* Notice B: the manuscript caption. mockGetBookState reads the e2e seam
+ * `__SEED_PARAGRAPHS_MERGED__` (bookId -> chapter ids); the Solway Bay (sb)
+ * fixture has 18 chapters that open straight in the manuscript view. */
+const CAPTION = /ten or more places where a line of dialogue begins mid-paragraph/;
+
+async function openManuscript(page: Page, seed: number[] | null) {
+  if (seed) {
+    await page.addInitScript((ids) => {
+      (
+        globalThis as unknown as { __SEED_PARAGRAPHS_MERGED__?: Record<string, number[]> }
+      ).__SEED_PARAGRAPHS_MERGED__ = { sb: ids };
+    }, seed);
+  }
+  await page.goto('/#/books/sb/manuscript');
+  /* The book opens on its first chapter with low-confidence lines (ch3); step
+     back with Prev to chapter 1 so the walk starts there. */
+  await expect(page.getByRole('heading', { name: /^Chapter 3\b/i, level: 1 })).toBeVisible({
+    timeout: 10_000,
+  });
+  await page.getByRole('button', { name: 'Previous chapter' }).click();
+  await page.getByRole('button', { name: 'Previous chapter' }).click();
+  await expect(page.getByRole('heading', { name: /^Chapter 1\b/i, level: 1 })).toBeVisible();
+}
+
+async function walkChapters(page: Page) {
+  const caption = page.getByTestId('manuscript-paragraph-notice');
+  await expect(caption).toHaveCount(0);
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.getByRole('heading', { name: /^Chapter 2\b/i, level: 1 })).toBeVisible();
+  await expect(caption).toBeVisible();
+  await expect(caption).toContainText(CAPTION);
+  await page.getByRole('button', { name: 'Previous chapter' }).click();
+  await expect(page.getByRole('heading', { name: /^Chapter 1\b/i, level: 1 })).toBeVisible();
+  await expect(caption).toHaveCount(0);
+}
+
+test.describe('#2254 paragraph-structure notice B on the manuscript view', () => {
+  test('a flagged chapter shows the caption; its neighbours do not', async ({ page }) => {
+    await openManuscript(page, [2]);
+    await walkChapters(page);
+  });
+
+  test('with no seed no chapter shows the caption', async ({ page }) => {
+    await openManuscript(page, null);
+    await page.getByRole('button', { name: 'Next chapter' }).click();
+    await expect(page.getByRole('heading', { name: /^Chapter 2\b/i, level: 1 })).toBeVisible();
+    await expect(page.getByTestId('manuscript-paragraph-notice')).toHaveCount(0);
+  });
+});
+
+test.describe('#2254 notice B at phone width', () => {
+  test.use({ viewport: { width: 375, height: 812 } });
+
+  test('the caption walk works and the page does not scroll sideways', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', 'mobile projects already run at phone width');
+    await openManuscript(page, [2]);
+    await walkChapters(page);
+    await page.getByRole('button', { name: 'Next chapter' }).click();
+    await expect(page.getByTestId('manuscript-paragraph-notice')).toBeVisible();
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(scrollWidth).toBeLessThanOrEqual(375);
+  });
+});
