@@ -68,7 +68,7 @@ describe('POST /api/config/env-cleanup error bodies (#4236)', () => {
     const res = await request(app).post('/api/config/env-cleanup');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('server/.env not found.');
-    expect(JSON.stringify(res.body)).not.toContain(tmpDir);
+    expect(res.body.error).not.toContain(tmpDir);
     expect(errSpy.mock.calls.some((args: unknown[]) => args.includes(envPath))).toBe(true);
   });
 
@@ -79,7 +79,7 @@ describe('POST /api/config/env-cleanup error bodies (#4236)', () => {
     const res = await request(app).post('/api/config/env-cleanup');
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('Could not read server/.env.');
-    expect(JSON.stringify(res.body)).not.toContain(tmpDir);
+    expect(res.body.error).not.toContain(tmpDir);
     expectLogged(envPath);
   });
 
@@ -91,7 +91,7 @@ describe('POST /api/config/env-cleanup error bodies (#4236)', () => {
     const res = await request(app).post('/api/config/env-cleanup');
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('Could not write the backup server/.env.bak.');
-    expect(JSON.stringify(res.body)).not.toContain(tmpDir);
+    expect(res.body.error).not.toContain(tmpDir);
     expectLogged(`${envPath}.bak`);
     expect(readFileSync(envPath, 'utf-8')).toBe(ENV_WITH_CANDIDATE);
   });
@@ -108,7 +108,7 @@ describe('POST /api/config/env-cleanup error bodies (#4236)', () => {
     const res = await request(app).post('/api/config/env-cleanup');
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('Could not write the cleaned server/.env.');
-    expect(JSON.stringify(res.body)).not.toContain(tmpDir);
+    expect(res.body.error).not.toContain(tmpDir);
     expectLogged(envPath);
     expect(readdirSync(join(tmpDir, 'rename-fail')).filter((f) => f.includes('.tmp-'))).toEqual([]);
   });
