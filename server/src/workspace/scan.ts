@@ -111,6 +111,8 @@ export interface BookStateJson {
         `synthesizedAt`. Used as a tie-breaker for cast-drift detection
         (was the cast confirmed before or after the audio was made?). */
     audioRenderedAt?: string;
+    /** Take identity of the live take (spec §4.1). Nothing writes it yet. */
+    audioTakeId?: string;
     /** Sticky flag set by `renameChapter` (and by merge/split when an
         explicit title override is supplied). Locks the title against
         both heuristic refresh paths: the opportunistic
@@ -503,6 +505,7 @@ interface SegmentsJsonForScan {
   durationSec?: number;
   modelKey?: string;
   synthesizedAt?: string;
+  takeId?: string;
   /** Per-character render snapshots — source for the `audioEngines` breakdown
       backfill on chapters that pre-date that field (false-drift fix). */
   characterSnapshots?: Record<string, { voiceEngine?: string; renderedFallbackEngine?: string }>;

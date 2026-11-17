@@ -68,6 +68,8 @@ export interface SegmentsFile {
   chapterId: number;
   chapterTitle?: string;
   synthesizedAt?: string;
+  /** Take identity (spec §4.1): 16 lowercase base32 chars. Nothing writes it yet. */
+  takeId?: string;
   /** #2128 — the `cast-id-history.json` `seq` this render resolved against.
       Mirrors `finalize-chapter-write.ts`'s `ChapterSegmentsFile` (the write
       view). Absent on every render that predates the stamp; `0` is valid. */

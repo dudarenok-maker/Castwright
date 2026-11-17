@@ -61,6 +61,8 @@ export interface ChapterSegmentsFile {
   sampleRate: number;
   modelKey: TtsModelKey;
   synthesizedAt: string;
+  /** Take identity (spec §4.1). Nothing writes it yet (Phase 1). */
+  takeId?: string;
   /** #2128 — the `seq` of the `cast-id-history.json` state THIS render
       resolved against. Written ONLY by the full-render path
       (`generation.ts`); `chapter-qa-repair.ts` and `chapter-splice.ts` carry
