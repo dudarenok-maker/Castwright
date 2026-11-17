@@ -236,6 +236,13 @@ function selectOpenProsodyBookId(s: RootState): string | null {
     : null;
 }
 
+/* #4098 — the background emotion run yields to the user's own work on the book
+   AND to a read-only book (its analysis runs, or the era is latched): the
+   persistence gate drops every annotation it would apply, so the run would spend
+   a whole-book LLM pass for nothing. */
+const prosodyBookBlocked = (s: RootState, bookId: string): boolean =>
+  selectBookHasForegroundWork(s, bookId) || selectCastReadOnly(s, bookId);
+
 export function Layout() {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
@@ -1562,8 +1569,9 @@ export function Layout() {
      shows, but it never makes the book busy (analysis-substage-selectors), so
      Generate / Resume / Design / Detect and the queue stay open while it runs.
      It yields instead: the moment the user starts work of their own on the
-     book (selectBookHasForegroundWork, which counts an analysis run), or the
-     book stops being the open trigger's book (another book or a non-book
+     book (selectBookHasForegroundWork, which counts an analysis run) or the
+     book turns read-only (selectCastReadOnly, #4098: an analysis run or its era;
+     the persistence gate would drop every annotation), or the book stops being the open trigger's book (another book or a non-book
      view opens), it is aborted and its pill cleared; the book stays marked
      unfinished, so it is run again the next time it is opened. So at most
      one background run at a time: the open book's. The run in flight, if
@@ -1588,7 +1596,7 @@ export function Layout() {
         const bg = prosodyBackground.current;
         if (!bg || bg.ctrl.signal.aborted) return;
         const s = store.getState();
-        if (selectOpenProsodyBookId(s) === bg.id && !selectBookHasForegroundWork(s, bg.id)) return;
+        if (selectOpenProsodyBookId(s) === bg.id && !prosodyBookBlocked(s, bg.id)) return;
         bg.ctrl.abort();
         if (s.prosody.activeStreams[bg.id]?.background) dispatch(prosodyActions.clear({ bookId: bg.id }));
       }),
@@ -1633,10 +1641,11 @@ export function Layout() {
         if (background) {
           /* Never start a run that could apply nothing (the slices hold the
              book under another manuscriptId than its read reports, or it is no
-             longer open), nor one the user's own work would end at once — the
-             open trigger looks again when that work is gone. */
+             longer open), nor one the user's own work, or a read-only book
+             (#4098), would end at once — the open trigger looks again when
+             that is gone. */
           if (!isOpen() || selectOpenProsodyBookId(store.getState()) !== id) return;
-          if (selectBookHasForegroundWork(store.getState(), id)) {
+          if (prosodyBookBlocked(store.getState(), id)) {
             if (prosodyOpenHandled.current === id) prosodyOpenHandled.current = null;
             return;
           }
@@ -1692,7 +1701,7 @@ export function Layout() {
             if (!signal?.aborted)
               dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d)));
           },
-          canApply: () => !signal?.aborted && isOpen(),
+          canApply: () => !signal?.aborted && isOpen() && !selectCastReadOnly(store.getState(), id),
         });
         /* Yielded, partial or skipped: the start mark stays, and the open
            trigger owns the fill-only re-run — the book stays in `considered`. */
@@ -1779,7 +1788,7 @@ export function Layout() {
   const openProsodyBusy = useAppSelector((s) =>
     openProsodyBookId
       ? !shouldAutoTriggerProsody(s, openProsodyBookId) ||
-        selectBookHasForegroundWork(s, openProsodyBookId)
+        prosodyBookBlocked(s, openProsodyBookId)
       : false,
   );
   useEffect(() => {
@@ -1796,7 +1805,7 @@ export function Layout() {
       prosodyOpenDeferred.current = id;
       return;
     }
-    if (openProsodyBusy) return; // the user's own work on the book — looked at again when it ends
+    if (openProsodyBusy) return; // the user's own work on the book, or a read-only book (#4098) — looked at again when it ends
     prosodyOpenHandled.current = id;
     runAutoProsody(id, { background: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps

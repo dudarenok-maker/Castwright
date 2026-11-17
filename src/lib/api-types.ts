@@ -13135,6 +13135,12 @@ export interface operations {
              *     for the book: the cast is read-only until the run ends. The check
              *     runs before any read or write, so nothing is persisted. Re-read the book from disk once the run has finished.
              *
+             *     #4098 — a whole-slice `manuscript` write is refused the same way while an
+             *     analysis job is registered: both analysis jobs rewrite manuscript-edits.json
+             *     at the end of the run and would revert it. The check runs before the patch is
+             *     validated and before any read or write. Re-read the book from disk once the
+             *     run has finished.
+             *
              *     Plan 289: `stale_revision` — the request carried a `baseRevision`
              *     and a field the write would change has moved on disk since that
              *     base. Nothing was written; re-read the book. A request without

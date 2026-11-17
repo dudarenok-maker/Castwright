@@ -18,6 +18,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { selectCastReadOnly } from '../store/book-busy-slice';
+import { refuseIfManuscriptEditsLocked } from '../store/restructure-lock';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
 import { notificationsActions } from '../store/notifications-slice';
 import {
@@ -87,6 +89,15 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
 
   const run = async (scope: { chapterId?: number }) => {
     if (store.getState().manuscript.bookId !== bookId) return; // #3435 — see holdsBook
+    /* #4098 — an analysis run (or its latched era) makes the book read-only: the
+       persistence gate drops every manuscript save at build time, so a run here
+       would spend the analyzer quota and report tagged lines that never saved.
+       Toast only; the buttons stay enabled. */
+    if (refuseIfManuscriptEditsLocked(store.getState, dispatch)) {
+      setMenuOpen(false);
+      setPhase('idle');
+      return;
+    }
     setMenuOpen(false);
     setPhase('running');
     setProgress(0);
@@ -114,6 +125,8 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
     });
     // Held while the book's restructure is in flight (a state.json write).
     const markUnfinished = () => markProsodyUnfinished(store, bookId);
+    // #4098 — an era that rose mid-run: its annotations are counted as skipped.
+    let readOnlySkipped = false;
     const toastRestructured = () =>
       dispatch(
         notificationsActions.pushToast({
@@ -129,6 +142,10 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         chapterId: scope.chapterId,
         canApply: () => {
           const s = store.getState();
+          if (selectCastReadOnly(s, bookId)) {
+            readOnlySkipped = true;
+            return false;
+          }
           return (
             !restructured() && selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true
           );
@@ -156,8 +173,9 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         dispatch(
           notificationsActions.pushToast({
             kind: 'warn',
-            message:
-              'Some detected emotions were not saved because you left the book — they will be filled in the next time you open it.',
+            message: readOnlySkipped
+              ? 'Some detected emotions were not saved because a re-analysis is running — they will be filled in the next time you open the book.'
+              : 'Some detected emotions were not saved because you left the book — they will be filled in the next time you open it.',
           }),
         );
         setStatus(null);

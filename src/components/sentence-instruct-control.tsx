@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import type { Character } from '../lib/types';
@@ -68,7 +68,7 @@ export function SentenceInstructControl({
   const audible = character?.ttsModelKey === 'qwen3-tts-1.7b';
 
   const commit = (value: string) => {
-    if (refuseIfEditsLocked(store.getState, dispatch)) return;
+    if (refuseIfManuscriptEditsLocked(store.getState, dispatch)) return;
     dispatch(manuscriptActions.setSentenceInstruct({ chapterId, sentenceId, instruct: value }));
     if (audible && character) markStale({ id: character.id, name: character.name });
     setOpen(false);

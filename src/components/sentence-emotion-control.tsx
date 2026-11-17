@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { uiSelectors } from '../store/ui-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
@@ -86,7 +86,7 @@ export function SentenceEmotionControl({
 
   const current = emotion && emotion !== 'neutral' ? emotion : undefined;
   const choose = (value: Emotion) => {
-    if (refuseIfEditsLocked(store.getState, dispatch)) return;
+    if (refuseIfManuscriptEditsLocked(store.getState, dispatch)) return;
     dispatch(manuscriptActions.setSentenceEmotion({ chapterId, sentenceId, emotion: value }));
     /* fs-34 — an emotion edit only changes the audio when it actually selects a
        different voice: a Qwen character WITH a designed variant for this emotion.

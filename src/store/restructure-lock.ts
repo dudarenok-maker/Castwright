@@ -8,6 +8,12 @@
 
 import type { RootState } from './index';
 import { notificationsActions } from './notifications-slice';
+import {
+  CAST_READ_ONLY_DEDUPE_KEY,
+  CAST_READ_ONLY_MESSAGE,
+  selectCastReadOnly,
+  stageBookId,
+} from './book-busy-slice';
 
 export const RESTRUCTURING_REASON = 'Unavailable while the chapters are being restructured.';
 
@@ -53,6 +59,33 @@ export function refuseIfEditsLocked(
       kind: 'warn',
       message: RESTRUCTURING_TOAST_MESSAGE,
       dedupeKey: RESTRUCTURING_TOAST_KEY,
+    }),
+  );
+  return true;
+}
+
+/** #4098 — the manuscript-editing variant. A manuscript edit is also refused
+    while the book's cast is read-only (its analysis runs, or the era is latched
+    until the re-read): the persistence gate drops the save at build time, so a
+    surface that goes on to resolve review ops or log a `boundary_move` would
+    record an edit that never landed. Toast only; the controls stay enabled.
+    Every surface that dispatches a persisted `manuscript/*` action calls this
+    BEFORE its side writes. Restructure keeps its own message and is checked
+    first. */
+export function refuseIfManuscriptEditsLocked(
+  getState: () => RootState,
+  dispatch: (a: ReturnType<typeof notificationsActions.pushToast>) => unknown,
+  bookId?: string | null,
+): boolean {
+  if (refuseIfEditsLocked(getState, dispatch, bookId)) return true;
+  const state = getState();
+  const book = bookId ?? stageBookId(state);
+  if (!book || !selectCastReadOnly(state, book)) return false;
+  dispatch(
+    notificationsActions.pushToast({
+      kind: 'error',
+      message: CAST_READ_ONLY_MESSAGE,
+      dedupeKey: CAST_READ_ONLY_DEDUPE_KEY,
     }),
   );
   return true;
