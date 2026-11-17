@@ -41,7 +41,7 @@ import { join } from 'node:path';
 import {
   classify,
   runCli,
-  runCensus,
+  runCensus as realRunCensus,
   rowsToProcesses,
   computeOsDescendants,
   readPriorSamples,
@@ -419,6 +419,40 @@ test('classify() reports every root, not just reap candidates (the census log ne
 });
 
 // ---------------------------------------------------------------------------
+// Self-pid pinning. runCensus protects the REAL process.pid and its ancestry
+// (ownAncestryPids), so any fixture pid that equals the test process's own pid —
+// likely on Windows (multiples of 4) and on Linux alike — turns a deterministic
+// fixture into an intermittent red (the A2 CI flake, #4383). Rather than renumber
+// ~25 hand-picked pids and trust nobody adds a low one later, every runCensus that
+// is fed a fixture snapshot runs with process.pid pinned above any OS pid_max.
+// A census with NO injected snapshot (the real-WMI collector) keeps the real pid.
+// ---------------------------------------------------------------------------
+
+const PINNED_SELF_PID = 2_100_000_000;
+
+function withSelfPid(pid, fn) {
+  const real = process.pid;
+  Object.defineProperty(process, 'pid', { value: pid, configurable: true });
+  try {
+    return fn();
+  } finally {
+    Object.defineProperty(process, 'pid', { value: real, configurable: true });
+  }
+}
+
+const recordedCensusOpts = [];
+
+function pinnedCensus(opts) {
+  return withSelfPid(PINNED_SELF_PID, () => realRunCensus(opts));
+}
+
+function runCensus(opts) {
+  if (!opts.collectSnapshot) return realRunCensus(opts);
+  recordedCensusOpts.push(opts);
+  return pinnedCensus(opts);
+}
+
+// ---------------------------------------------------------------------------
 // runCensus() — the log-writing / kill-scoping / never-blocks-push contract
 // ---------------------------------------------------------------------------
 
@@ -724,7 +758,7 @@ function runSweep(restrictTo, startedAtOfLive) {
   const killedPids = [];
   const result = runCensus({
     collectSnapshot: () => processes,
-    readPrior: () => ({ SWEEP_ROOT_PID: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: startedAtOfLive } }),
+    readPrior: () => ({ [SWEEP_ROOT_PID]: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: startedAtOfLive } }),
     appendLog: () => {},
     kill: true,
     killReasons: ['orphaned-unreachable'],
@@ -750,19 +784,6 @@ test('A2: an exact restrictTo entry whose live start time differs is not killed;
   assert.deepEqual(differs.killedPids, []);
   const same = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
   assert.deepEqual(same.killedPids, [SWEEP_ROOT_PID], 'control: the exact match is still reaped (the fixture is a real orphan)');
-});
-
-test('A2 regression: the sweep fixture is immune to the test process owning a low (Windows-style) pid', () => {
-  const real = process.pid;
-  // 5000 is what the fixture used to hard-code; a CI runner whose test process
-  // landed on it had the root protected as "own ancestry" and the control failed.
-  Object.defineProperty(process, 'pid', { value: 5000, configurable: true });
-  try {
-    const same = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
-    assert.deepEqual(same.killedPids, [SWEEP_ROOT_PID]);
-  } finally {
-    Object.defineProperty(process, 'pid', { value: real, configurable: true });
-  }
 });
 
 // --- #4222 review findings 1 and 4: "under the pushing checkout" is judged for the
@@ -2515,4 +2536,34 @@ test('U3 classifyBatteryLocation (inRoot) fails closed on empty or non-string in
   assert.equal(under('node vitest run', U_ROOT), false);
   assert.equal(under(line, ''), false);
   assert.equal(under(line, undefined), false);
+});
+
+// Invariant (#4383, review pass 1): no fixture pid may ever change a census outcome by
+// equalling the real test process's pid. Replays every fixture snapshot the file fed
+// to runCensus (report-only, so no kill side effects) with process.pid spoofed to each
+// pid and ppid in it, and demands the verdicts match the unspoofed run. Runs last so
+// recordedCensusOpts is complete. Goes red if pinnedCensus stops pinning the self pid.
+test('INV: no fixture pid in this file can collide with the real process pid', () => {
+  const replayable = recordedCensusOpts.filter((o) => o.readPrior && !o.logPath);
+  assert.ok(replayable.length > 30, `expected to have recorded many fixture censuses, got ${replayable.length}`);
+  const seen = new Set();
+  let checked = 0;
+  for (const opts of replayable) {
+    const replay = { ...opts, kill: false, appendLog: () => {} };
+    const baseline = pinnedCensus(replay).verdicts;
+    const pids = new Set();
+    for (const p of opts.collectSnapshot()) {
+      pids.add(p.pid);
+      pids.add(p.ppid);
+    }
+    for (const pid of pids) {
+      seen.add(pid);
+      const spoofed = withSelfPid(pid, () => pinnedCensus(replay).verdicts);
+      assert.deepEqual(spoofed, baseline, `fixture pid ${pid} changes a census outcome when it is the real process pid`);
+      checked++;
+    }
+  }
+  assert.ok(seen.has(SWEEP_ROOT_PID), 'the sweep fixture root must be among the checked pids');
+  assert.ok(seen.has(9104) && seen.has(9001) && seen.has(3001), 'the known-low fixture pids must be among the checked pids');
+  assert.ok(checked > 100, `checked only ${checked} pid spoofs`);
 });
