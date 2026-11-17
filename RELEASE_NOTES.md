@@ -20,6 +20,7 @@
 - **A failed re-record or chapter render no longer shows where your files live.** When "Re-record the flagged lines" or a chapter render hits a full disk, a locked file or a busy folder, the message now says what went wrong in plain words, without the full path to your files, and a locked file no longer gets mistaken for running out of memory.
 - **Error messages no longer show where your files live.** If your library, queue, a manuscript upload, an export, a voice change across a series or a model removal hits a locked file or a full disk, Castwright now says what went wrong in plain words instead of printing the folder path. And if a file problem struck while a book called "The Quota" was being analysed, it is no longer mistaken for a rate-limit error. Designing voices for the whole cast no longer stops on a locked file: that one character fails, the rest carry on, and the voice engine is no longer blamed.
 - **Importing certain malformed EPUBs no longer crashes Castwright.** A book with an empty link inside a chapter used to take the whole app down the moment you imported it; it now opens normally, or, if Castwright still cannot read the book, tells you so and keeps running. Books that already imported fine read exactly as before.
+- **Damaged EPUB and Kindle books can no longer take Castwright down.** Castwright now reads each book in a separate, sealed-off step, so a book it cannot read gets a clear message and everything else keeps running. Books are read exactly as before.
 
 # Castwright 1.15.0
 
