@@ -112,7 +112,7 @@ function isUnderRoot(absPath, root) {
  *  mixed within one path). Order matters: collapse doubled backslashes to a
  *  single one FIRST, then unify every remaining run of `/`/`\` to a single
  *  `/` — reversing the order would turn `\\` into `//` instead of `/`. */
-function normalizeSeparators(text) {
+export function normalizeSeparators(text) {
   return text.replace(/\\\\/g, '\\').replace(/[\\/]+/g, '/');
 }
 
@@ -123,7 +123,7 @@ function normalizeSeparators(text) {
  *  attempted (see the Bash-detection doc comment below). Non-drive-letter
  *  roots (defensive only — every real root here is `C:\...`) fall back to
  *  the single normalized, lowercased root string. */
-function pathSpellings(root) {
+export function pathSpellings(root) {
   const normalized = normalizeSeparators(root).toLowerCase();
   const m = /^([a-z]):\/(.*)$/.exec(normalized);
   if (!m) return [normalized];
@@ -141,7 +141,7 @@ function pathSpellings(root) {
  *  it as a reference to the wrong root. Mirrors `isUnderRoot`'s `+ sep`
  *  boundary check, adapted for scanning free-text instead of comparing two
  *  already-resolved paths. */
-function containsPathAtBoundary(haystack, needle) {
+export function containsPathAtBoundary(haystack, needle) {
   let idx = haystack.indexOf(needle);
   while (idx !== -1) {
     const next = haystack[idx + needle.length];

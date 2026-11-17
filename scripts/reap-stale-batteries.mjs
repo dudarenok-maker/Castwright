@@ -35,6 +35,7 @@ import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
+import { containsPathAtBoundary, normalizeSeparators, pathSpellings } from './hooks/guard-worktree-write.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, '..');
@@ -537,6 +538,27 @@ export function classify(snapshot, now, thresholds) {
 // ---------------------------------------------------------------------------
 
 const isWindows = process.platform === 'win32';
+
+/** Does this process command line name a path under the checkout `root`?
+ *  ARGV ONLY — the process snapshot carries no working directory (see
+ *  `rowsToProcesses`), so a battery launched with relative paths only and no
+ *  checkout path anywhere in its argv never matches (callers therefore spare
+ *  it; a manual `npm run doctor -- --kill` can still reap it). Matches every
+ *  Windows spelling of the root (backslash, forward slash, doubled backslash,
+ *  Git Bash `/c/...`, WSL `/mnt/c/...`, any letter case) via the helpers shared
+ *  with the worktree-write guard. The component-boundary check matters
+ *  because sibling worktree names share prefixes (`wt-3243` vs
+ *  `wt-3243-followup`): a plain substring match would treat the sibling's
+ *  processes as ours. Fails closed: a non-string/empty command line or root
+ *  is never "under" anything. */
+export function commandLineUnderRoot(commandLine, root) {
+  if (typeof commandLine !== 'string' || commandLine === '') return false;
+  if (typeof root !== 'string') return false;
+  const trimmedRoot = root.replace(/[\\/]+$/, '');
+  if (trimmedRoot === '') return false;
+  const haystack = normalizeSeparators(commandLine).toLowerCase();
+  return pathSpellings(trimmedRoot).some((spelling) => containsPathAtBoundary(haystack, spelling));
+}
 
 /** Map raw JSON rows from `collectProcessSnapshot`'s PowerShell query into the
  *  process shape `classify()` expects. Pure and exported so this layer has a

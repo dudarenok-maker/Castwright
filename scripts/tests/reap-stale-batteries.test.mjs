@@ -47,6 +47,7 @@ import {
   readPriorSamples,
   appendCensusLog,
   collectProcessSnapshot,
+  commandLineUnderRoot,
   isBatteryInvocation,
   killTree,
   tailBytesFor,
@@ -2091,4 +2092,53 @@ test('pass 4: an empty result after the retry returns [] carrying snapshotError'
   } finally {
     console.warn = origWarn;
   }
+});
+
+// ---------------------------------------------------------------------------
+// #4222 — commandLineUnderRoot: argv-only "is this under the checkout" check
+// ---------------------------------------------------------------------------
+
+const U_ROOT = 'C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards';
+
+test('U1 commandLineUnderRoot matches every Windows spelling of the root', () => {
+  // Mutations: M2 (pathSpellings drops /c/ and /mnt/c/ forms) goes red on the
+  // Git Bash and WSL lines; M3 (drop .toLowerCase() on the command line) goes
+  // red on the mixed-case line.
+  const lines = [
+    'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs run',
+    'NODE c:/claude/projects/WT-4222-PREPUSH-REAPER-GUARDS/node_modules/vitest/vitest.mjs',
+    'C:\\\\Claude\\\\Projects\\\\wt-4222-prepush-reaper-guards\\\\node_modules\\\\vitest\\\\vitest.mjs',
+    '/c/Claude/Projects/wt-4222-prepush-reaper-guards/node_modules/vitest/vitest.mjs',
+    '/mnt/c/Claude/Projects/wt-4222-prepush-reaper-guards/node_modules/vitest/vitest.mjs',
+    '"C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs" run',
+  ];
+  const roots = [U_ROOT, U_ROOT + '\\', 'C:/Claude/Projects/wt-4222-prepush-reaper-guards', 'C:/Claude/Projects/wt-4222-prepush-reaper-guards/'];
+  for (const root of roots) {
+    for (const line of lines) {
+      assert.equal(commandLineUnderRoot(line, root), true, `root ${root} should match: ${line}`);
+    }
+  }
+});
+
+test('U2 commandLineUnderRoot respects the path-component boundary', () => {
+  // Mutation M1 (containsPathAtBoundary becomes plain includes) makes the
+  // -followup line match, so this goes red.
+  const outside = [
+    'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards-followup\\node_modules\\vitest\\vitest.mjs',
+    'node C:\\Claude\\Projects\\Audiobook-Generator\\node_modules\\vitest\\vitest.mjs',
+    'node C:\\Users\\x\\scratchpad\\p2-4213\\server\\node_modules\\vitest\\vitest.mjs',
+  ];
+  for (const line of outside) {
+    assert.equal(commandLineUnderRoot(line, U_ROOT), false, `should not match: ${line}`);
+  }
+});
+
+test('U3 commandLineUnderRoot fails closed on empty or non-string input', () => {
+  // Mutation M4 (empty root returns true) turns the empty-root cases red.
+  const line = 'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs';
+  assert.equal(commandLineUnderRoot('', U_ROOT), false);
+  assert.equal(commandLineUnderRoot(undefined, U_ROOT), false);
+  assert.equal(commandLineUnderRoot('node vitest run', U_ROOT), false);
+  assert.equal(commandLineUnderRoot(line, ''), false);
+  assert.equal(commandLineUnderRoot(line, undefined), false);
 });
