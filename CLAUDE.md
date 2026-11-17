@@ -987,7 +987,8 @@ The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features
 **Automated regression net:**
 
 - `npm run test:e2e` (cloud `verify.yml` gate, ~90s): `playwright test --project=chromium`. Runs every spec + the chromium project of the responsive specs (`e2e/responsive/*.spec.ts`).
-- `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports.
+- `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports. It SKIPS the mobile/tablet visual baselines (`--grep-invert="visual baselines"`).
+- `npm run test:e2e:mobile:visual` (opt-in locally): `playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1`. Reads the committed Linux mobile/tablet baselines. Runs in `cross-os.yml` (`mobile-e2e` job) and `release.yml` (blocks `publish`), NOT in `verify.yml`. The win32 mobile/tablet baselines are read by no workflow (manual compare on a Windows box only).
 - `npm run test:e2e:all` (opt-in, ~17min): everything across all 3 projects.
 
 Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it auto-runs at every project.
@@ -1162,7 +1163,7 @@ for the Flutter companion — no local hook runs `flutter analyze`/`test`),
 `release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` on its **twice-weekly**
 (Wednesday + Sunday) cron. **Every release tag now runs COMPLETE
 cross-platform verification before it publishes** (plan 215): `release.yml`
-gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile` (Ubuntu)
+gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile` (Ubuntu) + `test:e2e:mobile:visual` (Ubuntu)
 + `verify:quick`+build on macOS **and** Windows — a red leg on any deployer
 OS blocks the public-beta release, so you no longer fire cross-OS by hand
 before a release. `cross-os.yml` (`workflow_dispatch` + twice-weekly cron on

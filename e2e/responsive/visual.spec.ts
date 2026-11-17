@@ -35,13 +35,15 @@
  *
  * Visuals run ONLY via `npm run test:e2e:visual` (chromium, see
  * package.json), not in the parallel `test:e2e` battery, and are skipped by
- * `test:e2e:mobile` — see archive/37-e2e-playwright.md.
+ * `test:e2e:mobile` — see archive/37-e2e-playwright.md. The mobile and
+ * tablet projects are read by `npm run test:e2e:mobile:visual` (cross-os.yml
+ * and release.yml only, not verify.yml).
  *
  * To regenerate after an intentional visual change, use `=all`: a bare
  * `--update-snapshots` is the `changed` preset, which rewrites only baselines
  * that already fail, so a stale one inside the 5% gate is left behind.
  *   npm run test:e2e:visual -- --update-snapshots=all
- *   # mobile + tablet have no npm script; invoke playwright directly:
+ *   # mobile + tablet: compare has `test:e2e:mobile:visual`; the update has no script, invoke playwright directly:
  *   npx playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1 --update-snapshots=all
  *
  * Pairs with docs/features/archive/37-e2e-playwright.md "Visual baselines". */

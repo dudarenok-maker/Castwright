@@ -201,7 +201,7 @@ responsive/visual.spec.ts` captures the top bar in `ready`/`listen`/`generate`
   strip → hamburger), so these baselines **WILL** drift and must be re-blessed.
   They are exercised by the opt-in `test:e2e:mobile` and by the **release gate**
   (`release.yml` runs `test:e2e:mobile` on Ubuntu before publish, plan 215) —
-  an un-blessed baseline blocks the release, not the push.
+  an un-blessed baseline blocks the release, not the push. (Correction, #4203: `test:e2e:mobile` skips the visual baselines; they are read by `test:e2e:mobile:visual` in `cross-os.yml` and `release.yml`.)
 - **Re-bless procedure:** locally on win32 →
   `npx playwright test --project=tablet-chrome --project=mobile-chrome \
   --update-snapshots e2e/responsive/visual.spec.ts`; Linux baselines (CI/release

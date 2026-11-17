@@ -462,7 +462,7 @@ git commit -m "test(e2e): hamburger nav reachability at tablet/phone, inline at 
 
 ### Task 3: Re-bless the tablet + mobile visual baselines
 
-The top bar appears in the `ready` / `listen` / `generate` baselines. At 834 (tablet) and 412 (mobile) the bar changes (strip → hamburger), so those committed PNGs drift. chromium (1280) is unaffected (inline strip still shows). These projects run in the opt-in `test:e2e:mobile` and the release gate, not pre-push — but they MUST be re-blessed in this PR or the release fails.
+The top bar appears in the `ready` / `listen` / `generate` baselines. At 834 (tablet) and 412 (mobile) the bar changes (strip → hamburger), so those committed PNGs drift. chromium (1280) is unaffected (inline strip still shows). These projects run in the opt-in `test:e2e:mobile` and the release gate, not pre-push — but they MUST be re-blessed in this PR or the release fails. (Correction, #4203: `test:e2e:mobile` skips the visual baselines; they are read by `test:e2e:mobile:visual` in `cross-os.yml` and `release.yml`.)
 
 **Files:**
 - Modify (regenerate): `e2e/win32/responsive/visual.spec.ts/tablet-chrome/*.png`, `e2e/win32/responsive/visual.spec.ts/mobile-chrome/*.png`
