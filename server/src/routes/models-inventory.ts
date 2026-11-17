@@ -561,10 +561,7 @@ modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) =>
       });
     }
     console.error('[models-inventory] removal failed', err);
-    /* `ollama rm` failures are a spawn / daemon message with no book or cache path; only the
-       weight-dir `rmSync` carries one (a spawn ENOENT must not read as a disk problem). */
-    const fallback = err.message || 'Removal failed.';
-    return res.status(500).json({ error: id.startsWith('ollama:') ? fallback : requestFailureMessageFs(err, fallback) });
+    return res.status(500).json({ error: requestFailureMessageFs(err, err.message || 'Removal failed.') });
   }
 });
 

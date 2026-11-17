@@ -468,6 +468,22 @@ describe('requestFailureMessageFs (#3711)', () => {
     expect(FS_FAILURE_REQUEST_ERROR).toMatch(/Try again/);
   });
 
+  /* #4236 -- a child-process spawn failure carries a `code` + `syscall` too, but
+     it is no disk problem: a missing binary must keep reading as one. */
+  it('keeps the fallback for a spawn error (a missing binary is not a file-system fault)', () => {
+    const spawnErr = Object.assign(new Error('spawn ffmpeg ENOENT'), {
+      code: 'ENOENT',
+      syscall: 'spawn ffmpeg',
+      path: 'ffmpeg',
+      errno: -4058,
+    });
+    expect(requestFailureMessageFs(spawnErr, 'ffmpeg is not installed.')).toBe('ffmpeg is not installed.');
+    /* a real fs ENOENT is still curated */
+    expect(requestFailureMessageFs(fsError('ENOENT', 'open', 'C:\\w\\state.json'), 'x')).toBe(
+      FS_FAILURE_REQUEST_ERROR,
+    );
+  });
+
   it('still curates a lock-acquisition expiry exactly as requestFailureMessage does', () => {
     expect(
       requestFailureMessageFs(new LockAcquisitionTimeoutError('C:\\w\\cast.json', 10_000), 'x'),
