@@ -799,10 +799,10 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
 });
 
 /* #4239 — an EPUB with <a href=""> used to make epub2 throw from a zip callback,
-   an uncaughtException that exits the server. The import must now complete and
-   the process must keep serving. */
+   an uncaughtException that exits the server. The import must now complete, and
+   a second import on the same app must also answer 200. */
 describe('POST /api/import — EPUB with an empty href (#4239)', () => {
-  it('imports it and keeps serving the next request', async () => {
+  it('imports it, and a following import also answers 200', async () => {
     const epubBytes = await buildEmptyHrefEpub();
     const res = await request(app)
       .post('/api/import')

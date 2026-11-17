@@ -187,28 +187,26 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
     `linkparts.shift is not a function` on `<a href="">`; there the throw is an
     uncaughtException no try/await can catch, and the server exits. Over a proxy
     whose `getChapterRaw` answers synchronously the same code runs in this
-    call's own stack, so the throw is catchable. Only when it throws do we fall
-    back to {@link htmlBodyOnly}. Relies on epub2 3.0.2's `getChapter`
-    delegating through `this.getChapterRaw`; pinned by a test. */
+    call's own stack, so the throw is catchable. It is deliberately not caught
+    here: it propagates to {@link tryEpub2Parse}'s catch and the whole book goes
+    to {@link parseEpubRawZip}, as the older code did whenever the throw was
+    catchable (a book with STORED zip entries). Relies on epub2 3.0.2's
+    `getChapter` delegating through `this.getChapterRaw`; pinned by a test. */
 function epubChapterHtml(epub: EPub, id: string, raw: string): string {
   const proxy = Object.create(epub, {
     getChapterRaw: {
       value: (_id: string, cb: (err: Error | null, text?: string) => void) => cb(null, raw),
     },
   });
-  try {
-    let out: string | undefined;
-    let failure: Error | undefined;
-    epub.getChapter.call(proxy, id, (err: Error | null, text?: string) => {
-      if (err) failure = err;
-      else out = text;
-    });
-    if (failure) throw failure;
-    if (out === undefined) throw new Error('epub2 getChapter did not answer synchronously');
-    return out;
-  } catch {
-    return htmlBodyOnly(raw);
-  }
+  let out: string | undefined;
+  let failure: Error | undefined;
+  epub.getChapter.call(proxy, id, (err: Error | null, text?: string) => {
+    if (err) failure = err;
+    else out = text;
+  });
+  if (failure) throw failure;
+  if (out === undefined) throw new Error('epub2 getChapter did not answer synchronously');
+  return out;
 }
 
 /** Raw-zip fallback: unzip the EPUB and parse the OPF ourselves, tolerant of
@@ -413,8 +411,7 @@ function readAllZipEntries(bytes: Buffer): Promise<Map<string, Buffer>> {
 }
 
 /** Return the inner HTML of <body> (epub2's getChapter does this on the
-    primary path; the raw-zip path, and the primary path's fallback when
-    getChapter throws, have the whole document). Drops
+    primary path; the raw-zip path has the whole document). Drops
     <script>/<style> blocks whose text content would otherwise leak into the
     stripped prose. Falls back to the whole input when there's no <body>. */
 function htmlBodyOnly(html: string): string {
