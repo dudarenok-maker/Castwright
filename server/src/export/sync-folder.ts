@@ -3,7 +3,7 @@
    directory — typically a OneDrive / Syncthing / Google Drive watch path
    the user mirrors to their Android phone.
 
-   Atomic by design: writes to `<dest>/<filename>.tmp-<pid>-<ts>` first,
+   Atomic by design: writes to `<dest>/<filename>.tmp-<job id>` first,
    then renames over the final name using the same EPERM/EBUSY/ENOENT
    backoff the workspace's state.json writer relies on. Without that,
    OneDrive's change-detection scan window briefly locks the destination
@@ -23,11 +23,24 @@ export interface WriteToSyncFolderResult {
   syncPath: string;
 }
 
-export async function writeToSyncFolder(
+export interface SyncStage {
+  /** Job-private temp copy inside the sync folder (`<final>.tmp-<tag>`). */
+  tmpPath: string;
+  /** The flat sync name the commit renames onto. */
+  finalPath: string;
+}
+
+/* Stage 1 of the sync copy: copy `srcPath` to a job-private temp name next
+   to the final flat name. The final name (where the PREVIOUS export's synced
+   copy lives) is not touched, so a cancel before the commit can discard the
+   temp and leave the earlier copy byte-for-byte intact (#4228). `tag`
+   (the job id) keeps two jobs' temps from colliding. */
+export async function stageToSyncFolder(
   srcPath: string,
   destDir: string,
   filename: string,
-): Promise<WriteToSyncFolderResult> {
+  tag?: string,
+): Promise<SyncStage> {
   await mkdir(destDir, { recursive: true });
   /* `filename` is a slugified book filename, but it flows in from the caller
      as a bare string — sanitise it as a single segment and assert the result
@@ -35,7 +48,7 @@ export async function writeToSyncFolder(
      (js/path-injection). No-op for real export filenames. */
   const finalPath = join(destDir, sanitizeIdSegment(filename));
   assertContained(destDir, finalPath);
-  const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
+  const tmpPath = `${finalPath}.tmp-${tag ?? `${process.pid}-${Date.now()}`}`;
 
   /* copyFile (not rename) because the source lives under the workspace
      and may be on a different volume than the sync folder — rename(2)
@@ -44,18 +57,37 @@ export async function writeToSyncFolder(
      a different drive from the workspace under many setups. */
   try {
     await copyFile(srcPath, tmpPath);
-    await renameWithRetry(tmpPath, finalPath);
   } catch (e) {
-    /* Cleanup the tmp on terminal failure (defensive for a copy that
-       fails part-way, e.g. ENOSPC, in case the platform's own cleanup
-       does not run) — leaving `.tmp-<pid>-<ts>` droppings inside a
-       user's synced folder is the kind of thing they notice and
-       complain about. A copy failure also gets the Drive / OneDrive
-       hint below, same as a rename failure. */
+    /* A copy that fails part-way (e.g. ENOSPC) must not leave a
+       `.tmp-` dropping inside a user's synced folder. */
     await unlink(tmpPath).catch(() => {});
     throw wrapWithSyncHint(e, destDir);
   }
-  return { syncPath: finalPath };
+  return { tmpPath, finalPath };
+}
+
+/* Stage 2: rename the staged temp onto the flat sync name, using the same
+   EPERM/EBUSY/ENOENT backoff as the state.json writer. That backoff can retry
+   for up to RENAME_RETRY_WORST_CASE_MS (~3.6 s), a window a DELETE can land
+   in. Once the rename has landed it is never undone (the replaced copy cannot
+   be restored). */
+export async function commitSyncStage(
+  stage: SyncStage,
+  destDir: string,
+): Promise<WriteToSyncFolderResult> {
+  try {
+    await renameWithRetry(stage.tmpPath, stage.finalPath);
+  } catch (e) {
+    await unlink(stage.tmpPath).catch(() => {});
+    throw wrapWithSyncHint(e, destDir);
+  }
+  return { syncPath: stage.finalPath };
+}
+
+/* Best-effort removal of this job's own temp. Never touches the final name
+   or anything else in the user's sync folder. */
+export async function discardSyncStage(stage: { tmpPath: string }): Promise<void> {
+  await unlink(stage.tmpPath).catch(() => {});
 }
 
 export interface WriteFolderToSyncFolderResult {
@@ -139,7 +171,12 @@ function wrapWithSyncHint(err: unknown, destDir: string): Error {
   if (!hint) return base;
   const code = (err as { code?: string }).code;
   const codeLabel = code ? ` (${code})` : '';
-  const wrapped = new Error(`${hint} Underlying error${codeLabel}: ${base.message}`);
+  /* The message is built from the code only: a node fs error's own text embeds
+     the absolute workspace/sync paths, and this message reaches the client as
+     the job's errorReason (the wrapper has no `syscall`/`path`, so the curation
+     seams would pass it through). The raw error stays in `cause` and the log. */
+  console.error('[export] sync-folder write failed:', err);
+  const wrapped = new Error(`${hint} Underlying error${codeLabel}.`);
   /* Preserve the original error code so callers / tests can branch on it. */
   if (code) (wrapped as { code?: string }).code = code;
   (wrapped as { cause?: unknown }).cause = err;

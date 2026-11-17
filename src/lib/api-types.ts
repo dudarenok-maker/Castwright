@@ -6779,6 +6779,19 @@ export interface components {
                 newChapterId: number;
                 newSentenceId: number;
             }[];
+            /**
+             * @description #4227 — the manuscript slice token (same shape and salt as
+             *     `BookStateResponse.sliceRevisions.manuscript`) of the
+             *     `manuscript-edits.json` this request read: after any interrupted
+             *     earlier restructure's journal was replayed, before this request's own
+             *     rewrite. `sentenceRemap` is computed from that file. A client whose
+             *     last-learned manuscript token differs from this one holds a copy the
+             *     edits have moved away from (the replay re-keyed the file in this
+             *     request, or at server start), so it must NOT apply `sentenceRemap` to
+             *     its own sentences: it takes the sentences of a fresh book-state read
+             *     instead. Absent on a mock.
+             */
+            editsRevisionBefore?: components["schemas"]["SliceRevision"];
             /** @description Non-fatal advisories (orphan recovery, empty-chapter prune and generic-title renumber counts). Empty on a clean operation. */
             warnings?: string[];
         };
@@ -6876,9 +6889,11 @@ export interface components {
             progress?: number | null;
             /** @description Set once status === 'done' AND destination === 'download'. */
             downloadUrl?: string | null;
-            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. */
+            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted). */
             syncPath?: string | null;
-            /** @description Human-readable failure reason; populated when status === 'failed'. */
+            /** @description True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A cancelled job can still gain a syncPath until this clears, so a client that cancelled keeps following the job until it is false or absent. */
+            syncCopyInFlight?: boolean | null;
+            /** @description Human-readable reason; populated when status === 'failed' or 'cancelled'. A cancelled job whose sync-folder copy had already landed reads 'Cancelled by user. The files were already copied to the sync folder.'; a failed job whose sync-folder copy had already landed ends with 'The files were already copied to the sync folder.' */
             errorReason?: string | null;
             /** @description ISO timestamp */
             createdAt: string;
