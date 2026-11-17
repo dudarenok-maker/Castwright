@@ -13,6 +13,7 @@
      --library <dir> --out <scratchDir>   walk <dir>, write <out>/scan.json and
                                           <out>/scan.md; nothing outside <out>.
      --child <file>                       parse one file, measure it, print one JSON line.
+     --rewrite <epub> --to <copy>         write the #4217 what-if copy of one EPUB, print one JSON line.
    Test-only seams (not for operators)
      --parser-module <path>  the child imports that module's default export
                              instead of parseManuscript.
@@ -22,10 +23,14 @@
                              chapters at >= 10; the summary then states the label outcome. */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fromBuffer as yauzlFromBuffer, type Entry } from 'yauzl';
+import { ZipFile } from 'yazl';
 import { SUPPORTED_MANUSCRIPT_EXTENSIONS } from '../src/parsers/index.js';
+import { LEGACY_EXTRACTOR_VERSION } from '../src/parsers/version.js';
 import {
   countTurnOpeners,
   measureChapterLegibility,
@@ -87,10 +92,24 @@ export function walkLibrary(dir: string): string[] {
 export interface ParseOptions {
   parserModule?: string;
   timeoutMs?: number;
+  /** The scan's --out dir: the only place a what-if copy is ever written. Absent:
+      no what-if is computed. */
+  outDir?: string;
 }
 
-/** Parse one file in its own child process and classify the outcome. */
+/** Parse one file in its own child process and classify the outcome. An EPUB
+    that parsed also gets its #4217 what-if (a rewritten scratch copy, parsed in
+    its own child too) when `opts.outDir` is set. */
 export function parseInIsolation(file: string, opts: ParseOptions = {}): ScanEntry {
+  const entry = parseOne(file, opts);
+  if (entry.status === 'parsed' && entry.result) {
+    const w = whatIfFor(file, entry.result, opts);
+    if (w) entry.result.whatIf = w;
+  }
+  return entry;
+}
+
+function parseOne(file: string, opts: ParseOptions): ScanEntry {
   const timeoutMs = opts.timeoutMs ?? PER_FILE_TIMEOUT_MS;
   const base: Pick<ScanEntry, 'path' | 'extension'> = { path: file, extension: extensionOf(file) };
   const args = [TSX_CLI, SCRIPT_PATH, '--child', file];
@@ -126,6 +145,202 @@ export function parseInIsolation(file: string, opts: ParseOptions = {}): ScanEnt
       ? `signal ${result.signal}`
       : `exit code ${result.status}`;
   return { ...base, status: 'unparsed', reason: `exited without reporting (${how})` };
+}
+
+/* ---- the #4217 what-if (spec §4.4 step 1 "#4217 exposure"; R4-8 as amended by R5-8) -- */
+
+/** The block closers `stripHtml` drops at extractor version 1: extractor version
+    2's list (`html-utils.ts`). The scanner reads every library file as a book
+    without a `manuscriptExtractorVersion` stamp (a library file has no
+    state.json), so this list always applies. */
+export const WHAT_IF_CLOSERS = /<\/\s*(?:div|li|blockquote|h[1-6]|dd|dt|section|article)\s*>/gi;
+
+export type WhatIfStatus = 'paired' | 'not aligned' | 'not computed' | 'failed';
+
+export interface WhatIfChapter {
+  id: number;
+  title: string;
+  /** Legibility of the imported text, and of the same chapter in the copy. */
+  legibility: number | null;
+  whatIfLegibility: number | null;
+  /** Flagged (>= MERGED_TURNS_DEGRADED) on the imported text and below it in the copy. */
+  extractorMerged: boolean;
+}
+
+export interface WhatIfResult {
+  status: WhatIfStatus;
+  /** Why not paired: 'not aligned' names the mismatch; 'failed' the copy or parse error. */
+  reason?: string;
+  /** Closers the rewrite put a `<br/>` after, over every XHTML entry of the book. */
+  closersInserted?: number;
+  chapters?: WhatIfChapter[];
+}
+
+function whatIfFor(
+  file: string,
+  result: Record<string, unknown>,
+  opts: ParseOptions,
+): WhatIfResult | undefined {
+  const format = String(result.format ?? '');
+  if (format === 'mobi') {
+    return { status: 'not computed', reason: "MOBI's HTML sits inside a compressed binary" };
+  }
+  if (format !== 'epub' || !opts.outDir) return undefined;
+  const timeoutMs = opts.timeoutMs ?? PER_FILE_TIMEOUT_MS;
+  const dir = join(opts.outDir, 'whatif', createHash('sha1').update(file).digest('hex').slice(0, 12));
+  mkdirSync(dir, { recursive: true });
+  const copy = join(dir, basename(file));
+  const rw = spawnSync(process.execPath, [TSX_CLI, SCRIPT_PATH, '--rewrite', file, '--to', copy], {
+    windowsHide: true,
+    timeout: timeoutMs,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const rwPayload = lastJsonLine(rw.stdout ?? '');
+  if (!rwPayload || rwPayload.ok !== true) {
+    return {
+      status: 'failed',
+      reason: `copy not written: ${String(rwPayload?.error ?? `exit ${rw.status}`)}`,
+    };
+  }
+  const copyEntry = parseOne(copy, opts);
+  if (copyEntry.status !== 'parsed' || !copyEntry.result) {
+    return { status: 'failed', reason: `copy did not parse: ${copyEntry.reason ?? 'unknown'}` };
+  }
+  return pairWhatIf(
+    result.chapters as MeasuredChapter[],
+    copyEntry.result.chapters as MeasuredChapter[],
+    Number(rwPayload.closers ?? 0),
+  );
+}
+
+/** Pair the imported and what-if chapter lists by position, only when they have
+    the same count AND the same titles; otherwise the book is "not aligned" and
+    no chapter is labelled. */
+export function pairWhatIf(
+  imported: Array<Pick<MeasuredChapter, 'id' | 'title' | 'legibility'>>,
+  copy: Array<Pick<MeasuredChapter, 'title' | 'legibility'>>,
+  closersInserted: number,
+): WhatIfResult {
+  if (imported.length !== copy.length) {
+    return {
+      status: 'not aligned',
+      reason: `${imported.length} chapters imported, ${copy.length} in the copy`,
+      closersInserted,
+    };
+  }
+  const at = imported.findIndex((c, i) => c.title !== copy[i].title);
+  if (at >= 0) {
+    return { status: 'not aligned', reason: `chapter ${at + 1} title differs`, closersInserted };
+  }
+  return {
+    status: 'paired',
+    closersInserted,
+    chapters: imported.map((c, i) => ({
+      id: c.id,
+      title: c.title,
+      legibility: c.legibility,
+      whatIfLegibility: copy[i].legibility,
+      extractorMerged:
+        c.legibility !== null &&
+        c.legibility >= MERGED_TURNS_DEGRADED &&
+        copy[i].legibility !== null &&
+        (copy[i].legibility as number) < MERGED_TURNS_DEGRADED,
+    })),
+  };
+}
+
+function whatIfOf(e: ScanEntry): WhatIfResult | undefined {
+  return e.result?.whatIf as WhatIfResult | undefined;
+}
+
+/** True when the book's what-if labels this chapter extractor-merged (#4217). */
+export function isLabelledExtractorMerged(e: ScanEntry, chapterId: number): boolean {
+  return whatIfOf(e)?.chapters?.some((c) => c.id === chapterId && c.extractorMerged) ?? false;
+}
+
+/** Labelled books first, so the owner sees which books #4217 affects; then
+    every book whose what-if was not paired, and why. */
+export function renderExtractorExposure(parsed: ScanEntry[]): string[] {
+  const labelled = parsed.filter((e) => whatIfOf(e)?.chapters?.some((c) => c.extractorMerged));
+  const lines = [`## Extractor-merged (#4217): books the extractor merges (${labelled.length})`, ''];
+  if (!labelled.length) lines.push('None.');
+  for (const e of labelled) {
+    const w = whatIfOf(e) as WhatIfResult;
+    lines.push(`- ${e.path}: ${w.closersInserted ?? 0} closers inserted`);
+    for (const c of (w.chapters ?? []).filter((x) => x.extractorMerged)) {
+      lines.push(
+        `  - chapter ${c.id} "${c.title}": extractor-merged (#4217), ${c.legibility} imported, ${c.whatIfLegibility} in the what-if`,
+      );
+    }
+  }
+  const other = parsed.filter((e) => {
+    const w = whatIfOf(e);
+    return w && w.status !== 'paired';
+  });
+  lines.push('', `## What-if not paired (${other.length})`, '');
+  if (!other.length) lines.push('None.');
+  for (const e of other) {
+    const w = whatIfOf(e) as WhatIfResult;
+    lines.push(`- ${e.path}: what-if ${w.status}${w.reason ? ` (${w.reason})` : ''}`);
+  }
+  lines.push('');
+  return lines;
+}
+
+/* The rewrite: a copy of the EPUB with a `<br/>` after every closer `stripHtml`
+   drops, on every XHTML entry. Runs in its own child like any parse. */
+async function readZipEntries(buffer: Buffer): Promise<Array<{ name: string; data: Buffer }>> {
+  return new Promise((resolveAll, reject) => {
+    yauzlFromBuffer(buffer, { lazyEntries: true }, (err, zip) => {
+      if (err || !zip) return reject(err ?? new Error('not a zip'));
+      const out: Array<{ name: string; data: Buffer }> = [];
+      zip.on('error', reject);
+      zip.on('end', () => resolveAll(out));
+      zip.on('entry', (entry: Entry) => {
+        if (entry.fileName.endsWith('/')) return zip.readEntry();
+        zip.openReadStream(entry, (e, stream) => {
+          if (e || !stream) return reject(e ?? new Error('no stream'));
+          const chunks: Buffer[] = [];
+          stream.on('data', (c: Buffer) => chunks.push(c));
+          stream.on('error', reject);
+          stream.on('end', () => {
+            out.push({ name: entry.fileName, data: Buffer.concat(chunks) });
+            zip.readEntry();
+          });
+        });
+      });
+      zip.readEntry();
+    });
+  });
+}
+
+export async function rewriteEpub(buffer: Buffer): Promise<{ copy: Buffer; closers: number }> {
+  const entries = await readZipEntries(buffer);
+  let closers = 0;
+  const zip = new ZipFile();
+  for (const { name, data } of entries) {
+    let body = data;
+    if (/\.x?html?$/i.test(name)) {
+      body = Buffer.from(
+        data.toString('utf8').replace(WHAT_IF_CLOSERS, (m) => {
+          closers++;
+          return `${m}<br/>`;
+        }),
+        'utf8',
+      );
+    }
+    zip.addBuffer(body, name, { compress: false });
+  }
+  zip.end();
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolveEnd, reject) => {
+    zip.outputStream
+      .on('data', (c: Buffer) => chunks.push(c))
+      .on('end', () => resolveEnd())
+      .on('error', reject);
+  });
+  return { copy: Buffer.concat(chunks), closers };
 }
 
 function lastJsonLine(text: string): Record<string, unknown> | null {
@@ -257,11 +472,11 @@ export function renderLabelOutcome(parsed: ScanEntry[], opts: SummaryOptions = {
   const rows = parsed
     .map((e) => ({ e, m: measurementOf(e) }))
     .filter((x): x is { e: ScanEntry; m: BookMeasurement } => x.m !== null);
-  const high: Array<{ path: string; chapterId: number; count: number; format: string }> = [];
+  const high: Array<{ e: ScanEntry; path: string; chapterId: number; count: number; format: string }> = [];
   for (const { e, m } of rows) {
     for (const c of m.chapters) {
       if ((c.legibility ?? -1) >= MERGED_TURNS_DEGRADED) {
-        high.push({ path: e.path, chapterId: c.id, count: c.legibility as number, format: String(e.result?.format ?? '') });
+        high.push({ e, path: e.path, chapterId: c.id, count: c.legibility as number, format: String(e.result?.format ?? '') });
       }
     }
   }
@@ -281,7 +496,8 @@ export function renderLabelOutcome(parsed: ScanEntry[], opts: SummaryOptions = {
   const breaches = high.filter(
     (h) =>
       j[judgementKey(h.path, h.chapterId)] === 'clean' &&
-      !(opts.isExtractorMerged?.(h.path, h.chapterId) ?? false),
+      !(opts.isExtractorMerged?.(h.path, h.chapterId) ?? false) &&
+      !isLabelledExtractorMerged(h.e, h.chapterId),
   );
   const cands = rows.filter((x) => x.m.calibrationCandidate);
   if (!breaches.length && cands.length) {
@@ -310,6 +526,7 @@ export function renderSummary(report: ScanReport, opts: SummaryOptions = {}): st
     '',
     `Files: ${report.entries.length} (parsed ${parsed.length}, unparsed ${unparsed.length}, unsupported ${unsupported.length})`,
     '',
+    ...renderExtractorExposure(parsed),
     ...renderMeasured(parsed),
     ...renderCandidates(parsed),
     ...renderLabelOutcome(parsed, opts),
@@ -645,7 +862,12 @@ export async function runChild(file: string, parserModule?: string): Promise<voi
       ? ((await import(pathToFileURL(resolve(parserModule)).href)) as { default: ParseFn }).default
       : ((await import('../src/parsers/index.js')) as { parseManuscript: ParseFn }).parseManuscript;
     const buffer = readFileSync(file);
-    const parsed = await parse({ buffer, fileName: basename(file) });
+    /* A library file has no state.json stamp: read it as every unstamped book is. */
+    const parsed = await parse({
+      buffer,
+      fileName: basename(file),
+      extractorVersion: LEGACY_EXTRACTOR_VERSION,
+    });
     report({
       ok: true,
       format: parsed.format,
@@ -658,7 +880,11 @@ export async function runChild(file: string, parserModule?: string): Promise<voi
   }
 }
 
-type ParseFn = (input: { buffer: Buffer; fileName: string }) => Promise<ParsedLike>;
+type ParseFn = (input: {
+  buffer: Buffer;
+  fileName: string;
+  extractorVersion: number;
+}) => Promise<ParsedLike>;
 
 /* ---- entry ------------------------------------------------------------- */
 
@@ -668,6 +894,20 @@ function argValue(argv: string[], name: string): string | undefined {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  const rewrite = argValue(argv, '--rewrite');
+  if (rewrite) {
+    const to = argValue(argv, '--to');
+    try {
+      if (!to) throw new Error('--rewrite needs --to <copy>');
+      const { copy, closers } = await rewriteEpub(readFileSync(rewrite));
+      writeFileSync(to, copy);
+      report({ ok: true, closers });
+      return 0;
+    } catch (e) {
+      report({ ok: false, error: messageOf(e) });
+      return 1;
+    }
+  }
   const child = argValue(argv, '--child');
   if (child) {
     await runChild(child, argValue(argv, '--parser-module'));
@@ -683,6 +923,7 @@ export async function main(argv: string[]): Promise<number> {
   const rep = scanLibrary(resolve(library), {
     parserModule: argValue(argv, '--parser-module'),
     timeoutMs: t ? Number(t) : undefined,
+    outDir: resolve(out),
   });
   const jfile = argValue(argv, '--judgements');
   const judgements = jfile

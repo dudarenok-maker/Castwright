@@ -6,9 +6,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   scanLibrary,
   writeReport,
@@ -20,7 +29,7 @@ import {
   type ParsedLike,
 } from '../../server/scripts/paragraph-degradation-scan.mts';
 import { parseManuscript } from '../../server/src/parsers/index.ts';
-import { buildSingleChapterEpub } from '../../server/src/test-utils/empty-href-epub.ts';
+import { buildEpub, buildSingleChapterEpub } from '../../server/src/test-utils/empty-href-epub.ts';
 import {
   countTurnOpeners,
   measureChapterLegibility,
@@ -499,4 +508,183 @@ test('label: no candidate keeps it provisional; an extractor-merged chapter is n
     { judgements: { '/wrapped.txt#2': 'clean' }, isExtractorMerged: () => true },
   );
   assert.match(hooked, /label may drop/);
+});
+
+/* ---- the EPUB #4217 what-if (#2254 Phase 7a step 5) ------------------------- */
+
+const PARSERS_INDEX_URL = pathToFileURL(
+  join(import.meta.dirname, '..', '..', 'server', 'src', 'parsers', 'index.ts'),
+).href;
+
+/** A parser module that runs the real parseManuscript, then (only when the buffer
+    holds the what-if's inserted `<br/>`) reshapes the result by file name: `short`
+    drops the last chapter, `retitle` renames the last one. */
+function writeDelegatingParser(dir: string): string {
+  const p = join(dir, 'delegating-parser.mjs');
+  writeFileSync(
+    p,
+    `import { parseManuscript } from ${JSON.stringify(PARSERS_INDEX_URL)};
+export default async function parse(input) {
+  const parsed = await parseManuscript(input);
+  if (!input.buffer.includes('<br/>')) return parsed;
+  if (input.fileName.startsWith('short')) parsed.chapters = parsed.chapters.slice(0, -1);
+  if (input.fileName.startsWith('retitle')) {
+    parsed.chapters[parsed.chapters.length - 1].title = 'Другое название';
+  }
+  return parsed;
+}
+`,
+    'utf8',
+  );
+  return p;
+}
+
+/** A parser module for a stand-in MOBI: only the format tells it from markdown. */
+function writeMobiParser(dir: string): string {
+  const p = join(dir, 'mobi-parser.mjs');
+  writeFileSync(
+    p,
+    `export default async function parse({ fileName }) {
+  return { format: fileName.endsWith('.mobi') ? 'mobi' : 'markdown', chapters: [{ id: 1, title: 'c', body: 'Текст.' }] };
+}
+`,
+    'utf8',
+  );
+  return p;
+}
+
+const TURNS = (n: number): string[] => Array.from({ length: n }, (_, i) => `— Реплика номер ${i + 1}.`);
+/** Enough Russian prose for language detection to call the book ru. */
+const PROSE = `<p>${'Он медленно шёл по тёмной улице и думал о том, что случилось сегодня утром. '.repeat(400)}</p>`;
+const HTML_OPEN = '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body>' + PROSE;
+/** Twelve dash turns, each its own <div>, no <p>: v1 `stripHtml` merges them onto one line. */
+const DIV_CHAPTER = `${HTML_OPEN}${TURNS(12).map((t) => `<div>${t}</div>`).join(' ')}</body></html>`;
+/** Twelve turns inside ONE <p>: merged in the source itself. */
+const P_CHAPTER = `${HTML_OPEN}<p>${TURNS(12).join(' ')}</p></body></html>`;
+const CLEAN_CHAPTER = `${HTML_OPEN}<p>Тихая глава.</p><p>— Да.</p></body></html>`;
+
+function scanEpubs(
+  files: Record<string, Buffer>,
+  parserModule?: string,
+): { entries: ScanEntry[]; out: string; lib: string } {
+  const lib = tempDir('lib');
+  const out = join(tempDir('out'), 'scratch');
+  for (const [name, buf] of Object.entries(files)) writeFileSync(join(lib, name), buf);
+  const rep = scanLibrary(lib, { parserModule, outDir: out, timeoutMs: 60_000 });
+  return { entries: rep.entries, out, lib };
+}
+
+type WhatIfShape = {
+  status: string;
+  reason?: string;
+  closersInserted?: number;
+  chapters?: Array<{
+    id: number;
+    legibility: number | null;
+    whatIfLegibility: number | null;
+    extractorMerged: boolean;
+  }>;
+};
+const whatIf = (e: ScanEntry): WhatIfShape => e.result?.whatIf as WhatIfShape;
+
+test('a <div>-paragraphed EPUB is labelled extractor-merged (#4217), and the label outcome does not count it as a breach', async () => {
+  const { entries, out, lib } = scanEpubs({
+    'divs.epub': await buildEpub([DIV_CHAPTER, CLEAN_CHAPTER], { navLabels: ['Диалог', 'Тишина'] }),
+  });
+  const e = byName(entries, 'divs.epub');
+  assert.equal(e.status, 'parsed');
+  const w = whatIf(e);
+  assert.equal(w.status, 'paired');
+  assert.ok((w.closersInserted ?? 0) >= 12, `closers ${w.closersInserted}`);
+  const c1 = w.chapters![0];
+  assert.ok((c1.legibility ?? 0) >= 10, `imported ${c1.legibility}`);
+  assert.ok((c1.whatIfLegibility ?? 99) < 10, `what-if ${c1.whatIfLegibility}`);
+  assert.equal(c1.extractorMerged, true);
+  assert.equal(w.chapters![1].extractorMerged, false);
+
+  const judgements = { [`${e.path}#${c1.id}`]: 'clean' as const };
+  const md = renderSummary({ library: lib, build: 'b', entries: [e, candidateBook()] }, { judgements });
+  assert.match(md, /extractor-merged \(#4217\)/);
+  assert.match(md, /label may drop/);
+  assert.doesNotMatch(md, /breach:/);
+  assert.ok(
+    md.indexOf('Extractor-merged (#4217): books the extractor merges (1)') <
+      md.indexOf('## Books by worst-paragraph'),
+    'labelled books come first',
+  );
+  // Without the what-if the same judgement IS a breach: the label is what saves it.
+  const bare = { ...e, result: { ...e.result, whatIf: undefined } } as ScanEntry;
+  assert.match(
+    renderSummary({ library: lib, build: 'b', entries: [bare, candidateBook()] }, { judgements }),
+    /breach:/,
+  );
+  // The copy lives only under --out.
+  assert.ok(existsSync(join(out, 'whatif')));
+  assert.deepEqual(readdirSync(lib), ['divs.epub'], 'nothing else is written into the library');
+  rmSync(lib, { recursive: true, force: true });
+});
+
+test('a genuinely merged <p> is flagged and not labelled', async () => {
+  const { entries, lib } = scanEpubs({
+    'merged-p.epub': await buildEpub([P_CHAPTER], { navLabels: ['Склейка'] }),
+  });
+  const e = byName(entries, 'merged-p.epub');
+  const w = whatIf(e);
+  assert.equal(w.status, 'paired');
+  assert.ok((w.chapters![0].legibility ?? 0) >= 10);
+  assert.ok((w.chapters![0].whatIfLegibility ?? 0) >= 10);
+  assert.equal(w.chapters![0].extractorMerged, false);
+  assert.match(
+    renderSummary({ library: lib, build: 'b', entries }, {}),
+    /Extractor-merged \(#4217\): books the extractor merges \(0\)/,
+  );
+  rmSync(lib, { recursive: true, force: true });
+});
+
+test('an EPUB whose copy yields another chapter count or other titles is what-if not aligned, and labels nothing', async () => {
+  const aux = tempDir('aux');
+  const epub = await buildEpub([DIV_CHAPTER, CLEAN_CHAPTER], { navLabels: ['Диалог', 'Тишина'] });
+  const { entries, lib } = scanEpubs(
+    { 'short.epub': epub, 'retitle.epub': epub },
+    writeDelegatingParser(aux),
+  );
+  const short = whatIf(byName(entries, 'short.epub'));
+  assert.equal(short.status, 'not aligned');
+  assert.match(short.reason ?? '', /2 chapters imported, 1 in the copy/);
+  assert.equal(short.chapters, undefined);
+  const retitle = whatIf(byName(entries, 'retitle.epub'));
+  assert.equal(retitle.status, 'not aligned');
+  assert.match(retitle.reason ?? '', /title differs/);
+  assert.equal(retitle.chapters, undefined);
+  const md = renderSummary({ library: lib, build: 'b', entries }, {});
+  assert.match(md, /short\.epub: what-if not aligned/);
+  assert.match(md, /Extractor-merged \(#4217\): books the extractor merges \(0\)/);
+  rmSync(lib, { recursive: true, force: true });
+  rmSync(aux, { recursive: true, force: true });
+});
+
+test('a MOBI is what-if not computed, per book', () => {
+  const aux = tempDir('aux');
+  const lib = tempDir('lib');
+  writeFileSync(join(lib, 'book.mobi'), 'x');
+  const rep = scanLibrary(lib, {
+    parserModule: writeMobiParser(aux),
+    outDir: join(aux, 'out'),
+    timeoutMs: 20_000,
+  });
+  assert.equal(whatIf(byName(rep.entries, 'book.mobi')).status, 'not computed');
+  assert.match(renderSummary(rep, {}), /book\.mobi: what-if not computed/);
+  rmSync(lib, { recursive: true, force: true });
+  rmSync(aux, { recursive: true, force: true });
+});
+
+test('an EPUB that never parses gets no what-if and never stops the scan', () => {
+  const lib = tempDir('lib');
+  writeFileSync(join(lib, 'ok.md'), '# Hi\n\ntext\n');
+  writeFileSync(join(lib, 'a.epub'), 'not a zip');
+  const rep = scanLibrary(lib, { outDir: join(tempDir('out'), 'scratch'), timeoutMs: 60_000 });
+  assert.equal(byName(rep.entries, 'a.epub').status, 'unparsed');
+  assert.equal(byName(rep.entries, 'a.epub').result, undefined);
+  assert.equal(byName(rep.entries, 'ok.md').status, 'parsed');
+  rmSync(lib, { recursive: true, force: true });
 });
