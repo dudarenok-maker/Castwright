@@ -447,6 +447,11 @@ export const STEPS = [
            contract, so an openapi-only edit must bust this step's cache —
            otherwise the local run reports [cached] and the pin never fires. */
         'openapi.yaml',
+        /* #4226 — script-review-apply.test.ts readFileSync()s these shared
+           fixtures at runtime, locking the frontend copy against the server
+           core. extraFiles are literal paths (no globs), so each is named. */
+        'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
+        'server/src/analyzer/attribution-eval/__fixtures__/review-apply-vectors.json',
       ],
       includeLockfiles: ['root'],
     },

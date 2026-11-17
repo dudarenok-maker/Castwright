@@ -756,6 +756,16 @@ test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
 });
 
+// #4226 — src/lib/script-review-apply.test.ts readFileSync()s the shared
+// attribution-eval fixtures at runtime (no module-graph edge), so a diff of only
+// the server core copy + a fixture must still schedule the frontend `test` step.
+test('stepTouchedByDiff: a shared attribution-eval fixture diff matches the frontend test step (#4226)', () => {
+  for (const f of ['anchor-offset-vectors.json', 'review-apply-vectors.json']) {
+    const diff = [`server/src/analyzer/attribution-eval/__fixtures__/${f}`];
+    assert.equal(stepTouchedByDiff(stepByName['test'], diff), true, f);
+  }
+});
+
 // index.html carries the self-hosted webfonts <link>, the body's Tailwind
 // classes, and the #root mount div — all three determine what Playwright
 // mounts and what the visual baselines screenshot. Without this extraFiles
