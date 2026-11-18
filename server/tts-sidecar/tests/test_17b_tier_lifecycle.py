@@ -517,6 +517,9 @@ def test_d4_design_resolver(monkeypatch):
     assert main._own_resident_tier("qwen", "1.7b", {}) == ("qwen.base17", 3900, "cuda:0")
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=0))
     assert main._own_resident_tier("qwen", "1.7b", DESIGN) == (None, 0, None)
+    # VoiceDesign cold, only the 0.6B resident (#4237): protect None, the measured 0.6B alone
+    monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=0, base_mb=BASE_MB))
+    assert main._own_resident_tier("qwen", "1.7b", DESIGN) == (None, BASE_MB, "cuda:0")
     unmeasured = _fake_qwen(resident=False, design_mb=1)
     unmeasured._design_weights_mb = 0
     monkeypatch.setitem(main.ENGINES, "qwen", unmeasured)
@@ -555,6 +558,18 @@ def test_d6_design_with_voicedesign_cold_credits_its_resident_0_6b(monkeypatch, 
     assert adm == {"device": "cuda:0"}
     assert booked == 6144, "the credit is fit-only: the ledger books the FULL peak"
     assert qwen._base is not None, "admission evicted the 0.6B the design reuses"
+
+
+def test_d7_the_cold_design_credit_is_not_free_headroom(monkeypatch):
+    """#4237 pass 2, the refuse direction: VoiceDesign cold, 0.6B resident, other
+    tenants 3400 so free is 3488. 3488 + 1300 - 409 = 4379 < 6144 refuses; crediting
+    VoiceDesign's 3400 fallback while it is cold would admit (7779) and OOM."""
+    qwen = _fake_qwen(resident=False, base_mb=BASE_MB)
+    pc = _tight_wire(monkeypatch, qwen, other_mb=3400)
+    adm, booked = _design(pc)
+    assert adm == {"noCapacity": {"neededMb": 6144 - BASE_MB, "deviceKey": "cuda:0"}}
+    assert booked == 0
+    assert qwen._base is not None
 
 
 def test_b1_a_credited_model_freed_during_a_ladder_step_is_not_counted_twice(monkeypatch):
