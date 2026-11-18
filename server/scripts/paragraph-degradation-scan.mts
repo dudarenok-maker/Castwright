@@ -50,7 +50,8 @@ const SCRIPT_DIR = dirname(SCRIPT_PATH);
 /* tsx's own .mjs entrypoint, run via process.execPath: no Windows .cmd shim. */
 const TSX_CLI = join(SCRIPT_DIR, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
-export type FileStatus = 'parsed' | 'unparsed' | 'unsupported';
+/** `link`: a symlink or Windows junction (Node reports both as a symbolic link). It is listed, never followed, so a linked folder cannot vanish from the report. */
+export type FileStatus = 'parsed' | 'unparsed' | 'unsupported' | 'link';
 
 export interface ScanEntry {
   path: string;
@@ -76,7 +77,7 @@ export function isSupported(file: string): boolean {
   return SUPPORTED_MANUSCRIPT_EXTENSIONS.includes(extensionOf(file));
 }
 
-export function walkLibrary(dir: string): string[] {
+export function walkLibrary(dir: string, links: string[] = []): string[] {
   const out: string[] = [];
   const visit = (d: string): void => {
     const items = readdirSync(d, { withFileTypes: true }).sort((a, b) =>
@@ -84,7 +85,8 @@ export function walkLibrary(dir: string): string[] {
     );
     for (const it of items) {
       const full = join(d, it.name);
-      if (it.isDirectory()) visit(full);
+      if (it.isSymbolicLink()) links.push(full);
+      else if (it.isDirectory()) visit(full);
       else if (it.isFile()) out.push(full);
     }
   };
@@ -373,7 +375,10 @@ export function buildId(): string {
 
 export function scanLibrary(library: string, opts: ParseOptions = {}): ScanReport {
   const entries: ScanEntry[] = [];
-  for (const file of walkLibrary(library)) {
+  const links: string[] = [];
+  const files = walkLibrary(library, links);
+  for (const link of links) entries.push({ path: link, extension: extensionOf(link), status: 'link' });
+  for (const file of files) {
     if (!isSupported(file)) {
       entries.push({ path: file, extension: extensionOf(file), status: 'unsupported' });
       continue;
@@ -521,13 +526,14 @@ export function renderSummary(report: ScanReport, opts: SummaryOptions = {}): st
   const parsed = by('parsed');
   const unparsed = by('unparsed');
   const unsupported = by('unsupported');
+  const links = by('link');
   const lines = [
     '# Paragraph-degradation library scan',
     '',
     `Library: ${report.library}`,
     `Build: ${report.build}`,
     '',
-    `Files: ${report.entries.length} (parsed ${parsed.length}, unparsed ${unparsed.length}, unsupported ${unsupported.length})`,
+    `Files: ${report.entries.length} (parsed ${parsed.length}, unparsed ${unparsed.length}, unsupported ${unsupported.length}, skipped links ${links.length})`,
     '',
     ...renderExtractorExposure(parsed),
     ...renderMeasured(parsed),
@@ -541,6 +547,12 @@ export function renderSummary(report: ScanReport, opts: SummaryOptions = {}): st
     '',
     ...(unsupported.length
       ? unsupported.map((e) => `- ${e.path} (.${e.extension || 'none'})`)
+      : ['None.']),
+    '',
+    `## Skipped links (${links.length})`,
+    '',
+    ...(links.length
+      ? ['Symlinks and junctions are not followed: whatever they point at is NOT in this scan.', ...links.map((e) => `- ${e.path}`)]
       : ['None.']),
     '',
   ];

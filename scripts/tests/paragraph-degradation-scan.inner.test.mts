@@ -15,6 +15,8 @@ import {
   existsSync,
   rmSync,
   cpSync,
+  symlinkSync,
+  rmdirSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -99,6 +101,37 @@ test('a parser crash from a bare callback is reported with its message, and the 
   assert.equal(good.result?.chapterCount, 2);
   rmSync(lib, { recursive: true, force: true });
   rmSync(aux, { recursive: true, force: true });
+});
+
+test('a linked folder is listed as a skipped link, not followed and not silently dropped', (t) => {
+  const lib = tempDir('lib');
+  const aux = tempDir('aux');
+  const target = tempDir('target');
+  writeFileSync(join(target, 'inside.md'), '# Hi\n\ntext\n');
+  writeFileSync(join(lib, 'real.md'), '# Hi\n\ntext\n');
+  const link = join(lib, 'linked-folder');
+  try {
+    symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (e) {
+    t.skip(`cannot create a symlink/junction here: ${(e as Error).message}`);
+    return;
+  }
+  try {
+    const rep = scanLibrary(lib, { parserModule: writeParser(aux, join(aux, 'm.txt')), timeoutMs: 20_000 });
+    assert.equal(byName(rep.entries, 'linked-folder').status, 'link');
+    assert.equal(byName(rep.entries, 'real.md').status, 'parsed');
+    assert.ok(!rep.entries.some((e) => e.path.endsWith('inside.md')), 'the link must not be followed');
+    const md = renderSummary(rep);
+    assert.match(md, /skipped links 1\)/);
+    assert.match(md, /## Skipped links \(1\)/);
+    assert.ok(md.includes(`- ${link}`), 'the link is named in the report');
+    assert.match(md, /NOT in this scan/);
+  } finally {
+    rmdirSync(link); // the link only, never its target
+    rmSync(lib, { recursive: true, force: true });
+    rmSync(aux, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  }
 });
 
 test('a parse that never settles is reported timed out and the scan goes on', () => {
