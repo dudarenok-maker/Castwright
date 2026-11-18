@@ -10,11 +10,13 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const { busy, failRestore, failMigrate, unlinkGate } = vi.hoisted(() => ({
+const { busy, failRestore, failMigrate, failStateWrite, unlinkGate } = vi.hoisted(() => ({
   busy: { value: false },
   failRestore: { value: false },
   /* #4339 I6: fail the migration's wrong-extension rename with a path-bearing fs error. */
   failMigrate: { value: false },
+  /* #4319 pass 2: fail every state.json read-modify-write (a state-json lock timeout). */
+  failStateWrite: { value: false },
   /* One-shot gate: the first unlink whose path matches parks until released. */
   unlinkGate: {
     match: null as null | ((p: string) => boolean),
@@ -42,6 +44,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 vi.mock('../workspace/file-lock.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
   return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
+});
+vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/book-state-update.js')>();
+  return {
+    ...real,
+    updateStateAtDir: (...args: Parameters<typeof real.updateStateAtDir>) => {
+      if (failStateWrite.value) throw new Error('simulated state.json write failure');
+      return real.updateStateAtDir(...args);
+    },
+  };
 });
 vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/atomic-rename.js')>();
@@ -138,6 +150,7 @@ beforeEach(async () => {
   busy.value = false;
   failRestore.value = false;
   failMigrate.value = false;
+  failStateWrite.value = false;
   rmSync(audioRoot, { recursive: true, force: true });
   mkdirSync(audioRoot, { recursive: true });
   rmSync(revisionsPath, { force: true });
@@ -784,6 +797,25 @@ describe('lazy migration at Accept / Reject (#4339)', () => {
     expect(text).not.toContain('operation not permitted');
     expect(res.body.error).toBe('Failed to reject revision.');
     expect(existsSync(prev())).toBe(true);
+  });
+
+  it('Accept swallows a failed state.json re-stamp (spec State-write table): 200, the previous take is deleted, state.json untouched', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '00:10' });
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    seed([entry(1, 'r1')]);
+    const before = chapterNow();
+    failStateWrite.value = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await accept('r1');
+    warn.mockRestore();
+    failStateWrite.value = false;
+
+    expect(res.status).toBe(200);
+    expect(existsSync(prev())).toBe(false);
+    expect(chapterNow()).toEqual(before);
   });
 
   it('I6: the same at Accept answers a curated 500', async () => {

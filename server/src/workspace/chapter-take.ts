@@ -695,7 +695,9 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
     request deletes would describe a take that is no longer there.
 
     Phase 1 holds no journal replay; Phase 2 adds it before `migrateSlugFiles`.
-    Errors propagate: the route entry points curate them, the fsck logs them. */
+    A failed step-5 `state.json` write is logged and swallowed (spec State-write
+    table); every other error propagates: the route entry points curate them,
+    the fsck logs them. */
 export async function reconcileSlug(
   handle: AnyBookHandle,
   slug: string,
@@ -707,26 +709,33 @@ export async function reconcileSlug(
   const restamp = opts.restamp !== false;
   await ensureTakeIdentity(handle, slug, { mirrorState: restamp });
   if (!restamp || !chapterAudioExists(root, slug)) return;
-  await updateStateAtDir(handle.bookDir, async (state) => {
-    const idx = state.chapters.findIndex((c) => c.slug === slug);
-    if (idx < 0) return null;
-    const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
-    if (!segments) return null;
-    const before = state.chapters[idx] as Record<string, unknown>;
-    const recorded = before.audioRenderedAt;
-    /* A LEGACY REJECT: `state.json` records an `audioRenderedAt` that is not the
-       live segments' `synthesizedAt`. Step 4's mirror writes `audioTakeId` only,
-       so it never erases this mismatch. */
-    const legacyReject = typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
-    if (legacyReject) return stampedState(state, slug, segments, true);
-    const healed = healTakeFields(
-      before as { slug?: string } & TakeFields,
-      deriveTakeFields(segments),
-      new Set<string>(),
-    ) as Record<string, unknown>;
-    if (TAKE_STATE_FIELDS.every((f) => sameValue(before[f], healed[f]))) return null;
-    const chapters = state.chapters.slice();
-    chapters[idx] = healed as unknown as (typeof chapters)[number];
-    return { ...state, chapters };
-  });
+  try {
+    await updateStateAtDir(handle.bookDir, async (state) => {
+      const idx = state.chapters.findIndex((c) => c.slug === slug);
+      if (idx < 0) return null;
+      const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
+      if (!segments) return null;
+      const before = state.chapters[idx] as Record<string, unknown>;
+      const recorded = before.audioRenderedAt;
+      /* A LEGACY REJECT: `state.json` records an `audioRenderedAt` that is not the
+         live segments' `synthesizedAt`. Step 4's mirror writes `audioTakeId` only,
+         so it never erases this mismatch. */
+      const legacyReject = typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
+      if (legacyReject) return stampedState(state, slug, segments, true);
+      const healed = healTakeFields(
+        before as { slug?: string } & TakeFields,
+        deriveTakeFields(segments),
+        new Set<string>(),
+      ) as Record<string, unknown>;
+      if (TAKE_STATE_FIELDS.every((f) => sameValue(before[f], healed[f]))) return null;
+      const chapters = state.chapters.slice();
+      chapters[idx] = healed as unknown as (typeof chapters)[number];
+      return { ...state, chapters };
+    });
+  } catch (err) {
+    /* Swallow and log (spec State-write table): the re-stamp is a repair, not part of
+       what the caller asked for, and the next reconcile repeats it. A migration
+       failure above still throws. */
+    console.warn(`[take] state.json re-stamp failed for ${slug}:`, err);
+  }
 }
