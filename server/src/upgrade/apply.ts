@@ -11,6 +11,7 @@
 
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
 import { dirname, join } from 'node:path';
 import yauzl from 'yauzl';
 import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
@@ -205,13 +206,14 @@ function streamEntryToFile(zip: yauzl.ZipFile, entry: yauzl.Entry, destFile: str
       try {
         mkdirSync(dirname(destFile), { recursive: true });
       } catch (e) {
+        // yauzl's RefUnrefFilter holds its own ref on the zip until the entry's
+        // read stream is destroyed; zip.close() alone would not release it.
+        stream.destroy();
         return rej(e);
       }
-      const out = createWriteStream(destFile);
-      stream.on('error', rej);
-      out.on('error', rej);
-      out.on('close', res);
-      stream.pipe(out);
+      // pipeline destroys BOTH streams on either side's error (pipe() would
+      // leave the write fd open when the source fails).
+      pipeline(stream, createWriteStream(destFile)).then(() => res(), rej);
     });
   });
 }
@@ -221,6 +223,13 @@ export function extractRelease(zipPath: string, releaseDir: string, topDir: stri
   return new Promise((resolve2, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
       if (err || !zip) return reject(err ?? new Error('failed to open zip'));
+      // autoClose only fires on 'end' / yauzl's own error path, so every other
+      // reject must release the fd itself (a held handle blocks renaming any
+      // directory containing the zip on Windows).
+      const fail = (e: unknown) => {
+        zip.close();
+        reject(e);
+      };
       const prefix = `${topDir}/`;
       zip.on('entry', (entry: yauzl.Entry) => {
         const name = entry.fileName.replace(/\\/g, '/');
@@ -232,13 +241,13 @@ export function extractRelease(zipPath: string, releaseDir: string, topDir: stri
           try {
             mkdirSync(dest, { recursive: true });
           } catch (e) {
-            return reject(e);
+            return fail(e);
           }
           zip.readEntry();
         } else {
           streamEntryToFile(zip, entry, dest)
             .then(() => zip.readEntry())
-            .catch(reject);
+            .catch(fail);
         }
       });
       zip.on('end', () => resolve2());
