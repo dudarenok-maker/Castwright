@@ -1,12 +1,14 @@
 /* #4339 — `reconcileSlug` at the boot fsck (spec 2026-11-13-chapter-take-lifecycle-design.md
    §6.1 steps 4-5, §7 Phase 1 step 5). Drives the real `fsckAllBooks` over a tempdir
    workspace; audio fixtures are magic-byte stubs (the sniffer reads only the head,
-   and a single live file is never decoded). WORKSPACE_DIR is set BEFORE the modules
+   and a single live file is decoded only for a legacy-reject shape, which uses a real mp3).
+   WORKSPACE_DIR is set BEFORE the modules
    load (paths.ts caches it at import). Each test names the mutation that turns it red. */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 let workspaceRoot: string;
 let take: typeof import('./chapter-take.js');
@@ -49,6 +51,17 @@ function seedBook(opts: { chapter?: Record<string, unknown>; bookId?: boolean } 
     }),
   );
   return { bookDir, audio, state };
+}
+
+/** A real mp3 of `sec` seconds: a legacy-reject chapter's live audio is full-decoded
+    and compared with its segments' `durationSec` before it is re-stamped (H6). */
+function writeRealMp3(path: string, sec: number): void {
+  const r = spawnSync(
+    'ffmpeg',
+    ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=180:duration=${sec}`, '-ar', '8000', '-ac', '1', '-b:a', '16k', path],
+    { windowsHide: true },
+  );
+  if (r.status !== 0) throw new Error(`ffmpeg failed: ${String(r.stderr)}`);
 }
 
 const writeJson = (path: string, v: unknown) => writeFileSync(path, JSON.stringify(v));
@@ -130,7 +143,7 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
         audioQa: { score: 0.9 },
       },
     });
-    writeFileSync(join(b.audio, `${SLUG}.mp3`), MP3);
+    writeRealMp3(join(b.audio, `${SLUG}.mp3`), 20);
     writeJson(join(b.audio, `${SLUG}.segments.json`), { durationSec: 20, modelKey: 'm-b', synthesizedAt: 'T-B' });
 
     await fsck.fsckAllBooks();
@@ -294,7 +307,7 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
 
   it('I8: a second boot changes no file (state.json and every audio file byte-identical)', async () => {
     const b = seedBook({ chapter: { audioRenderedAt: 'T-A', duration: '00:10' } });
-    writeFileSync(join(b.audio, `${SLUG}.mp3`), MP3);
+    writeRealMp3(join(b.audio, `${SLUG}.mp3`), 20);
     writeJson(join(b.audio, `${SLUG}.segments.json`), { durationSec: 20, synthesizedAt: 'T-B' });
     writeFileSync(join(b.audio, `${SLUG}.previous.mp3`), MP3);
     writeJson(join(b.audio, `${SLUG}.previous.segments.json`), { durationSec: 9 });

@@ -23,7 +23,7 @@ import { mkdir, open, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { RENAME_RETRY_DELAYS_MS, jitteredDelayMs, renameWithRetry, RETRYABLE_CODES } from './atomic-rename.js';
-import { assertHeld, type AnyBookHandle } from './book-op-lock.js';
+import { assertHeld, readBookStateOrThrow, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
 import { audioDir } from './paths.js';
 import type { BookStateJson } from './scan.js';
@@ -676,6 +676,52 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
  * reconcileSlug (§6.1 steps 1-5, lazy migration)
  * ------------------------------------------------------------------ */
 
+/** `state.json` records an `audioRenderedAt` that is not the live segments'
+    `synthesizedAt`. Step 4's mirror writes `audioTakeId` only, so it never
+    erases this mismatch. */
+function isLegacyRejectShape(recorded: unknown, segments: TakeSegmentsView): boolean {
+  return typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
+}
+
+/** H6 (spec W1): the legacy-reject shape also arises when a re-render's
+    preserve and install renames both failed, leaving the NEW segments beside
+    the OLD live audio with `state.json` still describing that audio. So before
+    step 4 mints an id or step 5 stamps, a chapter in that shape has its live
+    audio FULL-DECODED and compared with the segments' `durationSec` (the
+    multi-live rule's tolerance). False means the segments do not describe this
+    audio (a mismatch, or no way to tell): the caller touches nothing. The read of
+    `state.json` is lock-free and the decode runs under the caller's book-op
+    only, never inside `book` (R8-3). Any other chapter answers true without a
+    decode. */
+async function segmentsDescribeLiveAudio(handle: AnyBookHandle, root: string, slug: string): Promise<boolean> {
+  const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
+  if (!segments) return true;
+  let recorded: unknown;
+  try {
+    const state = await readBookStateOrThrow(handle.bookDir);
+    recorded = (state?.chapters.find((c) => c.slug === slug) as Record<string, unknown> | undefined)?.audioRenderedAt;
+  } catch {
+    return true; // step 5's own read reports an unreadable state
+  }
+  if (!isLegacyRejectShape(recorded, segments)) return true;
+  const expected = segments.durationSec;
+  const audio = liveAudioFiles(root, slug)[0];
+  const decoded = audio ? await decodeDurationSec(audio.path) : null;
+  if (
+    typeof expected === 'number' &&
+    Number.isFinite(expected) &&
+    decoded !== null &&
+    Math.abs(decoded - expected) <= DURATION_MATCH_TOLERANCE_SEC
+  ) {
+    return true;
+  }
+  console.warn(
+    `[take] ${slug}: live segments (durationSec ${String(expected)}) do not describe the live audio ` +
+      `(decoded ${decoded === null ? 'unreadable' : decoded.toFixed(2)} s); state.json and take ids left as they are`,
+  );
+  return false;
+}
+
 /** Bring one chapter slug's take up to the current model, under the caller's
     book-op (the handle is asserted first): `migrateSlugFiles` (steps 1-3),
     `ensureTakeIdentity` (step 4), then the `state.json` re-stamp (step 5).
@@ -709,6 +755,7 @@ export async function reconcileSlug(
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
   const restamp = opts.restamp !== false;
+  if (restamp && chapterAudioExists(root, slug) && !(await segmentsDescribeLiveAudio(handle, root, slug))) return;
   await ensureTakeIdentity(handle, slug, { mirrorState: restamp });
   if (!restamp || !chapterAudioExists(root, slug)) return;
   try {
@@ -722,8 +769,7 @@ export async function reconcileSlug(
       /* A LEGACY REJECT: `state.json` records an `audioRenderedAt` that is not the
          live segments' `synthesizedAt`. Step 4's mirror writes `audioTakeId` only,
          so it never erases this mismatch. */
-      const legacyReject = typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
-      if (legacyReject) return stampedState(state, slug, segments, true);
+      if (isLegacyRejectShape(recorded, segments)) return stampedState(state, slug, segments, true);
       const healed = healTakeFields(
         before as { slug?: string } & TakeFields,
         deriveTakeFields(segments),
