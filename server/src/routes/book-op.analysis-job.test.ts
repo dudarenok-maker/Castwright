@@ -21,6 +21,7 @@ import request from 'supertest';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
 import type { CharacterOutput, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { AnalysisJob } from './analysis.js';
+import { awaitLeaseDrained } from '../test-utils/await-lease-drained.js';
 import { expectMatchesAnalysisStateSchema } from '../test-utils/openapi-analysis-state.js';
 
 type G = Record<string, unknown>;
@@ -264,7 +265,7 @@ describe('POST /:id/analysis is a registered analysis job (#3711)', () => {
     release.open();
     const res = await run;
     expect(sseFrames(res.text).some((f) => f.kind === 'result')).toBe(true);
-    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
     expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.newDir)).toBe(true);
   });
@@ -431,7 +432,7 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
     expect(refused.status).toBe(409);
 
     halted.open();
-    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
     expect((await renameOf(s)).status).toBe(200);
     /* Both files moved with the book; the old folder was not recreated. */
     expect(existsSync(s.bookDir)).toBe(false);
@@ -529,10 +530,15 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
 
     /* Only the SECOND call's write lands... */
     halted.open();
-    await vi.waitFor(() =>
-      expect(
-        JSON.parse(readFileSync(join(s.bookDir, '.audiobook', 'analysis-state.json'), 'utf8')).state,
-      ).toBe('halted'),
+    /* #4447 — the halted snapshot is endJob's detached terminal write, the same slow
+       `renameWithRetry` the lease drains wait on, so it gets the same budget (the 1 s default
+       reads a missing file as ENOENT). */
+    await vi.waitFor(
+      () =>
+        expect(
+          JSON.parse(readFileSync(join(s.bookDir, '.audiobook', 'analysis-state.json'), 'utf8')).state,
+        ).toBe('halted'),
+      { timeout: 10_000 },
     );
     /* ...and the last unit settles. The first call's paused write is still parked. */
     releaseWork(job);
@@ -661,7 +667,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
       expect(refused.body.code).toBe('book_busy');
       expect(existsSync(s.newDir)).toBe(false);
       releaseWork(held!);
-      await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+      await awaitLeaseDrained(bookJobKinds, s.bookId);
       expect((await renameOf(s)).status).toBe(200);
     } finally {
       spy.mockRestore();
@@ -692,7 +698,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     expect(seenDir).toBe(s.newDir);
     release.open();
     await q.postP;
-    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
   });
 
   it('subset POST queued behind a rename runs on the NEW folder (job.bookDir from the lease)', async () => {
@@ -729,7 +735,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     expect(seenDir).toBe(s.newDir);
     release.open();
     await q.postP;
-    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
   });
 });
 
@@ -759,7 +765,7 @@ describe('GET /analysis/state reports the live subset run\'s origin (#3774)', ()
     const state = await request(app).get(`/api/books/${s.bookId}/analysis/state`);
     release.open();
     await run;
-    await vi.waitFor(() => expect(bookJobKinds(s.bookId)).toEqual([]));
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
     return state;
   }
 
@@ -835,5 +841,24 @@ describe('GET /analysis/state reports the live subset run\'s origin (#3774)', ()
     await run;
     expect(state.body.kind).toBe('main');
     expect(state.body.subsetOrigin).toBeUndefined();
+  });
+});
+
+/* #4447 — a lease that drains slower than vi.waitFor's 1 s default (a loaded CI runner) must
+   still be waited out, not reported as `['analysis']` still held. */
+describe('awaitLeaseDrained waits for a slow lease release (#4447)', () => {
+  it('resolves once a lease released after 1.5 s is gone', async () => {
+    const { __addBookJobToken } = await import('../workspace/book-op-lock.js');
+    const bookId = 'slow-drain-4447';
+    const release = __addBookJobToken(bookId, 'analysis');
+    expect(bookJobKinds(bookId)).toEqual(['analysis']);
+    const t = setTimeout(release, 1500);
+    try {
+      await awaitLeaseDrained(bookJobKinds, bookId);
+      expect(bookJobKinds(bookId)).toEqual([]);
+    } finally {
+      clearTimeout(t);
+      release();
+    }
   });
 });
