@@ -8,16 +8,20 @@
 # decision on #4453: on a cache miss, download a pinned, checksum-verified
 # static build instead of running apt at all.
 #
-# Why this build: johnvansickle.com's VERSIONED archive
-# (`ffmpeg-7.0.2-amd64-static.tar.xz`). Unlike its `-release-` alias (which
-# moves) and unlike BtbN's dated autobuild tags (which the project prunes),
-# a versioned file is immutable, so the pinned SHA-256 below stays valid. It
-# is built with libmp3lame + libopus (what server/src/tts/mp3.ts and the
-# Opus export need) and the `loudnorm` filter; libfdk_aac is absent, exactly
-# as on Ubuntu's apt build, and the encoder already falls back to native
-# `aac` (docs/features/archive/72-audio-codec-aac-opus.md). 7.0.2 satisfies
-# package.json `castwright.ffmpeg.minimum` (6.0). It ships ffprobe too, which
-# server/src/export/* shells out to.
+# Why this build: BtbN/FFmpeg-Builds, the `autobuild-2026-10-31-12-59`
+# release (ffmpeg n8.1.3, linux64-gpl). Month-end autobuild tags are kept
+# indefinitely by that project (the 2024-12-31 one still exists), unlike its
+# daily tags, so the URL is stable; the asset is served from GitHub's own
+# network, next to the runner. First attempt was johnvansickle.com's
+# versioned 7.0.2 archive (immutable, SHA-256 abda8d77...), but PR #4455's
+# first CI run showed it answering datacenter IPs with a 7 KB HTML page
+# (bot challenge) for ~2 of 10 parallel jobs; retrying the same host is not a
+# fix. This build has libmp3lame, libopus and the `loudnorm` filter (what
+# server/src/tts/mp3.ts and the Opus export need); libfdk_aac is absent, as
+# on Ubuntu's apt build, and the encoder already falls back to native `aac`
+# (docs/features/archive/72-audio-codec-aac-opus.md). 8.1 is above
+# package.json `castwright.ffmpeg.minimum` (6.0). It ships ffprobe too,
+# which server/src/export/* shells out to.
 #
 # Bumping the build: change the URL, the SHA-256, the version in the cache
 # key, and the matching constants in scripts/tests/workflow-wiring.test.mjs.
@@ -28,15 +32,15 @@
 # then fails the step loudly; nothing falls through to anything else.
 #
 # Cache: the extracted binaries are cached. The key carries the ffmpeg
-# version, NOT the runner image — the old key embedded ImageOS/ImageVersion
+# version (8.1.3), NOT the runner image — the old key embedded ImageOS/ImageVersion
 # (apt .debs are image-coupled), so every runner-image roll missed. A static
 # binary is image-independent. NOTE (#4453): verify.yml triggers on
 # pull_request only, so its cache entries live in the PR's own ref scope and
 # are unreadable by other PRs; main never writes one. A PR's first run
-# therefore always misses — which is now a ~42 MB download, not an apt run.
+# therefore always misses — which is now a ~150 MB download from GitHub's network, not an apt run.
 #
 # `timeout-minutes:` is not accepted on a composite action's own steps, so
-# each download is wrapped in coreutils `timeout -k 10 90` instead.
+# each download is wrapped in coreutils `timeout -k 10 150` instead.
 name: 'Install ffmpeg (cached)'
 description: 'Install ffmpeg and ffprobe on an Ubuntu runner from a pinned, SHA-256-verified static build, cached so a hit skips the download.'
 
@@ -44,7 +48,7 @@ inputs:
   ffmpeg-version-pin:
     description: 'Manual cache-invalidation override: bump to force a fresh download and cache write.'
     required: false
-    default: 'v3'
+    default: 'v4'
 
 runs:
   using: 'composite'
@@ -54,7 +58,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/ffmpeg-static
-        key: ${{ runner.os }}-ffmpeg-static-7.0.2-${{ inputs.ffmpeg-version-pin }}
+        key: ${{ runner.os }}-ffmpeg-static-8.1.3-${{ inputs.ffmpeg-version-pin }}
 
     - name: Install ffmpeg
       shell: bash
@@ -66,18 +70,16 @@ runs:
         else
           echo "ffmpeg cache miss: downloading pinned static build"
           TMP="$(mktemp -d)"
-          # 3 attempts around download + verify: the first CI run of this
-          # action (PR #4455) saw 2 of 10 parallel jobs get a body that
-          # failed the checksum within ~350ms (not the real 42 MB archive)
-          # while the other 8 were fine. A bad body is retried; a persistent
-          # mismatch still fails the step, with what the server sent.
+          # 3 attempts around download + verify, so one bad body or dropped
+          # connection does not fail the job; a persistent mismatch still
+          # fails the step, with what the server sent.
           OK=0
           for attempt in 1 2 3; do
             rm -f "$TMP/ffmpeg.tar.xz"
-            if timeout -k 10 90 curl -fsSL --connect-timeout 20 --max-time 60 \
+            if timeout -k 10 150 curl -fsSL --connect-timeout 20 --max-time 120 \
                 -o "$TMP/ffmpeg.tar.xz" \
-                "https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz" \
-              && echo "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67  $TMP/ffmpeg.tar.xz" | sha256sum -c -; then
+                "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1.tar.xz" \
+              && echo "41e9c565594c390622cf968d82fa4135d9e9a11d06c1515644288cbc844e3380  $TMP/ffmpeg.tar.xz" | sha256sum -c -; then
               OK=1
               break
             fi
@@ -92,7 +94,7 @@ runs:
           fi
           mkdir -p "$DEST"
           tar -xJf "$TMP/ffmpeg.tar.xz" -C "$TMP"
-          install -m 0755 "$TMP"/ffmpeg-7.0.2-amd64-static/ffmpeg "$TMP"/ffmpeg-7.0.2-amd64-static/ffprobe "$DEST/"
+          install -m 0755 "$TMP"/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1/bin/ffmpeg "$TMP"/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1/bin/ffprobe "$DEST/"
           rm -rf "$TMP"
         fi
         echo "$DEST" >> "$GITHUB_PATH"

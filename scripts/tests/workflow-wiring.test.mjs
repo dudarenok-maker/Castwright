@@ -1247,8 +1247,8 @@ test('coverage parity: no derived condition silently narrows a leg', () => {
 });
 
 const FFMPEG_STATIC_URL =
-  'https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz';
-const FFMPEG_STATIC_SHA256 = 'abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67';
+  'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1.tar.xz';
+const FFMPEG_STATIC_SHA256 = '41e9c565594c390622cf968d82fa4135d9e9a11d06c1515644288cbc844e3380';
 
 function readFfmpegAction() {
   return readNormalized(resolve(repoRoot, '.github', 'actions', 'install-ffmpeg', 'action.yml'));
@@ -1284,10 +1284,10 @@ test('ffmpeg install (#4453): the apt path (the #2449 hang) no longer runs on a 
 
 test('ffmpeg install (#4453): the download is bounded by a timeout and retried', () => {
   const body = ffmpegInstallRunBody();
-  assert.match(body, /timeout\s+-k\s+10\s+90\s+curl\b/, 'download is not wrapped in `timeout -k 10 90`');
+  assert.match(body, /timeout\s+-k\s+10\s+150\s+curl\b/, 'download is not wrapped in `timeout -k 10 150`');
   assert.match(body, /for attempt in 1 2 3/, 'download/verify lost its 3-attempt retry loop');
   assert.match(body, /"\$OK" != "1"/, 'install step does not fail after the retries are exhausted');
-  assert.match(body, /--max-time\s+60\b/, 'curl lost --max-time 60');
+  assert.match(body, /--max-time\s+120\b/, 'curl lost --max-time 120');
 });
 
 test('ffmpeg install (#4453): cache key does not churn with the runner image', () => {
@@ -1295,7 +1295,7 @@ test('ffmpeg install (#4453): cache key does not churn with the runner image', (
   const key = src.match(/key:\s*([^\n]+)/);
   assert.ok(key, 'cache key not found');
   assert.doesNotMatch(key[1], /ImageVersion|ImageOS|steps\.image/, `cache key churns with the runner image: ${key[1]}`);
-  assert.match(key[1], /7\.0\.2/, 'cache key does not carry the pinned ffmpeg version');
+  assert.match(key[1], /8\.1\.3/, 'cache key does not carry the pinned ffmpeg version');
 });
 
 test('lockfile-touched polarity: both frontend and server test steps force full run when lockfile is changed (#2853)', () => {
