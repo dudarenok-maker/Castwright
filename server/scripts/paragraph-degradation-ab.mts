@@ -320,6 +320,8 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
     current.delete(id);
   }
 
+  // The transport appends a VRAM sample under <WORKSPACE_ROOT>/.telemetry/ after each call; this run writes nothing under the workspace.
+  process.env.CASTWRIGHT_VRAM_SAMPLE = '0';
   const url = process.env.OLLAMA_URL ?? 'http://localhost:11434';
   const analyzer = deps.makeAnalyzer({ url, model: opts.model });
   const capacity = settings.capacity;

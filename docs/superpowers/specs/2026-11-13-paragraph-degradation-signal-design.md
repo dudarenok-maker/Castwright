@@ -1740,7 +1740,9 @@ measurement while the saved capture survives it.
 - no re-imports of library books: the scanner and the runner read text and a
   pinned roster and write only their reports, captures and text dumps, to a
   scratch directory outside the workspace. They read the workspace without
-  the scan's self-heal, so nothing under it is written (R7-10, step 2).
+  the scan's self-heal, and the runner sets `CASTWRIGHT_VRAM_SAMPLE=0`, so nothing under
+  it is written (R7-10, step 2). The stage runner's git-ignored
+  `server/handoff/{inbox,outbox}/ab-*` files are the one other write, outside the workspace.
 
 **Gate before step 2:** #4165 has merged (met: closed 2026-11-15, on `main`
 since `1e295990`). The run notes the build it ran on.
@@ -2493,7 +2495,7 @@ with:
 > **Prerequisite:** local Ollama analyzer (model recorded), structure engine
 > on, escalation at default, no TTS, the owner's library on the box. No
 > re-imports; the tools write only their reports, captures and text dumps,
-> outside the workspace, and read it without the scan's self-heal.
+> outside the workspace (plus the stage runner's git-ignored `server/handoff/{inbox,outbox}/ab-*` files), and read it without the scan's self-heal.
 >
 > **Observe:** (1) the library legibility scan over every format, on the
 > **imported** text: per-book maxima, the worst imported paragraph of each

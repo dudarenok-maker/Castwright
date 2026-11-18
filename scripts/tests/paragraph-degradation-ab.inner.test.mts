@@ -323,6 +323,21 @@ test('the real capture path runs against a mock analyzer and saves its fields', 
   assert.equal(saved.model, 'A');
 });
 
+test('the runner opts out of VRAM telemetry before the analyzer is built, so nothing is written under the workspace', async () => {
+  const prior = process.env.CASTWRIGHT_VRAM_SAMPLE;
+  delete process.env.CASTWRIGHT_VRAM_SAMPLE;
+  try {
+    const { dir, manifest } = fixtureDir(1);
+    let seen: string | undefined = 'not-called';
+    const { deps } = fakeDeps({ makeAnalyzer: () => { seen = process.env.CASTWRIGHT_VRAM_SAMPLE; return mockAnalyzer; } });
+    await runCapture({ manifest, model: 'A', scratch: scratchOf(dir), language: 'ru' }, deps);
+    assert.equal(seen, '0');
+  } finally {
+    if (prior === undefined) delete process.env.CASTWRIGHT_VRAM_SAMPLE;
+    else process.env.CASTWRIGHT_VRAM_SAMPLE = prior;
+  }
+});
+
 /* ---- Phase 7b step 3: the runner settles the chapter pick (spec §4.4 step 2) ---- */
 
 interface ChSpec { id: number; hidden: number; dashParas?: number }
