@@ -221,6 +221,21 @@ describe('H6 pass 4: the gate does not fail open', () => {
     return { b, orphan };
   }
 
+  it('live audio that cannot be decoded is no match: nothing is stamped or minted, and the event is logged', async () => {
+    const { b, orphan } = await staticShape();
+    writeFileSync(join(b.audioRoot, `${SLUG}.mp3`), Buffer.from('not an mp3, nothing to decode here'));
+    const before = b.chapter();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await reconcileOne(b.bookDir);
+      expect(warn.mock.calls.some((c) => /do not describe the live audio \(decoded unreadable/.test(String(c[0])))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(orphan);
+  }, 30_000);
+
   it('an unreadable state.json at the gate leaves state.json and the segments alone', async () => {
     const { b, orphan } = await staticShape();
     const before = b.chapter();
