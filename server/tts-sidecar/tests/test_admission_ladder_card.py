@@ -115,3 +115,35 @@ def test_ladder_logs_the_card_it_evicts_on(caplog):
         asyncio.run(pc.admit("coqui", None, {}, cpu_capable=False, heavy=True))
     lines = [r.getMessage() for r in caplog.records if "admission ladder" in r.getMessage()]
     assert lines and all("step spk on cuda:0" in m for m in lines), lines
+
+
+def test_ladder_does_not_log_a_step_that_freed_nothing_or_raised(caplog):
+    # The line claims an eviction: a step whose run() returns False (nothing
+    # freed) or raises must not log it.
+    devs = _devs()
+
+    def boom():
+        raise RuntimeError("unload failed")
+
+    def steps(dk, eng):
+        return [
+            main.EvictStep("noop", None, lambda: False),
+            main.EvictStep("boom", None, boom),
+            main.EvictStep("spk", None, lambda: True),
+        ]
+
+    fp = type("F", (), {"peak_mb": lambda *_: PEAK, "record": lambda *_: None})()
+    pc = main.PlacementController(
+        probe=lambda: devs,
+        footprints=fp,
+        ledger=main.ReservationLedger(),
+        reserve_mb=lambda: 500,
+        idle_evict_steps=steps,
+        is_resident=lambda e: "cuda:0",
+        reclaim=lambda dk: False,
+    )
+    with caplog.at_level("INFO", logger="sidecar"):
+        asyncio.run(pc.admit("coqui", None, {}, cpu_capable=False, heavy=True))
+    lines = [r.getMessage() for r in caplog.records if "evicted step" in r.getMessage()]
+    assert any("step spk on cuda:0" in m for m in lines), lines
+    assert not any("step noop" in m or "step boom" in m for m in lines), lines
