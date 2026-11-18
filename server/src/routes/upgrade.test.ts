@@ -272,6 +272,17 @@ describe('upgrade failure reason is curated for LAN clients (#4322)', () => {
     }
   });
 
+  it('a failed apply result with no errorLan fails closed to the legacy sentence for a LAN client', async () => {
+    stage();
+    h.applyResult = { ok: false, phase: 'extract', error: RAW };
+    await request(app).post('/api/upgrade/apply');
+    await vi.waitFor(() => expect(readState().phase).toBe('error'));
+    expect(readState().errorLan).toBe(`extract: ${LEGACY}`);
+    const lan = await getAs('192.168.1.50');
+    expect(lan.body.error).toBe(`extract: ${LEGACY}`);
+    expect(lan.body.error).not.toContain('bob');
+  });
+
   it('legacy state file (no errorLan) never shows the raw text to a LAN client', async () => {
     writeFileSync(join(stagingDir, 'state.json'), JSON.stringify({ phase: 'error', error: 'EBUSY C:\\Users\\bob' }));
     const lan = await getAs('192.168.1.50');

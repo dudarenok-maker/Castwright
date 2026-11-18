@@ -197,7 +197,7 @@ upgradeRouter.post('/apply', async (_req: Request, res: Response) => {
         console.log(`[upgrade] applied v${result.version}; restarting.`);
         setTimeout(() => process.kill(process.pid, 'SIGTERM'), 250);
       } else {
-        tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: `${result.phase}: ${result.error}`, errorLan: `${result.phase}: ${result.errorLan ?? result.error}` });
+        tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: `${result.phase}: ${result.error}`, errorLan: `${result.phase}: ${result.errorLan ?? LEGACY_SENTENCE}` });
         console.error(`[upgrade] apply failed at ${result.phase}: ${result.error}`);
       }
     } catch (e) {
