@@ -4,7 +4,7 @@
    `putManuscript({ hintsSource: 'parse', parseTitles })` directly. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -184,9 +184,18 @@ describe('GET /:bookId/state paragraphsMergedChapters', () => {
   );
 
   it('is absent when there is no usable manuscript record', async () => {
-    /* No record in the store, and the hydrate fallback finds a one-chapter
-       parse with no merged turns. */
-    expect(await getMerged()).toBeUndefined();
+    /* No record in the store AND no manuscript file to hydrate one from, so the
+       route hands paragraphsMergedChapterIds an undefined record (its
+       `!rec` guard). With the file present the GET hydrates a one-chapter
+       record and never reaches that guard. */
+    const file = join(bookDir, 'manuscript.md');
+    const hidden = `${file}.hidden`;
+    renameSync(file, hidden);
+    try {
+      expect(await getMerged()).toBeUndefined();
+    } finally {
+      renameSync(hidden, file);
+    }
   });
 
   it('omits excluded chapters, including after an exclude toggle on the same cached record', async () => {
