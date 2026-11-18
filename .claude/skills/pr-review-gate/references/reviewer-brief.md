@@ -1197,7 +1197,7 @@ recite:
     every knob that changes a capture, and the fix put the resolved custom
     analyzer payload into the saved settings (so into every `capture-ch<id>.json`)
     and printed each differing leaf with its saved and current values. The
-    payload can hold `{ ollama: { api_key: "sk-..." } }`, and
+    payload can hold `{ api_key: "sk-..." }`, and
     `analyzer/runner/extra-params.ts` states callers never log a payload and
     never write one to an analyzer file; the wiki and plan 284 repeat it. The
     same sweep flattened `{options:{top_k:5}}` and `{"options.top_k":5}` to one
@@ -1211,8 +1211,7 @@ recite:
     that names the key without its value. Test with a unique sentinel seeded
     into the sensitive field, asserting it appears in no file under the output
     directory and in no log, stdout or stderr line.
-    (Numbered 92 after #4103's 89-90 and 91; renumber on merge if the order
-    changes.)
+    (Numbered 92 after #4103's 89-90 and #4106's 91; both merged, so no renumber.)
 
 ### Keeping the catalogue current
 
