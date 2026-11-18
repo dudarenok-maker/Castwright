@@ -735,7 +735,9 @@ Design rationale:
   `failure-taxonomy`, which generation's `chapter_failed` reason goes through,
   and, since #4236, `config` (its `/prompts/:id` endpoints), `library`, `queue`, `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory`,
-  `annotate-emotion`, `instruct-annotation`, `script-review`'s `chapter-failed`
+  `annotate-emotion`, `instruct-annotation`, `upgrade` and `upgrade/apply.ts`
+  (the apply failure's LAN reason, #4322), `setup-readiness` (`POST /setup/smoke`),
+  `script-review`'s `chapter-failed`
   frames, `export`'s job `errorReason` (the raw error and the ffmpeg stderr go to
   `runExportJob`'s log) and `voice-sample`'s 502 body; the batch routes' per-item
   reasons compose it inside `itemFailureReason` — `cast-series-patch`,
@@ -743,7 +745,7 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and thirty-one call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  one hundred and thirty-three call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
@@ -757,7 +759,7 @@ Design rationale:
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
-  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` (the stage route's catch, #4236), `series-cast`, `series-roster`,
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` ×2 (the stage route's catch, #4236; the apply IIFE's catch, #4322), `upgrade/apply.ts` (the apply-failure `errorLan` twin, #4322), `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
   weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
   not a disk fault), `annotate-emotion` and `instruct-annotation` (their

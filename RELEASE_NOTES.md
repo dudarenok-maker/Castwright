@@ -28,6 +28,8 @@
 - **Importing certain malformed EPUBs no longer crashes Castwright.** A book with an empty link inside a chapter used to take the whole app down the moment you imported it; it now opens normally, or, if Castwright still cannot read the book, tells you so and keeps running. Books that already imported fine read exactly as before.
 - **Damaged EPUB and Kindle books can no longer take Castwright down.** Castwright now reads each book in a separate, sealed-off step, so a book it cannot read gets a clear message and everything else keeps running. Books are read exactly as before.
 - **Books from EPUB and Kindle files keep their paragraphs.** Paragraphs and lines of dialogue that some books lay out in their own boxes, quotes or lists no longer run together when you import them. Books already in your library read exactly as before; to get the fix for one of them, use Re-parse manuscript (this clears its cast and audio, as it always has) or import the file again. Restoring a backup, or importing over a book, that brings a different version of the book's text now asks for a fresh analysis before you make audio, so lines edited against the other version aren't applied to the wrong text.
+- **A failed upgrade no longer shows your computer's folder paths to other devices.** On a phone or tablet you now get a plain explanation of what went wrong. On the computer running Castwright you still see the full detail.
+- **A disk or permission problem while unpacking an upgrade no longer stops Castwright.** Before, the app could shut down and leave the upgrade stuck on "applying". Now it tells you the upgrade failed and keeps running your current version.
 
 # Castwright 1.15.0
 

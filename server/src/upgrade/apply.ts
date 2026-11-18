@@ -11,9 +11,11 @@
 
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
 import { dirname, join } from 'node:path';
 import yauzl from 'yauzl';
 import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import {
   classifyVenvState,
   readStamp,
@@ -77,7 +79,38 @@ export interface ApplyResult {
   releaseDir: string;
   phase: ApplyPhase;
   error?: string;
+  /** Curated twin of `error`, safe for non-loopback (LAN) clients: fs errors are
+   *  reduced to a fixed path-free sentence, computed from the original Error
+   *  (#4322). `error` stays raw for loopback. */
+  errorLan?: string;
   pipRan?: boolean;
+}
+
+const NEEDS_REINSTALL_MESSAGE =
+  'The installed Python environment is incompatible with this release. ' +
+  'A fresh reinstall is required (your books and voices are preserved).';
+
+/* The child-process steps (npm ci, pip, the ORT marker write) fail with plain
+   Errors whose message is a full command line or a path (`run()`'s
+   `<abs python> -m pip install -r <abs requirements> exited 1`, a spawn ENOENT
+   on the absolute interpreter, the ORT marker's venv dir). requestFailureMessageFs
+   passes plain Errors through, so for those phases the LAN reason is a fixed
+   path-free sentence naming the step; an fs error inside them still gets the
+   shared fs curation. */
+const STEP_FAILURE_LAN: Partial<Record<ApplyPhase, string>> = {
+  'npm-ci': 'The dependency install step (npm) failed. See the server log for details.',
+  'pip-install': 'The dependency install step (pip) failed. See the server log for details.',
+};
+
+/* Fail closed: a phase with no entry above (a step added later) gets this fixed
+   sentence rather than its raw message. extract is the one deliberate
+   pass-through — its plain Errors are yauzl/zlib parse messages that name no
+   host path (an fs error there is still curated by requestFailureMessageFs). */
+const UNMAPPED_STEP_LAN = 'The upgrade failed. See the server log for details.';
+
+function curateFailureForLan(err: unknown, phase: ApplyPhase): string {
+  const fallback = phase === 'extract' ? (err as Error).message : (STEP_FAILURE_LAN[phase] ?? UNMAPPED_STEP_LAN);
+  return requestFailureMessageFs(err, fallback);
 }
 
 export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promise<ApplyResult> {
@@ -124,9 +157,8 @@ export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promis
         version: ctx.candidateVersion,
         releaseDir,
         phase,
-        error:
-          'The installed Python environment is incompatible with this release. ' +
-          'A fresh reinstall is required (your books and voices are preserved).',
+        error: NEEDS_REINSTALL_MESSAGE,
+        errorLan: NEEDS_REINSTALL_MESSAGE,
         pipRan,
       };
     }
@@ -146,7 +178,15 @@ export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promis
     } catch {
       /* best-effort cleanup */
     }
-    return { ok: false, version: ctx.candidateVersion, releaseDir, phase, error: (err as Error).message, pipRan };
+    return {
+      ok: false,
+      version: ctx.candidateVersion,
+      releaseDir,
+      phase,
+      error: (err as Error).message,
+      errorLan: curateFailureForLan(err, phase),
+      pipRan,
+    };
   }
 
   // COMMIT POINT â€” flip the pointer, then hand off to the detached restarter.
@@ -168,12 +208,19 @@ function streamEntryToFile(zip: yauzl.ZipFile, entry: yauzl.Entry, destFile: str
   return new Promise((res, rej) => {
     zip.openReadStream(entry, (err, stream) => {
       if (err || !stream) return rej(err ?? new Error('read stream failed'));
-      mkdirSync(dirname(destFile), { recursive: true });
-      const out = createWriteStream(destFile);
-      stream.on('error', rej);
-      out.on('error', rej);
-      out.on('close', res);
-      stream.pipe(out);
+      // Synchronous throw inside a yauzl callback would escape as an
+      // uncaughtException (server exit) instead of rejecting (#4322).
+      try {
+        mkdirSync(dirname(destFile), { recursive: true });
+      } catch (e) {
+        // yauzl's RefUnrefFilter holds its own ref on the zip until the entry's
+        // read stream is destroyed; zip.close() alone would not release it.
+        stream.destroy();
+        return rej(e);
+      }
+      // pipeline destroys BOTH streams on either side's error (pipe() would
+      // leave the write fd open when the source fails).
+      pipeline(stream, createWriteStream(destFile)).then(() => res(), rej);
     });
   });
 }
@@ -183,6 +230,13 @@ export function extractRelease(zipPath: string, releaseDir: string, topDir: stri
   return new Promise((resolve2, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
       if (err || !zip) return reject(err ?? new Error('failed to open zip'));
+      // autoClose only fires on 'end' / yauzl's own error path, so every other
+      // reject must release the fd itself (a held handle blocks renaming any
+      // directory containing the zip on Windows).
+      const fail = (e: unknown) => {
+        zip.close();
+        reject(e);
+      };
       const prefix = `${topDir}/`;
       zip.on('entry', (entry: yauzl.Entry) => {
         const name = entry.fileName.replace(/\\/g, '/');
@@ -191,12 +245,16 @@ export function extractRelease(zipPath: string, releaseDir: string, topDir: stri
         if (!rel) return zip.readEntry();
         const dest = join(releaseDir, rel);
         if (/\/$/.test(name)) {
-          mkdirSync(dest, { recursive: true });
+          try {
+            mkdirSync(dest, { recursive: true });
+          } catch (e) {
+            return fail(e);
+          }
           zip.readEntry();
         } else {
           streamEntryToFile(zip, entry, dest)
             .then(() => zip.readEntry())
-            .catch(reject);
+            .catch(fail);
         }
       });
       zip.on('end', () => resolve2());
