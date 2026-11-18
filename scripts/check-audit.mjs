@@ -9,6 +9,10 @@
 //   root:   node scripts/check-audit.mjs            (full audit, no --omit)
 //   server: node scripts/check-audit.mjs --omit-dev (production/runtime scope)
 //
+// Each waiver in audit-waivers.json carries a mandatory `scope`: root, server
+// or both. A waiver applies only to the leg its scope names (root = full audit,
+// server = --omit-dev); a missing or invalid scope fails closed with exit 3.
+//
 // --dir <path> runs npm audit in an arbitrary directory instead of the cwd.
 // --omit-dev   passes --omit=dev through to npm audit.
 //
