@@ -694,14 +694,18 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
  * reconcileSlug (§6.1 steps 1-5, lazy migration)
  * ------------------------------------------------------------------ */
 
-/** `state.json` records an `audioRenderedAt` that is not the live segments'
-    `synthesizedAt`. Step 4's mirror writes `audioTakeId` only, so it never
-    erases this mismatch. */
+/** The identity of a live segments file: its `[synthesizedAt, durationSec]`.
+    Absent segments have an identity of their own (`'absent'`), so a caller that
+    bound to "no segments" at the gate refuses segments that appear after it
+    rather than treating the absence as nothing to check. */
 function segmentsIdentity(segments: { synthesizedAt?: unknown; durationSec?: unknown } | null): string {
   if (!segments) return 'absent';
   return JSON.stringify([segments.synthesizedAt ?? null, segments.durationSec ?? null]);
 }
 
+/** `state.json` records an `audioRenderedAt` that is not the live segments'
+    `synthesizedAt`. Step 4's mirror writes `audioTakeId` only, so it never
+    erases this mismatch. */
 function isLegacyRejectShape(recorded: unknown, segments: TakeSegmentsView): boolean {
   return typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
 }
