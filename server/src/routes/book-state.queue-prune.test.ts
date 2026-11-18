@@ -185,7 +185,8 @@ function runPruneRound(attempt: PruneAttempt, round: number): Promise<void> {
     }));
     /* A stopped attempt must not start new requests. */
     if (attempt.stopped) return;
-    const rs = await Promise.all([
+    /* allSettled, not all: the drain must wait for EVERY request, and Promise.all gives up on the first rejection. */
+    const rs = await Promise.allSettled([
       request(app).delete(`/api/books/${bookId}`),
       request(queueApp).post('/api/queue/k1/start'),
       request(queueApp).post('/api/queue/pause').send({ paused: true }),
@@ -193,7 +194,7 @@ function runPruneRound(attempt: PruneAttempt, round: number): Promise<void> {
     ]);
     /* A stopped attempt is already reported by vitest; its assertions must not throw into nothing. */
     if (attempt.stopped) return;
-    expect(rs.map((r) => r.status)).toEqual([204, 200, 200, 200]);
+    expect(rs.map((r) => (r.status === 'fulfilled' ? r.value.status : String(r.reason)))).toEqual([204, 200, 200, 200]);
     const q = await readQueueFile(queueJsonPath());
     expect(q.paused).toBe(true);
     expect(q.entries.map((x) => `${x.id}:${x.status}`).sort()).toEqual(['k1:in_progress', 'k2:queued', `n${round}:queued`].sort());
@@ -253,5 +254,47 @@ describe('a stopped prune-race attempt drains (#4244)', () => {
     const after = await readQueueFile(queueJsonPath());
     expect(after).toEqual(snapshot);
     expect(snapshot.entries.map((x) => `${x.id}:${x.status}`).filter((s) => s.startsWith('n0'))).toEqual([]);
+  });
+
+  /* A request that fails at socket level must not end the drain early: the other requests are still running, and the
+     drain has to wait for every one of them to settle. */
+  it('does not resolve while the other requests are in flight when one rejects at socket level (#4244)', async () => {
+    const { queueJsonPath } = await import('../workspace/paths.js');
+    const { readQueueFile } = await import('../workspace/queue-migrate.js');
+    const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+    const { rm } = await import('node:fs/promises');
+    onTestFinished(() => rm(queueJsonPath(), { force: true }));
+
+    /* The DELETE alone is answered by a router that kills the socket; the three queue requests hit the real router. */
+    const realApp = app;
+    let deleteHit!: () => void;
+    const deleteSeen = new Promise<void>((r) => { deleteHit = r; });
+    const failingApp = express();
+    failingApp.delete('/api/books/:bookId', (req) => {
+      deleteHit();
+      req.socket.destroy();
+    });
+    app = failingApp;
+    onTestFinished(() => { app = realApp; });
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const held = serializeQueueMutation(() => gate);
+
+    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve() };
+    const round = runPruneRound(attempt, 0);
+    release();
+    await held;
+    /* The round's four requests are now in flight; stop the attempt while they are. */
+    await deleteSeen;
+    await stopAttempt(attempt);
+    await round.catch(() => undefined);
+
+    const atDrain = await readQueueFile(queueJsonPath());
+    await new Promise((r) => setTimeout(r, 300));
+    const later = await readQueueFile(queueJsonPath());
+    expect(later).toEqual(atDrain);
+    /* The enqueue ran to completion before the drain resolved. */
+    expect(atDrain.entries.map((x) => x.id)).toContain('n0');
   });
 });
