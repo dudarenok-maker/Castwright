@@ -211,12 +211,18 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     it('lists names, falling back to the id when a name is missing', () => {
       bare(withRerender(), { characterNames: { c1: 'Alice' } });
       const el = screen.getByTestId('qa-needs-rerender');
-      expect(el).toHaveTextContent('Needs re-render: Alice, c2');
+      expect(el).toHaveTextContent('Needs re-render: Alice, c2.');
       expect(el).toHaveTextContent(/No lines are recorded in their current voice yet/);
       expect(el).toHaveTextContent(/re-render a chapter they speak in to check them/);
       // #3680 pass 1 — a fallback-only character's voice never changed, so no cause is claimed.
       expect(el).not.toHaveTextContent(/voice changed/i);
       expect(el).not.toHaveTextContent(/these chapters/i);
+    });
+
+    it('is absent when the gate never ran and nothing is pending (nothing was settled)', () => {
+      bare(withRerender({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] }));
+      expect(screen.getByText(/flip on render-integrity checking/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
     });
 
     it('is absent when the list is empty', () => {

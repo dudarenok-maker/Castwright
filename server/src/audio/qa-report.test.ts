@@ -408,18 +408,25 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
       segments: [
         seg({ characterId: 'narrator' }), seg({ characterId: 'ren' }),
         seg({ characterId: 'thurid', voiceName: 'qwen-old', baseVoiceName: 'qwen-old' }),
+        seg({ characterId: 'pell', voiceName: 'qwen-old', baseVoiceName: 'qwen-old' }),
       ],
       characterSnapshots: {
         narrator: { voiceEngine: 'qwen' },
         ren: { voiceEngine: 'qwen' },
         thurid: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-old' },
+        pell: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-old' },
       },
     });
     // The marker is only true while the CURRENT cast voice has no rendered line: thurid's
     // cast voice is qwen-new, her one rendered line is qwen-old (#3680 pass 1).
     await mkdir(dotAudiobook(dir), { recursive: true });
     await writeJsonAtomic(castJsonPath(dir), {
-      characters: [{ id: 'thurid', name: 'Thurid', overrideTtsVoices: { qwen: { name: 'T', libraryUuid: 'new' } } }],
+      characters: [
+        { id: 'thurid', name: 'Thurid', overrideTtsVoices: { qwen: { name: 'T', libraryUuid: 'new' } } },
+        // pell is in the same position (a current voice with no line in it) but her row is a plain
+        // terminal too-short row, NOT the marker: she must not be listed.
+        { id: 'pell', name: 'Pell', overrideTtsVoices: { qwen: { name: 'P', libraryUuid: 'new' } } },
+      ],
     });
     await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
       { characterId: 'thurid', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
@@ -427,10 +434,12 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     await writeCentroids(dir, [
       { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
       { characterId: 'thurid', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short', noCurrentVoiceReference: true },
+      { characterId: 'pell', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' },
     ]);
 
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
     expect(report.voiceDrift.charactersNeedingRerender).toEqual(['thurid']);
+    expect(report.voiceDrift.charactersNeedingRerender).not.toContain('pell');
     expect(report.voiceDrift.charactersPending).toEqual(['ren']);
     expect(report.voiceDrift.charactersPending).not.toContain('thurid');
     expect(report.voiceDrift.charactersNeedingRerender).not.toContain('narrator');

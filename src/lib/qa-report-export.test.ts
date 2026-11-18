@@ -52,6 +52,22 @@ describe('formatQaReportText', () => {
     expect(lines[i + 1]).toBe('· Voice match — needs re-render: c1, c2');
   });
 
+  it('names the characters, not their ids, when a name map is given (#3680 pass 1)', () => {
+    const report = { ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'] } };
+    const text = formatQaReportText(report, 'Book', { c1: 'Alice' });
+    expect(text).toContain('· Voice match — needs re-render: Alice, c2');
+  });
+
+  it('omits the line where the card hides the listing: the gate never ran and nothing is pending (#3680 pass 1)', () => {
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [], charactersNeedingRerender: ['c1'] },
+    };
+    const text = formatQaReportText(report, 'Book');
+    expect(text).toContain('Voice match — not run for this book');
+    expect(text).not.toContain('needs re-render');
+  });
+
   it('omits the needs-re-render line when the list is empty', () => {
     expect(formatQaReportText(MOCK_QA_REPORT, 'Book')).not.toContain('needs re-render');
   });

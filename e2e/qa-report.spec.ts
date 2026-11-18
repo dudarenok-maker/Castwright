@@ -49,8 +49,8 @@ test.describe('QA report card', () => {
           chaptersScored: 2,
           chaptersEmbedFailed: 0,
           charactersOnRoster: 2,
-          charactersChecked: 2,
-          charactersPending: [],
+          charactersChecked: 1,
+          charactersPending: ['narrator'],
           charactersNeedingRerender: ['halloran'],
           mismatches: [],
           inconclusiveCount: 0,
@@ -84,6 +84,8 @@ test.describe('QA report card', () => {
     });
     await expect(listing).toContainText('Captain Halloran');
     await expect(listing).toContainText('Needs re-render');
-    await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
+    /* A genuinely pending character keeps its Resume action beside the listing: the listing
+       never stands in for it (and the count is 1, not 0, so this can actually go red). */
+    await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(1);
   });
 });

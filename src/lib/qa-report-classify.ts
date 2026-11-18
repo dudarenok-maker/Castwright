@@ -39,6 +39,18 @@ export type VoiceMatchClassification =
       inconclusiveCount: number;
     };
 
+/** #3680 — the ids the "needs re-render" listing shows, `[]` when it is hidden. Shared by the
+ *  QA card and the text export so the two can never disagree. Hidden in the `notRun` row with
+ *  nothing pending: no pass has settled, so the card reports nothing about characters yet.
+ *  (The `noEligible` row needs no case: the listed ids are a subset of the roster, so a
+ *  non-empty list implies at least one eligible chapter.) */
+export function needsRerenderIds(report: BookQaReport): string[] {
+  const ids = report.voiceDrift.charactersNeedingRerender ?? [];
+  if (ids.length === 0) return [];
+  if (classifyVoiceMatch(report).kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return [];
+  return ids;
+}
+
 export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassification {
   const vd = report.voiceDrift;
   if (vd.chaptersEligible === 0) return { kind: 'noEligible' };

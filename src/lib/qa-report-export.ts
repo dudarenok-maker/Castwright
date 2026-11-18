@@ -1,5 +1,5 @@
 import type { BookQaReport } from './types';
-import { classifyHeadline, classifyVoiceMatch } from './qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderIds } from './qa-report-classify';
 
 function acousticLine(r: BookQaReport): string {
   return `Acoustic — ${r.acoustic.linesChecked} lines checked, ${r.acoustic.linesRerecorded} needed a second take`;
@@ -21,9 +21,9 @@ function voiceMatchLine(r: BookQaReport): string {
   return `Voice match — ${c.charactersChecked} of ${c.charactersOnRoster} characters checked, ${c.mismatchCount} mismatches${inconclusiveSuffix}`;
 }
 
-function needsRerenderLine(r: BookQaReport): string | null {
-  const ids = r.voiceDrift.charactersNeedingRerender ?? [];
-  return ids.length > 0 ? `Voice match — needs re-render: ${ids.join(', ')}` : null;
+function needsRerenderLine(r: BookQaReport, characterNames?: Record<string, string>): string | null {
+  const ids = needsRerenderIds(r);
+  return ids.length > 0 ? `Voice match — needs re-render: ${ids.map((id) => characterNames?.[id] ?? id).join(', ')}` : null;
 }
 
 function castContinuityLine(r: BookQaReport): string {
@@ -43,8 +43,8 @@ function headline(r: BookQaReport): string {
   }
 }
 
-export function formatQaReportText(report: BookQaReport, bookTitle: string): string {
-  const rerender = needsRerenderLine(report);
+export function formatQaReportText(report: BookQaReport, bookTitle: string, characterNames?: Record<string, string>): string {
+  const rerender = needsRerenderLine(report, characterNames);
   return [
     `${bookTitle} — Castwright quality gate`,
     headline(report),
