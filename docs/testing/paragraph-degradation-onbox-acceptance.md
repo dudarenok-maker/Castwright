@@ -14,7 +14,7 @@
 ## 0. Prerequisites
 
 - A local Ollama on the owner's default analysis model. Pass its name to the runner as `--model` and **record it here**: `Model: ____________`.
-- `analyzer.structure.enabled = true`, `allowCloudFallback: false`. The runner reads the owner's saved analyzer settings (the saved settings file and `server/.env`; escalation included) without writing them, and records the effective `num_ctx`, capacity, escalation and reasoning in every capture.
+- `analyzer.structure.enabled = true`, `allowCloudFallback: false`. The runner reads the owner's saved analyzer settings (the saved settings file and `server/.env`; escalation included) without writing them, and records every `analyzer.*` effective value, the reasoning level, the request payload, the capacity and the effective chunk budget in every capture.
 - The owner's library (Calibre and the workspace) on the box.
 - **No re-imports of library books.** The scanner and the runner read text and a pinned roster, and write only their reports, captures and text dumps to a scratch directory **outside the workspace**. They read the workspace without the scan's self-heal, so nothing under it is written (the runner sets `CASTWRIGHT_VRAM_SAMPLE=0`, which stops the analyzer transport appending VRAM telemetry under `<workspace>/.telemetry/`). The one other thing it writes is the stage runner's handoff files, `server/handoff/{inbox,outbox}/ab-<id>-stage2*`: git-ignored, outside the workspace, with ids that cannot collide with a real job. Make the scratch directory first, for example `D:\scratch\pd2254`, and use it for every `--out` and `--scratch` below.
 - The gate: #4165 has merged (met: closed 2026-11-15). Record the build the run used (`git rev-parse HEAD`): `Build: ____________`.
@@ -145,7 +145,7 @@ node node_modules/tsx/dist/cli.mjs scripts/paragraph-degradation-ab.mts --manife
 
 `--resume` keeps every saved chapter, restores the shared structure budget from the most recent saved capture and captures only the chapter that died.
 
-**Same model, always.** Every re-capture uses the same analyzer model and the owner's saved analyzer settings as the first. **The runner refuses a different `--model`, and refuses changed settings** (`num_ctx`, capacity, chunk budget, escalation, reasoning), and writes nothing. Change a setting mid-run and the way forward is a new scratch directory.
+**Same model, always.** Every re-capture uses the same analyzer model and the owner's saved analyzer settings as the first. **The runner refuses a different `--model`, and refuses a change to any of these** and writes nothing: the effective value of every `analyzer.*` registry key (the Ollama URL, `num_ctx`, `num_gpu`, the input fractions, the coverage ratios, the structure knobs, and so on), the reasoning level, the saved request payload, the capacity, and the effective stage-2 chunk budget (what a chapter is cut to, not the configured cap). The refusal names the differing keys. A setting outside those (an environment variable with no `analyzer.*` key, say) is not checked. The analyzer is built on the Ollama URL production resolves (env, then the saved Admin override, then the default). Change a setting mid-run and the way forward is a new scratch directory.
 
 ### 2d. If a capture is defective, or nothing clears the floor
 

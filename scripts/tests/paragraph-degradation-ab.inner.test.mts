@@ -49,6 +49,7 @@ import { conventionsFor } from '../../server/src/analyzer/dialogue-structure/lan
 import { locateSentenceRanges } from '../../server/src/analyzer/dialogue-structure/aligner.ts';
 import { runStructureEngine } from '../../server/src/routes/analysis.ts';
 import { configValue } from '../../server/src/config/resolver.ts';
+import { resolveStage2ChunkCharBudget } from '../../server/src/analyzer/stage2-chunk.ts';
 import { captureChapterStages } from '../../server/src/analyzer/attribution-eval/run-eval.ts';
 import type { Analyzer } from '../../server/src/analyzer/index.ts';
 
@@ -226,6 +227,75 @@ test('saved settings: a re-capture under different settings is refused and write
   }
   // the same settings still resume
   assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: first }).deps), 0);
+});
+
+/** A settings file with any top-level shape (the payload lives outside configOverrides). */
+function rawSettingsFile(dir: string, name: string, body: Record<string, unknown>): string {
+  const f = join(dir, name);
+  writeFileSync(f, JSON.stringify(body));
+  return f;
+}
+
+test('saved settings: every analyzer knob, the payload and the Ollama URL is part of the check, and the refusal names what differs', async () => {
+  const base = { 'analyzer.ollama.numCtx': 4096 };
+  const cases: Array<{ name: string; body: Record<string, unknown>; named: string }> = [
+    { name: 'localInputFraction', body: { configOverrides: { ...base, 'analyzer.stage2.localInputFraction': 0.15 } }, named: 'analyzer.stage2.localInputFraction' },
+    { name: 'numGpu', body: { configOverrides: { ...base, 'analyzer.ollama.numGpu': 0 } }, named: 'analyzer.ollama.numGpu' },
+    { name: 'maxWindowsPerChapter', body: { configOverrides: { ...base, 'analyzer.structure.maxWindowsPerChapter': 1 } }, named: 'analyzer.structure.maxWindowsPerChapter' },
+    { name: 'url', body: { configOverrides: { ...base, 'analyzer.ollama.url': 'http://127.0.0.1:2' } }, named: 'analyzer.ollama.url' },
+    { name: 'payload', body: { configOverrides: base, analyzerExtraParamsByEngine: { ollama: { temperature: 0.2 } } }, named: 'payload' },
+  ];
+  const savedUrl = process.env.OLLAMA_URL;
+  delete process.env.OLLAMA_URL; // an env URL outranks a saved override, which would hide the url case
+  try {
+    const { dir, manifest } = fixtureDir(2);
+    const scratch = scratchOf(dir);
+    const first = settingsFile(dir, 'first.json', base);
+    await runCapture({ manifest: manifest.slice(0, 1), model: 'A', scratch }, fakeDeps({ settingsPath: first }).deps);
+    const before = snapshot(scratch);
+    for (const c of cases) {
+      const { deps, calls, logs } = fakeDeps({ settingsPath: rawSettingsFile(dir, `${c.name}.json`, c.body) });
+      assert.notEqual(await runCapture({ manifest, model: 'A', scratch, resume: true }, deps), 0, c.name);
+      assert.equal(calls.length, 0, `${c.name}: no capture may start`);
+      const line = logs.find((l) => l.includes('different analyzer settings')) ?? '';
+      assert.ok(line.includes(c.named), `${c.name}: the refusal names ${c.named}: ${line}`);
+      assert.equal(snapshot(scratch), before, `${c.name}: listing and bytes unchanged`);
+    }
+    // the same settings still resume
+    assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: first }).deps), 0);
+  } finally {
+    if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
+  }
+});
+
+test('saved settings: the record holds the effective chunk budget, not the configured cap', async () => {
+  const { dir, manifest } = fixtureDir(1);
+  const { deps } = fakeDeps({ settingsPath: settingsFile(dir, 's.json', { 'analyzer.ollama.numCtx': 4096 }) });
+  assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, deps), 0);
+  const [saved] = readSavedCaptures(scratchOf(dir)).map((e) => e.saved);
+  const cap = configValue<number>('analyzer.stage2.chunkCharBudget');
+  assert.equal(saved!.settings.effectiveChunkBudget, resolveStage2ChunkCharBudget(saved!.settings.capacity));
+  assert.ok(saved!.settings.effectiveChunkBudget < cap, `a 4096-token window cuts below the ${cap} cap`);
+});
+
+test('saved settings: a saved Ollama URL override is the one the analyzer is built with', async () => {
+  const savedUrl = process.env.OLLAMA_URL;
+  delete process.env.OLLAMA_URL;
+  try {
+    const { dir, manifest } = fixtureDir(1);
+    const urls: string[] = [];
+    const { deps } = fakeDeps({
+      settingsPath: settingsFile(dir, 's.json', { 'analyzer.ollama.url': 'http://10.9.8.7:11434/' }),
+      makeAnalyzer: (o) => {
+        urls.push(o.url);
+        return mockAnalyzer;
+      },
+    });
+    assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, deps), 0);
+    assert.deepEqual(urls, ['http://10.9.8.7:11434'], 'resolved as production does, trailing slash trimmed');
+  } finally {
+    if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
+  }
 });
 
 test('saved settings: the runner leaves a settings file that needs migrating byte-identical', async () => {

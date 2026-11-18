@@ -38,9 +38,13 @@
    confident reason fails the measurement before anything is written (saved captures untouched).
 
    Settings: server/.env is loaded as the server does, and the owner's saved user settings are read
-   WITHOUT writing (primeUserSettingsCacheReadOnly), so every knob resolves as in production. The
-   effective numCtx / capacity / chunk budget / escalation / reasoning are saved in each capture, and
-   a re-capture under different ones is refused like a different --model.
+   WITHOUT writing (primeUserSettingsCacheReadOnly), so every knob resolves as in production, and the
+   analyzer is built on getResolvedOllamaUrl() (env, then the saved Admin override, then the default).
+   Each capture saves the effective value of EVERY analyzer.* registry key, the reasoning level, the
+   resolved request payload, the capacity and the effective stage-2 chunk budget
+   (resolveStage2ChunkCharBudget(capacity), not the configured cap). A re-capture under any difference
+   in those is refused like a different --model, and the refusal names the differing keys. A knob that
+   is not an analyzer.* key and not the payload or reasoning level is not covered.
 
    Harness vs production (§4.3): capacity comes from resolveCapacity for the
    owner's real engine ('local' for Ollama); --model is required, with no default;
@@ -64,6 +68,10 @@ import { locateSentenceRanges } from '../src/analyzer/dialogue-structure/aligner
 import { runStructureEngine } from '../src/routes/analysis.js';
 import { resolveCapacity } from '../src/analyzer/capacity.js';
 import { configValue } from '../src/config/resolver.js';
+import { allKnobs } from '../src/config/registry.js';
+import { getResolvedOllamaUrl } from '../src/config/ollama-resolved.js';
+import { resolveStage2ChunkCharBudget } from '../src/analyzer/stage2-chunk.js';
+import { resolveExtraParamsSetting } from '../src/analyzer/runner/extra-params.js';
 import { getCachedUserSettings, primeUserSettingsCacheReadOnly } from '../src/workspace/user-settings.js';
 import { resolveReasoningSetting } from '../src/analyzer/reasoning.js';
 import type { EngineCapacity } from '../src/analyzer/capacity.js';
@@ -83,19 +91,51 @@ export interface ManifestEntry {
 export interface EffectiveSettings {
   numCtx: number;
   capacity: EngineCapacity;
-  chunkCharBudget: number;
+  /** What a chapter is actually cut to: resolveStage2ChunkCharBudget(capacity), not the configured cap. */
+  effectiveChunkBudget: number;
   escalation: string;
   reasoning: unknown;
+  /** The saved request payload (temperature, top_p, ...), merged last into the wire body. */
+  payload: unknown;
+  /** The effective value of every analyzer.* registry key, as configValue resolves it (url, numGpu, fractions, ...). */
+  knobs: Record<string, number | boolean | string>;
 }
 
 export function effectiveSettings(model: string): EffectiveSettings {
+  const capacity = resolveCapacity({ engine: 'local', model });
+  const knobs: EffectiveSettings['knobs'] = {};
+  for (const k of allKnobs()) {
+    if (k.key.startsWith('analyzer.')) knobs[k.key] = configValue<number | boolean | string>(k.key);
+  }
   return {
     numCtx: configValue<number>('analyzer.ollama.numCtx'),
-    capacity: resolveCapacity({ engine: 'local', model }),
-    chunkCharBudget: configValue<number>('analyzer.stage2.chunkCharBudget'),
+    capacity,
+    effectiveChunkBudget: resolveStage2ChunkCharBudget(capacity),
     escalation: configValue<string>('analyzer.structure.escalation'),
     reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model }) ?? null,
+    payload: resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' }) ?? null,
+    knobs,
   };
+}
+
+/** Every leaf of a value as `path -> JSON`, so two settings objects compare key by key. */
+function leaves(v: unknown, path: string, out: Map<string, string>): void {
+  if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0) {
+    for (const [k, x] of Object.entries(v)) leaves(x, path ? `${path}.${k}` : k, out);
+  } else out.set(path, JSON.stringify(v ?? null));
+}
+
+/** The keys whose recorded and current values differ, each as `key (saved X, now Y)`; empty when identical. */
+export function settingsDiff(saved: unknown, now: EffectiveSettings): string[] {
+  if (saved === null || typeof saved !== 'object') return ['(no settings recorded in the capture)'];
+  const a = new Map<string, string>();
+  const b = new Map<string, string>();
+  leaves(saved, '', a);
+  leaves(now, '', b);
+  return [...new Set([...a.keys(), ...b.keys()])]
+    .sort()
+    .filter((k) => a.get(k) !== b.get(k))
+    .map((k) => `${k} (saved ${a.get(k) ?? 'absent'}, now ${b.get(k) ?? 'absent'})`);
 }
 
 /** What a capture file holds: every captureChapterStages field plus the run's own. */
@@ -264,12 +304,13 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
     const names = [...new Set(foreign.map((e) => e.saved.model))].join(', ');
     return refuse(`${scratch} holds captures made under model ${names}, not ${opts.model};`);
   }
-  // The same settings too: a changed num_ctx / escalation / reasoning is a different experiment.
-  const drifted = existing.filter((e) => !isDeepStrictEqual(e.saved.settings, settings));
+  // The same settings too: any analyzer.* knob, the reasoning level, the payload or the effective chunk budget that differs is a different experiment.
+  const drifted = existing.filter((e) => settingsDiff(e.saved.settings, settings).length > 0);
   if (drifted.length > 0) {
+    const keys = [...new Set(drifted.flatMap((e) => settingsDiff(e.saved.settings, settings)))];
     return refuse(
       `${scratch} holds capture(s) made under different analyzer settings (ch${drifted.map((e) => e.saved.chapterId).join(', ch')}); ` +
-        `saved ${JSON.stringify(drifted[0]!.saved.settings ?? null)}, now ${JSON.stringify(settings)}. Restore the settings, or use a new scratch directory;`,
+        `differing: ${keys.join('; ')}. Restore the settings, or use a new scratch directory;`,
     );
   }
   if (mode === 'initial' && existing.length > 0 && !opts.resume) {
@@ -322,7 +363,7 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
 
   // The transport appends a VRAM sample under <WORKSPACE_ROOT>/.telemetry/ after each call; this run writes nothing under the workspace.
   process.env.CASTWRIGHT_VRAM_SAMPLE = '0';
-  const url = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+  const url = getResolvedOllamaUrl(); // env, then the saved Admin override, then the default, as production resolves it
   const analyzer = deps.makeAnalyzer({ url, model: opts.model });
   const capacity = settings.capacity;
   const stageCall = { language: opts.language } as StageCall;
