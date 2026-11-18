@@ -25,21 +25,26 @@
 # package.json `castwright.ffmpeg.minimum` (6.0). It ships ffprobe too,
 # which server/src/export/* shells out to.
 #
-# Bumping the build: change the URL, the SHA-256, the version in the cache
-# key, and the matching constants in scripts/tests/workflow-wiring.test.mjs.
+# Bumping the build: change the URL, the SHA-256 (and its prefix in the
+# cache key), and the matching constants in scripts/tests/workflow-wiring.test.mjs.
 #
 # No apt fallback, deliberately: apt IS the hang this replaces, and a
 # fallback to it would only re-introduce a 6-minute worst case. A download
 # failure or checksum mismatch is retried 3 times (each bounded by `timeout`),
 # then fails the step loudly; nothing falls through to anything else.
 #
-# Cache: the extracted binaries are cached. The key carries the ffmpeg
-# version (8.1.3), NOT the runner image — the old key embedded ImageOS/ImageVersion
-# (apt .debs are image-coupled), so every runner-image roll missed. A static
-# binary is image-independent. NOTE (#4453): verify.yml triggers on
-# pull_request only, so its cache entries live in the PR's own ref scope and
-# are unreadable by other PRs; main never writes one. A PR's first run
-# therefore always misses — which is now a ~150 MB download from GitHub's network, not an apt run.
+# Cache: the extracted binaries are cached. The key carries a prefix of the
+# pinned archive's SHA-256, so it changes exactly when the artifact does (a
+# hand-kept version label could be left behind on a bump and serve the old
+# binary from cache). It does NOT carry the runner image: the old key embedded
+# ImageOS/ImageVersion (apt .debs are image-coupled), so every image roll
+# missed, and a PR could only hit main's entry when it happened to be on the
+# same image build. A static binary is image-independent. verify.yml runs on
+# pull_request, so its entries are scoped to the PR's ref, but main does write
+# one (quarantine-health.yml weekly, cross-os.yml mobile-e2e on its cron) and
+# PRs restore the default branch's entries; a first PR run hits once main has
+# written the current key, and a miss is a ~150 MB download from GitHub's
+# network, not an apt run.
 #
 # `timeout-minutes:` is not accepted on a composite action's own steps, so
 # each download is wrapped in coreutils `timeout -k 10 150` instead.
@@ -60,7 +65,7 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/ffmpeg-static
-        key: ${{ runner.os }}-ffmpeg-static-8.1.3-${{ inputs.ffmpeg-version-pin }}
+        key: ${{ runner.os }}-ffmpeg-static-41e9c565594c-${{ inputs.ffmpeg-version-pin }}
 
     - name: Install ffmpeg
       shell: bash

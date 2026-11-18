@@ -1267,6 +1267,12 @@ test('ffmpeg install (#4453): cache miss downloads the pinned static build, veri
   assert.ok(body.includes(FFMPEG_STATIC_URL), `pinned URL ${FFMPEG_STATIC_URL} missing from install step`);
   assert.ok(body.includes(FFMPEG_STATIC_SHA256), 'pinned SHA-256 missing from install step');
   assert.match(body, /sha256sum\s+-c\b/, 'install step does not verify the download with `sha256sum -c`');
+  // The checksum must GATE the install: it sits inside the `if` condition and
+  // nothing (`|| true`, ...) may swallow its exit status.
+  const sumLine = body.split('\n').find((l) => /sha256sum\s+-c\b/.test(l));
+  assert.ok(sumLine, 'no line runs `sha256sum -c`');
+  assert.match(sumLine.trimEnd(), /sha256sum\s+-c\s+-;\s*then$/, '`sha256sum -c` is not the last command of the `if` condition');
+  assert.doesNotMatch(sumLine, /\|\|/, '`sha256sum -c` status is neutered by `||`');
   // set -e must be on so a checksum mismatch aborts the step (no fallback).
   assert.match(body, /set -euo pipefail/, 'install step lost `set -euo pipefail`; a checksum mismatch would not fail loudly');
   // Both binaries must reach PATH: server/src/export/* shells out to ffprobe too.
@@ -1291,7 +1297,7 @@ function ffmpegPinTooOld(url, now) {
   return (
     `pinned ffmpeg build ${m[1]}-${m[2]}-${m[3]} is over ${FFMPEG_PIN_MAX_AGE_MONTHS} months old; BtbN deletes ` +
     `month-end builds after two years, which would 404 the download. Re-pin to a newer month-end ` +
-    `autobuild (URL, SHA-256, version in the cache key, test constants) in .github/actions/install-ffmpeg/action.yml.`
+    `autobuild (URL, SHA-256, its prefix in the cache key, test constants) in .github/actions/install-ffmpeg/action.yml.`
   );
 }
 
@@ -1330,7 +1336,12 @@ test('ffmpeg install (#4453): cache key does not churn with the runner image', (
   const key = src.match(/key:\s*([^\n]+)/);
   assert.ok(key, 'cache key not found');
   assert.doesNotMatch(key[1], /ImageVersion|ImageOS|steps\.image/, `cache key churns with the runner image: ${key[1]}`);
-  assert.match(key[1], /8\.1\.3/, 'cache key does not carry the pinned ffmpeg version');
+  // Tied to the artifact, not a hand-kept label: a bump of URL + SHA that
+  // left the key behind would serve the old binary from cache.
+  assert.ok(
+    key[1].includes(FFMPEG_STATIC_SHA256.slice(0, 12)),
+    `cache key does not carry the pinned archive's SHA-256 prefix (${FFMPEG_STATIC_SHA256.slice(0, 12)}): ${key[1]}`,
+  );
 });
 
 test('lockfile-touched polarity: both frontend and server test steps force full run when lockfile is changed (#2853)', () => {
