@@ -15,6 +15,7 @@ import {
   collectAdvisoryIds,
   isExpired,
   gateFailures,
+  legFromArgs,
   loadWaivers,
   parseAuditOutput,
 } from '../check-audit.mjs';
@@ -125,7 +126,7 @@ test('isExpired: missing or malformed expiry is treated as expired (fail-closed)
 });
 
 test('gateFailures: clean report passes with no waivers', () => {
-  const { missing, expired } = gateFailures({}, []);
+  const { missing, expired } = gateFailures({}, [], 'root');
   assert.deepEqual(missing, []);
   assert.deepEqual(expired, []);
 });
@@ -135,7 +136,7 @@ test('gateFailures: ignores below-high noise', () => {
     'lodash@4': { severity: 'moderate', via: ['GHSA-nnn-333'] },
     'low-dep': { severity: 'low', via: ['GHSA-ooo-444'] },
   };
-  const { missing } = gateFailures(vulns, []);
+  const { missing } = gateFailures(vulns, [], 'root');
   assert.deepEqual(missing, []);
 });
 
@@ -150,7 +151,7 @@ test('gateFailures: flags unwaived high advisory', () => {
       via: [{ source: 888222, url: 'https://github.com/advisories/GHSA-cccc-2222-88gw', title: 'Injection' }],
     },
   };
-  const { missing, expired } = gateFailures(vulns, []);
+  const { missing, expired } = gateFailures(vulns, [], 'root');
   assert.deepEqual(expired, []);
   assert.deepEqual(missing, [
     { package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] },
@@ -165,8 +166,8 @@ test('gateFailures: active waiver covers its GHSA and package', () => {
       via: ['npm', { source: 999111, url: 'https://github.com/advisories/GHSA-7jn1-qqq4-99gw', title: 'ReDoS' }],
     },
   };
-  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'dismissed', expiry: '2099-01-01' }];
-  const { missing, expired } = gateFailures(vulns, waivers);
+  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'dismissed', scope: 'both', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers, 'root');
   assert.deepEqual(expired, []);
   assert.deepEqual(missing, []);
 });
@@ -179,8 +180,8 @@ test('gateFailures: waiver with matching GHSA but wrong package does not cover t
     },
   };
   // Waiver is for a different package, even though the GHSA matches
-  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'lodash', reason: 'false positive', expiry: '2099-01-01' }];
-  const { missing, expired } = gateFailures(vulns, waivers);
+  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'lodash', reason: 'false positive', scope: 'both', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers, 'root');
   assert.deepEqual(expired, []);
   // The advisory should NOT be waived because the package doesn't match
   assert.deepEqual(missing, [{ package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] }]);
@@ -194,15 +195,15 @@ test('gateFailures: expired waiver no longer covers its GHSA and is reported', (
     },
   };
   // isExpired uses real Date.now(), so drive the waiver into the past directly.
-  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'stale', expiry: '2020-01-01' }];
-  const { missing, expired } = gateFailures(vulns, waivers);
+  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'stale', scope: 'both', expiry: '2020-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers, 'root');
   assert.deepEqual(expired, ['GHSA-7jn1-qqq4-99gw']);
   assert.deepEqual(missing, [{ package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] }]);
 });
 
 test('gateFailures: high severity with no attributable advisory fails closed', () => {
   const vulns = { 'mystery@1': { severity: 'critical', via: [] } };
-  const { missing } = gateFailures(vulns, []);
+  const { missing } = gateFailures(vulns, [], 'root');
   assert.deepEqual(missing, [{ package: 'mystery@1', advisories: [] }]);
 });
 
@@ -221,8 +222,8 @@ test('gateFailures: transitive-only advisory is waivable when underlying GHSA is
     },
   };
   // Waive the underlying GHSA for the package that actually pulled in the vulnerability
-  const waivers = [{ ghsaId: 'GHSA-p6mc-m468-83gw', package: 'lodash', reason: 'dismissed', expiry: '2099-01-01' }];
-  const { missing, expired } = gateFailures(vulns, waivers);
+  const waivers = [{ ghsaId: 'GHSA-p6mc-m468-83gw', package: 'lodash', reason: 'dismissed', scope: 'both', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers, 'root');
   assert.deepEqual(expired, []);
   // Both async and lodash should now be waived
   assert.deepEqual(missing, []);
@@ -283,11 +284,80 @@ test('gateFailures: entry with multi-severity advisories only requires qualifyin
     },
   };
   // Only waive the high-severity advisory, not the moderate one
-  const waivers = [{ ghsaId: 'GHSA-hhhh-1111-aaaa', package: 'some-package', reason: 'dismissed', expiry: '2099-01-01' }];
-  const { missing, expired } = gateFailures(vulns, waivers);
+  const waivers = [{ ghsaId: 'GHSA-hhhh-1111-aaaa', package: 'some-package', reason: 'dismissed', scope: 'both', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers, 'root');
   assert.deepEqual(expired, []);
   // The moderate advisory should be filtered out (not collected), so missing should be empty
   assert.deepEqual(missing, []);
+});
+
+// --- leg-aware waivers (#4380) -------------------------------------------
+const SCOPE_VULNS = {
+  'react-router@8': {
+    severity: 'high',
+    via: [{ source: 999111, url: 'https://github.com/advisories/GHSA-7jn1-qqq4-99gw', title: 'ReDoS' }],
+  },
+};
+const scoped = (scope, expiry = '2099-01-01') => [
+  { ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'r', scope, expiry },
+];
+const NOT_WAIVED = [{ package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] }];
+
+test('gateFailures: scope root waives on the root leg but not on the server leg', () => {
+  assert.deepEqual(gateFailures(SCOPE_VULNS, scoped('root'), 'root').missing, []);
+  assert.deepEqual(gateFailures(SCOPE_VULNS, scoped('root'), 'server').missing, NOT_WAIVED);
+});
+
+test('gateFailures: scope server waives on the server leg but not on the root leg', () => {
+  assert.deepEqual(gateFailures(SCOPE_VULNS, scoped('server'), 'server').missing, []);
+  assert.deepEqual(gateFailures(SCOPE_VULNS, scoped('server'), 'root').missing, NOT_WAIVED);
+});
+
+test('gateFailures: scope both waives on either leg', () => {
+  assert.deepEqual(gateFailures(SCOPE_VULNS, scoped('both'), 'root').missing, []);
+  assert.deepEqual(gateFailures(SCOPE_VULNS, scoped('both'), 'server').missing, []);
+});
+
+test('gateFailures: a waiver with no scope covers neither leg (fail closed)', () => {
+  const noScope = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'r', expiry: '2099-01-01' }];
+  assert.deepEqual(gateFailures(SCOPE_VULNS, noScope, 'root').missing, NOT_WAIVED);
+  assert.deepEqual(gateFailures(SCOPE_VULNS, noScope, 'server').missing, NOT_WAIVED);
+});
+
+test('gateFailures: an expired waiver is reported on either leg regardless of scope', () => {
+  for (const leg of ['root', 'server']) {
+    for (const scope of ['root', 'server', 'both']) {
+      const { expired, missing } = gateFailures(SCOPE_VULNS, scoped(scope, '2020-01-01'), leg);
+      assert.deepEqual(expired, ['GHSA-7jn1-qqq4-99gw'], `${scope} waiver on ${leg} leg`);
+      assert.deepEqual(missing, NOT_WAIVED);
+    }
+  }
+});
+
+test('gateFailures: an invalid or missing leg throws', () => {
+  assert.throws(() => gateFailures(SCOPE_VULNS, scoped('both')), /leg must be/);
+  assert.throws(() => gateFailures(SCOPE_VULNS, scoped('both'), 'both'), /leg must be/);
+  assert.throws(() => gateFailures(SCOPE_VULNS, scoped('both'), 'dev'), /leg must be/);
+});
+
+test('legFromArgs: --omit-dev is the server leg, otherwise root', () => {
+  assert.equal(legFromArgs({ omitDev: true }), 'server');
+  assert.equal(legFromArgs({ omitDev: false }), 'root');
+  assert.equal(legFromArgs({}), 'root');
+});
+
+test('#4380: the committed picomatch waiver covers the root leg and not the server leg', () => {
+  const vulns = {
+    picomatch: {
+      severity: 'high',
+      via: [{ source: 1, url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf', severity: 'high', title: 'ReDoS' }],
+    },
+  };
+  const waivers = loadWaivers(join(REPO_ROOT, 'audit-waivers.json'));
+  assert.deepEqual(gateFailures(vulns, waivers, 'root').missing, []);
+  assert.deepEqual(gateFailures(vulns, waivers, 'server').missing, [
+    { package: 'picomatch', advisories: ['GHSA-fc5q-39xc-vjpf'] },
+  ]);
 });
 
 test('loadWaivers: parses a valid array and rejects a non-array', () => {
