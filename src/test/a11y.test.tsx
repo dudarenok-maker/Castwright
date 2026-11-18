@@ -354,6 +354,7 @@ describe('a11y — listen view', () => {
         exports: exportsSlice.reducer,
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
+        cast: castSlice.reducer,
       },
     });
     const { container } = render(
