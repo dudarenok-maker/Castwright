@@ -11478,9 +11478,15 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         if hasattr(engine, "_resolved_device"):
             family, _ = _parse_device(getattr(engine, "_resolved_device"))
         else:
-            family, _ = _parse_device(
+            family, index = _parse_device(
                 getattr(engine, "device", None) or getattr(engine, "_device", None)
             )
+            # #4456: a CT2 Whisper has no torch device, so its card lives only in
+            # `_device` (the admitted "cuda:N"); without it `_is_resident` maps
+            # the missing index to cuda:0. Whisper only -- Kokoro's `_device` is
+            # a pref, not the resolved card.
+            if not isinstance(engine, WhisperEngine) or family not in ("cuda", "rocm"):
+                index = None
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:

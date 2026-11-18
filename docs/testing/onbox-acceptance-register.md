@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 49 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 50 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**85 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**86 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-18 (#2254), 84 → 85.** Row **B110** (the library legibility scan and the Ночной дозор 1A measurement for the paragraph-degradation signal) added. Group B 10 → 11. `next-id` bumped B110 → B111 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-19 (#4456), 85 → 86.** Row **A131** (a GPU Whisper on the second card is fit-checked and evicted against that card) added. Group A 49 → 50. `next-id` bumped A129 → A132 in the same change (A129/A130 are held by open PRs #4436/#4441). Row is owed; not run here.
+>
+> **Previous change: 2026-11-18 (#2254), 84 → 85.** Row **B110** (the library legibility scan and the Ночной дозор 1A measurement for the paragraph-degradation signal) added. Group B 10 → 11. `next-id` bumped B110 → B111 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
 >
@@ -1954,7 +1956,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A129 -->
+<!-- next-id: A132 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6695,6 +6697,16 @@ The automated tests prove byte-identical output on the repo's seven EPUB fixture
 - **Re-parse after a restart.** Open a fully produced EPUB book after a server restart (the `hydrateFromDisk` path) and observe its chapters and text unchanged.
 
 *Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
+
+### A131 · A GPU Whisper on the second card is fit-checked and evicted against that card ([#4456](https://github.com/dudarenok-maker/Castwright/issues/4456)) · **the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti)**
+
+> **Renumber on merge.** A129 (PR #4436) and A130 (PR #4441) are held by open PRs; if either merges first, take the next free Group A id from `origin/main`'s `next-id` and bump this row.
+
+The automated tests drive the real `_engine_actual_card` / `_is_resident` with a fake CT2 Whisper on `cuda:1`, but only a second card proves that the real faster-whisper model is resident where `_device` says and that admission then acts on that card.
+
+- **Warm `/transcribe` targets the Whisper card.** On the 2-card boot set `ASR_DEVICE=cuda:1`, run one `/transcribe` so Whisper loads, then fill `cuda:1` until a second `/transcribe` is tight on it. Observe: `GET /health` lists `asr` under the `cuda:1` card (not `cuda:0`); the warm request is fit-checked against `cuda:1`; any ladder eviction or `noCapacity.deviceKey` names `cuda:1`; nothing resident on `cuda:0` is evicted on its behalf.
+
+*Needs:* the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti) and the Whisper weights. *Criteria:* this row. Clears when the card named in `/health` and in any `noCapacity` is recorded.
 
 
 ## Group B — local Ollama analyzer only

@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="134" data-publish-id="ce6449203da9"></div>
+  <div hidden data-published-as="135" data-publish-id="20c0295de811"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">85</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">86</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->49<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->50<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">49 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">50 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -989,6 +989,17 @@
         <li><strong>Re-parse after a restart.</strong> Open a fully produced EPUB book after a server restart (the <code>hydrateFromDisk</code> path) and observe its chapters and text unchanged.</li>
         </ul>
         <p class="src">the operator&#39;s box with the real EPUB/MOBI library (no GPU or sidecar needed) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4242">#4242</a> &#183; criteria in this row; harness <code>server/scripts/parse-worker-parity.ts</code></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A131</span><span class="iname">A GPU Whisper on the second card is fit-checked and evicted against that card</span><span class="risk">the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti)</span><span class="chev">&#8250;</span></summary>
+      <div class="body">
+        <p><strong>Renumber on merge.</strong> A129 (PR #4436) and A130 (PR #4441) are held by open PRs; if either merges first, take the next free Group A id from <code>origin/main</code>&#39;s <code>next-id</code> and bump this row.</p>
+        <p>The automated tests drive the real <code>_engine_actual_card</code> / <code>_is_resident</code> with a fake CT2 Whisper on <code>cuda:1</code>, but only a second card proves that the real faster-whisper model is resident where <code>_device</code> says and that admission then acts on that card.</p>
+        <ul>
+        <li><strong>Warm <code>/transcribe</code> targets the Whisper card.</strong> On the 2-card boot set <code>ASR_DEVICE=cuda:1</code>, run one <code>/transcribe</code> so Whisper loads, then fill <code>cuda:1</code> until a second <code>/transcribe</code> is tight on it. Observe: <code>GET /health</code> lists <code>asr</code> under the <code>cuda:1</code> card (not <code>cuda:0</code>); the warm request is fit-checked against <code>cuda:1</code>; any ladder eviction or <code>noCapacity.deviceKey</code> names <code>cuda:1</code>; nothing resident on <code>cuda:0</code> is evicted on its behalf.</li>
+        </ul>
+        <p class="src">the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti) and the Whisper weights &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4456">#4456</a> &#183; criteria in this row</p>
       </div>
     </details>
 
