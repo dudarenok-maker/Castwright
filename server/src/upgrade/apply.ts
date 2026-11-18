@@ -200,7 +200,13 @@ function streamEntryToFile(zip: yauzl.ZipFile, entry: yauzl.Entry, destFile: str
   return new Promise((res, rej) => {
     zip.openReadStream(entry, (err, stream) => {
       if (err || !stream) return rej(err ?? new Error('read stream failed'));
-      mkdirSync(dirname(destFile), { recursive: true });
+      // Synchronous throw inside a yauzl callback would escape as an
+      // uncaughtException (server exit) instead of rejecting (#4322).
+      try {
+        mkdirSync(dirname(destFile), { recursive: true });
+      } catch (e) {
+        return rej(e);
+      }
       const out = createWriteStream(destFile);
       stream.on('error', rej);
       out.on('error', rej);
@@ -223,7 +229,11 @@ export function extractRelease(zipPath: string, releaseDir: string, topDir: stri
         if (!rel) return zip.readEntry();
         const dest = join(releaseDir, rel);
         if (/\/$/.test(name)) {
-          mkdirSync(dest, { recursive: true });
+          try {
+            mkdirSync(dest, { recursive: true });
+          } catch (e) {
+            return reject(e);
+          }
           zip.readEntry();
         } else {
           streamEntryToFile(zip, entry, dest)
