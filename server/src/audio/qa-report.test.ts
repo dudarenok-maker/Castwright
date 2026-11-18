@@ -496,6 +496,16 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     expect(report.voiceDrift.charactersNeedingRerender).toEqual(['marlow']);
   });
 
+  it('a marker whose cast row is gone is stale: pending (Resume clears it), never listed as needing a re-render (#3680 pass 2)', async () => {
+    const dir = await mergedBook(['ren']);
+    // Same book, but the cast row was removed: no current voice, so the marker cannot be true.
+    await writeJsonAtomic(castJsonPath(dir), { characters: [] });
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual([]);
+    expect(report.voiceDrift.charactersNeedingRerenderChapters).toEqual({});
+    expect(report.voiceDrift.charactersPending).toEqual(['ren']);
+  });
+
   it('chaptersEmbedFailed excludes a chapter whose only unscored roster character is in charactersPending', async () => {
     const dir = await makeBook();
     await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
