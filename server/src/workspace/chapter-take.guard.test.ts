@@ -15,8 +15,11 @@
              identifier bound by a same-function `const` to one;
      RULE 3  a mutation call whose path argument is TRACKED from an audio
              directory by the resolver in `test-utils/guard-scan.ts`
-             (`audioDir(...)` or an `audio/` string, through `join` / `resolve`,
-             template-head and same-function `const` hops).
+             (`audioDir(...)` or an `audio/` string, OR a call to one of the
+             module's path builders `liveAudioPath` / `livePartPath` /
+             `previousAudioPath` / `previousPartPath` / `takeSuffixPath`,
+             through `join` / `resolve`, template-head and same-function
+             `const` hops).
    Mutation calls and their path arguments (spec list): rename / renameWithRetry
    / copyFile / cp (0 and 1), rm / unlink / writeFile / writeJsonAtomic /
    writeEmbeddings / writeVerdicts / mergeVerdictRows / writeAttempted /
@@ -64,7 +67,7 @@ import * as ts from 'typescript';
 import {
   resolvedCallName,
   collectSourceFiles,
-  isTrackedAudioPath,
+  isAudioDirRoot,
   isTrackedBy,
   parseGuardSource,
   unwrapExpression,
@@ -125,6 +128,24 @@ const MUTATION_ARGS: ReadonlyMap<string, readonly number[]> = (() => {
   }
   return map;
 })();
+
+/** The take module's exported path builders (`take-fields.ts`). A call to one
+    returns a take path, so it is a rule-3 root exactly as `audioDir(...)` is:
+    the writers were respelled through these without moving into the module,
+    and a root that only knew `audioDir` saw none of them (#4319 review 2). */
+const TAKE_PATH_BUILDERS: ReadonlySet<string> = new Set([
+  'liveAudioPath',
+  'livePartPath',
+  'previousAudioPath',
+  'previousPartPath',
+  'takeSuffixPath',
+]);
+
+/** The rule-3 root: an audio directory, or a call to a take path builder. */
+function isTakeRoot(e: ts.Expression): boolean {
+  if (isAudioDirRoot(e)) return true;
+  return ts.isCallExpression(e) && TAKE_PATH_BUILDERS.has(resolvedCallName(e) ?? '');
+}
 
 /** `open` / `openSync` mutate only with a write flag (`w`, `a`, `r+`, `+`). */
 const WRITE_FLAG_RE = /[wa+]/;
@@ -206,7 +227,7 @@ export function scanTakePaths(fileName: string, content: string): Hit[] {
           if (!arg) continue;
           const bare = unwrapExpression(arg);
           if (ts.isIdentifier(bare) && isTrackedBy(bare, isTakeNameExpr)) add(2, arg);
-          if (isTrackedAudioPath(arg)) add(3, arg);
+          if (isTrackedBy(arg, isTakeRoot)) add(3, arg);
         }
       }
     }
@@ -232,11 +253,18 @@ export function scanTakePaths(fileName: string, content: string): Hit[] {
 interface AllowEntry {
   count: number;
   permanentCount?: number;
-  removedBy: 4329 | 4330 | 4331 | 4332 | 4333 | 4334 | 4335 | 'permanent';
+  removedBy: 4320 | 4321 | 4324 | 4329 | 4330 | 4331 | 4332 | 4333 | 4334 | 4335 | 'permanent';
   reason: string;
 }
 
 const ALLOWLIST: Record<string, AllowEntry> = {
+  // Builder-rooted writers (#4319 review 2): respelled through the module's path builders in phase 1, still writing from outside it. Each leaves with the later phase that moves its writer in.
+  'audio/finalize-chapter-write.ts': { count: 8, removedBy: 4320, reason: "finalize (W1) stages and installs the live take (audio, segments, peaks, lufs, embeddings) with builder-spelled paths; #4320's prepareTake/commitTake owns that commit." },
+  'routes/chapter-qa-repair.ts': { count: 2, removedBy: 4320, reason: "QA repair's Edit 6b writes embeddings and verdict patches; #4320 turns them into prepareTake staged inputs." },
+  'audio/render-integrity/aggregate.ts': { count: 1, removedBy: 4321, reason: "scoring writes verdicts per character through livePartPath; #4321's commitScoring owns that write." },
+  'workspace/fsck-orphan-audio.ts': { count: 4, removedBy: 4321, reason: "the boot fsck's case-1 promotion and orphan removal; #4321's restoreTake promotion replaces fsck case 1 (any remainder of the fsck sweep is not named by #4320/#4321: see the PR)." },
+  'audio/rewrite-chapter-slugs.ts': { count: 9, removedBy: 4324, reason: "restructure's rename/split/merge slug rewrite moves take files by builder paths; #4324's relabelTakes replaces it." },
+  'export/build-m4b.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: liveAudioPath used only to NAME an export snapshot in the m4b staging dir (hard link / copy of a chapter mp3, #4223); not a chapter take, nothing to migrate." },
   'import/scan-import-folder.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(stage): the audio/ directory itself, not a take part." },
   'routes/book-state.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: §5.A Ownership: the reparse wipe stays allowlisted (wipeAudioKeepingOrphaned: rm(join(ad, entry), { recursive: true, force: true }) over every audio/ entry except .orphaned/, not a take part)." },
   'routes/generation.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(bookDir): the audio/ directory itself, not a take part." },
@@ -403,6 +431,41 @@ describe('chapter take guard (#4328) - the scan reports what it must', () => {
     const rd = "async function f(b, s) { const r = audioDir(b); await open(join(r, s), 'r'); }";
     expect(rulesOf(OUTSIDE, w)).toEqual([3]);
     expect(rulesOf(OUTSIDE, rd)).toEqual([]);
+  });
+
+  it('rule 3, #4319 review 2: finalize\'s builder-built shape (liveAudioPath / livePartPath / previousPartPath, a template suffix hop) is reported', () => {
+    const src = [
+      'async function f(bookDir, slug, ext, pid, buf, pcm, sr) {',
+      '  const audioRoot = audioDir(bookDir);',
+      '  const audioPath = liveAudioPath(audioRoot, slug, ext);',
+      '  const peaksPath = livePartPath(audioRoot, slug, "peaks");',
+      '  const tmp = `${audioPath}.tmp-${pid}`;',
+      '  await writeFile(tmp, buf);',
+      '  await rename(tmp, audioPath);',
+      '  await writeChapterPeaksFile(pcm, sr, peaksPath);',
+      '  await rm(previousPartPath(audioRoot, slug, "peaks"));',
+      '}',
+    ].join('\n');
+    const texts = scanTakePaths(OUTSIDE, src).map((h) => h.text);
+    // tmp (writeFile), tmp + audioPath (rename: two arguments, one hit span each), peaksPath, the inline builder call.
+    expect(texts).toEqual(expect.arrayContaining(['tmp', 'audioPath', 'peaksPath']));
+    expect(texts.some((t) => t.startsWith('previousPartPath('))).toBe(true);
+    // Without the builder roots none of this is seen: it is the same source minus audioDir's reach.
+    const bare = 'async function f(a, s, e) { await rm(liveAudioPath(a, s, e)); }';
+    expect(rulesOf(OUTSIDE, bare)).toEqual([3]);
+    // Reads of a builder path are not mutations.
+    expect(scanTakePaths(OUTSIDE, 'async function f(a, s, e) { await readFile(liveAudioPath(a, s, e)); }')).toEqual([]);
+  });
+
+  it('an extra unlisted write in an allowlisted file fails the exact count', () => {
+    // The tree scan compares hits.length to entry.count in both directions; this
+    // pins the arithmetic on the real finalize shape: one more write is one more hit.
+    const one = 'async function f(a, s, e) { await rm(liveAudioPath(a, s, e)); }';
+    const two = `${one}\nasync function g(a, s) { await rm(previousPartPath(a, s, "peaks")); }`;
+    expect(scanTakePaths(OUTSIDE, one)).toHaveLength(1);
+    expect(scanTakePaths(OUTSIDE, two)).toHaveLength(2);
+    const allowed = { count: 1 };
+    expect(scanTakePaths(OUTSIDE, two).length > allowed.count).toBe(true);
   });
 
   it('PINNED BLIND SPOT: the plant-1 shape with audioRoot as a function PARAMETER is NOT reported. If a later improvement starts catching it, flip this pin and update the FALSE NEGATIVES header.', () => {
