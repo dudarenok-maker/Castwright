@@ -21,6 +21,7 @@ import request from 'supertest';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
 import type { CharacterOutput, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { AnalysisJob } from './analysis.js';
+import { awaitLeaseDrained } from '../test-utils/await-lease-drained.js';
 import { expectMatchesAnalysisStateSchema } from '../test-utils/openapi-analysis-state.js';
 
 type G = Record<string, unknown>;
@@ -113,14 +114,6 @@ beforeAll(async () => {
   app.use('/api/manuscripts', analysisModule.analysisRouter);
   app.use('/api/books', bookStateRouter);
 }, 120_000);
-
-/* #4447 — the route's `runBookJob` lease is released only after the job drains, which is AFTER
-   the HTTP response (post-run persist + cast/state writes), and `runBookJob`'s `done` promise is
-   not reachable from the route, so there is no deterministic hook: poll the real registry. On a
-   loaded Windows runner the drain outlasted `vi.waitFor`'s 1 s default, so give it a realistic
-   budget; a passing run still returns the moment the lease is gone. */
-const awaitLeaseDrained = (bookId: string) =>
-  vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]), { timeout: 10_000 });
 
 afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
@@ -271,7 +264,7 @@ describe('POST /:id/analysis is a registered analysis job (#3711)', () => {
     release.open();
     const res = await run;
     expect(sseFrames(res.text).some((f) => f.kind === 'result')).toBe(true);
-    await awaitLeaseDrained(s.bookId);
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
     expect((await renameOf(s)).status).toBe(200);
     expect(existsSync(s.newDir)).toBe(true);
   });
@@ -438,7 +431,7 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
     expect(refused.status).toBe(409);
 
     halted.open();
-    await awaitLeaseDrained(s.bookId);
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
     expect((await renameOf(s)).status).toBe(200);
     /* Both files moved with the book; the old folder was not recreated. */
     expect(existsSync(s.bookDir)).toBe(false);
@@ -673,7 +666,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
       expect(refused.body.code).toBe('book_busy');
       expect(existsSync(s.newDir)).toBe(false);
       releaseWork(held!);
-      await awaitLeaseDrained(s.bookId);
+      await awaitLeaseDrained(bookJobKinds, s.bookId);
       expect((await renameOf(s)).status).toBe(200);
     } finally {
       spy.mockRestore();
@@ -704,7 +697,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     expect(seenDir).toBe(s.newDir);
     release.open();
     await q.postP;
-    await awaitLeaseDrained(s.bookId);
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
   });
 
   it('subset POST queued behind a rename runs on the NEW folder (job.bookDir from the lease)', async () => {
@@ -741,7 +734,7 @@ describe('the REAL analysis POST routes (#3711 review)', () => {
     expect(seenDir).toBe(s.newDir);
     release.open();
     await q.postP;
-    await awaitLeaseDrained(s.bookId);
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
   });
 });
 
@@ -771,7 +764,7 @@ describe('GET /analysis/state reports the live subset run\'s origin (#3774)', ()
     const state = await request(app).get(`/api/books/${s.bookId}/analysis/state`);
     release.open();
     await run;
-    await awaitLeaseDrained(s.bookId);
+    await awaitLeaseDrained(bookJobKinds, s.bookId);
     return state;
   }
 
@@ -860,7 +853,7 @@ describe('awaitLeaseDrained waits for a slow lease release (#4447)', () => {
     expect(bookJobKinds(bookId)).toEqual(['analysis']);
     const t = setTimeout(release, 1500);
     try {
-      await awaitLeaseDrained(bookId);
+      await awaitLeaseDrained(bookJobKinds, bookId);
       expect(bookJobKinds(bookId)).toEqual([]);
     } finally {
       clearTimeout(t);
