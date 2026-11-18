@@ -387,6 +387,38 @@ for (const [shape, url] of [
   });
 }
 
+/* An Ollama URL the WHATWG parser rejects is refused the same way: fetch would reject it later with an error
+   that echoes it, and a malformed URL can still hold a secret. Through the real main(), output tapped. */
+test('saved settings: an unparseable Ollama URL is refused by name, its text reaches nowhere, nothing is written', async () => {
+  const savedUrl = process.env.OLLAMA_URL;
+  delete process.env.OLLAMA_URL;
+  const { dir, manifest } = fixtureDir(1);
+  const manifestPath = join(dir, 'manifest.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const settingsPath = rawSettingsFile(dir, 'u.json', { configOverrides: { 'analyzer.ollama.url': 'ht!tp://bob:hunter2-SENTINEL@@' } });
+  const heard: string[] = [];
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origErr = process.stderr.write.bind(process.stderr);
+  const tap = (chunk: unknown): void => void heard.push(String(chunk));
+  process.stdout.write = ((c: unknown, ...r: unknown[]) => (tap(c), (origOut as (...a: unknown[]) => boolean)(c, ...r))) as typeof process.stdout.write;
+  process.stderr.write = ((c: unknown, ...r: unknown[]) => (tap(c), (origErr as (...a: unknown[]) => boolean)(c, ...r))) as typeof process.stderr.write;
+  let code: number;
+  try {
+    code = await main(['--manifest', manifestPath, '--model', 'A', '--scratch', scratchOf(dir)], { ...defaultDeps(), settingsPath });
+  } finally {
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
+    if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
+  }
+  assert.notEqual(code, 0);
+  const out = heard.join('');
+  assert.ok(out.includes('analyzer.ollama.url'), `the refusal names the key: ${out}`);
+  assert.ok(out.includes('not a valid URL'), `the refusal says why: ${out}`);
+  assert.ok(!out.includes('SENTINEL'), `the URL text reached stdout or stderr: ${out}`);
+  assert.ok(!existsSync(scratchOf(dir)), 'nothing was written');
+  for (const [p, text] of allFileTexts(dir)) assert.ok(!text.includes('SENTINEL') || p === settingsPath, `URL text found in ${p}`);
+});
+
 test('saved settings: the record holds the effective chunk budget, not the configured cap', async () => {
   const { dir, manifest } = fixtureDir(1);
   const { deps } = fakeDeps({ settingsPath: settingsFile(dir, 's.json', { 'analyzer.ollama.numCtx': 4096 }) });

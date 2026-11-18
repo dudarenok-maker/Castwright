@@ -44,8 +44,8 @@
    resolved request payload as a sha256 DIGEST of its canonical JSON (never the payload: it can hold an
    api key, and extra-params.ts forbids logging or persisting one), the capacity and the effective
    stage-2 chunk budget (resolveStage2ChunkCharBudget(capacity), not the configured cap). An Ollama URL
-   that carries credentials is refused before anything runs (fetch refuses it and its error echoes it; the
-   refusal names analyzer.ollama.url, never the value). A re-capture under any difference in those is refused
+   that carries credentials, or does not parse, is refused before anything runs (fetch refuses it and its
+   error echoes it; the refusal names analyzer.ollama.url, never the value). A re-capture under any difference in those is refused
    like a different --model, and the refusal names the differing keys (a payload as `payload (changed)`,
    with no values). A knob that
    is not an analyzer.* key and not the payload or reasoning level is not covered.
@@ -321,13 +321,15 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
   }
   // fetch refuses a URL that carries credentials and undici's error echoes it, so one would reach stderr;
   // production cannot use one either. Refused by key name only, never the value, before anything else runs.
-  let resolvedUrl: URL | null = null;
+  // An unparseable URL is refused the same way: fetch's later error echoes it, and it can still hold a secret.
+  let resolvedUrl: URL;
   try {
     resolvedUrl = new URL(getResolvedOllamaUrl());
   } catch {
-    // an unparseable URL has no userinfo to leak; the TypeError's own text would echo it, so it is not printed
+    // the TypeError's own text would echo the URL, so it is not printed
+    return refuse('analyzer.ollama.url is not a valid URL; fix the setting;');
   }
-  if (resolvedUrl && (resolvedUrl.username || resolvedUrl.password)) {
+  if (resolvedUrl.username || resolvedUrl.password) {
     return refuse('analyzer.ollama.url carries credentials, which fetch refuses (production cannot use such a URL either); remove them from the setting;');
   }
   const settings = effectiveSettings(opts.model);
