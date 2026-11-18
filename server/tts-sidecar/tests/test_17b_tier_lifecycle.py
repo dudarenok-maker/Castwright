@@ -351,6 +351,91 @@ def test_t6_base17_freed_between_admission_and_claim_stays_inside_the_booking(mo
     assert out["booked"] >= 6144 - 0, "the hold must still cover a cold reload of the base"
 
 
+# --- #4237: the mint credits its resident 0.6B audition base (fit check only) --
+
+
+def _tight_card(qwen, other_mb=400, total=8188):
+    """Probe-style 8188 card (the issue's shape): context `other_mb`, 1.7B-Base
+    3900 and the 0.6B 1300 reserved while resident."""
+
+    def probe():
+        used = other_mb + (BASE17_MB if qwen._base17 is not None else 0)
+        used += BASE_MB if qwen._base is not None else 0
+        return [{"kind": "cuda", "index": 0, "label": "g", "totalMb": total, "freeMb": total - used}]
+
+    return probe
+
+
+def _tight_wire(monkeypatch, qwen, **kw):
+    pc = _wire(monkeypatch, qwen, _tight_card(qwen, **kw))
+    monkeypatch.setattr(pc, "reserve_mb", lambda: 409)
+    return pc
+
+
+def test_m1_take_2_mint_with_both_bases_resident_is_admitted_without_evicting(monkeypatch):
+    """#4237 take 2: free 2588 + 3900 credit - 409 = 6079 < 6144 refused the mint
+    by 65 MB; crediting the resident 0.6B too (+1300) admits it."""
+    qwen = _fake_qwen(weights_mb=3900, base_mb=BASE_MB)
+    pc = _tight_wire(monkeypatch, qwen)
+    adm, booked = _mint(pc)
+    assert adm == {"device": "cuda:0"}
+    assert booked == 6144, "the credit is fit-only: the ledger books the FULL peak"
+    assert qwen._base17 is not None, "admission evicted the 1.7B-Base"
+    assert qwen._base is not None, "admission evicted the 0.6B"
+
+
+def test_m2_mint_with_only_the_0_6b_resident_is_admitted_and_runs_no_ladder_step(monkeypatch):
+    qwen = _fake_qwen(resident=False, base_mb=BASE_MB)
+    ran = []
+    steps = lambda device_key, engine: [main.EvictStep("probe", None, lambda: ran.append(1) or True)]
+    pc = _wire(monkeypatch, qwen, _tight_card(qwen), steps=steps)
+    monkeypatch.setattr(pc, "reserve_mb", lambda: 409)
+    adm, booked = _mint(pc)  # free 6488 + 1300 - 409 = 7379 >= 6144; without the credit 6079 < 6144
+    assert adm == {"device": "cuda:0"}
+    assert booked == 6144
+    assert ran == [], "a ladder step ran although the credit alone covers the peak"
+    assert qwen._base is not None
+
+
+def test_m3_the_credit_is_not_free_headroom(monkeypatch):
+    """Other tenants hold 2500 more: free 1088 + 5200 credit - 409 = 5879 < 6144."""
+    qwen = _fake_qwen(weights_mb=3900, base_mb=BASE_MB)
+    pc = _tight_wire(monkeypatch, qwen, other_mb=400 + 1500)
+    adm, booked = _mint(pc)
+    assert adm == {"noCapacity": {"neededMb": 6144 - 3900 - BASE_MB, "deviceKey": "cuda:0"}}
+    assert booked == 0
+    assert qwen._base17 is not None
+    assert qwen._base is not None
+
+
+def test_m4_a_credited_0_6b_freed_mid_ladder_is_not_counted_twice_for_a_mint(monkeypatch):
+    """The ladder frees the 0.6B; the re-probe already counts its 1300, so the
+    credit shrinks to the 1.7B-Base alone (`_live_credit`): 1792 + 3900 - 500 =
+    5192 < 6144. Counting the stale 5200 would admit it (6492)."""
+    qwen = _fake_qwen(weights_mb=3900, base_mb=BASE_MB)
+    steps = lambda device_key, engine: [
+        main.EvictStep("other", None, lambda: setattr(qwen, "_base", None) or True)
+    ]
+    pc = _wire(monkeypatch, qwen, _tight_card(qwen, other_mb=2500), steps=steps)
+    adm, booked = _mint(pc)
+    assert "noCapacity" in adm
+    assert booked == 0
+
+
+def test_m5_a_plain_1_7b_synth_does_not_receive_the_0_6b_credit(monkeypatch):
+    """Same resident state as m1, no `op`: free 2588 + 3900 - 409 = 6079 < 6144."""
+    qwen = _fake_qwen(weights_mb=3900, base_mb=BASE_MB)
+    pc = _tight_wire(monkeypatch, qwen)
+
+    async def body():
+        async with pc.reservation("qwen", "1.7b", {}, cpu_capable=False, heavy=True) as adm:
+            return adm
+
+    adm = asyncio.run(body())
+    assert adm == {"noCapacity": {"neededMb": 6144 - 3900, "deviceKey": "cuda:0"}}
+    assert qwen._base17 is not None
+
+
 # --- #4102: a design keeps its own warm VoiceDesign -------------------------
 
 
