@@ -58,6 +58,14 @@ describe('formatQaReportText', () => {
     expect(text).toContain('· Voice match — needs re-render: Alice, c2');
   });
 
+  it('names the chapters to re-render beside each character (#3680 pass 2)', () => {
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'], charactersNeedingRerenderChapters: { c1: [4], c2: [1, 3] } },
+    };
+    expect(formatQaReportText(report, 'Book', { c1: 'Alice' })).toContain('· Voice match — needs re-render: Alice (chapter 4), c2 (chapters 1, 3)');
+  });
+
   it('omits the line where the card hides the listing: the gate never ran and nothing is pending (#3680 pass 1)', () => {
     const report = {
       ...MOCK_QA_REPORT,

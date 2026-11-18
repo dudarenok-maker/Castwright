@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
-import { classifyHeadline, classifyVoiceMatch, needsRerenderIds } from '../lib/qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
 import { api } from '../lib/api';
 import { Pill } from './primitives';
 
@@ -211,7 +211,11 @@ function NeedsRerenderListing({
   if (ids.length === 0 || scoringProgress) return null;
   return (
     <p data-testid="qa-needs-rerender" className="text-sm text-ink/70 py-2">
-      Needs re-render: {ids.map((id) => characterNames?.[id] ?? id).join(', ')}. No lines are recorded in their current voice yet, so there is nothing to check — re-render a chapter they speak in to check them.
+      Needs re-render: {ids.map((id) => {
+        const chapters = needsRerenderChapters(report, id);
+        const name = characterNames?.[id] ?? id;
+        return chapters.length > 0 ? `${name} (${chapters.length === 1 ? 'chapter' : 'chapters'} ${chapters.join(', ')})` : name;
+      }).join(', ')}. Some of their lines were recorded in an earlier voice, so those can't be checked — re-render a chapter named here to check them.
     </p>
   );
 }

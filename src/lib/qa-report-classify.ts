@@ -42,13 +42,21 @@ export type VoiceMatchClassification =
 /** #3680 — the ids the "needs re-render" listing shows, `[]` when it is hidden. Shared by the
  *  QA card and the text export so the two can never disagree. Hidden in the `notRun` row with
  *  nothing pending: no pass has settled, so the card reports nothing about characters yet.
- *  (The `noEligible` row needs no case: the listed ids are a subset of the roster, so a
- *  non-empty list implies at least one eligible chapter.) */
+ *  (The `noEligible` row needs no case: a listed id comes from a MARKED roster key, and a
+ *  key only joins the roster by naming an eligible chapter in the same pass, so a non-empty
+ *  list implies at least one eligible chapter. The listed id itself may be a merge target
+ *  that is not a roster key.) */
 export function needsRerenderIds(report: BookQaReport): string[] {
   const ids = report.voiceDrift.charactersNeedingRerender ?? [];
   if (ids.length === 0) return [];
   if (classifyVoiceMatch(report).kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return [];
   return ids;
+}
+
+/** #3680 — the chapters holding the lines that keep `id` on the needs-re-render listing
+ *  (`[]` when the server sent none). Re-rendering one of them clears the marker. */
+export function needsRerenderChapters(report: BookQaReport, id: string): number[] {
+  return report.voiceDrift.charactersNeedingRerenderChapters?.[id] ?? [];
 }
 
 export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassification {

@@ -56,6 +56,7 @@ import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 import { readCentroids } from './centroids-io.js';
 import { readVerdicts, deriveBookOutline } from './verdicts-io.js';
 import { buildAudioQaReport } from '../qa-report.js';
+import { castIdHistoryPath } from '../../store/cast-id-history.js';
 
 const CHAPTERS = [
   { id: 1, slug: 'ch1' },
@@ -519,6 +520,39 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     const after = await buildAudioQaReport(dir, CH1);
     expect(after.voiceDrift.charactersNeedingRerender).toEqual([]);
     expect(after.voiceDrift.charactersPending).toEqual([]);
+  });
+
+  /* #3680 pass 2 — the marker is per render KEY. `marlow` absorbed a retired key (`ren`, or the
+     catch-all `unknown-male`): ch1's lines sit under the retired key in the OLD voice, ch2's under
+     `marlow` in her current voice and were checked. She is listed because of ch1 only, and the
+     report must say so: re-rendering ch2 would not clear it, re-rendering ch1 does. */
+  it.each(['ren', 'unknown-male'])('#3680 pass 2: a merged character with a healthy own key is listed for the chapters of the marked key %s only', async (retired) => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-marker-merged-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({
+      characters: [{ id: 'marlow', name: 'Marlow', overrideTtsVoices: { qwen: { name: 'M', libraryUuid: 'mv' } } }],
+    }));
+    writeFileSync(castIdHistoryPath(dir), JSON.stringify({ schema: 1, supersededBy: { [retired]: 'marlow' } }));
+    const lines = (voice: string): Line[] => [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice }));
+    await writeChapterLines(dir, 'ch1', 1, lines('qwen-rv'), 'qwen-rv', retired);
+    await writeChapterLines(dir, 'ch2', 2, lines('qwen-mv'), 'qwen-mv', 'marlow');
+
+    await scoreBook(dir, CHAPTERS);
+    const centroids = (await readCentroids(dir))!;
+    expect(centroids[retired].noCurrentVoiceReference).toBe(true);
+    expect(centroids['marlow'].noCurrentVoiceReference).toBeUndefined();
+    const report = await buildAudioQaReport(dir, CHAPTERS);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['marlow']);
+    // Only ch1 holds the marked key's lines: the listing names it, never ch2.
+    expect(report.voiceDrift.charactersNeedingRerenderChapters).toEqual({ marlow: [1] });
+
+    // Re-rendering the NAMED chapter in her current voice clears the marker and the listing.
+    await writeChapterLines(dir, 'ch1', 1, lines('qwen-mv'), 'qwen-mv', retired);
+    await scoreBook(dir, CHAPTERS);
+    expect((await readCentroids(dir))![retired].noCurrentVoiceReference).toBeUndefined();
+    const after = await buildAudioQaReport(dir, CHAPTERS);
+    expect(after.voiceDrift.charactersNeedingRerender).toEqual([]);
+    expect(after.voiceDrift.charactersNeedingRerenderChapters).toEqual({});
   });
 
   it('B: rendered entirely on the fallback engine — one pass clears charactersPending', async () => {

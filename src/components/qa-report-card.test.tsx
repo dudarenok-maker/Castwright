@@ -212,11 +212,19 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       bare(withRerender(), { characterNames: { c1: 'Alice' } });
       const el = screen.getByTestId('qa-needs-rerender');
       expect(el).toHaveTextContent('Needs re-render: Alice, c2.');
-      expect(el).toHaveTextContent(/No lines are recorded in their current voice yet/);
-      expect(el).toHaveTextContent(/re-render a chapter they speak in to check them/);
+      expect(el).toHaveTextContent(/Some of their lines were recorded in an earlier voice/);
+      expect(el).toHaveTextContent(/re-render a chapter named here to check them/);
+      expect(el).not.toHaveTextContent(/No lines are recorded/);
+      // The headline property of #3680: nothing is pending, so the listing is NOT a Resume offer.
+      expect(screen.queryByRole('button', { name: /resume scoring/i })).not.toBeInTheDocument();
       // #3680 pass 1 — a fallback-only character's voice never changed, so no cause is claimed.
       expect(el).not.toHaveTextContent(/voice changed/i);
       expect(el).not.toHaveTextContent(/these chapters/i);
+    });
+
+    it('names the chapters holding the marked key lines, per character (#3680 pass 2)', () => {
+      bare(withRerender({ charactersNeedingRerenderChapters: { c1: [4], c2: [1, 3] } }), { characterNames: { c1: 'Alice' } });
+      expect(screen.getByTestId('qa-needs-rerender')).toHaveTextContent('Needs re-render: Alice (chapter 4), c2 (chapters 1, 3).');
     });
 
     it('is absent when the gate never ran and nothing is pending (nothing was settled)', () => {

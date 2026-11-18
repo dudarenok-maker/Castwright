@@ -1,5 +1,5 @@
 import type { BookQaReport } from './types';
-import { classifyHeadline, classifyVoiceMatch, needsRerenderIds } from './qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from './qa-report-classify';
 
 function acousticLine(r: BookQaReport): string {
   return `Acoustic — ${r.acoustic.linesChecked} lines checked, ${r.acoustic.linesRerecorded} needed a second take`;
@@ -23,7 +23,13 @@ function voiceMatchLine(r: BookQaReport): string {
 
 function needsRerenderLine(r: BookQaReport, characterNames?: Record<string, string>): string | null {
   const ids = needsRerenderIds(r);
-  return ids.length > 0 ? `Voice match — needs re-render: ${ids.map((id) => characterNames?.[id] ?? id).join(', ')}` : null;
+  if (ids.length === 0) return null;
+  const entries = ids.map((id) => {
+    const chapters = needsRerenderChapters(r, id);
+    const name = characterNames?.[id] ?? id;
+    return chapters.length > 0 ? `${name} (${chapters.length === 1 ? 'chapter' : 'chapters'} ${chapters.join(', ')})` : name;
+  });
+  return `Voice match — needs re-render: ${entries.join(', ')}`;
 }
 
 function castContinuityLine(r: BookQaReport): string {

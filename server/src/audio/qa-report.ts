@@ -56,18 +56,23 @@ export interface AudioQaReport {
     charactersChecked: number;
     /** srv-36 hardening — stochastic characters that have appeared on a
      *  chapter's embeddings roster but have no row yet in
-     *  render-integrity.centroids.json — still mid-retry-cycle, not stuck.
-     *  A chapter whose only unscored roster character is in this list is
+     *  render-integrity.centroids.json, OR whose row is a stale no-current-voice
+     *  marker (#3680: a score-only pass clears it) — still mid-retry-cycle, not
+     *  stuck. A chapter whose only unscored roster character is in this list is
      *  excluded from chaptersEmbedFailed (see the computation below). */
     charactersPending: string[];
-    /** #3680/#3524 — stochastic characters whose persisted reference is the
-     *  `noCurrentVoiceReference` marker row AND whose current cast voice still has no
-     *  rendered line (re-checked here against the cast of record, not trusted from the
-     *  last pass): every line is inconclusive until a chapter is re-rendered in that
-     *  voice. A marker the current cast no longer supports is in `charactersPending`
-     *  instead (a score-only pass clears it). Such a character has a centroid row, so
-     *  a true marker is NOT in `charactersPending`. */
+    /** #3680/#3524 — CAST ids (resolved through the cast of record; a merged character
+     *  is listed once, under the id the cast shows) with a persisted
+     *  `noCurrentVoiceReference` marker on one of their render keys AND no rendered line
+     *  in that key's current cast voice, re-checked HERE at read time against the cast
+     *  of record rather than trusted from the last pass. Every line under that key is
+     *  inconclusive until a chapter holding it is re-rendered. A marker the current cast
+     *  no longer supports is in `charactersPending` instead. The marker is per KEY: a
+     *  merged character's other keys can be healthy, so see the chapters field below. */
     charactersNeedingRerender: string[];
+    /** #3680 — per id in `charactersNeedingRerender`: the chapter ids holding lines under
+     *  the marked key(s). Re-rendering one clears that key's marker. */
+    charactersNeedingRerenderChapters: Record<string, number[]>;
     mismatches: Array<{ characterId: string; chapterId?: number; fixable: boolean }>;
     inconclusiveCount: number;
     uncheckedCharacterIds: string[];
@@ -208,6 +213,8 @@ export async function buildAudioQaReport(
      (CLAUDE.md: cast.json is the identity of record), and de-duplicate, so the listing names
      the character the cast shows, once. */
   const charactersNeedingRerender: string[] = [];
+  const charactersNeedingRerenderChapters: Record<string, number[]> = {};
+  const idBySlug = new Map(chapters.map((c) => [c.slug, c.id]));
   if (markedIds.length > 0) {
     const { castResolver, bookLanguage } = await loadCastContext(bookDir);
     const { currentVoiceFor } = createCurrentVoiceFacts({
@@ -215,7 +222,8 @@ export async function buildAudioQaReport(
       configuredEngineByChar,
       castResolver,
       bookLanguage,
-      justFinalized: new Set(chapters.map((c) => c.slug)),
+      // Resume passes none (no run model key), so this is the pass the report predicts.
+      justFinalized: new Set<string>(),
     });
     const withCurrentLine = charsWithCurrentVoiceLine(voiceChapters, stochasticCharacterIds, currentVoiceFor);
     for (const id of markedIds) {
@@ -226,6 +234,17 @@ export async function buildAudioQaReport(
       // A marker needs a current voice, which needs a live cast row, so this resolves.
       const canonicalId = castResolver.resolve(id)?.character.id ?? id;
       if (!charactersNeedingRerender.includes(canonicalId)) charactersNeedingRerender.push(canonicalId);
+      /* The chapters whose lines sit under THIS marked key: re-rendering one puts a line in
+         the current voice and clears the marker. Another key of the same person may be
+         healthy, so the listing must not claim "no lines" for the person. */
+      const held = (charactersNeedingRerenderChapters[canonicalId] ??= []);
+      for (const cd of voiceChapters) {
+        const chapterId = idBySlug.get(cd.slug);
+        if (chapterId === undefined || held.includes(chapterId)) continue;
+        const has = cd.embRows.some((row) =>
+          resolveRowCharId(cd.segsByKey.get(segKey(row.characterId, row.sentenceIds)), row.characterId, cd.snapshots) === id);
+        if (has) held.push(chapterId);
+      }
     }
   }
   const charactersPending = Array.from(stochasticCharacterIds).filter(
@@ -310,6 +329,7 @@ export async function buildAudioQaReport(
       charactersChecked: Array.from(stochasticCharacterIds).filter((id) => !uncheckedSet.has(id)).length,
       charactersPending,
       charactersNeedingRerender,
+      charactersNeedingRerenderChapters,
       mismatches: outline.issues.map((r) => ({
         characterId: r.characterId,
         chapterId: r.chapterId,
