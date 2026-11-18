@@ -16,6 +16,7 @@ import { revisionsFailureText } from '../workspace/revisions-store.js';
 import { triggerScoring, isGenerationActive } from './generation.js';
 import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { isSpliceOrRepairActive } from './chapter-job-coordination.js';
 
 export const qaReportRouter = Router();
 
@@ -70,6 +71,15 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
     }
     if (isGenerationActive(bookId)) {
       res.status(409).json({ error: 'Book is currently generating — resume scoring once the run finishes.' });
+      return;
+    }
+    /* #4235 — a re-record splice or QA repair synthesises under its own Qwen tier, which the
+       post-audition reconcile in triggerScoring could evict mid-synthesis (that eviction is
+       separately skipped while anything is active, in triggerScoring). A remix registers the
+       same way but only applies gain and synthesises nothing, so refusing during one is
+       conservative, not tier-driven. Same curated-sentence rule. */
+    if (isSpliceOrRepairActive(bookId)) {
+      res.status(409).json({ error: 'A chapter fix or repair is running for this book — resume scoring once it finishes.' });
       return;
     }
     const registered = await runBookJob(bookId, 'scoring', async (lease) => {

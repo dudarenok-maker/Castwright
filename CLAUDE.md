@@ -435,7 +435,7 @@ Design rationale:
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
 - `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: `pre-commit` no longer gates on this or on `verify:fast:scoped` (ops-2997 retired that battery from the hook entirely) — see "Commit gate".
 - `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build + test:sidecar + audit + audit:server, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs. **No longer what `pre-push` invokes** (ops-2997 — see "Commit gate"): pre-push now runs only its guards plus the scope-gated `test:sidecar` step. This script remains for a manual full branch-scoped run — Before-shipping step 7 calls for it — and cloud `verify.yml` is the actual enforcement gate for everything it covers.
-- `npm run audit` — npm audit against the root lockfile, gating on any unwaived high/critical severity advisories (threshold `--audit-level=high`). Waivers live in `audit-waivers.json` at repo root with expiry enforcement. Exit codes: 0 = pass, 1 = unwaived high/critical, 2 = expired waiver(s) or bad CLI args, 3 = audit cannot be trusted (npm audit failed, or its output could not be parsed). See `scripts/check-audit.mjs` for scope and mechanics (#2434).
+- `npm run audit` — npm audit against the root lockfile, gating on any unwaived high/critical severity advisories (threshold `--audit-level=high`). Waivers live in `audit-waivers.json` at repo root with expiry enforcement. Each waiver carries a mandatory `scope` (`root`, `server` or `both`) and applies only to the leg it names (root = `node scripts/check-audit.mjs`, server = `--omit-dev`); a missing or invalid `scope` fails closed. Exit codes: 0 = pass, 1 = unwaived high/critical, 2 = expired waiver(s) or bad CLI args, 3 = audit cannot be trusted (npm audit failed, its output could not be parsed, or `audit-waivers.json` could not be loaded - including a waiver with a missing/invalid `scope`). See `scripts/check-audit.mjs` for scope and mechanics (#2434).
 - `npm run audit:server` — npm audit against the server lockfile, omitting devDependencies (`--omit=dev` for production/runtime scope only), same gate and severity threshold as root. Exits with the same codes as `audit`. Runs in both `verify.yml` and `verify:fast:branch` (root runs full tree, server scope-gated to `server/package-lock.json` changes). **Note:** both audit steps require network access to npm's advisory database — they cannot run offline.
 - `npm run build` — production build into `dist/`.
 - `npm run apk:companion` — build the Android companion APK and drop it at
@@ -735,7 +735,9 @@ Design rationale:
   `failure-taxonomy`, which generation's `chapter_failed` reason goes through,
   and, since #4236, `config` (its `/prompts/:id` endpoints), `library`, `queue`, `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory`,
-  `annotate-emotion`, `instruct-annotation`, `script-review`'s `chapter-failed`
+  `annotate-emotion`, `instruct-annotation`, `upgrade` and `upgrade/apply.ts`
+  (the apply failure's LAN reason, #4322), `setup-readiness` (`POST /setup/smoke`),
+  `script-review`'s `chapter-failed`
   frames, `export`'s job `errorReason` (the raw error and the ffmpeg stderr go to
   `runExportJob`'s log) and `voice-sample`'s 502 body; the batch routes' per-item
   reasons compose it inside `itemFailureReason` — `cast-series-patch`,
@@ -743,7 +745,7 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and thirty-one call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  one hundred and thirty-three call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
@@ -757,7 +759,7 @@ Design rationale:
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
-  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` (the stage route's catch, #4236), `series-cast`, `series-roster`,
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` ×2 (the stage route's catch, #4236; the apply IIFE's catch, #4322), `upgrade/apply.ts` (the apply-failure `errorLan` twin, #4322), `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
   weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
   not a disk fault), `annotate-emotion` and `instruct-annotation` (their

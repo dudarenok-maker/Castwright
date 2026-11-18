@@ -9,10 +9,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { spawnSync } from 'node:child_process';
 
-const { busy, failRestore, unlinkGate } = vi.hoisted(() => ({
+const { busy, failRestore, failMigrate, failStateWrite, unlinkGate } = vi.hoisted(() => ({
   busy: { value: false },
   failRestore: { value: false },
+  /* #4339 I6: fail the migration's wrong-extension rename with a path-bearing fs error. */
+  failMigrate: { value: false },
+  /* #4319 pass 2: fail every state.json read-modify-write (a state-json lock timeout). */
+  failStateWrite: { value: false, calls: 0 },
   /* One-shot gate: the first unlink whose path matches parks until released. */
   unlinkGate: {
     match: null as null | ((p: string) => boolean),
@@ -41,12 +46,32 @@ vi.mock('../workspace/file-lock.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
   return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
 });
+vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/book-state-update.js')>();
+  return {
+    ...real,
+    updateStateAtDir: (...args: Parameters<typeof real.updateStateAtDir>) => {
+      if (failStateWrite.value) {
+        failStateWrite.calls += 1;
+        throw new Error('simulated state.json write failure');
+      }
+      return real.updateStateAtDir(...args);
+    },
+  };
+});
 vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/atomic-rename.js')>();
   return {
     ...real,
     renameWithRetry: async (src: string, dest: string) => {
       if (failRestore.value && src.endsWith('.previous.mp3')) throw new Error('EBUSY: simulated restore failure');
+      if (failMigrate.value && src.endsWith('01-one.mp3')) {
+        throw Object.assign(new Error("EPERM: operation not permitted, rename 'C:/SECRET-WORKSPACE/01-one.mp3'"), {
+          code: 'EPERM',
+          syscall: 'rename',
+          path: 'C:/SECRET-WORKSPACE/01-one.mp3',
+        });
+      }
       return real.renameWithRetry(src, dest);
     },
   };
@@ -128,6 +153,8 @@ beforeEach(async () => {
   unlinkGate.match = null;
   busy.value = false;
   failRestore.value = false;
+  failMigrate.value = false;
+  failStateWrite.value = false;
   rmSync(audioRoot, { recursive: true, force: true });
   mkdirSync(audioRoot, { recursive: true });
   rmSync(revisionsPath, { force: true });
@@ -632,5 +659,190 @@ describe('unexpected failures answer fixed sentences (plan 286, invariant 8)', (
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: text });
     expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+});
+
+/* #4339 — lazy migration (reconcileSlug) at Accept and Reject. */
+const M4A_BYTES = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(16)]);
+const MP3_BYTES = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(32)]);
+/* A real mp3: a legacy-reject chapter's live audio is full-decoded and compared with its
+   segments' `durationSec` before step 5 stamps it, so a stub never reaches the write. */
+function writeRealMp3(path: string, sec: number): void {
+  const r = spawnSync(
+    'ffmpeg',
+    ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=180:duration=${sec}`, '-ar', '8000', '-ac', '1', '-b:a', '16k', path],
+    { windowsHide: true },
+  );
+  if (r.status !== 0) throw new Error(`ffmpeg failed: ${String(r.stderr)}`);
+}
+const statePath = () => join(bookDir, '.audiobook', 'state.json');
+function patchChapter(patch: Record<string, unknown>): void {
+  const st = JSON.parse(readFileSync(statePath(), 'utf8'));
+  st.chapters[0] = { ...st.chapters[0], ...patch };
+  writeFileSync(statePath(), JSON.stringify(st));
+}
+const chapterNow = () => JSON.parse(readFileSync(statePath(), 'utf8')).chapters[0] as Record<string, unknown>;
+const seg = (slug = '01-one') => join(audioRoot, `${slug}.segments.json`);
+const prevSeg = (slug = '01-one') => join(audioRoot, `${slug}.previous.segments.json`);
+
+describe('lazy migration at Accept / Reject (#4339)', () => {
+  it('I4: Reject on a legacy chapter mints an id into .previous.segments.json and does not re-stamp state.json from the take it deletes', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '00:10', audioQa: { score: 0.9 } });
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 9, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(200);
+    /* The restored (previous) take is now live and carries a minted id. */
+    const restored = JSON.parse(readFileSync(seg(), 'utf8'));
+    expect(restored.synthesizedAt).toBe('T-A');
+    expect(restored.takeId).toMatch(/^[a-z2-7]{16}$/);
+    expect(existsSync(prevSeg())).toBe(false);
+    /* Phase 1 restores without stamping (that is Phase 3): state.json is exactly
+       what main leaves, never a take (B) that this very request deletes. */
+    const ch = chapterNow();
+    expect(ch.audioRenderedAt).toBe('T-A');
+    expect(ch.audioQa).toEqual({ score: 0.9 });
+    expect(ch.duration).toBe('00:10');
+    expect('audioTakeId' in ch).toBe(false);
+  });
+
+  it('Reject deletes audioTakeId from state.json: state never names the take it just deleted', async () => {
+    patchChapter({ audioRenderedAt: 'T-B', duration: '00:20', audioTakeId: 'bbbbbbbbbbbbbbbb' });
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', takeId: 'bbbbbbbbbbbbbbbb' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 9, synthesizedAt: 'T-A', takeId: 'aaaaaaaaaaaaaaaa' }));
+    seed([entry(1, 'r1')]);
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(seg(), 'utf8')).takeId).toBe('aaaaaaaaaaaaaaaa');
+    expect('audioTakeId' in chapterNow()).toBe(false);
+  });
+
+  it('Reject in the orphan-segments shape (no live audio): restores the previous take and leaves state.json at it', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } });
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 12, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+    const before = chapterNow();
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(seg(), 'utf8')).synthesizedAt).toBe('T-A');
+    expect(chapterNow()).toEqual(before);
+  });
+
+  it('Accept in the orphan-segments shape (no live audio): state.json is not re-stamped from the orphan segments', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } });
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 12, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+    const before = chapterNow();
+
+    const res = await accept('r1');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('live_audio_missing');
+    expect(chapterNow()).toEqual(before);
+  });
+
+  it('a corrupt live segments.json does not block Reject (main never parsed it on this route)', async () => {
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), '{ not json');
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 9, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await reject('r1');
+    warn.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(seg(), 'utf8')).synthesizedAt).toBe('T-A');
+  });
+
+  it('a corrupt live segments.json and embeddings.json do not block Accept', async () => {
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), '{ not json');
+    writeFileSync(join(audioRoot, '01-one.embeddings.json'), '{ not json');
+    writeFileSync(prev(), MP3_BYTES);
+    seed([entry(1, 'r1')]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await accept('r1');
+    warn.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(existsSync(prev())).toBe(false);
+  });
+
+  it('I5: Accept on an m4a book whose live <slug>.mp3 holds AAC bytes renames it to <slug>.m4a first', async () => {
+    writeFileSync(live(), M4A_BYTES);
+    seed([entry(1, 'r1')]);
+
+    const res = await accept('r1');
+
+    expect(res.status).toBe(200);
+    expect(existsSync(live())).toBe(false);
+    expect(existsSync(join(audioRoot, '01-one.m4a'))).toBe(true);
+  });
+
+  it('I6: an fs error with an absolute path inside reconcileSlug at Reject answers a 500 with neither the path nor the raw message (M4 turns this red)', async () => {
+    failMigrate.value = true;
+    writeFileSync(live(), M4A_BYTES);
+    writeFileSync(prev(), MP3_BYTES);
+    seed([entry(1, 'r1')]);
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(500);
+    const text = JSON.stringify(res.body);
+    expect(text).not.toContain('SECRET-WORKSPACE');
+    expect(text).not.toContain('operation not permitted');
+    expect(res.body.error).toBe('Failed to reject revision.');
+    expect(existsSync(prev())).toBe(true);
+  });
+
+  it('Accept swallows a failed state.json re-stamp (spec State-write table): 200, the previous take is deleted, state.json untouched', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '00:10' });
+    writeRealMp3(live(), 1);
+    /* The segments describe the audio (1 s), so the H6 gate passes and step 5's stamp is attempted. */
+    writeFileSync(seg(), JSON.stringify({ durationSec: 1, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    seed([entry(1, 'r1')]);
+    const before = chapterNow();
+    failStateWrite.value = true;
+    failStateWrite.calls = 0;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await accept('r1');
+    const restampFailed = warn.mock.calls.some((c) => /state\.json re-stamp failed for 01-one/.test(String(c[0])));
+    warn.mockRestore();
+    failStateWrite.value = false;
+
+    expect(failStateWrite.calls).toBeGreaterThan(0); // the failing write really ran
+    expect(restampFailed).toBe(true); // and it was step 5's, swallowed and logged
+    expect(res.status).toBe(200);
+    expect(existsSync(prev())).toBe(false);
+    expect(chapterNow()).toEqual(before);
+  });
+
+  it('I6: the same at Accept answers a curated 500', async () => {
+    failMigrate.value = true;
+    writeFileSync(live(), M4A_BYTES);
+    seed([entry(1, 'r1')]);
+    const res = await accept('r1');
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain('SECRET-WORKSPACE');
   });
 });

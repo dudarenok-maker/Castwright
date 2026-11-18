@@ -281,6 +281,10 @@ export const STEPS = [
         // check-audit.test.mjs reads this at RUNTIME (committed-waivers
         // validity); no module-graph edge, same #1847 trap.
         'audit-waivers.json',
+        // check-audit.test.mjs also reads server/package.json at RUNTIME (the
+        // server audit script's --omit-dev pin); same #1847 trap, and without
+        // it a server/package.json-only diff skips the guard's CI leg (#4380).
+        'server/package.json',
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
         'RELEASE_NOTES.md',

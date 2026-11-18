@@ -25,9 +25,9 @@
  * return type are stable; Task 10 only changes the branch body.
  */
 
-import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { audioDir, castJsonPath, stateJsonPath } from '../../workspace/paths.js';
+import { livePartPath } from '../../workspace/take-fields.js';
 import { readJson } from '../../workspace/state-io.js';
 import { bookStateLanguage } from '../../workspace/scan.js';
 import { readStateJsonWithRecovery } from '../../workspace/state-migrate.js';
@@ -764,8 +764,8 @@ export async function scoreBook(
   const chapterData: ChapterData[] = [];
 
   for (const ch of chapters) {
-    const embPath = join(root, `${ch.slug}.embeddings.json`);
-    const segPath = join(root, `${ch.slug}.segments.json`);
+    const embPath = livePartPath(root, ch.slug, 'embeddings');
+    const segPath = livePartPath(root, ch.slug, 'segments');
 
     const embResult = await readEmbeddings(embPath);
 
@@ -1141,7 +1141,7 @@ export async function scoreBook(
         });
       }
       if (rowsForChar.length === 0) continue;
-      await mergeVerdictRows(join(root, `${cd.slug}.render-integrity.json`), charId, rowsForChar);
+      await mergeVerdictRows(livePartPath(root, cd.slug, 'verdicts'), charId, rowsForChar);
     }
     return mismatchCount;
   }

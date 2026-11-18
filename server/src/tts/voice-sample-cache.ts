@@ -96,6 +96,8 @@ export function purgeVoiceSamples(cacheScope: string): void {
    "Hello. I'm…" script is only used when the evidence array is
    genuinely empty (brand-new library voices, all-fabricated rosters
    the verifier swept clean). */
+/* The cached sample's audio extension (a cache file, not a chapter take). */
+const SAMPLE_EXT = 'mp3';
 const MAX_CHARS = 320;
 
 export function stripQuoteMarks(s: string): string {
@@ -162,7 +164,7 @@ export function voiceSampleFileName(
     ? `${args.text}|${args.voiceName}|${contentToken}`
     : `${args.text}|${args.voiceName}`;
   const paramHash = djb2(hashInput).toString(36).slice(0, 8);
-  return `${asciiFileScope(args.cacheScope)}-${args.modelKey}-${paramHash}.mp3`;
+  return `${asciiFileScope(args.cacheScope)}-${args.modelKey}-${paramHash}.${SAMPLE_EXT}`;
 }
 
 /* Plan 219: keep the on-disk sample filename ASCII even when the cacheScope (a

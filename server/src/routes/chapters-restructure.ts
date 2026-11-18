@@ -108,6 +108,7 @@ import { looksLikeTitle, MAX_SUBTITLE_LEN } from '../parsers/text.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-take.js';
 
 export const chaptersRestructureRouter = Router();
 
@@ -691,7 +692,7 @@ async function applyRestructureClaimed(
   );
 
   /* Plan 286 / #3704 — a renamed or renumbered chapter's pending entry moves to its new id with its
-     `.previous.mp3`; every other touched chapter's entry no longer pairs with the live take and is
+     the previous take (`.previous.<ext>`); every other touched chapter's entry no longer pairs with the live take and is
      dropped. Best-effort: logged, never in a response (the six handlers
      return raw messages, so a lock-key path must not reach them). A deliberate
      swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). An entry
@@ -703,7 +704,7 @@ async function applyRestructureClaimed(
   try {
     const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
     const previousMovedFrom = new Set(
-      audioSummary.renamed.filter((r) => r.suffix === 'previous.mp3').map((r) => r.from),
+      audioSummary.renamed.filter((r) => CHAPTER_AUDIO_EXTS.some((ext) => r.suffix === `previous.${ext}`)).map((r) => r.from),
     );
     const moves = pendingMovesAfterRestructure(oldChapters, result.audioOps, previousMovedFrom);
     if (touched.length > 0) await reconcilePendingAfterRestructure(bookDir, result.state.chapters, touched, moves);

@@ -448,17 +448,33 @@ describe('plan 290 — re-parse -> exclude -> Start -> Start (M26)', () => {
 });
 
 describe('plan 290 — survives the client', () => {
-  it('a PUT /state slice save from a stale client copy keeps the marker', async () => {
+  it('a PUT /state slice save from a client copy lacking the marker keeps the marker', async () => {
     const { bookId, bookDir } = await seedMergedBook('put-survives');
-    const staleCopy = readState(bookDir); // read before the re-parse: no marker
     await reparse(bookId);
     expect(readState(bookDir).sentencesPredateChapters).toBe(true);
+    /* The client re-read its copy after the re-parse (so its chapter slugs match disk, #4341's
+       slug_bound check), but its copy predates the marker: strip it, as a stale client would send. */
+    const { sentencesPredateChapters: _marker, ...clientCopy } = readState(bookDir);
+    void _marker;
     const res = await request(await appWith())
       .put(`/api/books/${bookId}/state`)
-      .send({ slice: 'state', patch: { ...staleCopy, tags: ['stale-save'] } });
+      .send({ slice: 'state', patch: { ...clientCopy, tags: ['stale-save'] } });
     expect(res.status).toBe(200);
     const after = readState(bookDir);
     expect(after.tags).toEqual(['stale-save']); // the save landed
     expect(after.sentencesPredateChapters).toBe(true);
+  }, 60_000);
+
+  it('a PUT /state slice save from a copy read BEFORE the re-parse (stale slugs) is refused 409 slug_bound, nothing written', async () => {
+    const { bookId, bookDir } = await seedMergedBook('put-stale-slugs');
+    const staleCopy = readState(bookDir); // read before the re-parse: old slugs, no marker
+    await reparse(bookId);
+    const before = readFileSync(statePath(bookDir), 'utf-8');
+    const res = await request(await appWith())
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'state', patch: { ...staleCopy, tags: ['stale-save'] } });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('slug_bound');
+    expect(readFileSync(statePath(bookDir), 'utf-8')).toBe(before);
   }, 60_000);
 });

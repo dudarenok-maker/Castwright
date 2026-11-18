@@ -304,7 +304,7 @@ describe('(d) the startup sweep never runs a step unlocked on a read error', () 
     const busy = seedBook('Sweep', 'S', 'Busy', 'sweep__s__busy');
     const fine = seedBook('Sweep', 'S', 'Fine', 'sweep__s__fine');
     faulted.add(paths.stateJsonPath(busy));
-    const fn = vi.fn(async (dir: string) => dir);
+    const fn = vi.fn(async (h: { bookDir: string }) => h.bookDir);
     const skipped = await bookOp.withBookOpAtDir(busy, fn);
     expect(fn).not.toHaveBeenCalled();
     expect(skipped).toBe(bookOp.BOOK_GONE);
@@ -315,7 +315,7 @@ describe('(d) the startup sweep never runs a step unlocked on a read error', () 
   it('a state that does not parse keeps running unlocked (it carries no bookId)', async () => {
     const broken = seedBook('Sweep', 'S', 'Broken', 'sweep__s__broken');
     writeFileSync(paths.stateJsonPath(broken), '{ not json');
-    const fn = vi.fn(async (dir: string) => dir);
+    const fn = vi.fn(async (h: { bookDir: string }) => h.bookDir);
     expect(await bookOp.withBookOpAtDir(broken, fn)).toBe(broken);
   });
 });

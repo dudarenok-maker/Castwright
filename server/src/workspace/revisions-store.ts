@@ -8,7 +8,7 @@
 
    LEAF LOCK. Nothing acquires any other lock while holding this one, and no file
    other than revisions.json is WRITTEN under it. (Normalisation probes
-   `audio/<slug>.previous.mp3` for existence — a read-only stat, no lock, no
+   the previous take (`.previous.<ext>`) for existence — a read-only stat, no lock, no
    write.) See the lock-order comment in cast-lock.ts.
 
    READS (readRevisions) take no lock: writeJsonAtomic renames atomically, so a
@@ -35,7 +35,7 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import { audioDir, revisionsJsonPath, stateJsonPath } from './paths.js';
 import { withKeyLock } from './file-lock.js';
-import { hasPreviousAudio as previousAudioExists } from './preserve-previous-audio.js';
+import { hasPreviousAudio as previousAudioExists } from './chapter-take.js';
 import { SCHEMA_SEAMS, migrateSeamDoc, stampSeamSchema, UnsupportedSchemaError } from './schema-migrate.js';
 
 const REVISIONS_SEAM = SCHEMA_SEAMS.find((s) => s.label === 'revisions.json')!;
@@ -53,7 +53,7 @@ export interface StoredRevision {
   /** Identity of the chapter this entry was recorded for (chapter `uuid`, which survives renumbering) and of the render it pairs with (`audioRenderedAt`). Stamped by finalize; absent on legacy entries. Checked by entryMatchesChapter. */
   chapterUuid?: string;
   renderedAt?: string;
-  /** Plan 286 OD20 — a legacy entry the old client never flipped (stuck "Rendering…"), surfaced because .previous.mp3 exists. Its A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against. */
+  /** Plan 286 OD20 — a legacy entry the old client never flipped (stuck "Rendering…"), surfaced because the previous take (.previous.<ext>) exists. Its A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against. */
   recovered?: true;
 }
 export interface StoredTimelineEntry {
@@ -119,10 +119,10 @@ function isObj(v: unknown): v is Record<string, unknown> {
 const EVENT_KINDS = new Set(['accepted', 'rejected', 'rolled-back']);
 
 /** Pure. Never writes. `previousExists(chapterId)` answers whether
-    `audio/<slug>.previous.mp3` exists for that chapter. Rules (spec §1):
+    the previous take (`.previous.<ext>`) exists for that chapter. Rules (spec §1):
     drop the legacy `drift` copy; default missing fields; keep a legacy
     (origin-less) entry — whatever its `playable` flag — only while
-    `.previous.mp3` exists, surfaced as playable, and stamped
+    the previous take (`.previous.<ext>`) exists, surfaced as playable, and stamped
     `recovered: true` when it was stored `playable:false` (plan 286 OD20);
     keep the LAST entry per chapter, except that a recovered entry never
     replaces a non-recovered one (plan 286, pass 3 #5). */
@@ -264,7 +264,7 @@ async function load(bookDir: string, chapters: readonly ChapterRef[]): Promise<R
   return (await loadWithStored(bookDir, chapters)).file;
 }
 
-/** `file` is the normalised view (legacy entries kept only while `.previous.mp3`
+/** `file` is the normalised view (legacy entries kept only while the previous take (`.previous.<ext>`)
     exists). `stored` is the same normalisation WITHOUT that `.previous` filter —
     the entries as stored. commitRevisionOp looks its own entry up there: the
     op's audio step has by then consumed `.previous`, which would otherwise make
@@ -381,9 +381,9 @@ export async function dropPendingForChapter(
 
 /** #3704 — reconcile pending entries after a restructure, in one write under the revisions lock
     (a leaf, like the rest of the module). `moves` re-keys an entry to its chapter's new id (the
-    chapter was renamed or renumbered and its `.previous.mp3` moved with it); `drop` removes the
+    chapter was renamed or renumbered and its previous take moved with it); `drop` removes the
     entries of every other touched chapter. The move is applied to the RAW entries, before
-    normalisation: rewriteChapterSlugs has already moved `.previous.mp3` to the new slug, so
+    normalisation: rewriteChapterSlugs has already moved the previous take to the new slug, so
     normalising first would probe the old slug and lose a legacy entry. No write when nothing
     matches. */
 export async function reconcilePendingAfterRestructure(
@@ -507,7 +507,7 @@ export async function commitRevisionOp(
 ): Promise<CommitResult> {
   return withKeyLock(revisionsLockKey(bookDir), async () => {
     const { file, stored } = await loadWithStored(bookDir, chapters);
-    /* Either view: `stored` finds a legacy entry whose `.previous.mp3` the op
+    /* Either view: `stored` finds a legacy entry whose previous take (`.previous.<ext>`) the op
        consumed; `file` finds a server entry that a later legacy entry for the
        same chapter shadows in `stored` (begin saw it through `file`). */
     const entry = isDangerousKey(revisionId)

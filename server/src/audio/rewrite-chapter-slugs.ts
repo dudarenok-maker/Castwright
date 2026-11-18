@@ -6,10 +6,9 @@
      <slug>.mp3 / .m4a / .ogg  the audio itself (the book's output format)
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
-     <slug>.previous.mp3 / .previous.segments.json /
-     <slug>.previous.peaks.json / .previous.lufs.json
-                           the A/B take's preserved prior render
-                           (audio/previous-audio.ts) — follows the live
+     <slug>.previous.mp3 / .m4a / .ogg and every .previous.<sidecar>
+                           the A/B take's preserved prior render, with its
+                           real extension (workspace/chapter-take.ts) — follows the live
                            audio, else a chapter that inherits the slug
                            inherits another chapter's previous take (#3400).
                            A stale `.previous.*` at any slug a chapter newly
@@ -33,43 +32,20 @@
 
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { CHAPTER_AUDIO_EXTS, type ChapterAudioExt } from '../workspace/chapter-audio-file.js';
+import { TAKE_SUFFIXES, takeSuffixPath, type TakeSuffix } from '../workspace/chapter-take.js';
 
-/** Suffixes of the companion files per chapter audio. Kept in one
-    array so add-a-new-companion changes touch one site. */
-const COMPANION_SUFFIXES = [
-  ...CHAPTER_AUDIO_EXTS,
-  'segments.json',
-  'peaks.json',
-  'previous.mp3',
-  'previous.segments.json',
-  'previous.peaks.json',
-  'previous.lufs.json',
-  'lufs.json',
-  'embeddings.json',
-  'render-integrity.json',
-  'render-integrity-attempted.json',
-] as const;
+/** Suffixes of the companion files per chapter audio: the take module's whole
+    suffix table (live audio + sidecars, and every `previous.*` part), so
+    add-a-new-companion changes touch one site. */
+const COMPANION_SUFFIXES = TAKE_SUFFIXES;
 /** The A/B take's `.previous.*` entries — the subset cleared at a rename target. */
 const PREVIOUS_SUFFIXES = COMPANION_SUFFIXES.filter((s) => s.startsWith('previous.')) as Array<
-  Extract<(typeof COMPANION_SUFFIXES)[number], `previous.${string}`>
+  Extract<TakeSuffix, `previous.${string}`>
 >;
-type CompanionSuffix =
-  | ChapterAudioExt
-  | 'segments.json'
-  | 'peaks.json'
-  | 'previous.mp3'
-  | 'previous.segments.json'
-  | 'previous.peaks.json'
-  | 'previous.lufs.json'
-  | 'lufs.json'
-  | 'embeddings.json'
-  | 'render-integrity.json'
-  | 'render-integrity-attempted.json';
+type CompanionSuffix = TakeSuffix;
 
 export type ChapterAudioOp =
   | { kind: 'delete'; from: string }
@@ -102,10 +78,6 @@ function failureMessage(label: string, e: unknown): string {
   return typeof code === 'string' ? `${label} (${code})` : label;
 }
 
-function suffixPath(audioRoot: string, slug: string, suffix: CompanionSuffix): string {
-  return join(audioRoot, `${slug}.${suffix}`);
-}
-
 /** Apply a batch of audio ops against the book's audio/ directory. */
 export async function rewriteChapterSlugs(
   audioRoot: string,
@@ -134,7 +106,7 @@ export async function rewriteChapterSlugs(
   for (const op of deletes) {
     if (renameSources.has(op.from)) continue;
     for (const suffix of COMPANION_SUFFIXES) {
-      const path = suffixPath(audioRoot, op.from, suffix);
+      const path = takeSuffixPath(audioRoot, op.from, suffix);
       if (!existsSync(path)) continue;
       try {
         await rm(path, { force: true });
@@ -166,9 +138,9 @@ export async function rewriteChapterSlugs(
     const tempSlug = `${op.from}.relabel-${randomUUID()}`;
     const stagedSuffixes: CompanionSuffix[] = [];
     for (const suffix of COMPANION_SUFFIXES) {
-      const src = suffixPath(audioRoot, op.from, suffix);
+      const src = takeSuffixPath(audioRoot, op.from, suffix);
       if (!existsSync(src)) continue;
-      const tmp = suffixPath(audioRoot, tempSlug, suffix);
+      const tmp = takeSuffixPath(audioRoot, tempSlug, suffix);
       try {
         await renameWithRetry(src, tmp);
         stagedSuffixes.push(suffix);
@@ -190,7 +162,7 @@ export async function rewriteChapterSlugs(
   // — a merge's renumbering gives the surviving chapter that slug).
   for (const op of deletes) {
     for (const suffix of COMPANION_SUFFIXES) {
-      const path = suffixPath(audioRoot, op.from, suffix);
+      const path = takeSuffixPath(audioRoot, op.from, suffix);
       if (!existsSync(path)) continue;
       try {
         await rm(path, { force: true });
@@ -218,7 +190,7 @@ export async function rewriteChapterSlugs(
   for (const slug of clearTargets) {
     const op: ChapterAudioOp = staged.find((s) => s.op.to === slug)?.op ?? { kind: 'delete', from: slug };
     for (const suffix of PREVIOUS_SUFFIXES) {
-      const path = suffixPath(audioRoot, slug, suffix);
+      const path = takeSuffixPath(audioRoot, slug, suffix);
       if (!existsSync(path)) continue;
       try {
         await rm(path, { force: true });
@@ -238,8 +210,8 @@ export async function rewriteChapterSlugs(
   // Phase 2: finalise temp slugs to their target slugs.
   for (const { op, tempSlug, stagedSuffixes } of staged) {
     for (const suffix of stagedSuffixes) {
-      const tmp = suffixPath(audioRoot, tempSlug, suffix);
-      const dest = suffixPath(audioRoot, op.to, suffix);
+      const tmp = takeSuffixPath(audioRoot, tempSlug, suffix);
+      const dest = takeSuffixPath(audioRoot, op.to, suffix);
       try {
         await renameWithRetry(tmp, dest);
         summary.renamed.push({ from: op.from, to: op.to, suffix });
@@ -261,7 +233,7 @@ export async function rewriteChapterSlugs(
   // file.
   for (const { op } of staged) {
     for (const suffix of ['segments.json', 'previous.segments.json'] as const) {
-      const segPath = suffixPath(audioRoot, op.to, suffix);
+      const segPath = takeSuffixPath(audioRoot, op.to, suffix);
       if (!existsSync(segPath)) continue;
       try {
         const seg = await readJson<{ chapterId?: number; chapterTitle?: string }>(segPath);
@@ -286,7 +258,7 @@ export async function rewriteChapterSlugs(
        by it). Re-stamp only rows that have one: a legacy row without it must
        stay unattributed. lufs / embeddings / attempted embed no chapter
        identity, so they move untouched. */
-    const verdictPath = suffixPath(audioRoot, op.to, 'render-integrity.json');
+    const verdictPath = takeSuffixPath(audioRoot, op.to, 'render-integrity.json');
     if (!existsSync(verdictPath)) continue;
     try {
       const rows = await readJson<Array<{ chapterId?: number }>>(verdictPath);
