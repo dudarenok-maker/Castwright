@@ -186,9 +186,11 @@ function runPowerShellFile(scriptPath, extraArgs = [], env = process.env, cwd = 
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-File', scriptPath, ...extraArgs);
-  // `cwd` matters when LOCALAPPDATA is absent: PowerShell then falls back to a
-  // cwd-relative Microsoft/Windows/PowerShell/ModuleAnalysisCache, which would
-  // land untracked in the repo checkout (#4229). Callers pass a throwaway dir.
+  // Hardening: callers pass a throwaway temp dir as `cwd`, so no PowerShell
+  // child can drop files (e.g. a ModuleAnalysisCache) in the repo checkout.
+  // This was NOT shown to be the mechanism behind #4229: an absent
+  // LOCALAPPDATA does not make PowerShell write a cwd-relative cache on the
+  // box where it was observed (the path comes from Environment.GetFolderPath).
   return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env, windowsHide: true, cwd });
 }
 
@@ -541,7 +543,7 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     );
   });
 
-  test(`${rel}: pwsh child with LOCALAPPDATA absent runs in a temp cwd, never the repo checkout (#4229)`, {
+  test(`${rel}: pwsh child with LOCALAPPDATA absent runs in a throwaway temp cwd, never the repo checkout (hardening; not shown to be #4229's mechanism)`, {
     skip: PWSH_SKIP_REASON ?? false,
   }, () => {
     const body = ['"CWD=" + (Get-Location).Path', '"LAD=[" + $env:LOCALAPPDATA + "]"'].join('\n');
