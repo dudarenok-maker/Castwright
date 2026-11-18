@@ -322,3 +322,89 @@ describe('#2253 — a merged (paragraph-degraded) chapter keeps its speakers', (
     });
   }
 });
+
+/* #2254 §4.2 — the internal `structureOptions` seam reaches parseChapterStructure.
+   Same merged body and model output as above: with default recovery the engine
+   re-introduces the paragraph breaks and confirms the dash turns; with
+   recoverMidParagraphTurns:false it does not, so `deterministic` differs. */
+describe('#2254 — attributeChapterStage2 structureOptions seam', () => {
+  async function deterministicFor(structureOptions?: { recoverMidParagraphTurns: boolean }) {
+    const opts = baseOpts(mergedMockSentences());
+    opts.chapter = { ...opts.chapter, body: MERGED_NARRATION_BODY };
+    let deterministic: SentenceOutput[] | null = null;
+    await attributeChapterStage2({
+      ...opts,
+      structureOptions,
+      onStages: (stages) => { deterministic = stages.deterministic; },
+    });
+    if (!deterministic) throw new Error('onStages was not called');
+    return deterministic as SentenceOutput[];
+  }
+
+  it('recoverMidParagraphTurns:false yields a different deterministic output than the default', async () => {
+    const withRecovery = await deterministicFor();
+    const withoutRecovery = await deterministicFor({ recoverMidParagraphTurns: false });
+    expect(withRecovery.length).toBeGreaterThan(0);
+    expect(withoutRecovery).not.toEqual(withRecovery);
+  });
+});
+
+/* #2254 §4.2 "Arm 1" / "Arm 2" — what recovery CHANGES on a merged,
+   narration-open paragraph. The recovered, name-tagged turn is sentence 1,
+   «— Здесь холодно, — сказала Майрин.» (tag speaker: mairin). The mock gets
+   that one turn wrong on purpose; the other two stay right. Outcomes are read
+   from the returned sentences and from onStages (deterministic / reasons /
+   flags), not from `final` alone. */
+describe('#2254 1A — recovery on vs off on a merged paragraph', () => {
+  async function runWithWrongTurn(wrongId: string, structureOptions?: { recoverMidParagraphTurns: boolean }) {
+    const mock = mergedMockSentences();
+    mock[0] = { ...mock[0], characterId: wrongId };
+    const opts = baseOpts(mock);
+    opts.chapter = { ...opts.chapter, body: MERGED_NARRATION_BODY };
+    type Stages = Parameters<NonNullable<Parameters<typeof attributeChapterStage2>[0]['onStages']>>[0];
+    const box: { stages?: Stages } = {};
+    const result = await attributeChapterStage2({
+      ...opts,
+      structureOptions,
+      onStages: (s) => { box.stages = s; },
+    });
+    const st = box.stages;
+    if (!st) throw new Error('onStages was not called');
+    const reason = st.reasons.find((r) => r.index === 0)?.reason;
+    const flagged = (st.flags ?? []).some((f) => f.index === 0);
+    return { result, det: st.deterministic[0], reason, flagged };
+  }
+
+  it('Arm 1, recovery ON: an in-roster wrong id is corrected to the tag speaker (tag-correct, 0.9, unflagged)', async () => {
+    const { result, det, reason, flagged } = await runWithWrongTurn('tobias');
+    expect(result.structureReport?.alignedPct).toBe(100);
+    expect(det.characterId).toBe('mairin');
+    expect(reason).toBe('tag-correct:mairin');
+    expect(det.confidence).toBe(CONFIDENCE.TAG_CORRECT);
+    expect(flagged).toBe(false);
+  });
+
+  it('Arm 1, recovery OFF: the in-roster wrong id is kept and flagged below 0.75', async () => {
+    const { result, det, flagged } = await runWithWrongTurn('tobias', { recoverMidParagraphTurns: false });
+    expect(result.structureReport?.alignedPct).toBe(100);
+    expect(det.characterId).toBe('tobias');
+    expect(det.confidence).toBeLessThan(0.75);
+    expect(flagged).toBe(true);
+  });
+
+  it('Arm 2, recovery ON: a wrong `narrator` is corrected to the tag speaker', async () => {
+    const { result, det, reason } = await runWithWrongTurn('narrator');
+    expect(result.structureReport?.alignedPct).toBe(100);
+    expect(det.characterId).toBe('mairin');
+    expect(reason).toBe('tag-correct:mairin');
+  });
+
+  it('Arm 2, recovery OFF: the wrong `narrator` is confidently confirmed (narration-confirm 0.95, unflagged)', async () => {
+    const { result, det, reason, flagged } = await runWithWrongTurn('narrator', { recoverMidParagraphTurns: false });
+    expect(result.structureReport?.alignedPct).toBe(100);
+    expect(det.characterId).toBe('narrator');
+    expect(reason).toBe('narration-confirm');
+    expect(det.confidence).toBe(0.95);
+    expect(flagged).toBe(false);
+  });
+});

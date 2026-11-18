@@ -36,6 +36,7 @@ import {
   refuseIfManuscriptEditsLocked,
   selectEditsLocked,
 } from '../store/restructure-lock';
+import { selectParagraphsMerged } from '../store/chapters-slice';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
@@ -842,6 +843,9 @@ export function ManuscriptView({
      conditionally (Rules of Hooks); currentChapterUnresolvedCount guards its
      own `currentChapter.id` read since currentChapter may still be
      undefined here. */
+  const currentChapterParagraphsMerged = useAppSelector((s) =>
+    currentChapter && s.chapters ? selectParagraphsMerged(s, currentChapter.id) : false,
+  );
   const currentChapterUnresolvedCount = useAppSelector((s) =>
     bookId && currentChapter ? unresolvedCountForChapters(s.scriptReview?.byBook[bookId], [currentChapter.id]) : 0,
   );
@@ -1158,6 +1162,14 @@ export function ManuscriptView({
                   className="basis-full text-xs text-ink/60"
                 >
                   {RESTRUCTURING_REASON}
+                </p>
+              )}
+              {currentChapterParagraphsMerged && (
+                <p
+                  data-testid="manuscript-paragraph-notice"
+                  className="basis-full text-xs text-ink/60"
+                >
+                  In the imported text, this chapter has a paragraph with ten or more places where a line of dialogue begins mid-paragraph. Each would usually start its own paragraph.
                 </p>
               )}
               <RestructureChaptersButton

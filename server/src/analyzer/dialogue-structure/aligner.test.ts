@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { parseChapterStructure } from './parser.js';
-import { alignSentences, locateSentenceOffsets, buildNeedle } from './aligner.js';
+import { alignSentences, locateSentenceOffsets, locateSentenceRanges, buildNeedle } from './aligner.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 
 const mkSentence = (id: number, characterId: string, text: string): SentenceOutput => ({
@@ -998,5 +998,69 @@ describe('alignSentences with dashIsDialogueMarker = true', () => {
 
     expect(resultWithDash.aligned[1].spans).toEqual([secondSpan]);
     expect(resultWithoutDash.aligned[1].spans).toEqual([secondSpan]);
+  });
+});
+
+describe('locateSentenceRanges (#2254 R10-4)', () => {
+  // Inputs the existing locateSentenceOffsets tests use: [sentences, body, gate].
+  const anchor = 'Это был очень длинный и сложный процесс, который никто не мог понять до конца.';
+  const table: Array<[Array<{ text: string }>, string, boolean]> = [
+    [[{ text: 'The door opened.' }, { text: 'A shadow fell across the floor.' }], 'The door opened. A shadow fell across the floor.', false],
+    [[{ text: 'The door opened.' }, { text: 'Something else entirely.' }], 'The door opened.', false],
+    [[{ text: 'Alpha here.' }, { text: 'nope.' }, { text: 'Gamma here.' }], 'Alpha here. Beta here. Gamma here.', false],
+    [[{ text: 'He said -- quietly -- nothing.' }], 'He said — quietly — nothing.', false],
+    [[{ text: '— Спокойной ночи, друзья!' }], `${anchor}
+— Спокойной ночи, друзья!`, true],
+    [[{ text: 'Спокойной ночи, друзья!' }], `${anchor}
+— Спокойной ночи, друзья!`, true],
+    [[{ text: '— Спокойной ночи,' }], 'Начало. — Спокойной ночи, друзья!', false],
+    [[{ text: 'Спокойной ночи,' }], 'Начало. — Спокойной ночи, друзья!', false],
+  ];
+
+  it('locateSentenceOffsets equals the start projection of locateSentenceRanges on every table input', () => {
+    for (const [sentences, body, gate] of table) {
+      expect(locateSentenceOffsets(sentences, body, gate)).toEqual(
+        locateSentenceRanges(sentences, body, gate).map((r) => r?.start ?? null),
+      );
+    }
+  });
+
+  it('a located range slices back to the sentence text', () => {
+    // Plain single-spaced ASCII: the module's normalisation is the identity here.
+    const body = 'The door opened. A shadow fell across the floor.';
+    const sentences = [{ text: 'The door opened.' }, { text: 'A shadow fell across the floor.' }];
+    const ranges = locateSentenceRanges(sentences, body);
+    ranges.forEach((r, i) => {
+      expect(r).not.toBeNull();
+      expect(body.slice(r!.start, r!.end)).toBe(sentences[i].text);
+      // end is a real offset, not undefined (an undefined end slices to the body's end).
+      expect(r!.end).toBe(body.indexOf(sentences[i].text) + sentences[i].text.length);
+    });
+  });
+
+  it('a repeated sentence in one line: each range lands on its own occurrence', () => {
+    const body = '— Да. Он долго молчал и смотрел в окно на дождь. — Да.';
+    const ranges = locateSentenceRanges(
+      [{ text: '— Да.' }, { text: 'Он долго молчал и смотрел в окно на дождь.' }, { text: '— Да.' }],
+      body,
+      true,
+    );
+    expect(ranges[0]).not.toBeNull();
+    expect(ranges[2]).not.toBeNull();
+    expect(ranges[0]!.start).toBe(0);
+    expect(ranges[2]!.start).toBeGreaterThanOrEqual(ranges[0]!.end);
+    expect(ranges[2]!.start).toBe(body.lastIndexOf('—'));
+  });
+
+  it('an unlocatable sentence gives null', () => {
+    const ranges = locateSentenceRanges([{ text: 'The door opened.' }, { text: 'Not here.' }], 'The door opened.');
+    expect(ranges[0]).toEqual({ start: 0, end: 'The door opened.'.length });
+    expect(ranges[1]).toBeNull();
+  });
+
+  it('does not use the fuzzy prefix fallback: a paraphrased long sentence is null (searches with fuzzy off)', () => {
+    const body = 'The quick brown fox jumps over the lazy dog.';
+    const ranges = locateSentenceRanges([{ text: 'The quick brown fox leaps over a sleepy dog.' }], body);
+    expect(ranges[0]).toBeNull();
   });
 });

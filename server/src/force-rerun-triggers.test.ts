@@ -142,6 +142,11 @@ const MAIN_COVERED = [
     base: REPO_ROOT,
   },
   {
+    rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[7].replace(/\*\*$/, 'paragraph-degradation-scan.mts'),
+    file: 'a server/scripts/** file (via the scripts/** trigger; SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
+    base: REPO_ROOT,
+  },
+  {
     rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[6],
     file: 'the versioned-dir launcher (SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
     base: REPO_ROOT,

@@ -1087,6 +1087,8 @@ export function Layout() {
                    book-state reconciliation; the slice maps raw SSE tick ids
                    through them so drifted characters keep their live row. */
                 characterIdAliases: res.characterIdAliases,
+                /* #2254 — chapters flagged paragraph-merged at import. */
+                paragraphsMergedChapters: res.paragraphsMergedChapters,
                 /* Plan 77 — book-state response now carries per-chapter
                    EBU R128 sidecar payloads. Older servers omit it; the
                    slice tolerates an undefined map by leaving each row's
