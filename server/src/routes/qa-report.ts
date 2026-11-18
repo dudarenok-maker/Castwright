@@ -16,6 +16,7 @@ import { revisionsFailureText } from '../workspace/revisions-store.js';
 import { triggerScoring, isGenerationActive } from './generation.js';
 import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
+import { isSpliceOrRepairActive } from './chapter-job-coordination.js';
 
 export const qaReportRouter = Router();
 
@@ -70,6 +71,12 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
     }
     if (isGenerationActive(bookId)) {
       res.status(409).json({ error: 'Book is currently generating — resume scoring once the run finishes.' });
+      return;
+    }
+    /* #4235 — a splice or QA repair synthesises under its own Qwen tier; the post-audition
+       reconcile in triggerScoring could evict that tier mid-synthesis. Same curated-sentence rule. */
+    if (isSpliceOrRepairActive(bookId)) {
+      res.status(409).json({ error: 'A chapter fix or repair is running for this book — resume scoring once it finishes.' });
       return;
     }
     const registered = await runBookJob(bookId, 'scoring', async (lease) => {

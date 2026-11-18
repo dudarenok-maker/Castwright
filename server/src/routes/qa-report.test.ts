@@ -114,6 +114,7 @@ let bookId: string;
    default workspace dir, before the tempdir below even exists). */
 let __registerFakeJobForTest: typeof import('./generation.js').__registerFakeJobForTest;
 let __awaitScoringSettled: typeof import('./generation.js').__awaitScoringSettled;
+let registerSplice: typeof import('./chapter-job-coordination.js').registerSplice;
 let scoreBook: typeof import('../audio/render-integrity/aggregate.js').scoreBook;
 /* Captured (rather than a static top-level `import * as cfg`) so the
    vi.spyOn below reliably intercepts the SAME binding generation.ts's
@@ -143,6 +144,7 @@ beforeAll(async () => {
   const configMod = await import('../config/resolver.js');
   __registerFakeJobForTest = generationModule.__registerFakeJobForTest;
   __awaitScoringSettled = generationModule.__awaitScoringSettled;
+  registerSplice = (await import('./chapter-job-coordination.js')).registerSplice;
   configModule = configMod;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
@@ -265,6 +267,48 @@ describe('POST /:bookId/resume-scoring', () => {
       const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
       expect(res.status).toBe(409);
     } finally {
+      cleanup();
+    }
+  });
+
+  /* #4235 — a splice / QA repair is invisible to isGenerationActive but must still hold off
+     the post-audition tier reconcile that runs downstream of scoreBook. */
+  it('returns 409 and never scores while a splice is in flight, then releases', async () => {
+    vi.mocked(scoreBook).mockClear();
+    const cleanup = registerSplice(bookId, 1, new AbortController());
+    let released = false;
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('A chapter fix or repair is running for this book — resume scoring once it finishes.');
+      await __awaitScoringSettled(bookId);
+      expect(scoreBook).not.toHaveBeenCalled();
+      cleanup();
+      released = true;
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        const after = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(after.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
+      }
+    } finally {
+      if (!released) cleanup();
+    }
+  });
+
+  it("another book's in-flight splice does not block this book", async () => {
+    vi.mocked(scoreBook).mockClear();
+    const cleanup = registerSplice(`${bookId}-other`, 1, new AbortController());
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+      expect(res.status).toBe(202);
+      await __awaitScoringSettled(bookId);
+    } finally {
+      configSpy.mockRestore();
       cleanup();
     }
   });
