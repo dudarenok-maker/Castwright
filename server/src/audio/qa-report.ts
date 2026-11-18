@@ -203,6 +203,11 @@ export async function buildAudioQaReport(
      A stale one (the voice was reverted, or the cast row is gone) is PENDING — a score-only
      pass (Resume) clears it — never a re-render. */
   const staleMarkerIds = new Set<string>();
+  /* #3680 pass 1 — the ids above are frozen-render snapshot keys (a merged character keeps
+     the key it rendered under). Resolve each through the cast of record, as scoreBook does
+     (CLAUDE.md: cast.json is the identity of record), and de-duplicate, so the listing names
+     the character the cast shows, once. */
+  const charactersNeedingRerender: string[] = [];
   if (markedIds.length > 0) {
     const { castResolver, bookLanguage } = await loadCastContext(bookDir);
     const { currentVoiceFor } = createCurrentVoiceFacts({
@@ -214,13 +219,18 @@ export async function buildAudioQaReport(
     });
     const withCurrentLine = charsWithCurrentVoiceLine(voiceChapters, stochasticCharacterIds, currentVoiceFor);
     for (const id of markedIds) {
-      if (currentVoiceFor(id) === undefined || withCurrentLine.has(id)) staleMarkerIds.add(id);
+      if (currentVoiceFor(id) === undefined || withCurrentLine.has(id)) {
+        staleMarkerIds.add(id);
+        continue;
+      }
+      // A marker needs a current voice, which needs a live cast row, so this resolves.
+      const canonicalId = castResolver.resolve(id)?.character.id ?? id;
+      if (!charactersNeedingRerender.includes(canonicalId)) charactersNeedingRerender.push(canonicalId);
     }
   }
   const charactersPending = Array.from(stochasticCharacterIds).filter(
     (id) => !(id in centroids) || staleMarkerIds.has(id),
   );
-  const charactersNeedingRerender = markedIds.filter((id) => !staleMarkerIds.has(id));
 
   /* srv-36 hardening — chaptersScored/chaptersEmbedFailed are now
      roster-aware: a chapter is "fully scored" iff EVERY character on its
