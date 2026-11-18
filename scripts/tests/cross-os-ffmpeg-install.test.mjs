@@ -229,7 +229,11 @@ function assertThrowawayCwd(reported, prefix) {
     `child cwd must be outside the checkout ${repo}; got ${childCwd}`,
   );
   assert.ok(basename(childCwd).startsWith(prefix), `expected a ${prefix}* dir; got ${childCwd}`);
-  assert.ok(!existsSync(childCwd), `expected the throwaway cwd to be cleaned up; ${childCwd} still exists`);
+  // existsSync on the RAW reported path, not `childCwd`: canonicalPath
+  // lower-cases, and mkdtemp suffixes are mixed-case, so on a case-sensitive
+  // filesystem (Linux/ext4) the lower-cased path never existed and this
+  // assertion could not fail. Lower-casing is for comparisons only.
+  assert.ok(!existsSync(reported), `expected the throwaway cwd to be cleaned up; ${reported} still exists`);
 }
 
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser
