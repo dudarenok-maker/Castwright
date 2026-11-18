@@ -5058,6 +5058,7 @@ class PlacementController:
             except Exception:
                 log.warning("evict step %s failed", step.name, exc_info=True)
                 continue
+            log.info("admission ladder (%s): evicted step %s on %s", engine, step.name, device_key)
             got = fits()
             if got is not None:
                 return got

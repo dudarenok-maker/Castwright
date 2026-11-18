@@ -91,3 +91,27 @@ def test_no_constraint_ladder_still_targets_the_roomiest_card():
     out = _run_both(devs)
     for entry, seen in out.items():
         assert seen and set(seen) == {"cuda:1"}, f"{entry}: ladder ran on {seen}"
+
+
+def test_ladder_logs_the_card_it_evicts_on(caplog):
+    # A129 observability: a ladder step that frees something logs the target
+    # card, so an operator can tell which card the ladder acted on.
+    devs = _devs()
+
+    def steps(dk, eng):
+        return [main.EvictStep("spk", None, lambda: True)]
+
+    fp = type("F", (), {"peak_mb": lambda *_: PEAK, "record": lambda *_: None})()
+    pc = main.PlacementController(
+        probe=lambda: devs,
+        footprints=fp,
+        ledger=main.ReservationLedger(),
+        reserve_mb=lambda: 500,
+        idle_evict_steps=steps,
+        is_resident=lambda e: "cuda:0",
+        reclaim=lambda dk: False,
+    )
+    with caplog.at_level("INFO", logger="sidecar"):
+        asyncio.run(pc.admit("coqui", None, {}, cpu_capable=False, heavy=True))
+    lines = [r.getMessage() for r in caplog.records if "admission ladder" in r.getMessage()]
+    assert lines and all("step spk on cuda:0" in m for m in lines), lines
