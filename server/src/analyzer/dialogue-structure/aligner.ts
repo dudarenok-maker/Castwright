@@ -638,7 +638,29 @@ export function locateSentenceOffsets(
   body: string,
   dashIsDialogueMarker: boolean = false,
 ): Array<number | null> {
-  const { text: normBody, rawStart } = buildNormalizedMap(body);
+  return locateSentenceRanges(sentences, body, dashIsDialogueMarker).map((r) =>
+    r === null ? null : r.start,
+  );
+}
+
+/** #2254 R10-4 — The same order-aware search as `locateSentenceOffsets` (the
+    `locateNeedles` call with its third argument `false`, NOT the `true` that
+    `alignSentences` passes), returning each sentence's raw `{ start, end }`
+    instead of only its start. `end` is exclusive: the raw offset just past the
+    sentence's last matched character. `null` when the sentence is not located.
+
+    The blind sheet needs the end because a recovery-off span can be most of an
+    11,000-13,000-character merged line, so bracketing the spans would bracket
+    the whole line; and a sentence that repeats its exact text in its own line
+    (`— Да.`) could be marked at the wrong occurrence by a text search alone.
+    The order-aware search places each sentence between its neighbours.
+    Pure: no I/O, no model calls. */
+export function locateSentenceRanges(
+  sentences: Array<{ text: string }>,
+  body: string,
+  dashIsDialogueMarker: boolean = false,
+): Array<{ start: number; end: number } | null> {
+  const { text: normBody, rawStart, rawEnd } = buildNormalizedMap(body);
   // #2537/#2540 — dash-invariant needle search, matching alignSentences. The
   // located offset is used as-is: when a dash-stripped needle's match starts
   // at a paragraph dash, the search that found it required one; see
@@ -647,5 +669,7 @@ export function locateSentenceOffsets(
   const needles = sentences.map((s) => buildNeedle(normalize(s.text), dashIsDialogueMarker));
   const located = locateNeedles(needles, normBody, false, dashAdjacencyFor(body, rawStart));
 
-  return located.map((m) => (m === null ? null : rawStart[m.start]));
+  return located.map((m) =>
+    m === null ? null : { start: rawStart[m.start], end: rawEnd[m.end - 1] },
+  );
 }

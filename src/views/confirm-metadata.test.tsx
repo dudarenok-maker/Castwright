@@ -518,3 +518,81 @@ describe('ConfirmMetadataView — optimistic LibraryBook languageSet (N6 regress
     ).toBeInTheDocument();
   });
 });
+
+describe('ConfirmMetadataView — merged-paragraph notice (#2254)', () => {
+  const NOTICE_TEXT = (where: string) =>
+    `Heads-up: in ${where}, the imported text has a paragraph with ten or more places where a line of dialogue begins mid-paragraph. Each of those places would usually start a new paragraph. A different copy or format of this book may give a better result.`;
+
+  function renderNotice(chapters: ImportCandidate['chapters'], language = 'ru') {
+    const c: ImportCandidate = {
+      ...candidate,
+      language,
+      languageSupported: true,
+      supportedLanguages: [
+        { code: 'en', label: 'English' },
+        { code: 'ru', label: 'Russian' },
+      ],
+      chapters,
+    };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: c },
+        library: { loaded: true, error: null, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+  }
+  const chs = (n: number, flagged: number[], extra: Record<number, object> = {}) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
+      title: `Chapter ${i + 1}`,
+      ...(flagged.includes(i + 1) ? { paragraphsMerged: true } : {}),
+      ...(extra[i + 1] ?? {}),
+    }));
+
+  it('shows the verbatim wording for one flagged chapter', () => {
+    renderNotice(chs(3, [2]));
+    const box = screen.getByTestId('confirm-paragraph-notice');
+    expect(box.textContent?.replace(/\s+/g, ' ').trim()).toBe(NOTICE_TEXT('1 chapter (Chapter 2)'));
+  });
+
+  it('hides after the language is overridden to English', async () => {
+    const user = userEvent.setup();
+    renderNotice(chs(3, [2]));
+    expect(screen.getByTestId('confirm-paragraph-notice')).toBeInTheDocument();
+    await user.selectOptions(screen.getByTestId('confirm-language'), 'en');
+    expect(screen.queryByTestId('confirm-paragraph-notice')).not.toBeInTheDocument();
+  });
+
+  it('hides when the only flagged chapter is pre-excluded front matter', () => {
+    renderNotice(chs(3, [1], { 1: { isLikelyFrontMatter: true } }));
+    expect(screen.queryByTestId('confirm-paragraph-notice')).not.toBeInTheDocument();
+  });
+
+  it('disappears when the user unticks the only flagged chapter', async () => {
+    const user = userEvent.setup();
+    renderNotice(chs(3, [2]));
+    expect(screen.getByTestId('confirm-paragraph-notice')).toBeInTheDocument();
+    await user.click(screen.getByText('Chapters to include'));
+    const list = screen.getByTestId('chapter-exclusion-scroll');
+    await user.click(within(list).getByText('Chapter 2'));
+    expect(screen.queryByTestId('confirm-paragraph-notice')).not.toBeInTheDocument();
+  });
+
+  it('caps the list at three titles then "and N more"', () => {
+    renderNotice(chs(6, [1, 2, 3, 4, 5]));
+    const text = screen.getByTestId('confirm-paragraph-notice').textContent ?? '';
+    expect(text.replace(/\s+/g, ' ')).toContain('in 5 chapters (Chapter 1, Chapter 2, Chapter 3 and 2 more)');
+    expect(text).not.toContain('Chapter 4');
+    expect(text).not.toContain('Chapter 5');
+  });
+});

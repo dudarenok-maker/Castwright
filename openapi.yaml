@@ -7302,6 +7302,11 @@ components:
                   type: boolean,
                   description: 'seam 3b — server-computed flag (title-union OR wordCount ≤ 150). Replaces the client-side regex mirror.',
                 }
+              paragraphsMerged:
+                {
+                  type: boolean,
+                  description: 'Set (true) only when the detected language is a notice language (ru) and the chapter imported text has a paragraph with ten or more mid-paragraph dialogue openers (MERGED_TURNS_DEGRADED); absent otherwise.',
+                }
 
     ImportResponse:
       type: object
@@ -10261,6 +10266,16 @@ components:
             characters:
               type: array
               items: { $ref: '#/components/schemas/Character' }
+        paragraphsMergedChapters:
+          type: array
+          items: { type: integer }
+          description: |
+            Ids of the non-excluded chapters whose hydrated body has merged
+            dialogue turns (the paragraph-degradation signal, #2254). Absent
+            when it was not measured (no book language, a language outside the
+            notice list, no hydrated manuscript, or hints that do not pair with
+            state.json) and when nothing is flagged. Derived on read; never
+            persisted.
         manuscript:
           type: object
           nullable: true

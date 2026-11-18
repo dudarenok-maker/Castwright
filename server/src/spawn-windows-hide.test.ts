@@ -162,6 +162,7 @@ const EXTERNAL_SCAN_ROOTS = [
   { dir: join(REPO_ROOT, 'scripts'), extensions: ['.mjs', '.cjs', '.js'] },
   { dir: join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts'), extensions: ['.mjs'] },
   { dir: join(REPO_ROOT, 'pinokio-scripts', 'lib'), extensions: ['.js', '.mjs'] },
+  { dir: join(REPO_ROOT, 'server', 'scripts'), extensions: ['.mts', '.ts', '.mjs'] },
 ] as const;
 
 /* Helper: recursively list files matching given extensions under a directory.
@@ -509,6 +510,7 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
       SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\/\*\*$/, ''),
       SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\/\*\*$/, ''),
       SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[3].replace(/\/\*\*$/, ''),
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[7].replace(/\/\*\*$/, ''),
     ];
     expect(externalRootsRel).toEqual(expectedExternalRootsRel);
 

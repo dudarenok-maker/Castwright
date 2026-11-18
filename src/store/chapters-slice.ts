@@ -121,6 +121,9 @@ export interface ChaptersState {
       ids exactly as before) and cleared whenever a hydrate rebuilds the
       rows for a different book. */
   characterIdAliases: Record<string, string>;
+  /** #2254 — chapter ids flagged as paragraph-merged at import. Set by
+      `hydrateFromBookState` (absent → cleared: not measured, nothing shown). */
+  paragraphsMergedChapterIds: number[];
   /** #3435 (decision F, O2) — chapters whose analysis did not finish
       (non-excluded, no current take, or a failure record), keyed by chapter
       id, with the note the Generate row shows. Hydrated from the book-state
@@ -170,6 +173,7 @@ const initialState: ChaptersState = {
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
   characterIdAliases: {},
+  paragraphsMergedChapterIds: [],
 };
 
 /** #3440 step 3 — map a raw SSE attribution id to the key this chapter row
@@ -361,6 +365,9 @@ export const chaptersSlice = createSlice({
           chapterCharacters. Ticks carry raw ids; keyFor maps them through.
           Absent (older server) → cleared, rows stay raw-matched. */
         characterIdAliases?: Record<string, string>;
+        /** #2254 — chapter ids flagged paragraph-merged at import. Absent →
+          cleared to [] (not measured, so nothing is shown). */
+        paragraphsMergedChapters?: number[];
         /** Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed
           by chapter id, surfaced by the book-state endpoint. Drives the
           listen-view LUFS report card + per-row drift badges. Absent
@@ -394,6 +401,7 @@ export const chaptersSlice = createSlice({
         characters,
         chapterCharacters,
         characterIdAliases,
+        paragraphsMergedChapters,
         chapterLufs,
         renderedSpeakersByChapter,
         renderedTextByChapter,
@@ -406,6 +414,7 @@ export const chaptersSlice = createSlice({
       s.renderedTextByChapter = renderedTextByChapter ?? {};
       s.renderedInstructByChapter = renderedInstructByChapter ?? {};
       s.characterIdAliases = characterIdAliases ?? {};
+      s.paragraphsMergedChapterIds = paragraphsMergedChapters ?? [];
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
       for (const c of characters) allCastQueued[c.id] = 'queued';
@@ -986,6 +995,10 @@ export function forwardRegenChapters(chapters: Chapter[], anchorId: number): Cha
 interface ChaptersRootShape {
   chapters: ChaptersState;
 }
+
+/** #2254 — true when the chapter's paragraphs were flagged as merged at import. */
+export const selectParagraphsMerged = (s: ChaptersRootShape, chapterId: number): boolean =>
+  s.chapters.paragraphsMergedChapterIds.includes(chapterId);
 
 /** All open generation streams (one per book generating). Empty when idle. */
 export const selectActiveStreams = (s: ChaptersRootShape): ActiveStreamSnapshot[] =>

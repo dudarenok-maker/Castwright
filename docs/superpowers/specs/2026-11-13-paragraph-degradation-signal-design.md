@@ -1543,7 +1543,7 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
 
 | Aspect | Production (`analysis.ts:7633-7646`) | Harness today | This design |
 |---|---|---|---|
-| Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model and passes it in |
+| Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model, against the owner's saved settings and `server/.env` (read without writing), and passes it in. Each capture records the effective value of every `analyzer.*` registry key, the reasoning level, a sha256 digest of the saved request payload (the payload itself is never written or printed: it can hold an api key), the capacity and the effective stage-2 chunk budget (`resolveStage2ChunkCharBudget(capacity)`, not the configured cap); a re-capture under any difference is refused and the refusal names the differing keys (a payload as `payload (changed)`, with no values). The analyzer is built on `getResolvedOllamaUrl()`, so a saved Admin URL is honoured |
 | Model | the owner's configured analyzer | `qwen3.5:9b` unless `EVAL_QWEN_MODEL` is set (`run-eval-cli.ts:91`) | **Matched.** The runner takes a required `--model` with no default, and the run sheet records it |
 | Escalation budget | one `structureBudget` per **book**, shared across chapters (`:7645`, `maxWindowsPerBook`) | none, so each chapter gets a fresh per-book default (`:3744-3746`) | **Matched.** The runner passes one shared budget object across the book's captured chapters |
 | Dedup constraints | plan 291's `planConstraints` for a plan-applied roster; `undefined` for a first analysis's rolling roster (`:7642`) | none | **Stated.** The harness has no plan, so it passes none, which is production's first-analysis shape |
@@ -1740,7 +1740,9 @@ measurement while the saved capture survives it.
 - no re-imports of library books: the scanner and the runner read text and a
   pinned roster and write only their reports, captures and text dumps, to a
   scratch directory outside the workspace. They read the workspace without
-  the scan's self-heal, so nothing under it is written (R7-10, step 2).
+  the scan's self-heal, and the runner sets `CASTWRIGHT_VRAM_SAMPLE=0`, so nothing under
+  it is written (R7-10, step 2). The stage runner's git-ignored
+  `server/handoff/{inbox,outbox}/ab-*` files are the one other write, outside the workspace.
 
 **Gate before step 2:** #4165 has merged (met: closed 2026-11-15, on `main`
 since `1e295990`). The run notes the build it ran on.
@@ -2493,7 +2495,7 @@ with:
 > **Prerequisite:** local Ollama analyzer (model recorded), structure engine
 > on, escalation at default, no TTS, the owner's library on the box. No
 > re-imports; the tools write only their reports, captures and text dumps,
-> outside the workspace, and read it without the scan's self-heal.
+> outside the workspace (plus the stage runner's git-ignored `server/handoff/{inbox,outbox}/ab-*` files), and read it without the scan's self-heal.
 >
 > **Observe:** (1) the library legibility scan over every format, on the
 > **imported** text: per-book maxima, the worst imported paragraph of each
