@@ -9,6 +9,7 @@
 - **Opening a book's Generate page now starts at the top** instead of jumping down to chapter 3.
 - **A link to chapter 3 on the Generate page now keeps its chapter.** The address keeps `?chapter=3`, so the link opens at that chapter, and so does reloading it, while a plain Generate link still opens at the top.
 - **Script Review suggestions that quote a rare CJK character now apply** instead of being skipped.
+- **Reject restores the original take correctly on M4A and Opus books.** The original recording now comes back in its own format instead of being misnamed.
 - **Script Review suggestions on accented words now apply,** even when your book stores an accent differently from the suggestion. A suggestion that would cut a character apart (an accent from its letter, an emoji from its skin tone, a flag in half) is now skipped, so it can't leave a stray piece behind. On older browsers without the text support this needs (Firefox before 125, for example), Castwright leaves split and dialogue-extraction suggestions unapplied rather than risk cutting a character apart.
 - **Opus books show their progress.** Reopening an Opus book now shows the chapters you've already made as done, the Library card counts them too, and a chapter that only has an earlier take left over is no longer marked finished.
 - **A save that fails no longer leaves stray files behind.** If your disk fills up while Castwright saves an export, a cover, or a chapter's loudness or waveform data, the half-written file is cleaned up instead of lingering.

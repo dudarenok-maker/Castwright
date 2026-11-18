@@ -11,6 +11,8 @@
        when no preserved pair exists (first renders, or chapters that
        predate the rollback-preservation feature).
    GET /api/books/:bookId/chapters/:chapterId/audio/previous.mp3
+   GET /api/books/:bookId/chapters/:chapterId/audio/previous.m4a
+   GET /api/books/:bookId/chapters/:chapterId/audio/previous.ogg
      → binary preview of the preserved file with range-support.
    DELETE /api/books/:bookId/chapters/:chapterId/audio/previous
      → Plan 286 — moved to POST …/revisions/{id}/accept. Answers 410.
@@ -34,13 +36,21 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
-import { restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
+import {
+  findChapterAudio,
+  findPreviousAudio,
+  reconcileSlug,
+  clearTakeIdMirror,
+  restorePreviousAudio,
+  livePartPath,
+  previousPartPath,
+  type ChapterAudioFile,
+  type PreviousAudioFile,
+} from '../workspace/chapter-take.js';
 import { isGenerationActive } from './generation.js';
 import { withKeyLock, isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { revisionOpLockKey, hasPendingForChapter } from '../workspace/revisions-store.js';
@@ -179,14 +189,14 @@ export const chapterAudioRouter = Router();
 
 type AudioVariant = 'current' | 'previous';
 
-/** Look up the live (`<slug>.mp3`) or preserved (`<slug>.previous.mp3`)
-    audio pair. */
+/** Look up the live (`<slug>.<ext>`) or preserved (`<slug>.previous.<ext>`)
+    audio pair, whatever its container (mp3, m4a or ogg). */
 async function locateChapterAudio(
   bookId: string,
   chapterIdRaw: string,
   variant: AudioVariant = 'current',
 ): Promise<{
-  audio: ChapterAudioFile;
+  audio: ChapterAudioFile | PreviousAudioFile;
   segPath: string;
   /** Sibling `<slug>.peaks.json` (current) or `<slug>.previous.peaks.json`
    *  (preserved) location. The file is optional — `readPeaksOrEmpty`
@@ -217,20 +227,20 @@ async function locateChapterAudio(
   const audio =
     variant === 'current'
       ? findChapterAudio(root, chapter.slug)
-      : findPreviousChapterAudio(root, chapter.slug);
+      : findPreviousAudio(root, chapter.slug);
   if (!audio) return null;
   const segPath =
     variant === 'current'
-      ? `${root}/${chapter.slug}.segments.json`
-      : `${root}/${chapter.slug}.previous.segments.json`;
+      ? livePartPath(root, chapter.slug, 'segments')
+      : previousPartPath(root, chapter.slug, 'segments');
   const peaksPath =
     variant === 'current'
-      ? join(root, `${chapter.slug}.peaks.json`)
-      : join(root, `${chapter.slug}.previous.peaks.json`);
+      ? livePartPath(root, chapter.slug, 'peaks')
+      : previousPartPath(root, chapter.slug, 'peaks');
   const lufsPath =
     variant === 'current'
-      ? join(root, `${chapter.slug}.lufs.json`)
-      : join(root, `${chapter.slug}.previous.lufs.json`);
+      ? livePartPath(root, chapter.slug, 'lufs')
+      : previousPartPath(root, chapter.slug, 'lufs');
   return { audio, segPath, peaksPath, lufsPath, chapterId, chapterTitle: chapter.title };
 }
 
@@ -278,7 +288,7 @@ chapterAudioRouter.get(
 );
 
 /* The preserved variant: same JSON shape as current, URL points at the
-   `previous.mp3` binary endpoint below. The revision-diff a/b player
+   `previous.<ext>` binary endpoint below (the one named by this JSON's url). The revision-diff a/b player
    fetches BOTH this and the live `/audio` endpoint and renders one A
    audio element + one B audio element. */
 chapterAudioRouter.get(
@@ -301,7 +311,7 @@ chapterAudioRouter.get(
        endpoint. */
     const lufs = await readLufsOrNull(found.lufsPath);
     res.json({
-      url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/audio/previous.mp3`,
+      url: `/api/books/${encodeURIComponent(req.params.bookId)}/chapters/${found.chapterId}/${found.audio.urlSuffix}`,
       durationSec: meta?.durationSec ?? 0,
       peaks,
       sampleRate: meta?.sampleRate ?? 24000,
@@ -311,7 +321,7 @@ chapterAudioRouter.get(
   },
 );
 
-function makeFileHandler(variant: AudioVariant = 'current') {
+function makeFileHandler(variant: AudioVariant = 'current', onlyExt?: string) {
   return async (req: Request, res: Response) => {
     const chapterId = Number.parseInt(req.params.chapterId, 10);
     if (!Number.isInteger(chapterId))
@@ -324,8 +334,11 @@ function makeFileHandler(variant: AudioVariant = 'current') {
     const audio =
       variant === 'current'
         ? findChapterAudio(audioRoot, chapter.slug)
-        : findPreviousChapterAudio(audioRoot, chapter.slug);
+        : findPreviousAudio(audioRoot, chapter.slug);
     if (!audio) return res.status(404).json({ message: 'Chapter audio not found.' });
+    /* A previous-take route serves only a take of its own file type. */
+    if (onlyExt && audio.ext !== onlyExt)
+      return res.status(404).json({ message: 'Chapter audio not found.' });
     res.sendFile(
       audio.path,
       {
@@ -366,7 +379,15 @@ chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.m4a', makeFileHandler
 chapterAudioRouter.get('/:bookId/chapters/:chapterId/audio.ogg', makeFileHandler('current'));
 chapterAudioRouter.get(
   '/:bookId/chapters/:chapterId/audio/previous.mp3',
-  makeFileHandler('previous'),
+  makeFileHandler('previous', 'mp3'),
+);
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio/previous.m4a',
+  makeFileHandler('previous', 'm4a'),
+);
+chapterAudioRouter.get(
+  '/:bookId/chapters/:chapterId/audio/previous.ogg',
+  makeFileHandler('previous', 'ogg'),
 );
 
 /* Plan 286 Task 29 — these two routes moved to the server-owned revision
@@ -426,9 +447,14 @@ chapterAudioRouter.post(
           return 'revisions-unreadable' as const;
         }
         const root = audioDir(located.bookDir);
-        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
-          restorePreviousAudio(root, chapter.slug),
-        );
+        return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), async () => {
+          /* §6.1 lazy migration before the restore; an error answers the fixed
+             `restore_failed` text below, never its own message. */
+          await reconcileSlug(located, chapter.slug, { restamp: false });
+          const restored = await restorePreviousAudio(root, chapter.slug);
+          if (restored === 'restored') await clearTakeIdMirror(located, chapter.slug);
+          return restored;
+        });
       });
       outcome = done === BOOK_GONE ? 'not-found' : done;
     } catch (e) {

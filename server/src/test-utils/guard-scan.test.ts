@@ -352,3 +352,105 @@ describe('guards share the scanner (no private copies)', () => {
     });
   });
 });
+
+/* ===== same-function const resolver (#4328) ================================
+   `isTrackedAudioPath` on the first argument of the call to `use(...)` in a
+   snippet. Each case pins one hop kind or one documented blind spot. */
+describe('same-function const resolver (isTrackedAudioPath)', () => {
+  /** True iff the argument of the call `use(<arg>)` is tracked. */
+  function tracked(src: string): boolean {
+    const sf = scanner.parseGuardSource(src);
+    let result: boolean | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && scanner.resolvedCallName(node) === 'use' && result === undefined) {
+        result = scanner.isTrackedAudioPath(node.arguments[0]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    if (result === undefined) throw new Error('snippet has no use(...) call');
+    return result;
+  }
+
+  it('root: audioDir(...) is tracked, inline and through a const', () => {
+    expect(tracked('function f(b) { use(audioDir(b)); }')).toBe(true);
+    expect(tracked('function f(b) { const r = audioDir(b); use(r); }')).toBe(true);
+  });
+
+  it('root: a string or template containing audio/ or ending in /audio is tracked', () => {
+    expect(tracked("function f() { use('x/audio/y'); }")).toBe(true);
+    expect(tracked("function f() { use('/book/audio'); }")).toBe(true);
+    expect(tracked('function f(b) { use(`${b}/audio/y`); }')).toBe(true);
+    expect(tracked("function f() { use('/book/other'); }")).toBe(false);
+  });
+
+  it('hop: a join / resolve call with a tracked argument is tracked, with an untracked one is not', () => {
+    expect(tracked('function f(b, s) { const r = audioDir(b); use(join(r, s)); }')).toBe(true);
+    expect(tracked('function f(b, s) { const r = audioDir(b); use(path.resolve(r, s)); }')).toBe(true);
+    expect(tracked('function f(b, s) { use(join(b, s)); }')).toBe(false);
+  });
+
+  it('hop: a template whose head expression is tracked is tracked; a tail-only mention is not', () => {
+    expect(tracked('function f(b, s) { const p = join(audioDir(b), s); use(`${p}.tmp-${s}`); }')).toBe(true);
+    expect(tracked('function f(b, s) { const r = audioDir(b); use(`x${r}.tmp`); }')).toBe(false);
+  });
+
+  it('hop: an alias chain of length 3 is followed', () => {
+    const src = [
+      'function f(b, s) {',
+      '  const a = audioDir(b);',
+      '  const b2 = a;',
+      '  const c = b2;',
+      '  const d = c;',
+      '  use(d);',
+      '}',
+    ].join('\n');
+    expect(tracked(src)).toBe(true);
+  });
+
+  it('a mixed chain (const -> join -> template -> alias) is followed end to end', () => {
+    const src = [
+      'function f(b, s) {',
+      '  const root = audioDir(b);',
+      '  const p = join(root, s);',
+      '  const t = `${p}.tmp-1`;',
+      '  const alias = t;',
+      '  use(alias);',
+      '}',
+    ].join('\n');
+    expect(tracked(src)).toBe(true);
+  });
+
+  it('a `let` is NOT followed', () => {
+    expect(tracked('function f(b) { let r = audioDir(b); use(r); }')).toBe(false);
+  });
+
+  it('a parameter is NOT followed', () => {
+    expect(tracked('function f(audioRoot) { use(audioRoot); }')).toBe(false);
+  });
+
+  it("a different function's const is NOT followed", () => {
+    const src = [
+      'function g(b) { const r = audioDir(b); return r; }',
+      'function f() { use(r); }',
+    ].join('\n');
+    expect(tracked(src)).toBe(false);
+  });
+
+  it("an enclosing function's const read from a nested closure is NOT followed", () => {
+    const src = 'function f(b) { const r = audioDir(b); return () => { use(r); }; }';
+    expect(tracked(src)).toBe(false);
+  });
+
+  it('a module-level binding is NOT followed', () => {
+    expect(tracked('const r = audioDir(x);\nfunction f() { use(r); }')).toBe(false);
+  });
+
+  it("a non-join call's return value is NOT followed", () => {
+    expect(tracked('function f(b) { use(helper(audioDir(b))); }')).toBe(false);
+  });
+
+  it('a self-referencing const terminates', () => {
+    expect(tracked('function f() { const a = a; use(a); }')).toBe(false);
+  });
+});

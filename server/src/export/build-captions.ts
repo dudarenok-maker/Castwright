@@ -6,11 +6,10 @@
    docs/superpowers/specs/2026-07-10-fs52-caption-srt-export-design.md. */
 
 import { stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { ZipFile } from 'yazl';
 import { audioDir, castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, livePartPath } from '../workspace/chapter-take.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { probeDurationSec } from './build-m4b.js';
 import { createZipWritePipeline, ExportIncompleteError, sanitiseForZip, pad2 } from './build-mp3-zip.js';
@@ -132,7 +131,7 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
     signal?.throwIfAborted();
     const { chapter, audioPath } = resolved[i];
     const segFile = await readJson<ChapterSegmentsFile>(
-      join(root, `${sanitizeIdSegment(chapter.slug)}.segments.json`),
+      livePartPath(root, sanitizeIdSegment(chapter.slug), 'segments'),
     );
     if (!segFile) throw new Error(`No segments.json found for rendered chapter ${chapter.slug}.`);
     const text = sentencesByChapter[chapter.id] ?? {};

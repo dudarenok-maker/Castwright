@@ -124,7 +124,7 @@ import { slugKeepingTake } from '../workspace/keep-take-slug.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restructure-gate.js';
 import { rollManuscriptEdits, type RollSnapshot } from '../workspace/edits-roll.js';
-import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
+import { carryTakeStateFields, carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { withBookLock } from '../workspace/book-lock.js';
 import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
@@ -8652,8 +8652,12 @@ export async function runMainAnalyzerJob(
                 /* #3628 — the title-source flags are not re-derivable here, so
                    carry them from prev (both only while the title is unchanged,
                    so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
-                   strip them and a later restructure would misjudge the title. */
-                chapters: carryTitleSynthesized(
+                   strip them and a later restructure would misjudge the title.
+                   The take fields (TAKE_STATE_FIELDS, #4319) ride through the
+                   same way, matched on id AND the final slug (after #4230's
+                   keep-the-disk-slug decision), over the fresh `prev` read inside
+                   this lock; failure stamps are deliberately not carried. */
+                chapters: carryTakeStateFields(carryTitleSynthesized(
                   (getManuscript(job.manuscriptId) ?? record).chapterHints.map((h) => ({
                     id: h.id,
                     title: h.title,
@@ -8673,7 +8677,7 @@ export async function runMainAnalyzerJob(
                     titleOverridden: prevOverriddenById.get(h.id) === h.title || undefined,
                   })),
                   prev.chapters,
-                ),
+                ), prev.chapters),
                 /* srv-59 Task 11 — record which analyzer produced this cast/
                    sentence set and, when the dialogue-structure engine ran,
                    the aggregated run report. Additive + schema-tolerant: no
@@ -10797,8 +10801,12 @@ export async function runSubsetAnalyzerJob(
                 /* #3628 — the title-source flags are not re-derivable here, so
                    carry them from prev (both only while the title is unchanged,
                    so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
-                   strip them and a later restructure would misjudge the title. */
-                chapters: carryTitleSynthesized(
+                   strip them and a later restructure would misjudge the title.
+                   The take fields (TAKE_STATE_FIELDS, #4319) ride through the
+                   same way, matched on id AND the final slug (after #4230's
+                   keep-the-disk-slug decision), over the fresh `prev` read inside
+                   this lock; failure stamps are deliberately not carried. */
+                chapters: carryTakeStateFields(carryTitleSynthesized(
                   (getManuscript(job.manuscriptId) ?? record).chapterHints.map((h) => ({
                     id: h.id,
                     title: h.title,
@@ -10818,7 +10826,7 @@ export async function runSubsetAnalyzerJob(
                     titleOverridden: prevOverriddenById.get(h.id) === h.title || undefined,
                   })),
                   prev.chapters,
-                ),
+                ), prev.chapters),
                 /* srv-59 Task 11 — a subset retry supersedes whatever
                    provenance the last full run left, so this REWRITES the
                    block wholesale (fresh `at` + a report recomputed from just

@@ -16,7 +16,6 @@
    a chapter that scoreBook's book-wide view never scores, producing a
    false "embed failed" count). */
 
-import { join } from 'node:path';
 import { loadSegmentsFiles } from './segments-io.js';
 import { deriveBookOutline } from './render-integrity/verdicts-io.js';
 import {
@@ -25,6 +24,7 @@ import {
   resolveRowCharId,
   segKey,
 } from './render-integrity/aggregate.js';
+import { livePartPath } from '../workspace/take-fields.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
@@ -119,7 +119,7 @@ export async function buildAudioQaReport(
   // from blocking that chapter's "fully scored" check below.
   const rosterByChapter = new Map<number, Set<string>>();
   for (const ch of chapters) {
-    const embPath = join(audioDir(bookDir), `${ch.slug}.embeddings.json`);
+    const embPath = livePartPath(audioDir(bookDir), ch.slug, 'embeddings');
     const embResult = await readEmbeddings(embPath);
     if (!embResult) continue;
     const stampByKey = stampByKeyByChapter.get(ch.id);

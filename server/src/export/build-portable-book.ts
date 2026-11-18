@@ -36,7 +36,7 @@
    change-log (if any), manuscript-hints (if any), then audio/ in chapter-id order. Deterministic
    ordering keeps round-trip checksum tests stable across runs. */
 
-import { createReadStream, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -49,6 +49,7 @@ import {
 } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { findBookByBookId } from '../workspace/scan.js';
+import { liveTakeParts } from '../workspace/chapter-take.js';
 
 /** Bundle MANIFEST schema version. Bump on incompatible shape changes; the
     import path refuses bundles with `schemaVersion` it doesn't know. */
@@ -134,27 +135,26 @@ function coverExtFromPath(path: string): string {
   return m ? m[1] : 'jpg';
 }
 
-/** Slug-prefixed audio asset files we want to ship: `<slug>.mp3|m4a|ogg|opus`,
-    `<slug>.segments.json`, `<slug>.peaks.json`. Excludes `.previous.*`
-    pairs (rollback-only state, not portable) and orphan segments without
-    a paired audio file. */
+/** The take parts we ship for a chapter: its live audio, `<slug>.segments.json`
+    and `<slug>.peaks.json`, read through the take module's live-part list
+    (#4330, F15) so a staged `.next-*` / `.discard-*` file, a `.previous.*`
+    pair, a `*.tmp-*` leftover or `audio/.orphaned/` can never ship. The lufs,
+    embeddings and verdict sidecars stay out, as before.
+
+    Two edge differences from the old prefix/extension filter, both from the
+    spec: a second live audio file of another extension is no longer shipped
+    (§4.2: until step 0 resolves an ambiguous slug, exports read the first hit
+    in EXT_PROBE_ORDER), and a `<slug>.opus` file is not a take part (it is
+    not in the suffix table, §4.2/§4.3), so it is not shipped. A clean book's
+    bundle is unchanged. */
 function listAudioAssets(root: string, slug: string): string[] {
   if (!existsSync(root)) return [];
-  /* Use the synchronous fs API here — we're inside the build pipeline,
-     not on the request hot path. Keeps the loop simple. */
-  const all = readdirSync(root);
-  const wanted: string[] = [];
-  const audioExts = ['.mp3', '.m4a', '.ogg', '.opus'];
-  for (const name of all) {
-    if (name.includes('.previous.')) continue;
-    if (!name.startsWith(`${slug}.`)) continue;
-    const lower = name.toLowerCase();
-    if (audioExts.some((e) => lower.endsWith(e))) wanted.push(name);
-    else if (lower.endsWith('.segments.json')) wanted.push(name);
-    else if (lower.endsWith('.peaks.json')) wanted.push(name);
-  }
+  const shipped = new Set<string>(['audio', 'segments', 'peaks']);
   /* Deterministic order keeps round-trip checksums stable. */
-  return wanted.sort();
+  return liveTakeParts(root, slug)
+    .filter((p) => shipped.has(p.part))
+    .map((p) => p.name)
+    .sort();
 }
 
 /** Convenience overload — accept a bookId and look the book up. */

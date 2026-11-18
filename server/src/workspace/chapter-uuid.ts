@@ -22,6 +22,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { BookStateJson } from './scan.js';
+import { TAKE_STATE_FIELDS } from './take-fields.js';
 
 type Chapter = BookStateJson['chapters'][number];
 
@@ -116,15 +117,12 @@ export function carryTitleSynthesized(
   });
 }
 
-/** Chapter fields only the server stamps (finalize's success stamp). On a
- *  wholesale chapters replace they come from disk; a client value is never used. */
-const SERVER_OWNED_CHAPTER_FIELDS = [
-  'duration',
-  'audioRenderedAt',
-  'audioModelKey',
-  'audioEngines',
-  'audioQa',
-] as const;
+/** Chapter fields only the server stamps: a chapter's take-derived fields,
+ *  one list (spec §4.3, W15). On a wholesale chapters replace they come from
+ *  disk; a client value is never used. Includes `audioTakeId`, so a client-sent
+ *  one is dropped (N13). Imported from the `take-fields.ts` leaf, never
+ *  `chapter-take.ts` (R10-2: this module is in `scan.ts`'s import closure). */
+const SERVER_OWNED_CHAPTER_FIELDS = TAKE_STATE_FIELDS;
 
 /** Server-stamped failure fields (generation's failure stamp). Disk wins, but
  *  the client may clear one with an explicit `null` (e.g. on Retry). */
@@ -165,6 +163,28 @@ export function carryServerOwnedChapterFields(
         if ((c as Record<string, unknown>)[key] === null) continue;
         if (d[key] !== undefined) out[key] = d[key];
       }
+    }
+    return out as Chapter;
+  });
+}
+
+/** Carry a chapter's take-state fields from disk onto a rebuilt chapter list
+ *  (spec §4.3). For each incoming chapter it finds the disk chapter by `id`
+ *  and accepts it only when `sameChapter` holds, then copies each
+ *  `TAKE_STATE_FIELDS` member the disk chapter has. It strips nothing: an
+ *  unmatched chapter is returned unchanged, and it never carries
+ *  `CLIENT_CLEARABLE_CHAPTER_FIELDS`. Returns a new array; nothing is mutated. */
+export function carryTakeStateFields(
+  incoming: readonly Chapter[],
+  existing: readonly Chapter[],
+): Chapter[] {
+  const existingById = indexById(existing);
+  return incoming.map((c) => {
+    const found = existingById.get(c.id);
+    if (!found || !sameChapter(c, found)) return c;
+    const out: Record<string, unknown> = { ...c };
+    for (const key of TAKE_STATE_FIELDS) {
+      if (found[key] !== undefined) out[key] = found[key];
     }
     return out as Chapter;
   });

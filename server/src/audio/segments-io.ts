@@ -16,7 +16,9 @@
    an unrendered chapter has no file, so callers never see it. */
 
 import { existsSync, readdirSync } from 'node:fs';
+import { basename } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
+import { livePartPath, TAKE_SIDECAR_SUFFIXES } from '../workspace/take-fields.js';
 import { readJson } from '../workspace/state-io.js';
 import type { TtsModelKey } from '../tts/index.js';
 import { buildCastResolver, rejectedPairsGoverning } from '../store/cast-resolve.js';
@@ -68,6 +70,8 @@ export interface SegmentsFile {
   chapterId: number;
   chapterTitle?: string;
   synthesizedAt?: string;
+  /** Take identity (spec §4.1): 16 lowercase base32 chars. Nothing writes it yet. */
+  takeId?: string;
   /** #2128 — the `cast-id-history.json` `seq` this render resolved against.
       Mirrors `finalize-chapter-write.ts`'s `ChapterSegmentsFile` (the write
       view). Absent on every render that predates the stamp; `0` is valid. */
@@ -207,7 +211,7 @@ export async function loadSegmentsFiles(
   const filesOnDisk = new Set<string>();
   try {
     for (const f of readdirSync(root)) {
-      if (f.endsWith('.segments.json')) filesOnDisk.add(f);
+      if (f.endsWith(`.${TAKE_SIDECAR_SUFFIXES.segments}`)) filesOnDisk.add(f);
     }
   } catch {
     return [];
@@ -215,7 +219,7 @@ export async function loadSegmentsFiles(
 
   const out: SegmentsFile[] = [];
   for (const ch of chapters) {
-    const fileName = `${ch.slug}.segments.json`;
+    const fileName = basename(livePartPath(root, ch.slug, 'segments'));
     if (!filesOnDisk.has(fileName)) continue;
     const seg = await readJson<SegmentsFile>(`${root}/${fileName}`).catch(() => null);
     if (seg && typeof seg.chapterId === 'number') out.push(seg);

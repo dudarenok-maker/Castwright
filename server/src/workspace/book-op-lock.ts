@@ -50,6 +50,7 @@ import { renameWithRetry } from './atomic-rename.js';
 import { getManuscript, putManuscript } from '../store/manuscripts.js';
 import { withBookLock } from './book-lock.js';
 import { backfillAudioModelKeysFromSegments, type BookStateJson } from './scan.js';
+import { registerUnaddressedDir, releaseUnaddressedDir, isUnaddressedDir } from './book-dir-key.js';
 
 /** Returned by `withBookOp*` / `runBookJob` when the book no longer exists. */
 export const BOOK_GONE: unique symbol = Symbol('BOOK_GONE');
@@ -65,7 +66,27 @@ export interface BookHandle {
 }
 
 /** The kinds of long job `runBookJob` registers (see book-jobs.ts). */
-export type BookJobKind = 'render' | 'scoring' | 'analysis' | 'design' | 'script-review' | 'export';
+export type BookJobKind =
+  | 'render'
+  | 'scoring'
+  | 'analysis'
+  | 'design'
+  | 'script-review'
+  | 'export'
+  | 'unaddressed-sweep';
+
+/** What `withBookOpAtDir` hands a boot sweep for a folder whose state.json has
+ *  no `bookId` (R4-8, R5-7). It carries no lock; the process-local set in
+ *  `book-dir-key.ts` is what stops a second holder. `held` is true only while
+ *  the callback runs, and only objects minted here count (`liveUnaddressed`). */
+export interface UnaddressedBookHandle {
+  kind: 'unaddressed';
+  bookDir: string;
+  held: boolean;
+}
+
+/** Either handle kind a take-module entry point accepts. */
+export type AnyBookHandle = BookHandle | UnaddressedBookHandle;
 
 /* ---- errors raised by the movers ------------------------------------------ */
 
@@ -383,6 +404,8 @@ function releaseHandle(book: BookHandle): void {
   liveHandles.delete(book);
 }
 
+const liveUnaddressed = new WeakSet<UnaddressedBookHandle>();
+
 /* ---- the locks -------------------------------------------------------------- */
 
 /** Same curation as `withStateJsonLock`: the raw timeout (whose message embeds
@@ -467,14 +490,18 @@ export async function withBookOps<T>(
 
 /** A startup sweep's per-book step: lock the book found at `dir` and run `fn`
  *  against the folder it lives in NOW (a rename that queued ahead of the sweep
- *  moves it). A book whose state.json carries no `bookId` cannot be resolved by
- *  any route, so the API cannot move it: `fn` runs on `dir` unlocked. A state that
- *  cannot be READ (EBUSY / EPERM / EIO) is not "no bookId": the folder is skipped
- *  (`BOOK_GONE`, logged; the next startup retries) rather than run unlocked. A book that
- *  vanished while the sweep queued is skipped (`BOOK_GONE`). */
+ *  moves it). `fn` gets a live `BookHandle` (R4-8). A book whose state.json
+ *  carries no `bookId` cannot be resolved by any route, so the API cannot move
+ *  it: `fn` runs on `dir` with a held `UnaddressedBookHandle`, and the folder
+ *  is registered in `book-dir-key.ts` for the span of the callback (released in
+ *  a `finally`). A folder already registered by another holder is skipped
+ *  (`BOOK_GONE`, logged). A state that cannot be READ (EBUSY / EPERM / EIO) is
+ *  not "no bookId": the folder is skipped (`BOOK_GONE`, logged; the next startup
+ *  retries) rather than run unlocked. A book that vanished while the sweep
+ *  queued is skipped (`BOOK_GONE`). */
 export async function withBookOpAtDir<T>(
   dir: string,
-  fn: (bookDir: string) => Promise<T>,
+  fn: (handle: BookHandle | UnaddressedBookHandle) => Promise<T>,
 ): Promise<T | typeof BOOK_GONE> {
   let raw: BookStateJson | null;
   try {
@@ -486,8 +513,22 @@ export async function withBookOpAtDir<T>(
     }
     raw = null;
   }
-  if (!raw?.bookId) return fn(dir);
-  return withBookOp(raw.bookId, ({ bookDir }) => fn(bookDir), { hintDir: dir });
+  if (!raw?.bookId) {
+    if (!registerUnaddressedDir(dir)) {
+      console.warn('[book-op-lock] another holder has this unaddressed folder; skipping it');
+      return BOOK_GONE;
+    }
+    const handle: UnaddressedBookHandle = { kind: 'unaddressed', bookDir: dir, held: true };
+    liveUnaddressed.add(handle);
+    try {
+      return await fn(handle);
+    } finally {
+      handle.held = false;
+      liveUnaddressed.delete(handle);
+      releaseUnaddressedDir(dir);
+    }
+  }
+  return withBookOp(raw.bookId, (book) => fn(book), { hintDir: dir });
 }
 
 /** One workspace-wide key held across "is this Author/Series/Title path free ->
@@ -500,10 +541,23 @@ export function withBookPathClaim<T>(fn: () => Promise<T>, timeoutMs?: number): 
 
 /* ---- the sanctioned movers ---------------------------------------------------- */
 
-function assertHeld(book: BookHandle, what: string): void {
+/** The live-handle check: throws unless `book` is the object a still-running
+ *  `withBookOp*` callback was handed. Shared by the movers below and by the
+ *  chapter take module (`chapter-take.ts`), whose entry points refuse a stale
+ *  or hand-built handle the same way. */
+export function assertHeld(book: AnyBookHandle, what: string): void {
+  if ('kind' in book) {
+    if (!book.held || !liveUnaddressed.has(book)) {
+      throw new Error(`${what}: book handle is not held -- run inside withBookOpAtDir`);
+    }
+    return;
+  }
   if (!book.held || !liveHandles.has(book)) {
     throw new Error(`${what}: book handle is not held -- a mover must run inside withBookOp`);
   }
+  /* R5-7: an unaddressed holder owns this folder; an addressed handle for the
+     same directory must not mutate it underneath. */
+  if (isUnaddressedDir(book.bookDir)) throw new BookBusyError(['unaddressed-sweep']);
 }
 
 function assertNotBusy(bookId: string): void {

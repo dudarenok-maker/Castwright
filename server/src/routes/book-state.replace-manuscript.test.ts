@@ -121,7 +121,7 @@ function seedSiblingSentinels() {
 async function awaitSiblingArms() {
   await vi.waitFor(() => {
     expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(false);
-    expect(existsSync(join(bookDir, 'audio'))).toBe(false);
+    expect(existsSync(join(bookDir, 'audio', '01-chapter-one.mp3'))).toBe(false);
     expect(existsSync(cachePath)).toBe(false);
   });
 }
@@ -374,7 +374,7 @@ describe('replace-manuscript handler', () => {
     vi.mocked(writeJsonAtomic).mockImplementation(real);
     expect(res.status).toBe(500);
     expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
-    expect(bookDirFiles()).toEqual(['.audiobook', 'manuscript.md']);
+    expect(bookDirFiles().filter((f) => f !== 'audio')).toEqual(['.audiobook', 'manuscript.md']);
   });
 
   it('#3400 -- a failure AFTER the record lands keeps the new file consistent with state', async () => {

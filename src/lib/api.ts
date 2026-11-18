@@ -118,6 +118,7 @@ import {
   getMockRevisions,
   hasMockRevisions,
   mockHasPrevious,
+  mockAudioExt,
   resetMockRevisions,
   seedMockRevisions,
 } from '../mocks/mock-revisions';
@@ -2145,7 +2146,7 @@ async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): 
      function's already-correct non-adjacent spacing rather than reinventing
      timings (spec's adversarial review round 2 flagged that risk explicitly). */
   return {
-    url: stubAudioB,
+    url: mockAudioExt(bookId) === 'm4a' ? `/mock-audio/${bookId}/${chapterId}/audio.m4a` : stubAudioB,
     durationSec: totalSec,
     peaks,
     sampleRate: 44100,
@@ -2194,7 +2195,10 @@ async function mockGetChapterAudioPrevious({
   if (!mockHasPrevious(bookId, chapterId)) return null;
   const totalSec = parseDuration(duration || '10:00');
   return {
-    url: stubAudioA,
+    url:
+      mockAudioExt(bookId) === 'm4a'
+        ? `/mock-audio/${bookId}/${chapterId}/audio/previous.m4a`
+        : stubAudioA,
     durationSec: totalSec,
     peaks: [],
     sampleRate: 44100,
