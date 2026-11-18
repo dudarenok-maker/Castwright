@@ -273,7 +273,7 @@ New-Item -ItemType Directory -Path $T -Force | Out-Null
 $child = @'
 param([string]$Dir, [string]$Worktree)
 $ErrorActionPreference = 'Continue'
-git -C $Worktree push *>&1 | Out-File -FilePath (Join-Path $Dir 'push.log') -Encoding utf8
+git -C $Worktree push -u origin HEAD *>&1 | Out-File -FilePath (Join-Path $Dir 'push.log') -Encoding utf8
 "EXIT=$LASTEXITCODE" | Out-File -FilePath (Join-Path $Dir 'push.log') -Append -Encoding utf8
 '@
 Set-Content -Path (Join-Path $T 'push.ps1') -Value $child -Encoding utf8
@@ -283,6 +283,15 @@ $p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
 $p.Id | Set-Content (Join-Path $T 'push.pid')
 $T
 ```
+
+**`push -u origin HEAD`, not a bare `push`.** A bare `git push`
+exits 128 on a branch's first push, both when it has no upstream ("has no upstream
+branch", unless `push.autoSetupRemote` is set) and when it tracks a different name
+such as `origin/main` ("does not match the name", whatever `push.autoSetupRemote`
+says). `-u origin HEAD` pushes the
+checked-out branch to the same-named branch on origin and makes that its
+upstream, replacing any other upstream (e.g. `origin/main`). The checked-out
+branch must be the one your brief names.
 
 **Never a fixed log name.** The GUID suffix is load-bearing, exactly as it is in
 `oe-detached-commit.ps1`: two lanes -- or two attempts in one lane -- that share
@@ -306,7 +315,9 @@ else           { 'child gone with no EXIT= -- check whether the upstream ref mov
 before 10** -- that is one pytest run, not a battery. The repo settles any
 disagreement, because a pid can be reused and a log line can be stale while a
 ref either moved or did not: `git -C $W status -sb` (the `ahead`/`behind`
-counts), or `git -C $W rev-parse HEAD "@{u}"`.
+counts), or `git -C $W rev-parse HEAD "@{u}"`. On a branch's first push,
+`fatal: no upstream configured` from that `rev-parse` means the push did not
+land: `-u` records the upstream only after origin accepts the ref.
 
 **Do not end your turn while it runs.** Polling is active waiting and is
 correct; ending the run is not -- you are headless and nothing will wake you.
@@ -345,7 +356,15 @@ See CLAUDE.md "Incidental findings: report, fix, record".
   scope").
 - Verify locally before pushing: `npm run verify:fast:branch` for the full branch-scoped
   battery (lint, typecheck, config:check, test:hooks, test, test:server, build, audit, etc.)
-  OR just the pre-push guards and sidecar check by running `git push --dry-run` first.
+  OR just the pre-push guards and sidecar check by running
+  `git -C $W push --dry-run origin HEAD` first (`$W` is the worktree path, as in the push
+  recipe under "Committing when a step is in scope"; without `-C` it resolves `HEAD` against
+  the shell's cwd, and from a primary checkout reports green without looking at your
+  branch). Not a bare `git push --dry-run`, which exits 128 on a branch's first push and
+  runs no hook; no `-u`, a dry run writes no config. `.husky/pre-push` cannot tell a dry
+  run from a real push, so on a `server/tts-sidecar/**` branch skip the dry run and push
+  detached directly, via that same recipe: the real push runs the identical hook and
+  pushes nothing if the hook fails.
   Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to the STAGED diff, so
   on an empty or unrelated index every leg reports `(out of scope)` and exits 0 having
   run no tests at all. A green from it proves nothing until the change is staged -- and
