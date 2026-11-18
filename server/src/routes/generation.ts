@@ -132,7 +132,7 @@ export async function triggerScoring(ctx: {
       see the reconcile comment below). Omitted by the resume route, which
       has no live run to derive a superset from and instead reconciles
       against scoreBook's own precise usedQwenTiers, and only while no render,
-      splice or QA repair is active anywhere (#4235) — the reconcile acts on the
+      splice or QA repair, or another book's score pass, is active anywhere (#4235) — the reconcile acts on the
       one shared sidecar, so it is decided at the moment it runs, not at request
       time. */
   keep?: { keep06: boolean; keep17: boolean };
