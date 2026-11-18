@@ -238,8 +238,8 @@ export interface PreserveResult {
     - A previous take's audio with a DIFFERENT extension (a format switch left
       `.previous.mp3` beside a live m4a) is removed first, so the old previous
       take does not survive beside the new one. Same-extension previous audio is
-      overwritten by the rename, as before. An unlink failure is logged and
-      skipped.
+      overwritten by the rename, as before. An unlink failure is logged and the
+      preserve is abandoned with nothing renamed (`preserved: false`).
     - Best-effort: a rename failure is logged, never thrown. We must NEVER block
       the regen on preservation; losing the audition is much less bad than losing
       the new audio. The two renames are not atomic; the fsck pairs up a crash
@@ -258,7 +258,11 @@ export async function preserveExistingAsPrevious(
     try {
       await unlink(stale);
     } catch (err) {
+      /* Fail closed: a stale `.previous.mp3` left beside the `.previous.m4a` we
+         are about to write would win `findPreviousAudio` (mp3 is probed first),
+         auditioning and restoring the wrong take. */
       console.warn(`[take] stale previous audio removal failed for ${slug}: ${(err as Error).message}`);
+      return { preserved: false };
     }
   }
 

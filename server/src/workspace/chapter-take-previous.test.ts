@@ -5,7 +5,7 @@
    deletes the live take BEFORE the rename and swallows a failed segments
    rename (Phase 3's restoreTake fixes them). */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -117,6 +117,23 @@ describe('preserveExistingAsPrevious', () => {
     expect((await preserveExistingAsPrevious(root, SLUG)).preserved).toBe(true);
     expect(names()).toEqual([`${SLUG}.previous.m4a`, `${SLUG}.previous.segments.json`]);
     expect(readFileSync(p(`${SLUG}.previous.m4a`), 'utf8')).toBe('LIVE-M4A');
+  });
+
+  it('P2b: a stale other-extension .previous that cannot be removed aborts the preserve, so two previous takes never coexist', async () => {
+    /* A directory at the stale name makes `unlink` fail on every OS. */
+    mkdirSync(p(`${SLUG}.previous.mp3`));
+    writeFileSync(p(`${SLUG}.m4a`), 'LIVE-M4A');
+    writeFileSync(p(`${SLUG}.segments.json`), '{"s":1}');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(await preserveExistingAsPrevious(root, SLUG)).toEqual({ preserved: false });
+
+    expect(warn).toHaveBeenCalled();
+    expect(existsSync(p(`${SLUG}.previous.m4a`))).toBe(false);
+    expect(readFileSync(p(`${SLUG}.m4a`), 'utf8')).toBe('LIVE-M4A');
+    expect(existsSync(p(`${SLUG}.segments.json`))).toBe(true);
+    expect(existsSync(p(`${SLUG}.previous.segments.json`))).toBe(false);
+    warn.mockRestore();
   });
 });
 
