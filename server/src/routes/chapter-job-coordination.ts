@@ -25,8 +25,21 @@ setInFlightSpliceCounter(() => inFlightSplices.size);
 let spliceEpoch = 0;
 setSpliceEpochReader(() => spliceEpoch);
 
+function prefix(bookId: string): string {
+  return `${bookId}::`;
+}
+
 function key(bookId: string, chapterId: number): string {
-  return `${bookId}::${chapterId}`;
+  return `${prefix(bookId)}${chapterId}`;
+}
+
+/** True when a chapter splice (Fix audio / remix) or a QA repair is in flight for ANY chapter of `bookId`. */
+export function isSpliceOrRepairActive(bookId: string): boolean {
+  const p = prefix(bookId);
+  for (const k of inFlightSplices.keys()) {
+    if (k.startsWith(p)) return true;
+  }
+  return false;
 }
 
 /** Register a splice as the in-flight holder for `(bookId, chapterId)`. A
