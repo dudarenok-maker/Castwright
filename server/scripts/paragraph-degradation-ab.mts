@@ -72,7 +72,8 @@ import { allKnobs } from '../src/config/registry.js';
 import { getResolvedOllamaUrl } from '../src/config/ollama-resolved.js';
 import { resolveStage2ChunkCharBudget } from '../src/analyzer/stage2-chunk.js';
 import { resolveExtraParamsSetting } from '../src/analyzer/runner/extra-params.js';
-import { getCachedUserSettings, primeUserSettingsCacheReadOnly } from '../src/workspace/user-settings.js';
+import { getCachedUserSettings, knownAnalyzerSecrets, primeUserSettingsCacheReadOnly } from '../src/workspace/user-settings.js';
+import { registerKnownSecretsProvider } from '../src/analyzer/known-secrets-gate.js';
 import { resolveReasoningSetting } from '../src/analyzer/reasoning.js';
 import type { EngineCapacity } from '../src/analyzer/capacity.js';
 
@@ -292,6 +293,9 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
   // The owner's saved settings, read without writing; every knob below resolves against them.
   try {
     primeUserSettingsCacheReadOnly(deps.settingsPath);
+    // The prime leaves the file stamp null, so the transport's error-path loadKnownAnalyzerSecrets() would
+    // re-read the file with readUserSettings() and may write it (a migration, a .bak.1). Serve the cache instead.
+    registerKnownSecretsProvider({ known: knownAnalyzerSecrets, load: async () => knownAnalyzerSecrets() });
   } catch (e) {
     return refuse(`${e instanceof Error ? e.message : String(e)};`);
   }

@@ -6,9 +6,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   runCapture,
   main,
@@ -50,6 +51,7 @@ import { locateSentenceRanges } from '../../server/src/analyzer/dialogue-structu
 import { runStructureEngine } from '../../server/src/routes/analysis.ts';
 import { configValue } from '../../server/src/config/resolver.ts';
 import { resolveStage2ChunkCharBudget } from '../../server/src/analyzer/stage2-chunk.ts';
+import { OllamaTransport } from '../../server/src/analyzer/transports/ollama-transport.ts';
 import { captureChapterStages } from '../../server/src/analyzer/attribution-eval/run-eval.ts';
 import type { Analyzer } from '../../server/src/analyzer/index.ts';
 
@@ -296,6 +298,53 @@ test('saved settings: a saved Ollama URL override is the one the analyzer is bui
   } finally {
     if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
   }
+});
+
+test('saved settings: after the prime, an Ollama 500 leaves the settings file byte-identical and adds no sibling', async () => {
+  const f = process.env.USER_SETTINGS_FILE;
+  assert.ok(f, 'USER_SETTINGS_FILE unset: run through paragraph-degradation-ab.test.mjs, which points it at a private file');
+  const { dir, manifest } = fixtureDir(1);
+  // A legacy shape readUserSettings() would migrate (a rewrite plus user-settings.json.bak.1).
+  const text = JSON.stringify({ eagerLoadKokoro: false });
+  writeFileSync(f, text);
+  const siblings = (): string[] => readdirSync(dirname(f)).sort();
+  const listingBefore = siblings();
+  const server = createServer((_q, res) => {
+    res.statusCode = 500;
+    res.end('boom');
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const savedUrl = process.env.OLLAMA_URL;
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  process.env.OLLAMA_URL = url;
+  try {
+    const { deps } = fakeDeps({
+      settingsPath: f,
+      capture: (async () => {
+        // the transport's non-OK path awaits loadKnownAnalyzerSecrets(), the call that re-read the settings file
+        await assert.rejects(
+          new OllamaTransport({ url, model: 'A' }).send({
+            system: '', messages: [{ role: 'user', content: 'hi' }], structuredOutput: { mode: 'off' },
+            temperature: 0, estimatedInputTokens: 0, call: {},
+          }),
+          /500/,
+        );
+        return {
+          raw: [], deterministic: [], final: [], reasons: [], flags: [],
+          stage1: { characters: [] }, paras: [], alignment: undefined,
+          structureReport: { alignedPct: 87, flagOnly: false },
+          chunks: { chunkCount: 1, coverageRetries: 0, coverageExhausted: 0, deterministicSplits: 0 },
+        };
+      }) as unknown as RunnerDeps['capture'],
+    });
+    assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, deps), 0);
+  } finally {
+    if (savedUrl === undefined) delete process.env.OLLAMA_URL;
+    else process.env.OLLAMA_URL = savedUrl;
+    await new Promise((r) => server.close(r));
+  }
+  assert.equal(readFileSync(f, 'utf8'), text, 'the settings file is untouched');
+  assert.deepEqual(siblings(), listingBefore, 'no .bak, marker or archive appeared beside it');
 });
 
 test('saved settings: the runner leaves a settings file that needs migrating byte-identical', async () => {

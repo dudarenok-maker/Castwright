@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -33,6 +34,10 @@ test('paragraph-degradation-ab: full suite (real runner via tsx)', () => {
   const childEnv = { ...process.env };
   delete childEnv.NODE_TEST_CONTEXT;
   delete childEnv.NODE_TEST_WORKER_ID;
+  /* The inner suite drives a real transport error, which re-reads the server's settings file. Point
+     that at a private file so the run never touches the box's own. */
+  const settingsDir = mkdtempSync(join(tmpdir(), 'pda-ab-us-'));
+  childEnv.USER_SETTINGS_FILE = join(settingsDir, 'user-settings.json');
 
   let output;
   try {
@@ -46,6 +51,8 @@ test('paragraph-degradation-ab: full suite (real runner via tsx)', () => {
     process.stderr.write(String(err.stdout ?? ''));
     process.stderr.write(String(err.stderr ?? ''));
     throw err;
+  } finally {
+    rmSync(settingsDir, { recursive: true, force: true });
   }
   process.stdout.write(output);
 
