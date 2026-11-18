@@ -1191,22 +1191,33 @@ recite:
     (Numbered 91: open PR #4103 holds 89 and 90; renumber on merge if the order
     changes.)
 
-92. **A test pins a file it reads at runtime, but that file is not among the
-    test step's CI scope inputs, so CI skips the guard on the one diff it
-    guards** - PR #4437 pass 2 (#4380): `check-audit.test.mjs` read
-    `server/package.json` as text to pin the server audit script's
-    `--omit-dev`, but `test:hooks` selects on its module graph plus
-    `extraFiles` and the file was in neither. A PR changing only that file
-    skipped both `test:hooks` legs, and the only audit step it did run could
-    not see the flip (#1847, the runtime-read trap). The same pass found the
-    pin read `scripts.audit` while CI and verify-cache call the root
-    `audit:server`, so rewriting that entry point (to a command that no longer
-    passes `--omit-dev`) stayed green. Checkable: for every `readFileSync` of
-    a non-imported path in a test, run `node scripts/ci-scope.mjs
-    --files=<that path>` and confirm the test's step reports true, and add the
-    path to its `extraFiles` with a pipeline case if not; for every pinned
-    script, confirm it is the entry point the workflow and `verify-cache`
-    actually invoke, not a script that entry point happens to delegate to.
+93. **A test depends on a path outside its step's globs, so CI skips the guard
+    on the one diff it guards** - PR #4437 pass 2 (#4380):
+    `check-audit.test.mjs` read `server/package.json` as text to pin the server
+    audit script's `--omit-dev`, but `test:hooks` selects on its `globs` plus
+    `extraFiles` only (no import graph: `ci-scope.mjs:54` is
+    `shared || stepTouchedByDiff(step, files)`, and `stepTouchedByDiff` checks
+    only `globs`, `extraFiles` and the server lockfile) and the file was in
+    neither. A PR changing only that file skipped both `test:hooks` legs, and
+    the only audit step it did run could not see the flip (#1847, the
+    runtime-read trap). Pass 3 added that the same reach goes beyond a
+    `readFileSync` in the test: `audit-waivers.json` is reached through
+    `loadWaivers()`'s default path and through `existsSync`, and the four
+    existing `extraFiles` entries for `launch.mjs`, `install-qwen3.mjs`,
+    `pip-constraints.mjs` and `pinokio.js` exist only because an import from
+    outside the globs is not followed either. Checkable: for every path a test
+    depends on that is not under its step's globs, whether the test reads it
+    (`readFileSync`, `existsSync`, `git ls-files`/`git show`), the code under
+    test reaches it through a default path, or the test imports it from outside
+    the globs, run `node scripts/ci-scope.mjs --files=<that path>` and confirm
+    the test's step reports true, and add the path to its `extraFiles` with a
+    pipeline case if not. For every pinned script, confirm the pins cover every
+    link from the entry point the workflow and `verify-cache` invoke down to
+    the flag that matters (this PR needed both the root `audit:server` pin and
+    the `server/package.json` `--omit-dev` pin; pinning only one lets a change
+    to the other through).
+    (Numbered 93: open PR #4389 holds 92; renumber on merge if the order
+    changes.)
 
 ### Keeping the catalogue current
 
