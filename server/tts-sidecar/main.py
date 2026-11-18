@@ -6183,6 +6183,33 @@ def _own_resident_design(engine: str, model: Optional[str]) -> Optional[tuple[st
     return (card, weights)
 
 
+def _own_resident_mint(engine: str, model: Optional[str]) -> tuple[Optional[str], int, Optional[str]]:
+    """`(protect, weights_mb, card)` for a 1.7b Qwen mint (#4237). A mint's peak
+    (`qwen.1.7b.mint`) co-loads the 0.6B audition base with the 1.7B-Base, and
+    both stay resident after it, so both are credited (fit check only) the way
+    `_own_resident_design` credits VoiceDesign + the 0.6B. `protect` is
+    `qwen.base17` when the 1.7B-Base is resident, else None: the evict ladder
+    has no 0.6B step to protect. `(None, 0, None)` when nothing is resident."""
+    if engine != "qwen" or "1.7b" not in (model or "").lower():
+        return (None, 0, None)
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine):
+        return (None, 0, None)
+    has17 = qwen._base17 is not None
+    has06 = getattr(qwen, "_base", None) is not None
+    if not has17 and not has06:
+        return (None, 0, None)
+    card = _qwen_resident_device_key(qwen)
+    if card is None:
+        return (None, 0, None)
+    weights = 0
+    if has17:
+        weights += getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB
+    if has06:
+        weights += getattr(qwen, "_base_weights_mb", 0) or _QWEN_BASE_WEIGHTS_MB
+    return ("qwen.base17" if has17 else None, weights, card)
+
+
 def _own_resident_tier(
     engine: str, model: Optional[str], cfg: Optional[dict]
 ) -> tuple[Optional[str], int, Optional[str]]:
@@ -6205,6 +6232,8 @@ def _own_resident_tier(
             return (None, 0, None)
         card, weights = found
         return ("qwen.design", weights, card)
+    if (cfg or {}).get("op") == "mint":
+        return _own_resident_mint(engine, model)
     found = _own_resident_qwen_card(engine, model)
     if found is None:
         return (None, 0, None)

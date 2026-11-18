@@ -255,6 +255,12 @@ def test_own_resident_tier_resolver(monkeypatch):
     only06._base = object()  # Qwen is on a card, but the 1.7B-Base is not loaded
     monkeypatch.setitem(main.ENGINES, "qwen", only06)
     assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0, None)
+    # #4237: a mint with ONLY the 0.6B resident credits it, protecting no tier
+    assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == (None, 1200, "cuda:0")
+    only06._base_weights_mb = BASE_MB
+    assert main._own_resident_tier("qwen", "1.7b", {"op": "mint"}) == (None, BASE_MB, "cuda:0")
+    assert main._own_resident_tier("qwen", "0.6b", {"op": "mint"}) == (None, 0, None)
+    assert main._own_resident_tier("qwen", "1.7b", {}) == (None, 0, None)
 
 
 # --- #4102: a mint keeps the resident base; credited in the fit check only --
@@ -403,9 +409,10 @@ def test_d4_design_resolver(monkeypatch):
     unmeasured_base._base_weights_mb = 0
     monkeypatch.setitem(main.ENGINES, "qwen", unmeasured_base)
     assert main._own_resident_tier("qwen", "1.7b", DESIGN)[1] == 3900 + 1200
-    # a mint never gets the 0.6B credit (#4237 owns that decision)
+    # a mint credits the resident 0.6B beside the 1.7B-Base (#4237); a plain synth does not
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(True, weights_mb=3900, base_mb=BASE_MB))
-    assert main._own_resident_tier("qwen", "1.7b", MINT)[1] == 3900
+    assert main._own_resident_tier("qwen", "1.7b", MINT) == ("qwen.base17", 3900 + BASE_MB, "cuda:0")
+    assert main._own_resident_tier("qwen", "1.7b", {}) == ("qwen.base17", 3900, "cuda:0")
     monkeypatch.setitem(main.ENGINES, "qwen", _fake_qwen(resident=False, design_mb=0))
     assert main._own_resident_tier("qwen", "1.7b", DESIGN) == (None, 0, None)
     unmeasured = _fake_qwen(resident=False, design_mb=1)
