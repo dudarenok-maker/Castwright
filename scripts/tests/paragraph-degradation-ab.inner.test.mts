@@ -332,6 +332,22 @@ test('saved settings: a nested payload and a dotted-key payload are different re
   assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: nested }).deps), 0);
 });
 
+test('saved settings: the payload digest ignores key order at every depth but not array order', async () => {
+  const { dir, manifest } = fixtureDir(2);
+  const scratch = scratchOf(dir);
+  const payloadFile = (name: string, payload: Record<string, unknown>): string => rawSettingsFile(dir, name, { analyzerExtraParamsByEngine: { ollama: payload } });
+  const base = payloadFile('base.json', { temperature: 0.2, options: { top_k: 5, top_p: 0.9, nested: { a: 1, b: 2 } }, stop: ['x', 'y'] });
+  // the same payload with its keys re-ordered at the top level and at two depths below it
+  const reordered = payloadFile('reordered.json', { stop: ['x', 'y'], options: { nested: { b: 2, a: 1 }, top_p: 0.9, top_k: 5 }, temperature: 0.2 });
+  const reversed = payloadFile('reversed.json', { temperature: 0.2, options: { top_k: 5, top_p: 0.9, nested: { a: 1, b: 2 } }, stop: ['y', 'x'] });
+  assert.equal(await runCapture({ manifest: manifest.slice(0, 1), model: 'A', scratch }, fakeDeps({ settingsPath: base }).deps), 0);
+  assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: reordered }).deps), 0, 're-ordered keys are the same payload');
+  const { deps, calls, logs } = fakeDeps({ settingsPath: reversed });
+  assert.notEqual(await runCapture({ manifest, model: 'A', scratch, resume: true }, deps), 0, 'a reversed array is a different payload');
+  assert.equal(calls.length, 0);
+  assert.ok((logs.find((l) => l.includes('different analyzer settings')) ?? '').includes('payload (changed)'));
+});
+
 /* A credential in the Ollama URL is refused before anything runs: fetch refuses such a URL anyway, and
    undici's error echoes it. Through the real main() and the real makeAnalyzer (the refusal comes first,
    so no network is needed), with stdout and stderr tapped. The four shapes the WHATWG parser reads as userinfo. */
