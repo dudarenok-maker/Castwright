@@ -526,6 +526,20 @@ def test_d5_warm_design_on_an_8188_card_is_admitted_without_evicting_voicedesign
     assert qwen._base is not None
 
 
+@pytest.mark.parametrize("with_base17", [True, False])
+def test_d6_design_with_voicedesign_cold_credits_its_resident_0_6b(monkeypatch, with_base17):
+    """#4237 pass 1: `design_voice` reuses a resident 0.6B and the design's peak
+    contains it, so with VoiceDesign cold the 0.6B is credited the way a mint
+    credits it. 8188 card, other 400, cushion 409: without the credit the ladder
+    evicts the 1.7B-Base and 6488 - 409 = 6079 < 6144 refuses the design."""
+    qwen = _fake_qwen(resident=with_base17, weights_mb=3900 if with_base17 else 0, base_mb=BASE_MB)
+    pc = _tight_wire(monkeypatch, qwen)
+    adm, booked = _design(pc)
+    assert adm == {"device": "cuda:0"}
+    assert booked == 6144, "the credit is fit-only: the ledger books the FULL peak"
+    assert qwen._base is not None, "admission evicted the 0.6B the design reuses"
+
+
 def test_b1_a_credited_model_freed_during_a_ladder_step_is_not_counted_twice(monkeypatch):
     """Review pass 2 (B): the idle watchdog frees the credited model on its own
     thread while a ladder step runs; the re-probe then already counts those

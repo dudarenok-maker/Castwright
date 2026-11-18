@@ -6165,22 +6165,31 @@ def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple
     return (card, getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB)
 
 
-def _own_resident_design(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
-    """`(card, weights_mb)` when a 1.7b Qwen design request finds VoiceDesign
-    resident (#4102), else None. The weights include the resident 0.6B audition
-    base, which the design itself uses and its peak already contains."""
+def _own_resident_design(engine: str, model: Optional[str]) -> tuple[Optional[str], int, Optional[str]]:
+    """`(protect, weights_mb, card)` for a 1.7b Qwen design (#4102). VoiceDesign
+    resident: `protect` is `qwen.design`, credited with the resident 0.6B audition
+    base too, which the design itself uses and its peak already contains. VoiceDesign
+    cold but the 0.6B resident (#4237, mirroring `_own_resident_mint`): `protect`
+    None (no ladder step frees the 0.6B), credited with the 0.6B alone, since
+    `design_voice` reuses it. `(None, 0, None)` when neither is resident."""
     if engine != "qwen" or "1.7b" not in (model or "").lower():
-        return None
+        return (None, 0, None)
     qwen = ENGINES.get("qwen")
-    if not isinstance(qwen, QwenEngine) or qwen._design is None:
-        return None
+    if not isinstance(qwen, QwenEngine):
+        return (None, 0, None)
+    has_design = qwen._design is not None
+    has06 = getattr(qwen, "_base", None) is not None
+    if not has_design and not has06:
+        return (None, 0, None)
     card = _qwen_resident_device_key(qwen)
     if card is None:
-        return None
-    weights = getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB
-    if getattr(qwen, "_base", None) is not None:
+        return (None, 0, None)
+    weights = 0
+    if has_design:
+        weights += getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB
+    if has06:
         weights += getattr(qwen, "_base_weights_mb", 0) or _QWEN_BASE_WEIGHTS_MB
-    return (card, weights)
+    return ("qwen.design" if has_design else None, weights, card)
 
 
 def _own_resident_mint(engine: str, model: Optional[str]) -> tuple[Optional[str], int, Optional[str]]:
@@ -6227,11 +6236,7 @@ def _own_resident_tier(
         card = _is_resident(engine)
         return (engine, 0, card) if card is not None else (None, 0, None)
     if (cfg or {}).get("op") == "design":
-        found = _own_resident_design(engine, model)
-        if found is None:
-            return (None, 0, None)
-        card, weights = found
-        return ("qwen.design", weights, card)
+        return _own_resident_design(engine, model)
     if (cfg or {}).get("op") == "mint":
         return _own_resident_mint(engine, model)
     found = _own_resident_qwen_card(engine, model)
