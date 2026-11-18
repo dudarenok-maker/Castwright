@@ -13,7 +13,8 @@ import { applyOpsToCharArray } from './apply-ops-chars.js';
 import { normalizeForMatch } from './review-apply-core.js';
 import { buildStructureEvidence } from '../dialogue-structure/evidence.js';
 import { configValue } from '../../config/resolver.js';
-import { resolveCapacity } from '../capacity.js';
+import { resolveCapacity, type EngineCapacity } from '../capacity.js';
+import type { ParseChapterOptions } from '../dialogue-structure/parser.js';
 
 export interface FamilyBreakdown {
   correct: number;
@@ -165,6 +166,88 @@ function pairSpansToSentences(
   return out;
 }
 
+/** What `onStages` delivers to `attributeChapterStage2`'s caller (#2254 §4.2). */
+type CapturedStages = Parameters<NonNullable<Parameters<typeof attributeChapterStage2>[0]['onStages']>>[0];
+
+/** #2254 §4.3 — chunk counters read off `attributeChapterStage2`'s four callbacks. */
+export interface ChunkCounters {
+  chunkCount: number;
+  coverageRetries: number;
+  coverageExhausted: number;
+  deterministicSplits: number;
+}
+
+export interface CapturedChapter {
+  raw: SentenceOutput[];
+  deterministic: SentenceOutput[];
+  /** `result.sentences`: the stage-2 output after escalation. */
+  final: SentenceOutput[];
+  reasons: CapturedStages['reasons'];
+  flags: CapturedStages['flags'];
+  stage1: Stage1Output;
+  paras: CapturedStages['paras'];
+  alignment: CapturedStages['alignment'];
+  structureReport: Awaited<ReturnType<typeof attributeChapterStage2>>['structureReport'];
+  chunks: ChunkCounters;
+}
+
+/** #2254 §4.3 — the capture half of `evalFixture`, extracted rather than copied:
+    stage 1 from the roster, `attributeChapterStage2` with every stage snapshot
+    captured and the chunk callbacks counted. Needs no `LabelledChapter` truth.
+    `capacity` is explicit; `structureBudget`, when given, is the caller's own
+    object (shared across chapters, mutated in place); `structureOptions` reaches
+    the structure parser. */
+export async function captureChapterStages(opts: {
+  analyzer: Analyzer;
+  escalationAnalyzer?: Analyzer | null;
+  manuscriptId: string;
+  title: string;
+  chapterId: number;
+  chapterText: string;
+  roster: RosterSnapshot;
+  stageCall: StageCall;
+  capacity: EngineCapacity;
+  structureOptions?: ParseChapterOptions;
+  structureBudget?: { remainingWindows: number };
+}): Promise<CapturedChapter> {
+  const stage1 = rosterToStage1(opts.roster, opts.chapterId);
+  let stages: CapturedStages | null = null;
+  const chunks: ChunkCounters = { chunkCount: 0, coverageRetries: 0, coverageExhausted: 0, deterministicSplits: 0 };
+
+  const result = await attributeChapterStage2({
+    analyzer: opts.analyzer,
+    manuscriptId: opts.manuscriptId,
+    title: opts.title,
+    stage1,
+    chapter: { id: opts.chapterId, title: `Chapter ${opts.chapterId}`, body: opts.chapterText },
+    stageCall: opts.stageCall,
+    escalationAnalyzer: opts.escalationAnalyzer ?? null,
+    capacity: opts.capacity,
+    ...(opts.structureOptions ? { structureOptions: opts.structureOptions } : {}),
+    ...(opts.structureBudget ? { structureBudget: opts.structureBudget } : {}),
+    onCoverageRetry: () => { chunks.coverageRetries += 1; },
+    onCoverageExhausted: () => { chunks.coverageExhausted += 1; },
+    onDeterministicSplit: () => { chunks.deterministicSplits += 1; },
+    onChunk: () => { chunks.chunkCount += 1; },
+    onStages: (s) => { stages = s; },
+  }); // no `as never` — the opts object is fully typed, so `s` gets its proper type
+
+  const st = stages as CapturedStages | null;
+  if (!st) throw new Error('captureChapterStages: onStages was not called');
+  return {
+    raw: st.raw,
+    deterministic: st.deterministic,
+    final: result.sentences,
+    reasons: st.reasons,
+    flags: st.flags,
+    stage1: st.stage1,
+    paras: st.paras,
+    alignment: st.alignment,
+    structureReport: result.structureReport,
+    chunks,
+  };
+}
+
 export async function evalFixture(opts: {
   analyzer: Analyzer;
   escalationAnalyzer?: Analyzer | null;
@@ -179,13 +262,6 @@ export async function evalFixture(opts: {
   engine?: 'qwen' | 'gemma';
   language?: string;
 }): Promise<FixtureResult> {
-  const stage1 = rosterToStage1(opts.roster, opts.chapterId);
-  let stages: {
-    raw: SentenceOutput[];
-    deterministic: SentenceOutput[];
-    reasons: Array<{ index: number; reason: string; bucket: string }>;
-  } | null = null;
-
   // Map the eval engine ('qwen'/'gemma') to the chunk-budget capacity.
   // Used by both stage 2 (chunk sizing) and review (if enabled).
   const chunkCapacity =
@@ -193,26 +269,28 @@ export async function evalFixture(opts: {
       ? resolveCapacity({ engine: 'local', model: process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b' })
       : resolveCapacity({ engine: 'gemini', model: configValue<string>('analyzer.gemini.model') });
 
-  const result = await attributeChapterStage2({
+  const captured = await captureChapterStages({
     analyzer: opts.analyzer,
+    escalationAnalyzer: opts.escalationAnalyzer,
     manuscriptId: opts.manuscriptId,
     title: opts.title,
-    stage1,
-    chapter: { id: opts.chapterId, title: `Chapter ${opts.chapterId}`, body: opts.truth.chapterText },
+    chapterId: opts.chapterId,
+    chapterText: opts.truth.chapterText,
+    roster: opts.roster,
     stageCall: opts.stageCall,
-    escalationAnalyzer: opts.escalationAnalyzer ?? null,
     capacity: chunkCapacity,
-    onStages: (s) => { stages = s; },
-  }); // no `as never` — the opts object is fully typed, so `s` gets its proper type
+  });
+  const result = { sentences: captured.final };
+  const stages = captured;
 
   // `reasons` align 1:1 to the deterministic snapshot; reused for the final stage
   // because escalation changes ids on already-flagged lines but not the evidence class.
-  const reasons = stages!.reasons;
+  const reasons = stages.reasons;
   const aliasMap = rosterAliasMap(opts.roster);
   const base: FixtureResult = {
     fixture: opts.fixtureName ?? `chapter-${opts.chapterId}`,
-    raw: scoreStage(opts.truth, stages!.raw, reasons, aliasMap),
-    deterministic: scoreStage(opts.truth, stages!.deterministic, reasons, aliasMap),
+    raw: scoreStage(opts.truth, stages.raw, reasons, aliasMap),
+    deterministic: scoreStage(opts.truth, stages.deterministic, reasons, aliasMap),
     final: scoreStage(opts.truth, result.sentences, reasons, aliasMap),
   };
 

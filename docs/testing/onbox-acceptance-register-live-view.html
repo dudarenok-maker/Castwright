@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="133" data-publish-id="5707d34f228a"></div>
+  <div hidden data-published-as="134" data-publish-id="ce6449203da9"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">84</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">85</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -210,7 +210,7 @@
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->49<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->17<!-- END GENERATED:glance:E --></td></tr>
@@ -998,7 +998,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">10 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">11 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -1140,6 +1140,21 @@
         <li>Stop a second run partway and resume it: the result matches a straight run, and edits stay paused until the cast reloads.</li>
         </ul>
         <p class="src">a real local Ollama analyzer (and per-phase models for the second pass), the Qwen TTS sidecar with VoiceDesign weights for the mid-run design, and a real voiced book with the three conditions above &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4031">#4031</a>, plan 291 &#183; run sheet <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> &#167;12</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B110</span><span class="iname">Does recovery fix merged paragraphing on a real book?</span><span class="risk">local Ollama analyzer (model recorded), the owner&#39;s library on the box; no TTS</span><span class="chev">&#8250;</span></summary>
+      <div class="body">
+        <p>Recovery (the mid-paragraph turn recovery in the structure engine) is on by default, and the <code>MERGED_TURNS_DEGRADED</code> threshold of 10 is provisional. Neither the library-wide false-positive check nor the 1A speaker measurement can run in a PR: they need the owner&#39;s library (Calibre and the workspace) and a local Ollama model on the box. Prerequisite: a local Ollama analyzer on the owner&#39;s default analysis model (passed as <code>--model</code> and recorded), <code>analyzer.structure.enabled = true</code>, <code>allowCloudFallback: false</code>, no TTS; the runner reads the owner&#39;s saved analyzer settings (the saved settings file and <code>server/.env</code>) without writing them and records the effective num_ctx, capacity, escalation and reasoning with each capture; no re-imports, everything written to a scratch directory outside the workspace (VRAM telemetry is switched off, so nothing under the workspace is written; the stage runner's git-ignored <code>server/handoff/{inbox,outbox}/ab-*</code> files are the one other write, also outside it). Observe:</p>
+        <ul>
+        <li>Step 1, the library scan over every format on the <b>imported</b> text: each book&#39;s maximum legibility; each flagged chapter&#39;s worst paragraph judged merged or clean; every clean-judged chapter at 10 or more (a breach), with chapter, count and format; extractor-merged (#4217) chapters listed as true positives; line-wrapped books with the arm that flagged them and their breaches counted; every stray-break result.</li>
+        <li>Step 1 also records unparsed files with each error message and unsupported files by extension, on the build recorded; each book&#39;s dash-turn density; the clean dialogue-dense ru dash books by title (the provisional label needs at least one); non-ru Cyrillic books apart; the 26 corpus books each marked scanned; and the label outcome (and, if it stays provisional, which condition failed).</li>
+        <li>Step 2, Ночной дозор, the 3 chapters with the most hidden turns that clear the 80% alignment floor, one live capture each, one at a time (a chapter below the floor is swapped for the next, at most two swaps): each chapter&#39;s alignment, <code>flagOnly</code> and status (picked, swapped out, captured but not used, superseded) and the replay control (pass or void).</li>
+        <li>Per picked chapter, the sentences whose post-crossExamine speaker recovery changed, on vs off (1A): counts over all sentences and over turn sentences, the narrator share on vs off, each changed sentence&#39;s class; swapped-out and captured-but-not-used chapters&#39; counts apart and outside the verdict.</li>
+        <li>The confident decisions on turn sentences by class and reason, including the engine&#39;s <code>narration-demote</code> overrides (a report, no verdict), and one blind hand-check of up to 30 sentences with <code>n</code>, <code>I</code>, <code>R</code> and <code>U</code> (and the seed and p-values for a sample).</li>
+        <li>The outcome (not a pass bar): <i>improves the speakers</i> (<code>I − R ≥ 3</code> in a census of 30 or fewer, else an exact test at 0.025), <i>makes them worse</i> (<code>R − I ≥ 1</code>, else 0.10), <i>no clear direction</i> or <i>changes no speaker</i>. A void or not-computed 1A does not discharge; every re-capture uses the same model and the owner&#39;s saved analyzer settings (the runner refuses another <code>--model</code>, and a change to the effective value of any <code>analyzer.*</code> registry key, the reasoning level, the request payload (recorded as a digest, never its values) or the effective stage-2 chunk budget, naming the differing keys), with one same-model re-roll at most. Wall-clock: none for step 1; for step 2, about 1.1–2.8 h per capture round with no swap, about 5.3 h at worst, about 10.6 h at worst with the re-roll.</li>
+        </ul>
+        <p class="src">the owner&#39;s library (Calibre and the workspace) on the box and a local Ollama model, no TTS sidecar &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/2254">#2254</a> &#183; run sheet <code>docs/testing/paragraph-degradation-onbox-acceptance.md</code></p>
       </div>
     </details>
   </section>

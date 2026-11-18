@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { parseManuscript, UnsupportedFormatError, UnusableMediaError, DrmProtectedError } from '../parsers/index.js';
 import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD, countWords } from '../parsers/front-matter.js';
 import { putManuscript, withParseOrigin, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
+import { isParagraphDegraded } from '../analyzer/dialogue-structure/legibility.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
   STANDALONES_SERIES,
@@ -177,6 +178,10 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
             isLikelyFrontMatter:
               isLikelyFrontMatterTitle(c.title) ||
               (wordCount > 0 && wordCount <= FRONT_MATTER_WORD_THRESHOLD),
+            /* #2254 — present (true) only when the detected language is a
+               notice language and this chapter's imported body is degraded;
+               absent otherwise (never false). */
+            ...(isParagraphDegraded(c.body, detected.language) === true ? { paragraphsMerged: true } : {}),
           };
         }),
       },
