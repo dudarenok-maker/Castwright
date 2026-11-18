@@ -24,8 +24,8 @@
 #
 # No apt fallback, deliberately: apt IS the hang this replaces, and a
 # fallback to it would only re-introduce a 6-minute worst case. A download
-# failure fails fast (curl retries, then the timeout below); a checksum
-# mismatch fails loudly with `set -e` and never falls through to anything.
+# failure or checksum mismatch is retried 3 times (each bounded by `timeout`),
+# then fails the step loudly; nothing falls through to anything else.
 #
 # Cache: the extracted binaries are cached. The key carries the ffmpeg
 # version, NOT the runner image — the old key embedded ImageOS/ImageVersion
@@ -36,7 +36,7 @@
 # therefore always misses — which is now a ~42 MB download, not an apt run.
 #
 # `timeout-minutes:` is not accepted on a composite action's own steps, so
-# the download is wrapped in coreutils `timeout -k 10 150` instead.
+# each download is wrapped in coreutils `timeout -k 10 90` instead.
 name: 'Install ffmpeg (cached)'
 description: 'Install ffmpeg and ffprobe on an Ubuntu runner from a pinned, SHA-256-verified static build, cached so a hit skips the download.'
 
@@ -44,7 +44,7 @@ inputs:
   ffmpeg-version-pin:
     description: 'Manual cache-invalidation override: bump to force a fresh download and cache write.'
     required: false
-    default: 'v2'
+    default: 'v3'
 
 runs:
   using: 'composite'
@@ -66,13 +66,28 @@ runs:
         else
           echo "ffmpeg cache miss: downloading pinned static build"
           TMP="$(mktemp -d)"
-          timeout -k 10 150 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
-            -o "$TMP/ffmpeg.tar.xz" \
-            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz"
-          ls -l "$TMP/ffmpeg.tar.xz"
-          if ! echo "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67  $TMP/ffmpeg.tar.xz" | sha256sum -c -; then
-            echo "::error::ffmpeg checksum mismatch; first bytes of what the server sent follow"
-            head -c 400 "$TMP/ffmpeg.tar.xz" | od -c | head -12
+          # 3 attempts around download + verify: the first CI run of this
+          # action (PR #4455) saw 2 of 10 parallel jobs get a body that
+          # failed the checksum within ~350ms (not the real 42 MB archive)
+          # while the other 8 were fine. A bad body is retried; a persistent
+          # mismatch still fails the step, with what the server sent.
+          OK=0
+          for attempt in 1 2 3; do
+            rm -f "$TMP/ffmpeg.tar.xz"
+            if timeout -k 10 90 curl -fsSL --connect-timeout 20 --max-time 60 \
+                -o "$TMP/ffmpeg.tar.xz" \
+                "https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz" \
+              && echo "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67  $TMP/ffmpeg.tar.xz" | sha256sum -c -; then
+              OK=1
+              break
+            fi
+            echo "::warning::ffmpeg download/verify attempt $attempt/3 failed"
+            ls -l "$TMP/ffmpeg.tar.xz" || true
+            head -c 400 "$TMP/ffmpeg.tar.xz" | od -c | head -12 || true
+            sleep $((attempt * 3))
+          done
+          if [ "$OK" != "1" ]; then
+            echo "::error::ffmpeg static build failed to download and verify after 3 attempts"
             exit 1
           fi
           mkdir -p "$DEST"

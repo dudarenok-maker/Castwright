@@ -1282,11 +1282,12 @@ test('ffmpeg install (#4453): the apt path (the #2449 hang) no longer runs on a 
   assert.doesNotMatch(nonComment, /apt-cache|apt-get|dpkg/, 'action still caches/installs apt packages');
 });
 
-test('ffmpeg install (#4453): the download is bounded by a timeout and curl retries', () => {
+test('ffmpeg install (#4453): the download is bounded by a timeout and retried', () => {
   const body = ffmpegInstallRunBody();
-  assert.match(body, /timeout\s+-k\s+10\s+150\s+curl\b/, 'download is not wrapped in `timeout -k 10 150`');
-  assert.match(body, /--retry\s+3\b/, 'curl lost --retry 3');
-  assert.match(body, /--max-time\s+120\b/, 'curl lost --max-time 120');
+  assert.match(body, /timeout\s+-k\s+10\s+90\s+curl\b/, 'download is not wrapped in `timeout -k 10 90`');
+  assert.match(body, /for attempt in 1 2 3/, 'download/verify lost its 3-attempt retry loop');
+  assert.match(body, /"\$OK" != "1"/, 'install step does not fail after the retries are exhausted');
+  assert.match(body, /--max-time\s+60\b/, 'curl lost --max-time 60');
 });
 
 test('ffmpeg install (#4453): cache key does not churn with the runner image', () => {
