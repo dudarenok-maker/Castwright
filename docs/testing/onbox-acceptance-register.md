@@ -756,9 +756,9 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-18 (#4237), 84 → 85.** Row **A129** (a mint is admitted beside its own resident 0.6B audition base, without waiting for or evicting the resident models) added. Group A 49 → 50. `next-id` bumped A129 → A130 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-18 (#4237), 84 → 85.** Row **A130** (a mint is admitted beside its own resident 0.6B audition base, without waiting for or evicting the resident models) added. Group A 49 → 50. `next-id` bumped A130 → A131 in the same change. Row is owed; not run here.
 >
-> **Previous change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
+> **Previous change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A130 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
 >
@@ -1954,7 +1954,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A130 -->
+<!-- next-id: A131 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6696,7 +6696,7 @@ The automated tests prove byte-identical output on the repo's seven EPUB fixture
 
 *Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
 
-### A129 · A mint is admitted beside its own resident 0.6B base ([#4237](https://github.com/dudarenok-maker/Castwright/issues/4237)) · **single 8 GB card, real Qwen sidecar with the 1.7B-Base installed**
+### A130 · A mint is admitted beside its own resident 0.6B base ([#4237](https://github.com/dudarenok-maker/Castwright/issues/4237)) · **single 8 GB card, real Qwen sidecar with the 1.7B-Base installed**
 
 The automated tests prove the admission decision with a fake probe and fake engines: a mint's fit check credits its own resident Qwen 0.6B-Base audition model, mirroring the design-credit fix of PR #4208, so a mint no longer needs room for a second copy of weights that are already on the card. They cannot show that the credit is safe on real VRAM, in particular that a real mint (decode beside the resident 0.6B and the 1.7B-Base) fits without a CUDA out-of-memory, and that a mint on an otherwise full card is still refused instead of crashing. Only a real 8 GB GPU, a real Qwen sidecar and real mints show that. Sidecar logs are in `logs/tts.err.log`. A refusal (`noCapacity`) leaves no line there and the server retries it silently, so count refusals in the append-only `logs/tts.log`, which holds uvicorn's access lines. From the repo root, before the run: `$n = @(Get-Content logs/tts.log).Count`. After it: `Get-Content logs/tts.log | Select-Object -Skip $n | Select-String 'POST /qwen/mint-variant HTTP/1\.1" 503'`. "No `noCapacity`" below means zero such lines.
 

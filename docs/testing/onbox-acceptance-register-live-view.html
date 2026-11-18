@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="133" data-publish-id="5707d34f228a"></div>
+  <div hidden data-published-as="134" data-publish-id="c1a402842a7a"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -992,7 +992,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A129</span><span class="iname">A mint is admitted beside its own resident 0.6B base</span><span class="risk">single 8 GB card, real Qwen sidecar with the 1.7B-Base installed</span><span class="chev">›</span></summary>
+      <summary><span class="num">A130</span><span class="iname">A mint is admitted beside its own resident 0.6B base</span><span class="risk">single 8 GB card, real Qwen sidecar with the 1.7B-Base installed</span><span class="chev">›</span></summary>
       <div class="body">
         <p>The automated tests prove the admission decision with a fake probe and fake engines: a mint&#39;s fit check credits its own resident Qwen 0.6B-Base audition model, mirroring the design-credit fix of PR #4208, so a mint no longer needs room for a second copy of weights that are already on the card. They cannot show that the credit is safe on real VRAM, in particular that a real mint (decode beside the resident 0.6B and the 1.7B-Base) fits without a CUDA out-of-memory, and that a mint on an otherwise full card is still refused instead of crashing. Only a real 8 GB GPU, a real Qwen sidecar and real mints show that. Sidecar logs are in <code>logs/tts.err.log</code>. A refusal (<code>noCapacity</code>) leaves no line there and the server retries it silently, so count refusals in the append-only <code>logs/tts.log</code>, which holds uvicorn&#39;s access lines. From the repo root, before the run: <code>$n = @(Get-Content logs/tts.log).Count</code>. After it: <code>Get-Content logs/tts.log | Select-Object -Skip $n | Select-String &#39;POST /qwen/mint-variant HTTP/1\.1&quot; 503&#39;</code>. &quot;No <code>noCapacity</code>&quot; below means zero such lines.</p>
         <ul>
