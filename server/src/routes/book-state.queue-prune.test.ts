@@ -209,7 +209,7 @@ async function stopAttempt(attempt: PruneAttempt): Promise<void> {
   await attempt.inFlight.catch(() => undefined);
 }
 
-/* The loop and the onTestFinished registration, shared by the quarantined case and the gating timeout+retry test, so
+/* The loop and the onTestFinished registration, shared by the quarantined case and the gating A/B pair, so
    deleting either line of the stop/drain wiring is visible to a non-quarantined run. */
 function runPruneAttempt(rounds: number): { attempt: PruneAttempt; done: Promise<void> } {
   const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
@@ -231,20 +231,28 @@ describe('DELETE /api/books/:bookId prune is serialised against other queue writ
     await runPruneAttempt(10).done;
   });
 
-  /* #4244 -- the gating twin of the case above: the same helper, driven through the forced-timeout + retry shape that
-     leaked. Attempt 0 is parked behind the queue lock until after its own timeout; without the stop/drain wiring its
-     stale round lands in attempt 1's queue (a foreign "n0:queued"), which attempt 1's round assertions reject. */
-  it('a timed-out attempt does not leak into its retry (#4244)', { timeout: 3000, retry: 1 }, async ({ task }) => {
-    const { queueJsonPath } = await import('../workspace/paths.js');
-    const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
-    const { rm } = await import('node:fs/promises');
-    onTestFinished(() => rm(queueJsonPath(), { force: true }));
-
-    if ((task.result?.retryCount ?? 0) === 0) {
-      const gate = new Promise<void>((r) => { setTimeout(r, 3500); });
+  /* #4244 -- the gating A/B pair for the leak, with no timeout and no retry. A ends with its round still parked behind
+     the queue lock, standing in for an attempt that timed out mid-round; onTestFinished must drain it before B starts.
+     B then runs a clean attempt: without the stop/drain wiring A's stale round lands in B's queue (a foreign
+     "n0:queued"), which B's round assertions reject. B therefore depends on A having run immediately before it, which
+     is why the two tests must stay adjacent and in this order (tests in a file run in declaration order). */
+  describe('A/B pair', () => {
+    it('A: an attempt ends with its round parked behind the queue lock (#4244)', async () => {
+      const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
       void serializeQueueMutation(() => gate);
-    }
-    await runPruneAttempt(2).done;
+      /* Not awaited: the attempt is still running when this test ends. The gate frees while its drain waits. */
+      runPruneAttempt(2);
+      setTimeout(release, 50);
+    });
+
+    it('B: the next test sees nothing the previous attempt started (#4244)', async () => {
+      const { queueJsonPath } = await import('../workspace/paths.js');
+      const { rm } = await import('node:fs/promises');
+      onTestFinished(() => rm(queueJsonPath(), { force: true }));
+      await runPruneAttempt(2).done;
+    });
   });
 
   /* #4244 -- timer-free pin on the loop's stop check: a stopped attempt starts no further round. */
