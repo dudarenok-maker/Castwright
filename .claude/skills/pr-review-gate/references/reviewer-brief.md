@@ -1240,6 +1240,26 @@ recite:
     to the other through).
     (Numbered 93 after #4389's 92, which is already on main; no renumber.)
 
+94. **A precondition stated as an env var to leave unset, which the launcher
+    re-injects from saved settings** - PR #4436 pass 3 (#4164): an on-box row
+    said "leave `COQUI_DEVICE` UNSET" so that only residency could constrain
+    the op. `COQUI_DEVICE` is the restart-sidecar knob `tts.coqui.device`
+    (`config/registry.ts`), the resolver ranks Node's env, then a saved
+    override, then the default (`config/resolver.ts`), and `buildSidecarEnv`
+    (`tts/spawn-sidecar.ts`) writes every non-default knob into the sidecar's
+    env on each spawn. A box with a saved Coqui device therefore got the pin
+    anyway: the bullet passed on a build that ignores residency, and its
+    "unpinned" control failed on a fixed one. The same hole covered
+    `ASR_DEVICE`, `SPK_DEVICE` and both idle TTLs. Checkable: for every
+    acceptance step or runbook line that says "set X" or "leave X unset" for an
+    env var, look X up in `config/registry.ts`; if it has an `env:` key, the
+    step must name how to set it through Node (shell export before Node
+    starts, or the Settings knob) and that a saved override counts as set.
+    Test by following the step on a box with a saved override and reading the
+    sidecar's real environment, not the shell's.
+    (Numbered 94 after #4437's 93, which is already on main; no other open PR
+    holds a number.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
