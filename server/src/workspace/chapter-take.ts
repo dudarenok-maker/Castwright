@@ -2,8 +2,10 @@
    §4 "Take identity and fields" and §5.A "Ownership", OD1 Option A).
 
    One module owns every take path, every take mutation and every take field in
-   `state.json`. Phase 1 (#4319) lands its first part: the sniffer, the stamp and
-   the lazy identity. Nothing calls it yet, so there is no behaviour change.
+   `state.json`. Phase 1 (#4319) lands its first part: the sniffer, the stamp, the
+   lazy identity, the Phase 1 forms of the A/B take functions that finalize and
+   the Accept / Reject / restore-unrecorded routes call, and the lazy migration
+   (`reconcileSlug`) that the boot fsck and those routes run.
 
    R10-2 LEAF RULE: `scan.ts` and every module it reaches import take names
    from `take-fields.ts` ONLY, never from this file. This file may import
@@ -441,8 +443,8 @@ export async function restorePreviousAudio(audioRoot: string, slug: string): Pro
 /* ------------------------------------------------------------------ *
  * Lazy migration, steps 1-3 (§6.1) and the quarantine (OD8)
  *
- * Nothing calls `migrateSlugFiles` yet; the wiring and the identity re-stamp
- * (steps 4-5) land in #4339. Step 6 belongs to Phase 3.
+ * `reconcileSlug` (below) calls `migrateSlugFiles`, then runs the identity
+ * (step 4) and the re-stamp (step 5). Step 6 belongs to Phase 3.
  *
  * NO DECODE UNDER `book` (§4.4, R8-3): `decodeDurationSec` runs under the
  * caller's book-op only, never inside `updateStateAtDir` or `withBookLock`.

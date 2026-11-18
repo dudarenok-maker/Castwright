@@ -24,8 +24,8 @@
  *       supported extension (`<slug>.{mp3,m4a,ogg}`).
  *       — Interpretation: valid pending-revision state. Leave alone.
  *
- * After these three cases, `fsckAllBooks` runs the take module's per-chapter
- * `reconcileSlug` (#4339). THAT step can rename a wrong-named live file to its
+ * Before cases 1 and 2, `fsckAllBooks` runs the take module's per-chapter
+ * `reconcileSlug` (#4339) on every chapter slug of the book. THAT step can rename a wrong-named live file to its
  * real extension, demote or quarantine a duplicate live file to
  * `audio/.orphaned/`, and mint ids into the live segments and embeddings, so
  * the live audio is touched by the fsck as a whole, though the three cases

@@ -27,7 +27,7 @@ This is the durable regression plan for the whole #3456 lifecycle. It is filled 
 - **New seams:** `server/src/workspace/chapter-take.ts` (the module) and its leaf `server/src/workspace/take-fields.ts` (R10-2), which holds what `scan.ts` needs. `withBookOpAtDir` hands its callback a book-op handle, and an unaddressed-directory set lands with it.
 - **Invariants preserved:** `check:cycles` passes against the unchanged `server/madge-cycles-allowlist.json`. `scan.ts` and every module it reaches take take-names only from `take-fields.ts`, never from `chapter-take.ts`.
 - **Migration story:** lazy, per chapter, and idempotent. The boot fsck and Accept/Reject/restore-unrecorded run the same per-chapter reconcile. The boot fsck walks every chapter of every book, so the first boot gives every rendered take an id (segments, embeddings, `state.json` `audioTakeId`), renames a wrong-named audio file, quarantines a duplicate live file under `audio/.orphaned/`, and fills any absent take member of `state.json`. It rewrites no existing `state.json` take value on a healthy chapter, and a clean mp3 book behaves as before.
-- **Reversibility:** Phase 1 renames no existing file and deletes nothing. A legacy `<slug>.previous.mp3` is still read. Reverting the PR leaves `takeId` fields that older code ignores.
+- **Reversibility:** reverting the PR leaves `takeId` fields that older code ignores. It does not undo the files Phase 1 moved: a renamed live file keeps its real extension, a quarantined duplicate stays under `audio/.orphaned/`, and a `.previous.m4a` or `.previous.ogg` written since is not read by older code, which probes `.previous.mp3` only. A legacy `<slug>.previous.mp3` is still read.
 
 ## Invariants to preserve (Phase 1)
 
@@ -77,9 +77,9 @@ Phase 1 still deletes before it restores on Reject, and still leaves sidecars an
 
 ## Still owed by later phases
 
-- **Phase 2 ([#4320](https://github.com/dudarenok-maker/Castwright/issues/4320)):** the commit protocol and its journals, `prepareTake`/`commitTake`, `journalNamedSlugs`, and the waiter retries.
-- **Phase 3 ([#4321](https://github.com/dudarenok-maker/Castwright/issues/4321)):** `restoreTake`, `acceptTake`, `dropAllTakes` and `relabelTakes`; the fsck's journalled promotion that replaces case 1; and the Reject ordering fix (H1) and the sidecar and loudness cleanup (H3).
-- **Phase 4 ([#4324](https://github.com/dudarenok-maker/Castwright/issues/4324)):** `reconcileBook` and the sweep, the live view, and the on-box register rows.
+- **Phase 2 ([#4320](https://github.com/dudarenok-maker/Castwright/issues/4320)):** the commit protocol and its journals, `prepareTake`/`commitTake`, `journalNamedSlugs`, the waiter retries, and `reconcileBook` and the sweep.
+- **Phase 3 ([#4321](https://github.com/dudarenok-maker/Castwright/issues/4321)):** `restoreTake` and `acceptTake`; `commitScoring`; the fsck's journalled promotion that replaces case 1; and the Reject ordering fix (H1) and the sidecar and loudness cleanup (H3).
+- **Phase 4 ([#4324](https://github.com/dudarenok-maker/Castwright/issues/4324)):** `dropAllTakes` and `relabelTakes`, the live view, and the on-box register rows.
 
 **On-box acceptance is not owed by Phase 1,** so it adds no register row. Spec §7 Phase 4 step 3 places the register rows (row Q, and an m4a book on real hardware) in Phase 4, and §8.4 makes row Q's OneDrive cells a gate for Phase 2.
 
