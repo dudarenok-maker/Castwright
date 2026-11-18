@@ -62,7 +62,8 @@ vi.mock('../store/analysis-state.js', async (importOriginal) => {
     },
     writeAnalysisState: async (...args: Parameters<typeof actual.writeAnalysisState>) => {
       const gate = (globalThis as G).__baj_halted_gate as Promise<void> | undefined;
-      if (gate && args[1].state === 'halted') await gate;      const pausedGate = (globalThis as G).__baj_paused_gate as Promise<void> | undefined;
+      if (gate && args[1].state === 'halted') await gate;
+      const pausedGate = (globalThis as G).__baj_paused_gate as Promise<void> | undefined;
       if (pausedGate && args[1].state === 'paused') {
         (globalThis as G).__baj_paused_parked = true;
         await pausedGate;

@@ -23,6 +23,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
+import { awaitLeaseDrained } from '../test-utils/await-lease-drained.js';
 
 let synthesiseImpl: (args: {
   onGroupComplete?: (e: { group: { characterId: string }; totalGroups: number; completed: number }) => void;
@@ -371,7 +372,7 @@ describe('per-chapter no-progress watchdog', () => {
     expect(bookJobKinds(bookId)).toContain('render'); // held: the child has not settled
     openGate();
     const body = await run;
-    await vi.waitFor(() => expect(bookJobKinds(bookId)).toEqual([]));
+    await awaitLeaseDrained(bookJobKinds, bookId, 'render');
     /* The callback threw: the stream still gets a curated terminal frame (never the raw
        message) instead of the socket being torn down by an unhandled `registered.done`. */
     expect(body).toContain('"type":"chapter_failed"');
