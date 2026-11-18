@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 49 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 50 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**84 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**85 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-18 (#4237), 84 → 85.** Row **A129** (a mint is admitted beside its own resident 0.6B audition base, without waiting for or evicting the resident models) added. Group A 49 → 50. `next-id` bumped A129 → A130 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
 >
@@ -1952,7 +1954,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A129 -->
+<!-- next-id: A130 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6694,6 +6696,15 @@ The automated tests prove byte-identical output on the repo's seven EPUB fixture
 
 *Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
 
+### A129 · A mint is admitted beside its own resident 0.6B base ([#4237](https://github.com/dudarenok-maker/Castwright/issues/4237)) · **single 8 GB card, real Qwen sidecar with the 1.7B-Base installed**
+
+The automated tests prove the admission decision with a fake probe and fake engines: a mint's fit check credits its own resident Qwen 0.6B-Base audition model, mirroring the design-credit fix of PR #4208, so a mint no longer needs room for a second copy of weights that are already on the card. They cannot show that the credit is safe on real VRAM, in particular that a real mint (decode beside the resident 0.6B and the 1.7B-Base) fits without a CUDA out-of-memory, and that a mint on an otherwise full card is still refused instead of crashing. Only a real 8 GB GPU, a real Qwen sidecar and real mints show that. Sidecar logs are in `logs/tts.err.log`. A refusal (`noCapacity`) leaves no line there and the server retries it silently, so count refusals in the append-only `logs/tts.log`, which holds uvicorn's access lines. From the repo root, before the run: `$n = @(Get-Content logs/tts.log).Count`. After it: `Get-Content logs/tts.log | Select-Object -Skip $n | Select-String 'POST /qwen/mint-variant HTTP/1\.1" 503'`. "No `noCapacity`" below means zero such lines.
+
+- **Back-to-back mints are each admitted and evict nothing.** On a fresh sidecar, render one Quality line so the 1.7B-Base is resident, then mint three or more emotion takes in a row for one designed voice (the first take loads the 0.6B base; the later takes run with it resident). Every take completes. `logs/tts.err.log` has no `Qwen 1.7B-Base unloaded (evicted for admission).` line and no second `Loading Qwen Base` line for the 0.6B between the takes. The `logs/tts.log` count has zero 503 lines for `POST /qwen/mint-variant`, and there is no CUDA out-of-memory. Record the take count, the 503 count and the log lines you saw.
+- **A mint is admitted with the 1.7B-Base freed and the 0.6B resident.** After the takes above, wait out `QWEN_BASE17_IDLE_TTL` so the 1.7B-Base is freed by its idle watchdog while the 0.6B stays resident (`GET /health` shows the 0.6B loaded). Mint one more take. It is admitted and completes, with no 503 line for `POST /qwen/mint-variant` and no CUDA out-of-memory. Record the take, the `/health` state before it and the 503 count.
+- **A full card still refuses a mint instead of running out of memory.** Make the card otherwise full: render one Quality line so the 1.7B-Base is resident, then press Load for Kokoro on the GPU and for any other model the card will take, until a further mint would not fit. Start a mint. It is refused for capacity (a 503 line for `POST /qwen/mint-variant` in the `logs/tts.log` count, which the server retries, and a capacity message in the app) and the sidecar does not crash with a CUDA out-of-memory. Record the 503 count and the message you saw.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar and the 1.7B-Base installed. *Criteria:* this row. Clears when each bullet is recorded with the log line or number it produced.
 
 ## Group B — local Ollama analyzer only
 
