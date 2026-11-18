@@ -6739,8 +6739,10 @@ export interface components {
             /**
              * @description The live take's id, mirrored from `segments.json` (#3456 §4.1).
              *     Server-owned and derived: the server writes it, and a PUT never
-             *     accepts it from a client. Absent on a chapter with no live take
-             *     or a take not yet given an id.
+             *     accepts it from a client. Absent on a chapter with no live take,
+             *     a take not yet given an id, or a take whose id is not yet mirrored
+             *     (after a Reject or restore-unrecorded the restored take has an id
+             *     but state.json lacks it until the next boot's reconcile).
              */
             readonly audioTakeId?: string;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
