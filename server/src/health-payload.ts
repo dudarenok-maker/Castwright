@@ -15,8 +15,8 @@ const repoRoot = resolve(__dirname, '..', '..');
  *  Extracted so the test can import it directly without pulling in index.ts's
  *  top-level side effects (app.listen, sidecar spawn, upgrade coordinator). */
 export function buildHealthPayload({ includePaths }: { includePaths: boolean }) {
-  /* cwd/runDir are absolute server paths: loopback-only (#4323) so a paired
-     LAN device cannot read the host's filesystem layout. When includePaths is
+  /* cwd/runDir are absolute server paths: loopback-only (#4323) so the health
+     check does not report them to a paired LAN device (other endpoints still do, #4446). When includePaths is
      false the keys are ABSENT (not null/''), leaving { envLoaded } only. */
   if (!includePaths) {
     return {
