@@ -232,6 +232,17 @@ describe('S5/S6/S7: ensureTakeIdentity', () => {
     after.forEach((buf, i) => expect(buf.equals(before[i])).toBe(true));
   });
 
+  it('S5b: the state.json mirror writes audioTakeId ONLY; every other member, a raw audioModelKey included, is left as it is', async () => {
+    const book = seedBook({ audioRenderedAt: 'old', duration: '0:01', audioModelKey: 'raw-key', audioEngines: { kokoro: 1 }, audioQa: { score: 0.5 } });
+    liveTake(book);
+    const before = stateChapter(book);
+
+    await withHandle(book, (h) => take.ensureTakeIdentity(h, SLUG));
+
+    const seg = readJsonFile(join(book.audio, `${SLUG}.segments.json`));
+    expect(stateChapter(book)).toEqual({ ...before, audioTakeId: seg.takeId });
+  });
+
   it('S6: a previous take with no id gains one; with no live take no live file appears', async () => {
     const book = seedBook();
     writeFileSync(join(book.audio, `${SLUG}.previous.mp3`), Buffer.from('ID3....'));

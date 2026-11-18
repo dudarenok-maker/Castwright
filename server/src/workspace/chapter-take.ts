@@ -23,10 +23,9 @@ import { existsSync } from 'node:fs';
 import { renameWithRetry } from './atomic-rename.js';
 import { assertHeld, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
-import { audioDir, stateJsonPath } from './paths.js';
+import { audioDir } from './paths.js';
 import type { BookStateJson } from './scan.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
-import { readStateJsonWithRecovery } from './state-migrate.js';
 import {
   CHAPTER_AUDIO_EXTS,
   TAKE_STATE_FIELDS,
@@ -154,13 +153,28 @@ async function stampIdIntoJson(path: string, takeId: string): Promise<void> {
   await writeJsonAtomic(path, { ...raw, takeId });
 }
 
+/* The identity mirror: ONLY `audioTakeId` is written. Every other member (a raw
+   `audioModelKey` from the old heal included) is left as it is, so a healthy
+   legacy chapter is not rewritten by its first boot (§4.4: a stamp of the same
+   take leaves such a field alone). */
+async function mirrorTakeIdIntoState(handle: AnyBookHandle, slug: string, takeId: string): Promise<void> {
+  await updateStateAtDir(handle.bookDir, (state) => {
+    const idx = state.chapters.findIndex((c) => c.slug === slug);
+    if (idx < 0) return null;
+    if ((state.chapters[idx] as Record<string, unknown>).audioTakeId === takeId) return null;
+    const chapters = state.chapters.slice();
+    chapters[idx] = { ...chapters[idx], audioTakeId: takeId } as (typeof chapters)[number];
+    return { ...state, chapters };
+  });
+}
+
 /** Lazily mint a take id for a take that lacks one. Idempotent: a take whose
     segments already carry a valid `takeId` is not rewritten.
 
     A LIVE take (`chapterAudioExists`) whose live segments lack a valid id gets
     one minted into the segments (a write failure throws) and the live
-    embeddings if present, then mirrored into `state.json` via
-    `stampStateFromLiveTake(.., { takeChanged: false })`. A failure of THAT
+    embeddings if present, then mirrored into `state.json` (`audioTakeId`
+    only). A failure of THAT
     mirror is logged and swallowed: the segments carry the id, and the scan heal
     repairs `state.json`. A PREVIOUS take whose `.previous.segments.json` lacks
     an id gets its own id (and its embeddings), with no live file touched.
@@ -183,7 +197,7 @@ export async function ensureTakeIdentity(
       await writeJsonAtomic(segPath, { ...segments, takeId });
       await stampIdIntoJson(livePartPath(root, slug, 'embeddings'), takeId);
       try {
-        if (opts.mirrorState !== false) await stampStateFromLiveTake(handle, slug, { takeChanged: false });
+        if (opts.mirrorState !== false) await mirrorTakeIdIntoState(handle, slug, takeId);
       } catch (err) {
         console.warn(`[take] state.json identity mirror failed for ${slug}:`, err);
       }
@@ -560,17 +574,6 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
  * reconcileSlug (§6.1 steps 1-5, lazy migration)
  * ------------------------------------------------------------------ */
 
-/* Step 5's legacy-reject shape: `state.json` records an `audioRenderedAt` that
-   is not the live segments' `synthesizedAt`. False with no live segments. */
-async function isLegacyReject(bookDir: string, root: string, slug: string): Promise<boolean> {
-  const segments = await readJson<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
-  if (!segments) return false;
-  const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
-  const recorded = (state?.chapters.find((c) => c.slug === slug) as Record<string, unknown> | undefined)
-    ?.audioRenderedAt;
-  return typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
-}
-
 /** Bring one chapter slug's take up to the current model, under the caller's
     book-op (the handle is asserted first): `migrateSlugFiles` (steps 1-3),
     `ensureTakeIdentity` (step 4), then the `state.json` re-stamp (step 5).
@@ -602,11 +605,6 @@ export async function reconcileSlug(
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
   const restamp = opts.restamp !== false;
-  /* The legacy-reject signal is read BEFORE step 4: `ensureTakeIdentity`'s state
-     mirror sets `audioRenderedAt` from the live segments, which would erase the
-     very mismatch step 5 looks for. The caller's book-op is held, so no other
-     writer moves the state between this read and the locked re-stamp below. */
-  const legacyBefore = await isLegacyReject(handle.bookDir, root, slug);
   await ensureTakeIdentity(handle, slug, { mirrorState: restamp });
   if (!restamp || !chapterAudioExists(root, slug)) return;
   await updateStateAtDir(handle.bookDir, async (state) => {
@@ -616,9 +614,10 @@ export async function reconcileSlug(
     if (!segments) return null;
     const before = state.chapters[idx] as Record<string, unknown>;
     const recorded = before.audioRenderedAt;
-    const legacyReject =
-      legacyBefore ||
-      (typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt);
+    /* A LEGACY REJECT: `state.json` records an `audioRenderedAt` that is not the
+       live segments' `synthesizedAt`. Step 4's mirror writes `audioTakeId` only,
+       so it never erases this mismatch. */
+    const legacyReject = typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
     if (legacyReject) return stampedState(state, slug, segments, true);
     const healed = healTakeFields(
       before as { slug?: string } & TakeFields,

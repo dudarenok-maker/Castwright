@@ -176,6 +176,39 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
     expect(chapterOf(b)).toEqual(before);
   });
 
+  it('I3: a LEGACY chapter (no takeId yet) with a raw-key audioModelKey gains only audioTakeId on the first boot', async () => {
+    const b = seedBook({
+      chapter: {
+        audioRenderedAt: 'T-live',
+        duration: '00:12',
+        audioModelKey: 'raw-key-from-old-heal',
+        audioEngines: { kokoro: 1 },
+        audioQa: { score: 0.5 },
+      },
+    });
+    writeFileSync(join(b.audio, `${SLUG}.mp3`), MP3);
+    /* No takeId: the real legacy population, so the identity mirror DOES run. The
+       segments derive a different effective key than the raw one in state. */
+    writeJson(join(b.audio, `${SLUG}.segments.json`), {
+      durationSec: 12,
+      modelKey: 'raw-key-from-old-heal',
+      synthesizedAt: 'T-live',
+      qa: { score: 0.1 },
+      characterSnapshots: { narrator: { voiceEngine: 'kokoro' } },
+    });
+    const before = chapterOf(b);
+    expect(take.deriveTakeFields(readJson(join(b.audio, `${SLUG}.segments.json`))).audioModelKey).not.toBe(
+      'raw-key-from-old-heal',
+    );
+
+    await fsck.fsckAllBooks();
+
+    const live = readJson(join(b.audio, `${SLUG}.segments.json`));
+    expect(take.isTakeId(live.takeId)).toBe(true);
+    expect(chapterOf(b).audioModelKey).toBe('raw-key-from-old-heal');
+    expect(chapterOf(b)).toEqual({ ...before, audioTakeId: live.takeId });
+  });
+
   it('I3: a legacy healthy chapter (no id) gains only audioTakeId when its state already matches the take', async () => {
     const b = seedBook({
       chapter: { audioRenderedAt: 'T-live', duration: '00:12', audioModelKey: 'm-live', audioQa: { score: 0.5 } },
