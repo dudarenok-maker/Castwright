@@ -12,7 +12,13 @@
    it no longer inlines its own tail. */
 
 import { rename, rm, writeFile } from 'node:fs/promises';
-import { liveAudioPath, livePartPath, preserveExistingAsPrevious } from '../workspace/chapter-take.js';
+import {
+  TAKE_STATE_FIELDS,
+  liveAudioPath,
+  livePartPath,
+  preserveExistingAsPrevious,
+  type TakeFields,
+} from '../workspace/chapter-take.js';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
@@ -792,18 +798,24 @@ async function finalizeChapterAudioWriteInner(
   const prev = await withStateJsonLock(statePath, async () => {
     const onDisk = await readStateJsonWithRecovery(statePath);
     if (onDisk) {
-      const formatted = formatDuration(durationSec);
+      /* Stamped over TAKE_STATE_FIELDS (the single list): a member this render
+         does not carry is dropped, so a previous take's `audioTakeId` never
+         survives onto the new one (its segments carry no id until minted). */
+      const stamp: TakeFields = {
+        duration: formatDuration(durationSec),
+        audioModelKey: effectiveModelKey,
+        audioEngines,
+        audioRenderedAt: segmentsFile.synthesizedAt,
+        audioQa,
+      };
+      const takeMembers = Object.fromEntries(TAKE_STATE_FIELDS.map((f) => [f, stamp[f]]));
       const next: BookStateJson = {
         ...onDisk,
         chapters: onDisk.chapters.map((c) =>
           c.id === chapter.id
             ? {
                 ...c,
-                duration: formatted,
-                audioModelKey: effectiveModelKey,
-                audioEngines,
-                audioRenderedAt: segmentsFile.synthesizedAt,
-                audioQa,
+                ...takeMembers,
                 generationState: undefined,
                 generationError: undefined,
                 generationErrorCode: undefined,
