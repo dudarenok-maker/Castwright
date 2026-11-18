@@ -224,11 +224,16 @@ export async function clearTakeIdMirror(handle: AnyBookHandle, slug: string): Pr
     an id gets its own id (and its embeddings), with no live file touched.
 
     `mirrorState: false` skips the `state.json` mirror, for a caller about to
-    replace the live take (Reject, restore-unrecorded). */
+    replace the live take (Reject, restore-unrecorded).
+
+    `onlyIfIdentity` is the identity `reconcileSlug`'s gate verified the live
+    audio against; when the live segments read here no longer carry it (a
+    finalize wrote new segments after the gate's decode), nothing is minted or
+    mirrored. */
 export async function ensureTakeIdentity(
   handle: AnyBookHandle,
   slug: string,
-  opts: { mirrorState?: boolean } = {},
+  opts: { mirrorState?: boolean; onlyIfIdentity?: string } = {},
 ): Promise<void> {
   assertHeld(handle, 'ensureTakeIdentity');
   const root = audioDir(handle.bookDir);
@@ -236,6 +241,9 @@ export async function ensureTakeIdentity(
   if (chapterAudioExists(root, slug)) {
     const segPath = livePartPath(root, slug, 'segments');
     const segments = await readJsonTolerant<Record<string, unknown>>(segPath);
+    if (opts.onlyIfIdentity !== undefined && (!segments || segmentsIdentity(segments) !== opts.onlyIfIdentity)) {
+      return;
+    }
     let takeId: string | null = null;
     if (segments && !isTakeId(segments.takeId)) {
       takeId = mintTakeId();
@@ -681,6 +689,10 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
 /** `state.json` records an `audioRenderedAt` that is not the live segments'
     `synthesizedAt`. Step 4's mirror writes `audioTakeId` only, so it never
     erases this mismatch. */
+function segmentsIdentity(segments: { synthesizedAt?: unknown; durationSec?: unknown }): string {
+  return JSON.stringify([segments.synthesizedAt ?? null, segments.durationSec ?? null]);
+}
+
 function isLegacyRejectShape(recorded: unknown, segments: TakeSegmentsView): boolean {
   return typeof recorded === 'string' && recorded.length > 0 && recorded !== segments.synthesizedAt;
 }
@@ -690,22 +702,31 @@ function isLegacyRejectShape(recorded: unknown, segments: TakeSegmentsView): boo
     the OLD live audio with `state.json` still describing that audio. So before
     step 4 mints an id or step 5 stamps, a chapter in that shape has its live
     audio FULL-DECODED and compared with the segments' `durationSec` (the
-    multi-live rule's tolerance). False means the segments do not describe this
-    audio (a mismatch, or no way to tell): the caller touches nothing. The read of
-    `state.json` is lock-free and the decode runs under the caller's book-op
-    only, never inside `book` (R8-3). Any other chapter answers true without a
-    decode. */
-async function segmentsDescribeLiveAudio(handle: AnyBookHandle, root: string, slug: string): Promise<boolean> {
+    multi-live rule's tolerance). `null` means the caller touches nothing: the
+    segments do not describe this audio (a mismatch, or no way to tell), or
+    `state.json` could not be read (a read that fails is no verdict). Otherwise
+    the answer carries the identity of the segments it read and whether they
+    were a legacy-reject shape verified by a decode (`legacy`; any other chapter
+    answers without a decode). The locked callers act only on segments that
+    still carry that identity, and stamp the legacy shape only if `legacy`
+    (the read here is lock-free). The decode
+    runs under the caller's book-op only, never inside `book` (R8-3). */
+async function segmentsDescribeLiveAudio(
+  handle: AnyBookHandle,
+  root: string,
+  slug: string,
+): Promise<{ identity: string | null; legacy: boolean } | null> {
   const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
-  if (!segments) return true;
+  if (!segments) return { identity: null, legacy: false };
   let recorded: unknown;
   try {
     const state = await readBookStateOrThrow(handle.bookDir);
     recorded = (state?.chapters.find((c) => c.slug === slug) as Record<string, unknown> | undefined)?.audioRenderedAt;
-  } catch {
-    return true; // step 5's own read reports an unreadable state
+  } catch (err) {
+    console.warn(`[take] ${slug}: state.json unreadable while checking the live audio; left as is:`, err);
+    return null;
   }
-  if (!isLegacyRejectShape(recorded, segments)) return true;
+  if (!isLegacyRejectShape(recorded, segments)) return { identity: segmentsIdentity(segments), legacy: false };
   const expected = segments.durationSec;
   const audio = liveAudioFiles(root, slug)[0];
   const decoded = audio ? await decodeDurationSec(audio.path) : null;
@@ -715,13 +736,13 @@ async function segmentsDescribeLiveAudio(handle: AnyBookHandle, root: string, sl
     decoded !== null &&
     Math.abs(decoded - expected) <= DURATION_MATCH_TOLERANCE_SEC
   ) {
-    return true;
+    return { identity: segmentsIdentity(segments), legacy: true };
   }
   console.warn(
     `[take] ${slug}: live segments (durationSec ${String(expected)}) do not describe the live audio ` +
       `(decoded ${decoded === null ? 'unreadable' : decoded.toFixed(2)} s); state.json and take ids left as they are`,
   );
-  return false;
+  return null;
 }
 
 /** Bring one chapter slug's take up to the current model, under the caller's
@@ -757,8 +778,15 @@ export async function reconcileSlug(
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
   const restamp = opts.restamp !== false;
-  if (restamp && chapterAudioExists(root, slug) && !(await segmentsDescribeLiveAudio(handle, root, slug))) return;
-  await ensureTakeIdentity(handle, slug, { mirrorState: restamp });
+  let verified: { identity: string | null; legacy: boolean } | null = null;
+  if (restamp && chapterAudioExists(root, slug)) {
+    verified = await segmentsDescribeLiveAudio(handle, root, slug);
+    if (!verified) return;
+  }
+  await ensureTakeIdentity(handle, slug, {
+    mirrorState: restamp,
+    ...(verified?.identity != null ? { onlyIfIdentity: verified.identity } : {}),
+  });
   if (!restamp || !chapterAudioExists(root, slug)) return;
   try {
     await updateStateAtDir(handle.bookDir, async (state) => {
@@ -766,12 +794,18 @@ export async function reconcileSlug(
       if (idx < 0) return null;
       const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
       if (!segments) return null;
+      /* Segments written after the gate's read were never checked against the audio. */
+      if (verified?.identity != null && segmentsIdentity(segments) !== verified.identity) return null;
       const before = state.chapters[idx] as Record<string, unknown>;
       const recorded = before.audioRenderedAt;
       /* A LEGACY REJECT: `state.json` records an `audioRenderedAt` that is not the
          live segments' `synthesizedAt`. Step 4's mirror writes `audioTakeId` only,
          so it never erases this mismatch. */
-      if (isLegacyRejectShape(recorded, segments)) return stampedState(state, slug, segments, true);
+      if (isLegacyRejectShape(recorded, segments)) {
+        /* Stamp only a shape the gate verified by decode (a legacy shape that
+           appeared after the gate's read was not). */
+        return verified?.legacy ? stampedState(state, slug, segments, true) : null;
+      }
       const healed = healTakeFields(
         before as { slug?: string } & TakeFields,
         deriveTakeFields(segments),

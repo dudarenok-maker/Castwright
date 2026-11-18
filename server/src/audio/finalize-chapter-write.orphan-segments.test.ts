@@ -14,6 +14,36 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const failRenames = { on: false };
+/* The gate's lock-free `state.json` read: `throw` fails it once (what the reader throws for
+   EBUSY / EPERM / EIO); `swap` lets it succeed, then writes `body` over the live segments, a
+   finalize's segments write landing between the gate and step 5's locked read. */
+const gate = vi.hoisted(() => ({
+  mode: 'off' as 'off' | 'throw' | 'swap',
+  calls: 0,
+  segPath: '',
+  body: '',
+}));
+
+vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
+  return {
+    ...orig,
+    readBookStateOrThrow: async (dir: string) => {
+      if (gate.mode === 'throw') {
+        gate.mode = 'off';
+        gate.calls += 1;
+        throw new orig.BookStateUnreadableError();
+      }
+      const r = await orig.readBookStateOrThrow(dir);
+      if (gate.mode === 'swap') {
+        gate.mode = 'off';
+        gate.calls += 1;
+        writeFileSync(gate.segPath, gate.body);
+      }
+      return r;
+    },
+  };
+});
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>();
@@ -51,6 +81,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   failRenames.on = false;
+  gate.mode = 'off';
+  gate.calls = 0;
 });
 
 afterAll(() => {
@@ -167,5 +199,67 @@ describe('H6: the boot reconcile with orphan segments beside the old live audio'
     expect(ch.audioRenderedAt).toBe(segA.synthesizedAt);
     expect(ch.duration).not.toBe(afterB.duration);
     expect(ch.audioTakeId).toBe(b.segments().takeId);
+  }, 30_000);
+});
+
+describe('H6 pass 4: the gate does not fail open', () => {
+  /* One book, not `fsckAllBooks`: an injected read failure must hit THIS book's gate, not an
+     earlier test's book. */
+  async function reconcileOne(bookDir: string) {
+    const { withBookOpAtDir } = await import('../workspace/book-op-lock.js');
+    const { reconcileSlug } = await import('../workspace/chapter-take.js');
+    await withBookOpAtDir(bookDir, (h) => reconcileSlug(h, SLUG));
+  }
+
+  /* The static shape of the H6 describe above: state at A (T-A), live A audio, orphan segments of
+     another length. Seeded from a real render so the audio decodes. */
+  async function staticShape() {
+    const b = await seedBook();
+    await b.render(1.0);
+    const orphan = { durationSec: 20, synthesizedAt: 'T-B', modelKey: 'qwen3-0.6b' };
+    writeFileSync(join(b.audioRoot, `${SLUG}.segments.json`), JSON.stringify(orphan));
+    return { b, orphan };
+  }
+
+  it('an unreadable state.json at the gate leaves state.json and the segments alone', async () => {
+    const { b, orphan } = await staticShape();
+    const before = b.chapter();
+    gate.mode = 'throw';
+    await reconcileOne(b.bookDir);
+    expect(gate.calls).toBe(1); // the injected failure really hit the gate's read
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(orphan);
+  }, 30_000);
+
+  it('segments written between the gate and the locked read are not stamped (gate saw a matching take)', async () => {
+    const b = await seedBook();
+    await b.render(1.0);
+    const matching = b.segments();
+    const before = b.chapter();
+    gate.segPath = join(b.audioRoot, `${SLUG}.segments.json`);
+    gate.body = JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'qwen3-0.6b' });
+    gate.mode = 'swap';
+    await reconcileOne(b.bookDir);
+    expect(gate.calls).toBe(1);
+    expect(matching.synthesizedAt).toBe(before.audioRenderedAt);
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(JSON.parse(gate.body)); // and no id was minted into them
+  }, 30_000);
+
+  it('segments swapped after the gate VERIFIED a genuine legacy reject are not stamped either', async () => {
+    const b = await seedBook();
+    await b.render(1.0);
+    const statePath = join(b.bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(statePath, 'utf8'));
+    st.chapters[0].audioRenderedAt = 'T-OLD'; // state names a take the live segments do not: legacy shape
+    writeFileSync(statePath, JSON.stringify(st));
+    const before = b.chapter();
+    gate.segPath = join(b.audioRoot, `${SLUG}.segments.json`);
+    gate.body = JSON.stringify({ durationSec: 1, synthesizedAt: 'T-NEW', modelKey: 'qwen3-0.6b' });
+    gate.mode = 'swap';
+    await reconcileOne(b.bookDir);
+    expect(gate.calls).toBe(1);
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(JSON.parse(gate.body));
   }, 30_000);
 });
