@@ -201,7 +201,7 @@ upgradeRouter.post('/apply', async (_req: Request, res: Response) => {
         console.error(`[upgrade] apply failed at ${result.phase}: ${result.error}`);
       }
     } catch (e) {
-      tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: (e as Error).message, errorLan: requestFailureMessageFs(e, (e as Error).message) });
+      tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: (e as Error).message, errorLan: requestFailureMessageFs(e, LEGACY_SENTENCE) });
       console.error('[upgrade] apply threw:', e);
     }
   })();

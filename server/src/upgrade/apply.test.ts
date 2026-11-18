@@ -164,6 +164,21 @@ describe('applyUpgrade', () => {
       expect(res.errorLan).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
     });
 
+    it('gives a phase with no STEP_FAILURE_LAN entry a fixed sentence, not its raw message', async () => {
+      // log() runs after phase flips to 'needs-reinstall' (no map entry), so a throw there lands in the catch.
+      const steps = fakeSteps({
+        readStamp: vi.fn(() => null),
+        log: (m: string) => {
+          if (m.includes('reinstall required')) throw new Error(`boom ${P}`);
+        },
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('needs-reinstall');
+      expect(res.error).toContain('bob');
+      expect(res.errorLan).toBe('The upgrade failed. See the server log for details.');
+      expect(res.errorLan).not.toContain('bob');
+    });
+
     it('passes a plain extract-phase Error through verbatim', async () => {
       const steps = fakeSteps({ extract: vi.fn(async () => { throw new Error('corrupt zip'); }) });
       const res = await applyUpgrade(ctx(), steps);

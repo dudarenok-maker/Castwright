@@ -313,6 +313,23 @@ describe('upgrade failure reason is curated for LAN clients (#4322)', () => {
     }
   });
 
+  it('a thrown plain Error carrying a path never reaches errorLan (fails closed to the legacy sentence)', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      stage();
+      h.applyThrows = new Error('spawn failed at C:\\Users\\bob\\x');
+      await request(app).post('/api/upgrade/apply');
+      await vi.waitFor(() => expect(readState().phase).toBe('error'));
+      expect(readState().error).toContain('bob');
+      expect(readState().errorLan).toBe(
+        'The upgrade failed. Check the server log on the computer running Castwright for details.',
+      );
+      expect(readState().errorLan).not.toContain('bob');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
   it('non-error phases are returned unchanged for both ips', async () => {
     writeFileSync(join(stagingDir, 'state.json'), JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0' }));
     for (const ip of ['127.0.0.1', '192.168.1.50']) {

@@ -102,8 +102,15 @@ const STEP_FAILURE_LAN: Partial<Record<ApplyPhase, string>> = {
   'pip-install': 'The dependency install step (pip) failed. See the server log for details.',
 };
 
+/* Fail closed: a phase with no entry above (a step added later) gets this fixed
+   sentence rather than its raw message. extract is the one deliberate
+   pass-through — its plain Errors are yauzl/zlib parse messages that name no
+   host path (an fs error there is still curated by requestFailureMessageFs). */
+const UNMAPPED_STEP_LAN = 'The upgrade failed. See the server log for details.';
+
 function curateFailureForLan(err: unknown, phase: ApplyPhase): string {
-  return requestFailureMessageFs(err, STEP_FAILURE_LAN[phase] ?? (err as Error).message);
+  const fallback = phase === 'extract' ? (err as Error).message : (STEP_FAILURE_LAN[phase] ?? UNMAPPED_STEP_LAN);
+  return requestFailureMessageFs(err, fallback);
 }
 
 export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promise<ApplyResult> {
