@@ -390,18 +390,20 @@ test('npm scripts: root audit runs the root leg, server audit runs --omit-dev', 
   assert.match(serverScripts.audit, /--omit-dev/);
 });
 
-test('#4380: the committed picomatch waiver covers the root leg and not the server leg', () => {
-  const vulns = {
-    picomatch: {
-      severity: 'high',
-      via: [{ source: 1, url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf', severity: 'high', title: 'ReDoS' }],
-    },
-  };
-  const waivers = loadWaivers(join(REPO_ROOT, 'audit-waivers.json'));
-  assert.deepEqual(gateFailures(vulns, waivers, 'root').missing, []);
-  assert.deepEqual(gateFailures(vulns, waivers, 'server').missing, [
-    { package: 'picomatch', advisories: ['GHSA-fc5q-39xc-vjpf'] },
-  ]);
+test('#4380: each committed waiver is active on exactly the legs its scope names', () => {
+  const legsByScope = { root: ['root'], server: ['server'], both: ['root', 'server'] };
+  for (const w of loadWaivers(join(REPO_ROOT, 'audit-waivers.json'))) {
+    const vulns = {
+      [w.package]: {
+        severity: 'high',
+        via: [{ source: 1, url: `https://github.com/advisories/${w.ghsaId}`, severity: 'high', title: 'x' }],
+      },
+    };
+    for (const leg of ['root', 'server']) {
+      const waived = gateFailures(vulns, [w], leg).missing.length === 0;
+      assert.equal(waived, legsByScope[w.scope].includes(leg), `${w.ghsaId} (${w.scope}) on the ${leg} leg`);
+    }
+  }
 });
 
 test('loadWaivers: parses a valid array and rejects a non-array', () => {
