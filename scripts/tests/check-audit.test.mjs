@@ -6,7 +6,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import {
   gateFailures,
   legFromArgs,
   loadWaivers,
+  main,
   parseAuditOutput,
 } from '../check-audit.mjs';
 
@@ -344,6 +345,49 @@ test('legFromArgs: --omit-dev is the server leg, otherwise root', () => {
   assert.equal(legFromArgs({ omitDev: true }), 'server');
   assert.equal(legFromArgs({ omitDev: false }), 'root');
   assert.equal(legFromArgs({}), 'root');
+});
+
+// --- main() wiring (#4380): drive the production path through its injection seam ---
+const fakeAudit = () => ({ stdout: JSON.stringify({ vulnerabilities: SCOPE_VULNS }), stderr: '' });
+const quietly = (fn) => {
+  const out = process.stdout.write;
+  const err = process.stderr.write;
+  process.stdout.write = () => true;
+  process.stderr.write = () => true;
+  try {
+    return fn();
+  } finally {
+    process.stdout.write = out;
+    process.stderr.write = err;
+  }
+};
+
+test('main: a root-scoped waiver passes the root leg and fails the --omit-dev (server) leg', () => {
+  const deps = { loadWaivers: () => scoped('root'), runNpmAudit: fakeAudit };
+  assert.equal(quietly(() => main([], deps)), 0);
+  assert.equal(quietly(() => main(['--omit-dev'], deps)), 1);
+});
+
+test('main: a server-scoped waiver passes the --omit-dev (server) leg and fails the root leg', () => {
+  const deps = { loadWaivers: () => scoped('server'), runNpmAudit: fakeAudit };
+  assert.equal(quietly(() => main(['--omit-dev'], deps)), 0);
+  assert.equal(quietly(() => main([], deps)), 1);
+});
+
+test('main: a waivers file the loader rejects (e.g. a missing scope) exits 3 on either leg', () => {
+  const loadWaivers = () => {
+    throw new Error('entry 0 missing or invalid scope (must be root, server or both)');
+  };
+  const deps = { loadWaivers, runNpmAudit: fakeAudit };
+  assert.equal(quietly(() => main([], deps)), 3);
+  assert.equal(quietly(() => main(['--omit-dev'], deps)), 3);
+});
+
+test('npm scripts: root audit runs the root leg, server audit runs --omit-dev', () => {
+  const rootScripts = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
+  const serverScripts = JSON.parse(readFileSync(join(REPO_ROOT, 'server', 'package.json'), 'utf8')).scripts;
+  assert.doesNotMatch(rootScripts.audit, /--omit-dev/);
+  assert.match(serverScripts.audit, /--omit-dev/);
 });
 
 test('#4380: the committed picomatch waiver covers the root leg and not the server leg', () => {

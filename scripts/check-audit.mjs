@@ -363,7 +363,7 @@ export function legFromArgs(args) {
   return args.omitDev ? 'server' : 'root';
 }
 
-export function main(argv) {
+export function main(argv, { loadWaivers: loadWaiversFn = loadWaivers, runNpmAudit: runNpmAuditFn = runNpmAudit } = {}) {
   let args;
   try {
     args = parseArgs(argv);
@@ -380,13 +380,13 @@ export function main(argv) {
 
   let waivers;
   try {
-    waivers = loadWaivers();
+    waivers = loadWaiversFn();
   } catch (err) {
     process.stderr.write(`check-audit: FAILED to load audit-waivers.json - ${err.message}\n`);
     return 3;
   }
 
-  const { stdout, stderr, error } = runNpmAudit({ dir, omitDev: args.omitDev });
+  const { stdout, stderr, error } = runNpmAuditFn({ dir, omitDev: args.omitDev });
   if (error) {
     process.stderr.write(`check-audit: FAILED to run npm audit - ${error.message}\n`);
     return 3;
