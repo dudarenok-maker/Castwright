@@ -69,7 +69,12 @@ runs:
           timeout -k 10 150 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
             -o "$TMP/ffmpeg.tar.xz" \
             "https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz"
-          echo "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67  $TMP/ffmpeg.tar.xz" | sha256sum -c -
+          ls -l "$TMP/ffmpeg.tar.xz"
+          if ! echo "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67  $TMP/ffmpeg.tar.xz" | sha256sum -c -; then
+            echo "::error::ffmpeg checksum mismatch; first bytes of what the server sent follow"
+            head -c 400 "$TMP/ffmpeg.tar.xz" | od -c | head -12
+            exit 1
+          fi
           mkdir -p "$DEST"
           tar -xJf "$TMP/ffmpeg.tar.xz" -C "$TMP"
           install -m 0755 "$TMP"/ffmpeg-7.0.2-amd64-static/ffmpeg "$TMP"/ffmpeg-7.0.2-amd64-static/ffprobe "$DEST/"
