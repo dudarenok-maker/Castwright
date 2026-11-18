@@ -6698,15 +6698,17 @@ The automated tests prove byte-identical output on the repo's seven EPUB fixture
 
 *Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
 
-### A131 · A GPU Whisper on the second card is fit-checked and evicted against that card ([#4456](https://github.com/dudarenok-maker/Castwright/issues/4456)) · **the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti)**
+### A131 · A GPU Whisper or Qwen on the second card is fit-checked and evicted against that card ([#4456](https://github.com/dudarenok-maker/Castwright/issues/4456)) · **the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti)**
 
-> **Renumber on merge.** A129 (PR #4436) and A130 (PR #4441) are held by open PRs; if either merges first, take the next free Group A id from `origin/main`'s `next-id` and bump this row.
+> **A130 is held by open PR #4441;** this row stays A131 (Group A's `next-id` is A132). If #4441 is closed unmerged, A130 stays unused: ids are allocate-once.
 
-The automated tests drive the real `_engine_actual_card` / `_is_resident` with a fake CT2 Whisper on `cuda:1`, but only a second card proves that the real faster-whisper model is resident where `_device` says and that admission then acts on that card.
+The automated tests drive the real `_engine_actual_card` / `_is_resident` and the production `_placement` with a fake CT2 Whisper and a fake Qwen wrapper on `cuda:1`, but only a second card proves that the real faster-whisper and Qwen models are resident where `_device` says and that admission then acts on that card. Both checks fill `cuda:0` and keep `cuda:1` roomy: before the fix the engine's card read as `cuda:0`, so the request was fit-checked there.
 
-- **Warm `/transcribe` targets the Whisper card.** On the 2-card boot set `ASR_DEVICE=cuda:1`, run one `/transcribe` so Whisper loads, then fill `cuda:1` until a second `/transcribe` is tight on it. Observe: `GET /health` lists `asr` under the `cuda:1` card (not `cuda:0`); the warm request is fit-checked against `cuda:1`; any ladder eviction or `noCapacity.deviceKey` names `cuda:1`; nothing resident on `cuda:0` is evicted on its behalf.
+- **`/health` shows the card.** Load the engine on `cuda:1` (Whisper: set `ASR_DEVICE=cuda:1` and run one `POST /transcribe`; Qwen: pin `QWEN_DEVICE=cuda:1` and run one `POST /synthesize` on the Qwen engine, so the 0.6B Base loads). Observe `GET /health`: `gpus[]` lists `asr` (or `qwen`) in the `resident` list of the entry with `idx: 1`. Unfixed, it sits in the synthetic `idx: -1` "unindexed" entry instead; `asr_loaded` / `qwen_loaded` are `true` either way.
+- **A warm request is checked against `cuda:1`, not `cuda:0`.** With the model resident on `cuda:1`, load other models onto `cuda:0` (the 8 GB card) until a warm 128 MB Whisper booking, or a warm Qwen 0.6B synth, no longer fits there; leave `cuda:1` roomy. Send the same request again. Observe, fixed: a 200, and nothing unrelated is unloaded (`kokoro_loaded` / `spk_loaded` and the rest of `/health` unchanged). Unfixed: a 503 whose body names `"deviceKey": "cuda:0"` (`{"noCapacity": true, "neededMb": ..., "deviceKey": "cuda:0"}`), or an unrelated `cuda:0` model unloaded to make room (its `*_loaded` flag flips to `false`).
+- **A pinned cold 1.7B follows the pin (Qwen).** With the 0.6B resident on `cuda:1`, `QWEN_DEVICE=cuda:1` and both cards roomy, send a `POST /synthesize` for the 1.7B model. Observe `GET /health` afterwards: `qwen_base17_loaded` is `true` and `gpus[]` still lists `qwen` under `idx: 1` (unfixed, the 1.7B is admitted to `cuda:0` and `qwen` is reported under `idx: 0`, with the 0.6B still on `cuda:1`).
 
-*Needs:* the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti) and the Whisper weights. *Criteria:* this row. Clears when the card named in `/health` and in any `noCapacity` is recorded.
+*Needs:* the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti), the Whisper weights and the Qwen3-TTS weights. *Criteria:* this row. Clears when the `gpus[]` card and any `noCapacity` `deviceKey` are recorded for Whisper and for Qwen.
 
 
 ## Group B — local Ollama analyzer only
