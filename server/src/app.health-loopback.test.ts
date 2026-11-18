@@ -68,8 +68,13 @@ describe('GET /api/health on the real app (#4323)', () => {
       expect(Object.keys(res.body.configLoad)).toEqual(['envLoaded']);
     });
 
-    it('X-Forwarded-For: 127.0.0.1 does not unlock the paths', async () => {
-      const res = await getHealth(lanIp!, { 'X-Forwarded-For': '127.0.0.1' });
+    it.each([
+      ['X-Forwarded-For', '127.0.0.1'],
+      ['Forwarded', 'for=127.0.0.1'],
+      ['X-Real-IP', '127.0.0.1'],
+      ['Host', 'localhost'],
+    ])('a spoofed %s: %s does not unlock the paths', async (name, value) => {
+      const res = await getHealth(lanIp!, { [name]: value });
       expect(res.status).toBe(200);
       expect(Object.keys(res.body.configLoad)).toEqual(['envLoaded']);
     });
