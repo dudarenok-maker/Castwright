@@ -17,7 +17,8 @@
              directory by the resolver in `test-utils/guard-scan.ts`
              (`audioDir(...)` or an `audio/` string, OR a call to one of the
              module's path builders `liveAudioPath` / `livePartPath` /
-             `previousAudioPath` / `previousPartPath` / `takeSuffixPath`,
+             `previousAudioPath` / `previousPartPath` / `takeSuffixPath`, or verdicts-io's
+             `attemptedPath`,
              through `join` / `resolve`, template-head and same-function
              `const` hops).
    Mutation calls and their path arguments (spec list): rename / renameWithRetry
@@ -52,10 +53,12 @@
    `count` is the file's TOTAL hits. `permanentCount` (default 0) is the part
    of them that is permanent: a hit that is not a take part (the `audio/`
    directory itself, a book-level file - §4.3) or the reparse wipe (§5.A
-   Ownership). `removedBy` is the child of #4319 that deletes the migratable
-   rest (count - permanentCount), or `'permanent'` when the whole entry stays.
-   Each later child lowers its own entries; Phase 1's verify child checks that
-   only permanent entries remain.
+   Ownership). `removedBy` is the phase ticket whose work moves the migratable
+   rest (count - permanentCount) into the take module (#4320 Phase 2, #4321
+   Phase 3, #4324 Phase 4), or `'permanent'` when the whole entry stays. Each
+   later phase lowers its own entries. Phase 1 ships with 4 permanent hits
+   (build-m4b, scan-import-folder, book-state, generation's audio/ mkdir) beside
+   the phase-owned ones below.
 
    MUTATION CHECK (B8): the scan is exposed as `scanTakePaths(fileName, text)`
    and the tests below feed it synthetic sources - never a planted real file. */
@@ -139,6 +142,7 @@ const TAKE_PATH_BUILDERS: ReadonlySet<string> = new Set([
   'previousAudioPath',
   'previousPartPath',
   'takeSuffixPath',
+  'attemptedPath',
 ]);
 
 /** The rule-3 root: an audio directory, or a call to a take path builder. */
@@ -261,13 +265,13 @@ const ALLOWLIST: Record<string, AllowEntry> = {
   // Builder-rooted writers (#4319 review 2): respelled through the module's path builders in phase 1, still writing from outside it. Each leaves with the later phase that moves its writer in.
   'audio/finalize-chapter-write.ts': { count: 8, removedBy: 4320, reason: "finalize (W1) stages and installs the live take (audio, segments, peaks, lufs, embeddings) with builder-spelled paths; #4320's prepareTake/commitTake owns that commit." },
   'routes/chapter-qa-repair.ts': { count: 2, removedBy: 4320, reason: "QA repair's Edit 6b writes embeddings and verdict patches; #4320 turns them into prepareTake staged inputs." },
-  'audio/render-integrity/aggregate.ts': { count: 1, removedBy: 4321, reason: "scoring writes verdicts per character through livePartPath; #4321's commitScoring owns that write." },
-  'workspace/fsck-orphan-audio.ts': { count: 4, removedBy: 4321, reason: "the boot fsck's case-1 promotion and orphan removal; #4321's restoreTake promotion replaces fsck case 1 (any remainder of the fsck sweep is not named by #4320/#4321: see the PR)." },
+  'audio/render-integrity/aggregate.ts': { count: 2, removedBy: 4321, reason: "scoring writes verdicts per character through livePartPath, and the attempted marker through attemptedPath (:667); #4321's commitScoring owns both writes." },
+  'workspace/fsck-orphan-audio.ts': { count: 4, removedBy: 4321, reason: "the boot fsck's case-1 promotion and orphan removal; #4321's restoreTake promotion replaces fsck case 1 case 2's orphan-previous-segments unlink belongs to the fsck sweep of spec §5.A \"Sweep (D4)\" (Phase 2 step 2, #4320), so the entry is last emptied at #4321." },
   'audio/rewrite-chapter-slugs.ts': { count: 9, removedBy: 4324, reason: "restructure's rename/split/merge slug rewrite moves take files by builder paths; #4324's relabelTakes replaces it." },
   'export/build-m4b.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: liveAudioPath used only to NAME an export snapshot in the m4b staging dir (hard link / copy of a chapter mp3, #4223); not a chapter take, nothing to migrate." },
   'import/scan-import-folder.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(stage): the audio/ directory itself, not a take part." },
   'routes/book-state.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "permanent: §5.A Ownership: the reparse wipe stays allowlisted (wipeAudioKeepingOrphaned: rm(join(ad, entry), { recursive: true, force: true }) over every audio/ entry except .orphaned/, not a take part)." },
-  'routes/generation.ts': { count: 1, permanentCount: 1, removedBy: 'permanent', reason: "mkdir of audioDir(bookDir): the audio/ directory itself, not a take part." },
+  'routes/generation.ts': { count: 2, permanentCount: 1, removedBy: 4321, reason: "mkdir of audioDir(bookDir) is permanent (the audio/ directory itself, not a take part); the attempted-marker write through attemptedPath (:295) moves into commitScoring in #4321 (spec §7 Phase 3 step 3)." },
 };
 
 /* ---------------------------------------------------------------------------
@@ -287,33 +291,42 @@ function scanTree(): Map<string, Hit[]> {
 const describeHits = (hits: Hit[]): string =>
   hits.map((h) => `    rule ${h.rule} @ line ${h.line}: ${h.text}`).join('\n');
 
+/** The ratchet, both directions: a file with more hits than its entry allows is a
+    new violation, fewer is "lower your entry", an entry whose file has none is
+    stale, and an unlisted file is a violation. Returns the problems. */
+function compareToAllowlist(found: Map<string, Hit[]>, allowlist: Record<string, AllowEntry>): string[] {
+  const problems: string[] = [];
+  for (const [rel, hits] of found) {
+    const entry = allowlist[rel];
+    if (!entry) {
+      problems.push(`${rel}: ${hits.length} take-path hit(s), NOT on the allowlist:
+${describeHits(hits)}`);
+    } else if (hits.length > entry.count) {
+      problems.push(
+        `${rel}: raise your entry? the scan found ${hits.length} hit(s), the entry allows ${entry.count} - a NEW take path:
+${describeHits(hits)}`,
+      );
+    } else if (hits.length < entry.count) {
+      problems.push(
+        `${rel}: lower your entry - the scan found ${hits.length} hit(s), the entry still says ${entry.count}.`,
+      );
+    }
+  }
+  for (const [rel, entry] of Object.entries(allowlist)) {
+    if (!found.has(rel)) {
+      problems.push(`${rel}: allowlisted for ${entry.count} hit(s) but the scan finds ZERO - remove the entry.`);
+    }
+  }
+  return problems;
+}
+
 describe('chapter take guard (#4328, spec §5.A) - tree scan', () => {
   it('every take path outside the take module is on the allowlist, with its exact count', () => {
-    const found = scanTree();
-    const problems: string[] = [];
-    for (const [rel, hits] of found) {
-      const entry = ALLOWLIST[rel];
-      if (!entry) {
-        problems.push(`${rel}: ${hits.length} take-path hit(s), NOT on the allowlist:\n${describeHits(hits)}`);
-      } else if (hits.length > entry.count) {
-        problems.push(
-          `${rel}: raise your entry? the scan found ${hits.length} hit(s), the entry allows ${entry.count} - a NEW take path:\n${describeHits(hits)}`,
-        );
-      } else if (hits.length < entry.count) {
-        problems.push(
-          `${rel}: lower your entry - the scan found ${hits.length} hit(s), the entry still says ${entry.count}.`,
-        );
-      }
-    }
-    for (const [rel, entry] of Object.entries(ALLOWLIST)) {
-      if (!found.has(rel)) {
-        problems.push(`${rel}: allowlisted for ${entry.count} hit(s) but the scan finds ZERO - remove the entry.`);
-      }
-    }
+    const problems = compareToAllowlist(scanTree(), ALLOWLIST);
     expect(problems, problems.join('\n\n')).toEqual([]);
   });
 
-  it('allowlist entries are well formed: removedBy is a child number or permanent, with a reason', () => {
+  it('allowlist entries are well formed: removedBy is a phase or child ticket number or permanent, with a reason', () => {
     for (const [rel, entry] of Object.entries(ALLOWLIST)) {
       expect(entry.count, rel).toBeGreaterThan(0);
       expect(entry.reason.length, `${rel}: reason`).toBeGreaterThan(10);
@@ -333,7 +346,7 @@ describe('chapter take guard (#4328, spec §5.A) - tree scan', () => {
   it('the scan is real: it walks many files and finds the known sites (a scan that finds nothing proves nothing)', () => {
     expect(collectSourceFiles(SRC_ROOT).length).toBeGreaterThan(300);
     const found = scanTree();
-    expect(found.size).toBeGreaterThan(2); // the permanent entries alone are 3
+    expect(found.size).toBeGreaterThan(3); // the permanent hits alone span 4 files
     for (const rel of ['routes/book-state.ts', 'routes/generation.ts', 'import/scan-import-folder.ts']) {
       expect(found.has(rel), `${rel}: expected take-path hits`).toBe(true);
     }
@@ -457,15 +470,23 @@ describe('chapter take guard (#4328) - the scan reports what it must', () => {
     expect(scanTakePaths(OUTSIDE, 'async function f(a, s, e) { await readFile(liveAudioPath(a, s, e)); }')).toEqual([]);
   });
 
-  it('an extra unlisted write in an allowlisted file fails the exact count', () => {
-    // The tree scan compares hits.length to entry.count in both directions; this
-    // pins the arithmetic on the real finalize shape: one more write is one more hit.
+  it('the ratchet runs both ways: an extra hit, a missing hit, an unlisted file and a stale entry each fail the comparison', () => {
     const one = 'async function f(a, s, e) { await rm(liveAudioPath(a, s, e)); }';
-    const two = `${one}\nasync function g(a, s) { await rm(previousPartPath(a, s, "peaks")); }`;
-    expect(scanTakePaths(OUTSIDE, one)).toHaveLength(1);
-    expect(scanTakePaths(OUTSIDE, two)).toHaveLength(2);
-    const allowed = { count: 1 };
-    expect(scanTakePaths(OUTSIDE, two).length > allowed.count).toBe(true);
+    const two = `${one}
+async function g(a, s) { await rm(previousPartPath(a, s, "peaks")); }`;
+    const entry = (count: number): AllowEntry => ({ count, removedBy: 4320, reason: 'synthetic entry for the ratchet test' });
+    const foundOf = (src: string) => new Map([[OUTSIDE, scanTakePaths(OUTSIDE, src)]]);
+    expect(compareToAllowlist(foundOf(one), { [OUTSIDE]: entry(1) })).toEqual([]);
+    expect(compareToAllowlist(foundOf(two), { [OUTSIDE]: entry(1) }).join('\n')).toMatch(/raise your entry/);
+    expect(compareToAllowlist(foundOf(one), { [OUTSIDE]: entry(2) }).join('\n')).toMatch(/lower your entry/);
+    expect(compareToAllowlist(foundOf(one), {}).join('\n')).toMatch(/NOT on the allowlist/);
+    expect(compareToAllowlist(new Map(), { [OUTSIDE]: entry(1) }).join('\n')).toMatch(/scan finds ZERO/);
+  });
+
+  it('rule 3, #4319 review pass 2: attemptedPath (the attempted-marker builder verdicts-io exports) is a root', () => {
+    expect(rulesOf(OUTSIDE, 'async function f(r, s) { await writeAttempted(attemptedPath(r, s)); }')).toEqual([3]);
+    expect(rulesOf(OUTSIDE, 'async function f(r, s) { const p = attemptedPath(r, s); await rm(p); }')).toEqual([3]);
+    expect(scanTakePaths(OUTSIDE, 'async function f(r, s) { return existsSync(attemptedPath(r, s)); }')).toEqual([]);
   });
 
   it('PINNED BLIND SPOT: the plant-1 shape with audioRoot as a function PARAMETER is NOT reported. If a later improvement starts catching it, flip this pin and update the FALSE NEGATIVES header.', () => {
