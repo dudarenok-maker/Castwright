@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 // Mutable holders the hoisted mock factories read at call time.
 const h = vi.hoisted(() => ({
@@ -32,6 +33,8 @@ const h = vi.hoisted(() => ({
   /* #4236 — the error the injected failure throws; null keeps the plain
      disk-full Error above. */
   writeFileSyncFailError: null as null | Error,
+  /* #4322 — the client ip the test app presents to the router. */
+  ip: '127.0.0.1',
 }));
 let stateWriteCallCount = 0;
 
@@ -102,11 +105,16 @@ beforeEach(async () => {
   h.writeFileSyncFailPath = null;
   h.writeFileSyncFailAfterCalls = null;
   h.writeFileSyncFailError = null;
+  h.ip = '127.0.0.1';
   stateWriteCallCount = 0;
 
   const { upgradeRouter } = await import('./upgrade.js');
   app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    Object.defineProperty(req, 'ip', { value: h.ip, configurable: true });
+    next();
+  });
   app.use('/api/upgrade', upgradeRouter);
 });
 
@@ -217,6 +225,91 @@ describe('POST /api/upgrade/apply', () => {
     await vi.waitFor(() => expect(h.applyCalls.length).toBe(1));
     expect((h.applyCalls[0] as { candidateVersion: string }).candidateVersion).toBe('1.6.0');
     await vi.waitFor(() => expect(readState().phase).toBe('error')); // ok:false → error state
+  });
+});
+
+describe('upgrade failure reason is curated for LAN clients (#4322)', () => {
+  const RAW = "EBUSY: rename 'C:\\Users\\bob\\x'";
+  const LEGACY = 'The upgrade failed. Check the server log on the computer running Castwright for details.';
+  const stage = () =>
+    writeFileSync(
+      join(stagingDir, 'state.json'),
+      JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0', topDir: 'castwright-v1.6.0', reqHash: 'h' }),
+    );
+  const getAs = async (ip: string) => {
+    h.ip = ip;
+    return request(app).get('/api/upgrade/state');
+  };
+
+  it('persists raw error AND errorLan, and still logs the raw error', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      stage();
+      h.applyResult = { ok: false, phase: 'extract', error: RAW, errorLan: FS_FAILURE_REQUEST_ERROR };
+      await request(app).post('/api/upgrade/apply');
+      await vi.waitFor(() => expect(readState().phase).toBe('error'));
+      expect(readState().error).toBe(`extract: ${RAW}`);
+      expect(readState().errorLan).toBe(`extract: ${FS_FAILURE_REQUEST_ERROR}`);
+      expect(errSpy.mock.calls.some((c) => String(c[0]).includes(RAW))).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('loopback gets the raw error; LAN and the 127.0.0.2 forwarder get the curated one; errorLan never leaks', async () => {
+    stage();
+    h.applyResult = { ok: false, phase: 'extract', error: RAW, errorLan: FS_FAILURE_REQUEST_ERROR };
+    await request(app).post('/api/upgrade/apply');
+    await vi.waitFor(() => expect(readState().phase).toBe('error'));
+    const lo = await getAs('127.0.0.1');
+    expect(lo.body.error).toBe(`extract: ${RAW}`);
+    expect(lo.body).not.toHaveProperty('errorLan');
+    for (const ip of ['192.168.1.50', '127.0.0.2']) {
+      const r = await getAs(ip);
+      expect(r.body.error).toBe(`extract: ${FS_FAILURE_REQUEST_ERROR}`);
+      expect(r.body.error).not.toContain('bob');
+      expect(r.body).not.toHaveProperty('errorLan');
+    }
+  });
+
+  it('legacy state file (no errorLan) never shows the raw text to a LAN client', async () => {
+    writeFileSync(join(stagingDir, 'state.json'), JSON.stringify({ phase: 'error', error: 'EBUSY C:\\Users\\bob' }));
+    const lan = await getAs('192.168.1.50');
+    expect(lan.body.error).toBe(LEGACY);
+    const lo = await getAs('127.0.0.1');
+    expect(lo.body.error).toBe('EBUSY C:\\Users\\bob');
+  });
+
+  it('a thrown apply stores raw error + curated errorLan', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      stage();
+      h.applyThrows = Object.assign(new Error("EBUSY: resource busy, rename 'C:\\Users\\bob\\x'"), {
+        code: 'EBUSY',
+        syscall: 'rename',
+        path: 'C:\\Users\\bob\\x',
+      });
+      await request(app).post('/api/upgrade/apply');
+      await vi.waitFor(() => expect(readState().phase).toBe('error'));
+      expect(readState().error).toContain('bob');
+      expect(readState().errorLan).toBeTruthy();
+      expect(readState().errorLan).not.toContain('bob');
+      const lan = await getAs('192.168.1.50');
+      expect(lan.body.error).toBe(readState().errorLan);
+      expect(lan.body.error).not.toContain('bob');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('non-error phases are returned unchanged for both ips', async () => {
+    writeFileSync(join(stagingDir, 'state.json'), JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0' }));
+    for (const ip of ['127.0.0.1', '192.168.1.50']) {
+      const r = await getAs(ip);
+      expect(r.body.phase).toBe('staged');
+      expect(r.body.candidateVersion).toBe('1.6.0');
+      expect(r.body).not.toHaveProperty('error');
+    }
   });
 });
 

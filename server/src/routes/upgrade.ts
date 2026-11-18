@@ -25,6 +25,9 @@ import { validateUpgradeZip } from '../upgrade/zip-validate.js';
 import { applyUpgrade, createApplySteps } from '../upgrade/apply.js';
 import { resolveUpgradePaths, type UpgradePaths } from '../upgrade/paths.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { isLoopbackRequest } from '../lan-auth.js';
+
+const LEGACY_SENTENCE = 'The upgrade failed. Check the server log on the computer running Castwright for details.';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /* server/{src,dist}/routes → repoRoot is three levels up. */
@@ -39,6 +42,8 @@ interface UpgradeState {
   topDir?: string;
   isDowngrade?: boolean;
   error?: string;
+  /** Curated twin of `error` served to non-loopback clients (#4322). Never sent in a response. */
+  errorLan?: string;
 }
 
 function paths(): UpgradePaths {
@@ -91,10 +96,14 @@ const uploadMw = multer({
 
 export const upgradeRouter = Router();
 
-upgradeRouter.get('/state', (_req: Request, res: Response) => {
+upgradeRouter.get('/state', (req: Request, res: Response) => {
   const p = paths();
   const busy = anyJobInFlight();
-  res.json({ ...readState(p), busy: busy.busy, busyReason: busy.busy ? busy : undefined });
+  const { errorLan, ...state } = readState(p);
+  if (state.phase === 'error' && !isLoopbackRequest(req)) {
+    state.error = errorLan ?? LEGACY_SENTENCE;
+  }
+  res.json({ ...state, busy: busy.busy, busyReason: busy.busy ? busy : undefined });
 });
 
 upgradeRouter.post('/stage', (req: Request, res: Response) => {
@@ -188,11 +197,11 @@ upgradeRouter.post('/apply', async (_req: Request, res: Response) => {
         console.log(`[upgrade] applied v${result.version}; restarting.`);
         setTimeout(() => process.kill(process.pid, 'SIGTERM'), 250);
       } else {
-        tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: `${result.phase}: ${result.error}` });
+        tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: `${result.phase}: ${result.error}`, errorLan: `${result.phase}: ${result.errorLan ?? result.error}` });
         console.error(`[upgrade] apply failed at ${result.phase}: ${result.error}`);
       }
     } catch (e) {
-      tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: (e as Error).message });
+      tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: (e as Error).message, errorLan: requestFailureMessageFs(e, (e as Error).message) });
       console.error('[upgrade] apply threw:', e);
     }
   })();
