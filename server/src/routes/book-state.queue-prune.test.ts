@@ -220,3 +220,38 @@ describe('DELETE /api/books/:bookId prune is serialised against other queue writ
     }
   });
 });
+
+/* #4244 -- deterministic proof that a stopped attempt drains. The queue lock is held open with a gate, so the round's
+   serialised reset parks behind it: the stand-in for "an attempt timed out while its requests were in flight". */
+describe('a stopped prune-race attempt drains (#4244)', () => {
+  it('a stopped attempt drains: nothing it started lands after stopAttempt resolves (#4244)', async () => {
+    const { queueJsonPath } = await import('../workspace/paths.js');
+    const { readQueueFile } = await import('../workspace/queue-migrate.js');
+    const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+    const { rm } = await import('node:fs/promises');
+    onTestFinished(() => rm(queueJsonPath(), { force: true }));
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const held = serializeQueueMutation(() => gate);
+
+    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve() };
+    const stale = runPruneRound(attempt, 0);
+    const drained = stopAttempt(attempt);
+    let drainedEarly = false;
+    void drained.then(() => { drainedEarly = true; });
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r));
+    expect(drainedEarly).toBe(false);
+
+    release();
+    await held;
+    await drained;
+    await expect(stale).resolves.toBeUndefined();
+
+    const snapshot = await readQueueFile(queueJsonPath());
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r));
+    const after = await readQueueFile(queueJsonPath());
+    expect(after).toEqual(snapshot);
+    expect(snapshot.entries.map((x) => `${x.id}:${x.status}`).filter((s) => s.startsWith('n0'))).toEqual([]);
+  });
+});
