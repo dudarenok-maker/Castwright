@@ -374,6 +374,14 @@ test('main: a server-scoped waiver passes the --omit-dev (server) leg and fails 
   assert.equal(quietly(() => main([], deps)), 1);
 });
 
+test('main: omitDev reaches npm audit only on the --omit-dev (server) leg', () => {
+  const seen = [];
+  const deps = { loadWaivers: () => [], runNpmAudit: (o) => (seen.push(o.omitDev), fakeAudit()) };
+  quietly(() => main([], deps));
+  quietly(() => main(['--omit-dev'], deps));
+  assert.deepEqual(seen, [false, true]);
+});
+
 test('main: a waivers file the loader rejects (e.g. a missing scope) exits 3 on either leg', () => {
   const loadWaivers = () => {
     throw new Error('entry 0 missing or invalid scope (must be root, server or both)');
