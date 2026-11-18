@@ -57,7 +57,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
@@ -182,11 +182,14 @@ const PWSH_SKIP_REASON = PWSH_EXE
       ...PWSH_DISCOVERY.attempts.map((a) => `  - ${a}`),
     ].join('\n');
 
-function runPowerShellFile(scriptPath, extraArgs = [], env = process.env) {
+function runPowerShellFile(scriptPath, extraArgs = [], env = process.env, cwd = undefined) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-File', scriptPath, ...extraArgs);
-  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env, windowsHide: true });
+  // `cwd` matters when LOCALAPPDATA is absent: PowerShell then falls back to a
+  // cwd-relative Microsoft/Windows/PowerShell/ModuleAnalysisCache, which would
+  // land untracked in the repo checkout (#4229). Callers pass a throwaway dir.
+  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env, windowsHide: true, cwd });
 }
 
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser
@@ -217,7 +220,7 @@ function parsePowerShellSyntaxErrors(scriptText) {
   writeFileSync(scriptPath, scriptText, 'utf8');
   writeFileSync(wrapperPath, PARSE_CHECK_WRAPPER, 'utf8');
   try {
-    const proc = runPowerShellFile(wrapperPath, ['-ScriptPath', scriptPath]);
+    const proc = runPowerShellFile(wrapperPath, ['-ScriptPath', scriptPath], process.env, dir);
     assert.equal(
       proc.status,
       0,
@@ -280,7 +283,7 @@ function runStubbedFfmpegScript(scriptBody, stubPreamble, { withLocalAppData = t
     delete env.LOCALAPPDATA;
   }
   try {
-    const proc = runPowerShellFile(scriptPath, [], env);
+    const proc = runPowerShellFile(scriptPath, [], env, dir);
     let githubPathContents = '';
     try {
       githubPathContents = readFileSync(githubPathFile, 'utf8');
@@ -536,6 +539,22 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
       /::warning::LOCALAPPDATA is not set/,
       'expected an explicit warning when LOCALAPPDATA is absent, not a silent skip',
     );
+  });
+
+  test(`${rel}: pwsh child with LOCALAPPDATA absent runs in a temp cwd, never the repo checkout (#4229)`, {
+    skip: PWSH_SKIP_REASON ?? false,
+  }, () => {
+    const body = ['"CWD=" + (Get-Location).Path', '"LAD=[" + $env:LOCALAPPDATA + "]"'].join('\n');
+    const proc = runStubbedFfmpegScript(body, '', { withLocalAppData: false });
+    assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
+    const cwdLine = proc.stdout.split(/\r?\n/).find((l) => l.startsWith('CWD='));
+    assert.ok(cwdLine, `expected a CWD= line; stdout:\n${proc.stdout}`);
+    const childCwd = cwdLine.slice(4).trim().toLowerCase();
+    const tmp = realpathSync(tmpdir()).toLowerCase();
+    const repoCwd = realpathSync(process.cwd()).toLowerCase();
+    assert.ok(childCwd.startsWith(tmp), `expected child cwd under ${tmp}; got ${childCwd}`);
+    assert.notEqual(childCwd, repoCwd, 'child cwd must not be the repo/test-runner cwd');
+    assert.match(proc.stdout, /LAD=\[\]/, 'expected LOCALAPPDATA to be absent in the child');
   });
 
   test(`${rel}: Windows ffmpeg install behaviour -- both choco and winget fail all 3 attempts -> exit 1 with the CI message, retrying with a real delay`, {
