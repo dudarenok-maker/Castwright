@@ -568,6 +568,20 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     expect(report.voiceDrift.charactersPending).toEqual([]);
     expect(auditionSpy).not.toHaveBeenCalled();
   });
+
+  it('#3680 pass 3: a fallback-only character (cast voice never changed) is listed with its chapter, so the card copy must name no cause', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-listed-allfallback-'));
+    writeCast(dir, 'h');
+    await writeChapterLines(
+      dir, 'ch1', 1,
+      [0, 1, 2].map((sid) => ({ sid, axis: 5, jitter: sid, voice: 'af_heart', fallback: 'kokoro' })),
+      'af_heart',
+    );
+    await scoreBook(dir, CH1);
+    const report = await buildAudioQaReport(dir, CH1);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['thurid']);
+    expect(report.voiceDrift.charactersNeedingRerenderChapters).toEqual({ thurid: [1] });
+  });
 });
 
 describe("scoreBook — the current voice's engine is the one the character last rendered on, not the first chapter's (#3524)", () => {

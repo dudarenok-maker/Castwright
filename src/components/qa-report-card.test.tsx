@@ -230,14 +230,23 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       bare(withRerender(), { characterNames: { c1: 'Alice' } });
       const el = screen.getByTestId('qa-needs-rerender');
       expect(el).toHaveTextContent('Needs re-render: Alice, c2.');
-      expect(el).toHaveTextContent(/Some of their lines were recorded in an earlier voice/);
-      expect(el).toHaveTextContent(/re-render a chapter named here to check them/);
+      // The exact sentence: it names no cause, because the cause differs (voice changed,
+      // fallback engine, merged key) and a fallback-only character's voice never changed.
+      expect(el).toHaveTextContent(
+        "Some of their lines weren't recorded in their current voice, so those can't be checked — re-render a chapter named here to check them.",
+      );
       expect(el).not.toHaveTextContent(/No lines are recorded/);
       // The headline property of #3680: nothing is pending, so the listing is NOT a Resume offer.
       expect(screen.queryByRole('button', { name: /resume scoring/i })).not.toBeInTheDocument();
-      // #3680 pass 1 — a fallback-only character's voice never changed, so no cause is claimed.
-      expect(el).not.toHaveTextContent(/voice changed/i);
-      expect(el).not.toHaveTextContent(/these chapters/i);
+    });
+
+    it('a fallback-only character (voice never changed) gets the same cause-neutral sentence (#3680 pass 3)', () => {
+      bare(withRerender({ charactersNeedingRerender: ['thurid'], charactersNeedingRerenderChapters: { thurid: [1] } }), {
+        characterNames: { thurid: 'Thurid' },
+      });
+      const el = screen.getByTestId('qa-needs-rerender');
+      expect(el).toHaveTextContent('Needs re-render: Thurid (chapter 1).');
+      expect(el).not.toHaveTextContent(/earlier voice/i);
     });
 
     it('names the chapters holding the marked key lines, per character (#3680 pass 2)', () => {

@@ -223,7 +223,7 @@ function NeedsRerenderListing({
         const chapters = needsRerenderChapters(report, id);
         const name = characterNames?.[id] ?? id;
         return chapters.length > 0 ? `${name} (${chapters.length === 1 ? 'chapter' : 'chapters'} ${chapters.join(', ')})` : name;
-      }).join(', ')}. Some of their lines were recorded in an earlier voice, so those can't be checked — re-render a chapter named here to check them.
+      }).join(', ')}. Some of their lines weren't recorded in their current voice, so those can't be checked — re-render a chapter named here to check them.
     </p>
   );
 }
