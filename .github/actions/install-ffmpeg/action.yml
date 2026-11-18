@@ -9,10 +9,12 @@
 # static build instead of running apt at all.
 #
 # Why this build: BtbN/FFmpeg-Builds, the `autobuild-2026-10-31-12-59`
-# release (ffmpeg n8.1.3, linux64-gpl). Month-end autobuild tags are kept
-# indefinitely by that project (the 2024-12-31 one still exists), unlike its
-# daily tags, so the URL is stable; the asset is served from GitHub's own
-# network, next to the runner. First attempt was johnvansickle.com's
+# release (ffmpeg n8.1.3, linux64-gpl). That project keeps the last build of
+# each month for TWO YEARS (its README), unlike its daily tags, which go
+# sooner; so this pin's URL will 404 around October 2028, and the release is
+# not immutable. scripts/tests/workflow-wiring.test.mjs goes red once the pin
+# is 18 months old: re-pin to a newer month-end build well before that. The
+# asset is served from GitHub's own network, next to the runner. First attempt was johnvansickle.com's
 # versioned 7.0.2 archive (immutable, SHA-256 abda8d77...), but PR #4455's
 # first CI run showed it answering datacenter IPs with a 7 KB HTML page
 # (bot challenge) for ~2 of 10 parallel jobs; retrying the same host is not a

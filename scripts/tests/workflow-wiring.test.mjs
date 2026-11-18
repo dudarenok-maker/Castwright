@@ -1274,6 +1274,41 @@ test('ffmpeg install (#4453): cache miss downloads the pinned static build, veri
   assert.match(body, /GITHUB_PATH/, 'install step does not put ffmpeg on PATH for later steps');
 });
 
+// BtbN/FFmpeg-Builds keeps the last build of each month for two years (its
+// README), then deletes it, and the release is not immutable. Go red at 18
+// months so there is ~6 months of slack to re-pin before the URL 404s and
+// every cache-miss job fails `Install ffmpeg`.
+const FFMPEG_PIN_MAX_AGE_MONTHS = 18;
+
+// Returns a failure message when the `autobuild-YYYY-MM-DD` tag in `url` is
+// more than FFMPEG_PIN_MAX_AGE_MONTHS before `now`, else null.
+function ffmpegPinTooOld(url, now) {
+  const m = url.match(/\/autobuild-(\d{4})-(\d{2})-(\d{2})-/);
+  if (!m) return `no autobuild-YYYY-MM-DD tag found in ${url}`;
+  const pinned = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  const limit = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - FFMPEG_PIN_MAX_AGE_MONTHS, now.getUTCDate()));
+  if (pinned >= limit) return null;
+  return (
+    `pinned ffmpeg build ${m[1]}-${m[2]}-${m[3]} is over ${FFMPEG_PIN_MAX_AGE_MONTHS} months old; BtbN deletes ` +
+    `month-end builds after two years, which would 404 the download. Re-pin to a newer month-end ` +
+    `autobuild (URL, SHA-256, version in the cache key, test constants) in .github/actions/install-ffmpeg/action.yml.`
+  );
+}
+
+test('ffmpeg install (#4453): the pinned BtbN build is not near its two-year deletion', () => {
+  const url = ffmpegInstallRunBody().match(/https:\/\/github\.com\/BtbN\/[^\s"\\]+/);
+  assert.ok(url, 'BtbN download URL not found in install step');
+  assert.equal(ffmpegPinTooOld(url[0], new Date()), null);
+});
+
+test('ffmpeg install (#4453): the pin-age guard flags an old pin and passes a fresh one', () => {
+  const tag = (d) => `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${d}-12-59/x.tar.xz`;
+  const now = new Date(Date.UTC(2026, 10, 19));
+  assert.match(ffmpegPinTooOld(tag('2024-01-31'), now), /over 18 months old.*action\.yml/);
+  assert.equal(ffmpegPinTooOld(tag('2026-10-31'), now), null);
+  assert.match(ffmpegPinTooOld('https://example.com/x.tar.xz', now), /no autobuild/);
+});
+
 test('ffmpeg install (#4453): the apt path (the #2449 hang) no longer runs on a cache miss', () => {
   const body = ffmpegInstallRunBody();
   assert.doesNotMatch(body, /apt-get/, 'install step still invokes apt-get');
