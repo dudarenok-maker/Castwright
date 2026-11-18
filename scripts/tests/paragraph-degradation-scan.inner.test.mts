@@ -17,6 +17,7 @@ import {
   cpSync,
   symlinkSync,
   rmdirSync,
+  unlinkSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -127,10 +128,16 @@ test('a linked folder is listed as a skipped link, not followed and not silently
     assert.ok(md.includes(`- ${link}`), 'the link is named in the report');
     assert.match(md, /NOT in this scan/);
   } finally {
-    rmdirSync(link); // the link only, never its target
-    rmSync(lib, { recursive: true, force: true });
-    rmSync(aux, { recursive: true, force: true });
-    rmSync(target, { recursive: true, force: true });
+    try {
+      // the link only, never its target: a junction needs rmdir on Windows, a dir symlink needs
+      // unlink on POSIX (rmdir answers ENOTDIR there)
+      if (process.platform === 'win32') rmdirSync(link);
+      else unlinkSync(link);
+    } finally {
+      rmSync(lib, { recursive: true, force: true });
+      rmSync(aux, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
   }
 });
 
