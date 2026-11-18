@@ -216,10 +216,17 @@ export async function triggerScoring(ctx: {
        keeps both. Best-effort; skipped when the run uses no Qwen tier. */
     /* #4235 — the resume route (no `ctx.keep`) has no run to protect, but a render, splice
        or QA repair on ANY book, or one registered after the request's 202, may be using a
-       tier scoreBook did not see: skip the eviction while any is active. The
-       generation path (`ctx.keep`) is unchanged (#4445). */
+       tier scoreBook did not see: skip the eviction while any is active. Another book's
+       score pass (its auditions render on the same sidecar, at that book's tiers) is
+       neither a render nor a splice, so it is read from `scoringInFlight` too. The
+       generation path (`ctx.keep`) is unchanged (#4445).
+       Two residual windows remain, each costing at most one cold reload: (a) after this
+       synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
+       before it posts `/unload`, so a job registering in that round trip loses its tier;
+       (b) between a Fix-audio batch's per-chapter splice POSTs nothing is registered, so a
+       pass finishing in that gap drops the tier at the chapter boundary. */
     const keep = ctx.keep ?? result.usedQwenTiers;
-    if (!ctx.keep && isAnyGenerationActive()) return;
+    if (!ctx.keep && (isAnyGenerationActive() || [...scoringInFlight.keys()].some((k) => k !== ctx.bookId))) return;
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
   });
   const run = registration

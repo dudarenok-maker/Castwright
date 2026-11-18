@@ -111,6 +111,7 @@ let workspaceRoot: string;
 let bookDir: string;
 let app: Express;
 let bookId: string;
+let bookIdB: string;
 /* Dynamically imported inside beforeAll, AFTER process.env.WORKSPACE_DIR is
    set below — generation.ts (and, transitively, aggregate.ts) statically
    import workspace/paths.js, whose WORKSPACE_ROOT is computed once at
@@ -166,6 +167,32 @@ beforeAll(async () => {
       bookId,
       manuscriptId: 'm_qa_report_test',
       title: TITLE,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.md',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+
+  /* A second real book, so a score pass can be genuinely in flight on "another book". */
+  const TITLE_B = 'QA Report Book B';
+  bookIdB = makeBookId(AUTHOR, SERIES, TITLE_B);
+  const bookDirB = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE_B);
+  mkdirSync(join(bookDirB, '.audiobook'), { recursive: true });
+  mkdirSync(join(bookDirB, 'audio'), { recursive: true });
+  writeFileSync(join(bookDirB, 'manuscript.md'), '# Chapter One\nbody.');
+  writeFileSync(
+    join(bookDirB, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: bookIdB,
+      manuscriptId: 'm_qa_report_test_b',
+      title: TITLE_B,
       author: AUTHOR,
       series: SERIES,
       seriesPosition: null,
@@ -360,6 +387,34 @@ describe('POST /:bookId/resume-scoring', () => {
       } finally {
         configSpy.mockRestore();
         cleanup();
+      }
+    });
+
+    it('a score pass in flight on another book skips the reconcile (202 stands)', async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      let releaseB!: () => void;
+      let enteredB!: () => void;
+      const enteredBP = new Promise<void>((r) => (enteredB = r));
+      vi.mocked(scoreBook).mockImplementationOnce(async () => {
+        enteredB();
+        await new Promise<void>((r) => (releaseB = r));
+        return { usedQwenTiers: { keep06: false, keep17: true }, mismatchCount: 0 };
+      });
+      vi.mocked(scoreBook).mockResolvedValueOnce(usedTiers);
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        expect((await request(app).post(`/api/books/${bookIdB}/resume-scoring`)).status).toBe(202);
+        await enteredBP;
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalledTimes(2);
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        releaseB?.();
+        await __awaitScoringSettled(bookIdB);
+        configSpy.mockRestore();
       }
     });
 
