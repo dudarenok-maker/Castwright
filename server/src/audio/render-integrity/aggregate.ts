@@ -521,6 +521,157 @@ async function readBookLanguage(bookDir: string): Promise<string | undefined> {
   }
 }
 
+/** The cast resolver over the live cast.json rows. */
+export type CastResolver = ReturnType<typeof buildCastResolver<CastCharacter>>;
+
+/** #2040 — the cast resolver (live cast.json + the book's retired-id history) and
+ *  the book language, read once. Shared by `scoreBook` and the QA report so both
+ *  resolve a frozen-render id and a character's current voice the same way. */
+export async function loadCastContext(bookDir: string): Promise<{
+  castResolver: CastResolver;
+  bookLanguage: string | undefined;
+}> {
+  const castChars = await readCastJson(bookDir);
+  /* #2040 Task 17 fix round 1 — pass the whole loaded object (not just
+     `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
+  const castIdHistory = await loadCastIdHistory(bookDir);
+  return {
+    castResolver: buildCastResolver(castChars ?? [], castIdHistory),
+    // #1951 — the language the chapters were rendered in.
+    bookLanguage: await readBookLanguage(bookDir),
+  };
+}
+
+/** Minimal per-snapshot view the current-voice helpers read. */
+export type CurrentVoiceSnapshot = {
+  voiceEngine?: string;
+  resolvedVoiceName?: string;
+  voiceId?: string;
+  attributes?: string[];
+  /** Per-character render tier — the audition renders under this. */
+  modelKey?: TtsModelKey;
+  /** ISO time of this character's last fresh render (absent on legacy snapshots). */
+  renderedAt?: string;
+  /** Engine / tier of that same full render, frozen with `renderedAt`. */
+  renderedEngine?: string;
+  renderedModelKey?: TtsModelKey;
+};
+
+/** The per-chapter slice the current-voice helpers need (a subset of scoreBook's ChapterData). */
+export type CurrentVoiceChapter = {
+  slug: string;
+  embRows: EmbeddingRow[];
+  segsByKey: Map<string, SegmentsEntry>;
+  snapshots: Record<string, CurrentVoiceSnapshot>;
+};
+
+/** #3524 — the voice a line was rendered in: `baseVoiceName ?? voiceName ??`
+ *  the chapter snapshot's `resolvedVoiceName`; `undefined` when unknown. Shared
+ *  by the anchor pool, the old-voice scoring rule and the no-current-line skip. */
+export const lineVoiceOf = (
+  seg: { baseVoiceName?: string | null; voiceName?: string | null } | undefined,
+  snapshots: Record<string, { resolvedVoiceName?: string } | undefined>,
+  charId: string,
+): string | undefined => seg?.baseVoiceName ?? seg?.voiceName ?? snapshots[charId]?.resolvedVoiceName;
+
+/** #3524 — how a character's CURRENT cast voice is derived: the engine its lines were
+ *  actually rendered on (see the comment below), resolved through the live cast row.
+ *  Shared by `scoreBook` and the QA report's stale-marker check (#3680), so the two can
+ *  never disagree about which voice is "current". */
+export function createCurrentVoiceFacts(args: {
+  chapterData: CurrentVoiceChapter[];
+  configuredEngineByChar: Map<string, string>;
+  castResolver: CastResolver;
+  bookLanguage: string | undefined;
+  justFinalized: Set<string>;
+  runModelKey?: TtsModelKey;
+}) {
+  const { chapterData, configuredEngineByChar, castResolver, bookLanguage, justFinalized } = args;
+  /* #3524 — "the engine actually rendered", the fallback engine for a character with no
+     `ttsEngine` of its own: this pass's run model key when scoring follows a render (only for the characters that
+     render produced lines for), else (Resume scoring) the engine stamped on the character's most recently rendered
+     non-fallback lines (the snapshot's frozen `renderedEngine` / `renderedModelKey`, stamped with `renderedAt` by that
+     full render, so a later partial write's own engine never replaces it). "Most recent" is the snapshot's own per-character `renderedAt` stamp,
+     which only a FULL chapter render moves (a qa-repair/Fix-audio/refinalize/gain-remix/A-B
+     reject keeps it, even for lines it re-records) —
+     never the file's mtime, which any partial write refreshes; a legacy snapshot
+     with no stamp sorts oldest and book order breaks ties (the later chapter wins), else, for
+     a character rendered only on a fallback engine, its configured engine.
+     The server's saved default plays no part: a session-picker run, a non-English retarget
+     and a remote sidecar's boot-time install state all make it diverge from what rendered. */
+  const runEngine: TtsEngine | undefined = args.runModelKey ? engineForModelKey(args.runModelKey) : undefined;
+  const stampedByChar = new Map<string, { engine: TtsEngine; modelKey?: TtsModelKey; renderedAt: string }>();
+  for (const cd of chapterData) {
+    for (const row of cd.embRows) {
+      const seg = cd.segsByKey.get(segKey(row.characterId, row.sentenceIds));
+      if (seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '') continue;
+      const id = resolveRowCharId(seg, row.characterId, cd.snapshots);
+      const snap = id !== undefined ? cd.snapshots[id] : undefined;
+      // The FROZEN engine / tier (a partial write rebuilds voiceEngine / modelKey from its own
+      // engine); a legacy snapshot with no frozen fields falls back to them.
+      const stampedEngine = snap?.renderedEngine ?? snap?.voiceEngine;
+      if (id === undefined || !snap || !stampedEngine) continue;
+      const renderedAt = snap.renderedAt ?? '';
+      const prior = stampedByChar.get(id);
+      if (!prior || renderedAt >= prior.renderedAt) {
+        stampedByChar.set(id, { engine: stampedEngine as TtsEngine, modelKey: snap.renderedModelKey ?? snap.modelKey, renderedAt });
+      }
+    }
+  }
+  /* The run key speaks ONLY for characters with lines in the chapters this run just
+     finalized — every other character resolves from its own stamped lines, so a one-chapter
+     run on another engine cannot replace an un-rendered character's real reference. */
+  const runRenderedChars = new Set<string>();
+  for (const cd of chapterData) {
+    if (!justFinalized.has(cd.slug)) continue;
+    for (const row of cd.embRows) {
+      const id = resolveRowCharId(cd.segsByKey.get(segKey(row.characterId, row.sentenceIds)), row.characterId, cd.snapshots);
+      if (id !== undefined) runRenderedChars.add(id);
+    }
+  }
+  const defaultEngineFor = (charId: string): TtsEngine | undefined =>
+    (runRenderedChars.has(charId) ? runEngine : undefined) ?? stampedByChar.get(charId)?.engine ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
+  /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
+     live row through castResolver, then the helper shared with
+     chapter-qa-repair.ts (#3449). `undefined` = no current voice known (no live
+     cast row, an undesigned voice → '', or no engine known), and that character
+     keeps first-chapter-wins with no filtering. */
+  const currentVoiceNameFor = (charId: string): string | undefined => {
+    const current = castResolver.resolve(charId)?.character;
+    if (!current) return undefined;
+    return currentCastVoiceName(current, defaultEngineFor(charId), bookLanguage);
+  };
+  const currentVoiceByChar = new Map<string, string | undefined>();
+  const currentVoiceFor = (charId: string): string | undefined => {
+    if (!currentVoiceByChar.has(charId)) currentVoiceByChar.set(charId, currentVoiceNameFor(charId));
+    return currentVoiceByChar.get(charId);
+  };
+  return { stampedByChar, runRenderedChars, defaultEngineFor, currentVoiceFor };
+}
+
+/** #3524 — characters with a current voice that have at least one rendered line in it
+ *  (`stochasticChars` only). The no-current-voice marker is exactly: current voice
+ *  known AND not in this set. */
+export function charsWithCurrentVoiceLine(
+  chapterData: CurrentVoiceChapter[],
+  stochasticChars: Set<string>,
+  currentVoiceFor: (charId: string) => string | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  for (const cd of chapterData) {
+    for (const row of cd.embRows) {
+      const seg = cd.segsByKey.get(segKey(row.characterId, row.sentenceIds));
+      const rowCharId = resolveRowCharId(seg, row.characterId, cd.snapshots);
+      if (rowCharId === undefined || !stochasticChars.has(rowCharId)) continue;
+      const rowCurrentVoice = currentVoiceFor(rowCharId);
+      if (rowCurrentVoice !== undefined && lineVoiceOf(seg, cd.snapshots, rowCharId) === rowCurrentVoice) {
+        out.add(rowCharId);
+      }
+    }
+  }
+  return out;
+}
+
 // ── Key for joining embedding rows to segment rows ─────────────────────────
 
 /** Exported so qa-report.ts's own roster join (the same embeddings-row →
@@ -597,19 +748,7 @@ export async function scoreBook(
 
   // ── Phase 1: Collect per-chapter embeddings + segments ─────────────────
 
-  type SnapshotView = {
-    voiceEngine?: string;
-    resolvedVoiceName?: string;
-    voiceId?: string;
-    attributes?: string[];
-    /** Per-character render tier — the audition renders under this. */
-    modelKey?: TtsModelKey;
-    /** ISO time of this character's last fresh render (absent on legacy snapshots). */
-    renderedAt?: string;
-    /** Engine / tier of that same full render, frozen with `renderedAt`. */
-    renderedEngine?: string;
-    renderedModelKey?: TtsModelKey;
-  };
+  type SnapshotView = CurrentVoiceSnapshot;
 
   type ChapterData = {
     id: number;
@@ -715,16 +854,12 @@ export async function scoreBook(
   // threaded onto each character's Option-B voice info as `hint`, letting
   // auditionCentroid build a per-render pool of distinct evidence quotes
   // instead of one repeated canned line.
-  const castChars = await readCastJson(bookDir);
   /* #2040 — resolve a snapshot's characterId through the cast + the book's
-     retired-id history, so a since-renamed character still gets its evidence
+     retired-id history (see `loadCastContext`), so a since-renamed character still gets its evidence
      quote (`hint`) and cloned-provenance check below instead of silently
      falling back to an undefined hint / `cloned: false` for a character that
      really does have both, just under its OLD id. */
-  /* #2040 Task 17 fix round 1 — pass the whole loaded object (not just
-     `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
-  const castIdHistory = await loadCastIdHistory(bookDir);
-  const castResolver = buildCastResolver(castChars ?? [], castIdHistory);
+  const { castResolver, bookLanguage } = await loadCastContext(bookDir);
   /* #3362 pass-4 fix (🟠D) — embedding rows carry the RAW segment
      characterId their synth request was made under (frozen at render time,
      see synthesise-chapter.ts); `stochasticChars`/`orderedChars`/
@@ -744,79 +879,16 @@ export async function scoreBook(
      is built here at all; the anchor-gathering loop and
      `scoreAndMergeCharacter` below both call `resolveRowCharId(seg, rawId,
      ownSnapshots)` directly against `cd.segsByKey`. */
-  // #1951 — the language the chapters were rendered in. Read once per run and
-  // stamped onto every Option-B audition below, for the same comparability
-  // reason the render TIER is (see the renderKey comment further down).
-  const bookLanguage = await readBookLanguage(bookDir);
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
-  /* #3524 — "the engine actually rendered", the fallback engine for a character with no
-     `ttsEngine` of its own: this pass's run model key when scoring follows a render (only for the characters that
-     render produced lines for), else (Resume scoring) the engine stamped on the character's most recently rendered
-     non-fallback lines (the snapshot's frozen `renderedEngine` / `renderedModelKey`, stamped with `renderedAt` by that
-     full render, so a later partial write's own engine never replaces it). "Most recent" is the snapshot's own per-character `renderedAt` stamp,
-     which only a FULL chapter render moves (a qa-repair/Fix-audio/refinalize/gain-remix/A-B
-     reject keeps it, even for lines it re-records) —
-     never the file's mtime, which any partial write refreshes; a legacy snapshot
-     with no stamp sorts oldest and book order breaks ties (the later chapter wins), else, for
-     a character rendered only on a fallback engine, its configured engine.
-     The server's saved default plays no part: a session-picker run, a non-English retarget
-     and a remote sidecar's boot-time install state all make it diverge from what rendered. */
-  const runEngine: TtsEngine | undefined = opts?.runModelKey ? engineForModelKey(opts.runModelKey) : undefined;
-  const stampedByChar = new Map<string, { engine: TtsEngine; modelKey?: TtsModelKey; renderedAt: string }>();
-  for (const cd of chapterData) {
-    for (const row of cd.embRows) {
-      const seg = cd.segsByKey.get(segKey(row.characterId, row.sentenceIds));
-      if (seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '') continue;
-      const id = resolveRowCharId(seg, row.characterId, cd.snapshots);
-      const snap = id !== undefined ? cd.snapshots[id] : undefined;
-      // The FROZEN engine / tier (a partial write rebuilds voiceEngine / modelKey from its own
-      // engine); a legacy snapshot with no frozen fields falls back to them.
-      const stampedEngine = snap?.renderedEngine ?? snap?.voiceEngine;
-      if (id === undefined || !snap || !stampedEngine) continue;
-      const renderedAt = snap.renderedAt ?? '';
-      const prior = stampedByChar.get(id);
-      if (!prior || renderedAt >= prior.renderedAt) {
-        stampedByChar.set(id, { engine: stampedEngine as TtsEngine, modelKey: snap.renderedModelKey ?? snap.modelKey, renderedAt });
-      }
-    }
-  }
-  /* The run key speaks ONLY for characters with lines in the chapters this run just
-     finalized — every other character resolves from its own stamped lines, so a one-chapter
-     run on another engine cannot replace an un-rendered character's real reference. */
-  const runRenderedChars = new Set<string>();
-  for (const cd of chapterData) {
-    if (!justFinalized.has(cd.slug)) continue;
-    for (const row of cd.embRows) {
-      const id = resolveRowCharId(cd.segsByKey.get(segKey(row.characterId, row.sentenceIds)), row.characterId, cd.snapshots);
-      if (id !== undefined) runRenderedChars.add(id);
-    }
-  }
-  const defaultEngineFor = (charId: string): TtsEngine | undefined =>
-    (runRenderedChars.has(charId) ? runEngine : undefined) ?? stampedByChar.get(charId)?.engine ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
-  /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
-     live row through castResolver, then the helper shared with
-     chapter-qa-repair.ts (#3449). `undefined` = no current voice known (no live
-     cast row, an undesigned voice → '', or no engine known), and that character
-     keeps first-chapter-wins with no filtering. */
-  const currentVoiceNameFor = (charId: string): string | undefined => {
-    const current = castResolver.resolve(charId)?.character;
-    if (!current) return undefined;
-    return currentCastVoiceName(current, defaultEngineFor(charId), bookLanguage);
-  };
-  const currentVoiceByChar = new Map<string, string | undefined>();
-  const currentVoiceFor = (charId: string): string | undefined => {
-    if (!currentVoiceByChar.has(charId)) currentVoiceByChar.set(charId, currentVoiceNameFor(charId));
-    return currentVoiceByChar.get(charId);
-  };
-  /* #3524 — the voice a line was rendered in: `baseVoiceName ?? voiceName ??`
-     the chapter snapshot's `resolvedVoiceName`; `undefined` when unknown. Shared
-     by the anchor pool, the old-voice scoring rule and the no-current-line skip. */
-  const lineVoiceOf = (
-    seg: { baseVoiceName?: string | null; voiceName?: string | null } | undefined,
-    snapshots: Record<string, { resolvedVoiceName?: string } | undefined>,
-    charId: string,
-  ): string | undefined => seg?.baseVoiceName ?? seg?.voiceName ?? snapshots[charId]?.resolvedVoiceName;
+  const { stampedByChar, runRenderedChars, defaultEngineFor, currentVoiceFor } = createCurrentVoiceFacts({
+    chapterData,
+    configuredEngineByChar,
+    castResolver,
+    bookLanguage,
+    justFinalized,
+    runModelKey: opts?.runModelKey,
+  });
   const matchedCurrentVoice = new Set<string>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
@@ -896,7 +968,7 @@ export async function scoreBook(
   // anchor. A character with no current voice keeps today's unfiltered pool.
   const anchorVecsByChar = new Map<string, Float32Array[]>();
   // #3524 — characters with a current voice that have at least one rendered line in it.
-  const hasCurrentVoiceLine = new Set<string>();
+  const hasCurrentVoiceLine = charsWithCurrentVoiceLine(chapterData, stochasticChars, currentVoiceFor);
   // #3518 — the distinct render tiers of the anchors pooled above (`undefined` = an anchor of unknown tier).
   const anchorTiersByChar = new Map<string, Set<string | undefined>>();
   for (const charId of stochasticChars) {
@@ -914,11 +986,6 @@ export async function scoreBook(
       const seg = cd.segsByKey.get(key);
       const rowCharId = resolveRowCharId(seg, row.characterId, cd.snapshots);
       if (rowCharId === undefined || !stochasticChars.has(rowCharId)) continue;
-
-      const rowCurrentVoice = currentVoiceFor(rowCharId);
-      if (rowCurrentVoice !== undefined && lineVoiceOf(seg, cd.snapshots, rowCharId) === rowCurrentVoice) {
-        hasCurrentVoiceLine.add(rowCharId);
-      }
 
       // Anchor-eligible: no per-segment fallback (use the per-segment field,
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)

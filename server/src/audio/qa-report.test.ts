@@ -404,13 +404,25 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
       bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
       modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
-      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' }), seg({ characterId: 'thurid' })],
+      segments: [
+        seg({ characterId: 'narrator' }), seg({ characterId: 'ren' }),
+        seg({ characterId: 'thurid', voiceName: 'qwen-old', baseVoiceName: 'qwen-old' }),
+      ],
       characterSnapshots: {
         narrator: { voiceEngine: 'qwen' },
         ren: { voiceEngine: 'qwen' },
-        thurid: { voiceEngine: 'qwen' },
+        thurid: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-old' },
       },
     });
+    // The marker is only true while the CURRENT cast voice has no rendered line: thurid's
+    // cast voice is qwen-new, her one rendered line is qwen-old (#3680 pass 1).
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'thurid', name: 'Thurid', overrideTtsVoices: { qwen: { name: 'T', libraryUuid: 'new' } } }],
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'thurid', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
     await writeCentroids(dir, [
       { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
       { characterId: 'thurid', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short', noCurrentVoiceReference: true },

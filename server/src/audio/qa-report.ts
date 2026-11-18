@@ -21,10 +21,14 @@ import { loadSegmentsFiles } from './segments-io.js';
 import { deriveBookOutline } from './render-integrity/verdicts-io.js';
 import {
   STOCHASTIC_ENGINES,
+  charsWithCurrentVoiceLine,
+  createCurrentVoiceFacts,
+  loadCastContext,
   resolveConfiguredEngineByChar,
   resolveRowCharId,
   segKey,
 } from './render-integrity/aggregate.js';
+import type { CurrentVoiceChapter } from './render-integrity/aggregate.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
@@ -57,10 +61,12 @@ export interface AudioQaReport {
      *  excluded from chaptersEmbedFailed (see the computation below). */
     charactersPending: string[];
     /** #3680/#3524 — stochastic characters whose persisted reference is the
-     *  `noCurrentVoiceReference` marker row: they have a current cast voice but no
-     *  rendered line in it (voice changed before they were ever scored), so every
-     *  line is inconclusive until the chapter is re-rendered. Such a character has
-     *  a centroid row, so it is NOT in `charactersPending`. */
+     *  `noCurrentVoiceReference` marker row AND whose current cast voice still has no
+     *  rendered line (re-checked here against the cast of record, not trusted from the
+     *  last pass): every line is inconclusive until a chapter is re-rendered in that
+     *  voice. A marker the current cast no longer supports is in `charactersPending`
+     *  instead (a score-only pass clears it). Such a character has a centroid row, so
+     *  a true marker is NOT in `charactersPending`. */
     charactersNeedingRerender: string[];
     mismatches: Array<{ characterId: string; chapterId?: number; fixable: boolean }>;
     inconclusiveCount: number;
@@ -124,6 +130,7 @@ export async function buildAudioQaReport(
   // in the book. Sourcing the roster from embeddings keeps such a character
   // from blocking that chapter's "fully scored" check below.
   const rosterByChapter = new Map<number, Set<string>>();
+  const voiceChapters: CurrentVoiceChapter[] = [];
   for (const ch of chapters) {
     const embPath = join(audioDir(bookDir), `${ch.slug}.embeddings.json`);
     const embResult = await readEmbeddings(embPath);
@@ -138,6 +145,17 @@ export async function buildAudioQaReport(
       if (rowCharId !== undefined && engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
     }
     if (chapterChars.size > 0) rosterByChapter.set(ch.id, chapterChars);
+
+    /* #3680 — the same per-chapter view scoreBook's phase 1 builds (a chapter with
+       BOTH an embeddings sibling and a segments file), for the stale-marker check. */
+    const segFile = segFiles.find((s) => s.chapterId === ch.id);
+    if (segFile) {
+      const segsByKey = new Map<string, NonNullable<typeof segFile.segments>[number]>();
+      for (const seg of segFile.segments ?? []) {
+        if (seg.characterId && Array.isArray(seg.sentenceIds)) segsByKey.set(segKey(seg.characterId, seg.sentenceIds), seg);
+      }
+      voiceChapters.push({ slug: ch.slug, embRows: embResult.rows, segsByKey, snapshots: ownSnapshots });
+    }
   }
 
   for (const seg of segFiles) {
@@ -178,10 +196,31 @@ export async function buildAudioQaReport(
   const uncheckedSet = new Set(outline.counts.uncheckedCharacters);
 
   const centroids = (await readCentroids(bookDir)) ?? {};
-  const charactersPending = Array.from(stochasticCharacterIds).filter((id) => !(id in centroids));
-  const charactersNeedingRerender = Array.from(stochasticCharacterIds).filter(
-    (id) => centroids[id]?.noCurrentVoiceReference === true,
+  const markedIds = Array.from(stochasticCharacterIds).filter((id) => centroids[id]?.noCurrentVoiceReference === true);
+  /* #3680 pass 1 — the persisted marker was decided from the cast voice at the last scoring
+     pass. Re-check it against the CURRENT cast voice, with the same helpers scoreBook uses:
+     a marker is only true while the character has a current voice AND no rendered line in it.
+     A stale one (the voice was reverted, or the cast row is gone) is PENDING — a score-only
+     pass (Resume) clears it — never a re-render. */
+  const staleMarkerIds = new Set<string>();
+  if (markedIds.length > 0) {
+    const { castResolver, bookLanguage } = await loadCastContext(bookDir);
+    const { currentVoiceFor } = createCurrentVoiceFacts({
+      chapterData: voiceChapters,
+      configuredEngineByChar,
+      castResolver,
+      bookLanguage,
+      justFinalized: new Set(chapters.map((c) => c.slug)),
+    });
+    const withCurrentLine = charsWithCurrentVoiceLine(voiceChapters, stochasticCharacterIds, currentVoiceFor);
+    for (const id of markedIds) {
+      if (currentVoiceFor(id) === undefined || withCurrentLine.has(id)) staleMarkerIds.add(id);
+    }
+  }
+  const charactersPending = Array.from(stochasticCharacterIds).filter(
+    (id) => !(id in centroids) || staleMarkerIds.has(id),
   );
+  const charactersNeedingRerender = markedIds.filter((id) => !staleMarkerIds.has(id));
 
   /* srv-36 hardening — chaptersScored/chaptersEmbedFailed are now
      roster-aware: a chapter is "fully scored" iff EVERY character on its

@@ -500,6 +500,27 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     expect(after.voiceDrift.charactersPending).toEqual([]);
   });
 
+  it('#3680 pass 1: reverting the voice WITHOUT a re-render makes the stale marker pending (Resume offered), not "needs a re-render"', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-marker-stale-revert-'));
+    writeCast(dir, 'new');
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice: 'qwen-old' })), 'qwen-old');
+    await scoreBook(dir, CH1);
+    expect((await readCentroids(dir))!['thurid'].noCurrentVoiceReference).toBe(true);
+    expect((await buildAudioQaReport(dir, CH1)).voiceDrift.charactersNeedingRerender).toEqual(['thurid']);
+
+    // The user reverts the cast voice; nothing is re-rendered or re-scored.
+    writeCast(dir, 'old');
+    const stale = await buildAudioQaReport(dir, CH1);
+    expect(stale.voiceDrift.charactersNeedingRerender).toEqual([]);
+    expect(stale.voiceDrift.charactersPending).toEqual(['thurid']);
+
+    // A score-only pass (what Resume runs) clears the marker.
+    await scoreBook(dir, CH1);
+    const after = await buildAudioQaReport(dir, CH1);
+    expect(after.voiceDrift.charactersNeedingRerender).toEqual([]);
+    expect(after.voiceDrift.charactersPending).toEqual([]);
+  });
+
   it('B: rendered entirely on the fallback engine — one pass clears charactersPending', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'spk-pending-allfallback-'));
     writeCast(dir, 'h');
