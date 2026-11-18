@@ -6147,7 +6147,8 @@ _QWEN_BASE17_WEIGHTS_MB = 3400
 _QWEN_DESIGN_WEIGHTS_MB = 3400
 # #4102 - and for the 0.6B audition base `design_voice` always leaves resident
 # (`_ensure_base_loaded`): a warm design's probe has it out of free VRAM, and the
-# design's peak includes it, so its fit check credits it beside VoiceDesign.
+# design's peak includes it, so its fit check credits it beside VoiceDesign (or,
+# with VoiceDesign cold, alone). A mint's peak co-loads it too (#4237).
 _QWEN_BASE_WEIGHTS_MB = 1200
 
 
@@ -6223,13 +6224,16 @@ def _own_resident_tier(
     engine: str, model: Optional[str], cfg: Optional[dict]
 ) -> tuple[Optional[str], int, Optional[str]]:
     """PlacementController.own_resident_tier: `("qwen.base17", weights_mb, card)`
-    for a 1.7b Qwen synth or mint (`op == "mint"`, #4102) while the 1.7B-Base is
-    resident, else `(None, 0, None)`. `card` is the device Qwen is on
+    for a 1.7b Qwen synth while the 1.7B-Base is resident, else `(None, 0, None)`.
+    A mint (`op == "mint"`, #4102/#4237) is `_own_resident_mint`: the same, with
+    the resident 0.6B added to the weights, and a 0.6B-only state credited with
+    protect None. `card` is the device Qwen is on
     (`_qwen_resident_device_key`, which sees `_base17` where `_is_resident` does
     not); `weights_mb` is the footprint measured at load, else the fallback. It
     is credited in the fit check only; the ledger books the FULL peak.
     A design (`op == "design"`, #4102) with VoiceDesign resident protects
-    `qwen.design` the same way (`_own_resident_design`).
+    `qwen.design` the same way, and credits a resident 0.6B with VoiceDesign cold
+    too, protect None (`_own_resident_design`).
     A resident GPU ASR or SPK (ECAPA) model (#4102) is protected on its card
     with NO credit (`("asr"|"spk", 0, card)`); the warm booking covers it."""
     if engine in ("asr", "spk"):

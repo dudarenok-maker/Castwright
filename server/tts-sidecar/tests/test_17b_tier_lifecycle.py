@@ -356,10 +356,11 @@ def test_t6_base17_freed_between_admission_and_claim_stays_inside_the_booking(mo
 
 def _tight_card(qwen, other_mb=400, total=8188):
     """Probe-style 8188 card (the issue's shape): context `other_mb`, 1.7B-Base
-    3900 and the 0.6B 1300 reserved while resident."""
+    3900, VoiceDesign 3900 and the 0.6B 1300 reserved while resident."""
 
     def probe():
         used = other_mb + (BASE17_MB if qwen._base17 is not None else 0)
+        used += BASE17_MB if qwen._design is not None else 0
         used += BASE_MB if qwen._base is not None else 0
         return [{"kind": "cuda", "index": 0, "label": "g", "totalMb": total, "freeMb": total - used}]
 
@@ -410,13 +411,14 @@ def test_m3_the_credit_is_not_free_headroom(monkeypatch):
 
 def test_m4_a_credited_0_6b_freed_mid_ladder_is_not_counted_twice_for_a_mint(monkeypatch):
     """The ladder frees the 0.6B; the re-probe already counts its 1300, so the
-    credit shrinks to the 1.7B-Base alone (`_live_credit`): 1792 + 3900 - 500 =
-    5192 < 6144. Counting the stale 5200 would admit it (6492)."""
+    credit shrinks to the 1.7B-Base alone (`_live_credit`): free 1788 + 3900 -
+    409 = 5279 < 6144. Counting the stale 5200 would admit it (6579)."""
     qwen = _fake_qwen(weights_mb=3900, base_mb=BASE_MB)
     steps = lambda device_key, engine: [
         main.EvictStep("other", None, lambda: setattr(qwen, "_base", None) or True)
     ]
     pc = _wire(monkeypatch, qwen, _tight_card(qwen, other_mb=2500), steps=steps)
+    monkeypatch.setattr(pc, "reserve_mb", lambda: 409)
     adm, booked = _mint(pc)
     assert "noCapacity" in adm
     assert booked == 0
@@ -434,6 +436,21 @@ def test_m5_a_plain_1_7b_synth_does_not_receive_the_0_6b_credit(monkeypatch):
     adm = asyncio.run(body())
     assert adm == {"noCapacity": {"neededMb": 6144 - 3900, "deviceKey": "cuda:0"}}
     assert qwen._base17 is not None
+
+
+def test_m6_a_mint_after_design_full_cast_is_admitted_evicts_voicedesign_and_keeps_the_0_6b(monkeypatch):
+    """#4237 pass 1: Design full cast leaves VoiceDesign + the 0.6B resident and
+    the 1.7B-Base unloaded, then a mint runs. Free 2588 + 1300 credit - 409 = 3479
+    runs the real ladder, which frees `qwen.design`; the credit has to survive
+    that step (`_live_credit`, protect None), so 6488 + 1300 - 409 >= 6144 admits
+    with the 0.6B kept. `main` refuses this state."""
+    qwen = _fake_qwen(resident=False, design_mb=3900, base_mb=BASE_MB)
+    pc = _tight_wire(monkeypatch, qwen)
+    adm, booked = _mint(pc)
+    assert adm == {"device": "cuda:0"}
+    assert booked == 6144, "the credit is fit-only: the ledger books the FULL peak"
+    assert qwen._design is None, "the ladder did not evict the idle VoiceDesign"
+    assert qwen._base is not None, "admission evicted the 0.6B the mint reuses"
 
 
 # --- #4102: a design keeps its own warm VoiceDesign -------------------------
