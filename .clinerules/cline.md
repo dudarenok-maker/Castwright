@@ -284,10 +284,11 @@ $p.Id | Set-Content (Join-Path $T 'push.pid')
 $T
 ```
 
-**`push -u origin HEAD`, not a bare `push`.** With `push.autoSetupRemote`
-unset, a bare `git push` exits 128 on a branch's first push, whether it has no
-upstream ("has no upstream branch") or tracks a different name such as
-`origin/main` ("does not match the name"). `-u origin HEAD` pushes the
+**`push -u origin HEAD`, not a bare `push`.** A bare `git push`
+exits 128 on a branch's first push, both when it has no upstream ("has no upstream
+branch", unless `push.autoSetupRemote` is set) and when it tracks a different name
+such as `origin/main` ("does not match the name", whatever `push.autoSetupRemote`
+says). `-u origin HEAD` pushes the
 checked-out branch to the same-named branch on origin and makes that its
 upstream, replacing any other upstream (e.g. `origin/main`). The checked-out
 branch must be the one your brief names.
@@ -355,11 +356,15 @@ See CLAUDE.md "Incidental findings: report, fix, record".
   scope").
 - Verify locally before pushing: `npm run verify:fast:branch` for the full branch-scoped
   battery (lint, typecheck, config:check, test:hooks, test, test:server, build, audit, etc.)
-  OR just the pre-push guards and sidecar check by running `git push --dry-run origin HEAD`
-  first (not a bare `git push --dry-run`, which exits 128 on a branch's first push and
-  runs no hook; no `-u`, a dry run writes no config). `.husky/pre-push` cannot tell a dry
-  run from a real push, so on a `server/tts-sidecar/**` branch the dry run also pays the
-  ~6.85 min `test:sidecar` -- launch it detached, per "Committing when a step is in scope".
+  OR just the pre-push guards and sidecar check by running
+  `git -C $W push --dry-run origin HEAD` first (`$W` is the worktree path, as in the push
+  recipe under "Committing when a step is in scope"; without `-C` it resolves `HEAD` against
+  the shell's cwd, and from a primary checkout reports green without looking at your
+  branch). Not a bare `git push --dry-run`, which exits 128 on a branch's first push and
+  runs no hook; no `-u`, a dry run writes no config. `.husky/pre-push` cannot tell a dry
+  run from a real push, so on a `server/tts-sidecar/**` branch skip the dry run and push
+  detached directly, via that same recipe: the real push runs the identical hook and
+  pushes nothing if the hook fails.
   Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to the STAGED diff, so
   on an empty or unrelated index every leg reports `(out of scope)` and exits 0 having
   run no tests at all. A green from it proves nothing until the change is staged -- and
