@@ -153,11 +153,12 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
         });
       }
       const root = audioDir(bookDir);
-      /* §6.1 lazy migration BEFORE the restore: mints and re-stamps a legacy
-         chapter first, so the previous take keeps the id minted into its
-         `.previous.segments.json`. An error falls to the catch-all below, which
+      /* §6.1 lazy migration BEFORE the restore: fixes a legacy chapter's files
+         and mints the previous take its id into `.previous.segments.json`.
+         No re-stamp (`restamp: false`): the live take is deleted below and
+         Phase 3 stamps the restored one. An error falls to the catch-all below, which
          answers a fixed text (never the fs error's own path-bearing message). */
-      await reconcileSlug(handle, begin.chapter.slug);
+      await reconcileSlug(handle, begin.chapter.slug, { restamp: false });
       let outcome: 'restored' | 'none';
       try {
         outcome = await restorePreviousAudio(root, begin.chapter.slug);

@@ -449,7 +449,7 @@ chapterAudioRouter.post(
         return withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), async () => {
           /* §6.1 lazy migration before the restore; an error answers the fixed
              `restore_failed` text below, never its own message. */
-          await reconcileSlug(located, chapter.slug);
+          await reconcileSlug(located, chapter.slug, { restamp: false });
           return restorePreviousAudio(root, chapter.slug);
         });
       });

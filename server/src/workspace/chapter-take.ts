@@ -163,8 +163,15 @@ async function stampIdIntoJson(path: string, takeId: string): Promise<void> {
     `stampStateFromLiveTake(.., { takeChanged: false })`. A failure of THAT
     mirror is logged and swallowed: the segments carry the id, and the scan heal
     repairs `state.json`. A PREVIOUS take whose `.previous.segments.json` lacks
-    an id gets its own id (and its embeddings), with no live file touched. */
-export async function ensureTakeIdentity(handle: AnyBookHandle, slug: string): Promise<void> {
+    an id gets its own id (and its embeddings), with no live file touched.
+
+    `mirrorState: false` skips the `state.json` mirror, for a caller about to
+    replace the live take (Reject, restore-unrecorded). */
+export async function ensureTakeIdentity(
+  handle: AnyBookHandle,
+  slug: string,
+  opts: { mirrorState?: boolean } = {},
+): Promise<void> {
   assertHeld(handle, 'ensureTakeIdentity');
   const root = audioDir(handle.bookDir);
 
@@ -176,7 +183,7 @@ export async function ensureTakeIdentity(handle: AnyBookHandle, slug: string): P
       await writeJsonAtomic(segPath, { ...segments, takeId });
       await stampIdIntoJson(livePartPath(root, slug, 'embeddings'), takeId);
       try {
-        await stampStateFromLiveTake(handle, slug, { takeChanged: false });
+        if (opts.mirrorState !== false) await stampStateFromLiveTake(handle, slug, { takeChanged: false });
       } catch (err) {
         console.warn(`[take] state.json identity mirror failed for ${slug}:`, err);
       }
@@ -576,18 +583,32 @@ async function isLegacyReject(bookDir: string, root: string, slug: string): Prom
     FILL-ONLY pass (`healTakeFields`): absent members are filled, existing
     values are never rewritten, so a healthy chapter is a no-op.
 
+    SEGMENTS DO NOT MAKE A TAKE LIVE (§4.2): with no live audio file the
+    re-stamp is skipped, so `state.json` keeps describing the take that is on
+    disk (finalize can die between writing its segments and its audio rename).
+    A caller about to REPLACE the live take (Reject, restore-unrecorded) passes
+    `restamp: false`: Phase 1 restores without stamping (Phase 3's
+    `restoreTake` stamps the restored take), and a stamp from the take that
+    request deletes would describe a take that is no longer there.
+
     Phase 1 holds no journal replay; Phase 2 adds it before `migrateSlugFiles`.
     Errors propagate: the route entry points curate them, the fsck logs them. */
-export async function reconcileSlug(handle: AnyBookHandle, slug: string): Promise<void> {
+export async function reconcileSlug(
+  handle: AnyBookHandle,
+  slug: string,
+  opts: { restamp?: boolean } = {},
+): Promise<void> {
   assertHeld(handle, 'reconcileSlug');
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
+  const restamp = opts.restamp !== false;
   /* The legacy-reject signal is read BEFORE step 4: `ensureTakeIdentity`'s state
      mirror sets `audioRenderedAt` from the live segments, which would erase the
      very mismatch step 5 looks for. The caller's book-op is held, so no other
      writer moves the state between this read and the locked re-stamp below. */
   const legacyBefore = await isLegacyReject(handle.bookDir, root, slug);
-  await ensureTakeIdentity(handle, slug);
+  await ensureTakeIdentity(handle, slug, { mirrorState: restamp });
+  if (!restamp || !chapterAudioExists(root, slug)) return;
   await updateStateAtDir(handle.bookDir, async (state) => {
     const idx = state.chapters.findIndex((c) => c.slug === slug);
     if (idx < 0) return null;

@@ -659,7 +659,7 @@ const seg = (slug = '01-one') => join(audioRoot, `${slug}.segments.json`);
 const prevSeg = (slug = '01-one') => join(audioRoot, `${slug}.previous.segments.json`);
 
 describe('lazy migration at Accept / Reject (#4339)', () => {
-  it('I4: Reject on a legacy chapter mints and re-stamps before its audio step; the restored take keeps the id minted into .previous.segments.json', async () => {
+  it('I4: Reject on a legacy chapter mints an id into .previous.segments.json and does not re-stamp state.json from the take it deletes', async () => {
     patchChapter({ audioRenderedAt: 'T-A', duration: '00:10', audioQa: { score: 0.9 } });
     writeFileSync(live(), MP3_BYTES);
     writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
@@ -675,12 +675,43 @@ describe('lazy migration at Accept / Reject (#4339)', () => {
     expect(restored.synthesizedAt).toBe('T-A');
     expect(restored.takeId).toMatch(/^[a-z2-7]{16}$/);
     expect(existsSync(prevSeg())).toBe(false);
-    /* The re-stamp ran BEFORE the restore, from the take that was live then (B). */
+    /* Phase 1 restores without stamping (that is Phase 3): state.json is exactly
+       what main leaves, never a take (B) that this very request deletes. */
     const ch = chapterNow();
-    expect(ch.audioRenderedAt).toBe('T-B');
-    expect('audioQa' in ch).toBe(false);
-    expect(ch.audioTakeId).toMatch(/^[a-z2-7]{16}$/);
-    expect(ch.audioTakeId).not.toBe(restored.takeId);
+    expect(ch.audioRenderedAt).toBe('T-A');
+    expect(ch.audioQa).toEqual({ score: 0.9 });
+    expect(ch.duration).toBe('00:10');
+    expect('audioTakeId' in ch).toBe(false);
+  });
+
+  it('Reject in the orphan-segments shape (no live audio): restores the previous take and leaves state.json at it', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } });
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 12, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+    const before = chapterNow();
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(seg(), 'utf8')).synthesizedAt).toBe('T-A');
+    expect(chapterNow()).toEqual(before);
+  });
+
+  it('Accept in the orphan-segments shape (no live audio): state.json is not re-stamped from the orphan segments', async () => {
+    patchChapter({ audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } });
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 12, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+    const before = chapterNow();
+
+    const res = await accept('r1');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('live_audio_missing');
+    expect(chapterNow()).toEqual(before);
   });
 
   it('I5: Accept on an m4a book whose live <slug>.mp3 holds AAC bytes renames it to <slug>.m4a first', async () => {

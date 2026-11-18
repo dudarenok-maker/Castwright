@@ -195,6 +195,22 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
     expect(chapterOf(b)).toEqual({ ...before, audioTakeId: live.takeId });
   });
 
+  it('I9: orphan live segments (finalize died at its audio rename): state.json stays at the take the fsck promotes, not the unrenamed segments', async () => {
+    const b = seedBook({
+      chapter: { audioRenderedAt: 'T-A', duration: '0:12', audioModelKey: 'm-a', audioQa: { score: 0.9 } },
+    });
+    /* No live audio: preserve ran and the new segments (B) were written, then the rename threw. */
+    writeJson(join(b.audio, `${SLUG}.segments.json`), { durationSec: 20, modelKey: 'm-b', synthesizedAt: 'T-B' });
+    writeFileSync(join(b.audio, `${SLUG}.previous.mp3`), MP3);
+    writeJson(join(b.audio, `${SLUG}.previous.segments.json`), { durationSec: 12, modelKey: 'm-a', synthesizedAt: 'T-A' });
+    const before = chapterOf(b);
+
+    await fsck.fsckAllBooks();
+
+    expect(readJson(join(b.audio, `${SLUG}.segments.json`)).synthesizedAt).toBe('T-A');
+    expect(chapterOf(b)).toEqual(before);
+  });
+
   it('I7: logs the .orphaned/ file count and total bytes for a book that has the folder', async () => {
     const b = seedBook();
     mkdirSync(join(b.audio, '.orphaned', 'ev1'), { recursive: true });

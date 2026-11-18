@@ -6,7 +6,7 @@
    fallback narrative has been retired; the `audio.wav` route is no longer
    registered and a legacy `.wav` on disk is invisible to the locator. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -634,6 +634,41 @@ describe('chapter-audio router', () => {
         expect(res.status).toBe(204);
         const restored = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
         expect(restored.takeId).toMatch(/^[a-z2-7]{16}$/);
+      });
+      describe('#4319 state.json stays at the take that is live (no re-stamp from a take this request deletes)', () => {
+        const statePath = () => join(bookDir, '.audiobook', 'state.json');
+        const chapterNow = () => JSON.parse(readFileSync(statePath(), 'utf8')).chapters[0] as Record<string, unknown>;
+        const liveSegs = () => join(audioRoot, `${SLUG}.segments.json`);
+        let originalState = '';
+        beforeEach(() => {
+          originalState = readFileSync(statePath(), 'utf8');
+          const st = JSON.parse(originalState);
+          st.chapters[0] = { ...st.chapters[0], audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } };
+          writeFileSync(statePath(), JSON.stringify(st));
+        });
+        afterEach(() => {
+          writeFileSync(statePath(), originalState);
+          rmIfExists(`${SLUG}.segments.json`);
+        });
+
+        it('orphan-segments shape (no live audio): state.json is left at the previous take that is restored', async () => {
+          resetAudio(); writePreviousMp3(); writePreviousSegments();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b' }));
+          const before = chapterNow();
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+          expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+          expect(chapterNow()).toEqual(before);
+        });
+
+        it('a live take about to be replaced is not stamped into state.json first', async () => {
+          resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b' }));
+          const before = chapterNow();
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+          expect(chapterNow()).toEqual(before);
+        });
       });
       it('404 no_previous_audio when nothing was preserved', async () => {
         resetAudio(); writeMp3();
