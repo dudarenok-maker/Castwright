@@ -89,6 +89,22 @@ const NEEDS_REINSTALL_MESSAGE =
   'The installed Python environment is incompatible with this release. ' +
   'A fresh reinstall is required (your books and voices are preserved).';
 
+/* The child-process steps (npm ci, pip, the ORT marker write) fail with plain
+   Errors whose message is a full command line or a path (`run()`'s
+   `<abs python> -m pip install -r <abs requirements> exited 1`, a spawn ENOENT
+   on the absolute interpreter, the ORT marker's venv dir). requestFailureMessageFs
+   passes plain Errors through, so for those phases the LAN reason is a fixed
+   path-free sentence naming the step; an fs error inside them still gets the
+   shared fs curation. */
+const STEP_FAILURE_LAN: Partial<Record<ApplyPhase, string>> = {
+  'npm-ci': 'The dependency install step (npm) failed. See the server log for details.',
+  'pip-install': 'The dependency install step (pip) failed. See the server log for details.',
+};
+
+function curateFailureForLan(err: unknown, phase: ApplyPhase): string {
+  return requestFailureMessageFs(err, STEP_FAILURE_LAN[phase] ?? (err as Error).message);
+}
+
 export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promise<ApplyResult> {
   const log = steps.log ?? (() => {});
   const releaseDir = join(ctx.releasesDir, `v${ctx.candidateVersion}`);
@@ -160,7 +176,7 @@ export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promis
       releaseDir,
       phase,
       error: (err as Error).message,
-      errorLan: requestFailureMessageFs(err, (err as Error).message),
+      errorLan: curateFailureForLan(err, phase),
       pipRan,
     };
   }

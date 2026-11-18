@@ -164,11 +164,61 @@ describe('applyUpgrade', () => {
       expect(res.errorLan).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
     });
 
-    it('passes a plain Error through verbatim', async () => {
-      const steps = fakeSteps({ npmCi: vi.fn(async () => { throw new Error('npm ci failed: exit 1'); }) });
+    it('passes a plain extract-phase Error through verbatim', async () => {
+      const steps = fakeSteps({ extract: vi.fn(async () => { throw new Error('corrupt zip'); }) });
       const res = await applyUpgrade(ctx(), steps);
-      expect(res.errorLan).toBe(res.error);
-      expect(res.errorLan).toBe('npm ci failed: exit 1');
+      expect(res.errorLan).toBe('corrupt zip');
+    });
+
+    // run()'s real rejection format: `${cmd} ${args.join(' ')} exited ${code}`.
+    const NO_PATH = /[\\/]|[A-Za-z]:/;
+    it.each([
+      [
+        'windows',
+        'C:\\Users\\bob\\Castwright\\venv\\Scripts\\python.exe -m pip install -r C:\\Users\\bob\\Castwright\\releases\\v1.6.0\\server\\tts-sidecar\\requirements\\nvidia-cuda.txt exited 1',
+      ],
+      [
+        'posix',
+        '/home/bob/castwright/venv/bin/python -m pip install -r /home/bob/castwright/releases/v1.6.0/server/tts-sidecar/requirements/nvidia-cuda.txt exited 1',
+      ],
+    ])('keeps absolute paths out of errorLan for a failed pip step (%s)', async (_n, raw) => {
+      const steps = fakeSteps({ pipInstall: vi.fn(async () => { throw new Error(raw); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('pip-install');
+      expect(res.error).toBe(raw);
+      expect(res.errorLan).toBe('The dependency install step (pip) failed. See the server log for details.');
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('keeps the npm step sentence path-free too', async () => {
+      const steps = fakeSteps({
+        npmCi: vi.fn(async () => { throw new Error('C:\\Program Files\\nodejs\\npm.cmd ci exited 1'); }),
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('npm-ci');
+      expect(res.error).toContain('npm.cmd');
+      expect(res.errorLan).toBe('The dependency install step (npm) failed. See the server log for details.');
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('keeps a spawn ENOENT on the absolute interpreter path out of errorLan', async () => {
+      const spawnErr = Object.assign(new Error('spawn /home/bob/castwright/venv/bin/python ENOENT'), {
+        code: 'ENOENT',
+        syscall: 'spawn /home/bob/castwright/venv/bin/python',
+        path: '/home/bob/castwright/venv/bin/python',
+      });
+      const steps = fakeSteps({ pipInstall: vi.fn(async () => { throw spawnErr; }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.error).toContain('/home/bob');
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('keeps the ORT marker error (venv dir in its message) out of errorLan', async () => {
+      const steps = fakeSteps({
+        pipInstall: vi.fn(async () => { throw new Error('ORT marker: no site-packages under C:\\Users\\bob\\venv'); }),
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.errorLan).not.toMatch(NO_PATH);
     });
 
     it('needs-reinstall carries the same sentence in errorLan', async () => {
