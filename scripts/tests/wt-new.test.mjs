@@ -1068,7 +1068,11 @@ for (const { from, mode } of [
     );
 
     const realWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = () => true;
+    let out = '';
+    process.stdout.write = (chunk) => {
+      out += String(chunk);
+      return true;
+    };
     let code;
     try {
       code = await inRepo(repo, () => wtNewMain(['feat/server-fresh', '--from', from, '--no-install']));
@@ -1076,6 +1080,13 @@ for (const { from, mode } of [
       process.stdout.write = realWrite;
     }
     assert.equal(code, 0);
+    // main() -> renderLaunchBlock hand-off: the default `from = 'main'` would
+    // hide a dropped `from:` argument for the `main` case but not `origin/main`.
+    assert.ok(out.includes(`(from ${from},`), `launch block must name the base ${from}, got:\n${out}`);
+    assert.ok(
+      out.includes('git push -u origin feat/server-fresh'),
+      `launch block must carry the push -u hint, got:\n${out}`,
+    );
     const result = branchConfig('feat/server-fresh');
     // status 1 = "no matching key"; any other status is a git error, which
     // would also print nothing to stdout.

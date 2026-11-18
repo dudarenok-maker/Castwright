@@ -226,7 +226,7 @@ export function runMerge({ branches, into, dryRun, runners, now }) {
       const switched = git(['switch', '--no-track', '-c', integration, 'origin/main']);
       if (switched.error || switched.status !== 0) {
         err(
-          `git switch -c ${integration} origin/main failed:\n${switched.stderr || switched.stdout}\n`,
+          `git switch --no-track -c ${integration} origin/main failed:\n${switched.stderr || switched.stdout}\n`,
         );
         return 1;
       }

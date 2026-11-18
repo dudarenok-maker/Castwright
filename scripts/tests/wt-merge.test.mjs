@@ -365,3 +365,22 @@ test('runMerge creates the integration branch with --no-track (#4449)', () => {
     `expected a --no-track switch, got:\n${calls.git.join('\n')}`,
   );
 });
+
+test('runMerge names the argv it actually ran when the branch switch fails (#4449)', () => {
+  const { runners, calls } = makeStubRunners({
+    git: {
+      'status --porcelain': { status: 0, stdout: '' },
+      'rev-parse --verify --quiet refs/heads/integration/test': { status: 1 },
+      'switch --no-track -c integration/test origin/main': {
+        status: 128,
+        stderr: 'fatal: invalid reference\n',
+      },
+    },
+  });
+  const code = runMerge({ branches: ['feat/a'], into: 'integration/test', dryRun: false, runners });
+  assert.equal(code, 1);
+  assert.match(
+    calls.err.join(''),
+    /git switch --no-track -c integration\/test origin\/main failed:/,
+  );
+});
