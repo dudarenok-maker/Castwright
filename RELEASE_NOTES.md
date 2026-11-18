@@ -27,6 +27,7 @@
 - **Importing certain malformed EPUBs no longer crashes Castwright.** A book with an empty link inside a chapter used to take the whole app down the moment you imported it; it now opens normally, or, if Castwright still cannot read the book, tells you so and keeps running. Books that already imported fine read exactly as before.
 - **Damaged EPUB and Kindle books can no longer take Castwright down.** Castwright now reads each book in a separate, sealed-off step, so a book it cannot read gets a clear message and everything else keeps running. Books are read exactly as before.
 - **Books from EPUB and Kindle files keep their paragraphs.** Paragraphs and lines of dialogue that some books lay out in their own boxes, quotes or lists no longer run together when you import them. Books already in your library read exactly as before; to get the fix for one of them, use Re-parse manuscript (this clears its cast and audio, as it always has) or import the file again. Restoring a backup, or importing over a book, that brings a different version of the book's text now asks for a fresh analysis before you make audio, so lines edited against the other version aren't applied to the wrong text.
+- **A second graphics card is no longer cleared out when the voice that needs room lives on the first.** On a computer with more than one graphics card, Castwright now makes room on the card a voice is actually running on, so your other voices stay loaded instead of being unloaded for nothing.
 
 # Castwright 1.15.0
 
