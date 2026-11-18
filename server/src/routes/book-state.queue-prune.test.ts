@@ -5,7 +5,7 @@
  * book-state.test.ts / book-state.hydrate.test.ts / etc. — this one is
  * isolated so the plan-102 contract has its own focused regression. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from 'vitest';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -149,13 +149,18 @@ describe('DELETE /api/books/:bookId prunes queue entries', () => {
   });
 });
 
-/* #4034 -- the prune is a read -> write on the shared queue file, so it goes through serializeQueueMutation. Moving
-   its read above the span would let a same-tick queue write land between that read and the prune's write and be
-   erased by it. */
-describe('DELETE /api/books/:bookId prune is serialised against other queue writes (#4034)', () => {
-  quarantinedIt('a same-tick /start, /pause and enqueue all survive the prune', async () => {
+/* #4244 -- a timed-out attempt is not cancelled by vitest: its loop keeps running and its in-flight requests land after
+   the retry's queue reset (a foreign "n8:queued" in the retry's round 0). Each attempt therefore carries a stop flag and
+   the promise of its current round, and onTestFinished drains it, so a finished attempt leaves nothing behind. */
+interface PruneAttempt { stopped: boolean; inFlight: Promise<unknown> }
+
+function runPruneRound(attempt: PruneAttempt, round: number): Promise<void> {
+  /* The WHOLE round is tracked (set synchronously, before the first await), so a reset parked behind the queue lock is
+     already in inFlight when the attempt is stopped. */
+  const roundPromise = (async (): Promise<void> => {
     const { queueJsonPath, makeBookId } = await import('../workspace/paths.js');
     const { writeQueueFile, readQueueFile } = await import('../workspace/queue-migrate.js');
+    const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
     const { queueRouter } = await import('./queue.js');
     const queueApp = express();
     queueApp.use(express.json());
@@ -165,30 +170,53 @@ describe('DELETE /api/books/:bookId prune is serialised against other queue writ
     const e = (id: string, bid: string, order: number) => ({
       id, bookId: bid, chapterId: order + 1, scope: 'this' as const, addedAt: '2026-05-23T00:00:00.000Z', status: 'queued' as const, order,
     });
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId, manuscriptId: 'm_prune_race', title, author: AUTHOR, series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z', schema: 1, chapters: [],
+      }),
+    );
+    await serializeQueueMutation(() => writeQueueFile(queueJsonPath(), {
+      entries: [e('p1', bookId, 0), e('k1', 'keep-book', 1), e('k2', 'keep-book', 2)],
+      paused: false,
+    }));
+    /* A stopped attempt must not start new requests. */
+    if (attempt.stopped) return;
+    const rs = await Promise.all([
+      request(app).delete(`/api/books/${bookId}`),
+      request(queueApp).post('/api/queue/k1/start'),
+      request(queueApp).post('/api/queue/pause').send({ paused: true }),
+      request(queueApp).post('/api/queue/enqueue').send({ entries: [{ id: `n${round}`, bookId: 'keep-book', chapterId: 9, scope: 'this' }] }),
+    ]);
+    /* A stopped attempt is already reported by vitest; its assertions must not throw into nothing. */
+    if (attempt.stopped) return;
+    expect(rs.map((r) => r.status)).toEqual([204, 200, 200, 200]);
+    const q = await readQueueFile(queueJsonPath());
+    expect(q.paused).toBe(true);
+    expect(q.entries.map((x) => `${x.id}:${x.status}`).sort()).toEqual(['k1:in_progress', 'k2:queued', `n${round}:queued`].sort());
+  })();
+  attempt.inFlight = roundPromise;
+  return roundPromise;
+}
+
+async function stopAttempt(attempt: PruneAttempt): Promise<void> {
+  attempt.stopped = true;
+  await attempt.inFlight.catch(() => undefined);
+}
+
+/* #4034 -- the prune is a read -> write on the shared queue file, so it goes through serializeQueueMutation. Moving
+   its read above the span would let a same-tick queue write land between that read and the prune's write and be
+   erased by it. */
+describe('DELETE /api/books/:bookId prune is serialised against other queue writes (#4034)', () => {
+  quarantinedIt('a same-tick /start, /pause and enqueue all survive the prune', async () => {
+    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve() };
+    onTestFinished(() => stopAttempt(attempt));
     for (let round = 0; round < 10; round++) {
-      const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
-      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
-      writeFileSync(
-        join(bookDir, '.audiobook', 'state.json'),
-        JSON.stringify({
-          bookId, manuscriptId: 'm_prune_race', title, author: AUTHOR, series: SERIES,
-          updatedAt: '2026-05-23T00:00:00.000Z', schema: 1, chapters: [],
-        }),
-      );
-      await writeQueueFile(queueJsonPath(), {
-        entries: [e('p1', bookId, 0), e('k1', 'keep-book', 1), e('k2', 'keep-book', 2)],
-        paused: false,
-      });
-      const rs = await Promise.all([
-        request(app).delete(`/api/books/${bookId}`),
-        request(queueApp).post('/api/queue/k1/start'),
-        request(queueApp).post('/api/queue/pause').send({ paused: true }),
-        request(queueApp).post('/api/queue/enqueue').send({ entries: [{ id: `n${round}`, bookId: 'keep-book', chapterId: 9, scope: 'this' }] }),
-      ]);
-      expect(rs.map((r) => r.status)).toEqual([204, 200, 200, 200]);
-      const q = await readQueueFile(queueJsonPath());
-      expect(q.paused).toBe(true);
-      expect(q.entries.map((x) => `${x.id}:${x.status}`).sort()).toEqual(['k1:in_progress', 'k2:queued', `n${round}:queued`].sort());
+      if (attempt.stopped) return;
+      await runPruneRound(attempt, round);
     }
   });
 });
