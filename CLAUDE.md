@@ -743,7 +743,7 @@ Design rationale:
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and thirty-one call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  one hundred and thirty-three call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
@@ -757,7 +757,7 @@ Design rationale:
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
-  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` (the stage route's catch, #4236), `series-cast`, `series-roster`,
+  and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` ×3 (the stage route's catch, #4236; the apply-failure `errorLan` twin and the apply IIFE's catch, #4322), `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
   weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
   not a disk fault), `annotate-emotion` and `instruct-annotation` (their
