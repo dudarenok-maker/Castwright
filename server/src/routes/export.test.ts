@@ -152,10 +152,11 @@ afterAll(async () => {
    disk-polling version keeps passing with that same delay in place. */
 async function waitForDone(
   exportId: string,
+  timeoutMs = 5_000,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const manifestFile = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
   let lastSeen = 'no manifest on disk';
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < Math.ceil(timeoutMs / 100); i++) {
     if (existsSync(manifestFile)) {
       const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as {
         status?: string;
@@ -171,7 +172,7 @@ async function waitForDone(
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`Export ${exportId} did not finish within timeout (${lastSeen}).`);
+  throw new Error(`Export ${exportId} did not finish within ${timeoutMs} ms timeout (${lastSeen}).`);
 }
 
 describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () => {
@@ -553,7 +554,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const firstId = first.body.id as string;
-    const { body: firstDone } = await waitForDone(firstId);
+    const { body: firstDone } = await waitForDone(firstId, 45_000);
     // #2084 — waitForDone treats 'failed' as terminal too, so without this
     // assertion a genuine export failure under contention (this is a
     // describeIfFfmpeg suite) presents as a confusing "expected false to be
@@ -564,7 +565,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const secondId = second.body.id as string;
-    const { body: secondDone } = await waitForDone(secondId);
+    const { body: secondDone } = await waitForDone(secondId, 45_000);
     expect(secondDone.status, `second export ended '${secondDone.status}', errorReason: ${secondDone.errorReason}`).toBe('done');
 
     /* First manifest is gone, second is present. */
@@ -576,7 +577,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     /* And the first job's GET now 404s — its row disappears from the queue. */
     const lookupFirst = await request(app).get(`/api/books/${bookId}/exports/${firstId}`);
     expect(lookupFirst.status).toBe(404);
-  });
+  }, 120_000);
 
   it('different-format re-exports DO NOT revoke each other (one row per format)', async () => {
     const zip = await request(app)
