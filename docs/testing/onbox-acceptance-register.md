@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 49 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 50 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**84 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**85 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-18 (#4164), 84 → 85.** Row **A129** (the admission ladder frees the op's own card on a two-GPU box, not the roomiest one) added. Group A 49 → 50. `next-id` bumped A129 → A130 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-17 (#4242), 83 → 84.** Row **A128** (EPUB and MOBI books read the same through the parse worker as in-process, at extractor version 1 and 2: parity over the operator's real library) added. Group A 48 → 49. `next-id` bumped A128 → A129 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-17 (#4217), 82 → 83.** Row **A127** (an existing book keeps its old extraction, byte for byte; a new import gets the paragraph-closer fix) added. Group A 47 → 48. `next-id` bumped A127 → A128 in the same change. Row is owed; not run here.
 >
@@ -1952,7 +1954,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A129 -->
+<!-- next-id: A130 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6693,6 +6695,16 @@ The automated tests prove byte-identical output on the repo's seven EPUB fixture
 - **Re-parse after a restart.** Open a fully produced EPUB book after a server restart (the `hydrateFromDisk` path) and observe its chapters and text unchanged.
 
 *Needs:* the operator's box with the real EPUB/MOBI library (no GPU or sidecar needed). *Criteria:* in this row; harness `server/scripts/parse-worker-parity.ts` (#4242). Clears when each bullet's result is recorded.
+
+### A129 · The admission ladder frees the op's own card, not the roomiest one ([#4164](https://github.com/dudarenok-maker/Castwright/issues/4164)) · **a box with TWO CUDA GPUs (e.g. the laptop card + the eGPU), the TTS sidecar, Coqui XTTS weights and Qwen 0.6B base**
+
+The automated tests prove the ladder's target with a fake probe and fake engines: `admit()` / `_resolve_admission()` in `server/tts-sidecar/main.py` run the idle-evict steps against `constraint` (the credited card, else the card the model is resident on, else the pinned card) and only fall back to the roomiest card when there is no constraint. They cannot show which card a real ladder frees on real VRAM. Only a real two-GPU box, a real sidecar and a real idle engine filling the tighter card show that nothing is evicted from the roomier card. Sidecar logs are in `logs/tts.err.log`; the idle-evict steps log the device key they act on.
+
+- **A resident model's op frees its own card.** Load Coqui so it is resident on card N, the tighter card (not the roomiest). Fill the rest of card N with an idle evictable engine (for example the analyzer's Ollama model) and leave the other card roomy. Request an op restricted to card N that needs more room than is free on N. Observe in the sidecar log which device key the idle-evict steps ran against: it is card N, and nothing is evicted from the roomier card. Record the device keys in the log lines, free MB on both cards before and after (`nvidia-smi`), who ran it and when.
+- **A pinned op that is not yet loaded frees its pinned card.** Repeat with an op pinned to card N through the engine's `*_DEVICE` env but not yet loaded (unload it first). Observe the same: the idle-evict steps name card N and the roomier card loses nothing. Record the device keys, free MB before and after on both cards, who and when.
+- **Control: no constraint still targets the roomiest card.** Run an op with no residency, no credit and no pin. Observe the ladder runs against the roomiest card, as before. Record the device key and free MB before and after on both cards.
+
+*Needs:* a box with two CUDA GPUs, the TTS sidecar, Coqui XTTS weights and Qwen 0.6B base. *Criteria:* this row. Clears when each bullet is recorded with the device keys, the free MB before and after on both cards, who ran it and when.
 
 
 ## Group B — local Ollama analyzer only
