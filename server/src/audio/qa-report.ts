@@ -56,6 +56,12 @@ export interface AudioQaReport {
      *  A chapter whose only unscored roster character is in this list is
      *  excluded from chaptersEmbedFailed (see the computation below). */
     charactersPending: string[];
+    /** #3680/#3524 — stochastic characters whose persisted reference is the
+     *  `noCurrentVoiceReference` marker row: they have a current cast voice but no
+     *  rendered line in it (voice changed before they were ever scored), so every
+     *  line is inconclusive until the chapter is re-rendered. Such a character has
+     *  a centroid row, so it is NOT in `charactersPending`. */
+    charactersNeedingRerender: string[];
     mismatches: Array<{ characterId: string; chapterId?: number; fixable: boolean }>;
     inconclusiveCount: number;
     uncheckedCharacterIds: string[];
@@ -173,6 +179,9 @@ export async function buildAudioQaReport(
 
   const centroids = (await readCentroids(bookDir)) ?? {};
   const charactersPending = Array.from(stochasticCharacterIds).filter((id) => !(id in centroids));
+  const charactersNeedingRerender = Array.from(stochasticCharacterIds).filter(
+    (id) => centroids[id]?.noCurrentVoiceReference === true,
+  );
 
   /* srv-36 hardening — chaptersScored/chaptersEmbedFailed are now
      roster-aware: a chapter is "fully scored" iff EVERY character on its
@@ -251,6 +260,7 @@ export async function buildAudioQaReport(
       charactersOnRoster: stochasticCharacterIds.size,
       charactersChecked: Array.from(stochasticCharacterIds).filter((id) => !uncheckedSet.has(id)).length,
       charactersPending,
+      charactersNeedingRerender,
       mismatches: outline.issues.map((r) => ({
         characterId: r.characterId,
         chapterId: r.chapterId,

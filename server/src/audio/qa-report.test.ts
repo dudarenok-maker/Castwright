@@ -399,6 +399,31 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     expect(report.voiceDrift.charactersPending).not.toContain('pell-hollis');
   });
 
+  it('charactersNeedingRerender lists only no-current-voice marker rows (#3680): not real rows, not unscored characters', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' }), seg({ characterId: 'thurid' })],
+      characterSnapshots: {
+        narrator: { voiceEngine: 'qwen' },
+        ren: { voiceEngine: 'qwen' },
+        thurid: { voiceEngine: 'qwen' },
+      },
+    });
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+      { characterId: 'thurid', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short', noCurrentVoiceReference: true },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['thurid']);
+    expect(report.voiceDrift.charactersPending).toEqual(['ren']);
+    expect(report.voiceDrift.charactersPending).not.toContain('thurid');
+    expect(report.voiceDrift.charactersNeedingRerender).not.toContain('narrator');
+    expect(report.voiceDrift.charactersNeedingRerender).not.toContain('ren');
+  });
+
   it('chaptersEmbedFailed excludes a chapter whose only unscored roster character is in charactersPending', async () => {
     const dir = await makeBook();
     await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {

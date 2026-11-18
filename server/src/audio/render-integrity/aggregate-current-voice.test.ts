@@ -478,6 +478,8 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     await scoreBook(dir, CH1);
     const report = await buildAudioQaReport(dir, CH1);
     expect(report.voiceDrift.charactersPending).toEqual([]);
+    // #3680 — the silently-"checked" character is LISTED as needing a re-render.
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['thurid']);
     const marked = (await readCentroids(dir))!['thurid'];
     expect(marked.noCurrentVoiceReference).toBe(true);
     const rows = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
@@ -492,6 +494,10 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     expect(rebuilt.noCurrentVoiceReference).toBeUndefined();
     expect(rebuilt.referenceKind).toBe('audition');
     expect(rebuilt.auditionVoice?.voiceName).toBe('qwen-new');
+    // #3680 — once re-rendered in the new voice the list empties again.
+    const after = await buildAudioQaReport(dir, CH1);
+    expect(after.voiceDrift.charactersNeedingRerender).toEqual([]);
+    expect(after.voiceDrift.charactersPending).toEqual([]);
   });
 
   it('B: rendered entirely on the fallback engine — one pass clears charactersPending', async () => {
