@@ -4,7 +4,7 @@
    ENOENT (the goal state of an unlink, so it counts as success at once). Each test names
    the mutation that turns it red. */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,6 +57,20 @@ const touch = (name: string) => writeFileSync(join(audioRoot, name), 'x');
 const files = () => readdirSync(audioRoot).sort();
 
 describe('unlinkWithRetry at the preserve site (stale previous of another extension)', () => {
+  it('a transient failure that clears on retry still removes the stale previous and preserves (M3: bare unlink at the preserve site turns this red)', async () => {
+    touch(`${SLUG}.m4a`);
+    touch(`${SLUG}.previous.mp3`);
+    plan.failTimes = 1;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const r = await take.preserveExistingAsPrevious(audioRoot, SLUG);
+
+    expect(r.preserved).toBe(true);
+    expect(plan.calls).toBe(2);
+    expect(files()).toEqual([`${SLUG}.previous.m4a`]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('ENOENT is the goal state: the stale previous that vanished counts as removed at once, with no retry wait (unlinkWithRetry retrying ENOENT turns this red)', async () => {
     touch(`${SLUG}.m4a`);
     touch(`${SLUG}.previous.mp3`);
@@ -75,6 +89,19 @@ describe('unlinkWithRetry at the preserve site (stale previous of another extens
 });
 
 describe('unlinkWithRetry at the discard site (stale live audio after a format switch)', () => {
+  it('a transient failure that clears on retry removes the stale live file outright, no .stale left (M5: bare unlink at the discard site turns this red)', async () => {
+    touch(`${SLUG}.mp3`);
+    touch(`${SLUG}.m4a`);
+    plan.failTimes = 1;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await take.discardStaleLiveAudio(audioRoot, SLUG, 'm4a');
+
+    expect(plan.calls).toBe(2);
+    expect(files()).toEqual([`${SLUG}.m4a`]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('ENOENT counts as removed at once: no retry, no warning, no .stale (unlinkWithRetry retrying ENOENT turns this red)', async () => {
     touch(`${SLUG}.mp3`);
     touch(`${SLUG}.m4a`);
@@ -91,4 +118,19 @@ describe('unlinkWithRetry at the discard site (stale live audio after a format s
     expect(files().some((f) => f.endsWith('.stale'))).toBe(false);
   });
 
+  it('a permanent failure demotes the stale file to <name>.stale, which no live probe reads (M4: the .stale fallback deleted turns this red)', async () => {
+    touch(`${SLUG}.mp3`);
+    touch(`${SLUG}.m4a`);
+    plan.always = true;
+    plan.code = 'EISDIR'; // not retryable: the fallback runs at once
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await take.discardStaleLiveAudio(audioRoot, SLUG, 'm4a');
+
+    expect(existsSync(join(audioRoot, `${SLUG}.mp3.stale`))).toBe(true);
+    expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(false);
+    expect(take.liveAudioFiles(audioRoot, SLUG).map((f) => f.ext)).toEqual(['m4a']);
+    expect(take.findChapterAudio(audioRoot, SLUG)?.ext).toBe('m4a');
+    expect(warn).toHaveBeenCalled();
+  });
 });

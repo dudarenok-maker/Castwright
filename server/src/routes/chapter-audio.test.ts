@@ -713,6 +713,17 @@ describe('chapter-audio router', () => {
           expect('audioTakeId' in chapterNow()).toBe(false);
         });
 
+        it('404 with no previous take keeps the live take id in state.json: nothing was replaced, so nothing is cleared', async () => {
+          const st = JSON.parse(readFileSync(statePath(), 'utf8'));
+          st.chapters[0] = { ...st.chapters[0], audioTakeId: 'bbbbbbbbbbbbbbbb' };
+          writeFileSync(statePath(), JSON.stringify(st));
+          resetAudio(); writeMp3();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-A', modelKey: 'm-b', takeId: 'bbbbbbbbbbbbbbbb' }));
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(404);
+          expect(chapterNow().audioTakeId).toBe('bbbbbbbbbbbbbbbb');
+        });
+
         it('a live take about to be replaced is not stamped into state.json first', async () => {
           resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
           writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b' }));
