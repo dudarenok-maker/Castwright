@@ -55,9 +55,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolve, dirname, join } from 'node:path';
+import { resolve, dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
@@ -549,9 +549,22 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
     const cwdLine = proc.stdout.split(/\r?\n/).find((l) => l.startsWith('CWD='));
     assert.ok(cwdLine, `expected a CWD= line; stdout:\n${proc.stdout}`);
-    const childCwd = cwdLine.slice(4).trim().toLowerCase();
-    const tmp = realpathSync(tmpdir()).toLowerCase();
-    const repoCwd = realpathSync(process.cwd()).toLowerCase();
+    // Canonicalise both sides to the long form: CI's os.tmpdir() is an 8.3
+    // short path (RUNNER~1) while the pwsh child reports the long one. The
+    // child's dir is already removed by now, so canonicalise its nearest
+    // existing ancestor and re-append the vanished tail.
+    const canonical = (p) => {
+      const tail = [];
+      let cur = p;
+      while (!existsSync(cur) && dirname(cur) !== cur) {
+        tail.unshift(basename(cur));
+        cur = dirname(cur);
+      }
+      return join(realpathSync.native(cur), ...tail).toLowerCase();
+    };
+    const childCwd = canonical(cwdLine.slice(4).trim());
+    const tmp = canonical(tmpdir());
+    const repoCwd = canonical(process.cwd());
     assert.ok(childCwd.startsWith(tmp), `expected child cwd under ${tmp}; got ${childCwd}`);
     assert.notEqual(childCwd, repoCwd, 'child cwd must not be the repo/test-runner cwd');
     assert.match(proc.stdout, /LAD=\[\]/, 'expected LOCALAPPDATA to be absent in the child');
