@@ -386,6 +386,8 @@ test('main: a waivers file the loader rejects (e.g. a missing scope) exits 3 on 
 test('npm scripts: root audit runs the root leg, server audit runs --omit-dev', () => {
   const rootScripts = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
   const serverScripts = JSON.parse(readFileSync(join(REPO_ROOT, 'server', 'package.json'), 'utf8')).scripts;
+  // CI and verify-cache call the root audit:server, so pin its delegation exactly.
+  assert.equal(rootScripts['audit:server'], 'npm --prefix server run audit');
   assert.doesNotMatch(rootScripts.audit, /--omit-dev/);
   assert.match(serverScripts.audit, /--omit-dev/);
 });
