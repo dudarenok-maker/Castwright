@@ -1543,7 +1543,7 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
 
 | Aspect | Production (`analysis.ts:7633-7646`) | Harness today | This design |
 |---|---|---|---|
-| Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model and passes it in |
+| Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model, against the owner's saved settings and `server/.env` (read without writing), and passes it in. The effective `num_ctx`, capacity, chunk budget, escalation and reasoning are recorded in each capture, and a re-capture under different ones is refused |
 | Model | the owner's configured analyzer | `qwen3.5:9b` unless `EVAL_QWEN_MODEL` is set (`run-eval-cli.ts:91`) | **Matched.** The runner takes a required `--model` with no default, and the run sheet records it |
 | Escalation budget | one `structureBudget` per **book**, shared across chapters (`:7645`, `maxWindowsPerBook`) | none, so each chapter gets a fresh per-book default (`:3744-3746`) | **Matched.** The runner passes one shared budget object across the book's captured chapters |
 | Dedup constraints | plan 291's `planConstraints` for a plan-applied roster; `undefined` for a first analysis's rolling roster (`:7642`) | none | **Stated.** The harness has no plan, so it passes none, which is production's first-analysis shape |

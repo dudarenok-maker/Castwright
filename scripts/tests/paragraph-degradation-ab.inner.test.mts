@@ -94,12 +94,16 @@ function snapshot(scratch: string): string {
 
 const mockAnalyzer = {} as Analyzer;
 
+/** A settings file that does not exist: every default test runs on the defaults, never on the box's own settings. */
+const NO_SETTINGS = join(tmpdir(), 'pda-ab-no-such-settings.json');
+
 /** A fake capture that spends one structure window per chapter and records what it was given. */
 function fakeDeps(over: Partial<RunnerDeps> = {}, failOn?: number) {
   const calls: Array<{ chapterId: number; budgetAtCall: number }> = [];
   const logs: string[] = [];
   const deps: RunnerDeps = {
     makeAnalyzer: () => mockAnalyzer,
+    settingsPath: NO_SETTINGS,
     capture: (async (o: Parameters<typeof captureChapterStages>[0]) => {
       calls.push({ chapterId: o.chapterId, budgetAtCall: o.structureBudget!.remainingWindows });
       if (o.chapterId === failOn) throw new Error(`simulated death in chapter ${o.chapterId}`);
@@ -163,6 +167,75 @@ test('one model: a run, a --resume and a wider --resume under model B are refuse
     assert.equal(calls.length, 0, 'no capture may start');
     assert.equal(snapshot(scratch), before, 'listing and bytes unchanged');
   }
+});
+
+/** Writes a user-settings file holding the given config overrides and returns its path. */
+function settingsFile(dir: string, name: string, overrides: Record<string, unknown>): string {
+  const f = join(dir, name);
+  writeFileSync(f, JSON.stringify({ configOverrides: overrides }));
+  return f;
+}
+
+test('saved settings: the capture is made under the saved override and records it', async () => {
+  const { dir, manifest } = fixtureDir(1);
+  const saw: Array<{ contextTokens: number | undefined }> = [];
+  const { deps } = fakeDeps({
+    settingsPath: settingsFile(dir, 's.json', { 'analyzer.ollama.numCtx': 4096, 'analyzer.structure.escalation': 'off' }),
+    capture: (async (o: Parameters<typeof captureChapterStages>[0]) => {
+      saw.push({ contextTokens: o.capacity?.contextTokens });
+      return {
+        raw: [], deterministic: [], final: [], reasons: [], flags: [],
+        stage1: { characters: [] }, paras: [], alignment: undefined,
+        structureReport: { alignedPct: 87, flagOnly: false },
+        chunks: { chunkCount: 1, coverageRetries: 0, coverageExhausted: 0, deterministicSplits: 0 },
+      };
+    }) as unknown as RunnerDeps['capture'],
+  });
+  assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, deps), 0);
+  assert.deepEqual(saw, [{ contextTokens: 4096 }], 'the stage call was sized to the saved num_ctx');
+  const [saved] = readSavedCaptures(scratchOf(dir)).map((e) => e.saved);
+  assert.equal(saved!.settings.numCtx, 4096);
+  assert.equal(saved!.settings.capacity.contextTokens, 4096);
+  assert.equal(saved!.settings.escalation, 'off');
+  assert.ok('reasoning' in saved!.settings);
+});
+
+test('saved settings: a re-capture under different settings is refused and writes nothing', async () => {
+  const { dir, manifest } = fixtureDir(2);
+  const scratch = scratchOf(dir);
+  const first = settingsFile(dir, 'first.json', { 'analyzer.ollama.numCtx': 4096 });
+  await runCapture({ manifest: manifest.slice(0, 1), model: 'A', scratch }, fakeDeps({ settingsPath: first }).deps);
+  const before = snapshot(scratch);
+
+  const changed = [
+    settingsFile(dir, 'ctx.json', { 'analyzer.ollama.numCtx': 8192 }),
+    settingsFile(dir, 'esc.json', { 'analyzer.ollama.numCtx': 4096, 'analyzer.structure.escalation': 'off' }),
+    NO_SETTINGS,
+  ];
+  for (const settingsPath of changed) {
+    for (const opts of [
+      { manifest, model: 'A', scratch, resume: true },
+      { manifest, model: 'A', scratch, recapture: [1], reason: 'x' },
+    ]) {
+      const { deps, calls, logs } = fakeDeps({ settingsPath });
+      assert.notEqual(await runCapture(opts, deps), 0);
+      assert.equal(calls.length, 0, 'no capture may start');
+      assert.ok(logs.some((l) => l.includes('different analyzer settings')), logs.join(' | '));
+      assert.equal(snapshot(scratch), before, 'listing and bytes unchanged');
+    }
+  }
+  // the same settings still resume
+  assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: first }).deps), 0);
+});
+
+test('saved settings: the runner leaves a settings file that needs migrating byte-identical', async () => {
+  const { dir, manifest } = fixtureDir(1);
+  const f = join(dir, 'legacy.json');
+  const text = JSON.stringify({ eagerLoadKokoro: false });
+  writeFileSync(f, text);
+  assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, fakeDeps({ settingsPath: f }).deps), 0);
+  assert.equal(readFileSync(f, 'utf8'), text);
+  assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith('legacy.json')), ['legacy.json']);
 });
 
 test('one model: a refused --resume adds no file beside the saved capture', async () => {
@@ -275,6 +348,7 @@ function pickDeps(below: Set<number>) {
   const logs: string[] = [];
   const deps: RunnerDeps = {
     makeAnalyzer: () => mockAnalyzer,
+    settingsPath: NO_SETTINGS,
     capture: (async (o: Parameters<typeof captureChapterStages>[0]) => {
       calls.push(o.chapterId);
       o.structureBudget!.remainingWindows -= 1;

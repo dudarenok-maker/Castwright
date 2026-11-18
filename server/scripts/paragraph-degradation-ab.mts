@@ -37,11 +37,17 @@
    by reason, with no verdict, and 1A's changed sentences carry the same class. An unknown
    confident reason fails the measurement before anything is written (saved captures untouched).
 
+   Settings: server/.env is loaded as the server does, and the owner's saved user settings are read
+   WITHOUT writing (primeUserSettingsCacheReadOnly), so every knob resolves as in production. The
+   effective numCtx / capacity / chunk budget / escalation / reasoning are saved in each capture, and
+   a re-capture under different ones is refused like a different --model.
+
    Harness vs production (§4.3): capacity comes from resolveCapacity for the
    owner's real engine ('local' for Ollama); --model is required, with no default;
    ONE structureBudget, seeded from analyzer.structure.maxWindowsPerBook, is shared
    across the book's chapters. Chapter text is read as-is (AC5 M-8). */
 
+import '../src/load-env.js'; // server/.env into process.env before any server module reads it, as src/index.ts does
 import { isDeepStrictEqual } from 'node:util';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -58,6 +64,9 @@ import { locateSentenceRanges } from '../src/analyzer/dialogue-structure/aligner
 import { runStructureEngine } from '../src/routes/analysis.js';
 import { resolveCapacity } from '../src/analyzer/capacity.js';
 import { configValue } from '../src/config/resolver.js';
+import { getCachedUserSettings, primeUserSettingsCacheReadOnly } from '../src/workspace/user-settings.js';
+import { resolveReasoningSetting } from '../src/analyzer/reasoning.js';
+import type { EngineCapacity } from '../src/analyzer/capacity.js';
 
 export const USAGE =
   'usage: paragraph-degradation-ab.mts --manifest <file.json> --model <name> --scratch <dir> [--language ru] [--resume | --recapture <ids> --reason <text> | --reroll --reason <text>]\n' +
@@ -70,10 +79,31 @@ export interface ManifestEntry {
   rosterPath: string;
 }
 
+/** What the analyzer is sized and run by: the owner's saved settings and .env, as production resolves them. */
+export interface EffectiveSettings {
+  numCtx: number;
+  capacity: EngineCapacity;
+  chunkCharBudget: number;
+  escalation: string;
+  reasoning: unknown;
+}
+
+export function effectiveSettings(model: string): EffectiveSettings {
+  return {
+    numCtx: configValue<number>('analyzer.ollama.numCtx'),
+    capacity: resolveCapacity({ engine: 'local', model }),
+    chunkCharBudget: configValue<number>('analyzer.stage2.chunkCharBudget'),
+    escalation: configValue<string>('analyzer.structure.escalation'),
+    reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model }) ?? null,
+  };
+}
+
 /** What a capture file holds: every captureChapterStages field plus the run's own. */
 export type SavedCapture = CapturedChapter & {
   chapterId: number;
   model: string;
+  /** The effective analyzer settings the capture ran under (checked on every re-capture). */
+  settings: EffectiveSettings;
   remainingWindows: number;
   capturedAt: string;
   round: number;
@@ -88,6 +118,8 @@ export interface RunnerDeps {
   /** Runs after a chapter's file is on disk and before the next chapter (measurement goes here). */
   afterCapture?: (saved: SavedCapture, file: string) => void | Promise<void>;
   log: (line: string) => void;
+  /** The settings file the runner reads (read-only); default is the server's own path. Tests point it at a temp file. */
+  settingsPath?: string;
 }
 
 export function defaultDeps(): RunnerDeps {
@@ -217,12 +249,28 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
   if (opts.reroll && recapture.length > 0) return refuse('--reroll and --recapture are separate runs.');
   if (mode !== 'initial' && !opts.reason?.trim()) return refuse(`--${mode} needs --reason "<text>".`);
 
+  // The owner's saved settings, read without writing; every knob below resolves against them.
+  try {
+    primeUserSettingsCacheReadOnly(deps.settingsPath);
+  } catch (e) {
+    return refuse(`${e instanceof Error ? e.message : String(e)};`);
+  }
+  const settings = effectiveSettings(opts.model);
+
   // One model across every capture: checked before any capture, resume or re-capture.
   const existing = readSavedCaptures(scratch);
   const foreign = existing.filter((e) => e.saved.model !== opts.model);
   if (foreign.length > 0) {
     const names = [...new Set(foreign.map((e) => e.saved.model))].join(', ');
     return refuse(`${scratch} holds captures made under model ${names}, not ${opts.model};`);
+  }
+  // The same settings too: a changed num_ctx / escalation / reasoning is a different experiment.
+  const drifted = existing.filter((e) => !isDeepStrictEqual(e.saved.settings, settings));
+  if (drifted.length > 0) {
+    return refuse(
+      `${scratch} holds capture(s) made under different analyzer settings (ch${drifted.map((e) => e.saved.chapterId).join(', ch')}); ` +
+        `saved ${JSON.stringify(drifted[0]!.saved.settings ?? null)}, now ${JSON.stringify(settings)}. Restore the settings, or use a new scratch directory;`,
+    );
   }
   if (mode === 'initial' && existing.length > 0 && !opts.resume) {
     return refuse(`${scratch} already holds ${existing.length} capture(s); pass --resume to continue the run.`);
@@ -274,7 +322,7 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
 
   const url = process.env.OLLAMA_URL ?? 'http://localhost:11434';
   const analyzer = deps.makeAnalyzer({ url, model: opts.model });
-  const capacity = resolveCapacity({ engine: 'local', model: opts.model });
+  const capacity = settings.capacity;
   const stageCall = { language: opts.language } as StageCall;
 
   const status = new Map<number, ChapterStatus>();
@@ -304,6 +352,7 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
         ...captured,
         chapterId: m.chapterId,
         model: opts.model,
+        settings,
         remainingWindows: structureBudget.remainingWindows,
         capturedAt: new Date().toISOString(),
         round,

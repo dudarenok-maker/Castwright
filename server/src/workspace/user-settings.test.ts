@@ -34,6 +34,8 @@ import {
   modelCapabilityRecordSchema,
   readUserSettings,
   writeAnalyzerCapabilityRecord,
+  primeUserSettingsCacheReadOnly,
+  getCachedUserSettings,
 } from './user-settings.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { setMissingWaitMsForTests } from './state-io.js';
@@ -2052,5 +2054,45 @@ describe('writeAnalyzerCapabilityRecord — merges each Test into one record per
     const stored = (await readUserSettings()).analyzerCapabilitiesByModel['q:4b'];
     expect(stored.reasoning).toEqual({ off: 'accepted' });
     expect(stored.digest).toBe('sha256-new');
+  });
+});
+
+describe('primeUserSettingsCacheReadOnly — fills the cache and writes nothing (#2254 runner)', () => {
+  const dirFiles = (d: string): string => readdirSync(d).sort().join(',');
+
+  it('serves the saved overrides through getCachedUserSettings', () => {
+    const file = join(workspaceRoot, 'saved-settings.json');
+    writeFileSync(file, JSON.stringify({ configOverrides: { 'analyzer.ollama.numCtx': 4096 } }));
+    _resetUserSettingsCache();
+    primeUserSettingsCacheReadOnly(file);
+    expect(getCachedUserSettings().configOverrides['analyzer.ollama.numCtx']).toBe(4096);
+  });
+
+  it('does not rewrite a file that needs a legacy migration, and leaves no backup or marker', () => {
+    const file = join(workspaceRoot, 'legacy-settings.json');
+    const text = JSON.stringify({ eagerLoadKokoro: false, configOverrides: { 'analyzer.ollama.numCtx': 4096 } });
+    writeFileSync(file, text);
+    const before = dirFiles(workspaceRoot);
+    _resetUserSettingsCache();
+    primeUserSettingsCacheReadOnly(file);
+    expect(readFileSync(file, 'utf8')).toBe(text);
+    expect(dirFiles(workspaceRoot)).toBe(before);
+    // the migration still applies in memory
+    expect(getCachedUserSettings().configOverrides['tts.preload.kokoro']).toBe(false);
+  });
+
+  it('treats an absent file as the defaults and creates nothing', () => {
+    const file = join(workspaceRoot, 'absent-settings.json');
+    _resetUserSettingsCache();
+    primeUserSettingsCacheReadOnly(file);
+    expect(getCachedUserSettings().configOverrides).toEqual(DEFAULT_USER_SETTINGS.configOverrides);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it('throws on an unparseable file rather than serving defaults', () => {
+    const file = join(workspaceRoot, 'bad-settings.json');
+    writeFileSync(file, '{ not json');
+    _resetUserSettingsCache();
+    expect(() => primeUserSettingsCacheReadOnly(file)).toThrow(/could not be read/);
   });
 });

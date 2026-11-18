@@ -1411,6 +1411,35 @@ export function getCachedUserSettings(): UserSettings {
   return cached ?? { ...DEFAULT_USER_SETTINGS };
 }
 
+/** Fills the cache from `path` and writes NOTHING: no legacy-file copy, no
+    migration write-back, no archive append, no backup recovery or sweep (all of
+    which readUserSettings() can do). For an offline tool that must see the owner's
+    saved settings but promises to write only under its own directory (the #2254
+    runner). An absent file is the defaults, like a first run; an unparseable one
+    throws, because defaults would silently stand in for the owner's settings. The
+    in-memory result is what readUserSettings() would commit, minus the stamp, so a
+    later readUserSettings() simply re-reads. */
+export function primeUserSettingsCacheReadOnly(path: string = USER_SETTINGS_PATH): void {
+  let raw: unknown = null;
+  if (existsSync(path)) {
+    try {
+      raw = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (err) {
+      throw new Error(`user settings ${path} could not be read (${(err as Error).message}); not running on defaults`);
+    }
+  }
+  if (raw === null || typeof raw !== 'object') {
+    cached = { ...DEFAULT_USER_SETTINGS };
+    explicitlySetKeys = new Set();
+    return;
+  }
+  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyAnalyzerModelFields(migrateLegacyEagerLoadFields(raw)));
+  const { value: loaded } = dropInvalidEndpointEntries(migrated, new Date());
+  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(loaded as object) });
+  cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
+  explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
+}
+
 /** Raw `cached?.defaultAnalysisModel` — `undefined` when the cache hasn't
     warmed, unlike getCachedUserSettings() which substitutes
     DEFAULT_USER_SETTINGS (whose defaultAnalysisModel, 'qwen3.5:4b', has a
