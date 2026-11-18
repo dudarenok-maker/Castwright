@@ -1200,6 +1200,21 @@ function anyBackupExists(): boolean {
   return false;
 }
 
+/** The pure half of a settings read, shared by performUserSettingsRead and primeUserSettingsCacheReadOnly so
+    the two cannot drift: which keys the file set explicitly, the three legacy migrations, the invalid-endpoint
+    drop and the schema parse (a parse failure is the defaults). `migrated` is the migrated file content, `raw`
+    itself when nothing migrated; `dropped` are the endpoint entries the drop removed. It writes nothing. */
+function deriveSettingsFromRaw(
+  raw: unknown,
+  now: Date,
+): { settings: UserSettings; explicitKeys: Set<string>; migrated: unknown; dropped: DroppedEndpointEntry[] } {
+  const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
+  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyAnalyzerModelFields(migrateLegacyEagerLoadFields(raw)));
+  const { value: loaded, dropped } = dropInvalidEndpointEntries(migrated, now);
+  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(loaded as object) });
+  return { settings: parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS }, explicitKeys, migrated, dropped };
+}
+
 /** The disk read proper. Touches no module global until commitRead — every
     `await` in here runs with the previous `cached` still fully in place. */
 async function performUserSettingsRead(): Promise<UserSettings> {
@@ -1368,11 +1383,9 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       /* See above. */
     }
   }
-  // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
-  const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
-
-  const eagerLoadMigrated = migrateLegacyEagerLoadFields(raw);
-  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyAnalyzerModelFields(eagerLoadMigrated));
+  // The explicit keys (#2632 N2), the migrations, the endpoint drop and the schema parse: one derivation, shared
+  // with primeUserSettingsCacheReadOnly. The write-back and the archive stay here, in the same order as before.
+  const { settings, explicitKeys, migrated, dropped } = deriveSettingsFromRaw(raw, new Date());
   if (migrated !== raw) {
     await writeJsonAtomic(USER_SETTINGS_PATH, migrated, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } }).catch(
       (err) => {
@@ -1380,7 +1393,6 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       },
     );
   }
-  const { value: loaded, dropped } = dropInvalidEndpointEntries(migrated, new Date());
   if (dropped.length > 0) {
     /* #3084 P25 — the append runs BEFORE commitRead publishes the cache and this read
        resolves, so no writer (they all read first, inside writeChain) can persist the
@@ -1392,10 +1404,9 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     const archive = invalidEndpointsArchivePath();
     for (const d of dropped) console.warn(droppedEntryWarning(d, archive));
   }
-  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(loaded as object) });
   // A successful read or backup recovery means the corruption episode, if any, is over.
   return commitRead(generation, {
-    settings: parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS },
+    settings,
     explicitKeys,
     corrupt: false,
     stamp: readStamp,
@@ -1433,11 +1444,9 @@ export function primeUserSettingsCacheReadOnly(path: string = USER_SETTINGS_PATH
     explicitlySetKeys = new Set();
     return;
   }
-  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyAnalyzerModelFields(migrateLegacyEagerLoadFields(raw)));
-  const { value: loaded } = dropInvalidEndpointEntries(migrated, new Date());
-  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(loaded as object) });
-  cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
-  explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
+  const derived = deriveSettingsFromRaw(raw, new Date());
+  cached = derived.settings;
+  explicitlySetKeys = derived.explicitKeys;
 }
 
 /** Raw `cached?.defaultAnalysisModel` — `undefined` when the cache hasn't
