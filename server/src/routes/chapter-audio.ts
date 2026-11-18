@@ -188,8 +188,8 @@ export const chapterAudioRouter = Router();
 
 type AudioVariant = 'current' | 'previous';
 
-/** Look up the live (`<slug>.mp3`) or preserved (`<slug>.previous.mp3`)
-    audio pair. */
+/** Look up the live (`<slug>.<ext>`) or preserved (`<slug>.previous.<ext>`)
+    audio pair, whatever its container (mp3, m4a or ogg). */
 async function locateChapterAudio(
   bookId: string,
   chapterIdRaw: string,
@@ -287,7 +287,7 @@ chapterAudioRouter.get(
 );
 
 /* The preserved variant: same JSON shape as current, URL points at the
-   `previous.mp3` binary endpoint below. The revision-diff a/b player
+   `previous.<ext>` binary endpoint below (the one named by this JSON's url). The revision-diff a/b player
    fetches BOTH this and the live `/audio` endpoint and renders one A
    audio element + one B audio element. */
 chapterAudioRouter.get(

@@ -546,7 +546,7 @@ async function main(): Promise<void> {
      preserve helper (`preserveExistingAsPrevious` in `workspace/chapter-take.ts`) renames two
      files (audio + segments) sequentially; a crash between them leaves a
      half-preserved state. On startup we walk every book's audio root,
-     promote any `.previous.mp3` back to live when the live counterpart
+     promote any `.previous.<ext>` back to live when the live counterpart
      is missing (regen crash recovery), and drop orphan
      `.previous.segments.json` files. Fire-and-forget: never blocks
      listen, never throws. Started AFTER the #3713 duplicate-bookId sweep above, so

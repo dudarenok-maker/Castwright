@@ -26,7 +26,7 @@ This is the durable regression plan for the whole #3456 lifecycle. It is filled 
 
 - **New seams:** `server/src/workspace/chapter-take.ts` (the module) and its leaf `server/src/workspace/take-fields.ts` (R10-2), which holds what `scan.ts` needs. `withBookOpAtDir` hands its callback a book-op handle, and an unaddressed-directory set lands with it.
 - **Invariants preserved:** `check:cycles` passes against the unchanged `server/madge-cycles-allowlist.json`. `scan.ts` and every module it reaches take take-names only from `take-fields.ts`, never from `chapter-take.ts`.
-- **Migration story:** lazy, per chapter, and idempotent. A take with no `takeId` gets one at the boot check or at Accept/Reject; nothing is migrated in bulk, and a clean mp3 book behaves as before.
+- **Migration story:** lazy, per chapter, and idempotent. The boot fsck and Accept/Reject/restore-unrecorded run the same per-chapter reconcile. The boot fsck walks every chapter of every book, so the first boot gives every rendered take an id (segments, embeddings, `state.json` `audioTakeId`), renames a wrong-named audio file, quarantines a duplicate live file under `audio/.orphaned/`, and fills any absent take member of `state.json`. It rewrites no existing `state.json` take value on a healthy chapter, and a clean mp3 book behaves as before.
 - **Reversibility:** Phase 1 renames no existing file and deletes nothing. A legacy `<slug>.previous.mp3` is still read. Reverting the PR leaves `takeId` fields that older code ignores.
 
 ## Invariants to preserve (Phase 1)

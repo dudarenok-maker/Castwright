@@ -24,9 +24,14 @@
  *       supported extension (`<slug>.{mp3,m4a,ogg}`).
  *       — Interpretation: valid pending-revision state. Leave alone.
  *
- * Safe to run on every server start: the operations are idempotent and
- * only ever rename / delete the `.previous.*` halves — the live audio
- * is never touched by this fsck. */
+ * After these three cases, `fsckAllBooks` runs the take module's per-chapter
+ * `reconcileSlug` (#4339). THAT step can rename a wrong-named live file to its
+ * real extension, demote or quarantine a duplicate live file to
+ * `audio/.orphaned/`, and mint ids into the live segments and embeddings, so
+ * the live audio is touched by the fsck as a whole, though the three cases
+ * above still only rename / delete the `.previous.*` halves.
+ *
+ * Safe to run on every server start: every operation is idempotent. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
