@@ -61,8 +61,7 @@ vi.mock('../store/analysis-state.js', async (importOriginal) => {
     },
     writeAnalysisState: async (...args: Parameters<typeof actual.writeAnalysisState>) => {
       const gate = (globalThis as G).__baj_halted_gate as Promise<void> | undefined;
-      if (gate && args[1].state === 'halted') await gate;
-      const pausedGate = (globalThis as G).__baj_paused_gate as Promise<void> | undefined;
+      if (gate && args[1].state === 'halted') await gate;      const pausedGate = (globalThis as G).__baj_paused_gate as Promise<void> | undefined;
       if (pausedGate && args[1].state === 'paused') {
         (globalThis as G).__baj_paused_parked = true;
         await pausedGate;
@@ -537,10 +536,15 @@ describe("the analysis lease covers endJob's detached terminal writes (#3714 rev
 
     /* Only the SECOND call's write lands... */
     halted.open();
-    await vi.waitFor(() =>
-      expect(
-        JSON.parse(readFileSync(join(s.bookDir, '.audiobook', 'analysis-state.json'), 'utf8')).state,
-      ).toBe('halted'),
+    /* #4447 — the halted snapshot is endJob's detached terminal write, the same slow
+       `renameWithRetry` the lease drains wait on, so it gets the same budget (the 1 s default
+       reads a missing file as ENOENT). */
+    await vi.waitFor(
+      () =>
+        expect(
+          JSON.parse(readFileSync(join(s.bookDir, '.audiobook', 'analysis-state.json'), 'utf8')).state,
+        ).toBe('halted'),
+      { timeout: 10_000 },
     );
     /* ...and the last unit settles. The first call's paused write is still parked. */
     releaseWork(job);
