@@ -145,7 +145,9 @@ function windowsFfmpegScriptBody(block) {
 function probePowerShell(exe) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
-  args.push('-Command', '$PSVersionTable.PSVersion.ToString()');
+  // Also report the cwd on stderr so a test can pin that the probe really ran
+  // in the throwaway dir (dropping `cwd: dir` below would otherwise go unseen).
+  args.push('-Command', "$PSVersionTable.PSVersion.ToString(); [Console]::Error.WriteLine('CWD=' + (Get-Location).Path)");
   // A throwaway cwd, same as every other child here, so the probe cannot drop
   // files in the checkout either.
   const dir = mkdtempSync(join(tmpdir(), 'pwsh-probe-'));
@@ -169,9 +171,10 @@ function findPowerShell() {
       attempts.push(`${exe}: ran but exited ${probe.status} (${(probe.stderr || '').trim().slice(0, 200)})`);
       continue;
     }
-    return { exe, attempts: [] };
+    const cwdLine = (probe.stderr || '').split(/\r?\n/).find((l) => l.startsWith('CWD='));
+    return { exe, probeCwd: cwdLine ? cwdLine.slice(4).trim() : null, attempts: [] };
   }
-  return { exe: null, attempts };
+  return { exe: null, probeCwd: null, attempts };
 }
 
 // PWSH_SKIP_REASON is null (falsy) whenever a usable PowerShell WAS found, so
@@ -608,6 +611,13 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     assert.ok(cwdLine, `expected a CWD= line; stdout:\n${proc.stdout}`);
     assertThrowawayCwd(cwdLine.slice(4).trim(), 'pwsh-behave-');
     assert.match(proc.stdout, /LAD=\[\]/, 'expected LOCALAPPDATA to be absent in the child');
+  });
+
+  test(`${rel}: the PowerShell capability probe runs in a throwaway temp cwd, never the repo checkout`, {
+    skip: PWSH_SKIP_REASON ?? false,
+  }, () => {
+    assert.ok(PWSH_DISCOVERY.probeCwd, 'expected the probe to report a CWD= line on stderr');
+    assertThrowawayCwd(PWSH_DISCOVERY.probeCwd, 'pwsh-probe-');
   });
 
   test(`${rel}: Windows ffmpeg install behaviour -- both choco and winget fail all 3 attempts -> exit 1 with the CI message, retrying with a real delay`, {
