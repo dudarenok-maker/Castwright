@@ -154,9 +154,16 @@ async function waitForDone(
   exportId: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const manifestFile = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
+  let lastSeen = 'no manifest on disk';
   for (let i = 0; i < 50; i++) {
     if (existsSync(manifestFile)) {
-      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as { status?: string };
+      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as {
+        status?: string;
+        errorReason?: string;
+      };
+      lastSeen = `last manifest status '${manifest.status}'${
+        manifest.errorReason ? `, errorReason: ${manifest.errorReason}` : ''
+      }`;
       if (manifest.status === 'done' || manifest.status === 'failed') {
         const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
         return { status: res.status, body: res.body as Record<string, unknown> };
@@ -164,7 +171,7 @@ async function waitForDone(
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`Export ${exportId} did not finish within timeout.`);
+  throw new Error(`Export ${exportId} did not finish within timeout (${lastSeen}).`);
 }
 
 describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () => {
@@ -551,14 +558,14 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     // assertion a genuine export failure under contention (this is a
     // describeIfFfmpeg suite) presents as a confusing "expected false to be
     // true" about a manifest path instead of "the export failed".
-    expect(firstDone.status).toBe('done');
+    expect(firstDone.status, `first export ended '${firstDone.status}', errorReason: ${firstDone.errorReason}`).toBe('done');
 
     const second = await request(app)
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const secondId = second.body.id as string;
     const { body: secondDone } = await waitForDone(secondId);
-    expect(secondDone.status).toBe('done');
+    expect(secondDone.status, `second export ended '${secondDone.status}', errorReason: ${secondDone.errorReason}`).toBe('done');
 
     /* First manifest is gone, second is present. */
     const firstManifest = join(bookDir, '.audiobook', 'export-manifests', `${firstId}.json`);
