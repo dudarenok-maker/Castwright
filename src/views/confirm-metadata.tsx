@@ -15,6 +15,7 @@ import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { IconSpinner } from '../lib/icons';
 import type { ConfirmBookResponse, LibraryBook } from '../lib/types';
 import { chapterSlug } from '../lib/chapter-heuristics';
+import { NOTICE_LANGUAGES } from '../lib/notice-languages';
 
 export function ConfirmMetadataView() {
   const dispatch = useAppDispatch();
@@ -87,6 +88,26 @@ export function ConfirmMetadataView() {
     if (!candidate) return false;
     return Boolean(candidate.author || candidate.series || candidate.seriesPosition);
   }, [candidate]);
+
+  /* #2254 notice A — merged-paragraph Heads-up. Shown only when a flagged,
+     non-excluded chapter exists AND the selected language is a notice language. */
+  const mergedChapterTitles = useMemo(
+    () =>
+      (candidate?.chapters ?? [])
+        .filter((ch) => ch.paragraphsMerged && !excludedSlugs.has(chapterSlug(ch.id, ch.title)))
+        .map((ch) => ch.title),
+    [candidate, excludedSlugs],
+  );
+  const showParagraphNotice =
+    mergedChapterTitles.length > 0 && NOTICE_LANGUAGES.includes(language);
+  const paragraphNoticeChapters = (() => {
+    const n = mergedChapterTitles.length;
+    const shown = mergedChapterTitles.slice(0, 3);
+    const noun = n === 1 ? 'chapter' : 'chapters';
+    if (n > 3) return `${n} ${noun} (${shown.join(', ')} and ${n - 3} more)`;
+    if (n === 1) return `${n} ${noun} (${shown[0]})`;
+    return `${n} ${noun} (${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]})`;
+  })();
 
   const libraryBooks = useAppSelector((s) => s.library.books);
 
@@ -278,6 +299,18 @@ export function ConfirmMetadataView() {
               already saved as {duplicatePositionBook.series} #
               {duplicatePositionBook.seriesPosition}. Saving will create a separate entry — change
               the number if that's not what you want.
+            </div>
+          )}
+
+          {showParagraphNotice && (
+            <div
+              data-testid="confirm-paragraph-notice"
+              className="-mt-2 px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900"
+            >
+              <span className="font-semibold">Heads-up:</span> in {paragraphNoticeChapters}, the
+              imported text has a paragraph with ten or more places where a line of dialogue begins
+              mid-paragraph. Each of those places would usually start a new paragraph. A different
+              copy or format of this book may give a better result.
             </div>
           )}
 

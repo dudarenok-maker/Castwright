@@ -61,6 +61,7 @@ function renderModal(
         renderedSpeakersByChapter: {},
         renderedTextByChapter: {},
         characterIdAliases: {},
+        paragraphsMergedChapterIds: [],
       },
     },
   });

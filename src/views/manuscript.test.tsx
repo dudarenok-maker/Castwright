@@ -23,7 +23,7 @@ import { uiSlice, uiActions } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { castSlice } from '../store/cast-slice';
-import { chaptersSlice } from '../store/chapters-slice';
+import { chaptersSlice, chaptersActions } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
 import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
@@ -3040,5 +3040,57 @@ describe('ManuscriptView — scene divider (#1679)', () => {
     expect(screen.getByTestId('scene-divider')).toBeInTheDocument();
     expect(screen.getByText(/Prose before the break/)).toBeInTheDocument();
     expect(screen.getByText(/Prose after the break/)).toBeInTheDocument();
+  });
+});
+
+describe('manuscript paragraph-merged caption (#2254)', () => {
+  const CAPTION =
+    'In the imported text, this chapter has a paragraph with ten or more places where a line of dialogue begins mid-paragraph. Each would usually start its own paragraph.';
+
+  function renderCaptionView(currentChapterId: number, flaggedIds: number[]) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        chapters: chaptersSlice.reducer,
+      },
+    });
+    store.dispatch(
+      chaptersActions.hydrateFromBookState({
+        bookId: 'book-pm',
+        chapters: [],
+        completedSlugs: [],
+        characters: [],
+        ...(flaggedIds.length ? { paragraphsMergedChapters: flaggedIds } : {}),
+      }),
+    );
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[chapter1, chapter2]}
+          currentChapterId={currentChapterId}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={sentences}
+        />
+      </Provider>,
+    );
+  }
+
+  it('shows the caption, verbatim, when the current chapter is flagged', () => {
+    renderCaptionView(2, [2]);
+    const caption = screen.getByTestId('manuscript-paragraph-notice');
+    expect(caption).toBeVisible();
+    expect(caption.textContent).toBe(CAPTION);
+  });
+
+  it('shows no caption when another chapter is flagged but the current one is not', () => {
+    renderCaptionView(2, [1]);
+    expect(screen.queryByTestId('manuscript-paragraph-notice')).toBeNull();
+  });
+
+  it('shows no caption when the slice holds no flagged ids', () => {
+    renderCaptionView(2, []);
+    expect(screen.queryByTestId('manuscript-paragraph-notice')).toBeNull();
   });
 });

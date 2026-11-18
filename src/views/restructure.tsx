@@ -151,6 +151,7 @@ export function RestructureView({ bookId }: Props) {
             /* #3440 — carry the raw→canonical aliases through the
                post-restructure re-hydrate too. */
             characterIdAliases: fresh.characterIdAliases,
+            paragraphsMergedChapters: fresh.paragraphsMergedChapters,
           }),
         );
       }

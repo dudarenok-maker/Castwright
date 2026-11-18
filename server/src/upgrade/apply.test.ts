@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { join } from 'node:path';
+import { FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { applyUpgrade, type ApplySteps, type ApplyContext } from './apply.js';
 
 function ctx(over: Partial<ApplyContext> = {}): ApplyContext {
@@ -140,5 +141,110 @@ describe('applyUpgrade', () => {
     expect(res.phase).toBe('needs-reinstall');
     expect(steps.pipInstall).not.toHaveBeenCalled();
     expect(steps.flipPointer).not.toHaveBeenCalled();
+  });
+  // #4322 — errorLan is the curated twin of error for LAN clients.
+  describe('errorLan (#4322)', () => {
+    const P = 'C:\\Users\\bob\\app\\releases\\v1.2.3';
+    const fsErr = (code: string, msg = `EBUSY: resource busy, rename '${P}'`) =>
+      Object.assign(new Error(msg), { code, syscall: 'rename', path: P });
+
+    it('curates an EBUSY fs error while error stays raw', async () => {
+      const steps = fakeSteps({ extract: vi.fn(async () => { throw fsErr('EBUSY'); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('bob');
+      expect(res.errorLan).toBe(FS_FAILURE_REQUEST_ERROR);
+      expect(res.errorLan).not.toContain('bob');
+      expect(res.errorLan).not.toContain('C:');
+    });
+
+    it('maps ENOSPC to the permanent-failure sentence', async () => {
+      const steps = fakeSteps({ extract: vi.fn(async () => { throw fsErr('ENOSPC', 'ENOSPC: no space left'); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.errorLan).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
+    });
+
+    it('gives a phase with no STEP_FAILURE_LAN entry a fixed sentence, not its raw message', async () => {
+      // log() runs after phase flips to 'needs-reinstall' (no map entry), so a throw there lands in the catch.
+      const steps = fakeSteps({
+        readStamp: vi.fn(() => null),
+        log: (m: string) => {
+          if (m.includes('reinstall required')) throw new Error(`boom ${P}`);
+        },
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('needs-reinstall');
+      expect(res.error).toContain('bob');
+      expect(res.errorLan).toBe('The upgrade failed. See the server log for details.');
+      expect(res.errorLan).not.toContain('bob');
+    });
+
+    it('passes a plain extract-phase Error through verbatim', async () => {
+      const steps = fakeSteps({ extract: vi.fn(async () => { throw new Error('corrupt zip'); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.errorLan).toBe('corrupt zip');
+    });
+
+    // run()'s real rejection format: `${cmd} ${args.join(' ')} exited ${code}`.
+    const NO_PATH = /[\\/]|[A-Za-z]:/;
+    it.each([
+      [
+        'windows',
+        'C:\\Users\\bob\\Castwright\\venv\\Scripts\\python.exe -m pip install -r C:\\Users\\bob\\Castwright\\releases\\v1.6.0\\server\\tts-sidecar\\requirements\\nvidia-cuda.txt exited 1',
+      ],
+      [
+        'posix',
+        '/home/bob/castwright/venv/bin/python -m pip install -r /home/bob/castwright/releases/v1.6.0/server/tts-sidecar/requirements/nvidia-cuda.txt exited 1',
+      ],
+    ])('keeps absolute paths out of errorLan for a failed pip step (%s)', async (_n, raw) => {
+      const steps = fakeSteps({ pipInstall: vi.fn(async () => { throw new Error(raw); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('pip-install');
+      expect(res.error).toBe(raw);
+      expect(res.errorLan).toBe('The dependency install step (pip) failed. See the server log for details.');
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('keeps the npm step sentence path-free too', async () => {
+      const steps = fakeSteps({
+        npmCi: vi.fn(async () => { throw new Error('C:\\Program Files\\nodejs\\npm.cmd ci exited 1'); }),
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('npm-ci');
+      expect(res.error).toContain('npm.cmd');
+      expect(res.errorLan).toBe('The dependency install step (npm) failed. See the server log for details.');
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('keeps a spawn ENOENT on the absolute interpreter path out of errorLan', async () => {
+      const spawnErr = Object.assign(new Error('spawn /home/bob/castwright/venv/bin/python ENOENT'), {
+        code: 'ENOENT',
+        syscall: 'spawn /home/bob/castwright/venv/bin/python',
+        path: '/home/bob/castwright/venv/bin/python',
+      });
+      const steps = fakeSteps({ pipInstall: vi.fn(async () => { throw spawnErr; }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.error).toContain('/home/bob');
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('keeps the ORT marker error (venv dir in its message) out of errorLan', async () => {
+      const steps = fakeSteps({
+        pipInstall: vi.fn(async () => { throw new Error('ORT marker: no site-packages under C:\\Users\\bob\\venv'); }),
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.errorLan).not.toMatch(NO_PATH);
+    });
+
+    it('needs-reinstall carries the same sentence in errorLan', async () => {
+      const steps = fakeSteps({
+        readStamp: vi.fn(() => ({ pythonTag: 'cp311', profile: 'nvidia', reqHash: 'x' })),
+        resolveRequired: vi.fn(() => ({ pythonTag: 'cp312', profile: 'nvidia', reqHash: 'y' })),
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('needs-reinstall');
+      expect(res.errorLan).toBe(res.error);
+      expect(res.errorLan).toMatch(/reinstall/i);
+    });
   });
 });

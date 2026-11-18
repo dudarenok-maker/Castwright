@@ -104,6 +104,23 @@ describe('mock e2e seam: __SEED_PROSODY_ANNOTATED__', () => {
   });
 });
 
+describe('mock e2e seam: __SEED_PARAGRAPHS_MERGED__ (#2254)', () => {
+  const seed = globalThis as unknown as { __SEED_PARAGRAPHS_MERGED__?: Record<string, number[]> };
+  afterEach(() => {
+    delete seed.__SEED_PARAGRAPHS_MERGED__;
+  });
+
+  it('carries the seeded chapter ids on the book that has an entry, and only that book', async () => {
+    seed.__SEED_PARAGRAPHS_MERGED__ = { sb: [2] };
+    expect((await mockGetBookState('sb'))!.paragraphsMergedChapters).toEqual([2]);
+    expect(await mockGetBookState('ns')).not.toHaveProperty('paragraphsMergedChapters');
+  });
+
+  it('omits the key when nothing is seeded', async () => {
+    expect(await mockGetBookState('sb')).not.toHaveProperty('paragraphsMergedChapters');
+  });
+});
+
 describe('mock analyse keeps book state in step with the manuscript id', () => {
   it('reports the analysed manuscript id from getBookState, like the real server', async () => {
     vi.useFakeTimers();

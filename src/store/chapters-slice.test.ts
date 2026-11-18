@@ -8,6 +8,7 @@ import {
   forwardRegenChapters,
   selectActiveStreams,
   selectAnyActiveStream,
+  selectParagraphsMerged,
   type ActiveStreamSnapshot,
   type ChaptersState,
 } from './chapters-slice';
@@ -34,6 +35,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   renderedTextByChapter: {},
   scoringProgress: {},
   characterIdAliases: {},
+  paragraphsMergedChapterIds: [],
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>
@@ -2019,5 +2021,31 @@ describe('chaptersSlice — analysisGapById (#3435 decision F / O2)', () => {
       }),
     );
     expect(next.analysisGapById).toEqual({ 2: { message: 'Speaker attribution collapsed.' } });
+  });
+});
+
+describe('paragraphsMergedChapterIds (#2254)', () => {
+  const hydrate = (paragraphsMergedChapters?: number[]) =>
+    chaptersActions.hydrateFromBookState({
+      bookId: 'book-pm',
+      chapters: [{ id: 1, title: 'One', slug: '1-one' }],
+      completedSlugs: [],
+      characters: [],
+      ...(paragraphsMergedChapters ? { paragraphsMergedChapters } : {}),
+    });
+
+  it('stores the flagged ids and the selector reads them', () => {
+    const state = chaptersSlice.reducer(baseState([]), hydrate([2, 5]));
+    expect(state.paragraphsMergedChapterIds).toEqual([2, 5]);
+    const root = { chapters: state };
+    expect(selectParagraphsMerged(root, 2)).toBe(true);
+    expect(selectParagraphsMerged(root, 5)).toBe(true);
+    expect(selectParagraphsMerged(root, 1)).toBe(false);
+  });
+
+  it('a later hydrate without the field clears it', () => {
+    let state = chaptersSlice.reducer(baseState([]), hydrate([2, 5]));
+    state = chaptersSlice.reducer(state, hydrate());
+    expect(state.paragraphsMergedChapterIds).toEqual([]);
   });
 });

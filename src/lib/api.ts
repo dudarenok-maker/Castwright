@@ -887,7 +887,7 @@ async function mockDiscardQwenPreview(
   await wait(20);
 }
 
-async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
+export async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
   await wait(250);
   const effectiveName = fileName ?? file?.name ?? null;
   const effectiveText = text ?? '';
@@ -921,6 +921,14 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
   const cyrillicCount = (effectiveText.match(/[Ѐ-ӿ]/g) ?? []).length;
   const letterCount = (effectiveText.match(/\p{L}/gu) ?? []).length;
   const mockLanguage = letterCount > 0 && cyrillicCount / letterCount >= 0.3 ? 'ru' : 'en';
+  /* #2254 notice A — mirrors MERGED_TURNS_DEGRADED (10) and TURN_IN_PARAGRAPH in
+     server/src/analyzer/dialogue-structure/legibility.ts (source of truth), so e2e can
+     seed the confirm-view merged-paragraph Heads-up without a server. */
+  const mockParagraphsMerged =
+    mockLanguage === 'ru' &&
+    effectiveText
+      .split('\n')
+      .some((line) => (line.match(/[.!?…:]\s+(?:—|–|-)\s+(?=\p{Lu})/gu) ?? []).length >= 10);
   const candidate = {
     format: (inferFormat(effectiveName ?? undefined) ?? 'markdown') as UploadResponse['format'],
     title,
@@ -931,7 +939,9 @@ async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promi
     sourceText: effectiveText,
     wordCount: effectiveText.trim().split(/\s+/).filter(Boolean).length,
     byteSize: file ? file.size : new Blob([effectiveText]).size,
-    chapters: [{ id: 1, title: 'Chapter 1' }],
+    chapters: [
+      { id: 1, title: 'Chapter 1', ...(mockParagraphsMerged ? { paragraphsMerged: true } : {}) },
+    ],
     language: mockLanguage,
     languageSupported: true,
     languageFallback: false,
@@ -1404,9 +1414,19 @@ export async function mockGetBookState(
   const seeded = (
     globalThis as unknown as { __SEED_PROSODY_ANNOTATED__?: Record<string, boolean> }
   ).__SEED_PROSODY_ANNOTATED__?.[bookId];
-  return withRevisions && seeded !== undefined
-    ? { ...withRevisions, state: { ...withRevisions.state, prosodyAnnotated: seeded } }
-    : withRevisions;
+  const withProsody =
+    withRevisions && seeded !== undefined
+      ? { ...withRevisions, state: { ...withRevisions.state, prosodyAnnotated: seeded } }
+      : withRevisions;
+  /* e2e seam (#2254): a spec can prime a book's merged-paragraph chapter ids
+     via `page.addInitScript` BEFORE the app boots. Undefined in normal
+     dev/prod; with no entry for the book the key stays absent. */
+  const seededMerged = (
+    globalThis as unknown as { __SEED_PARAGRAPHS_MERGED__?: Record<string, number[]> }
+  ).__SEED_PARAGRAPHS_MERGED__?.[bookId];
+  return withProsody && seededMerged !== undefined
+    ? { ...withProsody, paragraphsMergedChapters: seededMerged }
+    : withProsody;
 }
 
 /* e2e seam (plan 291, #4031): every mock PUT, in order, exposed on

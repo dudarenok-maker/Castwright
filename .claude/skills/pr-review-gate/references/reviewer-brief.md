@@ -1191,6 +1191,28 @@ recite:
     (Numbered 91: open PR #4103 holds 89 and 90; renumber on merge if the order
     changes.)
 
+92. **A completeness fix that records or prints "everything", sweeping in a
+    field the module's own contract says is never persisted or logged** — PR
+    #4389 pass 3 (#2254): pass 2 asked the runner's re-capture refusal to cover
+    every knob that changes a capture, and the fix put the resolved custom
+    analyzer payload into the saved settings (so into every `capture-ch<id>.json`)
+    and printed each differing leaf with its saved and current values. The
+    payload can hold `{ api_key: "sk-..." }`, and
+    `analyzer/runner/extra-params.ts` states callers never log a payload and
+    never write one to an analyzer file; the wiki and plan 284 repeat it. The
+    same sweep flattened `{options:{top_k:5}}` and `{"options.top_k":5}` to one
+    leaf set, so two different requests compared equal. Checkable: for every
+    change that widens what a record, log line, error message or diff output
+    includes ("every X", "all knobs", "the whole settings object"), grep the
+    owning module for a never-log / never-persist / redact statement about
+    anything the widening now reaches, and read the outputs (files and refusal
+    text), not the comparison. Where a value must be compared but not shown,
+    require a digest of a canonical form that keeps structure, and a message
+    that names the key without its value. Test with a unique sentinel seeded
+    into the sensitive field, asserting it appears in no file under the output
+    directory and in no log, stdout or stderr line.
+    (Numbered 92 after #4103's 89-90 and #4106's 91; both merged, so no renumber.)
+
 93. **A test depends on a path outside its step's globs, so CI skips the guard
     on the one diff it guards** - PR #4437 pass 2 (#4380):
     `check-audit.test.mjs` read `server/package.json` as text to pin the server
@@ -1216,8 +1238,7 @@ recite:
     the flag that matters (this PR needed both the root `audit:server` pin and
     the `server/package.json` `--omit-dev` pin; pinning only one lets a change
     to the other through).
-    (Numbered 93: open PR #4389 holds 92; renumber on merge if the order
-    changes.)
+    (Numbered 93 after #4389's 92, which is already on main; no renumber.)
 
 ### Keeping the catalogue current
 
