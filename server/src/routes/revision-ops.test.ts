@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { spawnSync } from 'node:child_process';
 
 const { busy, failRestore, failMigrate, failStateWrite, unlinkGate } = vi.hoisted(() => ({
   busy: { value: false },
@@ -16,7 +17,7 @@ const { busy, failRestore, failMigrate, failStateWrite, unlinkGate } = vi.hoiste
   /* #4339 I6: fail the migration's wrong-extension rename with a path-bearing fs error. */
   failMigrate: { value: false },
   /* #4319 pass 2: fail every state.json read-modify-write (a state-json lock timeout). */
-  failStateWrite: { value: false },
+  failStateWrite: { value: false, calls: 0 },
   /* One-shot gate: the first unlink whose path matches parks until released. */
   unlinkGate: {
     match: null as null | ((p: string) => boolean),
@@ -50,7 +51,10 @@ vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
   return {
     ...real,
     updateStateAtDir: (...args: Parameters<typeof real.updateStateAtDir>) => {
-      if (failStateWrite.value) throw new Error('simulated state.json write failure');
+      if (failStateWrite.value) {
+        failStateWrite.calls += 1;
+        throw new Error('simulated state.json write failure');
+      }
       return real.updateStateAtDir(...args);
     },
   };
@@ -661,6 +665,16 @@ describe('unexpected failures answer fixed sentences (plan 286, invariant 8)', (
 /* #4339 — lazy migration (reconcileSlug) at Accept and Reject. */
 const M4A_BYTES = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(16)]);
 const MP3_BYTES = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(32)]);
+/* A real mp3: a legacy-reject chapter's live audio is full-decoded and compared with its
+   segments' `durationSec` before step 5 stamps it, so a stub never reaches the write. */
+function writeRealMp3(path: string, sec: number): void {
+  const r = spawnSync(
+    'ffmpeg',
+    ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=180:duration=${sec}`, '-ar', '8000', '-ac', '1', '-b:a', '16k', path],
+    { windowsHide: true },
+  );
+  if (r.status !== 0) throw new Error(`ffmpeg failed: ${String(r.stderr)}`);
+}
 const statePath = () => join(bookDir, '.audiobook', 'state.json');
 function patchChapter(patch: Record<string, unknown>): void {
   const st = JSON.parse(readFileSync(statePath(), 'utf8'));
@@ -801,18 +815,23 @@ describe('lazy migration at Accept / Reject (#4339)', () => {
 
   it('Accept swallows a failed state.json re-stamp (spec State-write table): 200, the previous take is deleted, state.json untouched', async () => {
     patchChapter({ audioRenderedAt: 'T-A', duration: '00:10' });
-    writeFileSync(live(), MP3_BYTES);
-    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));
+    writeRealMp3(live(), 1);
+    /* The segments describe the audio (1 s), so the H6 gate passes and step 5's stamp is attempted. */
+    writeFileSync(seg(), JSON.stringify({ durationSec: 1, synthesizedAt: 'T-B' }));
     writeFileSync(prev(), MP3_BYTES);
     seed([entry(1, 'r1')]);
     const before = chapterNow();
     failStateWrite.value = true;
+    failStateWrite.calls = 0;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const res = await accept('r1');
+    const restampFailed = warn.mock.calls.some((c) => /state\.json re-stamp failed for 01-one/.test(String(c[0])));
     warn.mockRestore();
     failStateWrite.value = false;
 
+    expect(failStateWrite.calls).toBeGreaterThan(0); // the failing write really ran
+    expect(restampFailed).toBe(true); // and it was step 5's, swallowed and logged
     expect(res.status).toBe(200);
     expect(existsSync(prev())).toBe(false);
     expect(chapterNow()).toEqual(before);
