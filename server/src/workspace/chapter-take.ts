@@ -175,11 +175,21 @@ async function stampIdIntoJson(path: string, takeId: string): Promise<void> {
 /* The identity mirror: ONLY `audioTakeId` is written. Every other member (a raw
    `audioModelKey` from the old heal included) is left as it is, so a healthy
    legacy chapter is not rewritten by its first boot (§4.4: a stamp of the same
-   take leaves such a field alone). */
-async function mirrorTakeIdIntoState(handle: AnyBookHandle, slug: string, takeId: string): Promise<void> {
-  await updateStateAtDir(handle.bookDir, (state) => {
+   take leaves such a field alone). The live segments are re-read inside the lock
+   and nothing is written unless they still carry `takeId`: a finalize's segments
+   write landing after the mint would otherwise leave state naming an id no file
+   carries. */
+async function mirrorTakeIdIntoState(
+  handle: AnyBookHandle,
+  slug: string,
+  takeId: string,
+  liveSegPath: string,
+): Promise<void> {
+  await updateStateAtDir(handle.bookDir, async (state) => {
     const idx = state.chapters.findIndex((c) => c.slug === slug);
     if (idx < 0) return null;
+    const live = await readJsonTolerant<Record<string, unknown>>(liveSegPath);
+    if (live?.takeId !== takeId) return null;
     if ((state.chapters[idx] as Record<string, unknown>).audioTakeId === takeId) return null;
     const chapters = state.chapters.slice();
     chapters[idx] = { ...chapters[idx], audioTakeId: takeId } as (typeof chapters)[number];
@@ -258,7 +268,7 @@ export async function ensureTakeIdentity(
        they already agree. */
     if (takeId && opts.mirrorState !== false) {
       try {
-        await mirrorTakeIdIntoState(handle, slug, takeId);
+        await mirrorTakeIdIntoState(handle, slug, takeId, segPath);
       } catch (err) {
         console.warn(`[take] state.json identity mirror failed for ${slug}:`, err);
       }

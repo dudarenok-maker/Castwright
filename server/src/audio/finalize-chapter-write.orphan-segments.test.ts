@@ -58,6 +58,50 @@ vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   };
 });
 
+/* Pass 5: finalize's segments write landing at a chosen point. `afterMint` fires right after
+   the live segments are rewritten (step 4's mint write, before its state mirror); `atAudioCheck`
+   fires on the Nth `chapterAudioExists` call (counted from arming), i.e. between the gate and
+   step 5's locked read. Either writes `body` over the live segments. */
+const land = vi.hoisted(() => ({
+  afterMint: false,
+  atAudioCheck: 0,
+  checks: 0,
+  hits: 0,
+  segPath: '',
+  body: '',
+}));
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return {
+    ...orig,
+    writeJsonAtomic: async (p: string, v: unknown) => {
+      await orig.writeJsonAtomic(p, v);
+      if (land.afterMint && land.segPath && p.replace(/\\/g, '/') === land.segPath.replace(/\\/g, '/')) {
+        land.afterMint = false;
+        land.hits += 1;
+        writeFileSync(land.segPath, land.body);
+      }
+    },
+  };
+});
+vi.mock('../workspace/take-fields.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../workspace/take-fields.js')>();
+  return {
+    ...orig,
+    chapterAudioExists: (root: string, slug: string) => {
+      if (land.atAudioCheck > 0) {
+        land.checks += 1;
+        if (land.checks === land.atAudioCheck) {
+          land.atAudioCheck = 0;
+          land.hits += 1;
+          writeFileSync(land.segPath, land.body);
+        }
+      }
+      return orig.chapterAudioExists(root, slug);
+    },
+  };
+});
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs/promises')>();
   return {
@@ -96,6 +140,7 @@ beforeEach(() => {
   failRenames.on = false;
   gate.mode = 'off';
   gate.calls = 0;
+  Object.assign(land, { afterMint: false, atAudioCheck: 0, checks: 0, hits: 0 });
 });
 
 afterAll(() => {
@@ -306,5 +351,34 @@ describe('H6 pass 4: the gate does not fail open', () => {
     expect(gate.calls).toBe(1);
     expect(b.chapter()).toEqual(before);
     expect(b.segments()).toEqual(JSON.parse(gate.body));
+  }, 30_000);
+});
+
+describe('H6 pass 5: the identity binding holds across the steps themselves', () => {
+  async function reconcileOne(bookDir: string) {
+    const { withBookOpAtDir } = await import('../workspace/book-op-lock.js');
+    const { reconcileSlug } = await import('../workspace/chapter-take.js');
+    await withBookOpAtDir(bookDir, (h) => reconcileSlug(h, SLUG));
+  }
+  const orphanB = { durationSec: 20, synthesizedAt: 'T-B', modelKey: 'qwen3-0.6b' };
+  const setChapter = (bookDir: string, edit: (c: Record<string, unknown>) => void) => {
+    const p = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(p, 'utf8'));
+    edit(st.chapters[0]);
+    writeFileSync(p, JSON.stringify(st));
+  };
+
+  it('(4) segments landing after step 4 mints and before its mirror: state.json names no id the files do not carry', async () => {
+    const b = await seedBook();
+    await b.render(1.0);
+    const segPath = join(b.audioRoot, `${SLUG}.segments.json`);
+    const { takeId: _id, ...bare } = b.segments(); // a healthy legacy take: no id yet
+    writeFileSync(segPath, JSON.stringify(bare));
+    setChapter(b.bookDir, (c) => delete c.audioTakeId);
+    Object.assign(land, { segPath, body: JSON.stringify(orphanB), afterMint: true });
+    await reconcileOne(b.bookDir);
+    expect(land.hits).toBe(1);
+    expect(b.segments()).toEqual(orphanB);
+    expect(b.chapter().audioTakeId).toBeUndefined(); // the mint was overwritten; the mirror must not name it
   }, 30_000);
 });
