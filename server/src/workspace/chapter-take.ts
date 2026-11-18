@@ -728,15 +728,13 @@ async function segmentsDescribeLiveAudio(
   }
   if (!isLegacyRejectShape(recorded, segments)) return { identity: segmentsIdentity(segments), legacy: false };
   const expected = segments.durationSec;
-  const audio = liveAudioFiles(root, slug)[0];
-  const decoded = audio ? await decodeDurationSec(audio.path) : null;
-  if (
-    typeof expected === 'number' &&
-    Number.isFinite(expected) &&
-    decoded !== null &&
-    Math.abs(decoded - expected) <= DURATION_MATCH_TOLERANCE_SEC
-  ) {
-    return { identity: segmentsIdentity(segments), legacy: true };
+  let decoded: number | null = null;
+  if (typeof expected === 'number' && Number.isFinite(expected)) {
+    const audio = liveAudioFiles(root, slug)[0];
+    decoded = audio ? await decodeDurationSec(audio.path) : null;
+    if (decoded !== null && Math.abs(decoded - expected) <= DURATION_MATCH_TOLERANCE_SEC) {
+      return { identity: segmentsIdentity(segments), legacy: true };
+    }
   }
   console.warn(
     `[take] ${slug}: live segments (durationSec ${String(expected)}) do not describe the live audio ` +

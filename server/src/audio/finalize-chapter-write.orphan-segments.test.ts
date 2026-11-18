@@ -24,6 +24,19 @@ const gate = vi.hoisted(() => ({
   body: '',
 }));
 
+/* Counts child processes spawned (ffmpeg is the decode and the encode). */
+const spawned = vi.hoisted(() => ({ n: 0 }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...real,
+    spawn: ((...args: Parameters<typeof real.spawn>) => {
+      spawned.n += 1;
+      return real.spawn(...args);
+    }) as typeof real.spawn,
+  };
+});
+
 vi.mock('../workspace/book-op-lock.js', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../workspace/book-op-lock.js')>();
   return {
@@ -234,6 +247,23 @@ describe('H6 pass 4: the gate does not fail open', () => {
     }
     expect(b.chapter()).toEqual(before);
     expect(b.segments()).toEqual(orphan);
+  }, 30_000);
+
+  it('segments without a numeric durationSec are no match, and the audio is not decoded for it', async () => {
+    const { b } = await staticShape();
+    const noDuration = { synthesizedAt: 'T-B', modelKey: 'qwen3-0.6b' };
+    writeFileSync(join(b.audioRoot, `${SLUG}.segments.json`), JSON.stringify(noDuration));
+    const before = b.chapter();
+    spawned.n = 0;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await reconcileOne(b.bookDir);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(spawned.n).toBe(0); // no ffmpeg decode of audio that could not be compared anyway
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(noDuration);
   }, 30_000);
 
   it('an unreadable state.json at the gate leaves state.json and the segments alone', async () => {
