@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, open, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { renameWithRetry } from './atomic-rename.js';
+import { RENAME_RETRY_DELAYS_MS, jitteredDelayMs, renameWithRetry, RETRYABLE_CODES } from './atomic-rename.js';
 import { assertHeld, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
 import { audioDir } from './paths.js';
@@ -241,6 +241,49 @@ export async function ensureTakeIdentity(
  * (Phase 2) and `restoreTake` / `acceptTake` (Phase 3) replace.
  * ------------------------------------------------------------------ */
 
+/** `unlink` on the `renameWithRetry` backoff: the same transient Windows /
+    OneDrive holds that delay a rename delay an unlink. A non-retryable code
+    throws at once. */
+async function unlinkWithRetry(path: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await unlink(path);
+      return;
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (!code || !RETRYABLE_CODES.has(code) || attempt === RENAME_RETRY_DELAYS_MS.length) throw e;
+      await new Promise((r) => setTimeout(r, jitteredDelayMs(RENAME_RETRY_DELAYS_MS[attempt])));
+    }
+  }
+}
+
+/** Called by finalize AFTER the new take's audio is installed. Removes every
+    live audio file whose extension differs from the new take's, so exactly one
+    live file exists and it is the new take (mp3 is probed first, so an old mp3
+    left beside a new m4a would be the one served). Needed when the preserve
+    aborted (a stale previous could not be removed) and left the old live file
+    in place. A file that cannot be removed is renamed to `<name>.stale`, which
+    no probe reads; if even that fails it is logged and left. */
+export async function discardStaleLiveAudio(
+  audioRoot: string,
+  slug: string,
+  keepExt: ChapterAudioExt,
+): Promise<void> {
+  for (const f of liveAudioFiles(audioRoot, slug)) {
+    if (f.ext === keepExt) continue;
+    try {
+      await unlinkWithRetry(f.path);
+    } catch (err) {
+      console.warn(`[take] stale live audio removal failed for ${slug}: ${(err as Error).message}`);
+      try {
+        await renameWithRetry(f.path, `${f.path}.stale`);
+      } catch (err2) {
+        console.warn(`[take] stale live audio demotion failed for ${slug}: ${(err2 as Error).message}`);
+      }
+    }
+  }
+}
+
 export interface PreserveResult {
   /** True when an existing audio file was found and the rename succeeded.
       False on first render (nothing to preserve) and on rename failures. */
@@ -255,8 +298,10 @@ export interface PreserveResult {
     - A previous take's audio with a DIFFERENT extension (a format switch left
       `.previous.mp3` beside a live m4a) is removed first, so the old previous
       take does not survive beside the new one. Same-extension previous audio is
-      overwritten by the rename, as before. An unlink failure is logged and the
-      preserve is abandoned with nothing renamed (`preserved: false`).
+      overwritten by the rename, as before. The unlink retries on the `renameWithRetry` backoff;
+      a final failure is logged and the preserve is abandoned with nothing
+      renamed (`preserved: false`). The caller (finalize) then removes the old
+      live file if its extension differs (`discardStaleLiveAudio`).
     - Best-effort: a rename failure is logged, never thrown. We must NEVER block
       the regen on preservation; losing the audition is much less bad than losing
       the new audio. The two renames are not atomic; the fsck pairs up a crash
@@ -273,7 +318,7 @@ export async function preserveExistingAsPrevious(
     const stale = previousAudioPath(audioRoot, slug, ext);
     if (!existsSync(stale)) continue;
     try {
-      await unlink(stale);
+      await unlinkWithRetry(stale);
     } catch (err) {
       /* Fail closed: a stale `.previous.mp3` left beside the `.previous.m4a` we
          are about to write would win `findPreviousAudio` (mp3 is probed first),

@@ -16,6 +16,7 @@ import {
   TAKE_STATE_FIELDS,
   liveAudioPath,
   livePartPath,
+  discardStaleLiveAudio,
   preserveExistingAsPrevious,
   type TakeFields,
 } from '../workspace/chapter-take.js';
@@ -783,6 +784,10 @@ async function finalizeChapterAudioWriteInner(
   await writeJsonAtomic(segPath, segmentsFile);
   await rename(tmpAudio, audioPath);
   tmp.path = null;
+  /* Exactly one live file, the new take: an aborted preserve (a stale previous
+     could not be removed) leaves the old live file in place, and after a
+     container switch mp3-first probing would serve it over this render. */
+  await discardStaleLiveAudio(audioRoot, chapter.slug, audioExt);
   try {
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);
   } catch (err) {
