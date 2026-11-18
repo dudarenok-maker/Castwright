@@ -279,7 +279,8 @@ export async function ensureTakeIdentity(
 
 /** `unlink` on the `renameWithRetry` backoff: the same transient Windows /
     OneDrive holds that delay a rename delay an unlink. A non-retryable code
-    throws at once. */
+    throws at once; ENOENT is the goal state of an unlink (the file is already
+    gone), so it returns at once. */
 async function unlinkWithRetry(path: string): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -287,6 +288,7 @@ async function unlinkWithRetry(path: string): Promise<void> {
       return;
     } catch (e) {
       const code = (e as { code?: string }).code;
+      if (code === 'ENOENT') return;
       if (!code || !RETRYABLE_CODES.has(code) || attempt === RENAME_RETRY_DELAYS_MS.length) throw e;
       await new Promise((r) => setTimeout(r, jitteredDelayMs(RENAME_RETRY_DELAYS_MS[attempt])));
     }
