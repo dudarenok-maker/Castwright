@@ -239,7 +239,7 @@ test('runMerge aborts with exit code 2 and lists conflict files on merge conflic
       'status --porcelain': { status: 0, stdout: '' },
       'fetch origin main': { status: 0 },
       'rev-parse --verify --quiet refs/heads/integration/test': { status: 1 },
-      'switch -c integration/test origin/main': { status: 0 },
+      'switch --no-track -c integration/test origin/main': { status: 0 },
       'fetch origin feat/a': { status: 0 },
       // First (and only) merge fails with status 1.
       'merge --no-ff origin/feat/a': {
@@ -279,7 +279,7 @@ test('runMerge aborts with exit code 3 when verify fails after the 2nd merge', (
       'status --porcelain': { status: 0, stdout: '' },
       'fetch origin main': { status: 0 },
       'rev-parse --verify --quiet refs/heads/integration/test': { status: 1 },
-      'switch -c integration/test origin/main': { status: 0 },
+      'switch --no-track -c integration/test origin/main': { status: 0 },
       'fetch origin feat/a': { status: 0 },
       'merge --no-ff origin/feat/a': { status: 0 },
       'fetch origin feat/b': { status: 0 },
@@ -320,7 +320,7 @@ test('runMerge prints summary with merged branches + final SHA on success', () =
       'status --porcelain': { status: 0, stdout: '' },
       'fetch origin main': { status: 0 },
       'rev-parse --verify --quiet refs/heads/integration/test': { status: 1 },
-      'switch -c integration/test origin/main': { status: 0 },
+      'switch --no-track -c integration/test origin/main': { status: 0 },
       'fetch origin feat/a': { status: 0 },
       'merge --no-ff origin/feat/a': { status: 0 },
       'fetch origin feat/b': { status: 0 },
@@ -343,4 +343,44 @@ test('runMerge prints summary with merged branches + final SHA on success', () =
   assert.match(logText, /feat\/a, feat\/b/);
   assert.match(logText, /abc123456789/); // first 12 chars of SHA
   assert.match(logText, /git push -u origin integration\/test/);
+});
+
+// ---- runMerge: integration branch is created without an upstream (#4449) ----
+
+test('runMerge creates the integration branch with --no-track (#4449)', () => {
+  // The stub answers status 0 to any unmatched command, so the canned keys
+  // above cannot catch a dropped flag — assert the recorded argv instead.
+  const { runners, calls } = makeStubRunners({
+    git: {
+      'status --porcelain': { status: 0, stdout: '' },
+      'rev-parse --verify --quiet refs/heads/integration/test': { status: 1 },
+      'rev-parse HEAD': { status: 0, stdout: 'abc1234567890def\n' },
+    },
+    npm: { 'run verify': { status: 0 } },
+  });
+  const code = runMerge({ branches: ['feat/a'], into: 'integration/test', dryRun: false, runners });
+  assert.equal(code, 0, `expected exit 0, got ${code}. err=${calls.err.join('')}`);
+  assert.ok(
+    calls.git.includes('switch --no-track -c integration/test origin/main'),
+    `expected a --no-track switch, got:\n${calls.git.join('\n')}`,
+  );
+});
+
+test('runMerge names the argv it actually ran when the branch switch fails (#4449)', () => {
+  const { runners, calls } = makeStubRunners({
+    git: {
+      'status --porcelain': { status: 0, stdout: '' },
+      'rev-parse --verify --quiet refs/heads/integration/test': { status: 1 },
+      'switch --no-track -c integration/test origin/main': {
+        status: 128,
+        stderr: 'fatal: invalid reference\n',
+      },
+    },
+  });
+  const code = runMerge({ branches: ['feat/a'], into: 'integration/test', dryRun: false, runners });
+  assert.equal(code, 1);
+  assert.match(
+    calls.err.join(''),
+    /git switch --no-track -c integration\/test origin\/main failed:/,
+  );
 });

@@ -17,7 +17,7 @@
 //      worktree's generated .env.local / server/.env (slot 0 = main). #3052:
 //      NOT the worktree count — that re-issued a surviving tree's slot as
 //      soon as an earlier tree was torn down.
-//   3. Creates ../wt-<slug> via `git worktree add -b <branch> <path> <base>`.
+//   3. Creates ../wt-<slug> via `git worktree add --no-track -b <branch> <path> <base>`.
 //   4. Writes <worktree>/.env.local with VITE_PORT / PORT / VITE_API_PORT /
 //      LOCAL_TTS_PORT / PLAYWRIGHT_PORT for this slot.
 //   5. Writes <worktree>/server/.env with PORT / WORKSPACE_DIR / LOCAL_TTS_PORT for this slot
@@ -300,13 +300,13 @@ function runInstalls(worktreePath) {
   }
 }
 
-export function renderLaunchBlock({ worktreePath, branch, ports, slot, install }) {
+export function renderLaunchBlock({ worktreePath, branch, from = 'main', ports, slot, install }) {
   const winPath = worktreePath.replace(/\//g, '\\');
   const lines = [
     ``,
     `[wt-new] slot ${slot} → ports VITE=${ports.VITE_PORT} API=${ports.PORT} TTS=${ports.LOCAL_TTS_PORT} E2E=${ports.PLAYWRIGHT_PORT}`,
     `[wt-new] worktree created at ${worktreePath}`,
-    `[wt-new] branch ${branch} (from ${branch === 'main' ? 'HEAD' : 'requested base'})`,
+    `[wt-new] branch ${branch} (from ${from}, no upstream — publish with: git push -u origin ${branch})`,
     ``,
     `Next steps — paste into a new terminal:`,
     ``,
@@ -390,7 +390,12 @@ export async function main(argv) {
   }
 
   process.stdout.write(`[wt-new] creating worktree at ${worktreePath} on new branch ${args.branch}\n`);
-  gitOrThrow(['worktree', 'add', '-b', args.branch, worktreePath, args.from]);
+  // --no-track: a remote-tracking base (`--from origin/main`) would otherwise
+  // become the new branch's upstream (#4449). That makes a plain `git push`
+  // fail under push.default=simple, push to `main` under push.default=upstream,
+  // defeat push.autoSetupRemote, and make `git status`/`git pull` compare
+  // against `main`.
+  gitOrThrow(['worktree', 'add', '--no-track', '-b', args.branch, worktreePath, args.from]);
 
   const envPath = join(worktreePath, '.env.local');
   writeFileSync(envPath, renderEnvLocal({ slot, branch: args.branch, ports }), 'utf8');
@@ -419,7 +424,7 @@ export async function main(argv) {
   }
 
   process.stdout.write(
-    renderLaunchBlock({ worktreePath, branch: args.branch, ports, slot, install: args.install }),
+    renderLaunchBlock({ worktreePath, branch: args.branch, from: args.from, ports, slot, install: args.install }),
   );
   return 0;
 }
