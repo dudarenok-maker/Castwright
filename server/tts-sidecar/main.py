@@ -5176,9 +5176,10 @@ class PlacementController:
         if cpu_capable and not heavy:
             return {"device": "cpu"}
 
-        # The credited card (when there is a credit) is the only card this
-        # request can run on, so it is also the ladder's target (#4079).
-        worst = credit_card if credit_card is not None else self._worst_device_key(devices)
+        # The credited, resident or pinned card (whichever `constraint` names)
+        # is the only card this request can run on, so it is also the
+        # ladder's target (#4079, #4164).
+        worst = constraint if constraint is not None else self._worst_device_key(devices)
         if worst is not None:
             def _fits():
                 probed = self.probe()
@@ -5191,7 +5192,7 @@ class PlacementController:
             key = await self._evict_until(worst, engine, _fits, protect)
             if key is not None:
                 return {"device": key}
-            worst = credit_card if credit_card is not None else self._worst_device_key(self.probe())
+            worst = constraint if constraint is not None else self._worst_device_key(self.probe())
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
@@ -5455,7 +5456,7 @@ class PlacementController:
         if held is None:
             held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
-            worst = credit_card if credit_card is not None else self._worst_device_key(devices)
+            worst = constraint if constraint is not None else self._worst_device_key(devices)
             if worst is not None:
                 def _fits():
                     probed = self.probe()
