@@ -4,7 +4,6 @@ import request from 'supertest';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
 import { buildHealthPayload } from './health-payload.js';
 import { isLoopbackRequest } from './lan-auth.js';
 
@@ -13,8 +12,8 @@ import { isLoopbackRequest } from './lan-auth.js';
 // test doesn't just restate the implementation.
 const expectedRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Mirrors app.ts's /api/health one-liner exactly; the source-level assertion
-// below pins that the real mount cannot drift from this mirror.
+// Mirrors app.ts's /api/health one-liner for fast ip-shape cases; the real
+// wiring is pinned by app.health-loopback.test.ts (real app, real sockets).
 function makeApp(ip = '127.0.0.1') {
   const app = express();
   app.use((req, _res, next) => {
@@ -112,10 +111,5 @@ describe('GET /api/health', () => {
     const res = await request(makeApp('127.0.0.2')).get('/api/health');
     expect(res.body.configLoad).not.toHaveProperty('cwd');
     expect(res.body.configLoad).not.toHaveProperty('runDir');
-  });
-
-  it('app.ts mounts /api/health gated on isLoopbackRequest(req)', () => {
-    const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'app.ts'), 'utf8');
-    expect(src).toContain('buildHealthPayload({ includePaths: isLoopbackRequest(req) })');
   });
 });
