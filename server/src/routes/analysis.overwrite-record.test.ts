@@ -19,6 +19,7 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import { ZipFile } from 'yazl';
 import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
+import { awaitLeaseDrained } from '../test-utils/await-lease-drained.js';
 import type {
   CharacterOutput,
   Stage1ChapterOutput,
@@ -110,7 +111,7 @@ afterEach(async () => {
   /* Let any start a failed case left queued finish while the stubs still exist,
      then wait for its lease, before the stubs and the book go. */
   await Promise.allSettled(startedRuns);
-  await vi.waitFor(() => expect(opLock.bookJobKinds(bookId)).toEqual([]));
+  await awaitLeaseDrained(opLock.bookJobKinds, bookId);
   for (const k of Object.keys(g)) if (k.startsWith('__ovr_')) delete g[k];
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
   opLock.__bookDirIndexForTest().clear();
