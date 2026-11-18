@@ -19,7 +19,10 @@ import { stat, mkdir, rm, writeFile, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, type ChapterAudioExt } from '../workspace/chapter-take.js';
+
+/* The export entry name's extension (the file is the live mp3 take's bytes). */
+const MP3_EXT: ChapterAudioExt = 'mp3';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
 import { ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
@@ -94,7 +97,7 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
   for (let i = 0; i < resolved.length; i++) {
     signal?.throwIfAborted();
     const { chapter, mp3Path } = resolved[i];
-    const fileName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.mp3`;
+    const fileName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${MP3_EXT}`;
     /* Route the per-chapter filename through sanitizeIdSegment so a
        `..`/separator surviving sanitiseForZip can't escape outDir
        (js/path-injection). No-op for real chapter titles. */

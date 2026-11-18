@@ -340,7 +340,7 @@ export async function encodePcmToAudio(
     format === 'mp3'
       ? join(
           tmpdir(),
-          `audiobook-encode-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}.mp3`,
+          `audiobook-encode-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}.${format}`,
         )
       : null;
 

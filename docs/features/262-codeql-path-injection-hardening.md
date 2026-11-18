@@ -7,7 +7,7 @@ owner: null
 # CodeQL path-injection + proto-pollution hardening (export pipeline)
 
 > Status: stable
-> Key files: `server/src/util/safe-path.ts`, `server/src/workspace/chapter-audio-file.ts`, `server/src/routes/export.ts`, `server/src/export/{build-mp3-zip,build-mp3-folder,build-captions,sync-folder}.ts`, `server/src/workspace/script-review-ledger.ts`
+> Key files: `server/src/util/safe-path.ts`, `server/src/workspace/take-fields.ts` (moved there from `chapter-audio-file.ts` by #4319), `server/src/routes/export.ts`, `server/src/export/{build-mp3-zip,build-mp3-folder,build-captions,sync-folder}.ts`, `server/src/workspace/script-review-ledger.ts`
 > URL surface: `POST /api/books/{id}/exports`, `GET …/exports/{jobId}/download`
 > OpenAPI ops: export job create / poll / download (unchanged shapes)
 > Issue: #1690
@@ -51,7 +51,7 @@ recognised containment barrier.
 
 | Sink | Taint source | Fix |
 |---|---|---|
-| `chapter-audio-file.ts` `findChapterAudio` join | `chapter.slug` | `sanitizeIdSegment(slug)` — clears the slug taint at **every** export consumer via propagation |
+| `take-fields.ts` `findChapterAudio` join (moved from `chapter-audio-file.ts` by #4319) | `chapter.slug` | `sanitizeIdSegment(slug)` — clears the slug taint at **every** export consumer via propagation |
 | `build-captions.ts` `*.segments.json` join | `chapter.slug` | `sanitizeIdSegment(chapter.slug)` |
 | `export.ts` `resolveArtifactPath` / `outPath` / `buildPath` | `job.filename` (slug(title) + validated suffix; also manifest-rehydrated) | `sanitizeIdSegment(filename)` at each join — clears the `unlink`/`rm`/`sendFile` sinks + the `outPath`-derived sinks inside `build-m4b` / `build-codec-zip` (no edits needed there) |
 | `build-mp3-zip.ts` / `build-mp3-folder.ts` staging filename join | `sanitiseForZip(chapter.title)` | `sanitizeIdSegment(entryName)` on the **filesystem** join; the pretty name stays the zip label |
@@ -81,7 +81,7 @@ this justification.
 Paired automated regression tests (all fail before the fix, pass after — the two
 subtle ones verified empirically for the JS semantics they rely on):
 
-- `chapter-audio-file.test.ts` — a `../evil` / `..\evil` slug does **not** reach
+- `take-fields.finder.test.ts` (was `chapter-audio-file.test.ts` before #4319) — a `../evil` / `..\evil` slug does **not** reach
   a file planted one level above the audio root (returns `null`); legit slugs
   unchanged.
 - `sync-folder.test.ts` — a `../escape` filename / book sub-folder stays under

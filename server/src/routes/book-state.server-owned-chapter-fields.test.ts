@@ -198,7 +198,7 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     const stale = structuredClone(seedChapters());
     writeState(withOverlay(seedChapters(), 1, STAMP));
     const incoming = stale.map((c) =>
-      c.id === 2 ? { ...c, title: 'Two (edited)', excluded: true } : c,
+      c.id === 2 ? { ...c, title: 'Two (edited)' } : c,
     );
 
     const res = await putChapters(incoming);
@@ -207,7 +207,6 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     const ch = readChapters();
     const c2 = ch.find((c) => c.id === 2)!;
     expect(c2.title).toBe('Two (edited)');
-    expect(c2.excluded).toBe(true);
     expect(ch.find((c) => c.id === 1)!.duration).toBe(STAMP.duration);
   });
 
@@ -227,34 +226,32 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
     expect(c1.audioQa).toEqual(STAMP.audioQa);
   });
 
-  it("G. a stale pre-reorder copy gets no other chapter's uuid or stamps", async () => {
+  it("G. a stale pre-reorder copy that would rebind slugs is refused (#4341)", async () => {
+    /* Before #4341 this PUT was accepted and the stamps were kept off the wrong
+       chapters; now a matched chapter may not change its slug, so the PUT is
+       refused and nothing is written. */
     writeState([
       { id: 1, title: 'Two', slug: '01-two', uuid: 'u-2', duration: '00:20:00' },
       { id: 2, title: 'One', slug: '02-one', uuid: 'u-1', duration: '00:10:00' },
     ]);
+    const before = readFileSync(statePathOf(bookDir), 'utf8');
 
     const res = await putChapters([
       { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
       { id: 2, title: 'Two', slug: '02-two', uuid: 'u-2' },
     ]);
-    expect(res.status).toBe(200);
-
-    const ch = readChapters();
-    const one = ch.find((c) => c.title === 'One')!;
-    const two = ch.find((c) => c.title === 'Two')!;
-    expect(one.duration).toBeUndefined();
-    expect(two.duration).toBeUndefined();
-    expect(one.uuid).not.toBe('u-2');
-    expect(two.uuid).not.toBe('u-1');
-    expect(new Set(ch.map((c) => c.uuid)).size).toBe(ch.length);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('slug_bound');
+    expect(readFileSync(statePathOf(bookDir), 'utf8')).toBe(before);
   });
 
-  it('H. a stale pre-merge copy never duplicates a uuid or borrows a stamp', async () => {
+  it('H. a stale pre-merge copy that would rebind a slug is refused (#4341)', async () => {
     writeState([
       { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
       { id: 2, title: 'Two', slug: '02-two', uuid: 'u-2' },
       { id: 3, title: 'Four', slug: '03-four', uuid: 'u-4', duration: '00:40:00' },
     ]);
+    const before = readFileSync(statePathOf(bookDir), 'utf8');
 
     const res = await putChapters([
       { id: 1, title: 'One', slug: '01-one', uuid: 'u-1' },
@@ -262,13 +259,23 @@ describe('PUT /:bookId/state slice:state — server-owned chapter fields (#3683)
       { id: 3, title: 'Three', slug: '03-three', uuid: 'u-3' },
       { id: 4, title: 'Four', slug: '04-four', uuid: 'u-4' },
     ]);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('slug_bound');
+    expect(readFileSync(statePathOf(bookDir), 'utf8')).toBe(before);
+  });
 
-    const ch = readChapters();
-    expect(new Set(ch.map((c) => c.uuid)).size).toBe(ch.length);
-    expect(ch.find((c) => c.title === 'Three')!.duration).toBeUndefined();
-    expect(ch.find((c) => c.title === 'Four')!.duration).toBeUndefined();
-    expect(ch.find((c) => c.title === 'Four')!.uuid).not.toBe('u-4');
-    expect(ch.find((c) => c.title === 'Three')!.uuid).not.toBe('u-4');
+  it('U1. a client audioTakeId is dropped; the disk value (or none) is stored (N13)', async () => {
+    const CLIENT = 'zzzzzzzzzzzzzzzz';
+    // Disk has a take id: the disk value wins.
+    writeState(withOverlay(seedChapters(), 1, { audioTakeId: 'abcdefghijklmnop' }));
+    const withDisk = await putChapters(withOverlay(seedChapters(), 1, { audioTakeId: CLIENT }));
+    expect(withDisk.status).toBe(200);
+    expect(readChapters().find((c) => c.id === 1)!.audioTakeId).toBe('abcdefghijklmnop');
+
+    // Disk has none: the client value is not stored at all.
+    writeState(seedChapters());
+    const noDisk = await putChapters(withOverlay(seedChapters(), 1, { audioTakeId: CLIENT }));
+    expect(noDisk.status).toBe(200);
+    expect('audioTakeId' in readChapters().find((c) => c.id === 1)!).toBe(false);
   });
 });

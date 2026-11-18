@@ -22,7 +22,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, link, mkdir, stat, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, liveAudioPath } from '../workspace/chapter-take.js';
 import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
 import { artistForExport } from './narrator-credit.js';
@@ -84,7 +84,7 @@ export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
     const snapshots: string[] = [];
     for (let i = 0; i < resolved.length; i++) {
       signal?.throwIfAborted();
-      const snapshotPath = join(stagingDir, `chapter-${i}.mp3`);
+      const snapshotPath = liveAudioPath(stagingDir, `chapter-${i}`, 'mp3');
       try {
         await link(resolved[i].mp3Path, snapshotPath);
       } catch {

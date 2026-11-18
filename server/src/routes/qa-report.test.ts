@@ -97,6 +97,12 @@ vi.mock('../audio/render-integrity/aggregate.js', async (importOriginal) => {
   };
 });
 
+/* #4235 — observe the post-audition tier reconcile; the real one would POST to the sidecar. */
+vi.mock('../tts/ensure-sidecar-loaded.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/ensure-sidecar-loaded.js')>();
+  return { ...actual, reconcileResidentQwenTiers: vi.fn(async () => {}) };
+});
+
 const AUTHOR = 'QA Report Test';
 const SERIES = 'Standalones';
 const TITLE = 'QA Report Book';
@@ -105,6 +111,7 @@ let workspaceRoot: string;
 let bookDir: string;
 let app: Express;
 let bookId: string;
+let bookIdB: string;
 /* Dynamically imported inside beforeAll, AFTER process.env.WORKSPACE_DIR is
    set below — generation.ts (and, transitively, aggregate.ts) statically
    import workspace/paths.js, whose WORKSPACE_ROOT is computed once at
@@ -114,7 +121,9 @@ let bookId: string;
    default workspace dir, before the tempdir below even exists). */
 let __registerFakeJobForTest: typeof import('./generation.js').__registerFakeJobForTest;
 let __awaitScoringSettled: typeof import('./generation.js').__awaitScoringSettled;
+let registerSplice: typeof import('./chapter-job-coordination.js').registerSplice;
 let scoreBook: typeof import('../audio/render-integrity/aggregate.js').scoreBook;
+let reconcileResidentQwenTiers: typeof import('../tts/ensure-sidecar-loaded.js').reconcileResidentQwenTiers;
 /* Captured (rather than a static top-level `import * as cfg`) so the
    vi.spyOn below reliably intercepts the SAME binding generation.ts's
    `triggerScoring` resolves — mirrors generation.test.ts's own
@@ -136,6 +145,7 @@ beforeAll(async () => {
   // to-be-mocked module.
   const aggregateModule = await import('../audio/render-integrity/aggregate.js');
   scoreBook = aggregateModule.scoreBook;
+  reconcileResidentQwenTiers = (await import('../tts/ensure-sidecar-loaded.js')).reconcileResidentQwenTiers;
 
   const { qaReportRouter } = await import('./qa-report.js');
   const { makeBookId } = await import('../workspace/paths.js');
@@ -143,6 +153,7 @@ beforeAll(async () => {
   const configMod = await import('../config/resolver.js');
   __registerFakeJobForTest = generationModule.__registerFakeJobForTest;
   __awaitScoringSettled = generationModule.__awaitScoringSettled;
+  registerSplice = (await import('./chapter-job-coordination.js')).registerSplice;
   configModule = configMod;
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
@@ -156,6 +167,32 @@ beforeAll(async () => {
       bookId,
       manuscriptId: 'm_qa_report_test',
       title: TITLE,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.md',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+
+  /* A second real book, so a score pass can be genuinely in flight on "another book". */
+  const TITLE_B = 'QA Report Book B';
+  bookIdB = makeBookId(AUTHOR, SERIES, TITLE_B);
+  const bookDirB = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE_B);
+  mkdirSync(join(bookDirB, '.audiobook'), { recursive: true });
+  mkdirSync(join(bookDirB, 'audio'), { recursive: true });
+  writeFileSync(join(bookDirB, 'manuscript.md'), '# Chapter One\nbody.');
+  writeFileSync(
+    join(bookDirB, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: bookIdB,
+      manuscriptId: 'm_qa_report_test_b',
+      title: TITLE_B,
       author: AUTHOR,
       series: SERIES,
       seriesPosition: null,
@@ -267,6 +304,164 @@ describe('POST /:bookId/resume-scoring', () => {
     } finally {
       cleanup();
     }
+  });
+
+  /* #4235 — a splice / QA repair is invisible to isGenerationActive but must still hold off
+     the post-audition tier reconcile that runs downstream of scoreBook. */
+  it('returns 409 and never scores while a splice is in flight, then releases', async () => {
+    vi.mocked(scoreBook).mockClear();
+    const cleanup = registerSplice(bookId, 1, new AbortController());
+    let released = false;
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('A chapter fix or repair is running for this book — resume scoring once it finishes.');
+      await __awaitScoringSettled(bookId);
+      expect(scoreBook).not.toHaveBeenCalled();
+      cleanup();
+      released = true;
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        const after = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(after.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
+      }
+    } finally {
+      if (!released) cleanup();
+    }
+  });
+
+  it("another book's in-flight splice does not block this book", async () => {
+    vi.mocked(scoreBook).mockClear();
+    vi.mocked(reconcileResidentQwenTiers).mockClear();
+    vi.mocked(scoreBook).mockResolvedValueOnce({ usedQwenTiers: { keep06: true, keep17: false }, mismatchCount: 0 });
+    const cleanup = registerSplice(`${bookId}-other`, 1, new AbortController());
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+      expect(res.status).toBe(202);
+      await __awaitScoringSettled(bookId);
+      /* #4235 — the 202 stands (per-book 409 is not the guard), but the shared sidecar's
+         tier must not be evicted while the other book's splice is registered. */
+      expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+    } finally {
+      configSpy.mockRestore();
+      cleanup();
+    }
+  });
+
+  /* #4235 — the eviction is decided when the reconcile runs, not at request time. */
+  describe('post-audition tier reconcile (#4235)', () => {
+    const usedTiers = { usedQwenTiers: { keep06: true, keep17: false }, mismatchCount: 0 };
+
+    it('control: nothing active, the reconcile still runs', async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      vi.mocked(scoreBook).mockResolvedValueOnce(usedTiers);
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledWith({ keep06: true, keep17: false });
+      } finally {
+        configSpy.mockRestore();
+      }
+    });
+
+    it("a splice on another book skips the reconcile (202 stands)", async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      vi.mocked(scoreBook).mockResolvedValueOnce(usedTiers);
+      const cleanup = registerSplice('other-author--standalones--other-book', 3, new AbortController());
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalled();
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
+        cleanup();
+      }
+    });
+
+    it('a render running on another book skips the reconcile (202 stands)', async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      vi.mocked(scoreBook).mockResolvedValueOnce(usedTiers);
+      const cleanup = __registerFakeJobForTest('other-author--standalones--other-book', []);
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalled();
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
+        cleanup();
+      }
+    });
+
+    it('a score pass in flight on another book skips the reconcile (202 stands)', async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      let releaseB!: () => void;
+      let enteredB!: () => void;
+      const enteredBP = new Promise<void>((r) => (enteredB = r));
+      vi.mocked(scoreBook).mockImplementationOnce(async () => {
+        enteredB();
+        await new Promise<void>((r) => (releaseB = r));
+        return { usedQwenTiers: { keep06: false, keep17: true }, mismatchCount: 0 };
+      });
+      vi.mocked(scoreBook).mockResolvedValueOnce(usedTiers);
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        expect((await request(app).post(`/api/books/${bookIdB}/resume-scoring`)).status).toBe(202);
+        await enteredBP;
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalledTimes(2);
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        releaseB?.();
+        await __awaitScoringSettled(bookIdB);
+        configSpy.mockRestore();
+      }
+    });
+
+    it('a splice registered on the same book AFTER the 202 skips the reconcile', async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      let release!: () => void;
+      let entered!: () => void;
+      const enteredP = new Promise<void>((r) => (entered = r));
+      vi.mocked(scoreBook).mockImplementationOnce(async () => {
+        entered();
+        await new Promise<void>((r) => (release = r));
+        return usedTiers;
+      });
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      let cleanup: (() => void) | undefined;
+      try {
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await enteredP;
+        cleanup = registerSplice(bookId, 1, new AbortController());
+        release();
+        await __awaitScoringSettled(bookId);
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        cleanup?.();
+        configSpy.mockRestore();
+      }
+    });
   });
 
   it('returns 404 for an unknown bookId', async () => {

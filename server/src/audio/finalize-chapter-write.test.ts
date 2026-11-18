@@ -9,7 +9,7 @@
    boundary, matching the rest of the audio suite. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +140,20 @@ describe('finalizeChapterAudioWrite onEncoded', () => {
     const result = await finalizeChapterAudioWrite(baseInput());
     expect(result.segmentCount).toBe(1);
     expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+  });
+});
+
+/* J1 (#4333, spec §7 Phase 1 step 2) - the job writer names its take through the
+   take module; the on-disk names stay exactly today's, with no `*.tmp-*` left. */
+describe('finalizeChapterAudioWrite take names (J1, #4333)', () => {
+  it('an m4a render leaves exactly <slug>.m4a and its three sidecars, no temp file', async () => {
+    await finalizeChapterAudioWrite({ ...baseInput(), audioFormat: 'aac-m4a' });
+    expect(readdirSync(audioRoot).sort()).toEqual([
+      `${SLUG}.lufs.json`,
+      `${SLUG}.m4a`,
+      `${SLUG}.peaks.json`,
+      `${SLUG}.segments.json`,
+    ]);
   });
 });
 

@@ -8,8 +8,15 @@ import type { Revision, RevisionsState, TimelineEntry } from '../lib/types';
 import { RevisionOpFailure, type RevisionOpCode } from '../lib/revision-op-failure';
 
 type MockFile = Omit<RevisionsState, 'bookId'>;
-interface Book { file: MockFile; previous: Set<number>; live: Set<number> }
-export interface MockRevisionsSeed { state?: Partial<MockFile>; previousChapterIds?: number[]; liveChapterIds?: number[] }
+export type MockAudioExt = 'mp3' | 'm4a';
+interface Book { file: MockFile; previous: Set<number>; live: Set<number>; audioExt: MockAudioExt }
+export interface MockRevisionsSeed {
+  state?: Partial<MockFile>;
+  previousChapterIds?: number[];
+  liveChapterIds?: number[];
+  /** File type of the book's chapter audio. Default mp3, which serves the bundled stubs. */
+  audioExt?: MockAudioExt;
+}
 
 const books = new Map<string, Book>();
 let mintSeq = 0;
@@ -19,7 +26,7 @@ const mintFileId = () => `${String(Date.now()).padStart(15, '0')}-mock${(mintSeq
 
 function book(bookId: string): Book {
   let b = books.get(bookId);
-  if (!b) { b = { file: emptyFile(), previous: new Set(), live: new Set() }; books.set(bookId, b); }
+  if (!b) { b = { file: emptyFile(), previous: new Set(), live: new Set(), audioExt: 'mp3' }; books.set(bookId, b); }
   return b;
 }
 const view = (bookId: string, b: Book): RevisionsState => ({ bookId, ...clone(b.file) });
@@ -43,11 +50,13 @@ export function seedMockRevisions(bookId: string, seed: MockRevisionsSeed): void
     file: { ...emptyFile(), ...clone(seed.state ?? {}) },
     previous: new Set(seed.previousChapterIds ?? []),
     live: new Set(seed.liveChapterIds ?? []),
+    audioExt: seed.audioExt ?? 'mp3',
   });
 }
 export function resetMockRevisions(): void { books.clear(); }
 export function hasMockRevisions(bookId: string): boolean { return books.has(bookId); }
 export function getMockRevisions(bookId: string): RevisionsState { return view(bookId, book(bookId)); }
+export function mockAudioExt(bookId: string): MockAudioExt { return book(bookId).audioExt; }
 export function mockHasPrevious(bookId: string, chapterId: number): boolean { return book(bookId).previous.has(chapterId); }
 
 function findOrDone(bookId: string, revisionId: string, kind: 'accepted' | 'rejected'): { b: Book; entry?: Revision; done?: RevisionsState } {

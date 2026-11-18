@@ -80,6 +80,7 @@ function VoiceMatchRow({
   const vd = report.voiceDrift;
   const [resuming, setResuming] = useState(false);
   const [resumed, setResumed] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const classification = classifyVoiceMatch(report);
 
   if (classification.kind === 'noEligible') {
@@ -125,6 +126,7 @@ function VoiceMatchRow({
             <button
               onClick={async () => {
                 setResuming(true);
+                setResumeError(null);
                 try {
                   await api.resumeScoring(bookId);
                   // Deliberately stays disabled after success (does NOT revert to
@@ -134,13 +136,14 @@ function VoiceMatchRow({
                   // book and useQaReport re-fetches. Reverting to "Resume scoring"
                   // here would invite a confusing repeat click.
                   setResumed(true);
-                } catch {
-                  // Any rejection lands here, including a 409 (a resume-triggered
-                  // scoreBook run is already in progress) — api.resumeScoring does
+                } catch (e) {
+                  // Any rejection lands here, including a 409 (a generation run, or
+                  // a splice / QA repair, is in progress) — api.resumeScoring does
                   // NOT swallow the 409, it throws just like any other failure (see
-                  // realResumeScoring in api.ts). There's no special-cased handling:
-                  // the button simply re-enables so the user can retry, same as for
-                  // a network error or any other rejection.
+                  // realResumeScoring in api.ts). The button re-enables so the user
+                  // can retry; a 409's server sentence (#4235) is shown beside it so
+                  // the refusal is not silent. A network error shows nothing.
+                  setResumeError((e as { code?: string }).code === 'resume-scoring-refused' ? (e as Error).message : null);
                   setResuming(false);
                 }
               }}
@@ -150,6 +153,11 @@ function VoiceMatchRow({
             >
               {resuming ? 'Resuming…' : 'Resume scoring'}
             </button>
+          )}
+          {!resumed && resumeError && (
+            <span role="status" className="text-[11px] text-ink/60">
+              {resumeError}
+            </span>
           )}
           {!resumed && jobStartBlockedReason && (
             <span id="qa-resume-scoring-blocked" className="text-[11px] text-ink/60">

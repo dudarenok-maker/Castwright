@@ -27,8 +27,6 @@ import {
   loadAnalysisCache,
   reachedConfirm,
 } from '../store/analysis-cache.js';
-import { formatDuration } from '../audio/format-duration.js';
-import { engineBreakdownFromSnapshots } from '../audio/engine-breakdown.js';
 import { normaliseBookLanguage, resolveEligibleEngines } from '../tts/language.js';
 import { ALL_TTS_ENGINES, type TtsEngine } from '../tts/model-keys.js';
 import {
@@ -39,7 +37,14 @@ import {
   type SeriesMemorySummary,
 } from './series-memory.js';
 import { voiceKindFor } from './voice-kind.js';
-import { chapterAudioExists } from './chapter-audio-file.js';
+import {
+  chapterAudioExists,
+  deriveTakeFields,
+  healTakeFields,
+  livePartPath,
+  TAKE_STATE_FIELDS,
+  type TakeFields,
+} from './take-fields.js';
 import { describeVoice } from '../tts/voice-mapping.js';
 
 export type LibraryBookStatus =
@@ -111,6 +116,8 @@ export interface BookStateJson {
         `synthesizedAt`. Used as a tie-breaker for cast-drift detection
         (was the cast confirmed before or after the audio was made?). */
     audioRenderedAt?: string;
+    /** Take identity of the live take (spec §4.1). Nothing writes it yet. */
+    audioTakeId?: string;
     /** Sticky flag set by `renameChapter` (and by merge/split when an
         explicit title override is supplied). Locks the title against
         both heuristic refresh paths: the opportunistic
@@ -503,14 +510,17 @@ interface CastJsonForScan {
   characters?: Array<{ id?: string; voiceId?: string }>;
 }
 
-/* Segments file shape — durationSec for runtime totals; modelKey +
-   synthesizedAt for lazy backfill of state.json's audioModelKey /
+/* Segments file shape — durationSec for runtime totals; the take fields the heal derives (modelKey +
+   synthesizedAt, snapshots, qa) for lazy backfill of state.json's audioModelKey /
    audioRenderedAt fields on legacy chapters that pre-date those fields
    landing in state.json (see backfillAudioModelKeys below). */
 interface SegmentsJsonForScan {
   durationSec?: number;
   modelKey?: string;
   synthesizedAt?: string;
+  takeId?: string;
+  /** The advisory QA verdict; fills `audioQa` when absent (§4.3). */
+  qa?: TakeFields['audioQa'];
   /** Per-character render snapshots — source for the `audioEngines` breakdown
       backfill on chapters that pre-date that field (false-drift fix). */
   characterSnapshots?: Record<string, { voiceEngine?: string; renderedFallbackEngine?: string }>;
@@ -1169,17 +1179,16 @@ export async function collectBooks(): Promise<Array<{ bookDir: string; state: Bo
   return out;
 }
 
-/* The chapter fields a scan self-heal may fill (#3400). */
-const HEALED_KEYS = ['audioModelKey', 'audioRenderedAt', 'duration', 'audioEngines', 'uuid'] as const;
-
 type ChapterHealPatch = {
   id: number;
   slug: string;
   /** The chapter's uuid when the heal read it (undefined before a mint). */
   uuid?: string;
-  set: Partial<BookStateJson['chapters'][number]>;
-  /** `set` was derived from the chapter's segments file: re-derive it under
-   *  the lock instead of trusting the copy computed before the wait. */
+  /** The heal's own non-take field (`uuid`). The take fields are never carried
+   *  here: they are derived from the segments file under the lock. */
+  set: { uuid?: string };
+  /** Fill the chapter's take fields from its segments file, re-derived under
+   *  the lock instead of trusting a copy computed before the wait. */
   fromSegments?: boolean;
 };
 
@@ -1219,22 +1228,23 @@ async function persistHealPatches(
            So a segments-derived fill is re-derived from the file as it is NOW,
            under the lock: one read before the wait would stamp the old take's
            model / render date onto a chapter whose audio was just deleted. */
-        let source = patch.set;
-        if (patch.fromSegments) {
-          source = (await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.set ?? {};
-        }
-        const fill: Partial<typeof ch> = {};
-        for (const key of HEALED_KEYS) {
-          if (source[key] === undefined) continue;
-          const unset = key === 'duration' ? !ch.duration || ch.duration === '00:00' : !ch[key];
-          if (unset) Object.assign(fill, { [key]: source[key] });
-        }
-        if (Object.keys(fill).length === 0) {
+        const derived: TakeFields = patch.fromSegments
+          ? ((await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.derived ?? {})
+          : {};
+        /* The take fields fill through the leaf's rule (absent members only,
+           never `audioTakeId`); `uuid` is the heal's own field. Phase 1 has no
+           journals, so the journal-named set is empty. */
+        const healed: typeof ch = healTakeFields(ch, derived, new Set());
+        if (patch.set.uuid !== undefined && !ch.uuid) healed.uuid = patch.set.uuid;
+        const differs =
+          healed.uuid !== ch.uuid ||
+          TAKE_STATE_FIELDS.some((key) => healed[key] !== ch[key]);
+        if (!differs) {
           chapters.push(ch);
           continue;
         }
         changed = true;
-        chapters.push({ ...ch, ...fill });
+        chapters.push(healed);
       }
       return changed ? { ...fresh, chapters } : null;
     });
@@ -1252,46 +1262,24 @@ async function persistHealPatches(
 async function deriveSegmentsHeal(
   bookDir: string,
   ch: BookStateJson['chapters'][number],
-): Promise<{ durationSec: number; set: Partial<BookStateJson['chapters'][number]> } | null> {
+): Promise<{ durationSec: number; derived: TakeFields } | null> {
   const meta = await readJson<SegmentsJsonForScan>(
-    join(audioDir(bookDir), `${ch.slug}.segments.json`),
+    livePartPath(audioDir(bookDir), ch.slug, 'segments'),
   );
   if (!meta) return null;
   const durationSec =
     typeof meta.durationSec === 'number' && Number.isFinite(meta.durationSec) ? meta.durationSec : 0;
-  const needsModelKey =
-    !ch.audioModelKey && typeof meta.modelKey === 'string' && meta.modelKey.length > 0;
-  const needsRenderedAt =
-    !ch.audioRenderedAt && typeof meta.synthesizedAt === 'string' && meta.synthesizedAt.length > 0;
-  /* Duration backfill: legacy chapters and chapters rendered via code
-     paths that pre-date generation.ts's state.json update block sit at
-     the analysis-seeded '00:00' even after their MP3 is on disk. The
-     segments file always carries the real PCM-measured durationSec, so
-     the same loop that backfills modelKey + renderedAt can repair
-     duration without an extra read. Treat empty + '00:00' as equally
-     unset - both come from `hydrateFromBookState`'s `c.duration ??
-     '00:00'` fallback and the analysis seed. */
-  const needsDuration =
-    (!ch.duration || ch.duration === '00:00') &&
-    typeof meta.durationSec === 'number' &&
-    Number.isFinite(meta.durationSec) &&
-    meta.durationSec > 0;
-  /* Engine breakdown backfill (false-drift fix). Recompute from the render
-     snapshots so a legacy chapter gains the mixed-engine detail. New field,
-     so a simple presence gate - never overwrites an existing breakdown. */
-  const breakdown = meta.characterSnapshots
-    ? engineBreakdownFromSnapshots(meta.characterSnapshots)
-    : {};
-  const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
-  return {
-    durationSec,
-    set: {
-      ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
-      ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
-      ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
-      ...(needsEngines ? { audioEngines: breakdown } : {}),
-    },
-  };
+  /* The take fields derive through the leaf (§4.4): the model key is the
+     EFFECTIVE one (`effectiveAudioModelKey`), never the raw `meta.modelKey`.
+     Duration backfill: legacy chapters and chapters rendered via code paths
+     that pre-date generation.ts's state.json update block sit at the
+     analysis-seeded '00:00' even after their MP3 is on disk; the segments file
+     carries the real PCM-measured durationSec. A non-positive length is not a
+     measurement, so it never fills (`healTakeFields` treats empty + '00:00' as
+     equally unset). */
+  const derived = deriveTakeFields(meta);
+  if (!(durationSec > 0)) delete derived.duration;
+  return { durationSec, derived };
 }
 
 /** Lazy-migrate `audioModelKey` and `audioRenderedAt` onto every chapter
@@ -1322,8 +1310,9 @@ export async function backfillAudioModelKeysFromSegments(
       const heal = await deriveSegmentsHeal(bookDir, ch);
       if (!heal) continue;
       if (!ch.excluded) totalSec += heal.durationSec;
-      if (Object.keys(heal.set).length > 0) {
-        next[i] = { ...ch, ...heal.set };
+      const healed: typeof ch = healTakeFields(ch, heal.derived, new Set());
+      if (TAKE_STATE_FIELDS.some((key) => healed[key] !== ch[key])) {
+        next[i] = healed;
         backfillNeeded = true;
       }
     } catch {
@@ -1340,15 +1329,11 @@ export async function backfillAudioModelKeysFromSegments(
       const patches: ChapterHealPatch[] = [];
       for (let i = 0; i < state.chapters.length; i++) {
         if (next[i] === state.chapters[i]) continue;
-        const set: Partial<BookStateJson['chapters'][number]> = {};
-        for (const key of HEALED_KEYS) {
-          if (next[i][key] !== state.chapters[i][key]) Object.assign(set, { [key]: next[i][key] });
-        }
         patches.push({
           id: state.chapters[i].id,
           slug: state.chapters[i].slug,
           uuid: state.chapters[i].uuid,
-          set,
+          set: {},
           fromSegments: true,
         });
       }

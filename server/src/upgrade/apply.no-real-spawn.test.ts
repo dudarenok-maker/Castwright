@@ -2,7 +2,7 @@
    restarter spawn. node:child_process is mocked so even the red run spawns
    nothing real. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,15 +33,36 @@ describe('createApplySteps never reaches a real spawn under vitest', () => {
     expect(process.env.VITEST).toBeTruthy();
   });
 
-  it('G1: default pipInstall is refused and spawns nothing', async () => {
-    const steps = createApplySteps({ venvDir, log: () => {} });
-    await expect(steps.pipInstall('/rel')).rejects.toThrow(/real spawn refused under vitest/);
-    expect(spawn).toHaveBeenCalledTimes(0);
-    // The GPU probe reached the mock (proves the mock covers the .mjs import)
-    // rather than starting a real powershell/lspci.
-    expect(execSync).toHaveBeenCalled();
-    expect(exec).toHaveBeenCalledTimes(0);
-    expect(execFile).toHaveBeenCalledTimes(0);
+  // detectVendor short-circuits to 'apple' on darwin without probing, so the
+  // GPU probe is only expected off darwin. process.platform is stubbed so both
+  // branches run on every CI OS (#4451); the no-real-spawn assertions hold on all.
+  describe.each([
+    ['darwin', false],
+    ['linux', true],
+    ['win32', true],
+  ])('G1: default pipInstall on %s', (platform, probes) => {
+    const realPlatform = process.platform;
+    beforeEach(() => {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+    });
+
+    it(`is refused, spawns nothing, ${probes ? 'probes' : 'does not probe'} the GPU`, async () => {
+      const steps = createApplySteps({ venvDir, log: () => {} });
+      await expect(steps.pipInstall('/rel')).rejects.toThrow(/real spawn refused under vitest/);
+      expect(spawn).toHaveBeenCalledTimes(0);
+      if (probes) {
+        // The GPU probe reached the mock (proves the mock covers the .mjs
+        // import) rather than starting a real powershell/lspci.
+        expect(execSync).toHaveBeenCalled();
+      } else {
+        expect(execSync).toHaveBeenCalledTimes(0);
+      }
+      expect(exec).toHaveBeenCalledTimes(0);
+      expect(execFile).toHaveBeenCalledTimes(0);
+    });
   });
 
   it('G2: npmCi routes through an injected run and never spawns', async () => {

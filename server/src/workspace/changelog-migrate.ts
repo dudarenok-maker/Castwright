@@ -87,7 +87,7 @@ export async function migrateLegacyChangeLogs(): Promise<MigrateResult> {
        timeout behind a slow holder) skips THAT book only; the next startup
        retries it (PR #3714 review pass 3). */
     try {
-      await withBookOpAtDir(walkedDir, (bookDir) => migrateBook(bookDir, result));
+      await withBookOpAtDir(walkedDir, (handle) => migrateBook(handle.bookDir, result));
     } catch (err) {
       console.warn('[changelog-migrate] skipping a book this startup', err);
     }

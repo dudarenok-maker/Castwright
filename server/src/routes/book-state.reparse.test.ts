@@ -161,7 +161,7 @@ function seedSiblingSentinels() {
 async function awaitSiblingArms() {
   await vi.waitFor(() => {
     expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(false);
-    expect(existsSync(join(bookDir, 'audio'))).toBe(false);
+    expect(existsSync(join(bookDir, 'audio', '01-chapter-one.mp3'))).toBe(false);
     expect(existsSync(cachePath)).toBe(false);
   });
 }
@@ -337,6 +337,23 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     err.mockRestore();
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+  });
+});
+
+describe('reparse handler — keeps quarantined audio (K7)', () => {
+  it('leaves audio/.orphaned/<event>/<file> and removes every other entry', async () => {
+    const orphan = join(bookDir, 'audio', '.orphaned', 'evt-1', 'old.mp3');
+    mkdirSync(dirname(orphan), { recursive: true });
+    writeFileSync(orphan, 'KEEP');
+    mkdirSync(join(bookDir, 'audio', 'nested', 'deeper'), { recursive: true });
+    writeFileSync(join(bookDir, 'audio', 'nested', 'deeper', 'x.mp3'), 'GONE');
+    writeFileSync(join(bookDir, 'audio', '01-chapter-one.mp3'), 'LIVE');
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    expect(res.status).toBe(200);
+    expect(readFileSync(orphan, 'utf8')).toBe('KEEP');
+    expect(existsSync(join(bookDir, 'audio', 'nested'))).toBe(false);
+    expect(existsSync(join(bookDir, 'audio', '01-chapter-one.mp3'))).toBe(false);
+    rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
   });
 });
 

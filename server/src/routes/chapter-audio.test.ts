@@ -6,7 +6,7 @@
    fallback narrative has been retired; the `audio.wav` route is no longer
    registered and a legacy `.wav` on disk is invisible to the locator. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -135,8 +135,12 @@ function rmIfExists(name: string) {
 
 function resetAudio() {
   rmIfExists(`${SLUG}.mp3`);
+  rmIfExists(`${SLUG}.m4a`);
+  rmIfExists(`${SLUG}.ogg`);
   rmIfExists(`${SLUG}.wav`);
   rmIfExists(`${SLUG}.previous.mp3`);
+  rmIfExists(`${SLUG}.previous.m4a`);
+  rmIfExists(`${SLUG}.previous.ogg`);
   rmIfExists(`${SLUG}.previous.segments.json`);
   rmIfExists(`${SLUG}.peaks.json`);
   rmIfExists(`${SLUG}.previous.peaks.json`);
@@ -239,6 +243,21 @@ function writeChapterSegments(segments: unknown[], name = `${SLUG}.segments.json
 }
 
 describe('chapter-audio router', () => {
+  describe.each(['mp3', 'm4a', 'ogg'] as const)('R4: live meta for a .%s book (#4331)', (ext) => {
+    beforeAll(() => {
+      resetAudio();
+      writeFileSync(join(audioRoot, `${SLUG}.${ext}`), Buffer.alloc(64, 1));
+    });
+    afterAll(() => resetAudio());
+
+    it('returns the same url suffix and the live segments', async () => {
+      const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio`);
+      expect(res.status).toBe(200);
+      expect(res.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio.${ext}`);
+      expect(res.body.segments).toHaveLength(2);
+    });
+  });
+
   describe('mp3 chapter', () => {
     beforeAll(() => {
       resetAudio();
@@ -519,6 +538,84 @@ describe('chapter-audio router', () => {
         expect(res.headers['accept-ranges']).toBe('bytes');
       });
 
+      /* #4337 A1/A2: a previous take keeps its own file type end to end. */
+      describe.each([
+        ['m4a', 'audio/mp4', Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64, 0x43)])],
+        ['ogg', 'audio/ogg', Buffer.concat([Buffer.from('OggS'), Buffer.alloc(64, 0x44)])],
+      ] as const)('previous .%s take', (ext, mime, bytes) => {
+        beforeAll(() => {
+          resetAudio();
+          writeMp3();
+          writeFileSync(join(audioRoot, `${SLUG}.previous.${ext}`), bytes);
+          writePreviousSegments();
+        });
+
+        it(`meta url ends in /audio/previous.${ext} and the file is served as ${mime}`, async () => {
+          const meta = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
+          expect(meta.status).toBe(200);
+          expect(meta.body.url).toBe(
+            `/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.${ext}`,
+          );
+          const file = await request(app)
+            .get(meta.body.url)
+            .buffer(true)
+            .parse((r, cb) => {
+              const chunks: Buffer[] = [];
+              r.on('data', (c: Buffer) => chunks.push(c));
+              r.on('end', () => cb(null, Buffer.concat(chunks)));
+            });
+          expect(file.status).toBe(200);
+          expect(file.headers['content-type']).toMatch(new RegExp(mime.replace('/', '\\/')));
+          expect(Buffer.compare(file.body as Buffer, bytes)).toBe(0);
+        });
+
+        it('A3: previous.mp3 404s when the preserved take is not an mp3', async () => {
+          const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous.mp3`);
+          expect(res.status).toBe(404);
+        });
+      });
+
+      /* #4319 review pass 1: the e2e runs in mock mode, so a SERVER regression
+         would pass it. This drives the real preserve over a real m4a take and
+         then the real previous-take routes. */
+      describe('an M4A book: a re-render preserves the take under its real extension', () => {
+        const OLD_M4A = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64, 0x41)]);
+        const NEW_M4A = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64, 0x42)]);
+        beforeAll(async () => {
+          resetAudio();
+          writeFileSync(join(audioRoot, `${SLUG}.m4a`), OLD_M4A);
+          writePreviousSegments();
+          const { preserveExistingAsPrevious } = await import('../workspace/chapter-take.js');
+          expect((await preserveExistingAsPrevious(audioRoot, SLUG)).preserved).toBe(true);
+          writeFileSync(join(audioRoot, `${SLUG}.m4a`), NEW_M4A);
+        });
+        const binary = (r: request.Response, cb: (err: Error | null, body: Buffer) => void) => {
+          const chunks: Buffer[] = [];
+          (r as unknown as NodeJS.ReadableStream).on('data', (c: Buffer) => chunks.push(c));
+          (r as unknown as NodeJS.ReadableStream).on('end', () => cb(null, Buffer.concat(chunks)));
+        };
+
+        it('answers the old bytes as audio/mp4 at /audio/previous.m4a, and the new bytes at /audio.m4a', async () => {
+          const meta = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
+          expect(meta.status).toBe(200);
+          expect(meta.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.m4a`);
+          const prevFile = await request(app).get(meta.body.url).buffer(true).parse(binary);
+          expect(prevFile.status).toBe(200);
+          expect(prevFile.headers['content-type']).toMatch(/audio\/mp4/);
+          expect(Buffer.compare(prevFile.body as Buffer, OLD_M4A)).toBe(0);
+
+          const liveFile = await request(app).get(`/api/books/${bookId}/chapters/1/audio.m4a`).buffer(true).parse(binary);
+          expect(liveFile.status).toBe(200);
+          expect(Buffer.compare(liveFile.body as Buffer, NEW_M4A)).toBe(0);
+        });
+
+        it('has no .previous.mp3 and answers it 404', async () => {
+          expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+          const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous.mp3`);
+          expect(res.status).toBe(404);
+        });
+      });
+
       it('GET audio/previous 404s when nothing preserved', async () => {
         resetAudio();
         writeMp3();
@@ -571,6 +668,79 @@ describe('chapter-audio router', () => {
         expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
         expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
         expect(existsSync(revisionsFile())).toBe(false);
+      });
+      it('#4339: mints a take id into a legacy previous take before restoring it', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
+        const res = await request(app).post(RU());
+        expect(res.status).toBe(204);
+        const restored = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+        expect(restored.takeId).toMatch(/^[a-z2-7]{16}$/);
+      });
+      describe('#4319 state.json stays at the take that is live (no re-stamp from a take this request deletes)', () => {
+        const statePath = () => join(bookDir, '.audiobook', 'state.json');
+        const chapterNow = () => JSON.parse(readFileSync(statePath(), 'utf8')).chapters[0] as Record<string, unknown>;
+        const liveSegs = () => join(audioRoot, `${SLUG}.segments.json`);
+        let originalState = '';
+        beforeEach(() => {
+          originalState = readFileSync(statePath(), 'utf8');
+          const st = JSON.parse(originalState);
+          st.chapters[0] = { ...st.chapters[0], audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } };
+          writeFileSync(statePath(), JSON.stringify(st));
+        });
+        afterEach(() => {
+          writeFileSync(statePath(), originalState);
+          rmIfExists(`${SLUG}.segments.json`);
+        });
+
+        it('orphan-segments shape (no live audio): state.json is left at the previous take that is restored', async () => {
+          resetAudio(); writePreviousMp3(); writePreviousSegments();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b' }));
+          const before = chapterNow();
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+          expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+          expect(chapterNow()).toEqual(before);
+        });
+
+        it('deletes audioTakeId from state.json: state never names the take it just deleted', async () => {
+          const st = JSON.parse(readFileSync(statePath(), 'utf8'));
+          st.chapters[0] = { ...st.chapters[0], audioTakeId: 'bbbbbbbbbbbbbbbb' };
+          writeFileSync(statePath(), JSON.stringify(st));
+          resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b', takeId: 'bbbbbbbbbbbbbbbb' }));
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+          expect('audioTakeId' in chapterNow()).toBe(false);
+        });
+
+        it('404 with no previous take keeps the live take id in state.json: nothing was replaced, so nothing is cleared', async () => {
+          const st = JSON.parse(readFileSync(statePath(), 'utf8'));
+          st.chapters[0] = { ...st.chapters[0], audioTakeId: 'bbbbbbbbbbbbbbbb' };
+          writeFileSync(statePath(), JSON.stringify(st));
+          resetAudio(); writeMp3();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-A', modelKey: 'm-b', takeId: 'bbbbbbbbbbbbbbbb' }));
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(404);
+          expect(chapterNow().audioTakeId).toBe('bbbbbbbbbbbbbbbb');
+        });
+
+        it('a live take about to be replaced is not stamped into state.json first', async () => {
+          resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b' }));
+          const before = chapterNow();
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+          expect(chapterNow()).toEqual(before);
+        });
+      });
+      it('a corrupt live segments.json does not block restore-unrecorded', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        writeFileSync(join(audioRoot, `${SLUG}.segments.json`), '{ not json');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+        } finally { warn.mockRestore(); writeChapterSegments(DEFAULT_SEGMENTS); }
       });
       it('404 no_previous_audio when nothing was preserved', async () => {
         resetAudio(); writeMp3();

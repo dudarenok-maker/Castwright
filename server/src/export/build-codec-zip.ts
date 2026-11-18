@@ -22,7 +22,7 @@ import type { ReadStream } from 'node:fs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { ZipFile } from 'yazl';
 import { audioDir } from '../workspace/paths.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio } from '../workspace/chapter-take.js';
 import { createZipWritePipeline, ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
 

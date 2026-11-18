@@ -118,6 +118,7 @@ import {
   getMockRevisions,
   hasMockRevisions,
   mockHasPrevious,
+  mockAudioExt,
   resetMockRevisions,
   seedMockRevisions,
 } from '../mocks/mock-revisions';
@@ -2145,7 +2146,7 @@ async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): 
      function's already-correct non-adjacent spacing rather than reinventing
      timings (spec's adversarial review round 2 flagged that risk explicitly). */
   return {
-    url: stubAudioB,
+    url: mockAudioExt(bookId) === 'm4a' ? `/mock-audio/${bookId}/${chapterId}/audio.m4a` : stubAudioB,
     durationSec: totalSec,
     peaks,
     sampleRate: 44100,
@@ -2194,7 +2195,10 @@ async function mockGetChapterAudioPrevious({
   if (!mockHasPrevious(bookId, chapterId)) return null;
   const totalSec = parseDuration(duration || '10:00');
   return {
-    url: stubAudioA,
+    url:
+      mockAudioExt(bookId) === 'm4a'
+        ? `/mock-audio/${bookId}/${chapterId}/audio/previous.m4a`
+        : stubAudioA,
     durationSec: totalSec,
     peaks: [],
     sampleRate: 44100,
@@ -2670,7 +2674,13 @@ async function realResumeScoring(bookId: string): Promise<void> {
     throw new Error(
       `Resume scoring failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
-  if (res.status === 409) throw Object.assign(new Error('Book is currently generating.'), { code: 'generation-active' });
+  if (res.status === 409) {
+    /* Two distinct refusals share the 409: a live generation run, or (#4235) a splice /
+       QA repair on the book. The server's fixed, path-free sentence says which. */
+    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+    const message = typeof body?.error === 'string' && body.error ? body.error : 'Scoring cannot resume right now.';
+    throw Object.assign(new Error(message), { code: 'resume-scoring-refused' });
+  }
 }
 
 async function mockResumeScoring(_bookId: string): Promise<void> {
