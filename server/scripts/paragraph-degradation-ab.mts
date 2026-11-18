@@ -41,9 +41,12 @@
    WITHOUT writing (primeUserSettingsCacheReadOnly), so every knob resolves as in production, and the
    analyzer is built on getResolvedOllamaUrl() (env, then the saved Admin override, then the default).
    Each capture saves the effective value of EVERY analyzer.* registry key, the reasoning level, the
-   resolved request payload, the capacity and the effective stage-2 chunk budget
-   (resolveStage2ChunkCharBudget(capacity), not the configured cap). A re-capture under any difference
-   in those is refused like a different --model, and the refusal names the differing keys. A knob that
+   resolved request payload as a sha256 DIGEST of its canonical JSON (never the payload: it can hold an
+   api key, and extra-params.ts forbids logging or persisting one), the capacity and the effective
+   stage-2 chunk budget (resolveStage2ChunkCharBudget(capacity), not the configured cap). Credentials in
+   the Ollama URL are recorded as a digest too. A re-capture under any difference in those is refused
+   like a different --model, and the refusal names the differing keys (a payload as `payload (changed)`,
+   with no values). A knob that
    is not an analyzer.* key and not the payload or reasoning level is not covered.
 
    Harness vs production (§4.3): capacity comes from resolveCapacity for the
@@ -53,6 +56,7 @@
 
 import '../src/load-env.js'; // server/.env into process.env before any server module reads it, as src/index.ts does
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -96,25 +100,45 @@ export interface EffectiveSettings {
   effectiveChunkBudget: number;
   escalation: string;
   reasoning: unknown;
-  /** The saved request payload (temperature, top_p, ...), merged last into the wire body. */
-  payload: unknown;
+  /** A sha256 of the saved request payload's canonical JSON (null when none). Never the payload: it can hold an api key. */
+  payload: string | null;
   /** The effective value of every analyzer.* registry key, as configValue resolves it (url, numGpu, fractions, ...). */
   knobs: Record<string, number | boolean | string>;
+}
+
+/** JSON with object keys sorted at every depth and nesting kept, so `{a:{b:1}}` and `{"a.b":1}` differ. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v !== null && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
+
+/** A URL knob (analyzer.ollama.url) can carry `user:pass@`; keep the rest readable, the credentials as a digest. */
+function redactUserinfo(s: string): string {
+  return s.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i, (_m, scheme: string, info: string) => `${scheme}<credentials sha256:${sha256(info).slice(0, 12)}>@`);
 }
 
 export function effectiveSettings(model: string): EffectiveSettings {
   const capacity = resolveCapacity({ engine: 'local', model });
   const knobs: EffectiveSettings['knobs'] = {};
   for (const k of allKnobs()) {
-    if (k.key.startsWith('analyzer.')) knobs[k.key] = configValue<number | boolean | string>(k.key);
+    if (!k.key.startsWith('analyzer.')) continue;
+    const v = configValue<number | boolean | string>(k.key);
+    knobs[k.key] = typeof v === 'string' ? redactUserinfo(v) : v;
   }
+  const payload = resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' });
   return {
     numCtx: configValue<number>('analyzer.ollama.numCtx'),
     capacity,
     effectiveChunkBudget: resolveStage2ChunkCharBudget(capacity),
     escalation: configValue<string>('analyzer.structure.escalation'),
     reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model }) ?? null,
-    payload: resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' }) ?? null,
+    payload: payload === undefined || payload === null ? null : sha256(canonicalJson(payload)),
     knobs,
   };
 }
@@ -136,7 +160,7 @@ export function settingsDiff(saved: unknown, now: EffectiveSettings): string[] {
   return [...new Set([...a.keys(), ...b.keys()])]
     .sort()
     .filter((k) => a.get(k) !== b.get(k))
-    .map((k) => `${k} (saved ${a.get(k) ?? 'absent'}, now ${b.get(k) ?? 'absent'})`);
+    .map((k) => (k === 'payload' ? 'payload (changed)' : `${k} (saved ${a.get(k) ?? 'absent'}, now ${b.get(k) ?? 'absent'})`));
 }
 
 /** What a capture file holds: every captureChapterStages field plus the run's own. */

@@ -270,6 +270,81 @@ test('saved settings: every analyzer knob, the payload and the Ollama URL is par
   }
 });
 
+/** Every file under a directory, recursively, as `path -> text`. */
+function allFileTexts(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (d: string): void => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.set(p, readFileSync(p, 'utf8'));
+    }
+  };
+  walk(root);
+  return out;
+}
+
+test('saved settings: a payload value never reaches disk, a log line, stdout or stderr (it is recorded as a digest)', async () => {
+  const SENTINEL = 'sk-SENTINEL-4389-pass3-9f1c2d';
+  const { dir, manifest } = fixtureDir(2);
+  const scratch = scratchOf(dir);
+  const first = rawSettingsFile(dir, 'first.json', { analyzerExtraParamsByEngine: { ollama: { api_key: SENTINEL, temperature: 0.2 } } });
+  const changed = rawSettingsFile(dir, 'changed.json', { analyzerExtraParamsByEngine: { ollama: { api_key: `${SENTINEL}-2`, temperature: 0.2 } } });
+  const heard: string[] = [];
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origErr = process.stderr.write.bind(process.stderr);
+  const tap = (chunk: unknown): void => void heard.push(String(chunk));
+  process.stdout.write = ((c: unknown, ...r: unknown[]) => (tap(c), (origOut as (...a: unknown[]) => boolean)(c, ...r))) as typeof process.stdout.write;
+  process.stderr.write = ((c: unknown, ...r: unknown[]) => (tap(c), (origErr as (...a: unknown[]) => boolean)(c, ...r))) as typeof process.stderr.write;
+  const logs: string[] = [];
+  try {
+    const a = fakeDeps({ settingsPath: first });
+    assert.equal(await runCapture({ manifest: manifest.slice(0, 1), model: 'A', scratch }, a.deps), 0);
+    logs.push(...a.logs);
+    // a changed payload is still refused, by name, with no value
+    const b = fakeDeps({ settingsPath: changed });
+    assert.notEqual(await runCapture({ manifest, model: 'A', scratch, resume: true }, b.deps), 0);
+    logs.push(...b.logs);
+    const line = b.logs.find((l) => l.includes('different analyzer settings')) ?? '';
+    assert.ok(line.includes('payload (changed)'), line);
+  } finally {
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
+  }
+  const files = allFileTexts(scratch);
+  assert.ok(files.size > 0, 'a capture file was written');
+  for (const [p, text] of files) assert.ok(!text.includes(SENTINEL), `payload value found in ${p}`);
+  for (const l of [...logs, ...heard]) assert.ok(!l.includes(SENTINEL), `payload value found in output: ${l}`);
+});
+
+test('saved settings: a nested payload and a dotted-key payload are different requests and refuse each other', async () => {
+  const { dir, manifest } = fixtureDir(2);
+  const scratch = scratchOf(dir);
+  const nested = rawSettingsFile(dir, 'nested.json', { analyzerExtraParamsByEngine: { ollama: { options: { top_k: 5 } } } });
+  const dotted = rawSettingsFile(dir, 'dotted.json', { analyzerExtraParamsByEngine: { ollama: { 'options.top_k': 5 } } });
+  assert.equal(await runCapture({ manifest: manifest.slice(0, 1), model: 'A', scratch }, fakeDeps({ settingsPath: nested }).deps), 0);
+  const { deps, calls, logs } = fakeDeps({ settingsPath: dotted });
+  assert.notEqual(await runCapture({ manifest, model: 'A', scratch, resume: true }, deps), 0);
+  assert.equal(calls.length, 0);
+  assert.ok((logs.find((l) => l.includes('different analyzer settings')) ?? '').includes('payload (changed)'));
+  // the same shape still resumes
+  assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: nested }).deps), 0);
+});
+
+test('saved settings: credentials in the Ollama URL are recorded as a digest, never as text', async () => {
+  const savedUrl = process.env.OLLAMA_URL;
+  delete process.env.OLLAMA_URL;
+  try {
+    const { dir, manifest } = fixtureDir(1);
+    const { deps, logs } = fakeDeps({ settingsPath: rawSettingsFile(dir, 'u.json', { configOverrides: { 'analyzer.ollama.url': 'http://bob:hunter2-SENTINEL@10.0.0.9:11434' } }) });
+    assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, deps), 0);
+    for (const [p, text] of allFileTexts(scratchOf(dir))) assert.ok(!text.includes('hunter2-SENTINEL'), p);
+    assert.ok(!logs.join('\n').includes('hunter2-SENTINEL'));
+  } finally {
+    if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
+  }
+});
+
 test('saved settings: the record holds the effective chunk budget, not the configured cap', async () => {
   const { dir, manifest } = fixtureDir(1);
   const { deps } = fakeDeps({ settingsPath: settingsFile(dir, 's.json', { 'analyzer.ollama.numCtx': 4096 }) });
