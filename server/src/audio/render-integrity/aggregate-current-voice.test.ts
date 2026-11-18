@@ -356,7 +356,7 @@ describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
 /** Per-line stamped chapter: each line carries its own `voiceName`/`baseVoiceName`
  *  (as a real render stamps them) and the chapter snapshot names `snapshotVoice`. */
 type Line = { sid: number; axis: number; jitter: number; voice: string; fallback?: string | null };
-async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen', snapModelKey = engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2', renderedAt?: string) {
+async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen', snapModelKey = engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2', renderedAt?: string, resolvedAs?: string) {
   mkdirSync(join(dir, 'audio'), { recursive: true });
   const rows = lines.map((l) => ({ characterId: charId, sentenceIds: [l.sid], vec: vec(l.axis, l.jitter) }));
   await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
@@ -371,9 +371,11 @@ async function writeChapterLines(dir: string, slug: string, chapterId: number, l
         renderedFallbackEngine: l.fallback ?? null,
         voiceName: l.voice,
         baseVoiceName: l.voice,
+        // A fresh re-render of a merged character: the raw id stays on the line, the stamp is the canonical one.
+        ...(resolvedAs ? { resolvedCharacterId: resolvedAs } : {}),
       })),
       characterSnapshots: {
-        [charId]: { voiceEngine: engine, modelKey: snapModelKey, resolvedVoiceName: snapshotVoice, ...(renderedAt ? { renderedAt } : {}) },
+        [resolvedAs ?? charId]: { voiceEngine: engine, modelKey: snapModelKey, resolvedVoiceName: snapshotVoice, ...(renderedAt ? { renderedAt } : {}) },
       },
     }),
   );
@@ -546,13 +548,58 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     // Only ch1 holds the marked key's lines: the listing names it, never ch2.
     expect(report.voiceDrift.charactersNeedingRerenderChapters).toEqual({ marlow: [1] });
 
-    // Re-rendering the NAMED chapter in her current voice clears the marker and the listing.
-    await writeChapterLines(dir, 'ch1', 1, lines('qwen-mv'), 'qwen-mv', retired);
+    // Re-rendering the NAMED chapter the way finalize writes it: the fresh lines are keyed under
+    // the canonical id (resolveSpeakingId), so no line is left under the retired key and it
+    // leaves the roster. The listing clears; the retired key's stored marker is not rewritten.
+    await writeChapterLines(dir, 'ch1', 1, lines('qwen-mv'), 'qwen-mv', retired, 'qwen', undefined, undefined, 'marlow');
     await scoreBook(dir, CHAPTERS);
-    expect((await readCentroids(dir))![retired].noCurrentVoiceReference).toBeUndefined();
     const after = await buildAudioQaReport(dir, CHAPTERS);
     expect(after.voiceDrift.charactersNeedingRerender).toEqual([]);
     expect(after.voiceDrift.charactersNeedingRerenderChapters).toEqual({});
+  });
+
+  it('#3680 pass 3: a retired key spanning two chapters keeps its marker after one production-shaped re-render, and the listing shrinks', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-marker-merged-span-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({
+      characters: [{ id: 'marlow', name: 'Marlow', overrideTtsVoices: { qwen: { name: 'M', libraryUuid: 'mv' } } }],
+    }));
+    writeFileSync(castIdHistoryPath(dir), JSON.stringify({ schema: 1, supersededBy: { ren: 'marlow' } }));
+    const chapters = [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }, { id: 3, slug: 'ch3' }];
+    const lines = (voice: string): Line[] => [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice }));
+    await writeChapterLines(dir, 'ch1', 1, lines('qwen-rv'), 'qwen-rv', 'ren');
+    await writeChapterLines(dir, 'ch2', 2, lines('qwen-mv'), 'qwen-mv', 'marlow');
+    await writeChapterLines(dir, 'ch3', 3, lines('qwen-rv'), 'qwen-rv', 'ren');
+    await scoreBook(dir, chapters);
+    expect((await buildAudioQaReport(dir, chapters)).voiceDrift.charactersNeedingRerenderChapters).toEqual({ marlow: [1, 3] });
+
+    // Re-render ch1 only: fresh lines are keyed under the canonical id, ch3 still holds `ren`.
+    await writeChapterLines(dir, 'ch1', 1, lines('qwen-mv'), 'qwen-mv', 'ren', 'qwen', undefined, undefined, 'marlow');
+    await scoreBook(dir, chapters);
+    expect((await readCentroids(dir))!['ren'].noCurrentVoiceReference).toBe(true);
+    const after = await buildAudioQaReport(dir, chapters);
+    expect(after.voiceDrift.charactersNeedingRerender).toEqual(['marlow']);
+    expect(after.voiceDrift.charactersNeedingRerenderChapters).toEqual({ marlow: [3] });
+  });
+
+  it('#3680 pass 3: two marked keys of one person list their chapters ascending, once each', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-marker-two-keys-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({
+      characters: [{ id: 'marlow', name: 'Marlow', overrideTtsVoices: { qwen: { name: 'M', libraryUuid: 'mv' } } }],
+    }));
+    writeFileSync(castIdHistoryPath(dir), JSON.stringify({ schema: 1, supersededBy: { ren: 'marlow' } }));
+    const chapters = [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }, { id: 3, slug: 'ch3' }];
+    const lines = (voice: string): Line[] => [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice }));
+    await writeChapterLines(dir, 'ch1', 1, lines('qwen-rv'), 'qwen-rv', 'ren');
+    await writeChapterLines(dir, 'ch2', 2, lines('qwen-om'), 'qwen-om', 'marlow');
+    await writeChapterLines(dir, 'ch3', 3, lines('qwen-rv'), 'qwen-rv', 'ren');
+    await scoreBook(dir, chapters);
+    const centroids = (await readCentroids(dir))!;
+    expect(centroids['ren'].noCurrentVoiceReference).toBe(true);
+    expect(centroids['marlow'].noCurrentVoiceReference).toBe(true);
+    const report = await buildAudioQaReport(dir, chapters);
+    expect(report.voiceDrift.charactersNeedingRerenderChapters).toEqual({ marlow: [1, 2, 3] });
   });
 
   it('B: rendered entirely on the fallback engine — one pass clears charactersPending', async () => {

@@ -203,7 +203,7 @@ function VoiceMatchRow({
   );
 }
 
-/* #3680 — characters whose current voice has no line recorded yet. Rendered
+/* #3680 — characters with a marked render key whose lines aren't in the current voice. Rendered
    beneath VoiceMatchRow (not inside its early-return chain); hidden while a
    live scoring pass runs and in the rows that report nothing settled. */
 function NeedsRerenderListing({

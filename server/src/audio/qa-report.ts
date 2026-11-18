@@ -71,7 +71,8 @@ export interface AudioQaReport {
      *  merged character's other keys can be healthy, so see the chapters field below. */
     charactersNeedingRerender: string[];
     /** #3680 — per id in `charactersNeedingRerender`: the chapter ids holding lines under
-     *  the marked key(s). Re-rendering one clears that key's marker. */
+     *  the marked key(s), ascending. A re-render keys its fresh lines under the canonical
+     *  id, so each re-rendered chapter drops off this list. */
     charactersNeedingRerenderChapters: Record<string, number[]>;
     mismatches: Array<{ characterId: string; chapterId?: number; fixable: boolean }>;
     inconclusiveCount: number;
@@ -234,8 +235,8 @@ export async function buildAudioQaReport(
       // A marker needs a current voice, which needs a live cast row, so this resolves.
       const canonicalId = castResolver.resolve(id)?.character.id ?? id;
       if (!charactersNeedingRerender.includes(canonicalId)) charactersNeedingRerender.push(canonicalId);
-      /* The chapters whose lines sit under THIS marked key: re-rendering one puts a line in
-         the current voice and clears the marker. Another key of the same person may be
+      /* The chapters whose lines sit under THIS marked key: re-rendering one keys its fresh
+         lines under the canonical id, so it leaves this list. Another key of the same person may be
          healthy, so the listing must not claim "no lines" for the person. */
       const held = (charactersNeedingRerenderChapters[canonicalId] ??= []);
       for (const cd of voiceChapters) {
@@ -246,6 +247,8 @@ export async function buildAudioQaReport(
         if (has) held.push(chapterId);
       }
     }
+    // One person can have several marked keys, each pushing its own chapters in turn.
+    for (const held of Object.values(charactersNeedingRerenderChapters)) held.sort((a, b) => a - b);
   }
   const charactersPending = Array.from(stochasticCharacterIds).filter(
     (id) => !(id in centroids) || staleMarkerIds.has(id),

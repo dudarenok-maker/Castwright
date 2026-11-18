@@ -54,7 +54,7 @@ export function needsRerenderIds(report: BookQaReport): string[] {
 }
 
 /** #3680 — the chapters holding the lines that keep `id` on the needs-re-render listing
- *  (`[]` when the server sent none). Re-rendering one of them clears the marker. */
+ *  (`[]` when the server sent none). Re-rendering one removes it from the list. */
 export function needsRerenderChapters(report: BookQaReport, id: string): number[] {
   return report.voiceDrift.charactersNeedingRerenderChapters?.[id] ?? [];
 }

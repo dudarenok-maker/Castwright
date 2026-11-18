@@ -10639,8 +10639,9 @@ components:
                 items: { type: integer }
               description: >-
                 Per id in charactersNeedingRerender, the chapter ids holding
-                lines under the marked key(s). Re-rendering one clears that
-                key's marker.
+                lines under the marked key(s), ascending. A re-render keys
+                its fresh lines under the canonical id, so each re-rendered
+                chapter drops off the list.
             mismatches:
               type: array
               items:
