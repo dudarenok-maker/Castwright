@@ -670,6 +670,15 @@ describe('chapter-audio router', () => {
           expect(chapterNow()).toEqual(before);
         });
       });
+      it('a corrupt live segments.json does not block restore-unrecorded', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        writeFileSync(join(audioRoot, `${SLUG}.segments.json`), '{ not json');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+        } finally { warn.mockRestore(); writeChapterSegments(DEFAULT_SEGMENTS); }
+      });
       it('404 no_previous_audio when nothing was preserved', async () => {
         resetAudio(); writeMp3();
         const res = await request(app).post(RU());

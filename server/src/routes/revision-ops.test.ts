@@ -714,6 +714,36 @@ describe('lazy migration at Accept / Reject (#4339)', () => {
     expect(chapterNow()).toEqual(before);
   });
 
+  it('a corrupt live segments.json does not block Reject (main never parsed it on this route)', async () => {
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), '{ not json');
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 9, synthesizedAt: 'T-A' }));
+    seed([entry(1, 'r1')]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await reject('r1');
+    warn.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(seg(), 'utf8')).synthesizedAt).toBe('T-A');
+  });
+
+  it('a corrupt live segments.json and embeddings.json do not block Accept', async () => {
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), '{ not json');
+    writeFileSync(join(audioRoot, '01-one.embeddings.json'), '{ not json');
+    writeFileSync(prev(), MP3_BYTES);
+    seed([entry(1, 'r1')]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const res = await accept('r1');
+    warn.mockRestore();
+
+    expect(res.status).toBe(200);
+    expect(existsSync(prev())).toBe(false);
+  });
+
   it('I5: Accept on an m4a book whose live <slug>.mp3 holds AAC bytes renames it to <slug>.m4a first', async () => {
     writeFileSync(live(), M4A_BYTES);
     seed([entry(1, 'r1')]);

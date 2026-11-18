@@ -79,6 +79,23 @@ export async function sniffAudioFormat(path: string): Promise<ChapterAudioExt | 
   return null;
 }
 
+/* `readJson`, except an unparseable file answers `null` (absent) with a log,
+   where `readJson` throws. The reconcile entry points (Accept, Reject,
+   restore-unrecorded, the boot fsck) read segments and embeddings that main
+   never parsed on those routes, so a corrupt file there must not block them.
+   Every caller treats `null` as "no such file": nothing is minted into it,
+   stamped from it or matched against it, and it is never rewritten. Any other
+   read error (EBUSY, EPERM, ...) still throws. */
+async function readJsonTolerant<T>(path: string): Promise<T | null> {
+  try {
+    return await readJson<T>(path);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    console.warn(`[take] ignoring unparseable ${basename(path)}: ${err.message}`);
+    return null;
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * The state stamp (§4.4)
  * ------------------------------------------------------------------ */
@@ -148,7 +165,7 @@ function stampedState(
    is a no-op. */
 async function stampIdIntoJson(path: string, takeId: string): Promise<void> {
   if (!existsSync(path)) return;
-  const raw = await readJson<Record<string, unknown>>(path);
+  const raw = await readJsonTolerant<Record<string, unknown>>(path);
   if (!raw || typeof raw !== 'object') return;
   await writeJsonAtomic(path, { ...raw, takeId });
 }
@@ -191,7 +208,7 @@ export async function ensureTakeIdentity(
 
   if (chapterAudioExists(root, slug)) {
     const segPath = livePartPath(root, slug, 'segments');
-    const segments = await readJson<Record<string, unknown>>(segPath);
+    const segments = await readJsonTolerant<Record<string, unknown>>(segPath);
     if (segments && !isTakeId(segments.takeId)) {
       const takeId = mintTakeId();
       await writeJsonAtomic(segPath, { ...segments, takeId });
@@ -205,7 +222,7 @@ export async function ensureTakeIdentity(
   }
 
   const prevSegPath = previousPartPath(root, slug, 'segments');
-  const prevSegments = await readJson<Record<string, unknown>>(prevSegPath);
+  const prevSegments = await readJsonTolerant<Record<string, unknown>>(prevSegPath);
   if (prevSegments && !isTakeId(prevSegments.takeId)) {
     const takeId = mintTakeId();
     await writeJsonAtomic(prevSegPath, { ...prevSegments, takeId });
@@ -513,7 +530,7 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
 
   /* Step 2: resolve two or more live files. */
   if (live.length >= 2) {
-    const segments = await readJson<{ durationSec?: unknown }>(livePartPath(root, slug, 'segments'));
+    const segments = await readJsonTolerant<{ durationSec?: unknown }>(livePartPath(root, slug, 'segments'));
     const expected =
       typeof segments?.durationSec === 'number' && Number.isFinite(segments.durationSec)
         ? segments.durationSec
@@ -614,7 +631,7 @@ export async function reconcileSlug(
   await updateStateAtDir(handle.bookDir, async (state) => {
     const idx = state.chapters.findIndex((c) => c.slug === slug);
     if (idx < 0) return null;
-    const segments = await readJson<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
+    const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
     if (!segments) return null;
     const before = state.chapters[idx] as Record<string, unknown>;
     const recorded = before.audioRenderedAt;
