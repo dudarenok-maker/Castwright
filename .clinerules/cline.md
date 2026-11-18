@@ -273,7 +273,7 @@ New-Item -ItemType Directory -Path $T -Force | Out-Null
 $child = @'
 param([string]$Dir, [string]$Worktree)
 $ErrorActionPreference = 'Continue'
-git -C $Worktree push *>&1 | Out-File -FilePath (Join-Path $Dir 'push.log') -Encoding utf8
+git -C $Worktree push -u origin HEAD *>&1 | Out-File -FilePath (Join-Path $Dir 'push.log') -Encoding utf8
 "EXIT=$LASTEXITCODE" | Out-File -FilePath (Join-Path $Dir 'push.log') -Append -Encoding utf8
 '@
 Set-Content -Path (Join-Path $T 'push.ps1') -Value $child -Encoding utf8
@@ -283,6 +283,11 @@ $p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
 $p.Id | Set-Content (Join-Path $T 'push.pid')
 $T
 ```
+
+**`push -u origin HEAD`, not a bare `push`.** A branch's first push has no
+upstream, and with `push.autoSetupRemote` unset a bare `git push` exits 128
+("has no upstream branch"). `-u origin HEAD` sets it, and is harmless on a
+branch that already has one.
 
 **Never a fixed log name.** The GUID suffix is load-bearing, exactly as it is in
 `oe-detached-commit.ps1`: two lanes -- or two attempts in one lane -- that share
