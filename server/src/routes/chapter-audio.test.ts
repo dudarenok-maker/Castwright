@@ -575,6 +575,47 @@ describe('chapter-audio router', () => {
         });
       });
 
+      /* #4319 review pass 1: the e2e runs in mock mode, so a SERVER regression
+         would pass it. This drives the real preserve over a real m4a take and
+         then the real previous-take routes. */
+      describe('an M4A book: a re-render preserves the take under its real extension', () => {
+        const OLD_M4A = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64, 0x41)]);
+        const NEW_M4A = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64, 0x42)]);
+        beforeAll(async () => {
+          resetAudio();
+          writeFileSync(join(audioRoot, `${SLUG}.m4a`), OLD_M4A);
+          writePreviousSegments();
+          const { preserveExistingAsPrevious } = await import('../workspace/chapter-take.js');
+          expect((await preserveExistingAsPrevious(audioRoot, SLUG)).preserved).toBe(true);
+          writeFileSync(join(audioRoot, `${SLUG}.m4a`), NEW_M4A);
+        });
+        const binary = (r: request.Response, cb: (err: Error | null, body: Buffer) => void) => {
+          const chunks: Buffer[] = [];
+          (r as unknown as NodeJS.ReadableStream).on('data', (c: Buffer) => chunks.push(c));
+          (r as unknown as NodeJS.ReadableStream).on('end', () => cb(null, Buffer.concat(chunks)));
+        };
+
+        it('answers the old bytes as audio/mp4 at /audio/previous.m4a, and the new bytes at /audio.m4a', async () => {
+          const meta = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous`);
+          expect(meta.status).toBe(200);
+          expect(meta.body.url).toBe(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio/previous.m4a`);
+          const prevFile = await request(app).get(meta.body.url).buffer(true).parse(binary);
+          expect(prevFile.status).toBe(200);
+          expect(prevFile.headers['content-type']).toMatch(/audio\/mp4/);
+          expect(Buffer.compare(prevFile.body as Buffer, OLD_M4A)).toBe(0);
+
+          const liveFile = await request(app).get(`/api/books/${bookId}/chapters/1/audio.m4a`).buffer(true).parse(binary);
+          expect(liveFile.status).toBe(200);
+          expect(Buffer.compare(liveFile.body as Buffer, NEW_M4A)).toBe(0);
+        });
+
+        it('has no .previous.mp3 and answers it 404', async () => {
+          expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+          const res = await request(app).get(`/api/books/${bookId}/chapters/1/audio/previous.mp3`);
+          expect(res.status).toBe(404);
+        });
+      });
+
       it('GET audio/previous 404s when nothing preserved', async () => {
         resetAudio();
         writeMp3();
