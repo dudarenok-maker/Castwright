@@ -251,9 +251,7 @@ export async function ensureTakeIdentity(
   if (chapterAudioExists(root, slug)) {
     const segPath = livePartPath(root, slug, 'segments');
     const segments = await readJsonTolerant<Record<string, unknown>>(segPath);
-    if (opts.onlyIfIdentity !== undefined && (!segments || segmentsIdentity(segments) !== opts.onlyIfIdentity)) {
-      return;
-    }
+    if (opts.onlyIfIdentity !== undefined && segmentsIdentity(segments) !== opts.onlyIfIdentity) return;
     let takeId: string | null = null;
     if (segments && !isTakeId(segments.takeId)) {
       takeId = mintTakeId();
@@ -699,7 +697,8 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
 /** `state.json` records an `audioRenderedAt` that is not the live segments'
     `synthesizedAt`. Step 4's mirror writes `audioTakeId` only, so it never
     erases this mismatch. */
-function segmentsIdentity(segments: { synthesizedAt?: unknown; durationSec?: unknown }): string {
+function segmentsIdentity(segments: { synthesizedAt?: unknown; durationSec?: unknown } | null): string {
+  if (!segments) return 'absent';
   return JSON.stringify([segments.synthesizedAt ?? null, segments.durationSec ?? null]);
 }
 
@@ -725,9 +724,9 @@ async function segmentsDescribeLiveAudio(
   handle: AnyBookHandle,
   root: string,
   slug: string,
-): Promise<{ identity: string | null; legacy: boolean } | null> {
+): Promise<{ identity: string; legacy: boolean } | null> {
   const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
-  if (!segments) return { identity: null, legacy: false };
+  if (!segments) return { identity: segmentsIdentity(null), legacy: false };
   let recorded: unknown;
   try {
     const state = await readBookStateOrThrow(handle.bookDir);
@@ -786,14 +785,14 @@ export async function reconcileSlug(
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
   const restamp = opts.restamp !== false;
-  let verified: { identity: string | null; legacy: boolean } | null = null;
+  let verified: { identity: string; legacy: boolean } | null = null;
   if (restamp && chapterAudioExists(root, slug)) {
     verified = await segmentsDescribeLiveAudio(handle, root, slug);
     if (!verified) return;
   }
   await ensureTakeIdentity(handle, slug, {
     mirrorState: restamp,
-    ...(verified?.identity != null ? { onlyIfIdentity: verified.identity } : {}),
+    ...(verified ? { onlyIfIdentity: verified.identity } : {}),
   });
   if (!restamp || !chapterAudioExists(root, slug)) return;
   try {
@@ -803,7 +802,7 @@ export async function reconcileSlug(
       const segments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
       if (!segments) return null;
       /* Segments written after the gate's read were never checked against the audio. */
-      if (verified?.identity != null && segmentsIdentity(segments) !== verified.identity) return null;
+      if (verified && segmentsIdentity(segments) !== verified.identity) return null;
       const before = state.chapters[idx] as Record<string, unknown>;
       const recorded = before.audioRenderedAt;
       /* A LEGACY REJECT: `state.json` records an `audioRenderedAt` that is not the

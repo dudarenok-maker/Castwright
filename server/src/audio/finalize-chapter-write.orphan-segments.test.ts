@@ -381,4 +381,53 @@ describe('H6 pass 5: the identity binding holds across the steps themselves', ()
     expect(b.segments()).toEqual(orphanB);
     expect(b.chapter().audioTakeId).toBeUndefined(); // the mint was overwritten; the mirror must not name it
   }, 30_000);
+
+  it('(6a) no segments at the gate, a legacy-shape state, and segments appearing before step 5: not stamped', async () => {
+    const b = await seedBook();
+    await b.render(1.0);
+    const segPath = join(b.audioRoot, `${SLUG}.segments.json`);
+    rmSync(segPath);
+    const before = b.chapter();
+    Object.assign(land, { segPath, body: JSON.stringify(orphanB), atAudioCheck: 3 });
+    await reconcileOne(b.bookDir);
+    expect(land.hits).toBe(1);
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(orphanB);
+  }, 30_000);
+
+  it('(6b) no segments at the gate, a state with no audioRenderedAt, and segments appearing before step 5: nothing filled', async () => {
+    const b = await seedBook();
+    await b.render(1.0);
+    const segPath = join(b.audioRoot, `${SLUG}.segments.json`);
+    rmSync(segPath);
+    setChapter(b.bookDir, (c) => {
+      delete c.audioRenderedAt;
+      delete c.audioModelKey;
+    });
+    const before = b.chapter();
+    Object.assign(land, { segPath, body: JSON.stringify(orphanB), atAudioCheck: 3 });
+    await reconcileOne(b.bookDir);
+    expect(land.hits).toBe(1);
+    expect(b.chapter()).toEqual(before);
+    expect(b.segments()).toEqual(orphanB);
+  }, 30_000);
+});
+
+describe('H6 pass 5: the legacy flag is its own guard', () => {
+  it('(6c) state.json gaining a legacy shape after a healthy gate (same segments) is not stamped without a decode', async () => {
+    const { withBookOpAtDir } = await import('../workspace/book-op-lock.js');
+    const { reconcileSlug } = await import('../workspace/chapter-take.js');
+    const b = await seedBook();
+    await b.render(1.0);
+    const statePath = join(b.bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(statePath, 'utf8'));
+    const before = b.chapter();
+    st.chapters[0].audioRenderedAt = 'T-OLD'; // lands after the gate saw a matching shape
+    /* `segPath`/`body` name the file the hook rewrites: here state.json, 3 checks in. */
+    Object.assign(land, { segPath: statePath, body: JSON.stringify(st), atAudioCheck: 3 });
+    await withBookOpAtDir(b.bookDir, (h) => reconcileSlug(h, SLUG));
+    expect(land.hits).toBe(1);
+    expect(b.chapter().audioRenderedAt).toBe('T-OLD'); // left as written, not re-stamped from the segments
+    expect(b.chapter().duration).toBe(before.duration);
+  }, 30_000);
 });
