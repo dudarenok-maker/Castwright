@@ -702,6 +702,17 @@ describe('chapter-audio router', () => {
           expect(chapterNow()).toEqual(before);
         });
 
+        it('deletes audioTakeId from state.json: state never names the take it just deleted', async () => {
+          const st = JSON.parse(readFileSync(statePath(), 'utf8'));
+          st.chapters[0] = { ...st.chapters[0], audioTakeId: 'bbbbbbbbbbbbbbbb' };
+          writeFileSync(statePath(), JSON.stringify(st));
+          resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
+          writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b', takeId: 'bbbbbbbbbbbbbbbb' }));
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(204);
+          expect('audioTakeId' in chapterNow()).toBe(false);
+        });
+
         it('a live take about to be replaced is not stamped into state.json first', async () => {
           resetAudio(); writeMp3(); writePreviousMp3(); writePreviousSegments();
           writeFileSync(liveSegs(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', modelKey: 'm-b' }));

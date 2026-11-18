@@ -684,6 +684,21 @@ describe('lazy migration at Accept / Reject (#4339)', () => {
     expect('audioTakeId' in ch).toBe(false);
   });
 
+  it('Reject deletes audioTakeId from state.json: state never names the take it just deleted', async () => {
+    patchChapter({ audioRenderedAt: 'T-B', duration: '00:20', audioTakeId: 'bbbbbbbbbbbbbbbb' });
+    writeFileSync(live(), MP3_BYTES);
+    writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B', takeId: 'bbbbbbbbbbbbbbbb' }));
+    writeFileSync(prev(), MP3_BYTES);
+    writeFileSync(prevSeg(), JSON.stringify({ durationSec: 9, synthesizedAt: 'T-A', takeId: 'aaaaaaaaaaaaaaaa' }));
+    seed([entry(1, 'r1')]);
+
+    const res = await reject('r1');
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(seg(), 'utf8')).takeId).toBe('aaaaaaaaaaaaaaaa');
+    expect('audioTakeId' in chapterNow()).toBe(false);
+  });
+
   it('Reject in the orphan-segments shape (no live audio): restores the previous take and leaves state.json at it', async () => {
     patchChapter({ audioRenderedAt: 'T-A', duration: '0:12', audioQa: { score: 0.9 } });
     writeFileSync(seg(), JSON.stringify({ durationSec: 20, synthesizedAt: 'T-B' }));

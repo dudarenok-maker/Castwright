@@ -44,6 +44,7 @@ import {
   findChapterAudio,
   findPreviousAudio,
   reconcileSlug,
+  clearTakeIdMirror,
   restorePreviousAudio,
   livePartPath,
   previousPartPath,
@@ -450,7 +451,9 @@ chapterAudioRouter.post(
           /* §6.1 lazy migration before the restore; an error answers the fixed
              `restore_failed` text below, never its own message. */
           await reconcileSlug(located, chapter.slug, { restamp: false });
-          return restorePreviousAudio(root, chapter.slug);
+          const restored = await restorePreviousAudio(root, chapter.slug);
+          if (restored === 'restored') await clearTakeIdMirror(located, chapter.slug);
+          return restored;
         });
       });
       outcome = done === BOOK_GONE ? 'not-found' : done;

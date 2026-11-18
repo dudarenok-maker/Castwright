@@ -13,6 +13,7 @@ import { audioDir } from '../workspace/paths.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
 import {
   acceptPreviousAudio,
+  clearTakeIdMirror,
   findChapterAudio,
   findPreviousAudio,
   reconcileSlug,
@@ -173,6 +174,8 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
           state: toRevisionsState(bookId, begin.file),
         });
       }
+
+      await clearTakeIdMirror(handle, begin.chapter.slug);
 
       const commit = await commitRevisionOp(bookDir, chapters, 'reject', revisionId);
       if (commit.kind === 'gone') {

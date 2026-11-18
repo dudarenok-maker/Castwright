@@ -185,6 +185,30 @@ async function mirrorTakeIdIntoState(handle: AnyBookHandle, slug: string, takeId
   });
 }
 
+/** Remove `audioTakeId` from the chapter's `state.json` entry, so state never
+    names a take that no longer exists. For a caller that has just replaced the
+    live take without stamping the new one (Reject, restore-unrecorded): the
+    restored take's id reaches `state.json` through the mirror's repair on the
+    next reconcile. Writes nothing when the member is already absent. A write
+    failure is logged and swallowed (spec State-write table): the restore has
+    landed, and the next reconcile's mirror repair overwrites a disagreeing id. */
+export async function clearTakeIdMirror(handle: AnyBookHandle, slug: string): Promise<void> {
+  assertHeld(handle, 'clearTakeIdMirror');
+  try {
+    await updateStateAtDir(handle.bookDir, (state) => {
+      const idx = state.chapters.findIndex((c) => c.slug === slug);
+      if (idx < 0) return null;
+      if (!('audioTakeId' in (state.chapters[idx] as Record<string, unknown>))) return null;
+      const chapters = state.chapters.slice();
+      const { audioTakeId: _gone, ...rest } = chapters[idx] as Record<string, unknown>;
+      chapters[idx] = rest as unknown as (typeof chapters)[number];
+      return { ...state, chapters };
+    });
+  } catch (err) {
+    console.warn(`[take] state.json audioTakeId clear failed for ${slug}:`, err);
+  }
+}
+
 /** Lazily mint a take id for a take that lacks one. Idempotent: a take whose
     segments already carry a valid `takeId` is not rewritten.
 
