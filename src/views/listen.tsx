@@ -12,6 +12,7 @@ import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { listenProgressActions, type ListenMarker } from '../store/listen-progress-slice';
 import { api } from '../lib/api';
+import { selectCharacterNamesById } from '../store/cast-slice';
 import { exportsActions } from '../store/exports-slice';
 import { retryExport } from '../store/exports-middleware';
 import { notificationsActions } from '../store/notifications-slice';
@@ -160,6 +161,7 @@ export function ListenView({
   const bookLanguage = useAppSelector(
     (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
   );
+  const characterNames = useAppSelector(selectCharacterNamesById);
   const analysisRunning = useAppSelector((s) => selectAnalysisRunningForBook(s, bookId));
   /* fs-51 — per-book performance-QA report card, fetched on mount. */
   const { report: qaReport, loading: qaLoading, error: qaError } = useQaReport(bookId);
@@ -250,7 +252,7 @@ export function ListenView({
         onFixLine={onFixLine}
       />
 
-      <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title} bookId={bookId} />
+      <QaReportCard report={qaReport} loading={qaLoading} error={qaError} bookTitle={title} bookId={bookId} characterNames={characterNames} />
 
       <ListenDownloadSection
         queueItems={queueItems}

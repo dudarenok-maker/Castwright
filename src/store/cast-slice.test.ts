@@ -1,7 +1,12 @@
 // Pairs with docs/features/archive/09-voice-match-pipeline.md
 
 import { describe, expect, it } from 'vitest';
-import { castSlice, castActions, selectCastTierByCharacterId } from './cast-slice';
+import {
+  castSlice,
+  castActions,
+  selectCastTierByCharacterId,
+  selectCharacterNamesById,
+} from './cast-slice';
 import type { AnalyseResponse, Character, VoiceMatchResponse } from '../lib/types';
 
 const makeChar = (id: string, overrides: Partial<Character> = {}): Character => ({
@@ -2057,6 +2062,24 @@ describe('selectCastTierByCharacterId (#1308)', () => {
   it('returns a stable reference across calls with an unchanged characters array', () => {
     const s = { cast: baseState([makeChar('marlow')]) };
     expect(selectCastTierByCharacterId(s)).toBe(selectCastTierByCharacterId(s));
+  });
+});
+
+describe('selectCharacterNamesById (#3680)', () => {
+  it('maps id to name and skips a character without a non-empty name', () => {
+    const s = {
+      cast: baseState([
+        makeChar('marlow', { name: 'Marlow' }),
+        makeChar('ghost', { name: '' }),
+        makeChar('blank', { name: '   ' }),
+      ]),
+    };
+    expect(selectCharacterNamesById(s)).toEqual({ marlow: 'Marlow' });
+  });
+
+  it('returns a stable reference across calls with an unchanged characters array', () => {
+    const s = { cast: baseState([makeChar('marlow')]) };
+    expect(selectCharacterNamesById(s)).toBe(selectCharacterNamesById(s));
   });
 });
 

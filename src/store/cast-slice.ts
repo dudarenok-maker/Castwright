@@ -1032,3 +1032,17 @@ export const selectCastTierByCharacterId = createSelector(
   (characters): Map<string, Character['ttsModelKey']> =>
     new Map(characters.map((c) => [c.id, c.ttsModelKey])),
 );
+
+/** id -> display name for every cast row with a non-empty name. Memoised
+    (createSelector) so consumers get a stable reference until the roster
+    changes. Feeds QaReportCard's "Needs re-render" listing (#3680). */
+export const selectCharacterNamesById = createSelector(
+  [selectCastCharacters],
+  (characters): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const c of characters) {
+      if (typeof c.name === 'string' && c.name.trim() !== '') out[c.id] = c.name;
+    }
+    return out;
+  },
+);
