@@ -3,6 +3,7 @@
     "ghsaId": "GHSA-fc5q-39xc-vjpf",
     "package": "picomatch",
     "reason": "ReDoS in picomatch <= 4.0.7 needs an attacker-controlled glob pattern; no fixed picomatch is published (4.0.7 is the version resolved). In package-lock.json every picomatch copy (4.0.7 and micromatch's nested 2.3.2) and every package that reports the advisory through it (micromatch, fast-glob, tinyglobby, fdir, vite, vitest, @vitejs/plugin-react, expect, jest-* and @types/jest, @typescript-eslint/typescript-estree) is flagged dev: true, and npm run audit:server (--omit=dev) passes, so none ships in the runtime. The only direct callers are the two force-rerun-triggers test files (src/test, server/src), scripts/run-hooks-tests.mjs, scripts/run-pinokio-tests.mjs and scripts/build-release-zip.mjs (fast-glob), all with hardcoded patterns; vite/vitest globs come from repo config. No src/ or server/src/ runtime code imports a glob library or passes user input to one. Remove when a fixed picomatch ships.",
+    "scope": "root",
     "expiry": "2027-01-17"
   }
 ]

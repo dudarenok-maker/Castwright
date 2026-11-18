@@ -295,10 +295,10 @@ test('loadWaivers: parses a valid array and rejects a non-array', () => {
   try {
     const good = join(dir, 'good.json');
     writeFileSync(good, JSON.stringify([
-      { ghsaId: 'GHSA-x', package: 'lodash', reason: 'dismissed', expiry: '2099-01-01' }
+      { ghsaId: 'GHSA-x', package: 'lodash', reason: 'dismissed', scope: 'root', expiry: '2099-01-01' }
     ]));
     assert.deepEqual(loadWaivers(good), [
-      { ghsaId: 'GHSA-x', package: 'lodash', reason: 'dismissed', expiry: '2099-01-01' }
+      { ghsaId: 'GHSA-x', package: 'lodash', reason: 'dismissed', scope: 'root', expiry: '2099-01-01' }
     ]);
     const bad = join(dir, 'bad.json');
     writeFileSync(bad, '{"not":"an array"}');
@@ -313,23 +313,33 @@ test('loadWaivers: rejects entries with missing required fields', () => {
   try {
     // Missing ghsaId
     let f = join(dir, 'missing-ghsa.json');
-    writeFileSync(f, JSON.stringify([{ package: 'lodash', reason: 'ok', expiry: '2099-01-01' }]));
+    writeFileSync(f, JSON.stringify([{ package: 'lodash', reason: 'ok', scope: 'root', expiry: '2099-01-01' }]));
     assert.throws(() => loadWaivers(f), /missing or invalid ghsaId/);
 
     // Missing package
     f = join(dir, 'missing-package.json');
-    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', reason: 'ok', expiry: '2099-01-01' }]));
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', reason: 'ok', scope: 'root', expiry: '2099-01-01' }]));
     assert.throws(() => loadWaivers(f), /missing or invalid package/);
 
     // Missing reason
     f = join(dir, 'missing-reason.json');
-    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', expiry: '2099-01-01' }]));
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', scope: 'root', expiry: '2099-01-01' }]));
     assert.throws(() => loadWaivers(f), /missing or invalid reason/);
 
     // Missing expiry
     f = join(dir, 'missing-expiry.json');
-    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok' }]));
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok', scope: 'root' }]));
     assert.throws(() => loadWaivers(f), /missing or invalid expiry/);
+
+    // Missing scope
+    f = join(dir, 'missing-scope.json');
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok', expiry: '2099-01-01' }]));
+    assert.throws(() => loadWaivers(f), /missing or invalid scope/);
+
+    // Unknown scope value
+    f = join(dir, 'unknown-scope.json');
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok', scope: 'dev', expiry: '2099-01-01' }]));
+    assert.throws(() => loadWaivers(f), /missing or invalid scope/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -338,7 +348,7 @@ test('loadWaivers: rejects entries with missing required fields', () => {
 test('loadWaivers: rejects entries with malformed or invalid expiry dates', () => {
   const dir = mkdtempSync(join(tmpdir(), 'check-audit-waivers-'));
   try {
-    const base = { ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok' };
+    const base = { ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok', scope: 'root' };
 
     // Malformed date format
     let f = join(dir, 'bad-format.json');
@@ -354,6 +364,19 @@ test('loadWaivers: rejects entries with malformed or invalid expiry dates', () =
     f = join(dir, 'bad-day.json');
     writeFileSync(f, JSON.stringify([{ ...base, expiry: '2099-08-45' }]));
     assert.throws(() => loadWaivers(f), /not a valid calendar date/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadWaivers: accepts each of root, server and both as scope', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-audit-waivers-'));
+  try {
+    for (const scope of ['root', 'server', 'both']) {
+      const f = join(dir, `${scope}.json`);
+      writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok', scope, expiry: '2099-01-01' }]));
+      assert.equal(loadWaivers(f)[0].scope, scope);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -281,11 +281,14 @@ export function parseAuditOutput(stdout) {
   return vulns && typeof vulns === 'object' ? vulns : {};
 }
 
+const WAIVER_SCOPES = ['root', 'server', 'both'];
+
 /**
  * Load and validate waivers. Each entry must be an object with:
  *   ghsaId (string): the GHSA advisory id
  *   package (string): the package name the waiver applies to
  *   reason (string): justification for the waiver
+ *   scope (string): which audit leg the waiver applies to - 'root', 'server' or 'both'
  *   expiry (string): YYYY-MM-DD date when the waiver expires
  *
  * Fail closed: any entry missing required fields or with a malformed expiry
@@ -294,7 +297,7 @@ export function parseAuditOutput(stdout) {
 export function loadWaivers(file = WAIVERS_FILE) {
   if (!existsSync(file)) return [];
   const parsed = JSON.parse(readFileSync(file, 'utf8'));
-  if (!Array.isArray(parsed)) throw new Error(`${file} must be an array of {ghsaId, package, reason, expiry}`);
+  if (!Array.isArray(parsed)) throw new Error(`${file} must be an array of {ghsaId, package, reason, scope, expiry}`);
 
   // Validate each entry - fail closed if any entry is malformed
   for (let i = 0; i < parsed.length; i++) {
@@ -310,6 +313,9 @@ export function loadWaivers(file = WAIVERS_FILE) {
     }
     if (typeof entry.reason !== 'string' || !entry.reason) {
       throw new Error(`${file} entry ${i} missing or invalid reason`);
+    }
+    if (!WAIVER_SCOPES.includes(entry.scope)) {
+      throw new Error(`${file} entry ${i} missing or invalid scope (must be root, server or both)`);
     }
     if (typeof entry.expiry !== 'string' || !entry.expiry) {
       throw new Error(`${file} entry ${i} missing or invalid expiry`);
