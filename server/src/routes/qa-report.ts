@@ -73,8 +73,11 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
       res.status(409).json({ error: 'Book is currently generating — resume scoring once the run finishes.' });
       return;
     }
-    /* #4235 — a splice or QA repair synthesises under its own Qwen tier; the post-audition
-       reconcile in triggerScoring could evict that tier mid-synthesis. Same curated-sentence rule. */
+    /* #4235 — a re-record splice or QA repair synthesises under its own Qwen tier, which the
+       post-audition reconcile in triggerScoring could evict mid-synthesis (that eviction is
+       separately skipped while anything is active, in triggerScoring). A remix registers the
+       same way but only applies gain and synthesises nothing, so refusing during one is
+       conservative, not tier-driven. Same curated-sentence rule. */
     if (isSpliceOrRepairActive(bookId)) {
       res.status(409).json({ error: 'A chapter fix or repair is running for this book — resume scoring once it finishes.' });
       return;
