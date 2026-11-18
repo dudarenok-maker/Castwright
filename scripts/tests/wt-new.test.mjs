@@ -1014,3 +1014,28 @@ test('inRepo restores GIT_* vars even when the chdir into the fixture throws', a
     delete process.env[key];
   }
 });
+
+test('wt-new main() --from a remote-tracking ref leaves the new branch with NO upstream (#4449)', async (t) => {
+  const { repo } = makeRealWorktreeRepo(t, [1]);
+  // A remote-tracking base, as `--from origin/main` is in real use. Git's
+  // default branch.autoSetupMerge would otherwise make it the new branch's
+  // upstream, so a plain `git push` silently does nothing.
+  gitAt(repo, ['remote', 'add', 'origin', 'https://example.invalid/fixture.git']);
+  gitAt(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  const realWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = () => true;
+  let code;
+  try {
+    code = await inRepo(repo, () => wtNewMain(['feat/server-fresh', '--from', 'origin/main', '--no-install']));
+  } finally {
+    process.stdout.write = realWrite;
+  }
+  assert.equal(code, 0);
+  const result = spawnSync('git', ['config', '--get-regexp', '^branch[.]feat/server-fresh[.](remote|merge)$'], {
+    cwd: repo,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: scrubGitEnvForThrowawayRepo(),
+  });
+  assert.equal(result.stdout, '', `new branch must carry no upstream config, got:\n${result.stdout}`);
+});

@@ -17,7 +17,7 @@
 //      worktree's generated .env.local / server/.env (slot 0 = main). #3052:
 //      NOT the worktree count — that re-issued a surviving tree's slot as
 //      soon as an earlier tree was torn down.
-//   3. Creates ../wt-<slug> via `git worktree add -b <branch> <path> <base>`.
+//   3. Creates ../wt-<slug> via `git worktree add --no-track -b <branch> <path> <base>`.
 //   4. Writes <worktree>/.env.local with VITE_PORT / PORT / VITE_API_PORT /
 //      LOCAL_TTS_PORT / PLAYWRIGHT_PORT for this slot.
 //   5. Writes <worktree>/server/.env with PORT / WORKSPACE_DIR / LOCAL_TTS_PORT for this slot
@@ -390,7 +390,9 @@ export async function main(argv) {
   }
 
   process.stdout.write(`[wt-new] creating worktree at ${worktreePath} on new branch ${args.branch}\n`);
-  gitOrThrow(['worktree', 'add', '-b', args.branch, worktreePath, args.from]);
+  // --no-track: a remote-tracking base (`--from origin/main`) would otherwise
+  // become the new branch's upstream, so a plain `git push` does nothing (#4449).
+  gitOrThrow(['worktree', 'add', '--no-track', '-b', args.branch, worktreePath, args.from]);
 
   const envPath = join(worktreePath, '.env.local');
   writeFileSync(envPath, renderEnvLocal({ slot, branch: args.branch, ports }), 'utf8');
