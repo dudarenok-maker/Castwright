@@ -7502,6 +7502,8 @@ export interface components {
                 charactersChecked: number;
                 /** @description srv-36 hardening — stochastic characters with no row in centroids.json yet: genuinely incomplete (never attempted, or mid-retry-cycle under the transient-failure cap). Drives the frontend's Resume-scoring affordance — narrower than "charactersChecked < charactersOnRoster", which also stays true forever for a terminally too-short character (nothing left to resume for those). */
                 charactersPending: string[];
+                /** @description Stochastic characters whose persisted reference is the no-current-voice marker (#3524) — they have a current cast voice but no rendered line in it, so voice matching has nothing to check until their chapters are re-rendered. Excluded from charactersPending (nothing for Resume scoring to do). See #3680. */
+                charactersNeedingRerender: string[];
                 mismatches: {
                     characterId: string;
                     /** @description Absent on rows from legacy verdict files written before chapter-scoping existed (see `voiceDrift.attribution`). */

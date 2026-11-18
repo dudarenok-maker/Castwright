@@ -10488,7 +10488,7 @@ components:
             linesFlaggedDrift: { type: integer }
         voiceDrift:
           type: object
-          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, mismatches, inconclusiveCount, uncheckedCharacterIds]
+          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, charactersNeedingRerender, mismatches, inconclusiveCount, uncheckedCharacterIds]
           properties:
             attribution: { type: string, enum: [full, legacy-unattributed] }
             chaptersEligible: { type: integer }
@@ -10517,6 +10517,16 @@ components:
                 "charactersChecked < charactersOnRoster", which also stays
                 true forever for a terminally too-short character (nothing
                 left to resume for those).
+            charactersNeedingRerender:
+              type: array
+              items: { type: string }
+              description: >-
+                Stochastic characters whose persisted reference is the
+                no-current-voice marker (#3524) — they have a current cast
+                voice but no rendered line in it, so voice matching has
+                nothing to check until their chapters are re-rendered.
+                Excluded from charactersPending (nothing for Resume scoring
+                to do). See #3680.
             mismatches:
               type: array
               items:
