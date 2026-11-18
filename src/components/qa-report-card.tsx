@@ -214,7 +214,7 @@ function NeedsRerenderListing({
   if (kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return null;
   return (
     <p data-testid="qa-needs-rerender" className="text-sm text-ink/70 py-2">
-      Needs re-render: {ids.map((id) => characterNames?.[id] ?? id).join(', ')}. Their voice changed after these chapters were recorded, so there is nothing to check yet — re-render the chapters to check them.
+      Needs re-render: {ids.map((id) => characterNames?.[id] ?? id).join(', ')}. No lines are recorded in their current voice yet, so there is nothing to check — re-render a chapter they speak in to check them.
     </p>
   );
 }
