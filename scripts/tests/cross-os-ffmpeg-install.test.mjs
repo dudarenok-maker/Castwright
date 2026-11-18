@@ -55,7 +55,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolve, dirname, join, basename } from 'node:path';
+import { resolve, dirname, join, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -146,7 +146,14 @@ function probePowerShell(exe) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-Command', '$PSVersionTable.PSVersion.ToString()');
-  return spawnSync(exe, args, { encoding: 'utf8', windowsHide: true });
+  // A throwaway cwd, same as every other child here, so the probe cannot drop
+  // files in the checkout either.
+  const dir = mkdtempSync(join(tmpdir(), 'pwsh-probe-'));
+  try {
+    return spawnSync(exe, args, { encoding: 'utf8', windowsHide: true, cwd: dir });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function findPowerShell() {
@@ -194,6 +201,37 @@ function runPowerShellFile(scriptPath, extraArgs = [], env = process.env, cwd = 
   return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env, windowsHide: true, cwd });
 }
 
+// Canonicalise to the long, real, lower-cased form: CI's os.tmpdir() is an 8.3
+// short path (RUNNER~1) while a pwsh child reports the long one. The child's
+// dir is already removed by the time we look, so canonicalise its nearest
+// existing ancestor and re-append the vanished tail.
+function canonicalPath(p) {
+  const tail = [];
+  let cur = p;
+  while (!existsSync(cur) && dirname(cur) !== cur) {
+    tail.unshift(basename(cur));
+    cur = dirname(cur);
+  }
+  return join(realpathSync.native(cur), ...tail).toLowerCase();
+}
+
+// Pins that a pwsh child's cwd (as it reported itself) was a throwaway dir
+// made by this harness: under tmpdir but not tmpdir itself, outside the
+// checkout (separator-bounded, so a sibling like `<repo>-x` is not "inside"),
+// named with the harness prefix, and already cleaned up.
+function assertThrowawayCwd(reported, prefix) {
+  const childCwd = canonicalPath(reported);
+  const tmp = canonicalPath(tmpdir());
+  const repo = canonicalPath(repoRoot);
+  assert.ok(childCwd.startsWith(tmp + sep), `expected child cwd under ${tmp}${sep}; got ${childCwd}`);
+  assert.ok(
+    childCwd !== repo && !childCwd.startsWith(repo + sep),
+    `child cwd must be outside the checkout ${repo}; got ${childCwd}`,
+  );
+  assert.ok(basename(childCwd).startsWith(prefix), `expected a ${prefix}* dir; got ${childCwd}`);
+  assert.ok(!existsSync(childCwd), `expected the throwaway cwd to be cleaned up; ${childCwd} still exists`);
+}
+
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser
 // — rather than a regex or hand-rolled lexer, which would just be a worse
 // version of the bug this test exists to catch. ParseInput reports syntax
@@ -213,9 +251,10 @@ foreach ($e in $errors) {
   }
 }
 ConvertTo-Json -InputObject $result -Depth 5
+[Console]::Error.WriteLine('CWD=' + (Get-Location).Path)
 `;
 
-function parsePowerShellSyntaxErrors(scriptText) {
+function parsePowerShellSyntaxErrors(scriptText, observed = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pwsh-parse-'));
   const scriptPath = join(dir, 'target.ps1');
   const wrapperPath = join(dir, 'parse-check.ps1');
@@ -229,6 +268,9 @@ function parsePowerShellSyntaxErrors(scriptText) {
       `the PowerShell parser-check process itself failed to run (exit ${proc.status}): ` +
         `${proc.stderr || proc.error}`,
     );
+    // Lets a test pin the parse-check child's cwd (reported on stderr).
+    const cwdLine = proc.stderr.split(/\r?\n/).find((l) => l.startsWith('CWD='));
+    observed.cwd = (cwdLine ?? '').slice(4).trim();
     const stdout = proc.stdout.trim();
     if (stdout === '') return [];
     const parsed = JSON.parse(stdout);
@@ -436,6 +478,15 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     );
   });
 
+  test(`${rel}: the parse-check child runs in a throwaway temp cwd, never the repo checkout`, {
+    skip: PWSH_SKIP_REASON ?? false,
+  }, () => {
+    const observed = {};
+    parsePowerShellSyntaxErrors('1 + 1', observed);
+    assert.ok(observed.cwd, 'expected the parse-check child to report its cwd');
+    assertThrowawayCwd(observed.cwd, 'pwsh-parse-');
+  });
+
   // Parsing is a low bar — a script can parse cleanly and still be wrong.
   // These execute the extracted script's REAL control flow (unmodified) in
   // a separate pwsh/powershell child process, with choco/winget/ffmpeg
@@ -551,24 +602,7 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     assert.equal(proc.status, 0, `expected exit 0; stdout:\n${proc.stdout}\nstderr:\n${proc.stderr}`);
     const cwdLine = proc.stdout.split(/\r?\n/).find((l) => l.startsWith('CWD='));
     assert.ok(cwdLine, `expected a CWD= line; stdout:\n${proc.stdout}`);
-    // Canonicalise both sides to the long form: CI's os.tmpdir() is an 8.3
-    // short path (RUNNER~1) while the pwsh child reports the long one. The
-    // child's dir is already removed by now, so canonicalise its nearest
-    // existing ancestor and re-append the vanished tail.
-    const canonical = (p) => {
-      const tail = [];
-      let cur = p;
-      while (!existsSync(cur) && dirname(cur) !== cur) {
-        tail.unshift(basename(cur));
-        cur = dirname(cur);
-      }
-      return join(realpathSync.native(cur), ...tail).toLowerCase();
-    };
-    const childCwd = canonical(cwdLine.slice(4).trim());
-    const tmp = canonical(tmpdir());
-    const repoCwd = canonical(process.cwd());
-    assert.ok(childCwd.startsWith(tmp), `expected child cwd under ${tmp}; got ${childCwd}`);
-    assert.notEqual(childCwd, repoCwd, 'child cwd must not be the repo/test-runner cwd');
+    assertThrowawayCwd(cwdLine.slice(4).trim(), 'pwsh-behave-');
     assert.match(proc.stdout, /LAD=\[\]/, 'expected LOCALAPPDATA to be absent in the child');
   });
 
