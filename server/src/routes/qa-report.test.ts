@@ -390,6 +390,24 @@ describe('POST /:bookId/resume-scoring', () => {
       }
     });
 
+    it('a render running on another book skips the reconcile (202 stands)', async () => {
+      vi.mocked(scoreBook).mockClear();
+      vi.mocked(reconcileResidentQwenTiers).mockClear();
+      vi.mocked(scoreBook).mockResolvedValueOnce(usedTiers);
+      const cleanup = __registerFakeJobForTest('other-author--standalones--other-book', []);
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+      try {
+        const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+        expect(res.status).toBe(202);
+        await __awaitScoringSettled(bookId);
+        expect(scoreBook).toHaveBeenCalled();
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        configSpy.mockRestore();
+        cleanup();
+      }
+    });
+
     it('a score pass in flight on another book skips the reconcile (202 stands)', async () => {
       vi.mocked(scoreBook).mockClear();
       vi.mocked(reconcileResidentQwenTiers).mockClear();

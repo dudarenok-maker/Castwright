@@ -197,6 +197,8 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     expect(resumeSpy).toHaveBeenCalledWith('b1');
     const retryButton = await screen.findByRole('button', { name: /resume scoring/i });
     expect(retryButton).not.toBeDisabled();
+    // A network error is not a server refusal: no sentence is shown beside the button.
+    expect(screen.queryByRole('status')).toBeNull();
     resumeSpy.mockRestore();
   });
 
