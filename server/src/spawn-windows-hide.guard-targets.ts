@@ -12,6 +12,7 @@
         the dev-machine *.test.ts invariant (all three read this tree).
       - 'scripts/**'                   — recursive, includes scripts/tests/.
       - 'server/tts-sidecar/scripts/**'
+      - 'server/scripts/**'            — the #2254 library scanner (spawns a child per file).
       - 'pinokio-scripts/lib/**'
       - 'e2e/global-teardown.ts'       — EXTERNAL_FILES_MANUAL's one entry.
       - 'vite.config.ts', 'launch.mjs' — two of the concrete files
