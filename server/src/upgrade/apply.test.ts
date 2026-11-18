@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { join } from 'node:path';
+import { FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { applyUpgrade, type ApplySteps, type ApplyContext } from './apply.js';
 
 function ctx(over: Partial<ApplyContext> = {}): ApplyContext {
@@ -140,5 +141,45 @@ describe('applyUpgrade', () => {
     expect(res.phase).toBe('needs-reinstall');
     expect(steps.pipInstall).not.toHaveBeenCalled();
     expect(steps.flipPointer).not.toHaveBeenCalled();
+  });
+  // #4322 — errorLan is the curated twin of error for LAN clients.
+  describe('errorLan (#4322)', () => {
+    const P = 'C:\\Users\\bob\\app\\releases\\v1.2.3';
+    const fsErr = (code: string, msg = `EBUSY: resource busy, rename '${P}'`) =>
+      Object.assign(new Error(msg), { code, syscall: 'rename', path: P });
+
+    it('curates an EBUSY fs error while error stays raw', async () => {
+      const steps = fakeSteps({ extract: vi.fn(async () => { throw fsErr('EBUSY'); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('bob');
+      expect(res.errorLan).toBe(FS_FAILURE_REQUEST_ERROR);
+      expect(res.errorLan).not.toContain('bob');
+      expect(res.errorLan).not.toContain('C:');
+    });
+
+    it('maps ENOSPC to the permanent-failure sentence', async () => {
+      const steps = fakeSteps({ extract: vi.fn(async () => { throw fsErr('ENOSPC', 'ENOSPC: no space left'); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.errorLan).toBe(FS_PERMANENT_FAILURE_REQUEST_ERROR);
+    });
+
+    it('passes a plain Error through verbatim', async () => {
+      const steps = fakeSteps({ npmCi: vi.fn(async () => { throw new Error('npm ci failed: exit 1'); }) });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.errorLan).toBe(res.error);
+      expect(res.errorLan).toBe('npm ci failed: exit 1');
+    });
+
+    it('needs-reinstall carries the same sentence in errorLan', async () => {
+      const steps = fakeSteps({
+        readStamp: vi.fn(() => ({ pythonTag: 'cp311', profile: 'nvidia', reqHash: 'x' })),
+        resolveRequired: vi.fn(() => ({ pythonTag: 'cp312', profile: 'nvidia', reqHash: 'y' })),
+      });
+      const res = await applyUpgrade(ctx(), steps);
+      expect(res.phase).toBe('needs-reinstall');
+      expect(res.errorLan).toBe(res.error);
+      expect(res.errorLan).toMatch(/reinstall/i);
+    });
   });
 });

@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import yauzl from 'yauzl';
 import { refuseUnderVitest } from '../system/refuse-under-vitest.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import {
   classifyVenvState,
   readStamp,
@@ -77,8 +78,16 @@ export interface ApplyResult {
   releaseDir: string;
   phase: ApplyPhase;
   error?: string;
+  /** Curated twin of `error`, safe for non-loopback (LAN) clients: fs errors are
+   *  reduced to a fixed path-free sentence, computed from the original Error
+   *  (#4322). `error` stays raw for loopback. */
+  errorLan?: string;
   pipRan?: boolean;
 }
+
+const NEEDS_REINSTALL_MESSAGE =
+  'The installed Python environment is incompatible with this release. ' +
+  'A fresh reinstall is required (your books and voices are preserved).';
 
 export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promise<ApplyResult> {
   const log = steps.log ?? (() => {});
@@ -124,9 +133,8 @@ export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promis
         version: ctx.candidateVersion,
         releaseDir,
         phase,
-        error:
-          'The installed Python environment is incompatible with this release. ' +
-          'A fresh reinstall is required (your books and voices are preserved).',
+        error: NEEDS_REINSTALL_MESSAGE,
+        errorLan: NEEDS_REINSTALL_MESSAGE,
         pipRan,
       };
     }
@@ -146,7 +154,15 @@ export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promis
     } catch {
       /* best-effort cleanup */
     }
-    return { ok: false, version: ctx.candidateVersion, releaseDir, phase, error: (err as Error).message, pipRan };
+    return {
+      ok: false,
+      version: ctx.candidateVersion,
+      releaseDir,
+      phase,
+      error: (err as Error).message,
+      errorLan: requestFailureMessageFs(err, (err as Error).message),
+      pipRan,
+    };
   }
 
   // COMMIT POINT — flip the pointer, then hand off to the detached restarter.
