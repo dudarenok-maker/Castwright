@@ -475,7 +475,7 @@ Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
 
 ### Known limitations
 
-- **Multi-GPU: only the highest-headroom card is ever asked.**
+- ~~**Multi-GPU: only the highest-headroom card is ever asked.**
   `_worst_device_key` (§6) returns the card with the **most** headroom, and
   that is the only card `_idle_evict` is ever asked about — it calls
   `idle_evict(device_key)` for that one card alone. So on a multi-GPU box, an
@@ -485,7 +485,10 @@ Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
   #1721, not something this design introduces, and it's irrelevant to the
   single-GPU case #1894 is about — but it belongs here as a known limitation
   in its own right, not only as the acceptance-scoping note §6 already
-  carries.
+  carries.~~
+  **Update (#4164):** this now holds only for *unconstrained* ops. An op that
+  is resident on a card, credited, or pinned to one runs the ladder against
+  that card (`constraint`), not the roomiest.
 - **Multi-GPU: a reclaimed Coqui can reload onto the wrong card.** After an
   evict, `_drop_model_locked` resets `_device` back to `_requested_device`
   (usually `"auto"`), and `synthesize`'s re-ensure calls `_ensure_loaded(model)`

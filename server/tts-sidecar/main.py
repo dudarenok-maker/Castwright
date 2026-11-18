@@ -4161,9 +4161,10 @@ def _parse_device_hint(raw: Optional[str]) -> Optional[str]:
     falls back to unconstrained best-fit, NOT into `pinned`, which restricts
     `_gpu_candidates` to one device with no fallback at all. A hard pin here
     would be strictly worse than sending no hint: on a box where the hinted
-    card is the busy one, the derive cannot fit, `_evict_until` targets the
-    ROOMIEST card instead (`_worst_device_key`) so eviction can never satisfy
-    the constraint, `withCapacityRetry` burns ~60 s, and the resolver
+    card is the busy one, the derive cannot fit, the ladder (targeted at the
+    pinned card since #4164) can only free IDLE ladder engines there and
+    cannot clear a card busy with work nothing can evict, so the fit never
+    succeeds, `withCapacityRetry` burns ~60 s, and the resolver
     soft-fails the voice — the character then renders in a stock catalogue
     voice. A preference degrades to today's placement instead. If a hard pin
     is ever wanted it must be a separate, explicit, fail-fast opt-in.
