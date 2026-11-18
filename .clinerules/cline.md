@@ -284,10 +284,13 @@ $p.Id | Set-Content (Join-Path $T 'push.pid')
 $T
 ```
 
-**`push -u origin HEAD`, not a bare `push`.** A branch's first push has no
-upstream, and with `push.autoSetupRemote` unset a bare `git push` exits 128
-("has no upstream branch"). `-u origin HEAD` sets it, and is harmless on a
-branch that already has one.
+**`push -u origin HEAD`, not a bare `push`.** With `push.autoSetupRemote`
+unset, a bare `git push` exits 128 on a branch's first push, whether it has no
+upstream ("has no upstream branch") or tracks a different name such as
+`origin/main` ("does not match the name"). `-u origin HEAD` pushes the
+checked-out branch to the same-named branch on origin and makes that its
+upstream, replacing any other upstream (e.g. `origin/main`). The checked-out
+branch must be the one your brief names.
 
 **Never a fixed log name.** The GUID suffix is load-bearing, exactly as it is in
 `oe-detached-commit.ps1`: two lanes -- or two attempts in one lane -- that share
@@ -311,7 +314,9 @@ else           { 'child gone with no EXIT= -- check whether the upstream ref mov
 before 10** -- that is one pytest run, not a battery. The repo settles any
 disagreement, because a pid can be reused and a log line can be stale while a
 ref either moved or did not: `git -C $W status -sb` (the `ahead`/`behind`
-counts), or `git -C $W rev-parse HEAD "@{u}"`.
+counts), or `git -C $W rev-parse HEAD "@{u}"`. On a branch's first push,
+`fatal: no upstream configured` from that `rev-parse` means the push did not
+land: `-u` records the upstream only after origin accepts the ref.
 
 **Do not end your turn while it runs.** Polling is active waiting and is
 correct; ending the run is not -- you are headless and nothing will wake you.
@@ -350,7 +355,11 @@ See CLAUDE.md "Incidental findings: report, fix, record".
   scope").
 - Verify locally before pushing: `npm run verify:fast:branch` for the full branch-scoped
   battery (lint, typecheck, config:check, test:hooks, test, test:server, build, audit, etc.)
-  OR just the pre-push guards and sidecar check by running `git push --dry-run` first.
+  OR just the pre-push guards and sidecar check by running `git push --dry-run origin HEAD`
+  first (not a bare `git push --dry-run`, which exits 128 on a branch's first push and
+  runs no hook; no `-u`, a dry run writes no config). `.husky/pre-push` cannot tell a dry
+  run from a real push, so on a `server/tts-sidecar/**` branch the dry run also pays the
+  ~6.85 min `test:sidecar` -- launch it detached, per "Committing when a step is in scope".
   Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to the STAGED diff, so
   on an empty or unrelated index every leg reports `(out of scope)` and exits 0 having
   run no tests at all. A green from it proves nothing until the change is staged -- and
