@@ -197,6 +197,24 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     expect(resumeSpy).toHaveBeenCalledWith('b1');
     const retryButton = await screen.findByRole('button', { name: /resume scoring/i });
     expect(retryButton).not.toBeDisabled();
+    // A network error is not a server refusal: no sentence is shown beside the button.
+    expect(screen.queryByRole('status')).toBeNull();
+    resumeSpy.mockRestore();
+  });
+
+  it("shows the server's refusal sentence when a splice or repair blocks Resume (#4235)", async () => {
+    const reason = 'A chapter fix or repair is running for this book — resume scoring once it finishes.';
+    const resumeSpy = vi
+      .spyOn(api, 'resumeScoring')
+      .mockRejectedValue(Object.assign(new Error(reason), { code: 'resume-scoring-refused' }));
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, chaptersScored: 6, charactersPending: ['ren'] },
+    };
+    render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test" bookId="b1" />);
+    await userEvent.click(screen.getByRole('button', { name: /resume scoring/i }));
+    expect(await screen.findByRole('status')).toHaveTextContent(reason);
+    expect(screen.getByRole('button', { name: /resume scoring/i })).not.toBeDisabled();
     resumeSpy.mockRestore();
   });
 });

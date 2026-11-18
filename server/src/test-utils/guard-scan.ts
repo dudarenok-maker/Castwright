@@ -369,3 +369,146 @@ export function isOpaqueInTokenRanges(
 ): boolean {
   return ranges.some((r) => index >= r.start && index < r.end);
 }
+
+/* ===== SAME-FUNCTION CONST RESOLVER (#4328, spec §5.A "The guard") ===========
+   For the chapter-take guard: given a call argument, is it "tracked" - does it
+   trace back to a ROOT predicate through the spec's hop kinds and nothing else?
+     - a root (the caller's `isRoot` predicate);
+     - a `join` / `resolve` call with a tracked argument;
+     - a template literal whose HEAD expression is tracked (the literal text
+       before the first `${` is empty);
+     - an identifier bound by a `const` declared in the SAME function (the
+       nearest enclosing function-like), followed transitively (an alias).
+   NOT followed, on purpose - the documented blind spots: a parameter, a `let`
+   or `var`, a non-`join` call's return value, a module-level binding, and a
+   `const` of a DIFFERENT function (including an enclosing one: a closure
+   reading its parent's const is a different function). Cycles are cut by a
+   seen-set. It needs a source file parsed with parent pointers
+   (`parseGuardSource`). ================================================ */
+
+/** Parse `content` with parent pointers, which the resolver walks. */
+export function parseGuardSource(content: string, fileName = 'guard-scan.ts'): ts.SourceFile {
+  return ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+}
+
+/** The callee's bare or member name: `f(...)` and `ns.f(...)` both give `f`. */
+export function resolvedCallName(call: ts.CallExpression): string | null {
+  const callee = call.expression;
+  if (ts.isIdentifier(callee)) return callee.text;
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+  return null;
+}
+
+/** `e` with parentheses, `await`, casts and non-null assertions peeled off. */
+export function unwrapExpression(e: ts.Expression): ts.Expression {
+  let cur = e;
+  for (;;) {
+    if (
+      ts.isParenthesizedExpression(cur) ||
+      ts.isAwaitExpression(cur) ||
+      ts.isAsExpression(cur) ||
+      ts.isNonNullExpression(cur) ||
+      ts.isSatisfiesExpression(cur) ||
+      ts.isTypeAssertionExpression(cur)
+    ) {
+      cur = cur.expression;
+    } else {
+      return cur;
+    }
+  }
+}
+
+function isFunctionLikeNode(n: ts.Node): n is ts.FunctionLikeDeclaration {
+  return (
+    ts.isFunctionDeclaration(n) ||
+    ts.isFunctionExpression(n) ||
+    ts.isArrowFunction(n) ||
+    ts.isMethodDeclaration(n) ||
+    ts.isConstructorDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n)
+  );
+}
+
+/** The nearest function-like enclosing `node`, or undefined at module level. */
+export function enclosingFunction(node: ts.Node): ts.FunctionLikeDeclaration | undefined {
+  for (let p = node.parent; p; p = p.parent) {
+    if (isFunctionLikeNode(p)) return p;
+  }
+  return undefined;
+}
+
+/** Initialisers of every `const <name> = ...` declared directly in `fn` (its
+    nested blocks included, nested functions NOT descended into). */
+function constInitialisers(fn: ts.FunctionLikeDeclaration, name: string): ts.Expression[] {
+  const out: ts.Expression[] = [];
+  const visit = (n: ts.Node): void => {
+    if (n !== fn && isFunctionLikeNode(n)) return;
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === name &&
+      n.initializer &&
+      ts.isVariableDeclarationList(n.parent) &&
+      (n.parent.flags & ts.NodeFlags.Const) !== 0
+    ) {
+      out.push(n.initializer);
+    }
+    ts.forEachChild(n, visit);
+  };
+  if (fn.body) ts.forEachChild(fn.body, visit);
+  return out;
+}
+
+const PATH_COMBINERS = new Set(['join', 'resolve']);
+
+/** Whether `expr` is tracked from `isRoot` through the hop kinds above. */
+export function isTrackedBy(
+  expr: ts.Expression,
+  isRoot: (node: ts.Expression) => boolean,
+  seen: Set<ts.Node> = new Set(),
+): boolean {
+  const e = unwrapExpression(expr);
+  if (isRoot(e)) return true;
+  if (ts.isIdentifier(e)) {
+    const fn = enclosingFunction(e);
+    if (!fn) return false; // module-level binding: not followed
+    for (const init of constInitialisers(fn, e.text)) {
+      if (seen.has(init)) continue;
+      seen.add(init);
+      if (isTrackedBy(init, isRoot, seen)) return true;
+    }
+    return false;
+  }
+  if (ts.isCallExpression(e)) {
+    const name = resolvedCallName(e);
+    if (name === null || !PATH_COMBINERS.has(name)) return false;
+    return e.arguments.some((a) => isTrackedBy(a, isRoot, seen));
+  }
+  if (ts.isTemplateExpression(e)) {
+    if (e.head.text !== '') return false;
+    const first = e.templateSpans[0];
+    return first ? isTrackedBy(first.expression, isRoot, seen) : false;
+  }
+  return false;
+}
+
+/** The spec's rule-3 root: `audioDir(...)`, or a string / template that
+    contains `audio/` or ends in `/audio`. */
+export function isAudioDirRoot(e: ts.Expression): boolean {
+  const chunkMatches = (text: string): boolean => text.includes('audio/') || text.endsWith('/audio');
+  if (ts.isCallExpression(e)) return resolvedCallName(e) === 'audioDir';
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return chunkMatches(e.text);
+  if (ts.isTemplateExpression(e)) {
+    return (
+      chunkMatches(e.head.text) ||
+      e.templateSpans.some((s) => chunkMatches(s.literal.text))
+    );
+  }
+  return false;
+}
+
+/** A call argument tracked from an audio directory (rule 3). */
+export function isTrackedAudioPath(arg: ts.Expression): boolean {
+  return isTrackedBy(arg, isAudioDirRoot);
+}

@@ -12,13 +12,19 @@
    it no longer inlines its own tail. */
 
 import { rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import {
+  TAKE_STATE_FIELDS,
+  liveAudioPath,
+  livePartPath,
+  discardStaleLiveAudio,
+  preserveExistingAsPrevious,
+  type TakeFields,
+} from '../workspace/chapter-take.js';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
-import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';
 import { formatDuration } from './format-duration.js';
 import { measureLoudnessFile, type MeasuredLoudness } from './measure-loudness.js';
@@ -61,6 +67,8 @@ export interface ChapterSegmentsFile {
   sampleRate: number;
   modelKey: TtsModelKey;
   synthesizedAt: string;
+  /** Take identity (spec §4.1). Nothing writes it yet (Phase 1). */
+  takeId?: string;
   /** #2128 — the `seq` of the `cast-id-history.json` state THIS render
       resolved against. Written ONLY by the full-render path
       (`generation.ts`); `chapter-qa-repair.ts` and `chapter-splice.ts` carry
@@ -214,10 +222,10 @@ async function finalizeChapterAudioWriteInner(
 
   const audioRoot = audioDir(bookDir);
   const audioExt = audioExtForFormat(audioFormat);
-  const audioPath = join(audioRoot, `${chapter.slug}.${audioExt}`);
-  const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
-  const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
-  const lufsPath = join(audioRoot, `${chapter.slug}.lufs.json`);
+  const audioPath = liveAudioPath(audioRoot, chapter.slug, audioExt);
+  const segPath = livePartPath(audioRoot, chapter.slug, 'segments');
+  const peaksPath = livePartPath(audioRoot, chapter.slug, 'peaks');
+  const lufsPath = livePartPath(audioRoot, chapter.slug, 'lufs');
 
   /* EBU R128 loudness normalisation (plan 71). Default ON; opt out with
      AUDIO_LOUDNORM_ENABLED=false. Two-pass measure-then-apply runs inside
@@ -695,7 +703,7 @@ async function finalizeChapterAudioWriteInner(
      under-scores, whereas a failure between the move and the audio rename
      left no `<slug>.<ext>` on disk (an unplayable chapter). */
   if (input.embeddings) {
-    const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+    const embPath = livePartPath(audioRoot, chapter.slug, 'embeddings');
     await writeEmbeddings(embPath, input.embeddings, EMBEDDINGS_VERSION);
   } else if (resynthesizedIndexSet.size > 0) {
     /* #3362 pass-6 fix (🟠G, owner design (i)) — chapter-splice.ts's
@@ -733,7 +741,7 @@ async function finalizeChapterAudioWriteInner(
        is dropped. That is right — the audio was just re-rendered, so those
        rows are stale — and leaves the chapter unembedded until a render
        embeds it. */
-    const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+    const embPath = livePartPath(audioRoot, chapter.slug, 'embeddings');
     const existing = await readEmbeddings(embPath).catch(() => null);
     if (existing) {
       const droppedKeys = new Set(
@@ -776,6 +784,10 @@ async function finalizeChapterAudioWriteInner(
   await writeJsonAtomic(segPath, segmentsFile);
   await rename(tmpAudio, audioPath);
   tmp.path = null;
+  /* Exactly one live file, the new take: an aborted preserve (a stale previous
+     could not be removed) leaves the old live file in place, and after a
+     container switch mp3-first probing would serve it over this render. */
+  await discardStaleLiveAudio(audioRoot, chapter.slug, audioExt);
   try {
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);
   } catch (err) {
@@ -791,18 +803,24 @@ async function finalizeChapterAudioWriteInner(
   const prev = await withStateJsonLock(statePath, async () => {
     const onDisk = await readStateJsonWithRecovery(statePath);
     if (onDisk) {
-      const formatted = formatDuration(durationSec);
+      /* Stamped over TAKE_STATE_FIELDS (the single list): a member this render
+         does not carry is dropped, so a previous take's `audioTakeId` never
+         survives onto the new one (its segments carry no id until minted). */
+      const stamp: TakeFields = {
+        duration: formatDuration(durationSec),
+        audioModelKey: effectiveModelKey,
+        audioEngines,
+        audioRenderedAt: segmentsFile.synthesizedAt,
+        audioQa,
+      };
+      const takeMembers = Object.fromEntries(TAKE_STATE_FIELDS.map((f) => [f, stamp[f]]));
       const next: BookStateJson = {
         ...onDisk,
         chapters: onDisk.chapters.map((c) =>
           c.id === chapter.id
             ? {
                 ...c,
-                duration: formatted,
-                audioModelKey: effectiveModelKey,
-                audioEngines,
-                audioRenderedAt: segmentsFile.synthesizedAt,
-                audioQa,
+                ...takeMembers,
                 generationState: undefined,
                 generationError: undefined,
                 generationErrorCode: undefined,

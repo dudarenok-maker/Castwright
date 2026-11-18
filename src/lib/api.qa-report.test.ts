@@ -14,6 +14,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('api.resumeScoring — 409 refusal (#4235)', () => {
+  it("surfaces the server's own sentence, not the generation label", async () => {
+    const error = 'A chapter fix or repair is running for this book — resume scoring once it finishes.';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error }), { status: 409 })));
+    const err = (await api.resumeScoring('b1').catch((e: Error) => e)) as Error & { code?: string };
+    expect(err.message).toBe(error);
+    expect(err.code).toBe('resume-scoring-refused');
+  });
+
+  it('falls back to a neutral sentence when the 409 body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 409 })));
+    const err = (await api.resumeScoring('b1').catch((e: Error) => e)) as Error;
+    expect(err.message).toBe('Scoring cannot resume right now.');
+  });
+});
+
 describe('api.getQaReport — wire contract', () => {
   it('fetches the book-scoped QA report endpoint and returns the body', async () => {
     const body = {

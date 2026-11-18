@@ -30,7 +30,7 @@ import {
 } from '../workspace/file-lock.js';
 import { castJsonPath, audioDir, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio, livePartPath } from '../workspace/chapter-take.js';
 import {
   canonicalModelKeyForEngine,
   engineForModelKey,
@@ -74,7 +74,6 @@ import {
 import { finalizeChapterAudioWrite, type ChapterSegmentsFile } from '../audio/finalize-chapter-write.js';
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
-import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { configValue } from '../config/resolver.js';
 import { readVerdicts, writeVerdicts } from '../audio/render-integrity/verdicts-io.js';
@@ -154,7 +153,7 @@ chapterQaRepairRouter.post(
     const audioFile = findChapterAudio(audioRoot, chapter.slug);
     if (!audioFile) return fail('Chapter has no rendered audio to repair — generate it first.');
 
-    const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
+    const segPath = livePartPath(audioRoot, chapter.slug, 'segments');
     const segFile = await readJson<ChapterSegmentsFile>(segPath).catch(() => null);
     if (!segFile || !Array.isArray(segFile.segments) || !segFile.segments.length) {
       return fail('Chapter segments metadata is missing or unreadable — re-render the chapter.');
@@ -261,7 +260,7 @@ chapterQaRepairRouter.post(
          Dedupes by segmentIndex: if the signal/ASR scan already flagged a segment,
          UNION (set acoustic: true on the existing entry) rather than adding a duplicate. */
       if (configValue('qa.speaker.autoRepair')) {
-        const verdictPath = join(audioRoot, `${chapter.slug}.render-integrity.json`);
+        const verdictPath = livePartPath(audioRoot, chapter.slug, 'verdicts');
         const verdictRows = await readVerdicts(verdictPath).catch(() => null);
         if (verdictRows) {
           for (const row of verdictRows) {
@@ -849,7 +848,7 @@ chapterQaRepairRouter.post(
          not abort the repair that already succeeded. */
       if (newEmbeddingsByIndex.size > 0) {
         try {
-          const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
+          const embPath = livePartPath(audioRoot, chapter.slug, 'embeddings');
           const existing = await readEmbeddings(embPath).catch(() => null);
           const existingRows: EmbeddingRow[] = existing?.rows ?? [];
 
@@ -873,7 +872,7 @@ chapterQaRepairRouter.post(
         }
 
         try {
-          const verdictPath = join(audioRoot, `${chapter.slug}.render-integrity.json`);
+          const verdictPath = livePartPath(audioRoot, chapter.slug, 'verdicts');
           const verdictRows = await readVerdicts(verdictPath).catch(() => null);
           if (verdictRows) {
             for (const [segIdx, vec] of newEmbeddingsByIndex) {

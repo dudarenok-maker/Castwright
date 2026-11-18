@@ -1191,6 +1191,75 @@ recite:
     (Numbered 91: open PR #4103 holds 89 and 90; renumber on merge if the order
     changes.)
 
+92. **A completeness fix that records or prints "everything", sweeping in a
+    field the module's own contract says is never persisted or logged** — PR
+    #4389 pass 3 (#2254): pass 2 asked the runner's re-capture refusal to cover
+    every knob that changes a capture, and the fix put the resolved custom
+    analyzer payload into the saved settings (so into every `capture-ch<id>.json`)
+    and printed each differing leaf with its saved and current values. The
+    payload can hold `{ api_key: "sk-..." }`, and
+    `analyzer/runner/extra-params.ts` states callers never log a payload and
+    never write one to an analyzer file; the wiki and plan 284 repeat it. The
+    same sweep flattened `{options:{top_k:5}}` and `{"options.top_k":5}` to one
+    leaf set, so two different requests compared equal. Checkable: for every
+    change that widens what a record, log line, error message or diff output
+    includes ("every X", "all knobs", "the whole settings object"), grep the
+    owning module for a never-log / never-persist / redact statement about
+    anything the widening now reaches, and read the outputs (files and refusal
+    text), not the comparison. Where a value must be compared but not shown,
+    require a digest of a canonical form that keeps structure, and a message
+    that names the key without its value. Test with a unique sentinel seeded
+    into the sensitive field, asserting it appears in no file under the output
+    directory and in no log, stdout or stderr line.
+    (Numbered 92 after #4103's 89-90 and #4106's 91; both merged, so no renumber.)
+
+93. **A test depends on a path outside its step's globs, so CI skips the guard
+    on the one diff it guards** - PR #4437 pass 2 (#4380):
+    `check-audit.test.mjs` read `server/package.json` as text to pin the server
+    audit script's `--omit-dev`, but `test:hooks` selects on its `globs` plus
+    `extraFiles` only (no import graph: `ci-scope.mjs:54` is
+    `shared || stepTouchedByDiff(step, files)`, and `stepTouchedByDiff` checks
+    only `globs`, `extraFiles` and the server lockfile) and the file was in
+    neither. A PR changing only that file skipped both `test:hooks` legs, and
+    the only audit step it did run could not see the flip (#1847, the
+    runtime-read trap). Pass 3 added that the same reach goes beyond a
+    `readFileSync` in the test: `audit-waivers.json` is reached through
+    `loadWaivers()`'s default path and through `existsSync`, and the four
+    existing `extraFiles` entries for `launch.mjs`, `install-qwen3.mjs`,
+    `pip-constraints.mjs` and `pinokio.js` exist only because an import from
+    outside the globs is not followed either. Checkable: for every path a test
+    depends on that is not under its step's globs, whether the test reads it
+    (`readFileSync`, `existsSync`, `git ls-files`/`git show`), the code under
+    test reaches it through a default path, or the test imports it from outside
+    the globs, run `node scripts/ci-scope.mjs --files=<that path>` and confirm
+    the test's step reports true, and add the path to its `extraFiles` with a
+    pipeline case if not. For every pinned script, confirm the pins cover every
+    link from the entry point the workflow and `verify-cache` invoke down to
+    the flag that matters (this PR needed both the root `audit:server` pin and
+    the `server/package.json` `--omit-dev` pin; pinning only one lets a change
+    to the other through).
+    (Numbered 93 after #4389's 92, which is already on main; no renumber.)
+
+94. **A precondition stated as an env var to leave unset, which the launcher
+    re-injects from saved settings** - PR #4436 pass 3 (#4164): an on-box row
+    said "leave `COQUI_DEVICE` UNSET" so that only residency could constrain
+    the op. `COQUI_DEVICE` is the restart-sidecar knob `tts.coqui.device`
+    (`config/registry.ts`), the resolver ranks Node's env, then a saved
+    override, then the default (`config/resolver.ts`), and `buildSidecarEnv`
+    (`tts/spawn-sidecar.ts`) writes every non-default knob into the sidecar's
+    env on each spawn. A box with a saved Coqui device therefore got the pin
+    anyway: the bullet passed on a build that ignores residency, and its
+    "unpinned" control failed on a fixed one. The same hole covered
+    `ASR_DEVICE`, `SPK_DEVICE` and both idle TTLs. Checkable: for every
+    acceptance step or runbook line that says "set X" or "leave X unset" for an
+    env var, look X up in `config/registry.ts`; if it has an `env:` key, the
+    step must name how to set it through Node (shell export before Node
+    starts, or the Settings knob) and that a saved override counts as set.
+    Test by following the step on a box with a saved override and reading the
+    sidecar's real environment, not the shell's.
+    (Numbered 94 after #4437's 93, which is already on main; no other open PR
+    holds a number.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape

@@ -7,6 +7,7 @@ import {
   reconcileChapterUuids,
   carryTitleSynthesized,
   carryServerOwnedChapterFields,
+  carryTakeStateFields,
 } from './chapter-uuid.js';
 import type { BookStateJson } from './scan.js';
 
@@ -461,5 +462,68 @@ describe('carryServerOwnedChapterFields (#3683)', () => {
     const out = carryServerOwnedChapterFields([ch({ id: 1, uuid: 'u-1' })], existing);
 
     expect(out[0].duration).toBe('00:20:00');
+  });
+});
+
+describe('carryTakeStateFields (#4340, spec §4.3)', () => {
+  const audioQa: NonNullable<Chapter['audioQa']> = {
+    status: 'ok',
+    reasons: [],
+    measuredLufs: -19,
+    truePeakDb: -2,
+    durationSec: 60,
+    expectedSec: 60,
+    checkedAt: '2026-11-01T00:00:00.000Z',
+  };
+
+  it('U2a. a matched chapter gains every member the disk chapter has', () => {
+    const existing = [
+      ch({
+        id: 1,
+        duration: '00:12:34',
+        audioModelKey: 'qwen',
+        audioEngines: { qwen: 2 },
+        audioRenderedAt: '2026-11-01T00:00:00.000Z',
+        audioQa,
+        audioTakeId: 'abcdefghijklmnop',
+      }),
+    ];
+    const out = carryTakeStateFields([ch({ id: 1, duration: '00:00' })], existing);
+    expect(out[0].duration).toBe('00:12:34');
+    expect(out[0].audioModelKey).toBe('qwen');
+    expect(out[0].audioEngines).toEqual({ qwen: 2 });
+    expect(out[0].audioRenderedAt).toBe('2026-11-01T00:00:00.000Z');
+    expect(out[0].audioQa).toEqual(audioQa);
+    expect(out[0].audioTakeId).toBe('abcdefghijklmnop');
+  });
+
+  it('U2b. an unmatched chapter (same id, different slug) keeps its placeholder and gains nothing', () => {
+    const existing = [ch({ id: 1, slug: '01-old', duration: '00:12:34', audioTakeId: 'abcdefghijklmnop' })];
+    const incoming = [ch({ id: 1, slug: '01-new', duration: '00:00' })];
+    const out = carryTakeStateFields(incoming, existing);
+    expect(out[0].duration).toBe('00:00');
+    expect('audioTakeId' in out[0]).toBe(false);
+    expect(out[0]).toEqual(incoming[0]);
+  });
+
+  it('U2c. a disk generationState failure is NOT carried', () => {
+    const existing = [
+      ch({ id: 1, duration: '00:01:00', generationState: 'failed', generationError: 'boom' }),
+    ];
+    const out = carryTakeStateFields([ch({ id: 1 })], existing);
+    expect(out[0].duration).toBe('00:01:00');
+    expect('generationState' in out[0]).toBe(false);
+    expect('generationError' in out[0]).toBe(false);
+  });
+
+  it('U2d. the input arrays are not mutated', () => {
+    const incoming = [ch({ id: 1 })];
+    const existing = [ch({ id: 1, duration: '00:01:00', audioTakeId: 'abcdefghijklmnop' })];
+    const inSnap = structuredClone(incoming);
+    const exSnap = structuredClone(existing);
+    const out = carryTakeStateFields(incoming, existing);
+    expect(out).not.toBe(incoming);
+    expect(incoming).toEqual(inSnap);
+    expect(existing).toEqual(exSnap);
   });
 });

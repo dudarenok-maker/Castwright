@@ -1,42 +1,57 @@
 /* Sibling fsck for the chapter-audio rollback-preservation pair (plan 20).
  *
- * The preserve helper (`preserve-previous-audio.ts`) renames two files —
- * `<slug>.mp3` and `<slug>.segments.json` — to `<slug>.previous.*` before
+ * The preserve helper (`preserveExistingAsPrevious`, `chapter-take.ts`) renames two files —
+ * `<slug>.{mp3,m4a,ogg}` and `<slug>.segments.json` — to `<slug>.previous.*` before
  * a regen clobbers the live render. The renames are sequential, not
  * atomic: a crash between them leaves a half-preserved state.
  *
  * Three recovery cases this fsck handles, run once on server startup:
  *
- *   (1) `<slug>.previous.mp3` exists, no live `<slug>.{mp3,m4a,ogg}` does.
+ *   (1) `<slug>.previous.{mp3,m4a,ogg}` exists, no live `<slug>.{mp3,m4a,ogg}` does.
  *       — Interpretation: the rename succeeded but the new render never
  *         landed (regen aborted / crashed before writing the new audio).
  *         Recovery: promote the preserved take back to live so the user
  *         doesn't see the chapter as missing audio.
  *
- *   (2) `<slug>.previous.segments.json` exists, `<slug>.previous.mp3`
- *       does NOT.
+ *   (2) `<slug>.previous.segments.json` exists, no `<slug>.previous.<ext>`
+ *       of any extension does.
  *       — Interpretation: orphan segments file. The audio was either
  *         already promoted out (accept/reject path) or the audio rename
  *         failed first. Either way the segments file is dead state.
  *         Recovery: delete the orphan.
  *
- *   (3) `<slug>.previous.mp3` exists alongside a live take of any
+ *   (3) `<slug>.previous.<ext>` exists alongside a live take of any
  *       supported extension (`<slug>.{mp3,m4a,ogg}`).
  *       — Interpretation: valid pending-revision state. Leave alone.
  *
- * Safe to run on every server start: the operations are idempotent and
- * only ever rename / delete the `.previous.*` halves — the live audio
- * is never touched by this fsck. */
+ * Before cases 1 and 2, `fsckAllBooks` runs the take module's per-chapter
+ * `reconcileSlug` (#4339) on every chapter slug of the book. THAT step can rename a wrong-named live file to its
+ * real extension, demote or quarantine a duplicate live file to
+ * `audio/.orphaned/`, and mint ids into the live segments and embeddings, so
+ * the live audio is touched by the fsck as a whole, though the three cases
+ * above still only rename / delete the `.previous.*` halves.
+ *
+ * Safe to run on every server start: every operation is idempotent. */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
 import { withBookOpAtDir } from './book-op-lock.js';
-import { findChapterAudio } from './chapter-audio-file.js';
-import { BOOKS_ROOT, audioDir, bookDirByDisplay } from './paths.js';
+import {
+  CHAPTER_AUDIO_EXTS,
+  findChapterAudio,
+  findPreviousAudio,
+  liveAudioPath,
+  livePartPath,
+  previousPartPath,
+  reconcileSlug,
+} from './chapter-take.js';
+import { BOOKS_ROOT, audioDir, bookDirByDisplay, stateJsonPath } from './paths.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 
-const PREV_MP3_RE = /^(.+)\.previous\.mp3$/i;
+/* `<slug>.previous.<ext>` for every audio extension the take module knows. */
+const PREV_AUDIO_RE = new RegExp('^(.+)\\.previous\\.(?:' + CHAPTER_AUDIO_EXTS.join('|') + ')$', 'i');
 const PREV_SEGMENTS_RE = /^(.+)\.previous\.segments\.json$/i;
 
 export interface FsckOrphanAudioResult {
@@ -67,12 +82,12 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
     return { recovered, errors };
   }
 
-  const prevMp3Slugs = new Set<string>();
+  const prevAudioSlugs = new Set<string>();
   const prevSegmentsSlugs = new Set<string>();
   for (const name of entries) {
-    const mp3 = PREV_MP3_RE.exec(name);
-    if (mp3) {
-      prevMp3Slugs.add(mp3[1]);
+    const audio = PREV_AUDIO_RE.exec(name);
+    if (audio) {
+      prevAudioSlugs.add(audio[1]);
       continue;
     }
     const seg = PREV_SEGMENTS_RE.exec(name);
@@ -82,17 +97,20 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
   /* Case 1: previous audio alive without a live counterpart → promote
      it back to live. The corresponding segments file (if any) is
      promoted alongside. */
-  for (const slug of prevMp3Slugs) {
-    const livePath = join(audioRoot, `${slug}.mp3`);
+  for (const slug of prevAudioSlugs) {
     /* Any supported extension counts as live (#3457): an m4a/ogg book's
        live take is never `<slug>.mp3`. */
     if (findChapterAudio(audioRoot, slug)) continue; // case 3 — leave the pair alone
+    /* The previous take keeps its real file type: `.previous.m4a` is promoted
+       to `<slug>.m4a`, never to `<slug>.mp3` (H13). */
+    const previous = findPreviousAudio(audioRoot, slug);
+    if (!previous) continue;
     try {
-      await renameWithRetry(join(audioRoot, `${slug}.previous.mp3`), livePath);
+      await renameWithRetry(previous.path, liveAudioPath(audioRoot, slug, previous.ext));
       if (prevSegmentsSlugs.has(slug)) {
         await renameWithRetry(
-          join(audioRoot, `${slug}.previous.segments.json`),
-          join(audioRoot, `${slug}.segments.json`),
+          previousPartPath(audioRoot, slug, 'segments'),
+          livePartPath(audioRoot, slug, 'segments'),
         );
         prevSegmentsSlugs.delete(slug);
       }
@@ -111,9 +129,8 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
      → drop. We re-check disk state because case 1 may have just
      promoted the matching previous segments. */
   for (const slug of prevSegmentsSlugs) {
-    const previousMp3 = join(audioRoot, `${slug}.previous.mp3`);
-    if (existsSync(previousMp3)) continue; // pair survived — leave alone
-    const orphan = join(audioRoot, `${slug}.previous.segments.json`);
+    if (findPreviousAudio(audioRoot, slug)) continue; // pair survived — leave alone
+    const orphan = previousPartPath(audioRoot, slug, 'segments');
     if (!existsSync(orphan)) continue; // already cleaned
     try {
       await unlink(orphan);
@@ -129,6 +146,39 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
   }
 
   return { recovered, errors };
+}
+
+/** File count and total bytes under `audio/.orphaned/`, recursively, or `null`
+    when the folder does not exist (§6.1 step 2: the fsck logs this per book on
+    every boot). Never throws: an unreadable entry is skipped. */
+export function orphanedSummary(audioRoot: string): { files: number; bytes: number } | null {
+  const dir = join(audioRoot, '.orphaned');
+  if (!existsSync(dir)) return null;
+  let files = 0;
+  let bytes = 0;
+  const walk = (d: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(d);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = join(d, name);
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) walk(full);
+        else {
+          files += 1;
+          bytes += st.size;
+        }
+      } catch {
+        /* vanished mid-walk: not counted */
+      }
+    }
+  };
+  walk(dir);
+  return { files, bytes };
 }
 
 /** Walk every book on disk and run the fsck against its `audio/` root.
@@ -162,10 +212,32 @@ export async function fsckAllBooks(): Promise<FsckOrphanAudioResult> {
            holder) skips THAT book only; the next startup retries it (PR #3714
            review pass 3). */
         try {
-          await withBookOpAtDir(walkedDir, async (bookDir) => {
-            const result = await fsckOrphanAudio(audioDir(bookDir));
+          await withBookOpAtDir(walkedDir, async (handle) => {
+            /* §6.1: lazy migration for every chapter slug BEFORE cases 1 and 2.
+               A failure for one slug is logged and the sweep continues. */
+            let slugs: string[] = [];
+            try {
+              const st = await readStateJsonWithRecovery(stateJsonPath(handle.bookDir));
+              slugs = (st?.chapters ?? []).map((c) => c.slug).filter((x): x is string => typeof x === 'string');
+            } catch (err) {
+              console.warn('[fsck-orphan-audio] could not read chapter slugs; skipping migration', err);
+            }
+            for (const slug of slugs) {
+              try {
+                await reconcileSlug(handle, slug);
+              } catch (err) {
+                console.warn(`[fsck-orphan-audio] reconcile failed for ${slug}; continuing`, err);
+              }
+            }
+            const result = await fsckOrphanAudio(audioDir(handle.bookDir));
             recovered.push(...result.recovered);
             errors.push(...result.errors);
+            const orphaned = orphanedSummary(audioDir(handle.bookDir));
+            if (orphaned) {
+              console.log(
+                `[fsck-orphan-audio] ${walkedDir}: .orphaned/ holds ${orphaned.files} file(s), ${orphaned.bytes} bytes`,
+              );
+            }
           });
         } catch (err) {
           console.warn('[fsck-orphan-audio] skipping a book this startup', err);
