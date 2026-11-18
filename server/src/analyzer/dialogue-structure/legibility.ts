@@ -84,8 +84,7 @@ export function turnInParagraphRegex(): RegExp {
 }
 
 /** Total turn openers inside paragraphs over the chapter (a sum, unlike
-    `measureChapterLegibility`'s maximum). Counted per `
-`-split line, so a
+    `measureChapterLegibility`'s maximum). Counted per `\n`-split line, so a
     match never spans a line break and the result is always >= the ru maximum.
     Takes no conventions: hidden-turn counts for the scanner and runner. */
 export function countTurnOpeners(body: string): number {
