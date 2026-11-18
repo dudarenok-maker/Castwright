@@ -180,6 +180,10 @@ function runPruneRound(attempt: PruneAttempt, round: number): Promise<void> {
         updatedAt: '2026-05-23T00:00:00.000Z', schema: 1, chapters: [],
       }),
     );
+    /* Serialised so the reset orders behind any mutation already in the queue chain. This is the SECOND layer: it is
+       reached only when the drain in stopAttempt gives up (a stale round outliving hookTimeout), the drain being the
+       layer that also covers a stale request still in its pre-lock prep. No test pins it: making this a bare
+       writeQueueFile keeps the suite green. */
     await serializeQueueMutation(() => writeQueueFile(queueJsonPath(), {
       entries: [e('p1', bookId, 0), e('k1', 'keep-book', 1), e('k2', 'keep-book', 2)],
       paused: false,
@@ -287,6 +291,9 @@ describe('a stopped prune-race attempt drains (#4244)', () => {
 
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
+    /* Released on failure too: a failed assertion before release() would leave the module queue chain blocked and hang
+       the tests after this one. A second release() is a no-op. */
+    onTestFinished(() => release());
     const held = serializeQueueMutation(() => gate);
 
     const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
