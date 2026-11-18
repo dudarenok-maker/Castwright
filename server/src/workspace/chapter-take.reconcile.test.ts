@@ -144,7 +144,7 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
     expect(ch.audioTakeId).toBe(live.takeId);
   });
 
-  it('I3: a healthy chapter with a raw-key audioModelKey is byte-identical apart from the added audioTakeId (M1 turns this red)', async () => {
+  it('I3: a healthy chapter whose segments carry an id gains only audioTakeId; a raw-key audioModelKey and audioQa are untouched (M1 turns this red)', async () => {
     const b = seedBook({
       chapter: {
         audioRenderedAt: 'T-live',
@@ -155,8 +155,8 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
       },
     });
     writeFileSync(join(b.audio, `${SLUG}.mp3`), MP3);
-    /* The segments already carry an id (so the identity mirror does not run) and derive a
-       DIFFERENT effective model key than the raw one the old heal stamped: a full
+    /* The segments already carry an id that state.json lacks (the mirror repairs it, and
+       writes nothing else) and derive a DIFFERENT effective model key than the raw one the old heal stamped: a full
        re-stamp would rewrite audioModelKey and audioQa; the fill-only pass leaves both. */
     writeJson(join(b.audio, `${SLUG}.segments.json`), {
       durationSec: 12,
@@ -167,13 +167,41 @@ describe('boot fsck runs reconcileSlug for every chapter slug', () => {
       characterSnapshots: { narrator: { voiceEngine: 'kokoro' } },
     });
     const before = chapterOf(b);
+    const liveId = readJson(join(b.audio, `${SLUG}.segments.json`)).takeId;
     expect(take.deriveTakeFields(readJson(join(b.audio, `${SLUG}.segments.json`))).audioModelKey).not.toBe(
       'raw-key-from-old-heal',
     );
 
     await fsck.fsckAllBooks();
 
-    expect(chapterOf(b)).toEqual(before);
+    expect(chapterOf(b)).toEqual({ ...before, audioTakeId: liveId });
+  });
+
+  it('the orphan-promote shape: the live segments carry an id state.json lacks, and three boots mirror it (and only it)', async () => {
+    const b = seedBook({ chapter: { duration: '0:12', audioRenderedAt: 'T-A', audioModelKey: 'kokoro-v1' } });
+    writeJson(join(b.audio, `${SLUG}.segments.json`), { durationSec: 20, synthesizedAt: 'T-B', modelKey: 'qwen3-0.6b' });
+    writeFileSync(join(b.audio, `${SLUG}.previous.mp3`), MP3);
+    writeJson(join(b.audio, `${SLUG}.previous.segments.json`), { durationSec: 12, synthesizedAt: 'T-A', modelKey: 'kokoro-v1' });
+    const before = chapterOf(b);
+
+    await fsck.fsckAllBooks();
+    await fsck.fsckAllBooks();
+    await fsck.fsckAllBooks();
+
+    const liveId = readJson(join(b.audio, `${SLUG}.segments.json`)).takeId;
+    expect(take.isTakeId(liveId)).toBe(true);
+    expect(chapterOf(b)).toEqual({ ...before, audioTakeId: liveId });
+  });
+
+  it('a state.json audioTakeId that disagrees with the live segments is overwritten by the next boot', async () => {
+    const b = seedBook({ chapter: { duration: '0:12', audioRenderedAt: 'T-A', audioTakeId: take.mintTakeId() } });
+    writeFileSync(join(b.audio, `${SLUG}.mp3`), MP3);
+    const liveId = take.mintTakeId();
+    writeJson(join(b.audio, `${SLUG}.segments.json`), { durationSec: 12, synthesizedAt: 'T-A', takeId: liveId });
+
+    await fsck.fsckAllBooks();
+
+    expect(chapterOf(b).audioTakeId).toBe(liveId);
   });
 
   it('I3: a LEGACY chapter (no takeId yet) with a raw-key audioModelKey gains only audioTakeId on the first boot', async () => {

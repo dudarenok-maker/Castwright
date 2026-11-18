@@ -214,10 +214,11 @@ export async function clearTakeIdMirror(handle: AnyBookHandle, slug: string): Pr
 
     A LIVE take (`chapterAudioExists`) whose live segments lack a valid id gets
     one minted into the segments (a write failure throws) and the live
-    embeddings if present, then mirrored into `state.json` (`audioTakeId`
-    only). A failure of THAT
-    mirror is logged and swallowed: the segments carry the id, and the scan heal
-    repairs `state.json`. A PREVIOUS take whose `.previous.segments.json` lacks
+    embeddings if present. The live segments' id is then mirrored into
+    `state.json` (`audioTakeId` only) whenever `state.json` lacks it or
+    disagrees, minted now or not. A failure of THAT mirror is logged and
+    swallowed: the segments carry the id, and the next reconcile repeats the
+    mirror. A PREVIOUS take whose `.previous.segments.json` lacks
     an id gets its own id (and its embeddings), with no live file touched.
 
     `mirrorState: false` skips the `state.json` mirror, for a caller about to
@@ -233,12 +234,21 @@ export async function ensureTakeIdentity(
   if (chapterAudioExists(root, slug)) {
     const segPath = livePartPath(root, slug, 'segments');
     const segments = await readJsonTolerant<Record<string, unknown>>(segPath);
+    let takeId: string | null = null;
     if (segments && !isTakeId(segments.takeId)) {
-      const takeId = mintTakeId();
+      takeId = mintTakeId();
       await writeJsonAtomic(segPath, { ...segments, takeId });
       await stampIdIntoJson(livePartPath(root, slug, 'embeddings'), takeId);
+    } else if (segments) {
+      takeId = segments.takeId as string;
+    }
+    /* Mirror on every reconcile, not only on a mint: a take that already carries
+       an id (an orphan-promote, a Reject, a swallowed mirror failure) otherwise
+       keeps a `state.json` that lacks or disagrees with it for good. A no-op when
+       they already agree. */
+    if (takeId && opts.mirrorState !== false) {
       try {
-        if (opts.mirrorState !== false) await mirrorTakeIdIntoState(handle, slug, takeId);
+        await mirrorTakeIdIntoState(handle, slug, takeId);
       } catch (err) {
         console.warn(`[take] state.json identity mirror failed for ${slug}:`, err);
       }
