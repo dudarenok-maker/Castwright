@@ -43,8 +43,9 @@
    Each capture saves the effective value of EVERY analyzer.* registry key, the reasoning level, the
    resolved request payload as a sha256 DIGEST of its canonical JSON (never the payload: it can hold an
    api key, and extra-params.ts forbids logging or persisting one), the capacity and the effective
-   stage-2 chunk budget (resolveStage2ChunkCharBudget(capacity), not the configured cap). Credentials in
-   the Ollama URL are recorded as a digest too. A re-capture under any difference in those is refused
+   stage-2 chunk budget (resolveStage2ChunkCharBudget(capacity), not the configured cap). An Ollama URL
+   that carries credentials is refused before anything runs (fetch refuses it and its error echoes it; the
+   refusal names analyzer.ollama.url, never the value). A re-capture under any difference in those is refused
    like a different --model, and the refusal names the differing keys (a payload as `payload (changed)`,
    with no values). A knob that
    is not an analyzer.* key and not the payload or reasoning level is not covered.
@@ -118,18 +119,13 @@ function canonicalJson(v: unknown): string {
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
-/** A URL knob (analyzer.ollama.url) can carry `user:pass@`; keep the rest readable, the credentials as a digest. */
-function redactUserinfo(s: string): string {
-  return s.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i, (_m, scheme: string, info: string) => `${scheme}<credentials sha256:${sha256(info).slice(0, 12)}>@`);
-}
-
 export function effectiveSettings(model: string): EffectiveSettings {
   const capacity = resolveCapacity({ engine: 'local', model });
   const knobs: EffectiveSettings['knobs'] = {};
   for (const k of allKnobs()) {
     if (!k.key.startsWith('analyzer.')) continue;
     const v = configValue<number | boolean | string>(k.key);
-    knobs[k.key] = typeof v === 'string' ? redactUserinfo(v) : v;
+    knobs[k.key] = v;
   }
   const payload = resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' });
   return {
@@ -322,6 +318,17 @@ export async function runCapture(opts: CaptureRunOptions, deps: RunnerDeps): Pro
     registerKnownSecretsProvider({ known: knownAnalyzerSecrets, load: async () => knownAnalyzerSecrets() });
   } catch (e) {
     return refuse(`${e instanceof Error ? e.message : String(e)};`);
+  }
+  // fetch refuses a URL that carries credentials and undici's error echoes it, so one would reach stderr;
+  // production cannot use one either. Refused by key name only, never the value, before anything else runs.
+  let resolvedUrl: URL | null = null;
+  try {
+    resolvedUrl = new URL(getResolvedOllamaUrl());
+  } catch {
+    // an unparseable URL has no userinfo to leak; the TypeError's own text would echo it, so it is not printed
+  }
+  if (resolvedUrl && (resolvedUrl.username || resolvedUrl.password)) {
+    return refuse('analyzer.ollama.url carries credentials, which fetch refuses (production cannot use such a URL either); remove them from the setting;');
   }
   const settings = effectiveSettings(opts.model);
 

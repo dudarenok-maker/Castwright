@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import {
   runCapture,
   main,
+  defaultDeps,
   captureFileName,
   readSavedCaptures,
   readPick,
@@ -331,19 +332,44 @@ test('saved settings: a nested payload and a dotted-key payload are different re
   assert.equal(await runCapture({ manifest, model: 'A', scratch, resume: true }, fakeDeps({ settingsPath: nested }).deps), 0);
 });
 
-test('saved settings: credentials in the Ollama URL are recorded as a digest, never as text', async () => {
-  const savedUrl = process.env.OLLAMA_URL;
-  delete process.env.OLLAMA_URL;
-  try {
+/* A credential in the Ollama URL is refused before anything runs: fetch refuses such a URL anyway, and
+   undici's error echoes it. Through the real main() and the real makeAnalyzer (the refusal comes first,
+   so no network is needed), with stdout and stderr tapped. The four shapes the WHATWG parser reads as userinfo. */
+for (const [shape, url] of [
+  ['user:pw@', 'http://bob:hunter2-SENTINEL@127.0.0.1:1'],
+  ['an unencoded @ in the password', 'http://bob:hunter2@SENTINEL@127.0.0.1:1'],
+  ['http:/ (one slash)', 'http:/bob:hunter2-SENTINEL@127.0.0.1:1'],
+  ['http:\\\\ (backslashes)', 'http:\\\\bob:hunter2-SENTINEL@127.0.0.1:1'],
+] as const) {
+  test(`saved settings: a credentialed Ollama URL (${shape}) is refused by name, the password reaches nowhere, nothing is written`, async () => {
+    const savedUrl = process.env.OLLAMA_URL;
+    delete process.env.OLLAMA_URL;
     const { dir, manifest } = fixtureDir(1);
-    const { deps, logs } = fakeDeps({ settingsPath: rawSettingsFile(dir, 'u.json', { configOverrides: { 'analyzer.ollama.url': 'http://bob:hunter2-SENTINEL@10.0.0.9:11434' } }) });
-    assert.equal(await runCapture({ manifest, model: 'A', scratch: scratchOf(dir) }, deps), 0);
-    for (const [p, text] of allFileTexts(scratchOf(dir))) assert.ok(!text.includes('hunter2-SENTINEL'), p);
-    assert.ok(!logs.join('\n').includes('hunter2-SENTINEL'));
-  } finally {
-    if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
-  }
-});
+    const manifestPath = join(dir, 'manifest.json');
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const settingsPath = rawSettingsFile(dir, 'u.json', { configOverrides: { 'analyzer.ollama.url': url } });
+    const heard: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    const tap = (chunk: unknown): void => void heard.push(String(chunk));
+    process.stdout.write = ((c: unknown, ...r: unknown[]) => (tap(c), (origOut as (...a: unknown[]) => boolean)(c, ...r))) as typeof process.stdout.write;
+    process.stderr.write = ((c: unknown, ...r: unknown[]) => (tap(c), (origErr as (...a: unknown[]) => boolean)(c, ...r))) as typeof process.stderr.write;
+    let code: number;
+    try {
+      code = await main(['--manifest', manifestPath, '--model', 'A', '--scratch', scratchOf(dir)], { ...defaultDeps(), settingsPath });
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+      if (savedUrl !== undefined) process.env.OLLAMA_URL = savedUrl;
+    }
+    assert.notEqual(code, 0);
+    const out = heard.join('');
+    assert.ok(out.includes('analyzer.ollama.url'), `the refusal names the key: ${out}`);
+    assert.ok(!out.includes('SENTINEL'), `the password reached stdout or stderr: ${out}`);
+    assert.ok(!existsSync(scratchOf(dir)), 'nothing was written');
+    for (const [p, text] of allFileTexts(dir)) assert.ok(!text.includes('SENTINEL') || p === settingsPath, `password found in ${p}`);
+  });
+}
 
 test('saved settings: the record holds the effective chunk budget, not the configured cap', async () => {
   const { dir, manifest } = fixtureDir(1);
