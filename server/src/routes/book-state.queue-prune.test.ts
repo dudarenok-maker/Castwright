@@ -152,9 +152,10 @@ describe('DELETE /api/books/:bookId prunes queue entries', () => {
 /* #4244 -- a timed-out attempt is not cancelled by vitest: its loop keeps running and its in-flight requests land after
    the retry's queue reset (a foreign "n8:queued" in the retry's round 0). Each attempt therefore carries a stop flag and
    the promise of its current round, and onTestFinished drains it, so a finished attempt leaves nothing behind. */
-interface PruneAttempt { stopped: boolean; inFlight: Promise<unknown> }
+interface PruneAttempt { stopped: boolean; inFlight: Promise<unknown>; roundsStarted: number }
 
 function runPruneRound(attempt: PruneAttempt, round: number): Promise<void> {
+  attempt.roundsStarted++;
   /* The WHOLE round is tracked (set synchronously, before the first await), so a reset parked behind the queue lock is
      already in inFlight when the attempt is stopped. */
   const roundPromise = (async (): Promise<void> => {
@@ -208,17 +209,61 @@ async function stopAttempt(attempt: PruneAttempt): Promise<void> {
   await attempt.inFlight.catch(() => undefined);
 }
 
+/* The loop and the onTestFinished registration, shared by the quarantined case and the gating timeout+retry test, so
+   deleting either line of the stop/drain wiring is visible to a non-quarantined run. */
+function runPruneAttempt(rounds: number): { attempt: PruneAttempt; done: Promise<void> } {
+  const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
+  onTestFinished(() => stopAttempt(attempt));
+  const done = (async (): Promise<void> => {
+    for (let round = 0; round < rounds; round++) {
+      if (attempt.stopped) return;
+      await runPruneRound(attempt, round);
+    }
+  })();
+  return { attempt, done };
+}
+
 /* #4034 -- the prune is a read -> write on the shared queue file, so it goes through serializeQueueMutation. Moving
    its read above the span would let a same-tick queue write land between that read and the prune's write and be
    erased by it. */
 describe('DELETE /api/books/:bookId prune is serialised against other queue writes (#4034)', () => {
   quarantinedIt('a same-tick /start, /pause and enqueue all survive the prune', async () => {
-    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve() };
-    onTestFinished(() => stopAttempt(attempt));
-    for (let round = 0; round < 10; round++) {
-      if (attempt.stopped) return;
-      await runPruneRound(attempt, round);
+    await runPruneAttempt(10).done;
+  });
+
+  /* #4244 -- the gating twin of the case above: the same helper, driven through the forced-timeout + retry shape that
+     leaked. Attempt 0 is parked behind the queue lock until after its own timeout; without the stop/drain wiring its
+     stale round lands in attempt 1's queue (a foreign "n0:queued"), which attempt 1's round assertions reject. */
+  it('a timed-out attempt does not leak into its retry (#4244)', { timeout: 3000, retry: 1 }, async ({ task }) => {
+    const { queueJsonPath } = await import('../workspace/paths.js');
+    const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+    const { rm } = await import('node:fs/promises');
+    onTestFinished(() => rm(queueJsonPath(), { force: true }));
+
+    if ((task.result?.retryCount ?? 0) === 0) {
+      const gate = new Promise<void>((r) => { setTimeout(r, 3500); });
+      void serializeQueueMutation(() => gate);
     }
+    await runPruneAttempt(2).done;
+  });
+
+  /* #4244 -- timer-free pin on the loop's stop check: a stopped attempt starts no further round. */
+  it('a stopped attempt starts no further round (#4244)', async () => {
+    const { queueJsonPath } = await import('../workspace/paths.js');
+    const { serializeQueueMutation } = await import('../workspace/queue-mutex.js');
+    const { rm } = await import('node:fs/promises');
+    onTestFinished(() => rm(queueJsonPath(), { force: true }));
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const held = serializeQueueMutation(() => gate);
+    const { attempt, done } = runPruneAttempt(10);
+    const drained = stopAttempt(attempt);
+    release();
+    await held;
+    await drained;
+    await done;
+    expect(attempt.roundsStarted).toBe(1);
   });
 });
 
@@ -236,7 +281,7 @@ describe('a stopped prune-race attempt drains (#4244)', () => {
     const gate = new Promise<void>((r) => { release = r; });
     const held = serializeQueueMutation(() => gate);
 
-    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve() };
+    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
     const stale = runPruneRound(attempt, 0);
     const drained = stopAttempt(attempt);
     let drainedEarly = false;
@@ -281,7 +326,7 @@ describe('a stopped prune-race attempt drains (#4244)', () => {
     const gate = new Promise<void>((r) => { release = r; });
     const held = serializeQueueMutation(() => gate);
 
-    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve() };
+    const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
     const round = runPruneRound(attempt, 0);
     release();
     await held;
