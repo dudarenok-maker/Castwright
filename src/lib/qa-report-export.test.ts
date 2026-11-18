@@ -44,4 +44,15 @@ describe('formatQaReportText', () => {
     const text = formatQaReportText(report, 'Book');
     expect(text).toContain('2 chapters inconclusive');
   });
+
+  it('adds a needs-re-render line right after the voice-match line when non-empty', () => {
+    const report = { ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'] } };
+    const lines = formatQaReportText(report, 'Book').split('\n');
+    const i = lines.findIndex((l) => l.includes('Voice match — 18 of 18'));
+    expect(lines[i + 1]).toBe('· Voice match — needs re-render: c1, c2');
+  });
+
+  it('omits the needs-re-render line when the list is empty', () => {
+    expect(formatQaReportText(MOCK_QA_REPORT, 'Book')).not.toContain('needs re-render');
+  });
 });

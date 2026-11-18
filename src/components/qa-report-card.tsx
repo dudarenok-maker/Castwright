@@ -16,6 +16,9 @@ interface QaReportCardProps {
   /** #3774 — why starting a job is off right now (an include's run is live); the
       Resume scoring button is disabled with this reason shown. */
   jobStartBlockedReason?: string;
+  /** #3680 — character id -> display name for the "needs re-render" listing;
+      an id missing from the map falls back to the raw id. */
+  characterNames?: Record<string, string>;
 }
 
 function slugify(title: string): string {
@@ -192,6 +195,30 @@ function VoiceMatchRow({
   );
 }
 
+/* #3680 — characters whose current voice has no line recorded yet. Rendered
+   beneath VoiceMatchRow (not inside its early-return chain); hidden while a
+   live scoring pass runs and in the rows that report nothing settled. */
+function NeedsRerenderListing({
+  report,
+  scoringProgress,
+  characterNames,
+}: {
+  report: BookQaReport;
+  scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
+  characterNames?: Record<string, string>;
+}) {
+  const ids = report.voiceDrift.charactersNeedingRerender ?? [];
+  if (ids.length === 0 || scoringProgress) return null;
+  const kind = classifyVoiceMatch(report).kind;
+  if (kind === 'noEligible') return null;
+  if (kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return null;
+  return (
+    <p data-testid="qa-needs-rerender" className="text-sm text-ink/70 py-2">
+      Needs re-render: {ids.map((id) => characterNames?.[id] ?? id).join(', ')}. Their voice changed after these chapters were recorded, so there is nothing to check yet — re-render the chapters to check them.
+    </p>
+  );
+}
+
 function CastContinuityRow({ report }: { report: BookQaReport }) {
   const { mild, moderate, severe } = report.configDrift.counts;
   const total = mild + moderate + severe;
@@ -208,7 +235,7 @@ function CastContinuityRow({ report }: { report: BookQaReport }) {
   );
 }
 
-export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason }: QaReportCardProps) {
+export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason, characterNames }: QaReportCardProps) {
   if (loading) {
     return <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 text-sm text-ink/50">Loading QA report…</div>;
   }
@@ -230,6 +257,7 @@ export function QaReportCard({ report, loading, error, bookTitle, bookId, scorin
         <AcousticRow report={report} />
         <TranscriptRow report={report} />
         <VoiceMatchRow report={report} bookId={bookId} scoringProgress={scoringProgress} jobStartBlockedReason={jobStartBlockedReason} />
+        <NeedsRerenderListing report={report} scoringProgress={scoringProgress} characterNames={characterNames} />
         <CastContinuityRow report={report} />
       </div>
       <div className="flex gap-2 mt-4">

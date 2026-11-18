@@ -21,6 +21,11 @@ function voiceMatchLine(r: BookQaReport): string {
   return `Voice match — ${c.charactersChecked} of ${c.charactersOnRoster} characters checked, ${c.mismatchCount} mismatches${inconclusiveSuffix}`;
 }
 
+function needsRerenderLine(r: BookQaReport): string | null {
+  const ids = r.voiceDrift.charactersNeedingRerender ?? [];
+  return ids.length > 0 ? `Voice match — needs re-render: ${ids.join(', ')}` : null;
+}
+
 function castContinuityLine(r: BookQaReport): string {
   const total = r.configDrift.counts.mild + r.configDrift.counts.moderate + r.configDrift.counts.severe;
   return `Cast continuity — ${total} changes since render`;
@@ -39,12 +44,14 @@ function headline(r: BookQaReport): string {
 }
 
 export function formatQaReportText(report: BookQaReport, bookTitle: string): string {
+  const rerender = needsRerenderLine(report);
   return [
     `${bookTitle} — Castwright quality gate`,
     headline(report),
     `· ${acousticLine(report)}`,
     `· ${asrLine(report)}`,
     `· ${voiceMatchLine(report)}`,
+    ...(rerender ? [`· ${rerender}`] : []),
     `· ${castContinuityLine(report)}`,
   ].join('\n');
 }

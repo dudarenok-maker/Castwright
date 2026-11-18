@@ -199,4 +199,36 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     expect(retryButton).not.toBeDisabled();
     resumeSpy.mockRestore();
   });
+
+  describe('needs re-render listing (#3680)', () => {
+    const withRerender = (extra = {}) => ({
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'], ...extra },
+    });
+    const bare = (report: typeof MOCK_QA_REPORT, props = {}) =>
+      render(<QaReportCard report={report} loading={false} error={false} bookTitle="T" bookId="b1" {...props} />);
+
+    it('lists names, falling back to the id when a name is missing', () => {
+      bare(withRerender(), { characterNames: { c1: 'Alice' } });
+      const el = screen.getByTestId('qa-needs-rerender');
+      expect(el).toHaveTextContent('Needs re-render: Alice, c2');
+      expect(el).toHaveTextContent(/re-render the chapters to check them/);
+    });
+
+    it('is absent when the list is empty', () => {
+      bare(MOCK_QA_REPORT);
+      expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
+    });
+
+    it('is absent while a scoring pass is live', () => {
+      bare(withRerender(), { scoringProgress: { charactersChecked: 1, charactersOnRoster: 5 } });
+      expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
+    });
+
+    it('shows alongside the Resume button when characters are also pending', () => {
+      bare(withRerender({ charactersPending: ['c3'] }));
+      expect(screen.getByRole('button', { name: /resume scoring/i })).toBeInTheDocument();
+      expect(screen.getByTestId('qa-needs-rerender')).toBeInTheDocument();
+    });
+  });
 });
