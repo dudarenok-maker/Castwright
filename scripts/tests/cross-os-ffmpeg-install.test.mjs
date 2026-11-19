@@ -70,6 +70,13 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
+// quarantine-health.yml has no `cross-os-verify` job, so it joins only the
+// Windows-ffmpeg delegation loop, not the job-timeout loop (#4244).
+const WINDOWS_FFMPEG_WORKFLOWS = [
+  ...WORKFLOWS,
+  resolve(repoRoot, '.github', 'workflows', 'quarantine-health.yml'),
+];
+
 const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
 
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
@@ -654,7 +661,7 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
 // inline (reintroducing the #2480 duplication) must not go unnoticed. Each
 // workflow's "Install ffmpeg (Windows)" step must reference the composite
 // action rather than embed its own `run: |` block.
-for (const path of WORKFLOWS) {
+for (const path of WINDOWS_FFMPEG_WORKFLOWS) {
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {

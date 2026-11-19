@@ -37,6 +37,19 @@ name: Quarantine Lane Health
 # register realistically needs (it is usually empty, and even non-empty this
 # job is cheap: only the specific quarantined files run, not the full gating
 # suites).
+#
+# Per-OS matrix (#4244): the job runs on ubuntu-latest AND windows-latest,
+# because the quarantined case behind #4244 only ever stalled on Windows CI and
+# an Ubuntu-only run could call it `always-passes` from an OS where it never
+# failed. Each leg runs scripts/quarantine-health.mjs as its own process and
+# writes its OWN report (stdout plus that job's $GITHUB_STEP_SUMMARY), which
+# names the OS it ran on; verdicts are never combined across OSes, and
+# `always-passes` means "on this OS". A row graduates only when EVERY leg
+# reports `always-passes`. Windows gets a 40-minute cap (Ubuntu keeps 30):
+# slower checkout, `npm ci` and choco ffmpeg install; 40 is 30 plus 10 minutes
+# of setup headroom, not a measurement. release.yml's `quarantine-lane` is
+# deliberately NOT mirrored: it runs `npm run test:quarantine` once, pass/fail,
+# produces no per-test verdict, and is not graduation evidence.
 
 on:
   workflow_dispatch:
@@ -58,13 +71,21 @@ concurrency:
 
 jobs:
   quarantine-health:
-    name: npm run quarantine:health
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: npm run quarantine:health (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     # Belt-and-suspenders alongside the script's own always-exit-0-for-test-
     # outcomes contract: this job's result can never block anything even if
     # the runner itself crashes (e.g. an unreadable register file).
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            timeout: 30
+          - os: windows-latest
+            timeout: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -78,7 +99,12 @@ jobs:
       # quarantined, if any, is exactly what this job doesn't know ahead of
       # time.
       - name: Install ffmpeg
+        if: matrix.os == 'ubuntu-latest'
         uses: ./.github/actions/install-ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/install-ffmpeg-windows
 
       - name: Quarantine lane health report
         run: npm run quarantine:health

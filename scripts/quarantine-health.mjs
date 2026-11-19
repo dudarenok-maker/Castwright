@@ -908,8 +908,9 @@ const GH_TIMEOUT_MS = 30 * 1000;
 // quarantine-health.test.mjs so a future bump to either constant can't
 // silently blow the job's timeout budget again.
 export const RUN_LOOP_WALL_CLOCK_BUDGET_MS = 20 * 60 * 1000;
-// Mirrors `timeout-minutes: 30` in .github/workflows/quarantine-health.yml —
-// keep these in sync if that job's cap ever changes.
+// Mirrors the TIGHTEST matrix leg's `timeout` (Ubuntu, 30) in
+// .github/workflows/quarantine-health.yml — a test pins it, so keep them in
+// sync if that leg's cap ever changes.
 export const JOB_CAP_MS = 30 * 60 * 1000;
 
 // Builds vitest's CLI argv (pure — unit-tested). `--retry=0` overrides

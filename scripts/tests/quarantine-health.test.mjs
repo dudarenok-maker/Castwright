@@ -34,6 +34,7 @@ import {
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import yaml from 'js-yaml';
 
 // --- resolveRuns (finding 12: QUARANTINE_HEALTH_RUNS=0/negative guard) -----
 
@@ -1596,6 +1597,25 @@ test('the run-loop wall-clock budget fits inside the workflow job cap with margi
   }
   assert.ok(started < 5, `expected the budget to stop the loop before all 5 runs, but all 5 started`);
   assert.ok(elapsed <= RUN_LOOP_WALL_CLOCK_BUDGET_MS, `worst-case elapsed (${elapsed}ms) exceeded the budget`);
+});
+
+test('quarantine-health.yml runs a per-OS matrix whose tightest leg mirrors JOB_CAP_MS (#4244)', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const doc = yaml.load(readFileSync(wfPath, 'utf8'));
+  const job = doc.jobs['quarantine-health'];
+  assert.ok(job, 'no quarantine-health job found -- did it get renamed?');
+  assert.equal(job['runs-on'], '${{ matrix.os }}');
+  assert.equal(job['timeout-minutes'], '${{ matrix.timeout }}');
+  assert.equal(job.strategy['fail-fast'], false);
+  assert.equal(job['continue-on-error'], true);
+  const include = job.strategy.matrix.include;
+  assert.deepEqual(include.map((e) => e.os).sort(), ['ubuntu-latest', 'windows-latest']);
+  const capMin = JOB_CAP_MS / 60000;
+  for (const e of include) {
+    assert.equal(typeof e.timeout, 'number', `${e.os} leg has no numeric timeout`);
+    assert.ok(e.timeout >= capMin, `${e.os} timeout ${e.timeout} is below JOB_CAP_MS (${capMin} min)`);
+  }
+  assert.equal(Math.min(...include.map((e) => e.timeout)), capMin, 'JOB_CAP_MS must equal the tightest leg timeout');
 });
 
 // --- OS-named report (#4244) -------------------------------------------------
