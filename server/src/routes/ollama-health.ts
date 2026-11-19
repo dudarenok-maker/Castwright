@@ -9,6 +9,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { jobForClient } from '../lan-paths.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { inferEngineFromModelId } from '../analyzer/model-id.js';
 import {
@@ -573,9 +574,9 @@ ollamaHealthRouter.get('/detect', async (_req: Request, res: Response) => {
   return res.json(result);
 });
 
-ollamaHealthRouter.post('/install', (_req: Request, res: Response) => {
+ollamaHealthRouter.post('/install', (req: Request, res: Response) => {
   const job = installBootstrap.start();
-  return res.status(202).json(job);
+  return res.status(202).json(jobForClient(req, job));
 });
 
 ollamaHealthRouter.get('/install/:id', (req: Request, res: Response) => {
@@ -583,7 +584,7 @@ ollamaHealthRouter.get('/install/:id', (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: `No install job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });
 
 ollamaHealthRouter.post('/install/:id/recheck', async (req: Request, res: Response) => {
@@ -591,7 +592,7 @@ ollamaHealthRouter.post('/install/:id/recheck', async (req: Request, res: Respon
   if (!job) {
     return res.status(404).json({ error: `No install job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });
 
 ollamaHealthRouter.post('/pull', (req: Request, res: Response) => {
@@ -605,7 +606,7 @@ ollamaHealthRouter.post('/pull', (req: Request, res: Response) => {
     });
   }
   const job = pullBootstrap.start(getResolvedOllamaUrl(), model);
-  return res.status(202).json(job);
+  return res.status(202).json(jobForClient(req, job));
 });
 
 ollamaHealthRouter.get('/pull/:id', (req: Request, res: Response) => {
@@ -613,7 +614,7 @@ ollamaHealthRouter.get('/pull/:id', (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: `No pull job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });
 
 /* POST /api/ollama/refresh — a thin "re-probe now" alias for GET /health.

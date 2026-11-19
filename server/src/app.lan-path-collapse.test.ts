@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 
@@ -408,5 +408,116 @@ describe('stored settings paths: collapse for LAN, expand ~ on LAN write only (#
       expect(existsSync(join(process.cwd(), '~'))).toBe(false);
       expect(existsSync(join(home, 'ws', '~'))).toBe(false);
     });
+  });
+});
+
+/* ---- #4498: sweep Overflow rows (device-store, install jobs, ollama, clone-derive) ---- */
+
+const realUser = (process.env.USERNAME ?? process.env.USER ?? '').trim();
+
+describe('DeviceStoreDegradedError text collapse on the real app (#4446/#4498, rows 27-28)', () => {
+  const devFile = () => join(home, 'ws', 'device-tokens.json');
+  async function degrade() {
+    writeFileSync(devFile(), '{not json');
+    const dt = await import('./workspace/device-tokens.js');
+    dt._resetDeviceTokenCacheForTests();
+  }
+  async function heal() {
+    rmSync(devFile(), { force: true });
+    const dt = await import('./workspace/device-tokens.js');
+    dt._resetDeviceTokenCacheForTests();
+  }
+  afterAll(heal);
+
+  it('loopback GET /api/devices keeps the full path in the 503 text', async () => {
+    await degrade();
+    const lo = await getJson('127.0.0.1', '/api/devices');
+    expect(lo.status).toBe(503);
+    expect(lo.body.error).toContain(home);
+  });
+
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('GET /api/devices 503 text has ~ and neither the fake home nor the real username', async () => {
+      await degrade();
+      const lan = await getJson(lanIp!, '/api/devices');
+      expect(lan.status).toBe(503);
+      expect(lan.body.error).toContain('~');
+      expect(lan.body.error).not.toContain(home);
+      if (realUser) expect(lan.body.error).not.toContain(realUser);
+    });
+
+    it('unauthenticated POST /api/pair/redeem degraded-store 503 body leaks neither home nor username', async () => {
+      await degrade();
+      const { createPairingSession } = await import('./workspace/pairing-sessions.js');
+      const { code } = createPairingSession('phone');
+      const res = await sendJson(lanIp!, 'POST', '/api/pair/redeem', { code });
+      expect(res.status).toBe(503);
+      const raw = JSON.stringify(res.body);
+      expect(raw).toContain('~');
+      expect(raw).not.toContain(home);
+      if (realUser) expect(raw.toLowerCase()).not.toContain(realUser.toLowerCase());
+    });
+
+    it('unauthenticated POST /api/pair/redeem-browser degraded-store text is collapsed too (or not reachable)', async () => {
+      await degrade();
+      const { createPairingSession } = await import('./workspace/pairing-sessions.js');
+      const { code } = createPairingSession('phone', Date.now(), 10);
+      const res = await sendJson(lanIp!, 'POST', '/api/pair/redeem-browser', { code });
+      expect(JSON.stringify(res.body)).not.toContain(home);
+    });
+  });
+});
+
+describe('jobForClient (#4446/#4498, unit test with fake req)', () => {
+  const mk = (ip: string) => ({ ip, socket: { remoteAddress: ip }, headers: {} }) as any;
+  it('collapses step, error and manualInstallerPath for LAN; loopback untouched; input never mutated', async () => {
+    const { jobForClient } = await import('./lan-paths.js');
+    const job = {
+      id: 'j1',
+      status: 'failed',
+      step: `running ${join(home, 'venv', 'bin', 'pip')}`,
+      error: `spawn ${join(home, 'x')} ENOENT`,
+      manualInstallerPath: join(home, 'Downloads', 'OllamaSetup.exe'),
+      progress: 3,
+    };
+    const lo = jobForClient(mk('127.0.0.1'), job);
+    expect(lo).toEqual(job);
+    const lan = jobForClient(mk('192.168.1.50'), job);
+    expect(lan.step).not.toContain(home);
+    expect(lan.step.startsWith('running ~')).toBe(true);
+    expect(lan.error).not.toContain(home);
+    expect(lan.manualInstallerPath.startsWith('~')).toBe(true);
+    expect(lan.manualInstallerPath).not.toContain(home);
+    expect(lan.progress).toBe(3);
+    expect(job.step).toContain(home);
+  });
+});
+
+describe('install job routes collapse step/error on the real app (#4446/#4498, rows 8a/9a/9b)', () => {
+  const job = () => ({
+    id: 'jx',
+    status: 'failed',
+    step: `pip at ${join(home, 'venv')}`,
+    error: `failed in ${join(home, 'venv', 'x')}`,
+    manualInstallerPath: join(home, 'Downloads', 'OllamaSetup.exe'),
+  });
+  const stub = () => ({ getJob: () => job(), recheck: async () => job(), start: () => job(), detect: async () => ({}) }) as any;
+
+  it('venv bootstrap, kokoro and ollama job GETs: loopback full, LAN ~', async () => {
+    (await import('./routes/venv-bootstrap.js')).setVenvBootstrap(stub());
+    (await import('./routes/kokoro-install.js')).setKokoroInstallBootstrap(stub());
+    (await import('./routes/ollama-health.js')).setOllamaBootstraps({ install: stub() });
+    for (const p of ['/api/setup/venv/bootstrap/jx', '/api/kokoro/install/jx', '/api/ollama/install/jx']) {
+      const lo = await getJson('127.0.0.1', p);
+      expect(lo.body.step, p).toContain(home);
+      if (lanIp) {
+        const lan = await getJson(lanIp, p);
+        expect(lan.body.step, p).not.toContain(home);
+        expect(lan.body.error, p).not.toContain(home);
+        expect(lan.body.manualInstallerPath ?? "~", p).not.toContain(home);
+        expect(lan.body.step, p).toContain('~');
+        expect(lan.body.error, p).toContain('~');
+      }
+    }
   });
 });

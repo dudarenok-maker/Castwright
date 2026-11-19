@@ -5105,6 +5105,37 @@ describe('POST /api/voice-library/clone (fs-38 Wave 3b1)', () => {
     expect(res.status).toBe(503);
   });
 
+  it('#4498: clone-derive sidecar error text collapses the home dir for LAN clients, not loopback', async () => {
+    const { writeCandidate } = await import('../workspace/clone-candidate.js');
+    const { homedir } = await import('node:os');
+    const express = (await import('express')).default;
+    const msg = `derive failed at ${homedir()}/models/x.onnx`;
+    const lanApp = express();
+    lanApp.use((req, _res, next) => {
+      Object.defineProperty(req, 'ip', { value: '192.168.1.50', configurable: true });
+      next();
+    });
+    lanApp.use(app);
+    for (const [id, agent, expectHome] of [
+      ['cand-4498-lo', app, true],
+      ['cand-4498-lan', lanApp, false],
+    ] as const) {
+      await writeCandidate(
+        id,
+        { sampleRate: 24000, durationSeconds: 12, transcript: 't', transcriptSource: 'whisper', captureMethod: 'upload' },
+        Buffer.from('RIFF'),
+      );
+      decodeMock.mockResolvedValueOnce(Buffer.from([0, 0, 0, 0]));
+      deriveMock.mockRejectedValueOnce(new SidecarDesignError(msg, 503));
+      const res = await request(agent)
+        .post('/api/voice-library/clone')
+        .send({ candidateId: id, consent: { personName: 'X', relationship: 'self', permittedUse: 'personal' } });
+      expect(res.status).toBe(503);
+      expect(String(res.body.error).includes(homedir())).toBe(expectHome);
+      if (!expectHome) expect(res.body.error).toContain('~');
+    }
+  });
+
   it('clamps a sidecar status-0 (unreachable) to 502, not a RangeError 500', async () => {
     const { writeCandidate } = await import('../workspace/clone-candidate.js');
     await writeCandidate(

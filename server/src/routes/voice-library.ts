@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { nanoid } from 'nanoid';
 import multer from 'multer';
 import type { Request, Response } from '../http.js';
+import { textForClient } from '../lan-paths.js';
 import {
   entryDir,
   listEntries,
@@ -1447,11 +1448,11 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
          to. Body shape (reason/code) is this route's own. */
       return res
         .status(httpStatusForSidecarError(sde))
-        .json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
+        .json({ error: textForClient(req, sde.reason ?? sde.message ?? 'Clone derivation failed.'), code: sde.code });
     }
     console.error('[voice-library] clone failed', e);
     return res.status(502).json({
-      error: requestFailureMessageFs(e, (e as Error).message || 'Voice clone failed.'),
+      error: textForClient(req, requestFailureMessageFs(e, (e as Error).message || 'Voice clone failed.')),
     });
   }
 });

@@ -15,6 +15,7 @@ import { Router } from 'express';
 import express from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import type { Request, Response } from '../http.js';
+import { textForClient } from '../lan-paths.js';
 import { enumerateLanUrls } from './export-lan.js';
 import { resolveRootCaPath } from './cert-root.js';
 import { getLanRuntime } from '../lan-runtime.js';
@@ -131,7 +132,7 @@ pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), 
     // caller who legitimately holds it and hasn't gotten a device yet.
     restorePairingSession(code);
     if (err instanceof DeviceStoreDegradedError) {
-      res.status(503).json({ error: err.message });
+      res.status(503).json({ error: textForClient(req, err.message) });
       return;
     }
     throw err;
@@ -178,7 +179,7 @@ pairRedeemRouter.post(
       // this doesn't reopen the single-use race.
       restorePairingSession(code);
       if (err instanceof DeviceStoreDegradedError) {
-        res.status(503).json({ error: err.message });
+        res.status(503).json({ error: textForClient(req, err.message) });
         return;
       }
       throw err;

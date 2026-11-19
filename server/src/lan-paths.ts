@@ -56,6 +56,21 @@ export function textForClient(req: Request, text: string): string {
   return text.replace(new RegExp(`${esc}(?=[\\\\/]|$|[^\\w])`, win ? 'gi' : 'g'), '~');
 }
 
+/* Install/bootstrap/pull job snapshots: `step` / `error` are free text that can
+   embed host paths (subprocess output, spawn errors), `manualInstallerPath` is a
+   bare path. Returns a shallow copy for non-loopback; loopback gets the job as-is. */
+export function jobForClient<T extends object>(req: Request, job: T): T {
+  if (isLoopbackRequest(req)) return job;
+  const out = { ...job } as Record<string, unknown>;
+  for (const k of ['step', 'error'] as const) {
+    if (typeof out[k] === 'string') out[k] = textForClient(req, out[k] as string);
+  }
+  if (typeof out.manualInstallerPath === 'string') {
+    out.manualInstallerPath = pathForClient(req, out.manualInstallerPath);
+  }
+  return out as T;
+}
+
 export function pathForClientOrNull(req: Request, p: string | null): string | null {
   return p === null ? null : pathForClient(req, p);
 }
