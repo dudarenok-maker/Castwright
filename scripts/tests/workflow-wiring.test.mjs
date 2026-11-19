@@ -1302,9 +1302,13 @@ function ffmpegPinTooOld(url, now) {
 }
 
 test('ffmpeg install (#4453): the pinned BtbN build is not near its two-year deletion', () => {
-  const url = ffmpegInstallRunBody().match(/https:\/\/github\.com\/BtbN\/[^\s"\\]+/);
+  const url = ffmpegInstallRunBody().match(/https:\/\/github\.com\/BtbN\/[^\s\u0022\\]+/);
   assert.ok(url, 'BtbN download URL not found in install step');
   assert.equal(ffmpegPinTooOld(url[0], new Date()), null);
+  // BtbN keeps only the last 14 daily builds; only month-end builds are kept for two years.
+  const d = url[0].match(/\/autobuild-(\d{4})-(\d{2})-(\d{2})-/);
+  const lastDay = new Date(Date.UTC(Number(d[1]), Number(d[2]), 0)).getUTCDate();
+  assert.equal(Number(d[3]), lastDay, `pinned tag ${d[0]} is not a month-end build; a daily build 404s within weeks`);
 });
 
 test('ffmpeg install (#4453): the pin-age guard flags an old pin and passes a fresh one', () => {
@@ -1313,6 +1317,9 @@ test('ffmpeg install (#4453): the pin-age guard flags an old pin and passes a fr
   assert.match(ffmpegPinTooOld(tag('2024-01-31'), now), /over 18 months old.*action\.yml/);
   assert.equal(ffmpegPinTooOld(tag('2026-10-31'), now), null);
   assert.match(ffmpegPinTooOld('https://example.com/x.tar.xz', now), /no autobuild/);
+  // threshold boundary for a 2026-10-31 pin: 18 months on, fires from 2028-05-01
+  assert.equal(ffmpegPinTooOld(tag('2026-10-31'), new Date(Date.UTC(2028, 3, 30))), null);
+  assert.match(ffmpegPinTooOld(tag('2026-10-31'), new Date(Date.UTC(2028, 4, 1))), /over 18 months old/);
 });
 
 test('ffmpeg install (#4453): the apt path (the #2449 hang) no longer runs on a cache miss', () => {
