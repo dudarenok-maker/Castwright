@@ -316,3 +316,39 @@ describe('voices override skipped[].bookDir collapse (#4446, unit test of skippe
     expect(lan[1]).toEqual(skipped[1]);
   });
 });
+
+/* ---- Batch B (#4485): worktrees, diagnostics, lan-cert error text ---- */
+
+describe('textForClient free-text collapse (#4446, unit test with fake req)', () => {
+  const mk = (ip: string) => ({ ip, socket: { remoteAddress: ip }, headers: {} }) as any;
+  it('collapses every home occurrence for LAN, keeps loopback and non-home text', async () => {
+    const { textForClient } = await import('./lan-paths.js');
+    const msg = `spawn failed: ${join(home, 'a', 'x.js')} and ${join(home, 'b')}`;
+    expect(textForClient(mk('127.0.0.1'), msg)).toBe(msg);
+    const lan = textForClient(mk('192.168.1.50'), msg);
+    expect(lan).not.toContain(home);
+    expect(lan.match(/~/g)!.length).toBe(2);
+    expect(textForClient(mk('192.168.1.50'), 'no paths here')).toBe('no paths here');
+  });
+});
+
+describe('GET /api/worktrees path collapse (#4446, unit test of worktreesForWire with a fake req)', () => {
+  const mk = (ip: string) => ({ ip, socket: { remoteAddress: ip }, headers: {} }) as any;
+  it('collapses row paths for LAN, keeps loopback absolute', async () => {
+    const { worktreesForWire } = await import('./routes/worktrees.js');
+    const rows = [{ path: join(home, 'wt', 'one'), branch: 'b', head: 'h', ports: {}, vitePort: 1, alive: false }];
+    expect(worktreesForWire(mk('127.0.0.1'), rows)[0].path).toBe(rows[0].path);
+    expect(worktreesForWire(mk('192.168.1.50'), rows)[0].path).toBe('~' + rows[0].path.slice(home.length));
+    expect(rows[0].path.startsWith(home)).toBe(true);
+  });
+});
+
+describe('GET /api/diagnostics detail collapse on the real app (#4446, real-app test)', () => {
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('no check detail leaks the fake home to a LAN client', async () => {
+      const lan = await getJson(lanIp!, '/api/diagnostics');
+      expect(lan.status).toBe(200);
+      for (const c of lan.body.checks) expect(String(c.detail ?? '')).not.toContain(home);
+    });
+  });
+});

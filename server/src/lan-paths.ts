@@ -27,6 +27,18 @@ export function pathForClient(req: Request, p: string): string {
   return isLoopbackRequest(req) ? p : collapseHomePath(p);
 }
 
+/* Free-text variant: collapse every `<home>` occurrence inside a message
+   (error strings that embed an absolute path). Loopback keeps the text. */
+export function textForClient(req: Request, text: string): string {
+  if (isLoopbackRequest(req)) return text;
+  const win = process.platform === 'win32';
+  let home = homedir();
+  while (home.length > 1 && (home.endsWith('/') || (win && home.endsWith('\\')))) home = home.slice(0, -1);
+  if (!home) return text;
+  const esc = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(`${esc}(?=[\\\\/]|$|[^\\w])`, win ? 'gi' : 'g'), '~');
+}
+
 export function pathForClientOrNull(req: Request, p: string | null): string | null {
   return p === null ? null : pathForClient(req, p);
 }
