@@ -19,6 +19,7 @@ import {
   minUsableRuns,
   aggregate,
   formatReport,
+  resolveOsLabel,
   buildVitestArgs,
   classifyRunResult,
   runVitestJson,
@@ -1595,4 +1596,76 @@ test('the run-loop wall-clock budget fits inside the workflow job cap with margi
   }
   assert.ok(started < 5, `expected the budget to stop the loop before all 5 runs, but all 5 started`);
   assert.ok(elapsed <= RUN_LOOP_WALL_CLOCK_BUDGET_MS, `worst-case elapsed (${elapsed}ms) exceeded the budget`);
+});
+
+// --- OS-named report (#4244) -------------------------------------------------
+
+test('formatReport with os names it in the first line (empty entries)', () => {
+  const lines = formatReport({ entries: [], runs: 0, issueStates: new Map(), os: 'Windows' }).split('\n');
+  assert.equal(lines[0], '# Quarantine lane health report (Windows)');
+});
+
+test('formatReport with os names it in the first line (non-empty entries)', () => {
+  const entries = [{ testName: 'a', file: 'server/src/a.test.ts', issueNumbers: [1], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, runs: 5 }];
+  const lines = formatReport({ entries, runs: 5, issueStates: new Map(), os: 'Windows' }).split('\n');
+  assert.equal(lines[0], '# Quarantine lane health report (Windows)');
+});
+
+test('formatReport without os keeps the unchanged first line', () => {
+  const lines = formatReport({ entries: [], runs: 0, issueStates: new Map() }).split('\n');
+  assert.equal(lines[0], '# Quarantine lane health report');
+});
+
+test('always-passes legend is scoped to this OS and requires every OS leg', () => {
+  const entries = [{ testName: 'a', file: 'server/src/a.test.ts', issueNumbers: [1], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, runs: 5 }];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  const legend = report.split('\n').find((l) => l.startsWith('- **always-passes**'));
+  assert.ok(legend, 'legend line present');
+  assert.ok(legend.includes('on this OS'), 'legend says on this OS');
+  assert.ok(legend.includes('every OS leg'), 'legend says every OS leg');
+});
+
+test('resolveOsLabel prefers RUNNER_OS, else falls back to platform', () => {
+  assert.equal(resolveOsLabel({ RUNNER_OS: 'Windows' }, 'linux'), 'Windows');
+  assert.equal(resolveOsLabel({}, 'win32'), 'win32');
+  assert.equal(resolveOsLabel({ RUNNER_OS: '   ' }, 'linux'), 'linux');
+});
+
+test('main() end-to-end: empty register report names RUNNER_OS in its heading (#4244)', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-os-test-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+  writeFileSync(registerPath, `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+_Empty — no tests are currently quarantined._
+`, 'utf8');
+
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalRunnerOs = process.env.RUNNER_OS;
+  const originalExitCode = process.exitCode;
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.env.RUNNER_OS = 'Windows';
+    process.exitCode = 0;
+    main(registerPath);
+    const first = readFileSync(summaryPath, 'utf8').split('\n')[0];
+    assert.equal(first, '# Quarantine lane health report (Windows)');
+  } finally {
+    if (originalSummaryPath === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    if (originalRunnerOs === undefined) delete process.env.RUNNER_OS;
+    else process.env.RUNNER_OS = originalRunnerOs;
+    process.exitCode = originalExitCode;
+    try {
+      rmSync(summaryPath, { force: true });
+      rmSync(registerPath, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  }
 });

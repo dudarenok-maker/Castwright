@@ -13,7 +13,7 @@
    turning the report into a long-running matrix job) and buckets each
    quarantined test by its outcome across those runs:
 
-     - always-passes  — every run passed. Candidate to graduate back to gating.
+     - always-passes  — every run on this OS passed; a candidate to graduate back to gating only when every OS leg reports always-passes.
      - intermittent    — some passed, some failed. Genuinely flaky; the
                           register row is honest.
      - never-passes    — every run failed. Not flaky — broken. The register
@@ -709,10 +709,18 @@ export function aggregate(entries, perRunOutcomes, perRunFailedDomains = []) {
   });
 }
 
+// Names the OS this leg ran on: GitHub Actions' RUNNER_OS (Linux|Windows|macOS)
+// when set and non-blank, else Node's process.platform (win32|linux|darwin).
+export function resolveOsLabel(env = process.env, platform = process.platform) {
+  const runnerOs = typeof env.RUNNER_OS === 'string' ? env.RUNNER_OS.trim() : '';
+  return runnerOs !== '' ? runnerOs : platform;
+}
+
 // Renders the final markdown report. `issueStates` maps issue number → 'OPEN'
 // | 'CLOSED' | null (unknown — e.g. `gh` unavailable or the call failed).
-export function formatReport({ entries, runs, issueStates }) {
-  const lines = ['# Quarantine lane health report', ''];
+export function formatReport({ entries, runs, issueStates, os }) {
+  const heading = typeof os === 'string' && os !== '' ? `# Quarantine lane health report (${os})` : '# Quarantine lane health report';
+  const lines = [heading, ''];
 
   if (entries.length === 0) {
     lines.push(
@@ -732,7 +740,7 @@ export function formatReport({ entries, runs, issueStates }) {
     lines.push(`Ran the quarantine lane ${runs} time(s). Bucket legend:`);
   }
   lines.push('');
-  lines.push('- **always-passes** — every run passed; candidate to graduate back into the gating suite.');
+  lines.push('- **always-passes** — every run on this OS passed; a candidate to graduate back into the gating suite only when every OS leg (each job of `.github/workflows/quarantine-health.yml`) reports always-passes.');
   lines.push('- **intermittent** — some runs passed, some failed; genuinely flaky, the register row is honest.');
   lines.push('- **never-passes** — every run failed; not flaky, just broken — the register row is likely lying.');
   lines.push(
@@ -1082,7 +1090,7 @@ export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
   // and Fix 3 (malformed rows with <5 cells are now counted as parse failures).
   const plan = planRegisterRun(markdown);
   if (plan.outcome === 'empty') {
-    emit(formatReport({ entries: [], runs: 0, issueStates: new Map() }));
+    emit(formatReport({ entries: [], runs: 0, issueStates: new Map(), os: resolveOsLabel() }));
     return; // clean no-op — exit 0
   }
   if (plan.outcome === 'parse-failure') {
@@ -1156,7 +1164,7 @@ export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
   const uniqueIssues = [...new Set(rows.flatMap((r) => r.issueNumbers))];
   const issueStates = new Map(uniqueIssues.map((n) => [n, checkIssueState(n)]));
 
-  const report = formatReport({ entries, runs: perRunOutcomes.length, issueStates });
+  const report = formatReport({ entries, runs: perRunOutcomes.length, issueStates, os: resolveOsLabel() });
   let finalReport = report;
   if (abortedEarly) {
     finalReport += `\n\n**Aborted early after ${perRunOutcomes.length}/${RUNS} planned run(s)** — see the job log for the error.`;
