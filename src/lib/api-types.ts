@@ -4260,6 +4260,12 @@ export interface components {
              * @description Optional override for the WORKSPACE_DIR env var. Read once at
              *     server startup — changes require a server restart to apply
              *     (UI flags this with a "restart required" badge).
+             *
+             *     Non-loopback requests receive the home directory collapsed to
+             *     `~` (a path not under the home directory is unchanged);
+             *     loopback requests receive the full path. On write, a leading
+             *     `~` from a non-loopback request is expanded to the home
+             *     directory.
              */
             workspaceDirOverride?: string | null;
             /**
@@ -4268,6 +4274,12 @@ export interface components {
              *     mirrored to the user's phone). Null disables the "save to sync
              *     folder" tab in the export modal. The writer mkdirs on demand
              *     and uses the same OneDrive-safe atomic-rename retry as state.json.
+             *
+             *     Non-loopback requests receive the home directory collapsed to
+             *     `~` (a path not under the home directory is unchanged);
+             *     loopback requests receive the full path. On write, a leading
+             *     `~` from a non-loopback request is expanded to the home
+             *     directory.
              */
             exportSyncFolder?: string | null;
             /**
@@ -4412,7 +4424,12 @@ export interface components {
              * @enum {string}
              */
             readonly apiKeyStatus: "set" | "unset";
-            /** @description Resolved absolute path of the active workspace root. */
+            /**
+             * @description Resolved absolute path of the active workspace root. Non-loopback
+             *     requests (a phone or tablet on the LAN) receive the home
+             *     directory collapsed to `~`; a path not under the home directory
+             *     is returned unchanged. Loopback requests receive the full path.
+             */
             readonly workspaceRoot: string;
             /**
              * @description Where WORKSPACE_ROOT was resolved from. `override` when
@@ -4597,7 +4614,9 @@ export interface components {
             /** @enum {string} */
             analysisEngine?: "local" | "gemini" | "openai";
             allowCloudFallback?: boolean;
+            /** @description A leading `~` is expanded to the home directory when the request is non-loopback. */
             workspaceDirOverride?: string | null;
+            /** @description A leading `~` is expanded to the home directory when the request is non-loopback. */
             exportSyncFolder?: string | null;
             minorCastMinLines?: number;
             /** @enum {string} */
@@ -5149,8 +5168,11 @@ export interface components {
             seriesPosition?: number | null;
             isStandalone: boolean;
             paths: {
+                /** @description Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged. */
                 bookDir: string;
+                /** @description Collapsed to `~` for non-loopback requests, like `bookDir`. */
                 manuscript: string;
+                /** @description Collapsed to `~` for non-loopback requests, like `bookDir`. */
                 dotAudiobook: string;
             };
         };
@@ -6971,7 +6993,7 @@ export interface components {
             progress?: number | null;
             /** @description Set once status === 'done' AND destination === 'download'. */
             downloadUrl?: string | null;
-            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted). */
+            /** @description Absolute path the archive was copied to when destination === 'sync-folder'. Non-loopback requests receive the home directory collapsed to `~` (a path not under it is unchanged). A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted). */
             syncPath?: string | null;
             /** @description True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A cancelled job can still gain a syncPath until this clears, so a client that cancelled keeps following the job until it is false or absent. */
             syncCopyInFlight?: boolean | null;
@@ -8059,6 +8081,10 @@ export interface operations {
                      * @description Absolute filesystem path the export pipeline would
                      *     attempt to write into. The probe creates the folder
                      *     on demand and removes the probe file before returning.
+                     *     A leading `~` (alone, or followed by a separator) is
+                     *     expanded to the home directory for non-loopback
+                     *     requests, so a path read back from `exportSyncFolder`
+                     *     on a LAN client can be tested as shown.
                      */
                     path: string;
                 };
@@ -11522,6 +11548,7 @@ export interface operations {
                     "application/json": {
                         updated: number;
                         skipped: {
+                            /** @description Book folder that was skipped. Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged. */
                             bookDir: string;
                             characterId: string;
                             reason: string;
@@ -11559,6 +11586,7 @@ export interface operations {
                     "application/json": {
                         error: string;
                         skipped?: {
+                            /** @description Book folder that was skipped. Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged. */
                             bookDir: string;
                             characterId: string;
                             reason: string;
@@ -12810,6 +12838,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         bookId: string;
+                        /** @description Folder the bundle was imported into. Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged. */
                         targetPath: string;
                         importedFiles: number;
                         conflict?: {

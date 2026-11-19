@@ -160,6 +160,10 @@ paths:
                     Absolute filesystem path the export pipeline would
                     attempt to write into. The probe creates the folder
                     on demand and removes the probe file before returning.
+                    A leading `~` (alone, or followed by a separator) is
+                    expanded to the home directory for non-loopback
+                    requests, so a path read back from `exportSyncFolder`
+                    on a LAN client can be tested as shown.
       responses:
         '200':
           description: |
@@ -3061,7 +3065,9 @@ paths:
                       type: object
                       required: [bookDir, characterId, reason]
                       properties:
-                        bookDir: { type: string }
+                        bookDir:
+                          type: string
+                          description: Book folder that was skipped. Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged.
                         characterId: { type: string }
                         reason: { type: string }
         '404':
@@ -3084,7 +3090,9 @@ paths:
                       type: object
                       required: [bookDir, characterId, reason]
                       properties:
-                        bookDir: { type: string }
+                        bookDir:
+                          type: string
+                          description: Book folder that was skipped. Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged.
                         characterId: { type: string }
                         reason: { type: string }
 
@@ -4127,7 +4135,9 @@ paths:
                 required: [bookId, targetPath, importedFiles]
                 properties:
                   bookId: { type: string }
-                  targetPath: { type: string }
+                  targetPath:
+                    type: string
+                    description: Folder the bundle was imported into. Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged.
                   importedFiles: { type: integer }
                   conflict:
                     type: object
@@ -6329,6 +6339,12 @@ components:
             Optional override for the WORKSPACE_DIR env var. Read once at
             server startup — changes require a server restart to apply
             (UI flags this with a "restart required" badge).
+
+            Non-loopback requests receive the home directory collapsed to
+            `~` (a path not under the home directory is unchanged);
+            loopback requests receive the full path. On write, a leading
+            `~` from a non-loopback request is expanded to the home
+            directory.
         exportSyncFolder:
           type: string
           nullable: true
@@ -6338,6 +6354,12 @@ components:
             mirrored to the user's phone). Null disables the "save to sync
             folder" tab in the export modal. The writer mkdirs on demand
             and uses the same OneDrive-safe atomic-rename retry as state.json.
+
+            Non-loopback requests receive the home directory collapsed to
+            `~` (a path not under the home directory is unchanged);
+            loopback requests receive the full path. On write, a leading
+            `~` from a non-loopback request is expanded to the home
+            directory.
         minorCastMinLines:
           type: integer
           minimum: 0
@@ -6505,7 +6527,11 @@ components:
         workspaceRoot:
           type: string
           readOnly: true
-          description: Resolved absolute path of the active workspace root.
+          description: |
+            Resolved absolute path of the active workspace root. Non-loopback
+            requests (a phone or tablet on the LAN) receive the home
+            directory collapsed to `~`; a path not under the home directory
+            is returned unchanged. Loopback requests receive the full path.
         workspaceSource:
           type: string
           enum: [env, default, override]
@@ -6735,9 +6761,11 @@ components:
         workspaceDirOverride:
           type: string
           nullable: true
+          description: A leading `~` is expanded to the home directory when the request is non-loopback.
         exportSyncFolder:
           type: string
           nullable: true
+          description: A leading `~` is expanded to the home directory when the request is non-loopback.
         minorCastMinLines:
           type: integer
           minimum: 0
@@ -7445,9 +7473,9 @@ components:
               type: object
               required: [bookDir, manuscript, dotAudiobook]
               properties:
-                bookDir: { type: string }
-                manuscript: { type: string }
-                dotAudiobook: { type: string }
+                bookDir: { type: string, description: 'Non-loopback requests receive the home directory collapsed to `~`; a path not under the home directory is unchanged.' }
+                manuscript: { type: string, description: 'Collapsed to `~` for non-loopback requests, like `bookDir`.' }
+                dotAudiobook: { type: string, description: 'Collapsed to `~` for non-loopback requests, like `bookDir`.' }
 
     # --- Upload -----------------------------------------------------
     UploadResponse:
@@ -9820,7 +9848,7 @@ components:
           {
             type: string,
             nullable: true,
-            description: "Absolute path the archive was copied to when destination === 'sync-folder'. A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted).",
+            description: "Absolute path the archive was copied to when destination === 'sync-folder'. Non-loopback requests receive the home directory collapsed to `~` (a path not under it is unchanged). A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted).",
           }
         syncCopyInFlight:
           {
