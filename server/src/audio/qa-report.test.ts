@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { writeEmbeddings, EMBEDDINGS_VERSION } from './render-integrity/embeddin
 import { castIdHistoryPath } from '../store/cast-id-history.js';
 import { writeCentroids } from './render-integrity/centroids-io.js';
 import { buildAudioQaReport } from './qa-report.js';
+import * as configModule from '../config/resolver.js';
 
 async function makeBook(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'qa-report-'));
@@ -55,6 +56,19 @@ describe('buildAudioQaReport', () => {
     expect(report.voiceDrift.chaptersEligible).toBe(1); // wren is qwen-voiced
     expect(report.voiceDrift.chaptersScored).toBe(0); // no render-integrity.json written
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(0); // gate genuinely off, not an embed failure
+  });
+
+  it('speakerCheckEnabled follows the live qa.speaker.enabled gate (#4454)', async () => {
+    const dir = await makeBook();
+    for (const gate of [false, true]) {
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(gate);
+      try {
+        const report = await buildAudioQaReport(dir, []);
+        expect(report.voiceDrift.speakerCheckEnabled).toBe(gate);
+      } finally {
+        configSpy.mockRestore();
+      }
+    }
   });
 
   it('reports chaptersEligible = 0 for an all-Kokoro book, distinct from not-run', async () => {

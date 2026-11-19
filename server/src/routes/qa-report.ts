@@ -17,6 +17,7 @@ import { triggerScoring, isGenerationActive } from './generation.js';
 import { BOOK_GONE, peekBook } from '../workspace/book-op-lock.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { isSpliceOrRepairActive } from './chapter-job-coordination.js';
+import { configValue } from '../config/resolver.js';
 
 export const qaReportRouter = Router();
 
@@ -80,6 +81,12 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
        conservative, not tier-driven. Same curated-sentence rule. */
     if (isSpliceOrRepairActive(bookId)) {
       res.status(409).json({ error: 'A chapter fix or repair is running for this book — resume scoring once it finishes.' });
+      return;
+    }
+    /* #4454 — triggerScoring returns immediately while the speaker check is off, so without this
+       the route would answer 202 and do nothing. Same curated-sentence rule. */
+    if (!configValue('qa.speaker.enabled')) {
+      res.status(409).json({ error: 'The speaker check is off — turn it on in Settings to score character voices.' });
       return;
     }
     const registered = await runBookJob(bookId, 'scoring', async (lease) => {

@@ -12,6 +12,7 @@ export const MOCK_QA_REPORT: BookQaReport = {
   asr: { linesVerified: 342, linesFlaggedDrift: 0 },
   voiceDrift: {
     attribution: 'full',
+    speakerCheckEnabled: true,
     chaptersEligible: 12,
     chaptersScored: 12,
     chaptersEmbedFailed: 0,

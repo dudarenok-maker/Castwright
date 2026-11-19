@@ -42,6 +42,7 @@ describe('api.getQaReport — wire contract', () => {
       asr: { linesVerified: 0, linesFlaggedDrift: 0 },
       voiceDrift: {
         attribution: 'full' as const,
+        speakerCheckEnabled: true,
         chaptersEligible: 0,
         chaptersScored: 0,
         chaptersEmbedFailed: 0,

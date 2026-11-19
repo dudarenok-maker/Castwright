@@ -32,6 +32,7 @@ import { livePartPath } from '../workspace/take-fields.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
+import { configValue } from '../config/resolver.js';
 
 export interface AudioQaReport {
   chaptersRendered: number;
@@ -40,6 +41,8 @@ export interface AudioQaReport {
   asr: { linesVerified: number; linesFlaggedDrift: number };
   voiceDrift: {
     attribution: 'full' | 'legacy-unattributed';
+    /** #4454 — the live qa.speaker.enabled gate; false means no score pass will run, so nothing in charactersPending can be resumed */
+    speakerCheckEnabled: boolean;
     chaptersEligible: number;
     chaptersScored: number;
     /** Eligible chapters that scoreBook attempted (see the attempted
@@ -325,6 +328,7 @@ export async function buildAudioQaReport(
     },
     voiceDrift: {
       attribution,
+      speakerCheckEnabled: configValue<boolean>('qa.speaker.enabled') === true,
       chaptersEligible: eligibleChapterIds.size,
       chaptersScored,
       chaptersEmbedFailed,

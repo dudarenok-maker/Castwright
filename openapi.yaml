@@ -10589,9 +10589,15 @@ components:
             linesFlaggedDrift: { type: integer }
         voiceDrift:
           type: object
-          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, charactersNeedingRerender, mismatches, inconclusiveCount, uncheckedCharacterIds]
+          required: [attribution, speakerCheckEnabled, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, charactersNeedingRerender, mismatches, inconclusiveCount, uncheckedCharacterIds]
           properties:
             attribution: { type: string, enum: [full, legacy-unattributed] }
+            speakerCheckEnabled:
+              type: boolean
+              description: >-
+                The live qa.speaker.enabled gate at report time. When false,
+                no scoring pass runs, so the client must not offer Resume
+                scoring.
             chaptersEligible: { type: integer }
             chaptersScored: { type: integer }
             chaptersEmbedFailed:

@@ -2624,6 +2624,7 @@ const HOLLOW_TIDE_QA_REPORT: BookQaReport = {
   asr: { linesVerified: 640, linesFlaggedDrift: 2 },
   voiceDrift: {
     attribution: 'full',
+    speakerCheckEnabled: true,
     chaptersEligible: 7,
     chaptersScored: 7,
     chaptersEmbedFailed: 0,

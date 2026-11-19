@@ -228,6 +228,19 @@ describe('GET /api/books/:bookId/qa-report', () => {
     });
   });
 
+  it('carries the live qa.speaker.enabled gate as voiceDrift.speakerCheckEnabled (#4454)', async () => {
+    for (const gate of [false, true]) {
+      const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(gate);
+      try {
+        const res = await request(app).get(`/api/books/${bookId}/qa-report`);
+        expect(res.status).toBe(200);
+        expect(res.body.voiceDrift.speakerCheckEnabled).toBe(gate);
+      } finally {
+        configSpy.mockRestore();
+      }
+    }
+  });
+
   it('404s for an unknown book', async () => {
     const res = await request(app).get('/api/books/does-not-exist/qa-report');
     expect(res.status).toBe(404);
@@ -471,15 +484,21 @@ describe('POST /:bookId/resume-scoring', () => {
 
   it('a lock timeout answers the curated 500 (no lock-key path)', async () => {
     const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
-    const res = await request(app).post('/api/books/LOCK_TRIGGER/resume-scoring');
-    expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
-    expect(res.text).not.toContain('SECRET-WORKSPACE');
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    try {
+      const res = await request(app).post('/api/books/LOCK_TRIGGER/resume-scoring');
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+      expect(res.text).not.toContain('SECRET-WORKSPACE');
+    } finally {
+      configSpy.mockRestore();
+    }
   });
 
   it('a timed-out runBookJob registration answers the curated 500 (no lock-key path)', async () => {
     const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
     failRegistration.on = true;
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
     try {
       const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
       expect(res.status).toBe(500);
@@ -487,6 +506,7 @@ describe('POST /:bookId/resume-scoring', () => {
       expect(res.text).not.toContain('SECRET-WORKSPACE');
     } finally {
       failRegistration.on = false;
+      configSpy.mockRestore();
     }
   });
 
@@ -495,16 +515,43 @@ describe('POST /:bookId/resume-scoring', () => {
      not reach the body. Curated in the same round as the GET. */
   it('plan 286 (OD26) — resume-scoring: an error naming a path answers a fixed sentence', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await request(app).post('/api/books/EPERM_TRIGGER/resume-scoring');
-    err.mockRestore();
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    let res: Awaited<ReturnType<ReturnType<typeof request>['post']>>;
+    try {
+      res = await request(app).post('/api/books/EPERM_TRIGGER/resume-scoring');
+    } finally {
+      err.mockRestore();
+      configSpy.mockRestore();
+    }
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Failed to resume scoring.' });
     expect(res.text).not.toContain('SECRET-WORKSPACE');
   });
 
   it('a non-lock failure answers a fixed sentence', async () => {
-    const res = await request(app).post('/api/books/THROW_TRIGGER/resume-scoring');
-    expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: 'Failed to resume scoring.' });
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(true);
+    try {
+      const res = await request(app).post('/api/books/THROW_TRIGGER/resume-scoring');
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: 'Failed to resume scoring.' });
+    } finally {
+      configSpy.mockRestore();
+    }
+  });
+
+  /* #4454 — with the speaker check off triggerScoring is a no-op, so the route must refuse
+     rather than answer 202 and do nothing. */
+  it('returns 409 and never scores when the speaker check is off', async () => {
+    vi.mocked(scoreBook).mockClear();
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(false);
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('The speaker check is off — turn it on in Settings to score character voices.');
+      await __awaitScoringSettled(bookId);
+      expect(scoreBook).not.toHaveBeenCalled();
+    } finally {
+      configSpy.mockRestore();
+    }
   });
 });
