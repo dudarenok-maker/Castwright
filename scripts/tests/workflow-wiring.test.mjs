@@ -272,6 +272,7 @@ const parseLegs = (src) =>
 const REQUIRED_LEGS = {
   test: 'shared|step_test|step_test_e2e',
   'test:server': 'shared|step_test_server|step_test_server_slow',
+  'test:server:ffmpeg-floor': 'shared|step_test_server|step_test_server_slow',
   'test:windows': 'shared|step_test',
   'test:server:windows': 'shared|step_test_server',
   'test:hooks:windows': 'shared|step_test_hooks',
@@ -1477,6 +1478,19 @@ test('lockfile-touched polarity: both frontend and server test steps force full 
   );
 });
 
+// #4461: true only for a step that lives in verify.yml's `ffmpeg-floor` job AND
+// is bounded: step-level timeout-minutes, every apt-get wrapped in
+// `timeout -k 10 <N>`, and a 3-attempt retry loop.
+function isBoundedFfmpegFloorAptStep(workflowSource, stepBody) {
+  const job = workflowSource.match(/^ {2}ffmpeg-floor:\n((?: {4}.*\n|\n)*)/m);
+  if (!job || !job[1].includes(stepBody)) return false;
+  if (!/^ {8}timeout-minutes:\s*\d+\s*$/m.test(stepBody)) return false;
+  const aptCmds = stepBody.match(/apt-get\s+(?:update|install)/g) ?? [];
+  const wrapped = stepBody.match(/timeout -k 10 \d+ sudo apt-get\s+(?:update|install)/g) ?? [];
+  if (aptCmds.length === 0 || wrapped.length !== aptCmds.length) return false;
+  return /for attempt in 1 2 3/.test(stepBody);
+}
+
 test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-ffmpeg action)', () => {
   // Issue #2449: unretried `sudo apt-get update && sudo apt-get install -y ffmpeg`
   // hangs on mirror timeouts and burns entire job timeouts. This regression test
@@ -1500,6 +1514,15 @@ test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-f
     for (const [, , stepBody] of steps) {
       // Skip if this is the approved install-ffmpeg action
       if (/uses:\s*\.\/\.github\/actions\/install-ffmpeg/.test(stepBody)) {
+        continue;
+      }
+
+      // #4461 exemption: verify.yml's `ffmpeg-floor` job installs the apt
+      // ffmpeg (6.1.1 on ubuntu-24.04) on purpose, to test the declared floor.
+      // It holds ONLY while the step is bounded (the #2449 hang guard): a
+      // step-level timeout-minutes, every apt command wrapped in
+      // `timeout -k 10 <N>`, and a 3-attempt retry loop.
+      if (workflowFile === 'verify.yml' && isBoundedFfmpegFloorAptStep(workflowSource, stepBody)) {
         continue;
       }
 
