@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 52 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 53 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**88 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**89 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-19 (#4456), 87 → 88.** Row **A131** (a GPU Whisper or Qwen on the second card is fit-checked and evicted against that card) added. Group A 51 → 52. `next-id` bumped A131 → A132 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-20 (#4445), 88 → 89.** Row **A132** (the generation path's Qwen tier reconciles skip their eviction while other GPU work is active: a repair on a Quality book keeps its 1.7B while another book's render finishes a chapter) added. Group A 52 → 53. `next-id` bumped A132 → A133 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-19 (#4456), 87 → 88.** Row **A131** (a GPU Whisper or Qwen on the second card is fit-checked and evicted against that card) added. Group A 51 → 52. `next-id` bumped A131 → A132 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-18 (#4237), 86 → 87.** Row **A130** (a mint is admitted beside its own resident 0.6B audition base, without waiting for or evicting the resident models) added. Group A 50 → 51. `next-id` bumped A130 → A131 in the same change. Row is owed; not run here.
 >
@@ -1960,7 +1962,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A132 -->
+<!-- next-id: A133 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6734,6 +6736,16 @@ The automated tests drive the real `_engine_actual_card` / `_is_resident` and th
 
 *Needs:* the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti), the Whisper weights and the Qwen3-TTS weights. *Criteria:* this row. Clears when the `gpus[]` card and any `noCapacity` `deviceKey` are recorded for Whisper and for Qwen.
 
+
+### A132 · The generation path's Qwen tier reconciles skip while other GPU work is active ([#4445](https://github.com/dudarenok-maker/Castwright/issues/4445)) · **single 8 GB card, real Qwen sidecar with the 0.6B and 1.7B-Base installed**
+
+The automated tests prove the skip decision with fakes: the post-audition reconcile (`afterChapterFinalized` → `triggerScoring` with `keep`) and the run-start reconcile both skip while a render on another book, any splice or QA repair, or another book's score pass is active, and the run's own book is excluded because its tier target already protects it. They cannot show what the real sidecar does with two tiers on a real 8 GB card. The owner accepted the risk of the 0.6B and 1.7B co-residing on an 8 GB card (#4445, 2026-11-20), so this row records the outcome; an out-of-memory alone does not fail it. Variant mints and voice-style batches are deliberately not counted: voice-style is LLM-only and holds no sidecar tier, and a mint's 1.7B Base is already protected by the sidecar's `unload_base17()` in-flight wait. Sidecar logs are in `logs/tts.err.log`; the server log is `logs/server.log`.
+
+- **Setup.** Two books: book A with a Quality cast (1.7B Base), book B with a Standard cast (0.6B only). Turn `qa.speaker.enabled` on, so the post-audition path runs. Start a fresh sidecar with both Qwen weights installed.
+- **A repair keeps its 1.7B while another book's render finishes a chapter.** Start a QA repair or a Fix-audio splice on book A at Quality, so the 1.7B Base is resident. While it runs, let book B's render finish a chapter and start its next chapter POST. Observe: the sidecar log shows no `POST /unload` for Qwen 1.7B during the repair; the server log shows `[generation] run-start tier reconcile skipped: other GPU work is active` for book B's chapter POST; and the repair completes without a cold 1.7B reload.
+- **Record the co-residency outcome.** Record whether the 0.6B and the 1.7B were resident together (`GET /health`: `qwen_loaded` and `qwen_base17_loaded`) and whether anything ran out of memory. Record the outcome either way; an OOM alone does not fail the row.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and two books (Quality and Standard). *Criteria:* #4445 and this row. Clears when each bullet is recorded with the log line it produced.
 
 ## Group B — local Ollama analyzer only
 
