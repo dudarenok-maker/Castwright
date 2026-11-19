@@ -1244,12 +1244,24 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        line; that line then fails and goes through the transient retry. A later
        chapter's POST (one per chapter, sibling chapters are live) and the
        post-score re-assert in triggerScoring must not unload a Kokoro a
-       sibling chapter's fallback line may be using. */
-    await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
-      .then((target) => reconcileResidentQwenTiers(target))
-      .catch((e) =>
-      console.warn('[generation] tier reconcile skipped:', (e as Error).message),
-    );
+       sibling chapter's fallback line may be using.
+       #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
+       work OTHER than this book's own is active (`otherTierWorkActive`: a render
+       on another book, any splice or QA repair, another book's score pass): the
+       reconcile can unload a Qwen tier that work is using. Same-book sibling
+       chapters are excluded from that check, so they still reconcile with Kokoro
+       kept, as above. */
+    if (otherTierWorkActive(bookId)) {
+      console.info(
+        '[generation] run-start tier reconcile skipped: other GPU work is active',
+      );
+    } else {
+      await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
+        .then((target) => reconcileResidentQwenTiers(target))
+        .catch((e) =>
+          console.warn('[generation] tier reconcile skipped:', (e as Error).message),
+        );
+    }
   }
 
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio

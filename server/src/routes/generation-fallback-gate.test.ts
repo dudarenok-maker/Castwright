@@ -331,15 +331,24 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
     }
   }, 15_000);
 
-  it('keeps Kokoro while a QA repair or splice is running (invisible to generation\'s own job map)', async () => {
+  it('skips the reconcile entirely while a QA repair or splice is running (invisible to generation\'s own job map) (#4445)', async () => {
     const { registerSplice } = await import('./chapter-job-coordination.js');
     /* A repair registers through the same `registerSplice` as a splice, on any book. */
     const release = registerSplice('some-other-book', 7, new AbortController());
     try {
       await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
-      expect(reconcileCalls.length).toBeGreaterThan(0);
-      expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true });
-      expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+      expect(reconcileCalls.length).toBe(0);
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('skips the reconcile entirely while another book is rendering (#4445)', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const release = __registerFakeJobForTest('other-book', []);
+    try {
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBe(0);
     } finally {
       release();
     }
