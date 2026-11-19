@@ -7,6 +7,7 @@ import { audioDir, dotAudiobook, castJsonPath } from '../workspace/paths.js';
 import { writeVerdicts, writeAttempted, attemptedPath } from './render-integrity/verdicts-io.js';
 import { scoreBook } from './render-integrity/aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './render-integrity/embeddings-io.js';
+import { castIdHistoryPath } from '../store/cast-id-history.js';
 import { writeCentroids } from './render-integrity/centroids-io.js';
 import { buildAudioQaReport } from './qa-report.js';
 
@@ -397,6 +398,112 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
     expect(report.voiceDrift.charactersPending).toEqual(['ren']);
     expect(report.voiceDrift.charactersPending).not.toContain('pell-hollis');
+  });
+
+  it('charactersNeedingRerender lists only no-current-voice marker rows (#3680): not real rows, not unscored characters', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [
+        seg({ characterId: 'narrator' }), seg({ characterId: 'ren' }),
+        seg({ characterId: 'thurid', voiceName: 'qwen-old', baseVoiceName: 'qwen-old' }),
+        seg({ characterId: 'pell', voiceName: 'qwen-old', baseVoiceName: 'qwen-old' }),
+      ],
+      characterSnapshots: {
+        narrator: { voiceEngine: 'qwen' },
+        ren: { voiceEngine: 'qwen' },
+        thurid: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-old' },
+        pell: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-old' },
+      },
+    });
+    // The marker is only true while the CURRENT cast voice has no rendered line: thurid's
+    // cast voice is qwen-new, her one rendered line is qwen-old (#3680 pass 1).
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [
+        { id: 'thurid', name: 'Thurid', overrideTtsVoices: { qwen: { name: 'T', libraryUuid: 'new' } } },
+        // pell is in the same position (a current voice with no line in it) but her row is a plain
+        // terminal too-short row, NOT the marker: she must not be listed.
+        { id: 'pell', name: 'Pell', overrideTtsVoices: { qwen: { name: 'P', libraryUuid: 'new' } } },
+      ],
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'thurid', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+      { characterId: 'thurid', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short', noCurrentVoiceReference: true },
+      { characterId: 'pell', centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['thurid']);
+    expect(report.voiceDrift.charactersNeedingRerender).not.toContain('pell');
+    expect(report.voiceDrift.charactersPending).toEqual(['ren']);
+    expect(report.voiceDrift.charactersPending).not.toContain('thurid');
+    expect(report.voiceDrift.charactersNeedingRerender).not.toContain('narrator');
+    expect(report.voiceDrift.charactersNeedingRerender).not.toContain('ren');
+  });
+
+  /** #3680 pass 1 — a book where the cast row is `marlow` (voice qwen-new) and `ren` was merged into her
+   *  (`supersededBy: { ren: 'marlow' }`); each chapter renders under the key it had at render time. */
+  async function mergedBook(chapterKeys: string[]): Promise<string> {
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'marlow', name: 'Marlow', overrideTtsVoices: { qwen: { name: 'M', libraryUuid: 'new' } } }],
+    });
+    await writeJsonAtomic(castIdHistoryPath(dir), { schema: 1, supersededBy: { ren: 'marlow' } });
+    for (const [i, key] of chapterKeys.entries()) {
+      const slug = `ch${i + 1}`;
+      await writeJsonAtomic(join(audioDir(dir), `${slug}.segments.json`), {
+        bookId: 'b1', chapterId: i + 1, chapterTitle: 'C', durationSec: 10, sampleRate: 24000,
+        modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+        segments: [seg({ characterId: key, voiceName: 'qwen-old', baseVoiceName: 'qwen-old' })],
+        characterSnapshots: { [key]: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-old' } },
+      });
+      await writeEmbeddings(join(audioDir(dir), `${slug}.embeddings.json`), [
+        { characterId: key, sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+      ], EMBEDDINGS_VERSION);
+    }
+    await writeCentroids(
+      dir,
+      chapterKeys.map((characterId) => ({
+        characterId, centroid: [0, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0, pSevere: 0, pBand: 0,
+        referenceKind: 'too-short' as const, noCurrentVoiceReference: true,
+      })),
+    );
+    return dir;
+  }
+
+  it('charactersNeedingRerender lists a merged character by its CURRENT cast id, not its retired frozen-render key (#3680 pass 1)', async () => {
+    const dir = await mergedBook(['ren']);
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['marlow']);
+  });
+
+  it('charactersNeedingRerender names a character once when both its retired and its current key are marked (#3680 pass 1)', async () => {
+    const dir = await mergedBook(['ren', 'marlow']);
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['marlow']);
+  });
+
+  it('a retired catch-all bucket key resolves like the render resolver does: render-only history is read as it is (#3680 pass 1)', async () => {
+    const dir = await mergedBook(['unknown-male']);
+    await writeJsonAtomic(castIdHistoryPath(dir), { schema: 1, supersededBy: { 'unknown-male': 'marlow' } });
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual(['marlow']);
+  });
+
+  it('a marker whose cast row is gone is stale: pending (Resume clears it), never listed as needing a re-render (#3680 pass 2)', async () => {
+    const dir = await mergedBook(['ren']);
+    // Same book, but the cast row was removed: no current voice, so the marker cannot be true.
+    await writeJsonAtomic(castJsonPath(dir), { characters: [] });
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.charactersNeedingRerender).toEqual([]);
+    expect(report.voiceDrift.charactersNeedingRerenderChapters).toEqual({});
+    expect(report.voiceDrift.charactersPending).toEqual(['ren']);
   });
 
   it('chaptersEmbedFailed excludes a chapter whose only unscored roster character is in charactersPending', async () => {

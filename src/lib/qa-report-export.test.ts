@@ -44,4 +44,39 @@ describe('formatQaReportText', () => {
     const text = formatQaReportText(report, 'Book');
     expect(text).toContain('2 chapters inconclusive');
   });
+
+  it('adds a needs-re-render line right after the voice-match line when non-empty', () => {
+    const report = { ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'] } };
+    const lines = formatQaReportText(report, 'Book').split('\n');
+    const i = lines.findIndex((l) => l.includes('Voice match — 18 of 18'));
+    expect(lines[i + 1]).toBe('· Voice match — needs re-render: c1, c2');
+  });
+
+  it('names the characters, not their ids, when a name map is given (#3680 pass 1)', () => {
+    const report = { ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'] } };
+    const text = formatQaReportText(report, 'Book', { c1: 'Alice' });
+    expect(text).toContain('· Voice match — needs re-render: Alice, c2');
+  });
+
+  it('names the chapters to re-render beside each character (#3680 pass 2)', () => {
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'], charactersNeedingRerenderChapters: { c1: [4], c2: [1, 3] } },
+    };
+    expect(formatQaReportText(report, 'Book', { c1: 'Alice' })).toContain('· Voice match — needs re-render: Alice (chapter 4), c2 (chapters 1, 3)');
+  });
+
+  it('omits the line where the card hides the listing: the gate never ran and nothing is pending (#3680 pass 1)', () => {
+    const report = {
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [], charactersNeedingRerender: ['c1'] },
+    };
+    const text = formatQaReportText(report, 'Book');
+    expect(text).toContain('Voice match — not run for this book');
+    expect(text).not.toContain('needs re-render');
+  });
+
+  it('omits the needs-re-render line when the list is empty', () => {
+    expect(formatQaReportText(MOCK_QA_REPORT, 'Book')).not.toContain('needs re-render');
+  });
 });

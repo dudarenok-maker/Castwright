@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
-import { classifyHeadline, classifyVoiceMatch } from '../lib/qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
 import { api } from '../lib/api';
 import { Pill } from './primitives';
 
@@ -16,6 +16,9 @@ interface QaReportCardProps {
   /** #3774 — why starting a job is off right now (an include's run is live); the
       Resume scoring button is disabled with this reason shown. */
   jobStartBlockedReason?: string;
+  /** #3680 — character id -> display name for the "needs re-render" listing;
+      an id missing from the map falls back to the raw id. */
+  characterNames?: Record<string, string>;
 }
 
 function slugify(title: string): string {
@@ -200,6 +203,31 @@ function VoiceMatchRow({
   );
 }
 
+/* #3680 — characters with a marked render key whose lines aren't in the current voice. Rendered
+   beneath VoiceMatchRow (not inside its early-return chain); hidden while a
+   live scoring pass runs and in the rows that report nothing settled. */
+function NeedsRerenderListing({
+  report,
+  scoringProgress,
+  characterNames,
+}: {
+  report: BookQaReport;
+  scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
+  characterNames?: Record<string, string>;
+}) {
+  const ids = needsRerenderIds(report);
+  if (ids.length === 0 || scoringProgress) return null;
+  return (
+    <p data-testid="qa-needs-rerender" className="text-sm text-ink/70 py-2">
+      Needs re-render: {ids.map((id) => {
+        const chapters = needsRerenderChapters(report, id);
+        const name = characterNames?.[id] ?? id;
+        return chapters.length > 0 ? `${name} (${chapters.length === 1 ? 'chapter' : 'chapters'} ${chapters.join(', ')})` : name;
+      }).join(', ')}. Some of their lines weren't recorded in their current voice, so those can't be checked — re-render a chapter named here to check them.
+    </p>
+  );
+}
+
 function CastContinuityRow({ report }: { report: BookQaReport }) {
   const { mild, moderate, severe } = report.configDrift.counts;
   const total = mild + moderate + severe;
@@ -216,7 +244,7 @@ function CastContinuityRow({ report }: { report: BookQaReport }) {
   );
 }
 
-export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason }: QaReportCardProps) {
+export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason, characterNames }: QaReportCardProps) {
   if (loading) {
     return <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 text-sm text-ink/50">Loading QA report…</div>;
   }
@@ -238,11 +266,12 @@ export function QaReportCard({ report, loading, error, bookTitle, bookId, scorin
         <AcousticRow report={report} />
         <TranscriptRow report={report} />
         <VoiceMatchRow report={report} bookId={bookId} scoringProgress={scoringProgress} jobStartBlockedReason={jobStartBlockedReason} />
+        <NeedsRerenderListing report={report} scoringProgress={scoringProgress} characterNames={characterNames} />
         <CastContinuityRow report={report} />
       </div>
       <div className="flex gap-2 mt-4">
         <button
-          onClick={() => downloadFile(`${slugify(bookTitle)}-qa-report.txt`, formatQaReportText(report, bookTitle), 'text/plain')}
+          onClick={() => downloadFile(`${slugify(bookTitle)}-qa-report.txt`, formatQaReportText(report, bookTitle, characterNames), 'text/plain')}
           className="text-xs font-semibold text-ink/70 hover:text-ink px-3 py-1.5 rounded-full border border-ink/10"
         >
           Download as text

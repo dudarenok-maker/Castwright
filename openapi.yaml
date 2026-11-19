@@ -10589,7 +10589,7 @@ components:
             linesFlaggedDrift: { type: integer }
         voiceDrift:
           type: object
-          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, mismatches, inconclusiveCount, uncheckedCharacterIds]
+          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, charactersNeedingRerender, mismatches, inconclusiveCount, uncheckedCharacterIds]
           properties:
             attribution: { type: string, enum: [full, legacy-unattributed] }
             chaptersEligible: { type: integer }
@@ -10612,12 +10612,36 @@ components:
               items: { type: string }
               description: >-
                 srv-36 hardening — stochastic characters with no row in
-                centroids.json yet: genuinely incomplete (never attempted, or
-                mid-retry-cycle under the transient-failure cap). Drives the
-                frontend's Resume-scoring affordance — narrower than
+                centroids.json yet (never attempted, or mid-retry-cycle under
+                the transient-failure cap), plus those whose row is a STALE
+                no-current-voice marker (#3680: the cast no longer supports
+                it, so a score-only pass clears it). Drives the frontend's
+                Resume-scoring affordance — narrower than
                 "charactersChecked < charactersOnRoster", which also stays
                 true forever for a terminally too-short character (nothing
-                left to resume for those).
+                left to resume for those). Frozen snapshot keys.
+            charactersNeedingRerender:
+              type: array
+              items: { type: string }
+              description: >-
+                CAST ids (resolved through the cast of record; a merged
+                character is listed once) with a no-current-voice marker
+                (#3524) on one of their render keys and no rendered line in
+                that key's current cast voice. Re-checked at read time
+                against the cast, not trusted from the last scoring pass; a
+                marker the cast no longer supports is in charactersPending
+                instead. The marker is per key, so a merged character's other
+                keys can be healthy. See #3680.
+            charactersNeedingRerenderChapters:
+              type: object
+              additionalProperties:
+                type: array
+                items: { type: integer }
+              description: >-
+                Per id in charactersNeedingRerender, the chapter ids holding
+                lines under the marked key(s), ascending. A re-render keys
+                its fresh lines under the canonical id, so each re-rendered
+                chapter drops off the list.
             mismatches:
               type: array
               items:

@@ -7591,8 +7591,14 @@ export interface components {
                 chaptersEmbedFailed: number;
                 charactersOnRoster: number;
                 charactersChecked: number;
-                /** @description srv-36 hardening — stochastic characters with no row in centroids.json yet: genuinely incomplete (never attempted, or mid-retry-cycle under the transient-failure cap). Drives the frontend's Resume-scoring affordance — narrower than "charactersChecked < charactersOnRoster", which also stays true forever for a terminally too-short character (nothing left to resume for those). */
+                /** @description srv-36 hardening — stochastic characters with no row in centroids.json yet (never attempted, or mid-retry-cycle under the transient-failure cap), plus those whose row is a STALE no-current-voice marker (#3680: the cast no longer supports it, so a score-only pass clears it). Drives the frontend's Resume-scoring affordance — narrower than "charactersChecked < charactersOnRoster", which also stays true forever for a terminally too-short character (nothing left to resume for those). Frozen snapshot keys. */
                 charactersPending: string[];
+                /** @description CAST ids (resolved through the cast of record; a merged character is listed once) with a no-current-voice marker (#3524) on one of their render keys and no rendered line in that key's current cast voice. Re-checked at read time against the cast, not trusted from the last scoring pass; a marker the cast no longer supports is in charactersPending instead. The marker is per key, so a merged character's other keys can be healthy. See #3680. */
+                charactersNeedingRerender: string[];
+                /** @description Per id in charactersNeedingRerender, the chapter ids holding lines under the marked key(s), ascending. A re-render keys its fresh lines under the canonical id, so each re-rendered chapter drops off the list. */
+                charactersNeedingRerenderChapters?: {
+                    [key: string]: number[];
+                };
                 mismatches: {
                     characterId: string;
                     /** @description Absent on rows from legacy verdict files written before chapter-scoping existed (see `voiceDrift.attribution`). */
