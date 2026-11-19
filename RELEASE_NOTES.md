@@ -38,6 +38,7 @@
 - **The health check keeps your folder paths on your computer.** It no longer shares your Castwright folder locations with phones and tablets on your network; the computer running it still sees them.
 - **A failed upgrade no longer shows your computer's folder paths to other devices.** On a phone or tablet you now get a plain explanation of what went wrong. On the computer running Castwright you still see the full detail.
 - **A disk or permission problem while unpacking an upgrade no longer stops Castwright.** Before, the app could shut down and leave the upgrade stuck on "applying". Now it tells you the upgrade failed and keeps running your current version.
+- **The QA report no longer offers to resume a voice check that is switched off.** It now says the speaker check is off, and points you to Settings to turn it on.
 
 # Castwright 1.15.0
 

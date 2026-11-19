@@ -44,6 +44,7 @@ test.describe('QA report card', () => {
         acoustic: { linesChecked: 40, linesRerecorded: 0, chaptersFlagged: 0 },
         asr: { linesVerified: 40, linesFlaggedDrift: 0 },
         voiceDrift: {
+          speakerCheckEnabled: true,
           attribution: 'full',
           chaptersEligible: 2,
           chaptersScored: 2,
@@ -87,5 +88,45 @@ test.describe('QA report card', () => {
     /* A genuinely pending character keeps its Resume action beside the listing: the listing
        never stands in for it (and the count is 1, not 0, so this can actually go red). */
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(1);
+  });
+
+  /* #4454 — with the speaker check switched off nothing is "pending": the card
+     must say so and offer no Resume (the server would answer 409). Same
+     `__mockQaReportOverride` seam as the test above. */
+  test('says the speaker check is off and offers no Resume when the gate is off', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __mockQaReportOverride: unknown }).__mockQaReportOverride = {
+        bookId: 'sb',
+        generatedAt: '2026-07-08T00:00:00.000Z',
+        chaptersRendered: 2,
+        chaptersTotal: 2,
+        totalLines: 40,
+        acoustic: { linesChecked: 40, linesRerecorded: 0, chaptersFlagged: 0 },
+        asr: { linesVerified: 40, linesFlaggedDrift: 0 },
+        voiceDrift: {
+          speakerCheckEnabled: false,
+          attribution: 'full',
+          chaptersEligible: 2,
+          chaptersScored: 2,
+          chaptersEmbedFailed: 0,
+          charactersOnRoster: 2,
+          charactersChecked: 1,
+          charactersPending: ['narrator'],
+          charactersNeedingRerender: [],
+          mismatches: [],
+          inconclusiveCount: 0,
+          uncheckedCharacterIds: [],
+        },
+        configDrift: { counts: { mild: 0, moderate: 0, severe: 0 }, events: [] },
+      };
+    });
+
+    await page.goto('/#/books/sb/listen');
+    await waitForListenViewReady(page, /Solway Bay/i);
+
+    const off = page.getByTestId('qa-speaker-check-off');
+    await expect(off).toBeVisible();
+    await expect(off).toContainText('Speaker check is off');
+    await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
   });
 });

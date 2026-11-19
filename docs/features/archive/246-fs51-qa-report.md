@@ -152,6 +152,9 @@ rendered book had no way to resume. Design spec:
    Resume-scoring button on the wider condition instead would show a
    permanently useless button for a book whose only unchecked characters
    are already terminal.
+   (#4454: when the speaker check is switched off, the report carries
+   `voiceDrift.speakerCheckEnabled: false`, the card says the check is off,
+   and no Resume button is shown.)
 9. **The per-chapter roster used for "fully scored" is sourced from each
    chapter's `embeddings.json`, not from `characterSnapshots`/segments.json
    presence.** A character can speak in a chapter (on the snapshot) yet have

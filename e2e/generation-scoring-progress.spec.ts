@@ -200,6 +200,7 @@ test.describe('Voice-match scoring progress (srv-36 hardening)', () => {
         acoustic: { linesChecked: 40, linesRerecorded: 0, chaptersFlagged: 0 },
         asr: { linesVerified: 40, linesFlaggedDrift: 0 },
         voiceDrift: {
+          speakerCheckEnabled: true,
           attribution: 'full',
           chaptersEligible: 2,
           chaptersScored: 1,
