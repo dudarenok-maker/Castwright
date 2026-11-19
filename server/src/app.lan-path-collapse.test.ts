@@ -146,3 +146,60 @@ function postJson(host: string, path: string) {
     r.end();
   });
 }
+
+function sendJson(host: string, method: string, path: string, payload?: unknown) {
+  return new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const data = payload === undefined ? undefined : JSON.stringify(payload);
+    const r = http.request(
+      { host, port, path, method, headers: data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {} },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => (raw += c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: raw ? JSON.parse(raw) : null }));
+      },
+    );
+    r.on('error', reject);
+    if (data) r.write(data);
+    r.end();
+  });
+}
+
+describe('/api/user/settings workspaceRoot collapse on the real app (#4446)', () => {
+  it('loopback GET: workspaceRoot is absolute, under the fake home', async () => {
+    const lo = await getJson('127.0.0.1', '/api/user/settings');
+    expect(lo.status).toBe(200);
+    expect(lo.body.workspaceRoot.startsWith(home)).toBe(true);
+  });
+
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('GET collapses home to ~ and keeps the rest', async () => {
+      const lo = await getJson('127.0.0.1', '/api/user/settings');
+      const lan = await getJson(lanIp!, '/api/user/settings');
+      expect(lan.status).toBe(200);
+      expect(lan.body.workspaceRoot).toBe('~' + lo.body.workspaceRoot.slice(home.length));
+    });
+
+    it('PUT answers with the collapsed real root and an echoed `~/evil` is not persisted', async () => {
+      const lo = await getJson('127.0.0.1', '/api/user/settings');
+      const put = await sendJson(lanIp!, 'PUT', '/api/user/settings', { workspaceRoot: '~/evil', displayName: 'x' });
+      expect(put.status).toBe(200);
+      expect(put.body.workspaceRoot).toBe('~' + lo.body.workspaceRoot.slice(home.length));
+      const after = await getJson('127.0.0.1', '/api/user/settings');
+      expect(after.body.workspaceRoot).toBe(lo.body.workspaceRoot);
+    });
+
+  });
+});
+
+describe('envDerived(settings, req) direct (#4446)', () => {
+  it('collapses for a LAN-shaped request, not for loopback', async () => {
+    const { envDerived } = await import('./routes/user-settings.js');
+    const { readUserSettings } = await import('./workspace/user-settings.js');
+    const settings = await readUserSettings();
+    const mk = (ip: string) => ({ ip, socket: { remoteAddress: ip }, headers: {} }) as any;
+    const lo = envDerived(settings, mk('127.0.0.1'));
+    const lan = envDerived(settings, mk('192.168.1.50'));
+    expect(lo.workspaceRoot.startsWith(home)).toBe(true);
+    expect(lan.workspaceRoot).toBe('~' + lo.workspaceRoot.slice(home.length));
+  });
+});
