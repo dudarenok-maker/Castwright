@@ -203,3 +203,116 @@ describe('envDerived(settings, req) direct (#4446)', () => {
     expect(lan.workspaceRoot).toBe('~' + lo.workspaceRoot.slice(home.length));
   });
 });
+
+/* ---- Batch A (#4484): import confirm, portable import, export job, voices override ---- */
+
+function multipartJson(host: string, path: string, fileName: string, bytes: Buffer) {
+  return new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const boundary = '----cwlan4446';
+    const head = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: application/zip\r\n\r\n`,
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const data = Buffer.concat([head, bytes, tail]);
+    const r = http.request(
+      { host, port, path, method: 'POST', headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, 'content-length': data.length } },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => (raw += c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: raw ? JSON.parse(raw) : null }));
+      },
+    );
+    r.on('error', reject);
+    r.end(data);
+  });
+}
+
+function getBytes(host: string, path: string) {
+  return new Promise<{ status: number; buf: Buffer }>((resolve, reject) => {
+    http
+      .get({ host, port, path }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, buf: Buffer.concat(chunks) }));
+      })
+      .on('error', reject);
+  });
+}
+
+async function importAndConfirm(host: string, title: string) {
+  const imp = await sendJson(host, 'POST', '/api/import', { text: `# ${title}\n\n## Chapter One\n\nText.\n`, fileName: 'm.md' });
+  expect(imp.status).toBe(200);
+  return sendJson(host, 'POST', '/api/books', {
+    tempId: imp.body.tempId,
+    author: 'Lan Author',
+    title,
+    seriesPosition: null,
+    isStandalone: true,
+  });
+}
+
+describe('POST /api/books (import confirm) paths collapse on the real app (#4446, real-app test)', () => {
+  it('loopback: three absolute paths under the fake home', async () => {
+    const lo = await importAndConfirm('127.0.0.1', 'Loop Book');
+    expect(lo.status).toBe(201);
+    for (const k of ['bookDir', 'manuscript', 'dotAudiobook']) expect(lo.body.paths[k].startsWith(home)).toBe(true);
+  });
+
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('collapses all three paths to ~ and keeps the rest', async () => {
+      const lan = await importAndConfirm(lanIp!, 'Lan Book');
+      expect(lan.status).toBe(201);
+      for (const k of ['bookDir', 'manuscript', 'dotAudiobook']) {
+        expect(lan.body.paths[k].startsWith('~')).toBe(true);
+        expect(lan.body.paths[k]).not.toContain(home);
+      }
+      expect(lan.body.paths.manuscript.startsWith(lan.body.paths.bookDir)).toBe(true);
+    });
+  });
+});
+
+describe('POST /api/import/portable targetPath collapse on the real app (#4446, real-app test)', () => {
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('loopback gets the absolute targetPath, LAN gets ~', async () => {
+      const book = await importAndConfirm('127.0.0.1', 'Portable Book');
+      const zip = await getBytes('127.0.0.1', `/api/books/${encodeURIComponent(book.body.bookId)}/export/portable`);
+      expect(zip.status).toBe(200);
+      const lo = await multipartJson('127.0.0.1', '/api/import/portable?onConflict=rename', 'b.zip', zip.buf);
+      expect(lo.status).toBe(201);
+      expect(lo.body.targetPath.startsWith(home)).toBe(true);
+      const lan = await multipartJson(lanIp!, '/api/import/portable?onConflict=rename', 'b.zip', zip.buf);
+      expect(lan.status).toBe(201);
+      expect(lan.body.targetPath.startsWith('~')).toBe(true);
+      expect(lan.body.targetPath).not.toContain(home);
+    });
+  });
+});
+
+describe('export job syncPath collapse (#4446, unit test of exportJobForClient with a fake req)', () => {
+  const mk = (ip: string) => ({ ip, socket: { remoteAddress: ip }, headers: {} }) as any;
+  it('collapses syncPath for LAN, keeps loopback absolute, passes null and non-home paths through, never mutates the job', async () => {
+    const { exportJobForClient } = await import('./routes/export.js');
+    const job = { id: 'e1', syncPath: join(home, 'Sync', 'b.m4b') } as any;
+    expect(exportJobForClient(mk('127.0.0.1'), job).syncPath).toBe(job.syncPath);
+    expect(exportJobForClient(mk('192.168.1.50'), job).syncPath).toBe('~' + job.syncPath.slice(home.length));
+    expect(job.syncPath.startsWith(home)).toBe(true);
+    expect(exportJobForClient(mk('192.168.1.50'), { ...job, syncPath: null }).syncPath).toBeNull();
+    const outside = process.platform === 'win32' ? 'D:\\sync\\b.m4b' : '/srv/sync/b.m4b';
+    expect(exportJobForClient(mk('192.168.1.50'), { ...job, syncPath: outside }).syncPath).toBe(outside);
+  });
+});
+
+describe('voices override skipped[].bookDir collapse (#4446, unit test of skippedForWire with a fake req)', () => {
+  const mk = (ip: string) => ({ ip, socket: { remoteAddress: ip }, headers: {} }) as any;
+  it('collapses bookDir for LAN, keeps loopback absolute, leaves placeholders and other fields', async () => {
+    const { skippedForWire } = await import('./routes/voices.js');
+    const skipped = [
+      { bookDir: join(home, 'ws', 'A', 'B'), characterId: 'c1', reason: 'already_cloned' },
+      { bookDir: '(unknown)', characterId: 'c2', reason: 'already_cloned' },
+    ];
+    expect(skippedForWire(mk('127.0.0.1'), skipped)).toEqual(skipped);
+    const lan = skippedForWire(mk('192.168.1.50'), skipped);
+    expect(lan[0]).toEqual({ ...skipped[0], bookDir: '~' + skipped[0].bookDir.slice(home.length) });
+    expect(lan[1]).toEqual(skipped[1]);
+  });
+});

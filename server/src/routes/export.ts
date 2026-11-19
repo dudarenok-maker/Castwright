@@ -50,6 +50,7 @@ import {
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findChapterAudio } from '../workspace/chapter-take.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
+import { pathForClientOrNull } from '../lan-paths.js';
 import {
   AVG_CHAPTER_BYTES,
   diskGuardMode,
@@ -522,7 +523,8 @@ async function createExportJob(
   /* srv-28 — ride the disk-low advisory back on the 201 body (warn mode). The
      export modal surfaces `warning` next to the queued job; the build still
      proceeds. Omitted entirely when the guard was ok / off. */
-  res.status(201).json(diskWarning ? { ...job, warning: diskWarning } : job);
+  const wireJob = exportJobForClient(req, job);
+  res.status(201).json(diskWarning ? { ...wireJob, warning: diskWarning } : wireJob);
   markResponded();
   await jobPromise;
   } finally {
@@ -568,7 +570,7 @@ exportRouter.get('/:bookId/exports', async (req: Request, res: Response) => {
   const list = [...jobs.values()]
     .filter((j) => j.bookId === located.state.bookId)
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return res.json(list);
+  return res.json(list.map((j) => exportJobForClient(req, j)));
 });
 
 exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
@@ -635,7 +637,7 @@ exportRouter.get('/:bookId/exports/:exportId', async (req: Request, res: Respons
   const job = jobs.get(req.params.exportId);
   if (!job || job.bookId !== located.state.bookId)
     return res.status(404).json({ error: 'export_not_found' });
-  return res.json(job);
+  return res.json(exportJobForClient(req, job));
 });
 
 exportRouter.get('/:bookId/exports/:exportId/download', async (req: Request, res: Response) => {
@@ -753,6 +755,12 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
     if (!audio) out.push(chapter.slug);
   }
   return out;
+}
+
+/* #4446 — response copy of a job with the home dir collapsed in `syncPath` for
+   LAN clients. The stored job keeps the absolute path (display-only on the wire). */
+export function exportJobForClient(req: Request, job: BookExportJob): BookExportJob {
+  return { ...job, syncPath: pathForClientOrNull(req, job.syncPath) };
 }
 
 /* Reason recorded on a cancelled job. A cancel that lands after the sync-folder
