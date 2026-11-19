@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { computeScopes } from '../ci-scope.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -1687,4 +1687,99 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
     'Register citation check step must execute `npm run check:register-citations`, ' +
       'not a neutered or renamed command.',
   );
+});
+
+// ---------------------------------------------------------------------------
+// ffmpeg-floor leg contract (#4461). package.json castwright.ffmpeg.minimum is
+// a SUPPORT floor ("the oldest ffmpeg we test against"); the `ffmpeg-floor` job
+// is what makes that true. Each test pins one property whose loss would turn
+// the leg into something that no longer tests the floor.
+// ---------------------------------------------------------------------------
+
+function ffmpegFloorJob() {
+  const blocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const job = blocks.find(([, name]) => name === 'ffmpeg-floor');
+  assert.ok(job, '`ffmpeg-floor` job not found in verify.yml; the ffmpeg support floor is no longer tested (#4461)');
+  const body = job[2];
+  const steps = body
+    .split(/^ {6}- name: /m)
+    .slice(1)
+    .map((s) => s.trimEnd());
+  return { body, steps };
+}
+
+const ffmpegFloorValue = () => JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')).castwright.ffmpeg.minimum;
+
+test('ffmpeg floor leg (#4461): runs-on is exactly ubuntu-24.04', () => {
+  const { body } = ffmpegFloorJob();
+  const m = body.match(/^ {4}runs-on:\s*(.+?)\s*$/m);
+  assert.ok(m, 'ffmpeg-floor has no runs-on:');
+  assert.equal(
+    m[1],
+    'ubuntu-24.04',
+    `ffmpeg-floor runs-on is \`${m[1]}\`; only ubuntu-24.04 apt ships ffmpeg 6.1.1, the floor build (ubuntu-latest drifts upward)`,
+  );
+});
+
+test('ffmpeg floor leg (#4461): installs ffmpeg via apt, never the static install-ffmpeg action', () => {
+  const { body } = ffmpegFloorJob();
+  assert.doesNotMatch(
+    body,
+    /uses:\s*\.\/\.github\/actions\/install-ffmpeg(?=\s|$)/m,
+    'ffmpeg-floor uses ./.github/actions/install-ffmpeg, which installs static 8.1.3 and defeats testing the floor',
+  );
+  assert.doesNotMatch(body, /actions\/install-ffmpeg/, 'ffmpeg-floor references an install-ffmpeg* action; the floor leg must use distro apt ffmpeg');
+  assert.match(body, /apt-get install\b[^\n]*\bffmpeg\b/, 'ffmpeg-floor has no `apt-get install ... ffmpeg`; it would not run the distro 6.1.1 build');
+});
+
+test('ffmpeg floor leg (#4461): version assert reads the floor from package.json via preflight-ffmpeg, no literal', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  assert.ok(step, 'no ffmpeg-floor step uses readFfmpegFloor(); the floor would be restated instead of read from package.json (invariant 1, docs/features/269)');
+  assert.match(step, /scripts\/preflight-ffmpeg\.cjs/, 'version-assert step does not load scripts/preflight-ffmpeg.cjs');
+  assert.match(step, /parseFfmpegVersion/, 'version-assert step does not use parseFfmpegVersion');
+  assert.match(step, /isBelowFloor/, 'version-assert step does not use isBelowFloor');
+  const floor = ffmpegFloorValue();
+  const major = String(floor).split('.')[0];
+  assert.ok(!step.includes(floor), `version-assert step hardcodes the floor "${floor}"; read it via readFfmpegFloor() so a package.json bump cannot drift`);
+  assert.doesNotMatch(
+    step,
+    new RegExp(`(["'\`])${major}\\1`),
+    `version-assert step hardcodes the floor major "${major}" as a quoted literal; derive it from readFfmpegFloor()`,
+  );
+});
+
+test('ffmpeg floor leg (#4461): test step runs the full fast and slow suites, never --changed', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /npx vitest run/.test(s));
+  assert.ok(step, 'ffmpeg-floor has no `npx vitest run` step');
+  assert.match(step, /npx vitest run(?!\S)(?! --config)/, 'test step lost the plain `npx vitest run` (fast suite)');
+  assert.match(step, /npx vitest run --config vitest\.config\.slow\.ts/, 'test step lost `npx vitest run --config vitest.config.slow.ts` (slow suite)');
+  assert.doesNotMatch(step, /--changed/, '`--changed` selects zero ffmpeg tests on most diffs, so the floor would go untested');
+});
+
+test('ffmpeg floor leg (#4461): ffmpeg-floor is in the verify aggregator needs:', () => {
+  const blocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = blocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const needs = (aggregator[2].match(/needs:\s*\[([^\]]*)\]/) ?? [undefined, ''])[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.ok(needs.includes('ffmpeg-floor'), `ffmpeg-floor is not in the aggregator needs: (${needs.join(', ')}); a red floor leg would not block merge`);
+});
+
+test('ffmpeg floor leg (#4461): no job-level if: (gate at step level so docs-only PRs stay green)', () => {
+  const { body } = ffmpegFloorJob();
+  assert.doesNotMatch(body, /^ {4}if:/m, 'ffmpeg-floor has a job-level `if:`; a skipped job fails the aggregator on docs-only PRs. Gate its steps instead');
+});
+
+test('ffmpeg floor leg (#4461): install, then version assert, then tests', () => {
+  const { steps } = ffmpegFloorJob();
+  const install = steps.findIndex((s) => /apt-get install\b[^\n]*\bffmpeg\b/.test(s));
+  const assertStep = steps.findIndex((s) => /readFfmpegFloor/.test(s));
+  const tests = steps.findIndex((s) => /npx vitest run/.test(s));
+  assert.ok(install >= 0 && assertStep >= 0 && tests >= 0, `ffmpeg-floor is missing a step (install=${install}, assert=${assertStep}, tests=${tests})`);
+  assert.ok(install < assertStep, 'version-assert step runs before the ffmpeg install step; it would assert against the wrong binary');
+  assert.ok(assertStep < tests, 'version-assert step runs after the test step; a wrong ffmpeg would be discovered only after the tests ran on it');
 });
