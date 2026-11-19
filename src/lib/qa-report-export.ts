@@ -1,5 +1,5 @@
 import type { BookQaReport } from './types';
-import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from './qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, isSpeakerCheckOff, needsRerenderChapters, needsRerenderIds } from './qa-report-classify';
 
 function acousticLine(r: BookQaReport): string {
   return `Acoustic — ${r.acoustic.linesChecked} lines checked, ${r.acoustic.linesRerecorded} needed a second take`;
@@ -14,11 +14,13 @@ function voiceMatchLine(r: BookQaReport): string {
   const c = classifyVoiceMatch(r);
   if (c.kind === 'noEligible') return 'Voice match — no stochastic-voiced characters in this book';
   if (c.kind === 'notRun') return 'Voice match — not run for this book';
+  if (c.kind === 'gateOff') return 'Voice match — speaker check is off';
+  const offSuffix = isSpeakerCheckOff(r) ? ' (speaker check is now off)' : '';
   const inconclusiveSuffix = c.inconclusiveCount > 0 ? `, ${c.inconclusiveCount} chapters inconclusive` : '';
   if (c.kind === 'embedShortfall') {
-    return `Voice match — ${c.chaptersScored} of ${c.chaptersEligible} eligible chapters scored (${c.chaptersEmbedFailed} couldn't be embedded), ${c.mismatchCount} mismatches${inconclusiveSuffix}`;
+    return `Voice match — ${c.chaptersScored} of ${c.chaptersEligible} eligible chapters scored (${c.chaptersEmbedFailed} couldn't be embedded), ${c.mismatchCount} mismatches${inconclusiveSuffix}${offSuffix}`;
   }
-  return `Voice match — ${c.charactersChecked} of ${c.charactersOnRoster} characters checked, ${c.mismatchCount} mismatches${inconclusiveSuffix}`;
+  return `Voice match — ${c.charactersChecked} of ${c.charactersOnRoster} characters checked, ${c.mismatchCount} mismatches${inconclusiveSuffix}${offSuffix}`;
 }
 
 function needsRerenderLine(r: BookQaReport, characterNames?: Record<string, string>): string | null {

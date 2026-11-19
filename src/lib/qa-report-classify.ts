@@ -23,6 +23,7 @@ export function classifyHeadline(report: BookQaReport): HeadlineClassification {
 export type VoiceMatchClassification =
   | { kind: 'noEligible' }
   | { kind: 'notRun' }
+  | { kind: 'gateOff' }
   | {
       kind: 'embedShortfall';
       chaptersScored: number;
@@ -49,6 +50,8 @@ export type VoiceMatchClassification =
 export function needsRerenderIds(report: BookQaReport): string[] {
   const ids = report.voiceDrift.charactersNeedingRerender ?? [];
   if (ids.length === 0) return [];
+  /* #4454 — with the speaker check off no pass will settle anything, same as the `notRun` rule. */
+  if (classifyVoiceMatch(report).kind === 'gateOff') return [];
   if (classifyVoiceMatch(report).kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return [];
   return ids;
 }
@@ -59,9 +62,22 @@ export function needsRerenderChapters(report: BookQaReport, id: string): number[
   return report.voiceDrift.charactersNeedingRerenderChapters?.[id] ?? [];
 }
 
+/** #4454 — true when the speaker check is switched off. Strict `=== false`: e2e specs seed untyped
+ *  report objects through `window.__mockQaReportOverride` and may omit the field, and an absent
+ *  field must keep today's behaviour. */
+export function isSpeakerCheckOff(report: BookQaReport): boolean {
+  return report.voiceDrift.speakerCheckEnabled === false;
+}
+
 export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassification {
   const vd = report.voiceDrift;
   if (vd.chaptersEligible === 0) return { kind: 'noEligible' };
+  /* #4454 — gate off with nothing real to report (pending is not resumable work, or never run):
+     say so. Past results (`embedShortfall` / `scored`) below stay: true for the audio scored.
+     Strict `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
+  if (isSpeakerCheckOff(report) && (vd.charactersPending.length > 0 || (vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0))) {
+    return { kind: 'gateOff' };
+  }
   /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the
      gate never ran" — a fleet-wide embedding failure (the gate attempted
      every eligible chapter, but embeddings failed for literally all of

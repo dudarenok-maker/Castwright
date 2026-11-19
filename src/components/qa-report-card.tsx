@@ -174,7 +174,7 @@ function VoiceMatchRow({
   /* the notRun/embedShortfall/scored classification (including the
      fs-51 fleet-wide-embed-failure and isolated-embed-shortfall correctness
      fixes) lives in qa-report-classify.ts, shared with qa-report-export.ts. */
-  if (classification.kind === 'notRun') {
+  if (classification.kind === 'notRun' || classification.kind === 'gateOff') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHeadline, classifyVoiceMatch } from './qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderIds } from './qa-report-classify';
+import { formatQaReportText } from './qa-report-export';
+import type { BookQaReport } from './types';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 
 describe('classifyHeadline', () => {
@@ -101,5 +103,46 @@ describe('classifyVoiceMatch', () => {
     const result = classifyVoiceMatch(report);
     expect(result.kind).toBe('embedShortfall');
     expect(result).toMatchObject({ inconclusiveCount: 2 });
+  });
+});
+
+describe('speaker check off (#4454)', () => {
+  const vd = MOCK_QA_REPORT.voiceDrift;
+  const off = (over: Partial<BookQaReport['voiceDrift']>): BookQaReport => ({
+    ...MOCK_QA_REPORT,
+    voiceDrift: { ...vd, speakerCheckEnabled: false, ...over },
+  });
+  const line = (r: BookQaReport) => formatQaReportText(r, 'Book').split('\n').find((l) => l.includes('Voice match —'));
+
+  it('(a) gate off + pending non-empty -> gateOff, export says the check is off', () => {
+    const r = off({ charactersPending: ['ren'], chaptersScored: 0 });
+    expect(classifyVoiceMatch(r).kind).toBe('gateOff');
+    expect(line(r)).toContain('Voice match — speaker check is off');
+  });
+
+  it('(b) gate off + notRun condition + nothing pending -> gateOff', () => {
+    expect(classifyVoiceMatch(off({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] })).kind).toBe('gateOff');
+  });
+
+  it('(c) gate off + scored keeps scored and notes the check is now off', () => {
+    const r = off({});
+    expect(classifyVoiceMatch(r).kind).toBe('scored');
+    expect(line(r)).toMatch(/\(speaker check is now off\)$/);
+  });
+
+  it('(d) gate on + pending is not gateOff', () => {
+    const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...vd, charactersPending: ['ren'], chaptersScored: 0 } };
+    expect(classifyVoiceMatch(r).kind).not.toBe('gateOff');
+  });
+
+  it('(e) field absent + pending is not gateOff', () => {
+    const { speakerCheckEnabled: _omit, ...rest } = vd;
+    const r = { ...MOCK_QA_REPORT, voiceDrift: { ...rest, charactersPending: ['ren'], chaptersScored: 0 } } as unknown as BookQaReport;
+    expect(classifyVoiceMatch(r).kind).not.toBe('gateOff');
+  });
+
+  it('(f) needsRerenderIds is empty for a gateOff report carrying charactersNeedingRerender', () => {
+    const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersNeedingRerender: ['c1'] });
+    expect(needsRerenderIds(r)).toEqual([]);
   });
 });
