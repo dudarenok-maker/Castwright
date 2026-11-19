@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
-import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, isSpeakerCheckOff, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
 import { api } from '../lib/api';
 import { Pill } from './primitives';
 
@@ -109,6 +109,16 @@ function VoiceMatchRow({
       </div>
     );
   }
+  /* #4454 — speaker check is off: say so and offer no Resume (Resume only when it can do the work, #3680).
+     MUST stay before the charactersPending branch: gateOff covers every gate-off report with pending characters. */
+  if (classification.kind === 'gateOff') {
+    return (
+      <div className="flex items-center justify-between py-2">
+        <span className="text-sm text-ink/70">Voice match</span>
+        <span data-testid="qa-speaker-check-off" className="text-sm text-ink/50">Speaker check is off — turn it on in Settings to check character voices.</span>
+      </div>
+    );
+  }
   /* srv-36 hardening — charactersPending means a prior scoreBook pass was
      interrupted mid-run (e.g. server restart) and left work undone that no
      live SSE stream will ever resume on its own (Task 6/7's architecture:
@@ -174,7 +184,7 @@ function VoiceMatchRow({
   /* the notRun/embedShortfall/scored classification (including the
      fs-51 fleet-wide-embed-failure and isolated-embed-shortfall correctness
      fixes) lives in qa-report-classify.ts, shared with qa-report-export.ts. */
-  if (classification.kind === 'notRun' || classification.kind === 'gateOff') {
+  if (classification.kind === 'notRun') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
@@ -182,7 +192,9 @@ function VoiceMatchRow({
       </div>
     );
   }
-  const inconclusiveNote = classification.inconclusiveCount > 0 ? ` · ${classification.inconclusiveCount} chapters inconclusive` : '';
+  const inconclusiveNote =
+    (classification.inconclusiveCount > 0 ? ` · ${classification.inconclusiveCount} chapters inconclusive` : '') +
+    (isSpeakerCheckOff(report) ? ' · speaker check is now off' : '');
   if (classification.kind === 'embedShortfall') {
     return (
       <div className="flex items-center justify-between py-2">

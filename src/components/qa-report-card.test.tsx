@@ -111,6 +111,43 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     expect(screen.getByRole('button', { name: /resume scoring/i })).toBeInTheDocument();
   });
 
+  describe('speaker check off (#4454)', () => {
+    const OFF_COPY = 'Speaker check is off — turn it on in Settings to check character voices.';
+    const renderWith = (voiceDrift: Partial<typeof MOCK_QA_REPORT.voiceDrift>) =>
+      render(
+        <QaReportCard
+          report={{ ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, ...voiceDrift } }}
+          loading={false}
+          error={false}
+          bookTitle="Test"
+          bookId="b1"
+        />,
+      );
+
+    it('(a) pending + gate off: says so and offers no Resume', () => {
+      renderWith({ speakerCheckEnabled: false, charactersPending: ['ren'], chaptersScored: 6 });
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+      expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+    });
+
+    it('(b) notRun shape + gate off: speaker-check copy replaces "Not run for this book"', () => {
+      renderWith({ speakerCheckEnabled: false, chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] });
+      expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+      expect(screen.queryByText(/Not run for this book/)).toBeNull();
+    });
+
+    it('(c) scored shape + gate off: keeps the result and appends the note, no Resume', () => {
+      renderWith({ speakerCheckEnabled: false, chaptersScored: 12, charactersPending: [] });
+      expect(screen.getByText(/18 of 18 characters checked.*speaker check is now off/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+    });
+
+    it('(d) control: gate on + pending still offers Resume', () => {
+      renderWith({ speakerCheckEnabled: true, charactersPending: ['ren'], chaptersScored: 6 });
+      expect(screen.getByRole('button', { name: 'Resume scoring' })).toBeInTheDocument();
+    });
+  });
+
   it('disables Resume scoring with the reason visible while a job start is blocked (#3774)', async () => {
     const resumeSpy = vi.spyOn(api, 'resumeScoring').mockResolvedValue();
     const report = {
