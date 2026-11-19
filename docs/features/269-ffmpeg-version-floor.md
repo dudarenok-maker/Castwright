@@ -148,6 +148,7 @@ deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembl
 - `pinokio-scripts/lib/ffmpeg-pin.test.js` (`node:test`, run by
   `npm run test:pinokio`) — the constraint is present in **both** `install.js`
   and `update.js`, both agree, and the major satisfies `package.json`.
+- `.github/workflows/verify.yml` `ffmpeg-floor` job (#4461) — runs the full server suite on `ubuntu-24.04` against the distro's apt ffmpeg 6.1.x, so the floor is tested in CI rather than only asserted. It deliberately uses apt, not `.github/actions/install-ffmpeg` (which pins the static 8.1.3 build the other legs use). It is a required leg. `scripts/tests/workflow-wiring.test.mjs`'s `ffmpeg floor leg (#4461)` tests pin the job's shape.
 
 ### Manual acceptance walkthrough
 
