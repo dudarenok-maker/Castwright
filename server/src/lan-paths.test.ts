@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collapseHomePath } from './lan-paths.js';
+import { collapseHomePath, expandHomePath } from './lan-paths.js';
 
 const w = (home: string) => ({ home, platform: 'win32' as const });
 const l = (home: string) => ({ home, platform: 'linux' as const });
@@ -39,5 +39,35 @@ describe('collapseHomePath (#4446)', () => {
   });
   it('empty home -> unchanged', () => {
     expect(collapseHomePath('/x/y', l(''))).toBe('/x/y');
+  });
+});
+
+describe('expandHomePath (#4446)', () => {
+  it('~ alone -> home', () => {
+    expect(expandHomePath('~', w('C:\\Users\\ann'))).toBe('C:\\Users\\ann');
+    expect(expandHomePath('~', l('/home/ann'))).toBe('/home/ann');
+  });
+  it('~/x on both platforms', () => {
+    expect(expandHomePath('~/x', l('/home/ann'))).toBe('/home/ann/x');
+    expect(expandHomePath('~/x', w('C:\\Users\\ann'))).toBe('C:\\Users\\ann/x');
+  });
+  it('~\\x expands on win32 only', () => {
+    expect(expandHomePath('~\\x', w('C:\\Users\\ann'))).toBe('C:\\Users\\ann\\x');
+    expect(expandHomePath('~\\x', l('/home/ann'))).toBe('~\\x');
+  });
+  it('~user/x, a~b and absolute paths are unchanged', () => {
+    expect(expandHomePath('~user/x', l('/home/ann'))).toBe('~user/x');
+    expect(expandHomePath('a~b', l('/home/ann'))).toBe('a~b');
+    expect(expandHomePath('D:\\books', w('C:\\Users\\ann'))).toBe('D:\\books');
+    expect(expandHomePath('/mnt/books', l('/home/ann'))).toBe('/mnt/books');
+  });
+  it('empty home -> unchanged', () => {
+    expect(expandHomePath('~/x', l(''))).toBe('~/x');
+  });
+  it('round-trips collapseHomePath for under-home paths on both platforms', () => {
+    const wp = 'C:\\Users\\ann\\Audiobooks\\Lib';
+    expect(expandHomePath(collapseHomePath(wp, w('C:\\Users\\ann')), w('C:\\Users\\ann'))).toBe(wp);
+    const lp = '/home/ann/Audiobooks/Lib';
+    expect(expandHomePath(collapseHomePath(lp, l('/home/ann')), l('/home/ann'))).toBe(lp);
   });
 });

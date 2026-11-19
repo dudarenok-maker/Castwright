@@ -23,6 +23,23 @@ export function collapseHomePath(
   return p;
 }
 
+/* Exact inverse of collapseHomePath: a leading `~` (alone, or followed by a
+   separator) becomes the home dir. `~user`, `a~b`, absolute paths and an empty
+   home are returned unchanged. */
+export function expandHomePath(
+  p: string,
+  opts: { home?: string; platform?: NodeJS.Platform } = {},
+): string {
+  const win = (opts.platform ?? process.platform) === 'win32';
+  const isSep = (c: string | undefined) => c === '/' || (win && c === '\\');
+  let home = opts.home ?? homedir();
+  while (home.length > 1 && isSep(home[home.length - 1])) home = home.slice(0, -1);
+  if (!home) return p;
+  if (p === '~') return home;
+  if (p[0] === '~' && isSep(p[1])) return home + p.slice(1);
+  return p;
+}
+
 export function pathForClient(req: Request, p: string): string {
   return isLoopbackRequest(req) ? p : collapseHomePath(p);
 }

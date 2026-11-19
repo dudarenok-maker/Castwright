@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 
@@ -349,6 +349,64 @@ describe('GET /api/diagnostics detail collapse on the real app (#4446, real-app 
       const lan = await getJson(lanIp!, '/api/diagnostics');
       expect(lan.status).toBe(200);
       for (const c of lan.body.checks) expect(String(c.detail ?? '')).not.toContain(home);
+    });
+  });
+});
+
+/* ---- #4486: stored writable paths (workspaceDirOverride, exportSyncFolder) ---- */
+
+describe('stored settings paths: collapse for LAN, expand ~ on LAN write only (#4446/#4486)', () => {
+  let wsOverride: string;
+  let syncFolder: string;
+  beforeAll(() => {
+    wsOverride = join(home, 'Audiobooks', 'Lib');
+    syncFolder = join(home, 'syncdir');
+    mkdirSync(syncFolder, { recursive: true });
+  });
+  afterAll(async () => {
+    await sendJson('127.0.0.1', 'PUT', '/api/user/settings', { workspaceDirOverride: null, exportSyncFolder: null });
+  });
+
+  it('loopback PUT stores the original absolute values; loopback GET returns them', async () => {
+    const put = await sendJson('127.0.0.1', 'PUT', '/api/user/settings', { workspaceDirOverride: wsOverride, exportSyncFolder: syncFolder });
+    expect(put.status).toBe(200);
+    const lo = await getJson('127.0.0.1', '/api/user/settings');
+    expect(lo.body.workspaceDirOverride).toBe(wsOverride);
+    expect(lo.body.exportSyncFolder).toBe(syncFolder);
+  });
+
+  it('loopback PUT of a literal ~ path is stored exactly as sent (no expansion)', async () => {
+    const put = await sendJson('127.0.0.1', 'PUT', '/api/user/settings', { workspaceDirOverride: '~\\x', exportSyncFolder: '~/y' });
+    expect(put.status).toBe(200);
+    const lo = await getJson('127.0.0.1', '/api/user/settings');
+    expect(lo.body.workspaceDirOverride).toBe('~\\x');
+    expect(lo.body.exportSyncFolder).toBe('~/y');
+    await sendJson('127.0.0.1', 'PUT', '/api/user/settings', { workspaceDirOverride: wsOverride, exportSyncFolder: syncFolder });
+  });
+
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('GET shows both as ~..., and a LAN PUT echoing them round-trips byte-identical', async () => {
+      const lan = await getJson(lanIp!, '/api/user/settings');
+      expect(lan.body.workspaceDirOverride).toBe('~' + wsOverride.slice(home.length));
+      expect(lan.body.exportSyncFolder).toBe('~' + syncFolder.slice(home.length));
+      const put = await sendJson(lanIp!, 'PUT', '/api/user/settings', {
+        displayName: 'phone',
+        workspaceDirOverride: lan.body.workspaceDirOverride,
+        exportSyncFolder: lan.body.exportSyncFolder,
+      });
+      expect(put.status).toBe(200);
+      expect(put.body.workspaceDirOverride.startsWith('~')).toBe(true);
+      const lo = await getJson('127.0.0.1', '/api/user/settings');
+      expect(lo.body.workspaceDirOverride).toBe(wsOverride);
+      expect(lo.body.exportSyncFolder).toBe(syncFolder);
+    });
+
+    it('LAN POST /sync-folder/test with ~/<existing subdir> is ok and creates no literal ~ dir', async () => {
+      const res = await sendJson(lanIp!, 'POST', '/api/user/settings/sync-folder/test', { path: '~' + syncFolder.slice(home.length) });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(existsSync(join(process.cwd(), '~'))).toBe(false);
+      expect(existsSync(join(home, 'ws', '~'))).toBe(false);
     });
   });
 });
