@@ -11388,7 +11388,7 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
 def _engine_actual_card(engine: Any) -> Optional[dict]:
     """(family, index, fell_back) for a LOADED engine, else None. index is the
     real torch ordinal for torch engines, the parsed "cuda:N" ordinal for
-    engines with no torch device (CT2 Whisper, Qwen, SPK), and None for ORT
+    engines with no torch device (CT2 Whisper, Qwen), and None for ORT
     Kokoro (family only).
     fell_back = requested cuda but resolved cpu (the silent-CPU signal)."""
     model = (
@@ -11487,7 +11487,7 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
                 getattr(engine, "device", None) or getattr(engine, "_device", None)
             )
             # #4456: an engine here has no `_resolved_device` split and no torch
-            # `.parameters()` (CT2 Whisper, Qwen's wrapper, SPK), so the string
+            # `.parameters()` (CT2 Whisper, Qwen's wrapper), so the string
             # attr IS its placement (Whisper/Qwen publish the admitted "cuda:N"
             # there); without the index `_is_resident` maps it to cuda:0.
             # Kokoro never reaches this line (it has `_resolved_device`).
