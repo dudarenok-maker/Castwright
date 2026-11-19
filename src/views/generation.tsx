@@ -128,7 +128,7 @@ import { notificationsActions } from '../store/notifications-slice';
 import { selectAnalysisBusyForBook, analysisBusyMessage } from '../store/analysis-substage-selectors';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
-import { castActions } from '../store/cast-slice';
+import { castActions, selectCharacterNamesById } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions, isStaleIncludeSnapshot, selectMainAnalysisLive } from '../store/analysis-slice';
 import { selectIsOpenBook } from '../store/open-book';
@@ -324,6 +324,7 @@ export function GenerationView({
      they keep the raw list. */
   const characterIdAliases = useAppSelector((s) => s.chapters.characterIdAliases);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
+  const characterNames = useAppSelector(selectCharacterNamesById);
   /* #3435 decision A — the server refuses a subset run (Re-analyse, Include)
      while this book's main analysis run is live, so both controls are
      disabled with "Pause the analysis first" until it is paused. */
@@ -1918,6 +1919,7 @@ export function GenerationView({
           error={qaError}
           bookTitle={title ?? ''}
           bookId={bookId}
+          characterNames={characterNames}
           scoringProgress={scoringProgress}
         />
       </div>

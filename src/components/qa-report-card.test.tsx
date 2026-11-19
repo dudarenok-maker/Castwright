@@ -217,4 +217,63 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     expect(screen.getByRole('button', { name: /resume scoring/i })).not.toBeDisabled();
     resumeSpy.mockRestore();
   });
+
+  describe('needs re-render listing (#3680)', () => {
+    const withRerender = (extra = {}) => ({
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['c1', 'c2'], ...extra },
+    });
+    const bare = (report: typeof MOCK_QA_REPORT, props = {}) =>
+      render(<QaReportCard report={report} loading={false} error={false} bookTitle="T" bookId="b1" {...props} />);
+
+    it('lists names, falling back to the id when a name is missing', () => {
+      bare(withRerender(), { characterNames: { c1: 'Alice' } });
+      const el = screen.getByTestId('qa-needs-rerender');
+      expect(el).toHaveTextContent('Needs re-render: Alice, c2.');
+      // The exact sentence: it names no cause, because the cause differs (voice changed,
+      // fallback engine, merged key) and a fallback-only character's voice never changed.
+      expect(el).toHaveTextContent(
+        "Some of their lines weren't recorded in their current voice, so those can't be checked — re-render a chapter named here to check them.",
+      );
+      expect(el).not.toHaveTextContent(/No lines are recorded/);
+      // The headline property of #3680: nothing is pending, so the listing is NOT a Resume offer.
+      expect(screen.queryByRole('button', { name: /resume scoring/i })).not.toBeInTheDocument();
+    });
+
+    it('a fallback-only character (voice never changed) gets the same cause-neutral sentence (#3680 pass 3)', () => {
+      bare(withRerender({ charactersNeedingRerender: ['thurid'], charactersNeedingRerenderChapters: { thurid: [1] } }), {
+        characterNames: { thurid: 'Thurid' },
+      });
+      const el = screen.getByTestId('qa-needs-rerender');
+      expect(el).toHaveTextContent('Needs re-render: Thurid (chapter 1).');
+      expect(el).not.toHaveTextContent(/earlier voice/i);
+    });
+
+    it('names the chapters holding the marked key lines, per character (#3680 pass 2)', () => {
+      bare(withRerender({ charactersNeedingRerenderChapters: { c1: [4], c2: [1, 3] } }), { characterNames: { c1: 'Alice' } });
+      expect(screen.getByTestId('qa-needs-rerender')).toHaveTextContent('Needs re-render: Alice (chapter 4), c2 (chapters 1, 3).');
+    });
+
+    it('is absent when the gate never ran and nothing is pending (nothing was settled)', () => {
+      bare(withRerender({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] }));
+      expect(screen.getByText(/flip on render-integrity checking/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
+    });
+
+    it('is absent when the list is empty', () => {
+      bare(MOCK_QA_REPORT);
+      expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
+    });
+
+    it('is absent while a scoring pass is live', () => {
+      bare(withRerender(), { scoringProgress: { charactersChecked: 1, charactersOnRoster: 5 } });
+      expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
+    });
+
+    it('shows alongside the Resume button when characters are also pending', () => {
+      bare(withRerender({ charactersPending: ['c3'] }));
+      expect(screen.getByRole('button', { name: /resume scoring/i })).toBeInTheDocument();
+      expect(screen.getByTestId('qa-needs-rerender')).toBeInTheDocument();
+    });
+  });
 });
