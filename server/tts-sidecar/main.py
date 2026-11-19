@@ -11425,7 +11425,9 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
 
 def _engine_actual_card(engine: Any) -> Optional[dict]:
     """(family, index, fell_back) for a LOADED engine, else None. index is the
-    real torch ordinal for torch engines; None for ORT/CT2 (family only).
+    real torch ordinal for torch engines, the parsed "cuda:N" ordinal for
+    engines with no torch device (CT2 Whisper, Qwen), and None for ORT
+    Kokoro (family only).
     fell_back = requested cuda but resolved cpu (the silent-CPU signal)."""
     model = (
         getattr(engine, "_model", None)
@@ -11499,7 +11501,7 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
             family, index = ("cuda" if dev.type == "cuda" else dev.type), dev.index
     except Exception:
         pass
-    if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
+    if family is None:  # ORT (Kokoro) or no params(): use the string attr (+ its index when there is no _resolved_device)
         # Prefer the RESOLVED device (Coqui AND Kokoro, since #2631 review B3,
         # keep the actual in _resolved_device and the pref in _device) so a
         # cpu fallback isn't masked by the cuda pref; then `device` (SPK,
@@ -11519,9 +11521,16 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         if hasattr(engine, "_resolved_device"):
             family, _ = _parse_device(getattr(engine, "_resolved_device"))
         else:
-            family, _ = _parse_device(
+            family, index = _parse_device(
                 getattr(engine, "device", None) or getattr(engine, "_device", None)
             )
+            # #4456: an engine here has no `_resolved_device` split and no torch
+            # `.parameters()` (CT2 Whisper, Qwen's wrapper), so the string
+            # attr IS its placement (Whisper/Qwen publish the admitted "cuda:N"
+            # there); without the index `_is_resident` maps it to cuda:0.
+            # Kokoro never reaches this line (it has `_resolved_device`).
+            if family not in ("cuda", "rocm"):
+                index = None
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
@@ -11576,7 +11585,7 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
         c["reserved_ceiling_mb"] = _card_reserved_ceiling_mb(c["total_mb"])
     for c in cards:
         c["resident"] = resident.get(c["idx"], [])
-    # ORT/CT2 engines (Kokoro/Whisper) and any cpu-fallen engine carry index=None
+    # ORT engines (Kokoro) and any cpu-fallen engine carry index=None
     # → the -1 bucket, which no real card claims. Surface it as a synthetic
     # entry so a cpu_fallback (stale_reason) is visible in gpus[] rather than
     # silently dropped. Only emitted when the bucket is non-empty, so a fully
