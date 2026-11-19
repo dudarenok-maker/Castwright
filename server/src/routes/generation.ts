@@ -107,6 +107,7 @@ import {
   setJobEpochReader,
   setQualityRenderCounter,
   isAnyGenerationActive,
+  isOtherGenerationActive,
 } from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
@@ -122,14 +123,26 @@ export const generationRouter = Router();
    scoring failure must never break generation. */
 const scoringInFlight = new Map<string, Promise<void>>();
 
+/** True when a score pass is in flight on a book other than `bookId`. */
+function otherBookScoringInFlight(bookId: string): boolean {
+  return [...scoringInFlight.keys()].some((k) => k !== bookId);
+}
+
+/** #4445 — true while work OTHER than `bookId`'s own render may be using a Qwen tier: a render on
+    another book, any splice or QA repair (any book), or another book's score pass. The
+    run's own render is excluded on purpose (its `keep` set protects it). */
+function otherTierWorkActive(bookId: string): boolean {
+  return isOtherGenerationActive(bookId) || otherBookScoringInFlight(bookId);
+}
+
 export async function triggerScoring(ctx: {
   bookId: string;
   bookDir: string;
   chapters: { id: number; slug: string }[];
   justFinalizedSlugs: Iterable<string>;
   /** Full-cast-superset tier set, supplied by the chapter-finalize path
-      (unchanged from today — protects an in-flight sibling chapter's tier,
-      see the reconcile comment below). Omitted by the resume route, which
+      protects an in-flight sibling chapter's tier, see the reconcile comment below;
+      the reconcile is also skipped while other work is active, #4445). Omitted by the resume route, which
       has no live run to derive a superset from and instead reconciles
       against scoreBook's own precise usedQwenTiers, and only while no render,
       splice or QA repair, or another book's score pass, is active anywhere (#4235) — the reconcile acts on the
@@ -219,14 +232,19 @@ export async function triggerScoring(ctx: {
        tier scoreBook did not see: skip the eviction while any is active. Another book's
        score pass (its auditions render on the same sidecar, at that book's tiers) is
        neither a render nor a splice, so it is read from `scoringInFlight` too. The
-       generation path (`ctx.keep`) is unchanged (#4445).
+       generation path (`ctx.keep`) skips on the same rule except that this book's own
+       render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
+       superset, so its own chapters are already protected (#4445).
        Two residual windows remain, each costing at most one cold reload: (a) after this
        synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
        before it posts `/unload`, so a job registering in that round trip loses its tier;
        (b) between a Fix-audio batch's per-chapter splice POSTs nothing is registered, so a
        pass finishing in that gap drops the tier at the chapter boundary. */
     const keep = ctx.keep ?? result.usedQwenTiers;
-    if (!ctx.keep && (isAnyGenerationActive() || [...scoringInFlight.keys()].some((k) => k !== ctx.bookId))) return;
+    const busy = ctx.keep
+      ? otherTierWorkActive(ctx.bookId)
+      : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId);
+    if (busy) return;
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
   });
   const run = registration

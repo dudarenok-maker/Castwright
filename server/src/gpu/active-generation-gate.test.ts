@@ -87,4 +87,37 @@ describe('active-generation-gate', () => {
     release();
     expect(readSpliceEpoch()).toBe((before as number) + 1);
   });
+
+  /* #4445 - the generation-path tier reconcile excludes its own book's render (its keep
+     set protects it) but must see any other render or any splice/repair. */
+  describe('isOtherGenerationActive', () => {
+    it('fails closed (true) when unregistered', async () => {
+      const { isOtherGenerationActive } = await import('./active-generation-gate.js');
+      expect(isOtherGenerationActive('book-1')).toBe(true);
+    });
+
+    it('is false when the provider returns only the given book', async () => {
+      const { setActiveGenerationBooksProvider, isOtherGenerationActive } = await import(
+        './active-generation-gate.js'
+      );
+      setActiveGenerationBooksProvider(() => ['book-1']);
+      expect(isOtherGenerationActive('book-1')).toBe(false);
+    });
+
+    it('is true when the provider returns another book', async () => {
+      const { setActiveGenerationBooksProvider, isOtherGenerationActive } = await import(
+        './active-generation-gate.js'
+      );
+      setActiveGenerationBooksProvider(() => ['book-1', 'book-2']);
+      expect(isOtherGenerationActive('book-1')).toBe(true);
+    });
+
+    it('is true when a splice counter reads > 0, even if only the given book renders', async () => {
+      const { setActiveGenerationBooksProvider, setInFlightSpliceCounter, isOtherGenerationActive } =
+        await import('./active-generation-gate.js');
+      setActiveGenerationBooksProvider(() => ['book-1']);
+      setInFlightSpliceCounter(() => 1);
+      expect(isOtherGenerationActive('book-1')).toBe(true);
+    });
+  });
 });

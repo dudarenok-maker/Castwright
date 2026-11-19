@@ -11,8 +11,8 @@
 
    A fs-26 splice and a QA repair are GPU work too but never enter
    `inFlightByBook`; `routes/chapter-job-coordination.ts` registers its
-   in-flight splice count (`setInFlightSpliceCounter`, #4066) and both
-   predicates below fold it in.
+   in-flight splice count (`setInFlightSpliceCounter`, #4066) and the
+   splice-aware predicates below fold it in.
 
    There is exactly one source of truth (the registered accessor) — nothing
    here copies or caches the state, so it can't drift from
@@ -139,6 +139,15 @@ function spliceActive(): boolean {
 export function isAnyGenerationActive(): boolean {
   if (!provider) return true;
   return provider().length > 0 || spliceActive();
+}
+
+/** #4445 — true when a render on a book OTHER than `bookId`, or any splice / QA repair
+    (on any book), may be in flight. Unregistered resolves to `true` (fail closed, like
+    isAnyGenerationActive). For a caller whose own render is already protected by its
+    keep set (the generation-path tier reconciles). */
+export function isOtherGenerationActive(bookId: string): boolean {
+  if (!provider) return true;
+  return provider().some((b) => b !== bookId) || spliceActive();
 }
 
 /** #4075 — true only when a splice or QA repair is KNOWN to be in flight and
