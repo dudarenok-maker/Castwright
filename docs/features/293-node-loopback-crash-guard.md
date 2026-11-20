@@ -27,7 +27,7 @@ In libuv's `deps/uv/src/win/tcp.c`, `uv__is_fast_loopback_fail_supported()` call
 - Node cherry-pick: nodejs/node#62561, first shipped in v24.16.0. User report: nodejs/node#63620.
 - Only `tcp.c` has the bug. The only other `RtlGetVersion` caller, `util.c:1580-1583` in `uv_os_uname`, sets `dwOSVersionInfoSize` first (read at v24.15.0).
 
-**Owner decision (2026-11-20), binding.** Drop Node 22 on Windows. No fixed 22.x exists, so on Windows the guard refuses every 22.x and requires >=24.16.0. **Amended 2026-11-20 (owner):** Node 22 support is dropped everywhere, not only on Windows. `engines.node` is exactly `>=24.16.0` (a plain floor, no union, no upper bound), which admits the still-affected Node 25.0 to 25.9 and 26.0.0; the Windows guard still refuses those. Pinokio's pin is `nodejs>=24.16.0,<25`. The PR also closes #4442.
+**Owner decision (2026-11-20), binding.** Drop Node 22 on Windows. No fixed 22.x exists, so on Windows the guard refuses every 22.x and requires >=24.16.0. **Amended 2026-11-20 (owner):** Node 22 support is dropped everywhere, not only on Windows. `engines.node` is exactly `>=24.16.0` (a plain floor, no union, no upper bound), which admits the still-affected Node 25.0 to 25.9 and 26.0.0; the Windows guard still refuses those. Pinokio's pin is `nodejs>=24.16.0,<25`. The PR refs #4442 but does not close it: #4442's recorded crash ran on Node v24.22.3, a release this plan marks as fixed, so it has a different or additional cause.
 
 ## Affected-release table
 
