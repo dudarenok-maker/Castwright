@@ -84,12 +84,15 @@ export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassificati
   /* #4454 — gate off with no chapter scored or attempted. With no other evidence either, say the
      check is off. The server's chapter counts skip any chapter whose roster holds a pending
      character, so a pending character in every eligible chapter zeroes both however much was
-     checked: a checked character (`charactersChecked`) or a standing mismatch / inconclusive count
-     is a past result and stays, as `checkedSoFar` (the pending row's wording, no Resume). Past
+     checked: a roster character with a centroids row (only a score pass writes one, so
+     `charactersPending` is shorter than the roster) or a standing mismatch / inconclusive count
+     is a past result and stays, as `checkedSoFar` (the pending row's wording, no Resume).
+     `charactersChecked` is NOT evidence: the server counts the roster minus too-short verdicts, so
+     a never-scored book reports it as the whole roster. Past
      results with chapters counted (`embedShortfall` / `scored`) below stay, pending characters or
      not. Strict `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
   if (isSpeakerCheckOff(report) && vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
-    if (vd.charactersChecked === 0 && vd.mismatches.length === 0 && vd.inconclusiveCount === 0) {
+    if (vd.charactersPending.length >= vd.charactersOnRoster && vd.mismatches.length === 0 && vd.inconclusiveCount === 0) {
       return { kind: 'gateOff' };
     }
     return {

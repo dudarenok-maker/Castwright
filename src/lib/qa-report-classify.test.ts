@@ -114,8 +114,24 @@ describe('speaker check off (#4454)', () => {
   });
   const line = (r: BookQaReport) => formatQaReportText(r, 'Book').split('\n').find((l) => l.includes('Voice match —'));
 
-  it('(a) gate off + pending non-empty -> gateOff, export says the check is off', () => {
-    const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersChecked: 0 });
+  /* The report buildAudioQaReport emits for a never-scored book (pinned by the server test
+     'a never-scored book reports every roster character as checked AND pending ...'): the roster
+     counts as fully "checked", every id is pending. */
+  const neverScored = (over: Partial<BookQaReport['voiceDrift']> = {}) =>
+    off({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      charactersPending: ['narrator', 'ren'],
+      mismatches: [],
+      inconclusiveCount: 0,
+      ...over,
+    });
+
+  it('(a) gate off + never scored (builder shape) -> gateOff, export says the check is off', () => {
+    const r = neverScored();
     expect(classifyVoiceMatch(r).kind).toBe('gateOff');
     expect(line(r)).toContain('Voice match — Render-integrity QA is off');
   });
@@ -134,8 +150,8 @@ describe('speaker check off (#4454)', () => {
     expect(line(r)).toMatch(/\(Render-integrity QA is now off\)$/);
   });
 
-  it('(b) gate off + notRun condition + nothing pending -> gateOff', () => {
-    expect(classifyVoiceMatch(off({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersChecked: 0, charactersPending: [] })).kind).toBe('gateOff');
+  it('(b) gate off + a never-scored book with no roster pending data still reads gateOff', () => {
+    expect(classifyVoiceMatch(neverScored({ charactersOnRoster: 0, charactersChecked: 0, charactersPending: [] })).kind).toBe('gateOff');
   });
 
   it('(c) gate off + scored keeps scored and notes the check is now off', () => {
@@ -156,7 +172,7 @@ describe('speaker check off (#4454)', () => {
   });
 
   it('(f) needsRerenderIds is empty for a gateOff report carrying charactersNeedingRerender', () => {
-    const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersChecked: 0, charactersNeedingRerender: ['c1'] });
+    const r = neverScored({ charactersNeedingRerender: ['c1'] });
     expect(needsRerenderIds(r)).toEqual([]);
   });
 

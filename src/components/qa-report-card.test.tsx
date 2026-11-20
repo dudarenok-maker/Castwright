@@ -125,7 +125,19 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       );
 
     it('(a) pending + gate off: says so and offers no Resume', () => {
-      renderWith({ speakerCheckEnabled: false, charactersPending: ['ren'], chaptersScored: 0, charactersChecked: 0 });
+      /* the shape buildAudioQaReport emits for a never-scored book (server qa-report.test.ts): the
+         whole roster counts as "checked" and every id is pending */
+      renderWith({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['narrator', 'ren'],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
     });
@@ -160,7 +172,17 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     });
 
     it('(b) notRun shape + gate off: render-integrity copy replaces "Not run for this book"', () => {
-      renderWith({ speakerCheckEnabled: false, chaptersScored: 0, chaptersEmbedFailed: 0, charactersChecked: 0, charactersPending: [] });
+      renderWith({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['narrator', 'ren'],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
       expect(screen.queryByText(/Not run for this book/)).toBeNull();
     });

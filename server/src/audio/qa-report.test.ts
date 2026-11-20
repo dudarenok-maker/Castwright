@@ -580,6 +580,32 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     expect(report.voiceDrift.mismatches.map((m) => m.characterId)).toEqual(['narrator']);
   });
 
+  /* #4454 pass 3 — the pinned builder shape the frontend `gateOff` cases are seeded from
+     (src/lib/qa-report-classify.test.ts, src/components/qa-report-card.test.tsx,
+     e2e/qa-report.spec.ts): a book that was never scored still reports charactersChecked as the
+     WHOLE roster (roster minus too-short verdicts), so only charactersPending tells it apart. */
+  it('a never-scored book reports every roster character as checked AND pending, with no mismatch', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, ren: { voiceEngine: 'qwen' } },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift).toMatchObject({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      mismatches: [],
+      inconclusiveCount: 0,
+    });
+    expect([...report.voiceDrift.charactersPending].sort()).toEqual(['narrator', 'ren']);
+  });
+
   it('chaptersEmbedFailed DOES count a chapter whose only unscored roster character is terminally capped (not in charactersPending)', async () => {
     // Deliberately hand-authored disk state (NOT a state a single scoreBook
     // run produces on its own — that's the point: this test exercises the

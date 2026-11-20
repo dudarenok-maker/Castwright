@@ -110,7 +110,7 @@ test.describe('QA report card', () => {
           chaptersScored: 0,
           chaptersEmbedFailed: 0,
           charactersOnRoster: 2,
-          charactersChecked: 0,
+          charactersChecked: 2, // the builder reports the whole roster as checked on a never-scored book (pinned in server qa-report.test.ts)
           charactersPending: ['narrator', 'halloran'],
           charactersNeedingRerender: [],
           mismatches: [],
