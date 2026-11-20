@@ -267,3 +267,28 @@ describe('rollManuscriptEdits keeps merge tombstones (#4155)', () => {
     expect(landedData[0]).not.toHaveProperty('mergedAwayKeys');
   });
 });
+
+describe('rollManuscriptEdits run-epoch fence (#3437)', () => {
+  it('a roll from a superseded run writes nothing and logs; the current run and no fence write', async () => {
+    const { beginRunEpoch, runWithRunEpoch, __resetRunEpochsForTests } = await import(
+      '../store/analysis-run-epoch.js'
+    );
+    __resetRunEpochsForTests();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const f1 = beginRunEpoch('m');
+      const f2 = beginRunEpoch('m');
+      await runWithRunEpoch(f1, () => rollManuscriptEdits(opts, () => ['stale'], 'book-3437-a'));
+      expect(landed).toEqual([]);
+      expect(log.mock.calls.map((c) => String(c[0]))).toContain(
+        '[analysis] dropped stale-run write: manuscript-edits roll manuscript="m" runEpoch=1 current=2',
+      );
+      await runWithRunEpoch(f2, () => rollManuscriptEdits(opts, () => ['current'], 'book-3437-b'));
+      await rollManuscriptEdits(opts, () => ['nofence'], 'book-3437-c');
+      expect(landed).toEqual([['current'], ['nofence']]);
+    } finally {
+      log.mockRestore();
+      __resetRunEpochsForTests();
+    }
+  });
+});
