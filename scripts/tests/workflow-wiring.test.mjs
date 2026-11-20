@@ -1904,9 +1904,28 @@ test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead o
   }
 });
 
-test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', () => {
-  const bash = spawnSync('bash', ['-c', 'true'], { windowsHide: true });
-  if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
+// The install step is an ubuntu-only `run:` block (`timeout`, `sudo`, `apt-get`). The two
+// behavioural cases below run it under bash with ALL THREE stubbed on PATH, so they depend on
+// neither GNU `timeout` (absent on macOS runners, #4569) nor a real apt. Without bash (a bare
+// Windows PowerShell box) they SKIP with a message rather than passing silently.
+const HAS_BASH = spawnSync('bash', ['-c', 'true'], { windowsHide: true }).status === 0;
+const NO_BASH_SKIP = HAS_BASH ? false : 'no bash on PATH; the static ffmpeg-floor pins still run';
+
+// `timeout -k 10 120 CMD...` -> run CMD directly (drops the three leading args).
+function writeFfmpegFloorStubs(bin, sudoBody) {
+  writeFileSync(join(bin, 'sudo'), sudoBody, { mode: 0o755 });
+  writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'timeout'), '#!/bin/sh\nshift 3\nexec "$@"\n', { mode: 0o755 });
+}
+
+test('ffmpeg floor leg (#4461): the behavioural cases cannot silently do nothing on a bash platform (#4569)', () => {
+  if (process.platform !== 'win32') {
+    assert.ok(HAS_BASH, 'bash is missing on a POSIX runner; the two ffmpeg-floor behavioural cases would silently skip');
+  }
+  assert.equal(NO_BASH_SKIP === false, HAS_BASH, 'skip flag disagrees with bash availability');
+});
+
+test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', { skip: NO_BASH_SKIP }, () => {
   const install = ffmpegFloorInstallStep();
   const run = install.split(/^ {8}run: \|\n/m)[1];
   assert.ok(run, 'install step has no `run: |` block');
@@ -1915,8 +1934,7 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
   try {
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\nexit 100\n', { mode: 0o755 });
-    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFfmpegFloorStubs(bin, '#!/bin/sh\nexit 100\n');
     const out = join(dir, 'output');
     const summary = join(dir, 'summary');
     writeFileSync(out, '');
@@ -1935,9 +1953,7 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
   }
 });
 
-test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', () => {
-  const bash = spawnSync('bash', ['-c', 'true'], { windowsHide: true });
-  if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
+test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', { skip: NO_BASH_SKIP }, () => {
   const install = ffmpegFloorInstallStep();
   assert.doesNotMatch(install, /\\n/, 'install step contains a literal backslash-n; bash passes it to apt-get as a stray argument');
   const run = install.split(/^ {8}run: \|\n/m)[1];
@@ -1948,8 +1964,7 @@ test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no wa
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     // Like real apt: `update` takes no arguments, so a stray one fails the command.
-    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\n[ "$2" = update ] && [ "$#" -gt 2 ] && exit 100\nexit 0\n', { mode: 0o755 });
-    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFfmpegFloorStubs(bin, '#!/bin/sh\n[ "$2" = update ] && [ "$#" -gt 2 ] && exit 100\nexit 0\n');
     const out = join(dir, 'output');
     const summary = join(dir, 'summary');
     writeFileSync(out, '');
@@ -1960,7 +1975,7 @@ test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no wa
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed (exit ${r.status}): ${r.stdout}${r.stderr}`);
-    assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}`);
+    assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}${r.stderr}`);
     assert.match(readFileSync(out, 'utf8'), /^installed=true$/m, 'GITHUB_OUTPUT lacks installed=true when apt works');
   } finally {
     rmSync(dir, { recursive: true, force: true });
