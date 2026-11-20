@@ -42,6 +42,29 @@ vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
     },
   };
 });
+/* #4445 — a hangable score pass for the "another book's score pass is in flight" case. Every other
+   test leaves `scoreBookImpl` unset, so it delegates to the real scoreBook (qa.speaker.enabled is off
+   by default, so it is never reached there). The book-jobs stand-in hands the fake scoring book a
+   lease (it has no folder on disk) and passes every other book through to the real registry. */
+let scoreBookImpl: ((...a: unknown[]) => Promise<unknown>) | null = null;
+vi.mock('../audio/render-integrity/aggregate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../audio/render-integrity/aggregate.js')>();
+  return {
+    ...actual,
+    scoreBook: (...a: Parameters<typeof actual.scoreBook>) =>
+      scoreBookImpl ? scoreBookImpl(...a) : actual.scoreBook(...a),
+  };
+});
+vi.mock('../workspace/book-jobs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-jobs.js')>();
+  return {
+    ...actual,
+    runBookJob: (bookId: string, kind: string, fn: (lease: unknown) => Promise<unknown>) =>
+      bookId === 'scoring-other-book'
+        ? Promise.resolve({ done: fn({ bookId, bookDir: '/scoring-other-book', state: {} }) })
+        : (actual.runBookJob as (...a: unknown[]) => unknown)(bookId, kind, fn),
+  };
+});
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();
   return { ...actual, selectTtsProvider: () => ({ synthesize: vi.fn() }) };
@@ -340,6 +363,48 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
       expect(reconcileCalls.length).toBe(0);
     } finally {
       release();
+    }
+  }, 10_000);
+
+  it('skips the reconcile entirely while a voice design or variant mint is in flight (#4445)', async () => {
+    const gate = await import('../gpu/active-generation-gate.js');
+    for (const setCounter of [gate.setInFlightDesignCounter, gate.setInFlightMintCounter]) {
+      reconcileCalls.length = 0;
+      setCounter(() => 1);
+      try {
+        await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+        expect(reconcileCalls.length).toBe(0);
+      } finally {
+        setCounter(() => 0);
+      }
+    }
+  }, 10_000);
+
+  it("skips the reconcile entirely while another book's score pass is in flight (#4445)", async () => {
+    const { triggerScoring, __awaitScoringSettled } = await import('./generation.js');
+    const cfg = await import('../config/resolver.js');
+    let releaseScore: (() => void) | undefined;
+    scoreBookImpl = () =>
+      new Promise((r) => {
+        releaseScore = () => r({ usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 });
+      });
+    const spy = vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    try {
+      await triggerScoring({
+        bookId: 'scoring-other-book',
+        bookDir: '/scoring-other-book',
+        chapters: [{ id: 1, slug: 'ch1' }],
+        justFinalizedSlugs: [],
+      });
+      spy.mockRestore();
+      await vi.waitFor(() => expect(releaseScore).toBeTypeOf('function'));
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBe(0);
+    } finally {
+      spy.mockRestore();
+      releaseScore?.();
+      await __awaitScoringSettled('scoring-other-book');
+      scoreBookImpl = null;
     }
   }, 10_000);
 
