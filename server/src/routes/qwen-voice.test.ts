@@ -615,6 +615,26 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/GPU busy/i);
   });
+
+  /* #3702 — a retryable-fork error that carries a node fs error's shape must reach
+     the client as the curated fs sentence, never its raw (path-bearing) message. */
+  it('answers a RetryableForkError carrying an fs error shape with FS_FAILURE_REQUEST_ERROR, no path', async () => {
+    const { RetryableForkError } = await import('../workspace/voice-uuid-fork.js');
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const path = 'C:\\Users\\someone\\castwright-workspace\\x';
+    withGpuLoadMock.mockImplementationOnce(() => {
+      throw Object.assign(
+        new RetryableForkError(`EPERM: operation not permitted, rename '${path}' -> 'y'`),
+        { code: 'EPERM', syscall: 'rename', path },
+      );
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('someone');
+  });
 });
 
 describe('fs-25 — design-voice emotion variants (Wave 3)', () => {

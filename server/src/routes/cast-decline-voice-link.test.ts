@@ -1070,3 +1070,23 @@ describe('a repeat decline with an unreadable chain member', () => {
     expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
   });
 });
+
+/* #3702 — a retryable-fork error that carries a node fs error's shape must reach the
+   client as the curated fs sentence, never its raw (path-bearing) message. */
+describe('a RetryableForkError carrying an fs error shape', () => {
+  it('answers 500 with FS_FAILURE_REQUEST_ERROR and no workspace path', async () => {
+    const { RetryableForkError } = await import('../workspace/voice-uuid-fork.js');
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const path = 'C:\\Users\\someone\\castwright-workspace\\x';
+    beforeLocks.fn = () => {
+      throw Object.assign(
+        new RetryableForkError(`EPERM: operation not permitted, rename '${path}' -> 'y'`),
+        { code: 'EPERM', syscall: 'rename', path },
+      );
+    };
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('someone');
+  });
+});

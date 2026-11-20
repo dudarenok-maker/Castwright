@@ -170,3 +170,26 @@ describe('POST /api/voice-library/clone — clone-fidelity advisory (#1945)', ()
     expect(await readCandidate('cand-below')).toBeNull();
   });
 });
+
+/* #3702 — a sidecar-shaped derive failure that also carries a node fs error's shape
+   must reach the client as the curated fs sentence, never its raw (path-bearing)
+   reason. */
+describe('POST /api/voice-library/clone — sidecar-shaped error carrying an fs error shape (#3702)', () => {
+  it('answers 5xx with FS_FAILURE_REQUEST_ERROR and no workspace path', async () => {
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const path = 'C:\\Users\\someone\\castwright-workspace\\x';
+    deriveMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error(`EPERM: operation not permitted, rename '${path}' -> 'y'`),
+        { name: 'SidecarDesignError', status: 500, code: 'EPERM', syscall: 'rename', path },
+      ),
+    );
+
+    await seedCandidate('cand-fs');
+    const res = await postClone('cand-fs');
+
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('someone');
+  });
+});
