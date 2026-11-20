@@ -33,7 +33,8 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTargetInputTooLargeError } from '../analyzer/errors.js';
+import { beginRunEpoch, runWithRunEpoch, type RunEpochFence } from '../store/analysis-run-epoch.js';
+import { AnalyzerReasoningOverflowError,GeminiContentBlockedError, AnalyzerTargetInputTooLargeError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -4138,6 +4139,9 @@ export interface AnalysisJobReplayState {
 }
 
 export interface AnalysisJob {
+  /** #3437 — this run's per-manuscript epoch fence, set at registration. Optional only because
+      test harnesses build jobs by hand; the runners run their body inside it when present. */
+  runEpoch?: RunEpochFence;
   controller: AbortController;
   subscribers: Set<AnalysisSubscriber>;
   manuscriptId: string;
@@ -5586,6 +5590,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   job.settled = new Promise<void>((resolve) => {
     job.resolveSettled = resolve;
   });
+  /* #3437 — bump the per-manuscript run epoch synchronously with the registration (no await
+     before the `.set`), and before the runner starts, so it precedes this run's Start-fresh
+     clear / rm / un-confirm. */
+  job.runEpoch = beginRunEpoch(manuscriptId);
   inFlightAnalysisByManuscript.set(manuscriptId, job);
   /* #3435 decision A — a writer from here until it leaves (endJob + drain). */
   joinWriters(job);
@@ -5745,7 +5753,18 @@ export function nonStoryOverflowWarningMessage(ctx: Parameters<typeof reasoningO
   );
 }
 
-export async function runMainAnalyzerJob(
+export function runMainAnalyzerJob(
+  job: AnalysisJob,
+  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
+  selection: AnalyzerSelection,
+  opts: MainAnalyzerJobOpts,
+): Promise<void> {
+  /* #3437 — the whole body runs inside the job's run-epoch fence when it has one. */
+  const body = () => runMainAnalyzerJobBody(job, record, selection, opts);
+  return job.runEpoch ? runWithRunEpoch(job.runEpoch, body) : body();
+}
+
+async function runMainAnalyzerJobBody(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
@@ -9312,6 +9331,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   job.settled = new Promise<void>((resolve) => {
     job.resolveSettled = resolve;
   });
+  /* #3437 — same synchronous epoch bump as the main registration. */
+  job.runEpoch = beginRunEpoch(manuscriptId);
   inFlightSubsetByManuscript.set(manuscriptId, job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
   /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
@@ -9381,7 +9402,21 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
    (sticky semantics). Broadcasts every event to job.subscribers and
    tracks replay state via trackForReplay; endJob handles teardown +
    map deregistration on every exit path. */
-export async function runSubsetAnalyzerJob(
+export function runSubsetAnalyzerJob(
+  job: AnalysisJob,
+  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
+  selection: AnalyzerSelection,
+  phase1Selection: AnalyzerSelection,
+  toRun: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>['chapterHints'],
+  allowStage1ShrinkSubset: boolean,
+): Promise<void> {
+  /* #3437 — the whole body runs inside the job's run-epoch fence when it has one. */
+  const body = () =>
+    runSubsetAnalyzerJobBody(job, record, selection, phase1Selection, toRun, allowStage1ShrinkSubset);
+  return job.runEpoch ? runWithRunEpoch(job.runEpoch, body) : body();
+}
+
+async function runSubsetAnalyzerJobBody(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
