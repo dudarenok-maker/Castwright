@@ -757,6 +757,23 @@ export function resolveLoadMode(env = process.env) {
   return String(env.QUARANTINE_HEALTH_LOAD ?? '').trim() === 'server-suite' ? 'server-suite' : 'none';
 }
 
+// Why the anchor load's pass has no measured length (`unmeasuredWhy`, set by main):
+// the report names the real cause rather than assuming the wall-clock budget.
+const UNMEASURED_PASS_REASONS = {
+  budget: {
+    span: 'that load\'s pass did not finish inside the wall-clock budget',
+    verdict: 'the load\'s pass never finished inside the wall-clock budget',
+  },
+  died: {
+    span: 'that load died before its pass finished',
+    verdict: 'the load died before its pass finished',
+  },
+  aborted: {
+    span: 'the run was aborted before the load\'s pass finished',
+    verdict: 'the run was aborted before the load\'s pass finished',
+  },
+};
+
 // Renders the final markdown report. `issueStates` maps issue number → 'OPEN'
 // | 'CLOSED' | null (unknown — e.g. `gh` unavailable or the call failed).
 // `load` ({ mode, loadedRuns, coverage }, optional) adds the line naming the load mode
@@ -786,6 +803,7 @@ export function formatReport({ entries, runs, issueStates, os, load }) {
       lines.push('');
       if (load.mode === 'server-suite') {
         const cov = load.coverage ?? null;
+        const why = UNMEASURED_PASS_REASONS[load.unmeasuredWhy] ? load.unmeasuredWhy : 'budget';
         // The pass length is the MEASURED one (the load ran to completion after
         // the last run); null when it never finished inside the budget.
         const measured = cov !== null && cov.passMs !== null;
@@ -794,15 +812,17 @@ export function formatReport({ entries, runs, issueStates, os, load }) {
         const span = cov
           ? `, spanning +${Math.round(cov.firstStartMs / 1000)}s to +${Math.round(cov.lastEndMs / 1000)}s from the load's launch${measured
             ? ` (${cov.firstPct}%-${cov.lastPct}% of that load's measured ${Math.round(cov.passMs / 1000)}s pass, exit ${load.passExitCode ?? 'unknown'})`
-            : ' (that load\'s pass did not finish inside the wall-clock budget, so its length and the share covered are unknown)'}`
+            : ` (${UNMEASURED_PASS_REASONS[why].span}, so its length and the share covered are unknown)`}`
           : '';
         const verdict = all && late
           ? 'This is a LOADED verdict.'
           : all && !measured
-            ? 'This is NOT a loaded verdict: the load\'s pass never finished inside the wall-clock budget, so the late window could not be measured.'
+            ? `This is NOT a loaded verdict: ${UNMEASURED_PASS_REASONS[why].verdict}, so the late window could not be measured.`
             : all
               ? `This is NOT a loaded verdict: the late window of the pass (the last ${Math.round(100 - 100 * LATE_COVERAGE_FRACTION)}%, where the recorded stall struck) was not covered.`
-              : 'This is NOT a loaded verdict: some runs had the machine to themselves, or the load was not past startup or was relaunched under them.';
+              : runs > 0 && load.loadedRuns === 0
+                ? `This is NOT a loaded verdict: none of the ${runs} runs was loaded (the load was not past startup, died or was relaunched before each of them).`
+                : 'This is NOT a loaded verdict: some runs had the machine to themselves, or the load was not past startup, died or was relaunched under them.';
         // A non-zero exit is reported, never folded into the verdict: a suite that
         // ran to its end and failed was still a real load for the runs inside it.
         const failedNote = measured && typeof load.passExitCode === 'number' && load.passExitCode !== 0
@@ -1424,6 +1444,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
   const anchorInstance = load?.status().instance ?? null;
   let loadPassDurationMs = null;
   let loadPassExitCode = null;
+  let unmeasuredWhy = 'budget'; // only read when the anchor pass has no measured length
   // The load and any in-flight vitest must not outlive an interrupted run.
   const uninstallInterruptCleanup = load
     ? installInterruptCleanup(() => { load.stop(); killLiveSpawns(); }, proc)
@@ -1495,6 +1516,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
       }
       loadPassDurationMs = load.passDurationMs(anchorInstance);
       loadPassExitCode = load.passExitCode(anchorInstance);
+      if (loadPassDurationMs === null) unmeasuredWhy = load.status().alive ? 'budget' : 'died';
     }
   } catch (err) {
     // Defensive belt-and-suspenders: runVitestJson/classifyRunResult never
@@ -1505,6 +1527,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
     // out the rest (finding 5).
     console.error(`quarantine-health: aborted early after ${perRunOutcomes.length}/${RUNS} run(s): ${err.message}`);
     abortedEarly = true;
+    unmeasuredWhy = 'aborted';
   } finally {
     load?.stop();
     uninstallInterruptCleanup();
@@ -1520,7 +1543,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
     runs: perRunOutcomes.length,
     issueStates,
     os: resolveOsLabel(),
-    load: { mode: load ? 'server-suite' : 'none', loadedRuns, coverage: loadCoverage(loadedSpans, loadPassDurationMs), passExitCode: loadPassExitCode },
+    load: { mode: load ? 'server-suite' : 'none', loadedRuns, coverage: loadCoverage(loadedSpans, loadPassDurationMs), passExitCode: loadPassExitCode, unmeasuredWhy },
   });
   let finalReport = report;
   if (abortedEarly) {

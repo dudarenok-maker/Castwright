@@ -2109,6 +2109,65 @@ test('main() prints the anchor load\'s exit code on the Load line: 0 plain, non-
   assert.match(bad, /This is a LOADED verdict/, bad);
 });
 
+test('formatReport names the actual reason a pass went unmeasured: budget, load died, run aborted', () => {
+  const unmeasured = { firstStartMs: 5_000, lastEndMs: 590_000, passMs: null, firstPct: null, lastPct: null };
+  const lineFor = (unmeasuredWhy) => formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: unmeasured, unmeasuredWhy } })
+    .split('\n').find((l) => l.startsWith('**Load:'));
+  const budget = lineFor('budget');
+  assert.match(budget, /did not finish inside the wall-clock budget/, budget);
+  const died = lineFor('died');
+  assert.match(died, /load died before its pass finished/, died);
+  assert.ok(!died.includes('wall-clock budget'), died);
+  const aborted = lineFor('aborted');
+  assert.match(aborted, /run was aborted before the load's pass finished/, aborted);
+  assert.ok(!aborted.includes('wall-clock budget'), aborted);
+  for (const l of [budget, died, aborted]) assert.ok(l.includes('NOT a loaded verdict') && !l.includes('This is a LOADED verdict'), l);
+});
+
+test('formatReport names the reason when not every run was loaded: none loaded vs some', () => {
+  const lineFor = (loadedRuns) => formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns, coverage: null } })
+    .split('\n').find((l) => l.startsWith('**Load:'));
+  assert.match(lineFor(0), /none of the 5 runs was loaded/, lineFor(0));
+  assert.match(lineFor(3), /3\/5 run\(s\) fully loaded.*NOT a loaded verdict.*died or was relaunched/, lineFor(3));
+  assert.ok(!lineFor(3).includes('none of the'), lineFor(3));
+});
+
+test('main() reports "load died" (not the budget) when the load dies after the last run, and the wait ends promptly', async () => {
+  // Alive through run 5's end, dead right after: the completion wait must notice at
+  // once via status().alive rather than idling to the 30-minute budget.
+  const seen = await driveMainWithLoad('server-suite', {
+    fakePassMs: 1e12,
+    shape: (s, c) => (s.spawnAt.length >= 5 && c.t > s.spawnAt[4] + RUN_COST_MS ? { alive: false } : {}),
+  });
+  const line = loadLine(seen);
+  assert.match(line, /5\/5 run\(s\) fully loaded/, line);
+  assert.match(line, /load died before its pass finished/, line);
+  assert.ok(!line.includes('wall-clock budget'), line);
+  assert.ok(seen.clock.t < seen.spawnAt[4] + RUN_COST_MS + 10_000, `the wait ended promptly, not at the budget: ${seen.clock.t}ms`);
+});
+
+test('main() reports "aborted" (not the budget) when a run throws after loaded runs', async () => {
+  const makeSpawn = () => {
+    let n = 0;
+    return () => {
+      n++;
+      if (n === 3) throw new Error('spawn exploded');
+      return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+    };
+  };
+  const seen = await driveMainWithLoad('server-suite', { fakePassMs: 1e12, makeSpawn });
+  const line = loadLine(seen);
+  assert.match(line, /2\/2 run\(s\) fully loaded/, line);
+  assert.match(line, /run was aborted before the load's pass finished/, line);
+  assert.ok(!line.includes('wall-clock budget'), line);
+  assert.match(seen.report, /Aborted early after 2\/5/);
+});
+
+test('main() reports "none of the runs was loaded" when the load is dead from the start', async () => {
+  const seen = await driveMainWithLoad('server-suite', { shape: () => ({ alive: false }) });
+  assert.match(loadLine(seen), /none of the 5 runs was loaded/, loadLine(seen));
+});
+
 // A fake spawned child whose stdout/stderr are observable.
 function fakeLoadChild(pid = 1) {
   const handlers = {};
