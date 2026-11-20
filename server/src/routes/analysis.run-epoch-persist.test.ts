@@ -178,6 +178,7 @@ async function runJob(
       bookId,
       manuscriptId,
       title: 'Run Epoch Persist Test Book',
+      language: 'en',
       author: 'Test Author',
       series: 'Standalones',
       seriesPosition: null,
