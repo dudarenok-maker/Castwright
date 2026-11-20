@@ -3104,13 +3104,60 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
     });
 
-    it('a re-analyse run does not disable them (only an include run strands a chapter)', async () => {
-      await startRun(mixed, null);
+    /* #3436 (owner decision 2026-11-21) -- the server refuses a render while the book is
+       analysing, so ANY analysis run of the book (a Re-analyse, not just an include) disables the
+       same controls, with its own reason. Seeded as the run's store snapshot, which is what
+       outlives the view. */
+    const reanalyseSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Attributing',
+      phaseProgress: 10,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [1],
+      subsetOrigin: 'reanalyse',
+    };
+    it.each(cases)('%s is disabled with the analysing reason while the book is being analysed, and enabled again when it ends', async (_label, chapters, expand, find) => {
+      const store = makeIncludeStore({ chapters });
+      renderInclude(store, chapters);
+      if (expand) fireEvent.click(screen.getByText(expand));
+      expect(find()).toBeEnabled();
+      act(() => {
+        store.dispatch(analysisActions.setActiveStream(reanalyseSnapshot));
+      });
+      expect(find()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toHaveTextContent(
+        /Analysing.*available when it finishes/i,
+      );
+      expect(find()).toHaveAttribute('title', expect.stringMatching(/available when it finishes/i));
+      act(() => {
+        store.dispatch(analysisActions.clearActiveStream());
+      });
+      expect(find()).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('a Re-analyse started from the view disables Resume until it ends', async () => {
+      let failRun!: (e: Error) => void;
+      runAnalysisForChaptersSpy.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            failRun = reject;
+          }),
+      );
+      const store = makeIncludeStore({ chapters: mixed });
+      renderInclude(store, mixed);
+      expect(screen.getByTestId('generation-view-resume')).toBeEnabled();
       fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
       fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
       await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
-      expect(screen.getByTestId('generation-view-resume')).toBeEnabled();
-      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+      expect(screen.getByTestId('generation-view-resume')).toBeDisabled();
+      failRun(new Error('boom'));
+      await waitFor(() => expect(screen.getByTestId('generation-view-resume')).toBeEnabled());
     });
   });
 
@@ -3137,7 +3184,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
     });
 
-    it('H: a remount while a RE-ANALYSE run is live does not block Resume', async () => {
+    it('H: a remount while a RE-ANALYSE run is live still blocks Resume (the server refuses a render while analysing, #3436)', async () => {
       const store = makeIncludeStore({ chapters: rows });
       const first = renderInclude(store, rows);
       fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
@@ -3146,8 +3193,8 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       first.unmount();
       expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', state: 'running' });
       renderInclude(store, rows);
-      expect(resume()).toBeEnabled();
-      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
     });
 
     it('H: leaving the view during the click-time busy read starts nothing', async () => {

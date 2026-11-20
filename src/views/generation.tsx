@@ -92,6 +92,10 @@ const INCLUDE_RUN_LIVE_REASON =
    and the include's Cancel rollback (re-exclude) would be refused. */
 const JOB_START_BLOCKED_REASON =
   'A chapter is being included and analysed. Wait for it to finish, or cancel it, before starting generation.';
+/* #3436 — the server refuses generation, a re-record and a QA repair while the book is analysing
+   (a render and an analysis on one book exclude each other), so every control that starts one is
+   off for the run's length. */
+const ANALYSIS_RUN_LIVE_REASON = 'Analysing this book. Available when it finishes.';
 /* #3774 — another Include click's busy read is still in flight (nothing is being
    analysed yet): a second click in that window is a double click or another chapter. */
 const INCLUDE_CHECK_PENDING_REASON =
@@ -125,7 +129,11 @@ import { useAppDispatch, useAppSelector } from '../store';
 import type { RootState } from '../store';
 import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectBookEditsLocked } from '../store/restructure-lock';
 import { notificationsActions } from '../store/notifications-slice';
-import { selectAnalysisBusyForBook, analysisBusyMessage } from '../store/analysis-substage-selectors';
+import {
+  selectAnalysisBusyForBook,
+  selectAnalysisRunningForBook,
+  analysisBusyMessage,
+} from '../store/analysis-substage-selectors';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions, selectCharacterNamesById } from '../store/cast-slice';
@@ -486,7 +494,15 @@ export function GenerationView({
     includeRunInStore ||
     includeRollbackInFlight ||
     Object.values(subsetByChapter).some((e) => e.origin === 'include' && isSubsetRunning(e));
-  const jobStartBlockedReason = includeRunLive ? JOB_START_BLOCKED_REASON : undefined;
+  /* #3436 — ANY analysis run of this book (main or subset, an include or a Re-analyse), read from
+     the store snapshot so it outlives the view, or from this instance's own subset runs. */
+  const analysisRunLive =
+    useAppSelector((s) => selectAnalysisRunningForBook(s, bookId)) || subsetRunning;
+  const jobStartBlockedReason = includeRunLive
+    ? JOB_START_BLOCKED_REASON
+    : analysisRunLive
+      ? ANALYSIS_RUN_LIVE_REASON
+      : undefined;
   /* Only a row that can show Include / Retry / Accept smaller cast reads these:
      an excluded chapter, or a chapter with a subset run (error) row. */
   const hasIncludeSurface = chapters.some((c) => c.excluded) || Object.keys(subsetByChapter).length > 0;
@@ -1708,7 +1724,7 @@ export function GenerationView({
             <button
               type="button"
               onClick={() => dispatch(startGenerationFlow())}
-              disabled={startGenerationPending || includeRunLive}
+              disabled={startGenerationPending || jobStartBlockedReason != null}
               title={jobStartBlockedReason}
               data-testid="generation-view-resume"
               data-tour-id="generate-resume-btn"
@@ -1720,7 +1736,7 @@ export function GenerationView({
           {allComplete && (
             <button
               onClick={onRegenerateBook}
-              disabled={analysisBusy || includeRunLive}
+              disabled={analysisBusy || jobStartBlockedReason != null}
               title={jobStartBlockedReason}
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
             >
@@ -1730,13 +1746,13 @@ export function GenerationView({
         </div>
       </div>
 
-      {includeRunLive && (
+      {jobStartBlockedReason && (
         /* #3774 — visible (not title-only) so touch users see why the controls are off. */
         <p
           data-testid="generation-job-start-blocked"
           className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-3 text-sm text-amber-900"
         >
-          {JOB_START_BLOCKED_REASON}
+          {jobStartBlockedReason}
         </p>
       )}
 
@@ -1794,7 +1810,7 @@ export function GenerationView({
           <button
             type="button"
             onClick={() => setBulkRegenOpen(true)}
-            disabled={analysisBusy || includeRunLive}
+            disabled={analysisBusy || jobStartBlockedReason != null}
             title={jobStartBlockedReason}
             className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
