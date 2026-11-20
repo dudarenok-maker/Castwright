@@ -1,6 +1,6 @@
 /* Plan 285 (#3400) — server-owned revisions operations (spec §2). One route per
    operation. Accept and reject run the audio step (today's code,
-   audio/previous-audio.ts) and then the JSON write, in that order; the JSON is
+   workspace/chapter-take.ts) and then the JSON write, in that order; the JSON is
    written only if the audio step succeeded.
 
    Since plan 286 (PR 2) the client calls these and writes no revisions of its
@@ -11,13 +11,15 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { audioDir } from '../workspace/paths.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
-import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
 import {
   acceptPreviousAudio,
-  findPreviousChapterAudio,
+  clearTakeIdMirror,
+  findChapterAudio,
+  findPreviousAudio,
+  reconcileSlug,
   restorePreviousAudio,
-} from '../audio/previous-audio.js';
+} from '../workspace/chapter-take.js';
+import { requestFailureMessage, withKeyLock } from '../workspace/file-lock.js';
 import {
   beginRevisionOp,
   commitRevisionOp,
@@ -70,7 +72,8 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
     /* #3711 — book-op outermost (order: book-op -> revision-op -> revisions), held
        across all three steps so a folder rename queued behind this accept lands
        after the audio step and the revisions.json commit. */
-    const outcome = await withBookOp(bookId, ({ bookDir, state }) => {
+    const outcome = await withBookOp(bookId, (handle) => {
+    const { bookDir, state } = handle;
     const chapters: ChapterRef[] = state.chapters;
 
     return serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
@@ -89,7 +92,11 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
          rename). The recovery is to retry Reject. Read-only pre-check; the audio
          code itself is unchanged. The body's state is a fresh lock-free read. */
       const root = audioDir(bookDir);
-      if (!findChapterAudio(root, begin.chapter.slug) && findPreviousChapterAudio(root, begin.chapter.slug)) {
+      /* §6.1 lazy migration, BEFORE the pre-check: a legacy chapter's wrong-named
+         file, missing take id or stale state members are fixed first. An error
+         falls to the catch-all, which answers a fixed text (no fs path). */
+      await reconcileSlug(handle, begin.chapter.slug);
+      if (!findChapterAudio(root, begin.chapter.slug) && findPreviousAudio(root, begin.chapter.slug)) {
         const current = await readRevisions(bookDir, chapters);
         return res.status(409).json({
           error: 'live_audio_missing',
@@ -124,7 +131,8 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
   const { bookId, revisionId } = req.params;
   try {
     /* #3711 — book-op outermost; see accept above. */
-    const outcome = await withBookOp(bookId, ({ bookDir, state }) => {
+    const outcome = await withBookOp(bookId, (handle) => {
+    const { bookDir, state } = handle;
     const chapters: ChapterRef[] = state.chapters;
 
     return serialisedPerChapter(bookDir, chapters, revisionId, async (held) => {
@@ -146,6 +154,12 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
         });
       }
       const root = audioDir(bookDir);
+      /* §6.1 lazy migration BEFORE the restore: fixes a legacy chapter's files
+         and mints the previous take its id into `.previous.segments.json`.
+         No re-stamp (`restamp: false`): the live take is deleted below and
+         Phase 3 stamps the restored one. An error falls to the catch-all below, which
+         answers a fixed text (never the fs error's own path-bearing message). */
+      await reconcileSlug(handle, begin.chapter.slug, { restamp: false });
       let outcome: 'restored' | 'none';
       try {
         outcome = await restorePreviousAudio(root, begin.chapter.slug);
@@ -160,6 +174,8 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
           state: toRevisionsState(bookId, begin.file),
         });
       }
+
+      await clearTakeIdMirror(handle, begin.chapter.slug);
 
       const commit = await commitRevisionOp(bookDir, chapters, 'reject', revisionId);
       if (commit.kind === 'gone') {

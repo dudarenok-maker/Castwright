@@ -11,6 +11,28 @@ export function buildEmptyHrefEpub(): Promise<Buffer> {
   );
 }
 
+const ORDINARY_CHAPTER =
+  '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Some ordinary prose with no links in it.</p></body></html>';
+
+/* An OPF cut off mid-<manifest> with an unclosed <item tag (#4289). */
+export function buildBrokenOpfEpub(): Promise<Buffer> {
+  return buildEpub([ORDINARY_CHAPTER], {
+    opfXml:
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:creator>A</dc:creator></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="applic',
+  });
+}
+
+/* The OPF and spine still name toc.ncx, but the entry is absent (#4289). */
+export function buildMissingNcxTargetEpub(): Promise<Buffer> {
+  return buildEpub([ORDINARY_CHAPTER], { omitNcx: true });
+}
+
+/* A two-chapter epub cut to its first half (#4289). */
+export async function buildTruncatedEpub(): Promise<Buffer> {
+  const full = await buildEpub([ORDINARY_CHAPTER, ORDINARY_CHAPTER]);
+  return full.subarray(0, Math.floor(full.length / 2));
+}
+
 export function buildSingleChapterEpub(chapterXhtml: string, navLabel = 'One'): Promise<Buffer> {
   return buildEpub([chapterXhtml], { navLabels: [navLabel] });
 }
@@ -22,7 +44,7 @@ export function buildSingleChapterEpub(chapterXhtml: string, navLabel = 'One'): 
    in the OPF and NCX), e.g. `Part 1 & More.xhtml`. */
 export function buildEpub(
   chapterXhtmls: string[],
-  opts: { navLabels?: string[]; compress?: boolean; fileNames?: string[] } = {},
+  opts: { navLabels?: string[]; compress?: boolean; fileNames?: string[]; opfXml?: string; omitNcx?: boolean } = {},
 ): Promise<Buffer> {
   const compress = opts.compress ?? true;
   const fileName = (i: number) => opts.fileNames?.[i] ?? `c${i + 1}.xhtml`;
@@ -47,17 +69,14 @@ export function buildEpub(
       'META-INF/container.xml',
       { compress },
     );
-    zip.addBuffer(
-      Buffer.from(
-        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:creator>A</dc:creator><dc:identifier id="id">x</dc:identifier><dc:language>en</dc:language></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>' +
+    const defaultOpf =
+      '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:creator>A</dc:creator><dc:identifier id="id">x</dc:identifier><dc:language>en</dc:language></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>' +
           items +
           '</manifest><spine toc="ncx">' +
           refs +
-          '</spine></package>',
-      ),
-      'OEBPS/content.opf',
-      { compress },
-    );
+          '</spine></package>';
+    zip.addBuffer(Buffer.from(opts.opfXml ?? defaultOpf), 'OEBPS/content.opf', { compress });
+    if (!opts.omitNcx) {
     zip.addBuffer(
       Buffer.from(
         '<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="x"/></head><docTitle><text>T</text></docTitle><navMap>' +
@@ -67,6 +86,7 @@ export function buildEpub(
       'OEBPS/toc.ncx',
       { compress },
     );
+    }
     chapterXhtmls.forEach((x, i) => zip.addBuffer(Buffer.from(x), `OEBPS/${fileName(i)}`, { compress }));
     zip.end();
     const chunks: Buffer[] = [];

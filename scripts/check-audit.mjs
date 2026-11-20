@@ -9,6 +9,10 @@
 //   root:   node scripts/check-audit.mjs            (full audit, no --omit)
 //   server: node scripts/check-audit.mjs --omit-dev (production/runtime scope)
 //
+// Each waiver in audit-waivers.json carries a mandatory `scope`: root, server
+// or both. A waiver applies only to the leg its scope names (root = full audit,
+// server = --omit-dev); a missing or invalid scope fails closed with exit 3.
+//
 // --dir <path> runs npm audit in an arbitrary directory instead of the cwd.
 // --omit-dev   passes --omit=dev through to npm audit.
 //
@@ -184,19 +188,33 @@ export function isExpired(waiver, today = new Date()) {
  * Cross-check the audit report against the waiver list.
  *
  * @param {Record<string, any>} vulnerabilities  npm audit's `vulnerabilities`
- * @param {Array<{ghsaId:string,package:string,expiry:string}>} waivers
+ * @param {Array<{ghsaId:string,package:string,scope:string,expiry:string}>} waivers
+ * @param {'root'|'server'} leg  which audit leg is being checked; a waiver is
+ *   active only if its `scope` is 'both' or names this leg
  * @returns {{missing: {package:string, advisories:string[]}[], expired: string[]}}
  */
-export function gateFailures(vulnerabilities, waivers) {
+export function gateFailures(vulnerabilities, waivers, leg) {
+  if (leg !== 'root' && leg !== 'server') {
+    throw new Error(`gateFailures: leg must be 'root' or 'server', got ${JSON.stringify(leg)}`);
+  }
   const expired = waivers
     .filter((w) => isExpired(w))
     .map((w) => (w && typeof w.ghsaId === 'string' ? w.ghsaId : '(blank/unknown ghsaId)'));
   // An expired waiver is treated as if it does not exist: the advisory it once
   // covered is unwaived again until the waiver is renewed with a fresh look.
   // Build a map of {ghsaId}_{package} for active waivers to match both fields.
+  // A waiver only applies to the leg its scope names ('both' covers either);
+  // a missing/unknown scope is never active (fail closed).
   const active = new Map(
     waivers
-      .filter((w) => w && typeof w.ghsaId === 'string' && typeof w.package === 'string' && !isExpired(w))
+      .filter(
+        (w) =>
+          w &&
+          typeof w.ghsaId === 'string' &&
+          typeof w.package === 'string' &&
+          (w.scope === 'both' || w.scope === leg) &&
+          !isExpired(w),
+      )
       .map((w) => [`${w.ghsaId}|${w.package}`, true]),
   );
 
@@ -281,11 +299,14 @@ export function parseAuditOutput(stdout) {
   return vulns && typeof vulns === 'object' ? vulns : {};
 }
 
+const WAIVER_SCOPES = ['root', 'server', 'both'];
+
 /**
  * Load and validate waivers. Each entry must be an object with:
  *   ghsaId (string): the GHSA advisory id
  *   package (string): the package name the waiver applies to
  *   reason (string): justification for the waiver
+ *   scope (string): which audit leg the waiver applies to - 'root', 'server' or 'both'
  *   expiry (string): YYYY-MM-DD date when the waiver expires
  *
  * Fail closed: any entry missing required fields or with a malformed expiry
@@ -294,7 +315,7 @@ export function parseAuditOutput(stdout) {
 export function loadWaivers(file = WAIVERS_FILE) {
   if (!existsSync(file)) return [];
   const parsed = JSON.parse(readFileSync(file, 'utf8'));
-  if (!Array.isArray(parsed)) throw new Error(`${file} must be an array of {ghsaId, package, reason, expiry}`);
+  if (!Array.isArray(parsed)) throw new Error(`${file} must be an array of {ghsaId, package, reason, scope, expiry}`);
 
   // Validate each entry - fail closed if any entry is malformed
   for (let i = 0; i < parsed.length; i++) {
@@ -310,6 +331,9 @@ export function loadWaivers(file = WAIVERS_FILE) {
     }
     if (typeof entry.reason !== 'string' || !entry.reason) {
       throw new Error(`${file} entry ${i} missing or invalid reason`);
+    }
+    if (!WAIVER_SCOPES.includes(entry.scope)) {
+      throw new Error(`${file} entry ${i} missing or invalid scope (must be root, server or both)`);
     }
     if (typeof entry.expiry !== 'string' || !entry.expiry) {
       throw new Error(`${file} entry ${i} missing or invalid expiry`);
@@ -334,7 +358,12 @@ export function loadWaivers(file = WAIVERS_FILE) {
   return parsed;
 }
 
-export function main(argv) {
+/** The audit leg for parsed CLI args: the server leg is the one run with --omit-dev. */
+export function legFromArgs(args) {
+  return args.omitDev ? 'server' : 'root';
+}
+
+export function main(argv, { loadWaivers: loadWaiversFn = loadWaivers, runNpmAudit: runNpmAuditFn = runNpmAudit } = {}) {
   let args;
   try {
     args = parseArgs(argv);
@@ -351,13 +380,13 @@ export function main(argv) {
 
   let waivers;
   try {
-    waivers = loadWaivers();
+    waivers = loadWaiversFn();
   } catch (err) {
     process.stderr.write(`check-audit: FAILED to load audit-waivers.json - ${err.message}\n`);
     return 3;
   }
 
-  const { stdout, stderr, error } = runNpmAudit({ dir, omitDev: args.omitDev });
+  const { stdout, stderr, error } = runNpmAuditFn({ dir, omitDev: args.omitDev });
   if (error) {
     process.stderr.write(`check-audit: FAILED to run npm audit - ${error.message}\n`);
     return 3;
@@ -372,7 +401,7 @@ export function main(argv) {
     return 3;
   }
 
-  const { missing, expired } = gateFailures(vulnerabilities, waivers);
+  const { missing, expired } = gateFailures(vulnerabilities, waivers, legFromArgs(args));
 
   if (expired.length > 0) {
     process.stderr.write(
@@ -385,7 +414,7 @@ export function main(argv) {
 
   if (missing.length > 0) {
     process.stderr.write(
-      `check-audit: FAIL - ${missing.length} high/critical vulnerabilit${missing.length === 1 ? 'y' : 'ies'} not waived:\n`,
+      `check-audit: FAIL - ${missing.length} high/critical vulnerabilit${missing.length === 1 ? 'y' : 'ies'} not waived (${legFromArgs(args)} leg):\n`,
     );
     for (const m of missing) {
       process.stderr.write(`  ${m.package}${m.advisories.length ? ` (${m.advisories.join(', ')})` : ''}\n`);

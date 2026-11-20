@@ -1,4 +1,4 @@
-/* findChapterAudio / chapterAudioExists — multi-format locator (plan 72
+/* findChapterAudio / chapterAudioExists (now in take-fields.ts, #4335) — multi-format locator (plan 72
    widened from MP3-only to MP3/M4A/Ogg). The plan-39 contract still
    holds: legacy `.wav` files on disk are invisible. A future contributor
    re-introducing a wav branch must trip this regression. */
@@ -7,12 +7,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findChapterAudio, chapterAudioExists } from './chapter-audio-file.js';
+import { findChapterAudio, chapterAudioExists } from './take-fields.js';
 
 let workdir: string;
 
 beforeEach(async () => {
-  workdir = await mkdtemp(join(tmpdir(), 'chapter-audio-file-test-'));
+  workdir = await mkdtemp(join(tmpdir(), 'take-fields-finder-test-'));
 });
 
 afterEach(async () => {

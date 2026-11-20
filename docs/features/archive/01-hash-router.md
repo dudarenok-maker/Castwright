@@ -24,6 +24,7 @@ Two-way binding between the URL hash and `ui.stage`. `parseHash` turns a URL int
 - `VALID_VIEWS` in `src/lib/router.ts:14` is exactly `['manuscript', 'cast', 'library', 'generate', 'listen', 'log']`. Adding a view requires updating both this list and `View` in `src/lib/types.ts:251`.
 - Default `currentChapterId` on `ready` parse is `3` (`router.ts:35`) — must match `READY_DEFAULTS` in `ui-slice.ts:13`.
 - `stageToHash` omits the `chapter` query param when `currentChapterId === 3` (`router.ts:53`) and omits `profile` when `openProfileId` is null. URL stays clean for the default state.
+- Update (#4212, 2026-11-17): the `ready` stage has an optional `chapterExplicit` flag (set by `ReadyRoute` from a numeric `?chapter=`), and `stageToHash` keeps `?chapter=3` when it is true; a plain URL still omits the param, and `stageEqual` compares the flag only for chapter 3 (since a0842036; for any other chapter the URL always carries it).
 - `installRouter` uses `history.replaceState` not `pushState` (`router.ts:88,96`). Pushing would break the back button; do not change.
 - `stageEqual` (`router.ts:62-72`) is the gate that prevents infinite hashchange loops. Do not bypass.
 - Unknown URL segments parse to safe defaults: `#/books/X/garbage` → `{ kind: 'ready', view: 'cast', ... }` (action falls back to `'cast'` at `router.ts:32`); fully unknown path → `{ kind: 'books' }` (`router.ts:39`).

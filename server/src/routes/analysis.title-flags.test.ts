@@ -3,7 +3,7 @@
    Same real-workspace harness as analysis.title-source.test.ts. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -675,5 +675,157 @@ ${lineFor(4)}
     const res = await start(await analysisApp(), manuscriptId);
     expect(res.status).toBe(200);
   }, 60_000);
+  },
+);
+
+const TAKE_MANUSCRIPT = `# Alpha Prime\n\nIt began.\n\n${lineFor(1)}\n\n# New Name\n\nIt began.\n\n${lineFor(2)}\n\n# Epilogue\n\nIt began.\n\n${lineFor(3)}\n`;
+
+describe.each(['main', 'subset'] as const)(
+  '#4230 — a completed %s analysis keeps a rendered chapter\'s slug when its title changes',
+  (kind) => {
+    it('keeps the slug (and the take) of a rendered retitled chapter; an unrendered one gets the new slug', async () => {
+      const { manuscriptId, bookDir } = await seedBook(`slug-${kind}`, TAKE_MANUSCRIPT, [
+        { title: 'Alpha Prime', slug: '01-alpha' },
+        { title: 'New Name', slug: '02-old-name' },
+        { title: 'Epilogue', slug: '03-epilogue' },
+      ]);
+      /* Dynamic imports: a static import would load paths.js before beforeAll
+         sets WORKSPACE_DIR and freeze the wrong workspace root for the file. */
+      const { audioDir } = await import('../workspace/paths.js');
+      const { chapterAudioExists } = await import('../workspace/chapter-take.js');
+      const audio = audioDir(bookDir);
+      mkdirSync(audio, { recursive: true });
+      const bytes2 = Buffer.from('take-two-bytes');
+      const bytes3 = Buffer.from('take-three-bytes-longer');
+      writeFileSync(join(audio, '02-old-name.mp3'), bytes2);
+      writeFileSync(join(audio, '03-epilogue.m4a'), bytes3);
+
+      /* The realistic state: a CHAPTER_TITLE_PARSER_VERSION bump ran
+         refreshChapterTitles (routes/book-state.ts), which retitles a rendered
+         chapter in state.json and keeps its slug. With equal chapter counts the
+         next cold hydrate takes hint titles from state.json (hintsFromParse), so
+         the hints carry 'New Name' while the audio still sits at '02-old-name'.
+         The persist then recomputed the slug from the new title. */
+      await runAnalysis(manuscriptId, kind);
+      expect(readState(bookDir).analysisProvenance?.scope).toBe(kind === 'main' ? 'book' : 'subset');
+
+      const ch = readState(bookDir).chapters as Array<{ title: string; slug: string }>;
+      // Chapter 2: rendered + retitled -> title changes, slug kept, still reads as rendered.
+      expect(ch[1].title).toBe('New Name');
+      expect(ch[1].slug).toBe('02-old-name');
+      expect(chapterAudioExists(audio, ch[1].slug)).toBe(true);
+      expect(readFileSync(join(audio, '02-old-name.mp3'))).toEqual(bytes2);
+      // Chapter 3: rendered, title unchanged.
+      expect(ch[2].slug).toBe('03-epilogue');
+      expect(chapterAudioExists(audio, ch[2].slug)).toBe(true);
+      expect(readFileSync(join(audio, '03-epilogue.m4a'))).toEqual(bytes3);
+      // Chapter 1: NOT rendered, retitled -> recomputed slug.
+      expect(ch[0].title).toBe('Alpha Prime');
+      expect(ch[0].slug).toBe('01-alpha-prime');
+      expect(chapterAudioExists(audio, ch[0].slug)).toBe(false);
+      // Slugs unique; nothing moved or created under audio/.
+      expect(new Set(ch.map((c) => c.slug)).size).toBe(ch.length);
+      expect(readdirSync(audio).sort()).toEqual(['02-old-name.mp3', '03-epilogue.m4a']);
+    }, 60_000);
+  },
+);
+
+/* #4319 step 6 part 3 (#4342) — the analysis persist's two chapter rebuilds
+   carry TAKE_STATE_FIELDS (spec §4.3, W16/R6-4/R7-6) for every chapter they
+   still match by `id` and `slug`, and clear failure stamps as on `main`. */
+const takeFieldsFor = (n: number) => ({
+  duration: `0${n}:30`,
+  audioModelKey: `model-${n}`,
+  audioEngines: { 'engine-a': n },
+  audioRenderedAt: `2026-11-1${n}T00:00:00.000Z`,
+  audioQa: {
+    status: 'ok' as const,
+    reasons: [] as string[],
+    measuredLufs: -19,
+    truePeakDb: -2,
+    durationSec: 30 * n,
+    expectedSec: null,
+    checkedAt: `2026-11-1${n}T00:00:01.000Z`,
+  },
+  audioTakeId: `abcdefghijklmnop`.slice(0, 15) + String(n),
+});
+const TAKE_KEYS = ['duration', 'audioModelKey', 'audioEngines', 'audioRenderedAt', 'audioQa', 'audioTakeId'] as const;
+const PERSIST_MANUSCRIPT = `# Alpha Prime\n\nIt began.\n\n${lineFor(1)}\n\n# Epilogue\n\nIt began.\n\n${lineFor(2)}\n`;
+
+describe.each(['main', 'subset'] as const)(
+  '#4342 — a completed %s analysis carries a rendered chapter\'s take fields',
+  (kind) => {
+    /* W1 (main) / W2 (subset): titles unchanged, every chapter keeps all members. */
+    it(`W${kind === 'main' ? 1 : 2}: keeps every TAKE_STATE_FIELDS member, audioQa and audioTakeId included`, async () => {
+      const { manuscriptId, bookDir } = await seedBook(`carry-${kind}`, PERSIST_MANUSCRIPT, [
+        { title: 'Alpha Prime', slug: '01-alpha-prime', ...takeFieldsFor(1) },
+        { title: 'Epilogue', slug: '02-epilogue', ...takeFieldsFor(2) },
+      ]);
+      await runAnalysis(manuscriptId, kind);
+      expect(readState(bookDir).analysisProvenance?.scope).toBe(kind === 'main' ? 'book' : 'subset');
+      const ch = readState(bookDir).chapters;
+      [1, 2].forEach((n) => {
+        for (const key of TAKE_KEYS) expect(ch[n - 1][key], `chapter ${n} ${key}`).toEqual(takeFieldsFor(n)[key]);
+      });
+    }, 60_000);
+
+    /* W3: a chapter whose slug the persist changes (no take on disk, so #4230
+       does not keep it) matches nothing and loses its members, as today. */
+    it('W3: a chapter whose slug the persist changes loses its take members', async () => {
+      const { manuscriptId, bookDir } = await seedBook(`carry-slug-${kind}`, PERSIST_MANUSCRIPT, [
+        { title: 'Alpha Prime', slug: '01-alpha', ...takeFieldsFor(1) },
+        { title: 'Epilogue', slug: '02-epilogue', ...takeFieldsFor(2) },
+      ]);
+      await runAnalysis(manuscriptId, kind);
+      const ch = readState(bookDir).chapters;
+      expect(ch[0].slug).toBe('01-alpha-prime');
+      for (const key of TAKE_KEYS) {
+        if (key === 'duration') continue; // an unmatched chapter keeps its placeholder duration
+        expect(ch[0][key], key).toBeUndefined();
+      }
+      expect(ch[0].duration).not.toBe(takeFieldsFor(1).duration);
+      // The untouched sibling still carries.
+      expect(ch[1].audioTakeId).toBe(takeFieldsFor(2).audioTakeId);
+    }, 60_000);
+
+    /* W4: a failure stamp is dropped by a re-analysis, as on main. */
+    it('W4: a chapter stamped generationState failed has no failure stamp afterwards', async () => {
+      const { manuscriptId, bookDir } = await seedBook(`carry-fail-${kind}`, PERSIST_MANUSCRIPT, [
+        {
+          title: 'Alpha Prime',
+          slug: '01-alpha-prime',
+          ...takeFieldsFor(1),
+          generationState: 'failed',
+          generationError: 'boom',
+          generationErrorCode: 'E_BOOM',
+        },
+        { title: 'Epilogue', slug: '02-epilogue', ...takeFieldsFor(2) },
+      ]);
+      await runAnalysis(manuscriptId, kind);
+      const c0 = readState(bookDir).chapters[0];
+      expect(c0.generationState).toBeUndefined();
+      expect(c0.generationError).toBeUndefined();
+      expect(c0.generationErrorCode).toBeUndefined();
+      // ...while its take members still carried.
+      expect(c0.audioTakeId).toBe(takeFieldsFor(1).audioTakeId);
+    }, 60_000);
+
+    /* W5: #4230 keeps the disk slug of a rendered retitled chapter, and because
+       the slug then matches, its take fields carry. Both asserted together. */
+    it('W5: a rendered chapter whose title changes keeps its disk slug and its take fields', async () => {
+      const { manuscriptId, bookDir } = await seedBook(`carry-keep-${kind}`, PERSIST_MANUSCRIPT, [
+        { title: 'Alpha Prime', slug: '01-alpha', ...takeFieldsFor(1) },
+        { title: 'Epilogue', slug: '02-epilogue', ...takeFieldsFor(2) },
+      ]);
+      const { audioDir } = await import('../workspace/paths.js');
+      const audio = audioDir(bookDir);
+      mkdirSync(audio, { recursive: true });
+      writeFileSync(join(audio, '01-alpha.mp3'), Buffer.from('take-one-bytes'));
+      await runAnalysis(manuscriptId, kind);
+      const ch = readState(bookDir).chapters;
+      expect(ch[0].title).toBe('Alpha Prime');
+      expect(ch[0].slug).toBe('01-alpha');
+      for (const key of TAKE_KEYS) expect(ch[0][key], key).toEqual(takeFieldsFor(1)[key]);
+    }, 60_000);
   },
 );

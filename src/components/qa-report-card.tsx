@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
-import { classifyHeadline, classifyVoiceMatch } from '../lib/qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
 import { api } from '../lib/api';
 import { Pill } from './primitives';
 
@@ -16,6 +16,9 @@ interface QaReportCardProps {
   /** #3774 — why starting a job is off right now (an include's run is live); the
       Resume scoring button is disabled with this reason shown. */
   jobStartBlockedReason?: string;
+  /** #3680 — character id -> display name for the "needs re-render" listing;
+      an id missing from the map falls back to the raw id. */
+  characterNames?: Record<string, string>;
 }
 
 function slugify(title: string): string {
@@ -80,6 +83,7 @@ function VoiceMatchRow({
   const vd = report.voiceDrift;
   const [resuming, setResuming] = useState(false);
   const [resumed, setResumed] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const classification = classifyVoiceMatch(report);
 
   if (classification.kind === 'noEligible') {
@@ -125,6 +129,7 @@ function VoiceMatchRow({
             <button
               onClick={async () => {
                 setResuming(true);
+                setResumeError(null);
                 try {
                   await api.resumeScoring(bookId);
                   // Deliberately stays disabled after success (does NOT revert to
@@ -134,13 +139,14 @@ function VoiceMatchRow({
                   // book and useQaReport re-fetches. Reverting to "Resume scoring"
                   // here would invite a confusing repeat click.
                   setResumed(true);
-                } catch {
-                  // Any rejection lands here, including a 409 (a resume-triggered
-                  // scoreBook run is already in progress) — api.resumeScoring does
+                } catch (e) {
+                  // Any rejection lands here, including a 409 (a generation run, or
+                  // a splice / QA repair, is in progress) — api.resumeScoring does
                   // NOT swallow the 409, it throws just like any other failure (see
-                  // realResumeScoring in api.ts). There's no special-cased handling:
-                  // the button simply re-enables so the user can retry, same as for
-                  // a network error or any other rejection.
+                  // realResumeScoring in api.ts). The button re-enables so the user
+                  // can retry; a 409's server sentence (#4235) is shown beside it so
+                  // the refusal is not silent. A network error shows nothing.
+                  setResumeError((e as { code?: string }).code === 'resume-scoring-refused' ? (e as Error).message : null);
                   setResuming(false);
                 }
               }}
@@ -150,6 +156,11 @@ function VoiceMatchRow({
             >
               {resuming ? 'Resuming…' : 'Resume scoring'}
             </button>
+          )}
+          {!resumed && resumeError && (
+            <span role="status" className="text-[11px] text-ink/60">
+              {resumeError}
+            </span>
           )}
           {!resumed && jobStartBlockedReason && (
             <span id="qa-resume-scoring-blocked" className="text-[11px] text-ink/60">
@@ -192,6 +203,31 @@ function VoiceMatchRow({
   );
 }
 
+/* #3680 — characters with a marked render key whose lines aren't in the current voice. Rendered
+   beneath VoiceMatchRow (not inside its early-return chain); hidden while a
+   live scoring pass runs and in the rows that report nothing settled. */
+function NeedsRerenderListing({
+  report,
+  scoringProgress,
+  characterNames,
+}: {
+  report: BookQaReport;
+  scoringProgress?: { charactersChecked: number; charactersOnRoster: number };
+  characterNames?: Record<string, string>;
+}) {
+  const ids = needsRerenderIds(report);
+  if (ids.length === 0 || scoringProgress) return null;
+  return (
+    <p data-testid="qa-needs-rerender" className="text-sm text-ink/70 py-2">
+      Needs re-render: {ids.map((id) => {
+        const chapters = needsRerenderChapters(report, id);
+        const name = characterNames?.[id] ?? id;
+        return chapters.length > 0 ? `${name} (${chapters.length === 1 ? 'chapter' : 'chapters'} ${chapters.join(', ')})` : name;
+      }).join(', ')}. Some of their lines weren't recorded in their current voice, so those can't be checked — re-render a chapter named here to check them.
+    </p>
+  );
+}
+
 function CastContinuityRow({ report }: { report: BookQaReport }) {
   const { mild, moderate, severe } = report.configDrift.counts;
   const total = mild + moderate + severe;
@@ -208,7 +244,7 @@ function CastContinuityRow({ report }: { report: BookQaReport }) {
   );
 }
 
-export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason }: QaReportCardProps) {
+export function QaReportCard({ report, loading, error, bookTitle, bookId, scoringProgress, jobStartBlockedReason, characterNames }: QaReportCardProps) {
   if (loading) {
     return <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-6 text-sm text-ink/50">Loading QA report…</div>;
   }
@@ -230,11 +266,12 @@ export function QaReportCard({ report, loading, error, bookTitle, bookId, scorin
         <AcousticRow report={report} />
         <TranscriptRow report={report} />
         <VoiceMatchRow report={report} bookId={bookId} scoringProgress={scoringProgress} jobStartBlockedReason={jobStartBlockedReason} />
+        <NeedsRerenderListing report={report} scoringProgress={scoringProgress} characterNames={characterNames} />
         <CastContinuityRow report={report} />
       </div>
       <div className="flex gap-2 mt-4">
         <button
-          onClick={() => downloadFile(`${slugify(bookTitle)}-qa-report.txt`, formatQaReportText(report, bookTitle), 'text/plain')}
+          onClick={() => downloadFile(`${slugify(bookTitle)}-qa-report.txt`, formatQaReportText(report, bookTitle, characterNames), 'text/plain')}
           className="text-xs font-semibold text-ink/70 hover:text-ink px-3 py-1.5 rounded-full border border-ink/10"
         >
           Download as text

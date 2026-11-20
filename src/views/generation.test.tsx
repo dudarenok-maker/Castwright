@@ -10,7 +10,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { changeLogSlice } from '../store/change-log-slice';
-import { castSlice } from '../store/cast-slice';
+import { castSlice, castActions } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
@@ -304,9 +304,10 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
     expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
   });
   /* Mounts the view in a MemoryRouter whose navigate() the test can call, to
-     edit the URL in place while Generate stays mounted (a cold `?chapter=3`
-     link scrolls only when hydrating it leaves the persisted `ui.stage`
-     unchanged; otherwise Layout drops the param before the view mounts). */
+     edit the URL in place while Generate stays mounted (since #4212 the stage
+     carries `chapterExplicit` and `stageToHash` keeps `?chapter=3` for it, so
+     a cold `?chapter=3` link survives Layout's sync and scrolls like any
+     other chapter). */
   function renderMounted(entry: string, stageChapterId: number) {
     const store = makeStore();
     store.dispatch(chaptersSlice.actions.setChapters(chs));
@@ -354,6 +355,103 @@ describe('GenerationView — scrolls to a chapter only when the URL names one (#
     navigateTo('/books/b1/generate?chapter=3');
     expect(scrollSpy).toHaveBeenCalledTimes(1);
     expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-3'));
+  });
+  /* #4212 — a reload rehydrates the stage to the URL's chapter before the rows
+     exist; the scroll must fire when they appear, once, not on every update. */
+  it('scrolls once when the named chapter row appears after mount, not on later list updates', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(5));
+    const view = (list: Chapter[]) => (
+      <Provider store={store}>
+        <HostedGenerationView
+          initialEntry="/books/b1/generate?chapter=5"
+          chapters={list}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>
+    );
+    const { rerender } = render(view([]));
+    expect(scrollSpy).not.toHaveBeenCalled();
+    rerender(view(chs));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
+    rerender(view(chs.map((c) => ({ ...c }))));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+  /* Kills the ref reset: the ref still holds 3 from the first scroll, and
+     hydrating ?chapter=3 does not change the stage id, so only the reset lets
+     the re-navigation scroll again. */
+  it('re-scrolls to chapter 3 when ?chapter=3 is dropped and then named again on a mounted view', () => {
+    const { navigateTo } = renderMounted('/books/b1/generate?chapter=3', 3);
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    navigateTo('/books/b1/generate');
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    navigateTo('/books/b1/generate?chapter=3');
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+  });
+  /* Kills the once-only check and the ref write: the target row leaving the
+     list and coming back re-runs the effect via `targetRowLoaded`, and only
+     the ref stops a second scroll. */
+  it('does not re-scroll when the target row leaves the list and comes back', () => {
+    const store = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(uiSlice.actions.setCurrentChapterId(5));
+    const view = (list: Chapter[]) => (
+      <Provider store={store}>
+        <HostedGenerationView
+          initialEntry="/books/b1/generate?chapter=5"
+          chapters={list}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>
+    );
+    const { rerender } = render(view(chs));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    rerender(view(chs.filter((c) => c.id !== 5)));
+    rerender(view(chs));
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+  });
+  /* #4310 pass 2 D — the view's effect runs before ReadyRoute hydrates the
+     stage, so its first run pairs the new URL with the old stage chapter. */
+  it('does not scroll to the old stage chapter when the URL is edited in place to a chapter with no row', () => {
+    const { navigateTo } = renderMounted('/books/b1/generate', 3);
+    navigateTo('/books/b1/generate?chapter=8');
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+  /* #4310 pass 3 E — the ref reset must fire whenever the URL's chapter is not
+     the stage's (every in-place change), not only when the URL drops the
+     param: chapter 8 has no row, so it never scrolls and never overwrites the
+     ref, and only the reset lets the return to 5 scroll again. */
+  it('re-scrolls to chapter 5 when a mounted ?chapter=5 visits a chapter with no row and returns', () => {
+    const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
+    navigateTo('/books/b1/generate?chapter=8');
+    act(() => {
+      store.dispatch(uiSlice.actions.setCurrentChapterId(8));
+    });
+    navigateTo('/books/b1/generate?chapter=5');
+    act(() => {
+      store.dispatch(uiSlice.actions.setCurrentChapterId(5));
+    });
+    expect(scrollSpy).toHaveBeenCalledTimes(2);
+    expect(scrollSpy.mock.contexts[0]).toBe(document.getElementById('chapter-5'));
+    expect(scrollSpy.mock.contexts[1]).toBe(document.getElementById('chapter-5'));
   });
   it('does not scroll to chapter 3 when a mounted ?chapter=5 is edited in place to a malformed value', () => {
     const { store, navigateTo } = renderMounted('/books/b1/generate?chapter=5', 5);
@@ -508,6 +606,7 @@ describe('GenerationView — #3440 step 4: aliased sentences join drifted attrib
           renderedSpeakersByChapter: {},
           renderedTextByChapter: {},
           characterIdAliases: aliases,
+          paragraphsMergedChapterIds: [],
         },
       },
     });
@@ -1209,6 +1308,19 @@ describe('GenerationView — activity sidebar', () => {
 });
 
 describe('GenerationView — fs-51 QA report card', () => {
+  it('names the characters needing a re-render from the cast (#3680 pass 1: the Generate mount is wired)', async () => {
+    getQaReportSpy.mockResolvedValue({
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['marlow'] },
+    });
+    const { store } = renderView();
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters(characters));
+    });
+    const listing = await screen.findByTestId('qa-needs-rerender');
+    expect(listing).toHaveTextContent('Needs re-render: Marlow.');
+  });
+
   it('refetches the QA report when a chapter completes', async () => {
     const { store } = renderView();
 

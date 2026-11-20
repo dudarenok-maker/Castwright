@@ -5,23 +5,30 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { buildHealthPayload } from './health-payload.js';
+import { isLoopbackRequest } from './lan-auth.js';
 
 // health-payload.ts's own repoRoot is two directories up from this file's
 // location (server/src -> repoRoot) — computed independently here so the
 // test doesn't just restate the implementation.
 const expectedRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-function makeApp() {
+// Mirrors app.ts's /api/health one-liner for fast ip-shape cases; the real
+// wiring is pinned by app.health-loopback.test.ts (real app, real sockets).
+function makeApp(ip = '127.0.0.1') {
   const app = express();
-  app.get('/api/health', (_req, res) => {
-    res.json(buildHealthPayload());
+  app.use((req, _res, next) => {
+    Object.defineProperty(req, 'ip', { value: ip, configurable: true });
+    next();
+  });
+  app.get('/api/health', (req, res) => {
+    res.json(buildHealthPayload({ includePaths: isLoopbackRequest(req) }));
   });
   return app;
 }
 
 describe('buildHealthPayload', () => {
   it('returns the expected shape: ok, ts (ISO string), configLoad.{envLoaded,cwd,runDir}', () => {
-    const payload = buildHealthPayload();
+    const payload = buildHealthPayload({ includePaths: true });
     expect(payload.ok).toBe(true);
     expect(typeof payload.ts).toBe('string');
     expect(() => new Date(payload.ts).toISOString()).not.toThrow();
@@ -34,7 +41,7 @@ describe('buildHealthPayload', () => {
     const saved = process.env.APP_RUN_DIR;
     try {
       process.env.APP_RUN_DIR = '/srv/audiobook/.run';
-      const payload = buildHealthPayload();
+      const payload = buildHealthPayload({ includePaths: true });
       expect(payload.configLoad.runDir).toBe(resolve('/srv/audiobook/.run'));
     } finally {
       if (saved === undefined) delete process.env.APP_RUN_DIR;
@@ -61,7 +68,7 @@ describe('buildHealthPayload', () => {
       // worker.
       delete process.env.APP_RUN_DIR;
       process.chdir(os.tmpdir());
-      const payload = buildHealthPayload();
+      const payload = buildHealthPayload({ includePaths: true });
       expect(payload.configLoad.runDir).toBe(resolve(expectedRepoRoot, '.run'));
       expect(payload.configLoad.runDir).not.toBe(resolve(process.cwd(), '.run'));
     } finally {
@@ -80,5 +87,29 @@ describe('GET /api/health', () => {
     expect(typeof res.body.configLoad.envLoaded).toBe('boolean');
     expect(typeof res.body.configLoad.cwd).toBe('string');
     expect(typeof res.body.configLoad.runDir).toBe('string');
+  });
+
+  it.each(['127.0.0.1', '::1', '::ffff:127.0.0.1'])('loopback ip %s still gets cwd + runDir', async (ip) => {
+    const res = await request(makeApp(ip)).get('/api/health');
+    expect(typeof res.body.configLoad.cwd).toBe('string');
+    expect(typeof res.body.configLoad.runDir).toBe('string');
+  });
+
+  it('LAN ip 192.168.1.50 gets NO cwd/runDir, but keeps envLoaded, ok, ts', async () => {
+    const res = await request(makeApp('192.168.1.50')).get('/api/health');
+    expect(res.status).toBe(200);
+    expect(res.body.configLoad).not.toHaveProperty('cwd');
+    expect(res.body.configLoad).not.toHaveProperty('runDir');
+    expect(typeof res.body.configLoad.envLoaded).toBe('boolean');
+    expect(res.body.ok).toBe(true);
+    expect(typeof res.body.ts).toBe('string');
+  });
+
+  // lan-port-forwarder.ts:92 sources forwarded :443 LAN traffic from 127.0.0.2
+  // (NOT 127.0.0.1) so it must NOT count as loopback.
+  it('forwarder ip 127.0.0.2 is treated as non-loopback: paths absent', async () => {
+    const res = await request(makeApp('127.0.0.2')).get('/api/health');
+    expect(res.body.configLoad).not.toHaveProperty('cwd');
+    expect(res.body.configLoad).not.toHaveProperty('runDir');
   });
 });

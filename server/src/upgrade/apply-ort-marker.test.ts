@@ -4,6 +4,15 @@
    marker-write ordering is exercised. */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+
+// execSync is mocked: pipInstall -> effectiveProfile -> detectVendor probes the
+// GPU through it, and the real one starts powershell/lspci (#4451).
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  execSync: vi.fn(() => ''),
+}));
+
+import { execSync } from 'node:child_process';
 import { createApplySteps } from './apply.js';
 
 const ORIGINAL_ACCELERATOR = process.env.ACCELERATOR;
@@ -32,6 +41,15 @@ function harness(profile: 'nvidia' | 'cpu') {
 }
 
 describe('pipInstall ORT marker wiring', () => {
+  // detectVendor short-circuits to 'apple' on darwin without probing (#4451),
+  // so the probe is only expected off darwin.
+  it('the GPU probe goes through the mocked execSync, never a real spawn', async () => {
+    vi.mocked(execSync).mockClear();
+    await harness('cpu').steps.pipInstall('/rel');
+    if (process.platform === 'darwin') expect(execSync).not.toHaveBeenCalled();
+    else expect(execSync).toHaveBeenCalled();
+  });
+
   it('deletes before the first pip call', async () => {
     const h = harness('cpu');
     await h.steps.pipInstall('/rel');

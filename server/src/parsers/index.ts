@@ -4,8 +4,7 @@
 
 import { parseText, type ParsedManuscript } from './text.js';
 import { parsePdf } from './pdf.js';
-import { parseEpub } from './epub.js';
-import { parseMobi } from './mobi.js';
+import { parseInWorker } from './parse-in-worker.js';
 
 export type { ParsedManuscript };
 export { UnusableMediaError } from './errors.js';
@@ -22,6 +21,10 @@ const EXT_TO_FORMAT: Record<string, 'markdown' | 'plaintext' | 'pdf' | 'epub' | 
   mobi: 'mobi',
   azw3: 'mobi',
 };
+
+/** Extensions parseManuscript accepts (lowercase, no dot). One list, so tooling
+    such as the library scanner never keeps a second copy. */
+export const SUPPORTED_MANUSCRIPT_EXTENSIONS: readonly string[] = Object.keys(EXT_TO_FORMAT);
 
 function extOf(fileName?: string): string | null {
   if (!fileName) return null;
@@ -41,6 +44,10 @@ export async function parseManuscript(input: {
       and produces sporadic "Invalid/missing file" errors. Other parsers
       ignore this field. */
   sourcePath?: string;
+  /** Which extraction behaviour to use for EPUB and MOBI. Required: every
+      caller decides (#4217); see `parsers/version.ts`. `parseText` and
+      `parsePdf` ignore it. */
+  extractorVersion: number;
 }): Promise<ParsedManuscript> {
   if (input.text !== undefined && !input.buffer) {
     const ext = extOf(input.fileName);
@@ -57,14 +64,27 @@ export async function parseManuscript(input: {
     return parsePdf(input.buffer, { fileName: input.fileName });
   }
   if (format === 'epub' || input.mimeType === 'application/epub+zip') {
-    return parseEpub(input.buffer, { fileName: input.fileName, sourcePath: input.sourcePath });
+    return parseInWorker({
+      format: 'epub',
+      /* With sourcePath the parser reads from disk and never touches the
+         buffer; don't clone the whole book into the worker for nothing. */
+      buffer: input.sourcePath ? Buffer.alloc(0) : input.buffer,
+      fileName: input.fileName,
+      sourcePath: input.sourcePath,
+      extractorVersion: input.extractorVersion,
+    });
   }
   if (
     format === 'mobi' ||
     input.mimeType === 'application/x-mobipocket-ebook' ||
     input.mimeType === 'application/vnd.amazon.ebook'
   ) {
-    return parseMobi(input.buffer, { fileName: input.fileName });
+    return parseInWorker({
+      format: 'mobi',
+      buffer: input.buffer,
+      fileName: input.fileName,
+      extractorVersion: input.extractorVersion,
+    });
   }
   if (format === 'markdown' || format === 'plaintext') {
     return parseText(input.buffer.toString('utf8'), { fileName: input.fileName, format });

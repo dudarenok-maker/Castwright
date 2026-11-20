@@ -258,4 +258,58 @@ describe('runVoiceDesign', () => {
       message: expect.stringContaining('Coqui XTTS is loaded'),
     });
   });
+
+  it('#4445 — a design / mint is counted at the leaf gate while in flight and released when it settles (success or throw)', async () => {
+    const { postDesignAndCacheAudition } = await import('./design-voice-core.js');
+    const gate = await import('../gpu/active-generation-gate.js');
+    const base = {
+      target: 'http://sidecar/qwen/x',
+      fetchBody: '{}',
+      outVoiceId: 'v',
+      cacheScope: 's',
+      modelKey: 'qwen3-tts-1.7b' as const,
+      calibrationText: 't',
+      sidecarUrl: 'http://sidecar',
+      logContext: 'x',
+    };
+    for (const purpose of ['design', 'mint'] as const) {
+      const seen: boolean[] = [];
+      mockWithCapacityRetry.mockImplementationOnce(async () => {
+        seen.push(gate.isDesignOrMintActive());
+        throw new Error('stop');
+      });
+      expect(gate.isDesignOrMintActive()).toBe(false);
+      await expect(postDesignAndCacheAudition({ ...base, purpose })).rejects.toBeTruthy();
+      expect(seen).toEqual([true]);
+      expect(gate.isDesignOrMintActive()).toBe(false);
+    }
+  });
+
+  it('#4445 — a design that SUCCEEDS is released too (fresh module state, so a leaked count from an earlier test cannot mask it)', async () => {
+    /* The throw-path test above would stay green if only the inner catch decremented. Re-import the
+       core and the leaf gate so this test owns its counters: whatever earlier tests left behind is
+       gone, and a decrement that is skipped on success shows up as a count that never returns to 0. */
+    vi.resetModules();
+    const { postDesignAndCacheAudition } = await import('./design-voice-core.js');
+    const gate = await import('../gpu/active-generation-gate.js');
+    const seen: boolean[] = [];
+    mockWithCapacityRetry.mockImplementationOnce(async (doPost, opts) => {
+      seen.push(gate.isDesignOrMintActive());
+      return doPost(opts.signal);
+    });
+    expect(gate.isDesignOrMintActive()).toBe(false);
+    const out = await postDesignAndCacheAudition({
+      target: 'http://sidecar/qwen/x',
+      fetchBody: '{}',
+      outVoiceId: 'v-ok',
+      cacheScope: 's',
+      modelKey: 'qwen3-tts-1.7b',
+      calibrationText: 't',
+      sidecarUrl: 'http://sidecar',
+      logContext: 'x',
+    });
+    expect(out.voiceId).toBe('v-ok');
+    expect(seen).toEqual([true]);
+    expect(gate.isDesignOrMintActive()).toBe(false);
+  });
 });

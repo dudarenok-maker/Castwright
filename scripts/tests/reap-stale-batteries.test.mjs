@@ -41,12 +41,14 @@ import { join } from 'node:path';
 import {
   classify,
   runCli,
-  runCensus,
+  runCensus as realRunCensus,
   rowsToProcesses,
   computeOsDescendants,
   readPriorSamples,
   appendCensusLog,
   collectProcessSnapshot,
+  classifyBatteryLocation,
+  REPO_ROOT,
   isBatteryInvocation,
   killTree,
   tailBytesFor,
@@ -417,6 +419,40 @@ test('classify() reports every root, not just reap candidates (the census log ne
 });
 
 // ---------------------------------------------------------------------------
+// Self-pid pinning. runCensus protects the REAL process.pid and its ancestry
+// (ownAncestryPids), so any fixture pid that equals the test process's own pid —
+// likely on Windows (multiples of 4) and on Linux alike — turns a deterministic
+// fixture into an intermittent red (the A2 CI flake, #4383). Rather than renumber
+// ~25 hand-picked pids and trust nobody adds a low one later, every runCensus that
+// is fed a fixture snapshot runs with process.pid pinned above any OS pid_max.
+// A census with NO injected snapshot (the real-WMI collector) keeps the real pid.
+// ---------------------------------------------------------------------------
+
+const PINNED_SELF_PID = 2_100_000_000;
+
+function withSelfPid(pid, fn) {
+  const real = process.pid;
+  Object.defineProperty(process, 'pid', { value: pid, configurable: true });
+  try {
+    return fn();
+  } finally {
+    Object.defineProperty(process, 'pid', { value: real, configurable: true });
+  }
+}
+
+const recordedCensusOpts = [];
+
+function pinnedCensus(opts) {
+  return withSelfPid(PINNED_SELF_PID, () => realRunCensus(opts));
+}
+
+function runCensus(opts) {
+  if (!opts.collectSnapshot) return realRunCensus(opts);
+  recordedCensusOpts.push(opts);
+  return pinnedCensus(opts);
+}
+
+// ---------------------------------------------------------------------------
 // runCensus() — the log-writing / kill-scoping / never-blocks-push contract
 // ---------------------------------------------------------------------------
 
@@ -567,6 +603,364 @@ test('runCli: --kill (the manual doctor path) allows both reap reasons', () => {
     },
   });
   assert.deepEqual(seenKillReasons.slice().sort(), ['orphaned-unreachable', 'stalled-rate'].sort());
+});
+
+// --- #4222 pre-push guards (G1-G8): orphaned AND stalled AND under checkout ---
+
+const GUARD_ROOT = 'C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards';
+const IN_CHECKOUT = `node ${GUARD_ROOT}\\node_modules\\vitest\\vitest.mjs run`;
+const OUT_OF_CHECKOUT = 'node C:\\Users\\x\\scratchpad\\p2-4213\\server\\node_modules\\vitest\\vitest.mjs run';
+
+// An orphaned path-less `cmd.exe /c npx vitest run` root plus a node child that
+// carries the path under test. `rate`: 'busy' (5 CPU-s/min), 'stalled' (~0.07),
+// or 'unknown' (no prior sample).
+function guardFixture({ childCommandLine, rate }) {
+  const startedAt = NOW - 60 * MIN;
+  const processes = [
+    { pid: 9001, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
+    { pid: 9002, ppid: 9001, name: 'node.exe', commandLine: childCommandLine, cpuSeconds: rate === 'busy' ? 100 : 25, startedAt },
+  ];
+  const priorSamples =
+    rate === 'unknown'
+      ? {}
+      : { 9001: { cpuSeconds: rate === 'busy' ? 25 : 24, sampledAt: NOW - 15 * MIN, startedAt } };
+  return { processes, priorSamples };
+}
+
+function runGuard(fixture, { prePushGuard = { root: GUARD_ROOT }, appended = [] } = {}) {
+  const killedPids = [];
+  const result = runCensus({
+    collectSnapshot: () => fixture.processes,
+    readPrior: () => fixture.priorSamples,
+    appendLog: (entry) => appended.push(entry),
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    prePushGuard,
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: (pid) => {
+      killedPids.push(pid);
+      return true;
+    },
+  });
+  return { ...result, killedPids };
+}
+
+test('G0: the guard fixtures really are battery orphans (non-vacuous)', () => {
+  assert.equal(isBatteryInvocation(IN_CHECKOUT), true);
+  const v = classify(
+    { ...guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'stalled' }), protectedPids: [] },
+    NOW,
+    THRESHOLDS,
+  );
+  assert.deepEqual(verdictFor(v, 9001).reasons.slice().sort(), ['orphaned-unreachable', 'stalled-rate']);
+});
+
+test('G1: a busy, orphaned, OUT-of-checkout battery survives pre-push', () => {
+  const r = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'busy' }));
+  assert.deepEqual(r.killed, []);
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.equal(r.spared[0].rootPid, 9001);
+});
+
+test('G2: a busy, orphaned, IN-checkout battery survives (stalled guard alone)', () => {
+  const r = runGuard(guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'busy' }));
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /not stalled \(rate 5\.0 CPU-s\/min\)/);
+});
+
+test('G3: a stalled, orphaned, OUT-of-checkout battery survives (root guard alone)', () => {
+  const r = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }));
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /outside checkout/);
+});
+
+test('G4: a stalled, orphaned, IN-checkout battery IS killed, whatever the path spelling', () => {
+  const child = 'node /c/claude/projects/WT-4222-prepush-reaper-guards/node_modules/vitest/vitest.mjs run';
+  const r = runGuard(guardFixture({ childCommandLine: child, rate: 'stalled' }));
+  assert.deepEqual(r.killedPids, [9001]);
+  assert.deepEqual(r.killed, [9001]);
+  assert.deepEqual(r.spared, []);
+});
+
+test('G5 control: with prePushGuard null the G1 and G3 fixtures ARE killed (manual-run behaviour)', () => {
+  const g1 = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'busy' }), { prePushGuard: null });
+  assert.deepEqual(g1.killedPids, [9001]);
+  assert.deepEqual(g1.spared, []);
+  const g3 = runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }), { prePushGuard: null });
+  assert.deepEqual(g3.killedPids, [9001]);
+});
+
+test('G6: an unknown rate (no trusted prior sample) in-checkout orphan survives', () => {
+  const r = runGuard(guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'unknown' }));
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /rate unknown/);
+});
+
+test('G7: runCli passes prePushGuard only on the pure --pre-push path', () => {
+  const seen = (args, opts = {}) => {
+    let guard;
+    runCli(args, {
+      ...opts,
+      runCensusFn: (o) => {
+        guard = o.prePushGuard;
+        return { verdicts: [], killed: [] };
+      },
+    });
+    return guard;
+  };
+  const knownRootsFn = () => ['C:\\injected\\root', 'C:\\injected\\other'];
+  assert.deepEqual(seen(['--pre-push'], { checkoutRoot: 'C:\\injected\\root', knownRootsFn }), {
+    root: 'C:\\injected\\root',
+    knownRoots: ['C:\\injected\\root', 'C:\\injected\\other'],
+  });
+  assert.equal(seen(['--kill']), null);
+  assert.equal(seen(['--pre-push', '--kill']), null);
+  assert.equal(seen([]), null);
+  assert.deepEqual(seen(['--pre-push'], { knownRootsFn: () => [REPO_ROOT] }), { root: REPO_ROOT, knownRoots: [REPO_ROOT] });
+});
+
+test('G8: the census log records spareReason for a spared root and null for a killed one', () => {
+  const spared = [];
+  runGuard(guardFixture({ childCommandLine: OUT_OF_CHECKOUT, rate: 'stalled' }), { appended: spared });
+  const sr = spared[0].roots.find((x) => x.rootPid === 9001);
+  assert.equal(sr.killed, false);
+  assert.ok(typeof sr.spareReason === 'string' && sr.spareReason.length > 0);
+
+  const killedLog = [];
+  runGuard(guardFixture({ childCommandLine: IN_CHECKOUT, rate: 'stalled' }), { appended: killedLog });
+  const kr = killedLog[0].roots.find((x) => x.rootPid === 9001);
+  assert.equal(kr.killed, true);
+  assert.equal(kr.spareReason, null);
+});
+
+// --- #4222 pass-2 finding A: the timeout sweep's `restrictTo` matches pid AND an
+// EXACT start time. An `approx` entry (the step root had already exited, or the
+// pre-kill snapshot failed) never matches: while the genuine root lives its
+// parent is verify-cache, which is protected, so a match is only a recycled pid. ---
+
+// Fixture pids sit above any OS pid_max (Linux 4194304) so they can never equal the
+// real test process's own pid (or an ancestor's), which ownAncestryPids would
+// protect: Windows pids are multiples of 4, so a literal 5000 could collide and
+// make the control below fail intermittently (the A2 CI flake).
+const SWEEP_ROOT_PID = 2_000_000_000;
+const SWEEP_CHILD_PID = SWEEP_ROOT_PID + 1;
+
+function runSweep(restrictTo, startedAtOfLive) {
+  const processes = [
+    { pid: SWEEP_ROOT_PID, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /d /s /c vitest run', cpuSeconds: 0, startedAt: startedAtOfLive },
+    { pid: SWEEP_CHILD_PID, ppid: SWEEP_ROOT_PID, name: 'node.exe', commandLine: OUT_OF_CHECKOUT, cpuSeconds: 100, startedAt: startedAtOfLive },
+  ];
+  const killedPids = [];
+  const result = runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => ({ [SWEEP_ROOT_PID]: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: startedAtOfLive } }),
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    restrictTo,
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: (pid) => {
+      killedPids.push(pid);
+      return true;
+    },
+  });
+  return { ...result, killedPids };
+}
+
+test('A1: an approx restrictTo entry never matches, so a recycled pid in another checkout is not killed', () => {
+  const r = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 30 * MIN, approx: true }]]), NOW - 2 * MIN);
+  assert.deepEqual(r.killed, []);
+  assert.deepEqual(r.killedPids, []);
+});
+
+test('A2: an exact restrictTo entry whose live start time differs is not killed; an equal one is', () => {
+  const differs = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 30 * MIN, approx: false }]]), NOW - 2 * MIN);
+  assert.deepEqual(differs.killedPids, []);
+  const same = runSweep(new Map([[SWEEP_ROOT_PID, { startedAt: NOW - 2 * MIN, approx: false }]]), NOW - 2 * MIN);
+  assert.deepEqual(same.killedPids, [SWEEP_ROOT_PID], 'control: the exact match is still reaped (the fixture is a real orphan)');
+});
+
+// --- #4222 review findings 1 and 4: "under the pushing checkout" is judged for the
+// battery as a whole, by the most-specific known root, at a real separator. ---
+
+const PRIMARY = 'C:\\Claude\\Projects\\Audiobook-Generator';
+const SCRATCH = 'C:/Users/dudar/AppData/Local/Temp/claude/sess/scratchpad/pr4315';
+
+// Captured verbatim from `npx vitest run` in a scratchpad worktree whose
+// node_modules is junctioned from the primary: the main vitest argv names the
+// run's own path, the fork worker's argv names the PRIMARY's realpath.
+function junctionBattery() {
+  const startedAt = NOW - 60 * MIN;
+  const p = (pid, ppid, name, commandLine, cpuSeconds) => ({ pid, ppid, name, commandLine, cpuSeconds, startedAt });
+  return {
+    processes: [
+      p(9201, 1, 'cmd.exe', `C:\\WINDOWS\\system32\\cmd.exe /d /s /c vitest run --root ${SCRATCH}/probe --pool=forks`, 0),
+      p(
+        9202,
+        9201,
+        'node.exe',
+        `"node"   "${SCRATCH.replace(/\//g, '\\')}\\node_modules\\.bin\\\\..\\vitest\\vitest.mjs" run --root ${SCRATCH}/probe`,
+        3,
+      ),
+      p(
+        9203,
+        9202,
+        'node.exe',
+        '"C:\\Program Files\\nodejs\\node.exe" --require C:/Claude/Projects/Audiobook-Generator/node_modules/vitest/suppress-warnings.cjs C:\\Claude\\Projects\\Audiobook-Generator\\node_modules\\vitest\\dist\\workers\\forks.js',
+        1,
+      ),
+    ],
+    priorSamples: { 9201: { cpuSeconds: 4.5, sampledAt: NOW - 15 * MIN, startedAt } },
+  };
+}
+
+test('J1: a scratchpad battery with junctioned node_modules is spared when pushing from the PRIMARY', () => {
+  const r = runGuard(junctionBattery(), { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] } });
+  assert.deepEqual(r.killedPids, []);
+  assert.equal(r.spared.length, 1);
+  assert.match(r.spared[0].reason, /outside checkout/);
+});
+
+test('J2: an orphaned stalled battery wholly under a NESTED worktree is spared when pushing from the primary', () => {
+  const nested = `${PRIMARY}\\.claude\\worktrees\\agent-a1b2`;
+  const fx = guardFixture({ childCommandLine: `node ${nested}\\node_modules\\vitest\\vitest.mjs run`, rate: 'stalled' });
+  // Even when git does not list the nested tree, a path under <root>\.claude\worktrees\ is not the primary's.
+  for (const knownRoots of [[PRIMARY, nested], [PRIMARY]]) {
+    const r = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots } });
+    assert.deepEqual(r.killedPids, [], JSON.stringify(knownRoots));
+  }
+  // Pushing FROM the nested worktree, its own battery is in-checkout and IS killed.
+  const own = runGuard(fx, { prePushGuard: { root: nested, knownRoots: [PRIMARY, nested] } });
+  assert.deepEqual(own.killedPids, [9001]);
+});
+
+test('J5: a git worktree nested under the root OUTSIDE .claude/worktrees is foreign only via knownRoots', () => {
+  // The nested-prefix check cannot see this one; only the known-roots owner
+  // match decides it (the runCensus -> prePushSpareReason knownRoots plumbing).
+  const nested = `${PRIMARY}\\tmp\\wt-x`;
+  const fx = guardFixture({ childCommandLine: `node ${nested}\\node_modules\\vitest\\vitest.mjs run`, rate: 'stalled' });
+  const listed = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY, nested] } });
+  assert.deepEqual(listed.killedPids, []);
+  assert.match(listed.spared[0].reason, /outside checkout/);
+  const unlisted = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] } });
+  assert.deepEqual(unlisted.killedPids, [9001], 'control: the same battery reads as in-root when git does not list the worktree');
+});
+
+test('J3: a root-name look-alike directory is not the checkout (Explorer copy, +old, ,v2, (2))', () => {
+  for (const sibling of [`${PRIMARY} - Copy`, `${PRIMARY}+old`, `${PRIMARY},v2`, `${PRIMARY} (2)`]) {
+    const line = `node ${sibling}\\node_modules\\vitest\\vitest.mjs run`;
+    assert.equal(classifyBatteryLocation([line], PRIMARY, [PRIMARY]).inRoot, false, line);
+    const r = runGuard(guardFixture({ childCommandLine: line, rate: 'stalled' }), {
+      prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] },
+    });
+    assert.deepEqual(r.killedPids, [], line);
+  }
+});
+
+// --- #4222 pass-2 finding B: kill-direction gaps in classifyBatteryLocation ---
+
+const PRIMARY_WORKER = `"C:\\Program Files\\nodejs\\node.exe" ${PRIMARY}\\node_modules\\vitest\\dist\\workers\\forks.js`;
+
+test('BL1: a look-alike that parses down to the BARE root is foreign, even beside a worker naming the primary', () => {
+  // The path parse stops at a space, `,`, `;` or `'`, so each sibling below
+  // collapses to a token equal to the root itself. It must be counted as
+  // foreign (ambiguous), not ignored: the junctioned worker alongside it makes
+  // inRoot true, which used to be enough to kill.
+  for (const sibling of [`${PRIMARY} - Copy`, `${PRIMARY} (2)`, `${PRIMARY},v2`, `${PRIMARY};x`, `${PRIMARY}'s copy`]) {
+    const lines = [`node ${sibling}\\node_modules\\vitest\\vitest.mjs run`, PRIMARY_WORKER];
+    const loc = classifyBatteryLocation(lines, PRIMARY, [PRIMARY]);
+    assert.ok(loc.foreign, `foreign for ${sibling}`);
+    const fx = guardFixture({ childCommandLine: lines[0], rate: 'stalled' });
+    fx.processes.push({ pid: 9003, ppid: 9002, name: 'node.exe', commandLine: PRIMARY_WORKER, cpuSeconds: 1, startedAt: NOW - 60 * MIN });
+    const r = runGuard(fx, { prePushGuard: { root: PRIMARY, knownRoots: [PRIMARY] } });
+    assert.deepEqual(r.killedPids, [], sibling);
+  }
+});
+
+test('BL2: a parent-directory segment is resolved before the owner match', () => {
+  const line = `node ${PRIMARY}\\..\\other-wt\\node_modules\\vitest\\vitest.mjs run`;
+  const loc = classifyBatteryLocation([line, PRIMARY_WORKER], PRIMARY, [PRIMARY]);
+  assert.ok(loc.foreign, 'resolves to a sibling directory of the root');
+  // Control: a `..` that stays inside the checkout is still in it.
+  const inside = classifyBatteryLocation([`node ${PRIMARY}\\a\\..\\node_modules\\vitest\\vitest.mjs run`], PRIMARY, [PRIMARY]);
+  assert.deepEqual(inside, { inRoot: true, foreign: null });
+});
+
+test('BL3: the neutral install-path allowance has a component boundary', () => {
+  for (const dir of ['C:\\Programming', 'C:\\Programs', 'C:\\Windowsx', 'C:\\ProgramDatax']) {
+    const loc = classifyBatteryLocation([`node ${dir}\\x\\vitest.mjs run`, PRIMARY_WORKER], PRIMARY, [PRIMARY]);
+    assert.ok(loc.foreign, dir);
+  }
+  // Controls: the real neutral locations (incl. `Program Files` truncated at its
+  // space, and the global npm prefix) stay neutral.
+  for (const neutral of [
+    '"C:\\Program Files\\nodejs\\node.exe"',
+    '"C:\\Program Files (x86)\\nodejs\\node.exe"',
+    'C:\\ProgramData\\x\\y.exe',
+    'C:\\Windows\\System32\\cmd.exe',
+    'C:\\Users\\dudar\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js',
+  ]) {
+    const loc = classifyBatteryLocation([`${neutral} ${PRIMARY}\\node_modules\\vitest\\vitest.mjs run`], PRIMARY, [PRIMARY]);
+    assert.deepEqual(loc, { inRoot: true, foreign: null }, neutral);
+  }
+});
+
+test('J4: an unrelated in-checkout process OUTSIDE the candidate subtree is not evidence of membership', () => {
+  // Mutation: `members.has(p.pid) && ...` -> `true && ...` goes red here.
+  // The candidate's own argv names no path at all (relative paths only), so
+  // nothing but the unrelated process below could make it look in-checkout.
+  const fx = guardFixture({ childCommandLine: 'node vitest run', rate: 'stalled' });
+  fx.processes.push({
+    pid: 9300,
+    ppid: 4242,
+    name: 'node.exe',
+    commandLine: `node ${GUARD_ROOT}\\node_modules\\vite\\bin\\vite.js`,
+    cpuSeconds: 50,
+    startedAt: NOW - 120 * MIN,
+  });
+  const r = runGuard(fx);
+  assert.deepEqual(r.killedPids, []);
+  assert.match(r.spared.find((s) => s.rootPid === 9001).reason, /not under checkout|outside checkout/);
+});
+
+test('G9: a forks battery recycling workers reads as rate-unknown, never stalled (#4222 review finding 2)', () => {
+  // Captured shape: vitest's forks pool recycles a worker per test file, so an
+  // exited worker's CPU leaves the subtree sum. Two workers carried 27.6 CPU-s
+  // at the prior sample; ten minutes later main grew 25 CPU-s but the current
+  // (NEW pids, started after the prior sample) workers hold 0.2 each, so the
+  // raw sum FELL. A rate computed from that delta reads a busy battery as dead.
+  const startedAt = NOW - 60 * MIN;
+  const sampledAt = NOW - 15 * MIN;
+  const processes = [
+    { pid: 9101, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
+    { pid: 9102, ppid: 9101, name: 'node.exe', commandLine: IN_CHECKOUT, cpuSeconds: 27.5, startedAt },
+    { pid: 9103, ppid: 9102, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0.2, startedAt: NOW - 20_000 },
+    { pid: 9104, ppid: 9102, name: 'node.exe', commandLine: 'node forks.js', cpuSeconds: 0.2, startedAt: NOW - 10_000 },
+  ];
+  const priorSamples = { 9101: { cpuSeconds: 27.6, sampledAt, startedAt } };
+  const v = verdictFor(classify({ processes, priorSamples, protectedPids: [] }, NOW, THRESHOLDS), 9101);
+  assert.equal(v.cpuRatePerMin, null, 'a member born after the prior sample makes the delta unreadable');
+  assert.ok(!v.reasons.includes('stalled-rate'));
+  const r = runGuard({ processes, priorSamples });
+  assert.deepEqual(r.killedPids, []);
+  assert.match(r.spared[0].reason, /rate unknown/);
+});
+
+test('G9b: a negative CPU delta (members exited) is rate-unknown, not clamped to a zero rate', () => {
+  const startedAt = NOW - 60 * MIN;
+  const processes = [
+    { pid: 9111, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /c npx vitest run', cpuSeconds: 0, startedAt },
+    { pid: 9112, ppid: 9111, name: 'node.exe', commandLine: IN_CHECKOUT, cpuSeconds: 3, startedAt },
+  ];
+  const priorSamples = { 9111: { cpuSeconds: 27.6, sampledAt: NOW - 15 * MIN, startedAt } };
+  const v = verdictFor(classify({ processes, priorSamples, protectedPids: [] }, NOW, THRESHOLDS), 9111);
+  assert.equal(v.cpuRatePerMin, null);
 });
 
 test('runCli: report-only mode (no flags) never sets kill=true', () => {
@@ -2091,4 +2485,124 @@ test('pass 4: an empty result after the retry returns [] carrying snapshotError'
   } finally {
     console.warn = origWarn;
   }
+});
+
+// ---------------------------------------------------------------------------
+// #4222 — classifyBatteryLocation (inRoot): argv-only "is this under the checkout" check
+// ---------------------------------------------------------------------------
+
+const under = (line, root) => classifyBatteryLocation([line], root, [root]).inRoot;
+const U_ROOT = 'C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards';
+
+test('U1 classifyBatteryLocation (inRoot) matches every Windows spelling of the root', () => {
+  // Mutations: M2 (classifyBatteryLocation drops its /c/ and /mnt/c/ rewrite)
+  // goes red on the Git Bash and WSL lines; M3 (drop .toLowerCase() on the
+  // command line) goes red on the mixed-case line.
+  const lines = [
+    'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs run',
+    'NODE c:/claude/projects/WT-4222-PREPUSH-REAPER-GUARDS/node_modules/vitest/vitest.mjs',
+    'C:\\\\Claude\\\\Projects\\\\wt-4222-prepush-reaper-guards\\\\node_modules\\\\vitest\\\\vitest.mjs',
+    '/c/Claude/Projects/wt-4222-prepush-reaper-guards/node_modules/vitest/vitest.mjs',
+    '/mnt/c/Claude/Projects/wt-4222-prepush-reaper-guards/node_modules/vitest/vitest.mjs',
+    '"C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs" run',
+  ];
+  const roots = [U_ROOT, U_ROOT + '\\', 'C:/Claude/Projects/wt-4222-prepush-reaper-guards', 'C:/Claude/Projects/wt-4222-prepush-reaper-guards/'];
+  for (const root of roots) {
+    for (const line of lines) {
+      assert.equal(under(line, root), true, `root ${root} should match: ${line}`);
+    }
+  }
+});
+
+test('U2 classifyBatteryLocation (inRoot) respects the path-component boundary', () => {
+  // Mutation M1 (classifyBatteryLocation's owner match becomes a bare
+  // `token.startsWith(o)`, no separator) makes the -followup line match, so this
+  // goes red.
+  const outside = [
+    'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards-followup\\node_modules\\vitest\\vitest.mjs',
+    'node C:\\Claude\\Projects\\Audiobook-Generator\\node_modules\\vitest\\vitest.mjs',
+    'node C:\\Users\\x\\scratchpad\\p2-4213\\server\\node_modules\\vitest\\vitest.mjs',
+  ];
+  for (const line of outside) {
+    assert.equal(under(line, U_ROOT), false, `should not match: ${line}`);
+  }
+});
+
+test('U3 classifyBatteryLocation (inRoot) fails closed on empty or non-string input', () => {
+  // Mutation M4 (empty root returns true) turns the empty-root cases red.
+  const line = 'node C:\\Claude\\Projects\\wt-4222-prepush-reaper-guards\\node_modules\\vitest\\vitest.mjs';
+  assert.equal(under('', U_ROOT), false);
+  assert.equal(under(undefined, U_ROOT), false);
+  assert.equal(under('node vitest run', U_ROOT), false);
+  assert.equal(under(line, ''), false);
+  assert.equal(under(line, undefined), false);
+});
+
+// Positive control for the seam the pin hides (#4383, review pass 2): runCensus must
+// protect the real process's own ancestry. Every other census here runs pinned to a pid
+// no fixture contains, so without this nothing would go red if ownAncestryPids (or its
+// wiring into runCensus) stopped protecting anything. Runs realRunCensus directly, with
+// process.pid spoofed to the sweep fixture's CHILD, so the root is its ancestor.
+test('A2 control: runCensus protects the real process ancestry; unspoofed, the same root is reaped', () => {
+  const run = (selfPid) => {
+    const killedPids = [];
+    const processes = [
+      { pid: SWEEP_ROOT_PID, ppid: 1, name: 'cmd.exe', commandLine: 'cmd.exe /d /s /c vitest run', cpuSeconds: 0, startedAt: NOW - 2 * MIN },
+      { pid: SWEEP_CHILD_PID, ppid: SWEEP_ROOT_PID, name: 'node.exe', commandLine: OUT_OF_CHECKOUT, cpuSeconds: 100, startedAt: NOW - 2 * MIN },
+    ];
+    const result = withSelfPid(selfPid, () =>
+      realRunCensus({
+        collectSnapshot: () => processes,
+        readPrior: () => ({ [SWEEP_ROOT_PID]: { cpuSeconds: 25, sampledAt: NOW - 15 * MIN, startedAt: NOW - 2 * MIN } }),
+        appendLog: () => {},
+        kill: true,
+        killReasons: ['orphaned-unreachable'],
+        thresholds: THRESHOLDS,
+        now: NOW,
+        killFn: (pid) => {
+          killedPids.push(pid);
+          return true;
+        },
+      }),
+    );
+    return { ...result, killedPids };
+  };
+  const protectedRun = run(SWEEP_CHILD_PID);
+  assert.deepEqual(protectedRun.killed, []);
+  assert.deepEqual(protectedRun.killedPids, []);
+  assert.deepEqual(protectedRun.verdicts.find((v) => v.rootPid === SWEEP_ROOT_PID)?.reasons, ['protected:self-ancestry']);
+  const control = run(PINNED_SELF_PID);
+  assert.deepEqual(control.killedPids, [SWEEP_ROOT_PID], 'control: with an unrelated self pid the same root is reaped');
+});
+
+// Invariant (#4383, review pass 1): no fixture pid may ever change a census outcome by
+// equalling the real test process's pid. Replays EVERY fixture snapshot the file fed to
+// the runCensus wrapper (including the two C3 round-trip censuses, given an empty prior;
+// report-only, so no kill side effects) with process.pid spoofed to each pid and ppid in
+// it, THROUGH THE SAME WRAPPER the tests use, and demands the verdicts match the
+// unspoofed run. MUST stay the last test in the file: a test appended after it is
+// pinned but never replayed. Goes red if the wrapper stops pinning the self pid.
+test('INV: no fixture pid in this file can collide with the real process pid', () => {
+  const replayable = recordedCensusOpts.slice();
+  assert.ok(replayable.length > 30, `expected to have recorded many fixture censuses, got ${replayable.length}`);
+  const seen = new Set();
+  let checked = 0;
+  for (const opts of replayable) {
+    const replay = { ...opts, kill: false, appendLog: () => {}, readPrior: opts.readPrior ?? (() => ({})) };
+    const baseline = runCensus(replay).verdicts;
+    const pids = new Set();
+    for (const p of opts.collectSnapshot()) {
+      pids.add(p.pid);
+      pids.add(p.ppid);
+    }
+    for (const pid of pids) {
+      seen.add(pid);
+      const spoofed = withSelfPid(pid, () => runCensus(replay).verdicts);
+      assert.deepEqual(spoofed, baseline, `fixture pid ${pid} changes a census outcome when it is the real process pid`);
+      checked++;
+    }
+  }
+  assert.ok(seen.has(SWEEP_ROOT_PID), 'the sweep fixture root must be among the checked pids');
+  assert.ok(seen.has(9104) && seen.has(9001) && seen.has(3001), 'the known-low fixture pids must be among the checked pids');
+  assert.ok(checked > 100, `checked only ${checked} pid spoofs`);
 });

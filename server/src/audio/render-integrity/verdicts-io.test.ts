@@ -91,6 +91,10 @@ describe('attempted sentinel', () => {
     await writeAttempted(p);
     expect(await readAttempted(p)).toBe(true);
   });
+
+  it('keeps the on-disk name <slug>.render-integrity-attempted.json (#4332)', () => {
+    expect(attemptedPath('/r', 'ch1')).toBe(join('/r', 'ch1.render-integrity-attempted.json'));
+  });
 });
 
 describe('deriveBookOutline', () => {

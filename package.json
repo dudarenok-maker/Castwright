@@ -9,7 +9,7 @@
   "castwright": {
     "ffmpeg": {
       "minimum": "6.0",
-      "rationale": "ops-35 (#1877). A SUPPORT floor, not a capability floor: the oldest ffmpeg we test against. Anchored to Ubuntu 24.04 LTS (ships 6.1.1). The audio path parses ffmpeg's loudnorm JSON output, which is a version-sensitive contract. Read by scripts/preflight-ffmpeg.cjs, server/src/diagnostics/ffmpeg.ts and pinokio-scripts/lib/ffmpeg-pin.test.js — never hardcode it elsewhere. Set to null to disable the preflight check (the documented rollback)."
+      "rationale": "ops-35 (#1877). A SUPPORT floor, not a capability floor: the oldest ffmpeg we test against. Anchored to Ubuntu 24.04 LTS (ships 6.1.1) and tested by verify.yml's ffmpeg-floor job: ubuntu-24.04, apt ffmpeg 6.1.x, the full server suite, a required leg (#4461). The audio path parses ffmpeg's loudnorm JSON output, which is a version-sensitive contract. Read by scripts/preflight-ffmpeg.cjs, server/src/diagnostics/ffmpeg.ts and pinokio-scripts/lib/ffmpeg-pin.test.js — never hardcode it elsewhere. Set to null to disable the preflight check (the documented rollback)."
     }
   },
   "scripts": {
@@ -129,18 +129,18 @@
   "devDependencies": {
     "@eslint/js": "^9",
     "@playwright/test": "^1.65.0",
-    "@tailwindcss/vite": "^4.3.4",
+    "@tailwindcss/vite": "^4.3.5",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.8",
+    "@testing-library/user-event": "^14.6.10",
     "@types/jest-axe": "^3.5.9",
     "@types/node": "^26.6.6",
     "@types/picomatch": "^4.0.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
+    "@vitejs/plugin-react": "^6.3.0",
     "archiver": "^8",
-    "concurrently": "^10.0.6",
+    "concurrently": "^10.0.7",
     "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-prettier": "^10",
@@ -157,13 +157,13 @@
     "openapi-typescript": "^7.0.0",
     "picomatch": "^4.0.7",
     "postcss": "^8.5.32",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "sharp": "^0.35.4",
     "std-env": "^4.3.0",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.0",
     "typescript-eslint": "^8",
-    "vite": "^8.3.6",
+    "vite": "^8.3.8",
     "vite-plugin-mkcert": "^2.0.0",
     "vitest": "^5.1.0"
   },

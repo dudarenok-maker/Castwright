@@ -82,6 +82,17 @@ const COVERED = [
      and only src/main.test.tsx (missing both guards) for src/styles.css. */
   { rel: 'index.html', file: 'the app shell' },
   { rel: 'src/styles.css', file: 'the design tokens' },
+  /* #4226 — script-review-apply.test.ts readFileSync()s the shared
+     attribution-eval fixtures at runtime (the drift lock against the server
+     core copy); no module-graph edge, so --changed would select zero tests. */
+  {
+    rel: 'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
+    file: 'the shared anchor-offset fixture',
+  },
+  {
+    rel: 'server/src/analyzer/attribution-eval/__fixtures__/review-apply-vectors.json',
+    file: 'the shared review-apply fixture',
+  },
 ];
 
 /* Real files that must NOT match. More than one shape, so widening a dead

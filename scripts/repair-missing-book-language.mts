@@ -142,6 +142,7 @@ import {
 import { loadAnalysisCache } from '../server/src/store/analysis-cache.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../server/src/workspace/state-migrate.js';
 import { parseManuscript } from '../server/src/parsers/index.js';
+import { extractorVersionOf } from '../server/src/parsers/version.js';
 import type { BookStateJson } from '../server/src/workspace/scan.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -525,6 +526,7 @@ async function manuscriptChaptersFor(bookDir: string, state: BookStateJson): Pro
       buffer,
       fileName: state.manuscriptFile,
       sourcePath: manuscriptPath,
+      extractorVersion: extractorVersionOf(state), // #4217: parse with the book's stamped version
     });
     const excludedIds = new Set<number>((state.chapters ?? []).filter((c) => c.excluded).map((c) => c.id));
     const chapters: ChapterSample[] = parsed.chapters

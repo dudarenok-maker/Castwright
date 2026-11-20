@@ -427,6 +427,19 @@ test('renderLaunchBlock omits npm install when install=true (auto-installed)', (
   assert.match(block, /npm run dev/);
 });
 
+test('renderLaunchBlock names the requested base and the first-push command (#4449)', () => {
+  const block = renderLaunchBlock({
+    worktreePath: 'C:/Claude/Projects/wt-foo',
+    branch: 'feat/server-foo',
+    from: 'origin/main',
+    ports: computePorts(1),
+    slot: 1,
+    install: true,
+  });
+  assert.match(block, /branch feat\/server-foo \(from origin\/main,/);
+  assert.match(block, /git push -u origin feat\/server-foo/);
+});
+
 test('renderLaunchBlock reminds about the .venv AND voices/ junctions for sidecar/TTS work (#2811)', () => {
   const block = renderLaunchBlock({
     worktreePath: 'C:/Claude/Projects/wt-foo',
@@ -1014,3 +1027,70 @@ test('inRepo restores GIT_* vars even when the chdir into the fixture throws', a
     delete process.env[key];
   }
 });
+
+// Each case pins branch.autoSetupMerge in the fixture's repo-local config (which
+// beats any global/system setting, so the result cannot depend on the box) and
+// carries a positive control: a plain `git branch ctl <base>` MUST pick up an
+// upstream under that same config. Without the control, a fixture where git
+// would never have set an upstream anyway (no `origin` remote configured, or
+// autoSetupMerge=false) passes vacuously with --no-track removed.
+for (const { from, mode } of [
+  { from: 'origin/main', mode: 'true' },
+  { from: 'origin/main', mode: 'always' },
+  // The default invocation: `main` itself tracks origin/main, so `inherit`
+  // would hand the new branch that upstream.
+  { from: 'main', mode: 'inherit' },
+]) {
+  test(`wt-new main() --from ${from} under autoSetupMerge=${mode} leaves the new branch with NO upstream (#4449)`, async (t) => {
+    const { repo } = makeRealWorktreeRepo(t, [1]);
+    // The `origin` remote is load-bearing: without a configured remote git
+    // does not treat refs/remotes/origin/main as a remote-tracking branch and
+    // never sets an upstream, so the test could not go red.
+    gitAt(repo, ['remote', 'add', 'origin', 'https://example.invalid/fixture.git']);
+    gitAt(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    gitAt(repo, ['config', 'branch.main.remote', 'origin']);
+    gitAt(repo, ['config', 'branch.main.merge', 'refs/heads/main']);
+    gitAt(repo, ['config', 'branch.autoSetupMerge', mode]);
+    const branchConfig = (name) =>
+      spawnSync('git', ['config', '--get-regexp', `^branch[.]${name}[.](remote|merge)$`], {
+        cwd: repo,
+        encoding: 'utf8',
+        windowsHide: true,
+        env: scrubGitEnvForThrowawayRepo(),
+      });
+    // Positive control.
+    gitAt(repo, ['branch', 'ctl', from]);
+    const control = branchConfig('ctl');
+    assert.match(
+      control.stdout,
+      /branch\.ctl\.merge refs\/heads\/main/,
+      `control: plain \`git branch ctl ${from}\` must get an upstream here, else the test cannot fail`,
+    );
+
+    const realWrite = process.stdout.write.bind(process.stdout);
+    let out = '';
+    process.stdout.write = (chunk) => {
+      out += String(chunk);
+      return true;
+    };
+    let code;
+    try {
+      code = await inRepo(repo, () => wtNewMain(['feat/server-fresh', '--from', from, '--no-install']));
+    } finally {
+      process.stdout.write = realWrite;
+    }
+    assert.equal(code, 0);
+    // main() -> renderLaunchBlock hand-off: the default `from = 'main'` would
+    // hide a dropped `from:` argument for the `main` case but not `origin/main`.
+    assert.ok(out.includes(`(from ${from},`), `launch block must name the base ${from}, got:\n${out}`);
+    assert.ok(
+      out.includes('git push -u origin feat/server-fresh'),
+      `launch block must carry the push -u hint, got:\n${out}`,
+    );
+    const result = branchConfig('feat/server-fresh');
+    // status 1 = "no matching key"; any other status is a git error, which
+    // would also print nothing to stdout.
+    assert.equal(result.status, 1, `expected git config exit 1 (no keys), got ${result.status}: ${result.stderr}`);
+    assert.equal(result.stdout, '', `new branch must carry no upstream config, got:\n${result.stdout}`);
+  });
+}

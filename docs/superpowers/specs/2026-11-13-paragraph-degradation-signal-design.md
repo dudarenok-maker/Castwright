@@ -504,7 +504,11 @@ wrote it, except that a lapsed decision now keeps only its title (revision
 - **R5-8 · The #4217 what-if is a rewritten EPUB copy, EPUB only.** It
   reuses the import path unchanged, rather than rebuilding the per-chapter
   HTML in the scanner. MOBI's HTML is inside a compressed binary, so its
-  what-if is reported as not computed.
+  what-if is reported as not computed. The what-if's closer list is now
+  extractor version 2's list (adding `</dd>`, `</dt>`, `</section>` and
+  `</article>`), and it applies only to a book without
+  `manuscriptExtractorVersion` (a version-2 book has no dropped named
+  closers).
 - **R5-9 · Line-wrap is a continuation test.** A hard wrap breaks lines
   mid-sentence, so the next line usually starts lowercase. A paragraph-per-line
   file starts each line with a capital or a dash. The 20% cut is a planning
@@ -598,7 +602,11 @@ wrote it, except that a lapsed decision now keeps only its title (revision
   and re-measures legibility as if they were breaks. A flagged chapter whose
   count falls below 10 under that what-if is labelled **extractor-merged
   (#4217)**. The what-if lives only in the scanner and changes no production
-  extraction (that is #4217's own design pass).
+  extraction (that is #4217's own design pass). The what-if's closer list is
+  now extractor version 2's list (adding `</dd>`, `</dt>`, `</section>` and
+  `</article>`), and it applies only to a book without
+  `manuscriptExtractorVersion` (a version-2 book has no dropped named
+  closers).
 
 ## Revision 3 changelog (history)
 
@@ -1076,18 +1084,25 @@ openapi, or used by the client. Nothing runs it at all.
 - **F2 (chore): discharged on `main`** by #4165's PR (§1.4 item 3, R5-13).
   Nothing is owed.
 - **F3 (dead code):** `assessParagraphStructure`. Phase 0, per Decision 5.
-- **F4 = #4217 (open, needs a design pass):** `stripHtml`
-  (`parsers/html-utils.ts:79-97`) converts only `<br>`, `<hr>` and `</p>` to
+- **F4 = #4217 (decided 2026-11-17 in #4217):** `stripHtml`
+  (`parsers/html-utils.ts:79-97`) converted only `<br>`, `<hr>` and `</p>` to
   line breaks. Every other block closer (`</div>`, `</li>`, `</blockquote>`,
-  `</h*>`) is stripped silently, which merges paragraphs in EPUB/MOBI sources
-  whose paragraphs are `<div>`s. It is not fixed here because the fix changes
-  the chapter bodies of books already in the library. `hydrateFromDisk`
-  re-parses the source file (`store/manuscripts.ts:155-167`), so persisted
-  sentence offsets would shift under existing books. **The decision owed (in
-  #4217):** which block closers become paragraph breaks, and how existing
-  books are migrated or pinned to the old extraction. Until then, Decision 2's
-  wording keeps the notices true for these merges, and owner decision 6 makes
-  them true positives in the register row's scan.
+  `</h*>`) was stripped silently, which merged paragraphs in EPUB/MOBI sources
+  whose paragraphs are `<div>`s. The fix changes the chapter bodies of books
+  already in the library, and `hydrateFromDisk` re-parses the source file
+  (`store/manuscripts.ts:155-167`), so persisted sentence offsets would shift
+  under existing books. **The outcome:** `</div>`, `</li>`, `</blockquote>`,
+  `</h1>`–`</h6>`, `</dd>`, `</dt>`, `</section>` and `</article>` now break
+  paragraphs (extractor version 2), and nested blocks collapse to single
+  breaks. A book without `manuscriptExtractorVersion` in `state.json` is
+  pinned to version 1 for every implicit re-read (hydrate, title refresh,
+  restructure, samples, the repair scripts), so its offsets do not move. A
+  new import, and an explicit re-parse or manuscript replace, get version 2
+  and the stamp. This shipped on branch
+  `fix/server-4217-block-closer-paragraphs`. The notices' wording is
+  unchanged, because it still claims only that the imported text runs
+  dialogue together, and a pinned book can still carry extractor merges, so
+  owner decision 6's "true positive" ruling still applies to it.
 
 ## 2 · Measure and threshold
 
@@ -1528,7 +1543,7 @@ runStructureEngine({ sentences, body, stage1, conventions, structureOptions? })
 
 | Aspect | Production (`analysis.ts:7633-7646`) | Harness today | This design |
 |---|---|---|---|
-| Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model and passes it in |
+| Chunk capacity | `resolveCapacity({ engine, model })` of the active analyzer | Gemini's unless `engine === 'qwen'` (`run-eval.ts:191-194`) | **Matched.** The runner resolves `capacity` from the owner's actual engine and model, against the owner's saved settings and `server/.env` (read without writing), and passes it in. Each capture records the effective value of every `analyzer.*` registry key, the reasoning level, a sha256 digest of the saved request payload (the payload itself is never written or printed: it can hold an api key), the capacity and the effective stage-2 chunk budget (`resolveStage2ChunkCharBudget(capacity)`, not the configured cap); a re-capture under any difference is refused and the refusal names the differing keys (a payload as `payload (changed)`, with no values). The analyzer is built on `getResolvedOllamaUrl()`, so a saved Admin URL is honoured |
 | Model | the owner's configured analyzer | `qwen3.5:9b` unless `EVAL_QWEN_MODEL` is set (`run-eval-cli.ts:91`) | **Matched.** The runner takes a required `--model` with no default, and the run sheet records it |
 | Escalation budget | one `structureBudget` per **book**, shared across chapters (`:7645`, `maxWindowsPerBook`) | none, so each chapter gets a fresh per-book default (`:3744-3746`) | **Matched.** The runner passes one shared budget object across the book's captured chapters |
 | Dedup constraints | plan 291's `planConstraints` for a plan-applied roster; `undefined` for a first analysis's rolling roster (`:7642`) | none | **Stated.** The harness has no plan, so it passes none, which is production's first-analysis shape |
@@ -1725,7 +1740,9 @@ measurement while the saved capture survives it.
 - no re-imports of library books: the scanner and the runner read text and a
   pinned roster and write only their reports, captures and text dumps, to a
   scratch directory outside the workspace. They read the workspace without
-  the scan's self-heal, so nothing under it is written (R7-10, step 2).
+  the scan's self-heal, and the runner sets `CASTWRIGHT_VRAM_SAMPLE=0`, so nothing under
+  it is written (R7-10, step 2). The stage runner's git-ignored
+  `server/handoff/{inbox,outbox}/ab-*` files are the one other write, outside the workspace.
 
 **Gate before step 2:** #4165 has merged (met: closed 2026-11-15, on `main`
 since `1e295990`). The run notes the build it ran on.
@@ -2478,7 +2495,7 @@ with:
 > **Prerequisite:** local Ollama analyzer (model recorded), structure engine
 > on, escalation at default, no TTS, the owner's library on the box. No
 > re-imports; the tools write only their reports, captures and text dumps,
-> outside the workspace, and read it without the scan's self-heal.
+> outside the workspace (plus the stage runner's git-ignored `server/handoff/{inbox,outbox}/ab-*` files), and read it without the scan's self-heal.
 >
 > **Observe:** (1) the library legibility scan over every format, on the
 > **imported** text: per-book maxima, the worst imported paragraph of each

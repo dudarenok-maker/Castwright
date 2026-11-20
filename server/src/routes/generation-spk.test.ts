@@ -40,6 +40,16 @@ const leaseDirs = vi.hoisted(
       ['b5', '/b5'],
       ['b-key', '/b-key'],
       ['b-resume', '/b-resume'],
+      ['other-book', '/o'],
+      ['skip-a', '/skip-a'],
+      ['skip-b1', '/skip-b1'],
+      ['skip-b2', '/skip-b2'],
+      ['skip-c', '/skip-c'],
+      ['skip-d', '/skip-d'],
+      ['skip-e', '/skip-e'],
+      ['skip-f', '/skip-f'],
+      ['stale-keep', '/stale-keep'],
+      ['stale-keep-ctl', '/stale-keep-ctl'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -77,8 +87,10 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { writeAttempted } from '../audio/render-integrity/verdicts-io.js';
 import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
-import { afterChapterFinalized, triggerScoring, __awaitScoringSettled } from './generation.js';
+import { afterChapterFinalized, triggerScoring, __awaitScoringSettled, __registerFakeJobForTest } from './generation.js';
 import * as cfg from '../config/resolver.js';
+import { registerSplice } from './chapter-job-coordination.js';
+import { setInFlightDesignCounter, setInFlightMintCounter } from '../gpu/active-generation-gate.js';
 
 const NO_QWEN = { keep06: false, keep17: false };
 const CH1 = { id: 1, slug: 'ch1' };
@@ -138,8 +150,9 @@ describe('afterChapterFinalized', () => {
     vi.spyOn(cfg, 'configValue').mockReturnValue(true);
     // Simulate the slow/hung audition-centroid score path that stalled chapter
     // assembly for 720s on the 8GB box: scoreBook never resolves.
+    let releaseHung!: (v: { usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }) => void;
     vi.mocked(scoreBook).mockImplementationOnce(
-      () => new Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }>(() => {}),
+      () => new Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }>((r) => { releaseHung = r; }),
     );
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -157,6 +170,10 @@ describe('afterChapterFinalized', () => {
     expect(outcome).toBe('resolved');
     // …but the pass WAS still kicked off (just not awaited).
     expect(scoreBook).toHaveBeenCalledTimes(1);
+    // Release the hung pass so its scoringInFlight entry does not leak into later tests (#4445:
+    // another book's in-flight score pass now gates the generation-path reconcile).
+    releaseHung({ usedQwenTiers: NO_QWEN, mismatchCount: 0 });
+    await __awaitScoringSettled('hang-1029');
   });
 
   it('does nothing when qa.speaker.enabled is false', async () => {
@@ -182,6 +199,132 @@ describe('afterChapterFinalized', () => {
     // It reconciles against ctx.keep (the run's full-cast set), NOT anything
     // derived from scoreBook's finalized-chapters view (scoreBook returns void).
     expect(reconcileResidentQwenTiers).toHaveBeenCalledWith(keep);
+  });
+
+  it('still reconciles on the generation path while the run own render is registered (#4235 skip is resume-only)', async () => {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    // In production afterChapterFinalized runs while the run's own render is
+    // registered, so isAnyGenerationActive() is true. The resume-only skip must
+    // not apply to a pass that carries ctx.keep.
+    const cleanup = __registerFakeJobForTest('b4', []);
+    try {
+      const keep = { keep06: true, keep17: false };
+      await afterChapterFinalized({ bookId: 'b4', bookDir: '/b4', chapters: [CH1], justFinalized: CH1, keep });
+      await __awaitScoringSettled('b4');
+      expect(reconcileResidentQwenTiers).toHaveBeenCalledWith(keep);
+    } finally {
+      cleanup();
+    }
+  });
+
+  /* #4445 - the generation path now skips the tier eviction while OTHER work is active. */
+  describe('skips the generation-path reconcile while other work is active (#4445)', () => {
+    const keep = { keep06: true, keep17: false };
+
+    it("(a) another book's render is registered", async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      const cleanup = __registerFakeJobForTest('other-book', []);
+      try {
+        await afterChapterFinalized({ bookId: 'skip-a', bookDir: '/skip-a', chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled('skip-a');
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('(b) a splice or QA repair is registered (another book, or the same book)', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      for (const [bookId, spliceBook] of [['skip-b1', 'other-book'], ['skip-b2', 'skip-b2']]) {
+        const release = registerSplice(spliceBook, 1, new AbortController());
+        try {
+          await afterChapterFinalized({ bookId, bookDir: `/${bookId}`, chapters: [CH1], justFinalized: CH1, keep });
+          await __awaitScoringSettled(bookId);
+          expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+        } finally {
+          release();
+        }
+      }
+    });
+
+    it("(c) another book's score pass is in flight", async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      let releaseOther!: (v: { usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }) => void;
+      vi.mocked(scoreBook).mockImplementationOnce(
+        () => new Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }>((r) => { releaseOther = r; }),
+      );
+      await afterChapterFinalized({ bookId: 'other-book', bookDir: '/o', chapters: [CH1], justFinalized: CH1, keep: NO_QWEN });
+      await afterChapterFinalized({ bookId: 'skip-c', bookDir: '/skip-c', chapters: [CH1], justFinalized: CH1, keep });
+      await __awaitScoringSettled('skip-c');
+      expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(releaseOther).toBeTypeOf('function'));
+      releaseOther({ usedQwenTiers: NO_QWEN, mismatchCount: 0 });
+      await __awaitScoringSettled('other-book');
+    });
+
+    /* A live voice design / variant mint on ANY book holds the VoiceDesign model and the
+       1.7B Base, and the reconcile's /unload would null them mid-forward. Neither enters
+       `inFlightByBook`, so they read from the leaf gate's registered counters. */
+    it.each([
+      ['(d) a voice design is in flight', 'skip-d', setInFlightDesignCounter],
+      ['(e) a variant mint is in flight', 'skip-e', setInFlightMintCounter],
+    ] as const)('%s', async (_name, bookId, setCounter) => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      setCounter(() => 1);
+      try {
+        await afterChapterFinalized({ bookId, bookDir: `/${bookId}`, chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled(bookId);
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        setCounter(() => 0);
+      }
+    });
+
+    it('(f) the resume route (no ctx.keep) skips while a design or mint is in flight', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      vi.mocked(scoreBook).mockResolvedValue({ usedQwenTiers: keep, mismatchCount: 0 });
+      for (const setCounter of [setInFlightDesignCounter, setInFlightMintCounter]) {
+        setCounter(() => 1);
+        try {
+          await triggerScoring({ bookId: 'skip-f', bookDir: '/skip-f', chapters: [CH1], justFinalizedSlugs: [] });
+          await __awaitScoringSettled('skip-f');
+          expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+        } finally {
+          setCounter(() => 0);
+        }
+      }
+    });
+  });
+
+  /* #4445 review pass 1 - `ctx.keep` is per chapter POST, so after a mid-run tier change a
+     same-book sibling may be rendering on the 1.7B while this stale keep says keep17:false. */
+  describe('never evicts the 1.7B while a Quality render is known active (#4445)', () => {
+    it('keeps the 1.7B (forces keep17:true) when a same-book sibling renders at Quality; the 0.6B half follows ctx.keep', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      const cleanup = __registerFakeJobForTest('stale-keep', [], true);
+      try {
+        const keep = { keep06: true, keep17: false };
+        await afterChapterFinalized({ bookId: 'stale-keep', bookDir: '/stale-keep', chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled('stale-keep');
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledTimes(1);
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledWith({ keep06: true, keep17: true });
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('control: no Quality render active, the 1.7B evicts as before', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      const cleanup = __registerFakeJobForTest('stale-keep-ctl', [], false);
+      try {
+        const keep = { keep06: true, keep17: false };
+        await afterChapterFinalized({ bookId: 'stale-keep-ctl', bookDir: '/stale-keep-ctl', chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled('stale-keep-ctl');
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledWith(keep);
+      } finally {
+        cleanup();
+      }
+    });
   });
 
   it('skips the reconcile when the run uses no Qwen tier', async () => {

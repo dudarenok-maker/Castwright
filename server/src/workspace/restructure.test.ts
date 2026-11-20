@@ -23,6 +23,7 @@ import {
   touchedChapterIds,
   pendingMovesAfterRestructure,
   carryMergedAwayKeys,
+  applySentenceRemap,
   type RefreshTitlesOptions,
   type RestructureSentence,
   type AudioOp,
@@ -38,6 +39,7 @@ function makeState(
     excluded?: boolean;
     audioModelKey?: string;
     audioRenderedAt?: string;
+    audioTakeId?: string;
     uuid?: string;
     titleSynthesized?: boolean;
   }>,
@@ -60,6 +62,7 @@ function makeState(
       ...(c.excluded ? { excluded: true } : {}),
       ...(c.audioModelKey ? { audioModelKey: c.audioModelKey } : {}),
       ...(c.audioRenderedAt ? { audioRenderedAt: c.audioRenderedAt } : {}),
+      ...(c.audioTakeId ? { audioTakeId: c.audioTakeId } : {}),
       ...(c.uuid ? { uuid: c.uuid } : {}),
       ...(c.titleSynthesized ? { titleSynthesized: true } : {}),
     })),
@@ -856,6 +859,124 @@ describe('carryMergedAwayKeys (#3400)', () => {
   });
 });
 
+describe('applySentenceRemap (#4227)', () => {
+  // Three chapters, two sentences each; every sentence carries extra fields
+  // and chapters 1/3 use a different characterId from chapter 2.
+  const chapters = () => makeState([
+    { id: 1, title: 'A' },
+    { id: 2, title: 'B' },
+    { id: 3, title: 'C' },
+  ]);
+  const hintsFor = () => makeHints([
+    { id: 1, title: 'A', body: 'One one.\n\nOne two.' },
+    { id: 2, title: 'B', body: 'Two one.\n\nTwo two.' },
+    { id: 3, title: 'C', body: 'Three one.\n\nThree two.' },
+  ]);
+  const extra = (id: number, chapterId: number, characterId: string, text: string, n: number) => ({
+    ...s(id, chapterId, characterId, text),
+    confidence: 0.5,
+    startMs: 10 * n,
+  });
+  const input = () => [
+    extra(1, 1, 'narr', 'One one.', 1),
+    extra(2, 1, 'narr', 'One two.', 2),
+    extra(1, 2, 'alice', 'Two one.', 3),
+    extra(2, 2, 'alice', 'Two two.', 4),
+    extra(1, 3, 'narr', 'Three one.', 5),
+    extra(2, 3, 'narr', 'Three two.', 6),
+  ];
+
+  it('R1 merge: rebuilds result.sentences (red if a remap field is ignored or the lookup key drops the chapter id)', () => {
+    // file order deliberately not chapter order, so a key on the sentence id
+    // alone pairs the wrong sentences
+    const sentences = input().reverse();
+    const result = applyMerge(chapters(), hintsFor(), sentences, { chapterIds: [1, 2] });
+    expect(applySentenceRemap(sentences, result.remap)).toEqual(result.sentences);
+    // not vacuous: the merge really renumbered (no chapter 3 left)
+    expect(result.sentences.some((x) => x.chapterId === 3)).toBe(false);
+  });
+
+  it('R2 split: rebuilds result.sentences (red if the old key ignores the sentence id)', () => {
+    const sentences = input();
+    const result = applySplit(chapters(), hintsFor(), sentences, { chapterId: 2, afterSentenceId: 1 });
+    expect(applySentenceRemap(sentences, result.remap)).toEqual(result.sentences);
+    expect(result.sentences.filter((x) => x.chapterId === 3).map((x) => x.text)).toEqual(['Two two.']);
+  });
+
+  it('R3 reorder: rebuilds result.sentences', () => {
+    const sentences = input();
+    const result = applyReorder(chapters(), hintsFor(), sentences, { order: [3, 1, 2] });
+    expect(applySentenceRemap(sentences, result.remap)).toEqual(result.sentences);
+    expect(result.sentences[0].text).toBe('Three one.');
+  });
+
+  it('R4 prune: rebuilds sentences whose chapterId the prune pass renumbered', () => {
+    const state = makeState([
+      { id: 1, title: 'A' },
+      { id: 2, title: 'B' },
+      { id: 3, title: 'C' },
+      { id: 4, title: 'D' },
+    ]);
+    // chapter 2: no sentences and an empty body, so a merge of 3+4 prunes it.
+    const hints = makeHints([
+      { id: 1, title: 'A', body: 'a' },
+      { id: 2, title: 'B', body: '' },
+      { id: 3, title: 'C', body: 'c' },
+      { id: 4, title: 'D', body: 'd' },
+    ]);
+    const sentences = [
+      extra(1, 1, 'narr', 'a', 1),
+      extra(1, 3, 'alice', 'c', 2),
+      extra(1, 4, 'narr', 'd', 3),
+    ];
+    const result = applyMerge(state, hints, sentences, { chapterIds: [3, 4] });
+    expect(result.state.chapters.map((c) => c.id)).toEqual([1, 2]);
+    expect(applySentenceRemap(sentences, result.remap)).toEqual(result.sentences);
+    expect(result.sentences.some((x, i) => x.chapterId !== sentences[i]?.chapterId)).toBe(true);
+  });
+
+  it('R5 orphan: a sentence whose chapter id names no chapter keeps its stale old key', () => {
+    const sentences = [...input(), extra(1, 7, 'narr', 'Orphan.', 7)];
+    const result = applyMerge(chapters(), hintsFor(), sentences, { chapterIds: [1, 2] });
+    expect(result.remap.some((r) => r.oldChapterId === 7)).toBe(true);
+    expect(applySentenceRemap(sentences, result.remap)).toEqual(result.sentences);
+  });
+
+  it('R6 identity: a rename rebuilds the input unchanged', () => {
+    const sentences = input();
+    const result = applyRename(chapters(), hintsFor(), sentences, { chapterId: 1, title: 'Renamed' });
+    const rebuilt = applySentenceRemap(sentences, result.remap);
+    expect(rebuilt).toEqual(result.sentences);
+    expect(rebuilt).toEqual(sentences);
+  });
+
+  it('R7 extras survive: confidence and startMs are carried through (red if the spread is dropped)', () => {
+    const sentences = input();
+    const result = applyMerge(chapters(), hintsFor(), sentences, { chapterIds: [1, 2] });
+    const rebuilt = applySentenceRemap(sentences, result.remap);
+    expect(rebuilt[2]).toMatchObject({ text: 'Two one.', confidence: 0.5, startMs: 30, characterId: 'alice' });
+    expect(rebuilt.every((x) => x.confidence === 0.5 && typeof x.startMs === 'number')).toBe(true);
+  });
+
+  it('R8 throws naming the key when a remap entry matches no sentence', () => {
+    expect(() =>
+      applySentenceRemap(input(), [
+        { oldChapterId: 9, oldSentenceId: 4, newChapterId: 1, newSentenceId: 1 },
+      ]),
+    ).toThrow(/9:4/);
+  });
+
+  it('R9 does not mutate its inputs', () => {
+    const sentences = input();
+    const result = applyMerge(chapters(), hintsFor(), sentences, { chapterIds: [1, 2] });
+    const before = structuredClone(sentences);
+    const remapBefore = structuredClone(result.remap);
+    applySentenceRemap(sentences, result.remap);
+    expect(sentences).toEqual(before);
+    expect(result.remap).toEqual(remapBefore);
+  });
+});
+
 /* -- title source (#3628): only app-made titles are renumbered ------ */
 
 describe('renumbering honours titleSynthesized (#3628)', () => {
@@ -1145,5 +1266,40 @@ describe('pendingMovesAfterRestructure (#3704)', () => {
   });
   it('never maps a delete', () => {
     expect(pendingMovesAfterRestructure(old as never, ops, new Set(['05-e'])).size).toBe(0);
+  });
+});
+
+/* -- take-state carry rule over TAKE_STATE_FIELDS (#4340) ------------ */
+
+describe('restructure take-state carry (#4340, spec §4.3)', () => {
+  const TAKE_ID = 'abcdefghijklmnop';
+  const stamped = () =>
+    makeState([
+      { id: 1, title: 'A', duration: '00:01:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: TAKE_ID },
+      { id: 2, title: 'B', duration: '00:02:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: 'bbbbbbbbbbbbbbbb' },
+      { id: 3, title: 'C', duration: '00:03:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: 'cccccccccccccccc' },
+    ]);
+  const hints = () =>
+    makeHints([
+      { id: 1, title: 'A', body: 'a' },
+      { id: 2, title: 'B', body: 'b' },
+      { id: 3, title: 'C', body: 'c' },
+    ]);
+  const sents = (): RestructureSentence[] => [s(1, 1, 'narr', 'A1'), s(1, 2, 'narr', 'B1'), s(1, 3, 'narr', 'C1')];
+
+  it('U3a. a reorder (content unchanged) carries every member, audioTakeId included', () => {
+    const result = applyReorder(stamped(), hints(), sents(), { order: [3, 1, 2] });
+    const byTitle = new Map(result.state.chapters.map((c) => [c.title, c]));
+    expect(byTitle.get('A')).toMatchObject({ duration: '00:01:00', audioModelKey: 'k', audioRenderedAt: '2026-01-01T00:00:00.000Z', audioTakeId: TAKE_ID });
+    expect(byTitle.get('C')!.audioTakeId).toBe('cccccccccccccccc');
+  });
+
+  it('U3b. a merge survivor (contentChanged) carries duration only', () => {
+    const result = applyMerge(stamped(), hints(), sents(), { chapterIds: [1, 2] });
+    const survivor = result.state.chapters[0];
+    expect(survivor.duration).toBe('00:01:00');
+    expect('audioModelKey' in survivor).toBe(false);
+    expect('audioRenderedAt' in survivor).toBe(false);
+    expect('audioTakeId' in survivor).toBe(false);
   });
 });

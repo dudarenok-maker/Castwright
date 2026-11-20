@@ -112,6 +112,12 @@ describe('GET /:bookId/state completedSlugs', () => {
     expect(await getCompleted()).toEqual(['01-a']);
   });
 
+  it('R2: a lone .next-x.mp3 does not count (#4331)', async () => {
+    writeState(['01-a']);
+    touchAudio('01-a.next-x.mp3');
+    expect(await getCompleted()).toEqual([]);
+  });
+
   it('D6: a short slug does not match a longer slug file', async () => {
     writeState(['ch-1', 'ch-10']);
     touchAudio('ch-10.mp3');

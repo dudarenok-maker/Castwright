@@ -819,11 +819,12 @@ describe('POST /api/import — EPUB with an empty href (#4239)', () => {
     expect(next.status).toBe(200);
   });
 
-  /* Neither reader can read this book: epub2 throws on the empty href, and the
-     raw-zip fallback never decodes `&amp;` in the manifest href, so it cannot
-     resolve the chapter files. The route must answer 415 (an UnusableEpubError),
-     not 500, and the server must keep serving. */
-  it('answers 415 for an EPUB neither reader can read, and a following import answers 200', async () => {
+  /* I3(a) — this fixture used to be unreadable by both readers (epub2 threw on
+     the empty href and the raw-zip reader never decoded `&amp;` in the manifest
+     href), so it answered 415. #4217's version-2 entity decode makes the raw-zip
+     reader resolve the chapter files, so the book now imports. Mutation: the
+     staging parse passes LEGACY_EXTRACTOR_VERSION and this answers 415. */
+  it('imports an `&amp;`-named EPUB with an empty href under extractor v2', async () => {
     const plain =
       '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p>Plain prose, nothing odd.</p></body></html>';
     const empty =
@@ -834,8 +835,24 @@ describe('POST /api/import — EPUB with an empty href (#4239)', () => {
     const res = await request(app)
       .post('/api/import')
       .attach('file', epubBytes, { filename: 'amp.epub', contentType: 'application/epub+zip' });
+    expect(res.status).toBe(200);
+    expect(res.body.candidate.chapters).toHaveLength(2);
+    expect(res.body.candidate.chapters.map((c: { title: string }) => c.title)).toEqual(['Part 1', 'Part 2']);
+  });
+
+  /* I3(b) — the PR #4241 purpose, with a fixture that is unreadable under
+     version 2: epub2 throws on the empty href, and the raw-zip reader resolves
+     both documents but finds no text, so it throws UnusableEpubError
+     ("image-only"). The route must answer 415, not 500, and keep serving. */
+  it('answers 415 for an EPUB neither reader can read, and a following import answers 200', async () => {
+    const imageOnly =
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body><p><a href=""></a></p></body></html>';
+    const epubBytes = await buildEpub([imageOnly, imageOnly]);
+    const res = await request(app)
+      .post('/api/import')
+      .attach('file', epubBytes, { filename: 'image-only.epub', contentType: 'application/epub+zip' });
     expect(res.status).toBe(415);
-    expect(res.body.error).toMatch(/readable text/);
+    expect(res.body.error).toMatch(/image-only/);
 
     const next = await request(app)
       .post('/api/import')
@@ -844,6 +861,38 @@ describe('POST /api/import — EPUB with an empty href (#4239)', () => {
         contentType: 'application/epub+zip',
       });
     expect(next.status).toBe(200);
+  });
+});
+
+/* I1 (#4217) — a new import extracts with version 2 and the created book is
+   stamped. Mutations: the staging parse passing LEGACY_EXTRACTOR_VERSION loses
+   the blank line between div paragraphs; dropping the `manuscriptExtractorVersion`
+   line in POST /api/books leaves the stamp undefined. */
+describe('POST /api/import + /api/books — extractor v2 (#4217)', () => {
+  it('I1: splits div paragraphs and stamps manuscriptExtractorVersion 2 in state.json', async () => {
+    const chapter =
+      '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body>' +
+      '<div class="p">First para one.</div><div class="p">First para two.</div></body></html>';
+    const epubBytes = await buildEpub([chapter]);
+    const importRes = await request(app)
+      .post('/api/import')
+      .attach('file', epubBytes, { filename: 'divs.epub', contentType: 'application/epub+zip' });
+    expect(importRes.status).toBe(200);
+    expect(importRes.body.candidate.sourceText).toContain('First para one.\n\nFirst para two.');
+
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Stamp Author',
+      title: 'Stamp Book',
+      series: 'Stamp Series',
+      seriesPosition: 1,
+      isStandalone: false,
+    });
+    expect(confirmRes.status).toBe(201);
+    const state = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.bookDir, '.audiobook', 'state.json'), 'utf8'),
+    );
+    expect(state.manuscriptExtractorVersion).toBe(2);
   });
 });
 
@@ -1160,5 +1209,56 @@ describe('POST /api/books — titleSynthesized persistence (#3628)', () => {
     for (const ch of headed) {
       expect('titleSynthesized' in ch).toBe(false);
     }
+  });
+});
+
+describe('POST /api/import — merged-paragraph flag (#2254)', () => {
+  const RU_PROSE =
+    'Старый дом стоял на краю деревни, и в нём давно никто не жил. ' +
+    'Ветер гулял по пустым комнатам, а осенний дождь стучал в разбитые окна. ' +
+    'Путник остановился у калитки и долго смотрел на тёмные окна. ';
+  const ES_PROSE =
+    'La casa antigua estaba al borde del pueblo y nadie vivía en ella desde hacía muchos años. ' +
+    'El viento recorría las habitaciones vacías mientras la lluvia golpeaba los cristales rotos. ' +
+    'El viajero se detuvo junto a la verja y miró durante largo rato las ventanas oscuras. ';
+  const EN_PROSE =
+    'The old house stood at the edge of the village, and nobody had lived in it for many years. ' +
+    'The wind wandered through the empty rooms while the autumn rain beat on the broken windows. ' +
+    'The traveller stopped at the gate and looked for a long time at the dark windows. ';
+
+  const ru12 = (sep: string) => Array.from({ length: 12 }, () => 'Он кивнул. — Да.').join(sep);
+  const body = (prose: string, merged: string) =>
+    `# Book\n\n## Chapter One\n\n${prose}${prose}\n\n${merged}\n\n## Chapter Two\n\n${prose}${prose}${prose}\n`;
+
+  async function importChapters(text: string) {
+    const res = await request(app).post('/api/import').send({ text, fileName: 'merged.md' });
+    expect(res.status).toBe(200);
+    return res.body.candidate as {
+      language: string;
+      chapters: Array<Record<string, unknown>>;
+    };
+  }
+
+  it('flags only the degraded chapter of a Russian import', async () => {
+    const c = await importChapters(body(RU_PROSE, ru12(' ')));
+    expect(c.language).toBe('ru');
+    expect(c.chapters).toHaveLength(2);
+    expect(c.chapters[0].paragraphsMerged).toBe(true);
+    expect(c.chapters[1]).not.toHaveProperty('paragraphsMerged');
+  });
+
+  it('emits no key for a Russian import with one turn per line', async () => {
+    const c = await importChapters(body(RU_PROSE, ru12('\n\n')));
+    expect(c.language).toBe('ru');
+    for (const ch of c.chapters) expect(ch).not.toHaveProperty('paragraphsMerged');
+  });
+
+  it.each([
+    ['es', ES_PROSE],
+    ['en', EN_PROSE],
+  ])('emits no key outside a notice language (%s)', async (lang, prose) => {
+    const c = await importChapters(body(prose, ru12(' ')));
+    expect(c.language).toBe(lang);
+    for (const ch of c.chapters) expect(ch).not.toHaveProperty('paragraphsMerged');
   });
 });

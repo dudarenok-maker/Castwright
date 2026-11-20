@@ -281,6 +281,10 @@ export const STEPS = [
         // check-audit.test.mjs reads this at RUNTIME (committed-waivers
         // validity); no module-graph edge, same #1847 trap.
         'audit-waivers.json',
+        // check-audit.test.mjs also reads server/package.json at RUNTIME (the
+        // server audit script's --omit-dev pin); same #1847 trap, and without
+        // it a server/package.json-only diff skips the guard's CI leg (#4380).
+        'server/package.json',
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
         'RELEASE_NOTES.md',
@@ -447,6 +451,11 @@ export const STEPS = [
            contract, so an openapi-only edit must bust this step's cache —
            otherwise the local run reports [cached] and the pin never fires. */
         'openapi.yaml',
+        /* #4226 — script-review-apply.test.ts readFileSync()s these shared
+           fixtures at runtime, locking the frontend copy against the server
+           core. extraFiles are literal paths (no globs), so each is named. */
+        'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
+        'server/src/analyzer/attribution-eval/__fixtures__/review-apply-vectors.json',
       ],
       includeLockfiles: ['root'],
     },
@@ -1864,10 +1873,15 @@ export async function runStepProcess(
         // re-sweep walks them from the dead root instead. POSIX: the group kill.
         if (!(windows && exitedAt != null)) killTreeFn(child);
         try {
-          // Provably-orphaned only (dead parent) — mirrors the pre-push
-          // reap's own narrow scope; a merely-slow-but-live subtree is not
-          // this sweep's job.
-          censusFn({ kill: true, killReasons: ['orphaned-unreachable'] });
+          // Provably-orphaned only (dead parent), and ONLY roots from this
+          // step's own pre-kill closure (`known`): the census is machine-wide,
+          // and this sweep runs from pre-push (`--steps test:sidecar`), so an
+          // unscoped kill would reap every other lane's orphaned battery
+          // (#4222). Deliberately without the pre-push reap's stalled-rate
+          // guard: this step's own orphans were busy when the timeout killed
+          // their parent. POSIX has no `known` (group kill), so it restricts
+          // to nothing.
+          censusFn({ kill: true, killReasons: ['orphaned-unreachable'], restrictTo: known ?? new Map() });
         } catch {
           // Best-effort — never let the reaper sweep mask the timeout outcome.
         }

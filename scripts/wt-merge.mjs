@@ -17,7 +17,8 @@
 //   2. `git fetch origin main`.
 //   3. Resolves the integration branch — `--into <name>` if provided, else
 //      `integration/<YYYY-MM-DD>`. If the branch already exists locally,
-//      checks it out and resumes; otherwise `git switch -c <name> origin/main`.
+//      checks it out and resumes; otherwise `git switch --no-track -c <name> origin/main`
+//      (--no-track: origin/main must not become the branch's upstream, #4449).
 //   4. Reads existing merge commits on the integration branch and skips any
 //      branches whose merge is already present (idempotent restart).
 //   5. For each remaining branch: `git fetch origin <branch>`,
@@ -222,10 +223,10 @@ export function runMerge({ branches, into, dryRun, runners, now }) {
       }
     } else {
       // Create fresh off origin/main.
-      const switched = git(['switch', '-c', integration, 'origin/main']);
+      const switched = git(['switch', '--no-track', '-c', integration, 'origin/main']);
       if (switched.error || switched.status !== 0) {
         err(
-          `git switch -c ${integration} origin/main failed:\n${switched.stderr || switched.stdout}\n`,
+          `git switch --no-track -c ${integration} origin/main failed:\n${switched.stderr || switched.stdout}\n`,
         );
         return 1;
       }

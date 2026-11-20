@@ -51,7 +51,7 @@ import {
 } from '../workspace/scan.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
-import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
+import { chapterAudioExists } from '../workspace/chapter-take.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {
@@ -107,6 +107,9 @@ import {
   setJobEpochReader,
   setQualityRenderCounter,
   isAnyGenerationActive,
+  isOtherGenerationActive,
+  isDesignOrMintActive,
+  isQualityRenderKnownActive,
 } from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
@@ -122,17 +125,46 @@ export const generationRouter = Router();
    scoring failure must never break generation. */
 const scoringInFlight = new Map<string, Promise<void>>();
 
+/** True when a score pass is in flight on a book other than `bookId`. */
+function otherBookScoringInFlight(bookId: string): boolean {
+  return [...scoringInFlight.keys()].some((k) => k !== bookId);
+}
+
+/** #4445 — true while work OTHER than `bookId`'s own render may be using a Qwen tier: a render on
+    another book, any splice or QA repair, any voice design or variant mint (any book), or another
+    book's score pass. The
+    run's own render is excluded on purpose (its `keep` set protects it). */
+function otherTierWorkActive(bookId: string): boolean {
+  return isOtherGenerationActive(bookId) || otherBookScoringInFlight(bookId);
+}
+
+/** #4445 — a generation-path reconcile never drops the 1.7B while any Quality render is live.
+    `ctx.keep` is computed per chapter POST, so after a mid-run tier change it can be stale
+    (keep17:false) while a same-book sibling renders on the 1.7B, and `otherTierWorkActive` leaves
+    that sibling out. The 0.6B half is NOT guarded the same way (no per-job tracker), so a 0.6B a
+    sibling uses can still be evicted by two paths, each costing a reload and retry — accepted:
+    (1) run start with 2+ workers, when a character is RAISED to Quality (the new POST's keep is
+    keep06:false while a sibling still renders on the 0.6B); (2) the score pass with one worker
+    and qa.speaker.enabled, when a character is LOWERED (ch5's keep is {keep06:false,
+    keep17:true}, ch6 renders that character on the 0.6B, ch5's job has already deregistered, and
+    its score-pass reconcile unloads the 0.6B). */
+function keepQualityResident<K extends { keep17: boolean }>(keep: K): K {
+  return isQualityRenderKnownActive() && !keep.keep17 ? { ...keep, keep17: true } : keep;
+}
+
 export async function triggerScoring(ctx: {
   bookId: string;
   bookDir: string;
   chapters: { id: number; slug: string }[];
   justFinalizedSlugs: Iterable<string>;
   /** Full-cast-superset tier set, supplied by the chapter-finalize path
-      (unchanged from today — protects an in-flight sibling chapter's tier,
-      see the reconcile comment below). Omitted by the resume route, which
+      protects an in-flight sibling chapter's tier, see the reconcile comment below;
+      the reconcile is also skipped while other work is active, #4445). Omitted by the resume route, which
       has no live run to derive a superset from and instead reconciles
-      against scoreBook's own precise usedQwenTiers — safe there because
-      resume never runs concurrently with an in-flight sibling render. */
+      against scoreBook's own precise usedQwenTiers, and only while no render,
+      splice or QA repair, or another book's score pass, is active anywhere (#4235) — the reconcile acts on the
+      one shared sidecar, so it is decided at the moment it runs, not at request
+      time. */
   keep?: { keep06: boolean; keep17: boolean };
   /** #3524 — the model key of the render run this pass follows; scoring resolves a
       character's current engine from it (see scoreBook's `runModelKey`). Omitted by the
@@ -212,8 +244,32 @@ export async function triggerScoring(ctx: {
        scoreBook's own precise usedQwenTiers. reconcile only evicts tiers NOT
        in the target set, so the in-use tier stays warm and a mixed-tier book
        keeps both. Best-effort; skipped when the run uses no Qwen tier. */
+    /* #4235 — the resume route (no `ctx.keep`) has no run to protect, but a render, splice
+       or QA repair on ANY book, or one registered after the request's 202, may be using a
+       tier scoreBook did not see: skip the eviction while any is active. Another book's
+       score pass (its auditions render on the same sidecar, at that book's tiers) is
+       neither a render nor a splice, so it is read from `scoringInFlight` too. So is a
+       voice design or variant mint (`isDesignOrMintActive`): the reconcile's `/unload`
+       nulls the VoiceDesign model and the 1.7B Base under it (#4445). The
+       generation path (`ctx.keep`) skips on the same rule except that this book's own
+       render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
+       superset, so its own chapters are already protected (#4445) — except after a mid-run tier
+       change, when a sibling's keep can differ: `keepQualityResident` therefore never drops the
+       1.7B while a Quality render is live. A 0.6B can still be evicted under a sibling when a
+       character is lowered to Standard (this score pass, one worker, qa.speaker.enabled: the next
+       chapter renders it on the 0.6B after this job deregistered) or raised to Quality at run
+       start with 2+ workers; each costs a reload and retry and is accepted.
+       Two residual windows remain, each costing at most one cold reload: (a) after this
+       synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
+       before it posts `/unload`, so a job registering in that round trip loses its tier;
+       (b) between a Fix-audio batch's per-chapter splice POSTs nothing is registered, so a
+       pass finishing in that gap drops the tier at the chapter boundary. */
     const keep = ctx.keep ?? result.usedQwenTiers;
-    if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
+    const busy = ctx.keep
+      ? otherTierWorkActive(ctx.bookId)
+      : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId) || isDesignOrMintActive();
+    if (busy) return;
+    if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keepQualityResident(keep));
   });
   const run = registration
     .then(async (reg): Promise<void> => {
@@ -1212,12 +1268,28 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        line; that line then fails and goes through the transient retry. A later
        chapter's POST (one per chapter, sibling chapters are live) and the
        post-score re-assert in triggerScoring must not unload a Kokoro a
-       sibling chapter's fallback line may be using. */
-    await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
-      .then((target) => reconcileResidentQwenTiers(target))
-      .catch((e) =>
-      console.warn('[generation] tier reconcile skipped:', (e as Error).message),
-    );
+       sibling chapter's fallback line may be using.
+       #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
+       work OTHER than this book's own is active (`otherTierWorkActive`: a render
+       on another book, any splice or QA repair, any voice design or variant mint, another
+       book's score pass): the
+       reconcile can unload a Qwen tier that work is using. Same-book sibling
+       chapters are excluded from that check, so they still reconcile with Kokoro
+       kept, as above. The 1.7B is additionally never dropped while a Quality render is
+       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
+       0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
+       in the score pass (one worker) — it costs a reload and retry. */
+    if (otherTierWorkActive(bookId)) {
+      console.info(
+        '[generation] run-start tier reconcile skipped: other GPU work is active',
+      );
+    } else {
+      await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
+        .then((target) => reconcileResidentQwenTiers(keepQualityResident(target)))
+        .catch((e) =>
+          console.warn('[generation] tier reconcile skipped:', (e as Error).message),
+        );
+    }
   }
 
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio

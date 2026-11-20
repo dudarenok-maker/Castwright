@@ -10,9 +10,10 @@
    middleware in Phase 5. A `'revisions'` slice is refused (400
    `revisions_server_owned`) — the server owns revisions.json (plan 286). */
 
+import { assertSlugBinding, SlugBoundError, SLUG_BOUND_SENTENCE } from '../workspace/put-slug-binding.js';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { readFile, rm, writeFile, unlink } from 'node:fs/promises';
+import { readFile, readdir, rm, writeFile, unlink } from 'node:fs/promises';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -103,6 +104,7 @@ import {
   sha256Hex,
 } from '../workspace/manuscript-hints.js';
 import { pairWithParse } from '../workspace/title-align.js';
+import { paragraphsMergedChapterIds } from '../workspace/paragraphs-merged.js';
 import {
   updateStateJsonLocked,
   writeStateJsonAtomic,
@@ -113,7 +115,12 @@ import {
   carryTitleSynthesized,
   carryServerOwnedChapterFields,
 } from '../workspace/chapter-uuid.js';
-import { CHAPTER_AUDIO_EXTS, chapterAudioExists } from '../workspace/chapter-audio-file.js';
+import {
+  CHAPTER_AUDIO_EXTS,
+  chapterAudioExists,
+  liveAudioPath,
+  livePartPath,
+} from '../workspace/chapter-take.js';
 import {
   putManuscript,
   getManuscript,
@@ -140,7 +147,11 @@ import { buildCastResolver } from '../store/cast-resolve.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { parseManuscript } from '../parsers/index.js';
-import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
+import {
+  CHAPTER_TITLE_PARSER_VERSION,
+  MANUSCRIPT_EXTRACTOR_VERSION,
+  extractorVersionOf,
+} from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { DEFAULT_NARRATOR_CREDIT } from '../export/narrator-credit.js';
@@ -343,11 +354,14 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
       ? await parseManuscript({
           text: buffer.toString('utf8'),
           fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+          extractorVersion: extractorVersionOf(state),
         })
       : await parseManuscript({
           buffer,
           fileName: state.manuscriptFile,
           sourcePath: manuscriptPath,
+          /* #4217: implicit re-read: unstamped = version 1, byte-stable. */
+          extractorVersion: extractorVersionOf(state),
         });
 
     /* #3828 — the hints read is write-free and, like the parse, outside the
@@ -804,7 +818,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     try {
       if (existsSync(audioDir(bookDir))) {
         for (const ch of state.chapters) {
-          const lufsPath = join(audioDir(bookDir), `${ch.slug}.lufs.json`);
+          const lufsPath = livePartPath(audioDir(bookDir), ch.slug, 'lufs');
           if (!existsSync(lufsPath)) {
             chapterLufs[ch.id] = null;
             continue;
@@ -936,11 +950,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
           : DEFAULT_NARRATOR_CREDIT,
     };
 
+    /* #2254 -- chapters whose hydrated body is merged-turn degraded (derived,
+       memoised per record; exclusion and pairing applied per request). */
+    const paragraphsMergedChapters = paragraphsMergedChapterIds(state, rec);
+
     res.json({
       state: stateView,
       sliceRevisions,
       cast,
       manuscript,
+      ...(paragraphsMergedChapters ? { paragraphsMergedChapters } : {}),
       manuscriptEdits: edits,
       revisions: revs,
       ...(revisionsError ? { revisionsError } : {}),
@@ -1088,6 +1107,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
   design: 'designing voices',
   'script-review': 'reviewing the script',
   export: 'exporting',
+  'unaddressed-sweep': 'a startup check of this folder',
 };
 
 export function busySentence(
@@ -1564,6 +1584,11 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            own output (what would land, language normalised as written) with the
            fresh read, for the fields the patch carries. */
         const buildNext = (state: BookStateJson, check = false): BookStateJson => {
+          if (check && patch.chapters) {
+            /* #4341 (R4-4, R5-8, R6-5) - decided on the locked fresh read,
+               before anything is written; nothing is written on refusal. */
+            assertSlugBinding(patch.chapters, state.chapters, audioDir(bookDir));
+          }
           const next = mergeState(state);
           if (check) {
             assertRevisionFresh(
@@ -1647,6 +1672,10 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   } catch (e) {
     const refusal = bookOpRefusal(e, 'rename');
     if (refusal) return res.status(refusal.status).json(refusal.body);
+    /* #4341 -- a slug-binding refusal (R4-4, R5-8, R6-5): fixed, path-free sentence; nothing written. */
+    if (e instanceof SlugBoundError) {
+      return res.status(409).json({ error: 'slug_bound', message: SLUG_BOUND_SENTENCE });
+    }
     /* Plan 289 -- a conditional write carrying a stale field. Fixed, path-free
        sentence; nothing was written. `fields` are names from the slice's fixed
        field list (they come from `staleFields`), never values, paths or lock text. */
@@ -1674,6 +1703,20 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     });
   }
 });
+
+/** The reparse/replace wipe of `audio/` (R4-5, R5-5): every entry goes except
+ *  `.orphaned/`. One loop in one function, so the take guard sees the `rm`. */
+async function wipeAudioKeepingOrphaned(bookDir: string): Promise<void> {
+  const ad = audioDir(bookDir);
+  const entries = await readdir(ad).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === 'ENOENT') return [] as string[];
+    throw e;
+  });
+  for (const entry of entries) {
+    if (entry === '.orphaned') continue;
+    await rm(join(ad, entry), { recursive: true, force: true });
+  }
+}
 
 /* Shared post-parse core for reparse + replace-manuscript. Given a freshly
    parsed manuscript, regenerates the chapter list, snapshots the srv-13
@@ -1835,7 +1878,9 @@ async function applyReparse(
       if (isLockAcquisitionTimeout(e) || e instanceof UnsupportedSchemaError) throw e;
       throw new Error("Couldn't reset this book's A/B review history.");
     }),
-    existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
+    /* R4-5 / R5-5: wipe every entry of audio/ EXCEPT the quarantine folder
+       .orphaned/ (audio a boot check set aside; a reparse must not destroy it). */
+    existsSync(ad) ? wipeAudioKeepingOrphaned(bookDir) : Promise.resolve(),
   ]);
 
   if (preservedEditCount > 0) {
@@ -1927,6 +1972,8 @@ async function applyReparse(
             ...(opts.manuscriptFile ? { manuscriptFile: opts.manuscriptFile } : {}),
             chapters: newChapters,
             chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+            /* #4217: explicit user action: version 2 + stamp (owner decision). */
+            manuscriptExtractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
             castConfirmed: false,
             /* Plan 289 — a wipe: every revision token of the book moves, so a kept
                or retrying save built before it is refused. */
@@ -2094,12 +2141,15 @@ async function prepareReparse(
       parsed = await parseManuscript({
         text: buffer.toString('utf8'),
         fileName: state.manuscriptFile.replace(/\.(epub|pdf)$/, '.txt'),
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
     } else {
       parsed = await parseManuscript({
         buffer,
         fileName: state.manuscriptFile,
         sourcePath: manuscriptPath,
+        /* #4217: explicit user action: version 2 + stamp (owner decision). */
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
     }
     return { fingerprint, parsed, sourceSha256: sha256Hex(buffer) };
@@ -2206,6 +2256,8 @@ bookStateRouter.post(
         buffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
+        /* #4217: explicit user action: version 2 + stamp (owner decision). */
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
       const newFile = `manuscript.${REPLACE_EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
       safeSegment(newFile);
@@ -2418,9 +2470,9 @@ bookStateRouter.post(
          sentence attribution. */
         if (excluded) {
           const audioRoot = audioDir(bookDir);
-          const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+          const segmentsPath = livePartPath(audioRoot, current.slug, 'segments');
           const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
-            join(audioRoot, `${current.slug}.${ext}`),
+            liveAudioPath(audioRoot, current.slug, ext),
           );
           for (const p of [segmentsPath, ...audioCandidates]) {
             if (existsSync(p)) {

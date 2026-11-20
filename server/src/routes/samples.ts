@@ -28,6 +28,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 import { putManuscript, withParseOrigin, type ManuscriptRecord } from '../store/manuscripts.js';
 import { sha256Hex } from '../workspace/manuscript-hints.js';
 import { parseManuscript } from '../parsers/index.js';
+import { extractorVersionOf } from '../parsers/version.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /* Testability seam: the committed sample set lives under samples/ next to the
@@ -179,6 +180,8 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
       buffer,
       fileName: safeManuscriptFile,
       sourcePath: dstManuscript,
+      // #4217: a sample keeps its bundle's stamp (absent = 1); its manuscript-edits.json was made against that extraction.
+      extractorVersion: extractorVersionOf(bundleState),
     });
     const record: ManuscriptRecord = {
       manuscriptId,

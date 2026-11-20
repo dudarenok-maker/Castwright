@@ -59,7 +59,7 @@ import { lanCertRouter } from './routes/lan-cert.js';
 import { devicesRouter } from './routes/devices.js';
 import { pairSessionRouter, pairRedeemRouter } from './routes/pairing.js';
 import { designProgressRelayRouter } from './routes/design-progress-relay.js';
-import { requireLanToken } from './lan-auth.js';
+import { requireLanToken, isLoopbackRequest } from './lan-auth.js';
 import { requireSameOrigin } from './csrf-origin.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
@@ -271,8 +271,8 @@ app.use('/workspace', (req, res, next) => {
 });
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
-app.get('/api/health', (_req, res) => {
-  res.json(buildHealthPayload());
+app.get('/api/health', (req, res) => {
+  res.json(buildHealthPayload({ includePaths: isLoopbackRequest(req) }));
 });
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)

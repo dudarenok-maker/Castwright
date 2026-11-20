@@ -10,7 +10,7 @@ owner: null
 >
 > Key files:
 > - `server/src/workspace/revisions-store.ts` (new): the only reader and writer of revisions.json.
-> - `server/src/audio/previous-audio.ts` (new): today's A/B audio steps, moved unchanged.
+> - `server/src/audio/previous-audio.ts` (new): today's A/B audio steps, moved unchanged. **Moved by #4319: the A/B audio steps now live in `workspace/chapter-take.ts`; `audio/previous-audio.ts` no longer exists.**
 > - `server/src/routes/revision-ops.ts` (new): the accept, reject and dismiss routes.
 > - `server/src/routes/review-request.ts` (new): the shared `review` validator.
 > - Server files modified: `server/src/routes/revisions.ts`, `server/src/routes/qa-report.ts`, `server/src/routes/chapter-audio.ts`, `server/src/routes/book-state.ts`, `server/src/routes/generation.ts`, `server/src/routes/queue.ts`, `server/src/workspace/queue-io.ts`, `server/src/audio/finalize-chapter-write.ts`, `server/src/routes/chapter-splice.ts`, `server/src/routes/chapter-qa-repair.ts`, `server/src/app.ts`.
@@ -30,7 +30,7 @@ owner: null
 
   PR 2 builds on it to fix #3397, where a Fix-audio prompt gets stuck or lost when the user leaves the book. It also fixes #3400, where stale client state erases revisions.json.
 - **Technical:** revisions.json gets a single owner with a per-book lock. It also gets a `fileId`/`rev` version stamp, the existing `schema-migrate.ts` seam, and read-time normalisation. Accept and reject each become one server request, and the JSON is written only after the audio step succeeds (D1). `pending` is returned even when the cast is empty (D8).
-- **Architectural:** adds a leaf lock class, `revisions:<abs bookDir>`, which sits outside the `design → library-voice → cast` order. The A/B audio steps move into `audio/previous-audio.ts` with no import of `routes/generation.ts`. Finalize gains a tri-state `review` seam that PR 2 switches on.
+- **Architectural:** adds a leaf lock class, `revisions:<abs bookDir>`, which sits outside the `design → library-voice → cast` order. The A/B audio steps move into `audio/previous-audio.ts` with no import of `routes/generation.ts`. Finalize gains a tri-state `review` seam that PR 2 switches on. **Update (#4319): the audio steps moved again, into `workspace/chapter-take.ts`.**
 
 ## Architectural impact
 
@@ -73,7 +73,7 @@ owner: null
    - The new routes have no client caller.
    - The reparse reset leaves `pending: []`, the same result the old delete produced.
 2. The lock key is `revisions:${path.resolve(bookDir)}`. It is built only by `revisionsLockKey` in `server/src/workspace/revisions-store.ts`.
-3. While that lock is held, only revisions.json is written and no other lock is acquired. The only other filesystem access is the read-only `.previous.mp3` existence probe used by normalisation.
+3. While that lock is held, only revisions.json is written and no other lock is acquired. The only other filesystem access is the read-only `.previous.mp3` existence probe used by normalisation. **Update (#4319): the previous take is no longer always `.previous.mp3`; the probe covers `.previous.mp3`, `.m4a` and `.ogg`.**
 4. Reads (`readRevisions`) take no lock and never write.
 5. The old routes keep today's status codes and order. `POST …/audio/previous/restore` keeps its `isGenerationActive` 409 **before** the chapter-id parse. `DELETE …/audio/previous` has no busy check today and gains none.
 6. `audio/previous-audio.ts` does not import `routes/generation.ts`. `routes/generation.ts` gains no new import from `audio/` or `workspace/`.

@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { parseManuscript, UnsupportedFormatError, UnusableMediaError, DrmProtectedError } from '../parsers/index.js';
 import { isLikelyFrontMatterTitle, FRONT_MATTER_WORD_THRESHOLD, countWords } from '../parsers/front-matter.js';
 import { putManuscript, withParseOrigin, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
+import { isParagraphDegraded } from '../analyzer/dialogue-structure/legibility.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
   STANDALONES_SERIES,
@@ -41,7 +42,7 @@ import { mintEditEpoch } from '../workspace/slice-revision.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
-import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
+import { CHAPTER_TITLE_PARSER_VERSION, MANUSCRIPT_EXTRACTOR_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/store.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -91,13 +92,18 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
         buffer: req.file.buffer,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
       });
       originalFileName = req.file.originalname;
       byteSize = req.file.size;
       originalBuffer = req.file.buffer;
     } else if (typeof req.body?.text === 'string') {
       const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName : undefined;
-      parsed = await parseManuscript({ text: req.body.text, fileName });
+      parsed = await parseManuscript({
+        text: req.body.text,
+        fileName,
+        extractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
+      });
       originalFileName = fileName ?? null;
       byteSize = Buffer.byteLength(req.body.text, 'utf8');
       originalBuffer = Buffer.from(req.body.text, 'utf8');
@@ -172,6 +178,10 @@ importRouter.post('/import', upload.single('file'), async (req: Request, res: Re
             isLikelyFrontMatter:
               isLikelyFrontMatterTitle(c.title) ||
               (wordCount > 0 && wordCount <= FRONT_MATTER_WORD_THRESHOLD),
+            /* #2254 — present (true) only when the detected language is a
+               notice language and this chapter's imported body is degraded;
+               absent otherwise (never false). */
+            ...(isParagraphDegraded(c.body, detected.language) === true ? { paragraphsMerged: true } : {}),
           };
         }),
       },
@@ -452,6 +462,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
         createdAt: now,
         updatedAt: now,
         chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+        manuscriptExtractorVersion: MANUSCRIPT_EXTRACTOR_VERSION,
         language,
         editEpoch: mintEditEpoch(),
       };

@@ -128,7 +128,7 @@ import { notificationsActions } from '../store/notifications-slice';
 import { selectAnalysisBusyForBook, analysisBusyMessage } from '../store/analysis-substage-selectors';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
-import { castActions } from '../store/cast-slice';
+import { castActions, selectCharacterNamesById } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions, isStaleIncludeSnapshot, selectMainAnalysisLive } from '../store/analysis-slice';
 import { selectIsOpenBook } from '../store/open-book';
@@ -324,6 +324,7 @@ export function GenerationView({
      they keep the raw list. */
   const characterIdAliases = useAppSelector((s) => s.chapters.characterIdAliases);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
+  const characterNames = useAppSelector(selectCharacterNamesById);
   /* #3435 decision A — the server refuses a subset run (Re-analyse, Include)
      while this book's main analysis run is live, so both controls are
      disabled with "Pause the analysis first" until it is paused. */
@@ -396,25 +397,42 @@ export function GenerationView({
      malformed value falls back to 3 there and must not scroll); a plain load
      stays at the top. Reading `?chapter=` here (not the stage) lets a
      `?chapter=3` set or edited while this view is mounted scroll, which the
-     stage alone can't tell from the default. A cold `?chapter=3` link scrolls
-     only when hydrating it leaves the persisted `ui.stage` unchanged;
-     otherwise Layout's Redux→URL sync drops it before this view mounts. */
+     stage alone can't tell from the default. Since #4212 the stage carries
+     `chapterExplicit` and `stageToHash` keeps `?chapter=3` for it, so a cold
+     `?chapter=3` link survives Layout's Redux→URL sync and scrolls like any
+     other chapter. */
   const currentChapterId = useAppSelector((s) =>
     s.ui.stage.kind === 'ready' ? s.ui.stage.currentChapterId : null,
   );
   const [searchParams] = useSearchParams();
-  const chapterNamedInUrl = parseChapterParam(searchParams.get('chapter')) != null;
+  /* #4310 pass 2 — this effect runs before ReadyRoute hydrates the stage from a
+     URL edited in place, so also require the stage chapter to agree with the
+     URL's, or its first run scrolls to the old chapter. */
+  const chapterNamedInUrl =
+    parseChapterParam(searchParams.get('chapter')) === currentChapterId && currentChapterId != null;
+  /* #4212 — a reload rehydrates the stage straight to the URL's chapter, so
+     neither dep below changes once the chapter rows load, and the effect's
+     last run found no row. `targetRowLoaded` re-runs it when the row appears;
+     `scrolledForChapter` keeps a target row that leaves the list and returns
+     from scrolling again, and its reset (the URL's chapter is not the stage's,
+     which covers a dropped param and every in-place chapter change) lets a
+     re-navigation to the same chapter scroll. */
+  const targetRowLoaded = chapters.some((c) => c.id === currentChapterId);
+  const scrolledForChapter = useRef<number | null>(null);
   useEffect(() => {
+    if (!chapterNamedInUrl) scrolledForChapter.current = null;
     if (currentChapterId == null || !chapterNamedInUrl) return;
+    if (scrolledForChapter.current === currentChapterId) return;
     const el = document.getElementById(`chapter-${currentChapterId}`);
     if (!el) return;
+    scrolledForChapter.current = currentChapterId;
     /* Defer a frame so any layout shift from view-switch settles before
        the scroll fires; without this, the target row is sometimes still
        being laid out and the scroll lands a few hundred pixels short. */
     requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [currentChapterId, chapterNamedInUrl]);
+  }, [currentChapterId, chapterNamedInUrl, targetRowLoaded]);
   /* Default analyzer engine used by the subset retry below (un-exclude
      path). Read at click time, not memoised, so a model switch between
      un-excludes is reflected on the next retry. */
@@ -1901,6 +1919,7 @@ export function GenerationView({
           error={qaError}
           bookTitle={title ?? ''}
           bookId={bookId}
+          characterNames={characterNames}
           scoringProgress={scoringProgress}
         />
       </div>

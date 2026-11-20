@@ -22,7 +22,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, unlink } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { nanoid } from 'nanoid';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { BOOK_GONE, withBookOp } from '../workspace/book-op-lock.js';
@@ -33,16 +33,22 @@ import {
   bookExportsDir,
   slug as slugify,
 } from '../workspace/paths.js';
-import { writeJsonAtomic } from '../workspace/state-io.js';
+import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { readUserSettings } from '../workspace/user-settings.js';
 import { buildMp3Zip, ExportIncompleteError, sanitiseForZip } from '../export/build-mp3-zip.js';
 import { buildM4b } from '../export/build-m4b.js';
 import { buildMp3Folder } from '../export/build-mp3-folder.js';
 import { buildCodecZip } from '../export/build-codec-zip.js';
 import { buildCaptions } from '../export/build-captions.js';
-import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
+import {
+  commitSyncStage,
+  discardSyncStage,
+  stageToSyncFolder,
+  writeFolderToSyncFolder,
+  type SyncStage,
+} from '../export/sync-folder.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio } from '../workspace/chapter-take.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import {
   AVG_CHAPTER_BYTES,
@@ -74,6 +80,11 @@ export interface BookExportJob {
   progress: number | null;
   downloadUrl: string | null;
   syncPath: string | null;
+  /** True while an un-cancellable sync-folder copy is in flight (the mp3-folder
+      copy, or a single-file commit rename). A client that cancelled keeps
+      following the job until this clears, then reads `syncPath` to learn
+      whether the copy landed anyway (#4228). */
+  syncCopyInFlight?: boolean | null;
   errorReason: string | null;
   createdAt: string;
   completedAt: string | null;
@@ -152,15 +163,35 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
          both files and dirs the same way. */
       if (job.status === 'done') {
         const artifact = resolveArtifactPath(bookDir, job);
-        if (!existsSync(artifact)) {
+        /* An mp3-folder swap moves the previous folder to a dot-prefixed
+           `.<slug>.old-<id>` before moving the new one in, so the flat name is
+           briefly absent mid-swap (a GET can land there) and stays absent after
+           a crash between the two renames. That manifest still describes a
+           real export: keep it rather than dropping the previous `done` row
+           (#4228). */
+        if (!existsSync(artifact) && !(await hasSwapAside(bookDir, job))) {
           await unlink(manifest).catch(() => {});
           continue;
         }
       }
+      /* A restart means no sync copy is in flight, whatever the manifest says
+         (a DELETE during the copy persisted `true`). */
+      if (job.syncCopyInFlight) job.syncCopyInFlight = false;
       if (!jobs.has(job.id)) jobs.set(job.id, job);
     } catch {
       /* Corrupt manifest — skip, don't fail the GET. */
     }
+  }
+}
+
+/* True when the exports folder holds a `.<filename>.old-<id>` swap-aside for
+   this job's flat name (see swapFolderIntoPlace). */
+async function hasSwapAside(bookDir: string, job: BookExportJob): Promise<boolean> {
+  const prefix = `.${sanitizeIdSegment(job.filename)}.old-`;
+  try {
+    return (await readdir(bookExportsDir(bookDir))).some((n) => n.startsWith(prefix));
+  } catch {
+    return false;
   }
 }
 
@@ -478,7 +509,7 @@ async function createExportJob(
          a restart rehydrates the stale manifest instead of the corrected
          one. Best-effort, same as runExportJob's own finally. */
       try {
-        await writeJsonAtomic(manifestPath(located.bookDir, job.id), job);
+        await writeJsonAtomicOrdered(manifestPath(located.bookDir, job.id), job);
       } catch {
         /* swallow — matches runExportJob's own finally */
       }
@@ -541,7 +572,7 @@ exportRouter.get('/:bookId/exports', async (req: Request, res: Response) => {
 });
 
 exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
-  /* #3711 -- QUICK book-folder writer (the cancelled manifest + partial-artifact cleanup):
+  /* #3711 -- QUICK book-folder writer (the cancelled manifest write; it removes no artifact, #4228):
      holds book-op for its whole span, so a rename queued behind it lands in the new
      folder and this never recreates the old one. The cancelled job's token is released
      by its own `runBookJob`, so the cancel itself is not blocked by it. */
@@ -565,7 +596,7 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
      overwrite with 'failed', so the order matters. */
   job.status = 'cancelled';
   job.completedAt = new Date().toISOString();
-  job.errorReason = 'Cancelled by user.';
+  job.errorReason = cancelReason(job.syncPath);
   jobs.set(job.id, { ...job });
 
   const controller = jobControllers.get(job.id);
@@ -575,26 +606,17 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
      state. If the disk write fails (the staging dir might already be
      gone), the in-memory state is still authoritative. */
   try {
-    await writeJsonAtomic(manifestPath(located.bookDir, job.id), job);
+    await writeJsonAtomicOrdered(manifestPath(located.bookDir, job.id), job);
   } catch {
     /* swallow */
   }
 
-  /* Plan 79 — best-effort cleanup of any partial artifact. For
-     single-file formats, runExportJob's catch already unlinks the
-     `.partial-<id>` tmp; this clears the final-path file too in case
-     the rename had already completed before cancel landed. For
-     mp3-folder, the builder writes per-chapter MP3s directly into the
-     destination folder so we rm-recursive it. Do NOT rm the exports/
-     parent — other completed exports of this book live there. */
-  if (job.filename) {
-    const artifact = resolveArtifactPath(located.bookDir, job);
-    if (job.format === 'mp3-folder') {
-      await rm(artifact, { recursive: true, force: true }).catch(() => {});
-    } else {
-      await unlink(artifact).catch(() => {});
-    }
-  }
+  /* Nothing is removed here (#4228). Every format builds into a job-private
+     path (`.partial-<id>` file, or the mp3-folder staging folder) that
+     runExportJob's own catch drops on the abort above, and the flat final
+     name holds the PREVIOUS completed export until the job's own commit.
+     Do NOT rm the exports/ parent: other completed exports of this book live
+     there. */
 
   return res.status(204).end();
     });
@@ -733,16 +755,52 @@ function preflightMissingChapters(state: BookStateJson, bookDir: string): string
   return out;
 }
 
+/* Reason recorded on a cancelled job. A cancel that lands after the sync-folder
+   copy leaves the copy and `syncPath` (never delete in the user's sync folder),
+   so the record says so instead of reading like nothing was written (#4228). */
+function cancelReason(syncPath: string | null): string {
+  return syncPath
+    ? 'Cancelled by user. The files were already copied to the sync folder.'
+    : 'Cancelled by user.';
+}
+
+/* Publish a freshly set `syncPath` to the jobs map without copying
+   runExportJob's own object over the entry: DELETE may already have flipped the
+   map entry to `cancelled`, and `{ ...job }` here would revert it to
+   `in_progress`. Patches only the field (and the reason, when the entry is
+   already cancelled and was written before the path was known). Synchronous. */
+function publishSyncPath(job: BookExportJob): void {
+  const cur = jobs.get(job.id);
+  if (!cur) return;
+  jobs.set(job.id, {
+    ...cur,
+    syncPath: job.syncPath,
+    errorReason: cur.status === 'cancelled' ? cancelReason(job.syncPath) : cur.errorReason,
+  });
+}
+
+/* Flip the in-flight marker on the job record around an un-cancellable
+   sync-folder copy, patching the map entry the same way (DELETE may already
+   have flipped it to `cancelled`). The modal reads this after a cancel to know
+   whether to keep waiting for the copy's outcome (#4228). Synchronous. */
+function publishSyncCopyInFlight(job: BookExportJob, inFlight: boolean): void {
+  job.syncCopyInFlight = inFlight;
+  const cur = jobs.get(job.id);
+  if (!cur) return;
+  jobs.set(job.id, { ...cur, syncCopyInFlight: inFlight });
+}
+
 /* A builder that resolves does not mean the export is still wanted: a zip
    builder registers every chapter up front and can finish after DELETE has
    already flipped the job to `cancelled`. Checked before each step that makes
-   the artifact visible (rename into place, sync-folder copy, `done`) so a
-   cancelled job ends cancelled and drops its own artifact — DELETE no longer
-   waits for the build, so its own artifact cleanup can run before the file
-   exists. Drops `artifact` (the file or, for mp3-folder, the folder) first.
-   One exception: an export cancelled after its sync-folder copy leaves that
-   copy (single-file and mp3-folder alike), because the copy is renamed over
-   the previous export's flat-named one (#4228). */
+   the artifact visible (sync-folder copy, rename into place, `done`) so a
+   cancelled job ends cancelled. Drops `artifact` first, which must be a
+   job-private path (the `.partial-<id>` build or the mp3-folder staging
+   folder), never the flat final name that holds the previous export (#4228).
+   An export cancelled after its sync-folder copy landed leaves that copy
+   (never delete anything in the user's sync folder): only the private build is
+   dropped and the local commit is skipped, so the previous LOCAL export stays
+   intact (#4228). */
 async function bailIfCancelled(
   signal: AbortSignal,
   artifact?: { path: string; folder?: boolean },
@@ -752,6 +810,87 @@ async function bailIfCancelled(
     await rm(artifact.path, { recursive: artifact.folder === true, force: true }).catch(() => {});
   }
   signal.throwIfAborted();
+}
+
+/* A directory cannot be renamed over a non-empty directory, so the previous
+   flat folder is moved aside first, staging is renamed into place, and the
+   old copy is removed best-effort. If the second rename fails the old folder
+   is restored and the error rethrown. If that restore ALSO fails, the previous
+   export is left in `oldPath` and logged loudly: nothing may delete it then,
+   because it is the only copy of the user's earlier export (#4228). */
+async function swapFolderIntoPlace(
+  staging: string,
+  finalPath: string,
+  oldPath: string,
+): Promise<void> {
+  const hadPrevious = existsSync(finalPath);
+  liveSwapAsides.add(oldPath);
+  try {
+    if (hadPrevious) await renameWithRetry(finalPath, oldPath);
+    try {
+      await renameWithRetry(staging, finalPath);
+    } catch (e) {
+      if (hadPrevious) {
+        await renameWithRetry(oldPath, finalPath).catch((restoreErr) => {
+          console.error(
+            `[export] could not restore the previous export from ${oldPath} to ${finalPath}; it is left in place, restore it by hand:`,
+            restoreErr,
+          );
+        });
+      }
+      throw e;
+    }
+    /* Committed: the new export supersedes the previous one and any `.old-*`
+       an earlier failed cleanup left behind. Only now, and never a swap-aside
+       another job is still using (#4228). */
+    if (hadPrevious) await removeSupersededSwapAside(oldPath);
+    await sweepSupersededSwapAsides(finalPath, oldPath);
+  } finally {
+    liveSwapAsides.delete(oldPath);
+  }
+}
+
+/* Swap-asides of swaps running right now, so a sweep never takes the previous
+   export of a concurrent same-name job out from under it. */
+const liveSwapAsides = new Set<string>();
+
+/* Best-effort removal of a superseded swap-aside: a transient lock (a scanner,
+   Explorer) is retried, and a permanent failure is logged, not swallowed. The
+   next successful export of the same name sweeps the leftover. */
+async function removeSupersededSwapAside(path: string): Promise<void> {
+  const ATTEMPTS = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      if (attempt >= ATTEMPTS) {
+        console.error(
+          `[export] could not remove the superseded previous export at ${path}; the next successful export of it will retry:`,
+          e,
+        );
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+}
+
+async function sweepSupersededSwapAsides(finalPath: string, ownOldPath: string): Promise<void> {
+  const dir = dirname(finalPath);
+  const prefix = `.${basename(finalPath)}.old-`;
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    if (!n.startsWith(prefix)) continue;
+    const p = join(dir, n);
+    if (p === ownOldPath || liveSwapAsides.has(p)) continue;
+    await removeSupersededSwapAside(p);
+  }
 }
 
 async function runExportJob(
@@ -768,32 +907,74 @@ async function runExportJob(
       jobs.set(job.id, { ...job });
     };
     if (job.format === 'mp3-folder') {
-      /* outPath is actually the staging folder for this format (one
-         sub-directory per book under the export id). The builder writes
-         per-chapter MP3s into it; the sync-folder branch then mirrors
-         each file into the user's target via writeFolderToSyncFolder. */
-      const folderResult = await buildMp3Folder({
-        bookDir,
-        state,
-        outDir: outPath,
-        onProgress,
-        signal,
-      });
-      job.sizeBytes = folderResult.totalBytes;
-      job.progress = 1;
-      await bailIfCancelled(signal, { path: outPath, folder: true });
+      /* Build into a job-private staging folder, never the flat `outPath`
+         that holds the previous export (#4228). The builder rm's and
+         recreates only `staging`; the sync-folder branch mirrors each file
+         from it via writeFolderToSyncFolder. The swap onto `outPath` is the
+         last step, after every cancel check. */
+      const staging = join(
+        bookExportsDir(bookDir),
+        `.${sanitizeIdSegment(job.filename)}.partial-${job.id}`,
+      );
+      try {
+        const folderResult = await buildMp3Folder({
+          bookDir,
+          state,
+          outDir: staging,
+          onProgress,
+          signal,
+        });
+        job.sizeBytes = folderResult.totalBytes;
+        job.progress = 1;
+        await bailIfCancelled(signal, { path: staging, folder: true });
 
-      if (syncFolder) {
-        /* fs-54 — author-level nesting, applied to every sync-folder
-           destination (this branch AND the single-file branch below), not
-           just Audiobookshelf — keeps behavior consistent across every
-           export tile and needs no wire-protocol change: `state.author`
-           is already in scope here. */
-        const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
-        const bookSubfolder = sanitiseForZip(state.title);
-        const synced = await writeFolderToSyncFolder(outPath, authoredSyncDir, bookSubfolder);
-        job.syncPath = synced.syncPath;
-        await bailIfCancelled(signal, { path: outPath, folder: true });
+        if (syncFolder) {
+          /* fs-54 — author-level nesting, applied to every sync-folder
+             destination (this branch AND the single-file branch below), not
+             just Audiobookshelf — keeps behavior consistent across every
+             export tile and needs no wire-protocol change: `state.author`
+             is already in scope here. */
+          const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
+          const bookSubfolder = sanitiseForZip(state.title);
+          /* The copy takes no signal, so a cancel cannot stop it: mark it in
+             flight so a client that cancels meanwhile keeps following the job
+             until `syncPath` (or its absence) is final (#4228). */
+          publishSyncCopyInFlight(job, true);
+          try {
+            const synced = await writeFolderToSyncFolder(staging, authoredSyncDir, bookSubfolder);
+            job.syncPath = synced.syncPath;
+            publishSyncPath(job);
+          } finally {
+            publishSyncCopyInFlight(job, false);
+          }
+          /* A cancel after the sync copy drops only staging; the synced copy
+             and syncPath stay (never delete in the user's sync folder). */
+          await bailIfCancelled(signal, { path: staging, folder: true });
+        }
+        /* Commit step: swap staging onto the flat folder. The swap's renames
+           retry for up to RENAME_RETRY_WORST_CASE_MS (~3.6 s each), a window a
+           DELETE can land in; it still ends `cancelled` and the swapped folder
+           stays as the newest valid export. The previous folder is moved to a
+           dot-prefixed `.<slug>.old-<id>`: a crash mid-swap leaves it behind
+           (dot-prefixed folders still show in Windows Explorer), and a
+           cleanup rm that fails permanently does too; the next successful
+           export of the same name removes it. */
+        await swapFolderIntoPlace(
+          staging,
+          outPath,
+          join(bookExportsDir(bookDir), `.${sanitizeIdSegment(job.filename)}.old-${job.id}`),
+        );
+        /* Synchronous, deletes nothing: re-evaluates a cancel that landed
+           during the awaited swap and stays directly before the `done`
+           publish below. */
+        signal.throwIfAborted();
+      } catch (e) {
+        /* Drop the private staging folder on any failure or cancel. The
+           `.old-<id>` folder is deliberately NOT removed here: after a failed
+           swap it is either already restored (nothing to remove) or, when the
+           restore failed too, the only copy of the previous export. */
+        await rm(staging, { recursive: true, force: true }).catch(() => {});
+        throw e;
       }
       /* No downloadUrl for folder exports — the route-layer guard
          already refuses the format + download combo, so leaving the
@@ -808,11 +989,13 @@ async function runExportJob(
          as EBUSY/EPERM, on POSIX it interleaves bytes. The partial-then-
          rename pattern matches sync-folder.ts's tmp+renameWithRetry shape
          so the final clobber is atomic for any reader (the download
-         endpoint, the user's File Explorer, the sync-folder copy). */
+         endpoint, the user's File Explorer). The sync-folder copy reads the
+         private `.partial-` build, not the flat name (#4228). */
       const buildPath = join(
         bookExportsDir(bookDir),
         `.${sanitizeIdSegment(job.filename)}.partial-${job.id}`,
       );
+      let staged: SyncStage | null = null;
       try {
         const result =
           job.format === 'mp3-zip'
@@ -848,26 +1031,59 @@ async function runExportJob(
           job.warning = (result as { warning?: string }).warning ?? null;
         }
         await bailIfCancelled(signal, { path: buildPath });
+        if (job.destination === 'sync-folder' && syncFolder) {
+          const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
+          /* Stage a job-private `.tmp-<jobId>` copy next to the flat sync name
+             (copied from the job-private build: the flat local name still holds
+             the previous export). The previous sync copy at the flat name is
+             untouched until the commit rename below (#4228). */
+          const stage = await stageToSyncFolder(buildPath, authoredSyncDir, job.filename, job.id);
+          staged = stage;
+          if (signal.aborted) {
+            /* Cancelled before the commit: drop only this job's own temp and
+               the private build; the earlier sync copy stays byte-identical. */
+            await discardSyncStage(stage);
+            staged = null;
+            await bailIfCancelled(signal, { path: buildPath });
+          }
+          /* The commit rename cannot be cancelled once started (see below): mark
+             it in flight, as for the mp3-folder copy. */
+          publishSyncCopyInFlight(job, true);
+          try {
+            const synced = await commitSyncStage(stage, authoredSyncDir);
+            staged = null;
+            job.syncPath = synced.syncPath;
+            publishSyncPath(job);
+          } finally {
+            publishSyncCopyInFlight(job, false);
+          }
+          /* A cancel after the sync commit leaves the synced copy and syncPath
+             (it already replaced the previous copy and cannot be restored).
+             Only the private build is dropped, so the local rename below is
+             skipped and the previous LOCAL export stays intact. */
+          await bailIfCancelled(signal, { path: buildPath });
+        }
+        /* Commit step: the LAST thing that touches the flat name. Every cancel
+           check above ran before it; once it has started it is never undone
+           (we cannot restore the replaced file), so nothing below removes
+           outPath. A DELETE landing while this rename is in flight (its retries
+           run for up to RENAME_RETRY_WORST_CASE_MS, ~3.6 s) cannot stop it: the
+           job still ends `cancelled` and the renamed file stays as the newest
+           valid export. */
         await renameWithRetry(buildPath, outPath);
-        await bailIfCancelled(signal, { path: outPath });
+        /* Synchronous, no rm: re-evaluates a cancel that landed during the
+           awaited rename and must stay directly before the `done` publish. */
+        signal.throwIfAborted();
       } catch (e) {
         /* On any failure (including cancel) the partial file is dropped
            so a `<bookDir>/exports/` listing never shows half-baked
            artifacts. Best-effort — if the rename above already moved it
            there's nothing to unlink. */
+        if (staged) await discardSyncStage(staged);
         await unlink(buildPath).catch(() => {});
         throw e;
       }
 
-      if (job.destination === 'sync-folder' && syncFolder) {
-        const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
-        const synced = await writeToSyncFolder(outPath, authoredSyncDir, job.filename);
-        job.syncPath = synced.syncPath;
-        /* The sync copy is renamed over the flat `<syncFolder>/<author>/<filename>`
-           name, where the previous completed export's copy lives, so it is left
-           in place — same as the mp3-folder branch (#4228). */
-        await bailIfCancelled(signal, { path: outPath });
-      }
       job.downloadUrl = `/api/books/${encodeURIComponent(job.bookId)}/exports/${encodeURIComponent(job.id)}/download`;
     }
     job.status = 'done';
@@ -875,11 +1091,11 @@ async function runExportJob(
     /* Publish `done` to the jobs map in the same synchronous step as the last
        cancel check, before any await: DELETE edits the map's copy, so until
        this runs a DELETE landing during the revoke below would read
-       `in_progress`, unlink the finished artifact, and the `finally` would
-       then write `done` + `downloadUrl` back over it. After this, a DELETE
-       sees `done` and is a no-op. Keep NO awaited step (setTimeout, await)
-       between the last cancel check and this publish: it would reopen the
-       gap, and no test pins the ordering. */
+       `in_progress` and the `finally` would then write `done` + `downloadUrl`
+       back over it. After this, a DELETE sees `done` and is a no-op. Rule:
+       every cancel check happens BEFORE the commit rename, the commit rename
+       is never undone, and nothing awaits between the final synchronous
+       `signal.throwIfAborted()` and this publish. */
     jobs.set(job.id, { ...job });
     /* Plan 79 — clobber-newest-wins on disk PLUS revoke any older
        manifest for the same (book, format). Together they keep the
@@ -900,14 +1116,26 @@ async function runExportJob(
         /* Only DELETE aborts the controller, so an aborted signal means the
            user cancelled; its own status flip landed on the jobs map's copy,
            not on this object. */
-        job.errorReason = signal.aborted ? 'Cancelled by user.' : (e as Error)?.message || 'Cancelled.';
+        job.errorReason = signal.aborted ? cancelReason(job.syncPath) : (e as Error)?.message || 'Cancelled.';
+      } else if (signal.aborted) {
+        /* `job` is still the map entry here (no progress tick or publish*
+           patch replaced it with a copy), so DELETE already flipped it and
+           wrote its reason before `syncPath` was known. Refresh the reason now
+           that the copy's outcome is. */
+        job.errorReason = cancelReason(job.syncPath);
       }
     } else {
       job.status = 'failed';
-      job.errorReason =
+      const failureReason =
         e instanceof ExportIncompleteError
           ? `Export incomplete: ${e.missing.length} chapter(s) missing MP3 audio.`
           : requestFailureMessageFs(e, (e as Error).message);
+      /* A local commit can fail after the sync copy already landed (the sync
+         commit runs first); say so rather than reading like nothing was
+         written (#4228). */
+      job.errorReason = job.syncPath
+        ? `${failureReason} The files were already copied to the sync folder.`
+        : failureReason;
       job.completedAt = new Date().toISOString();
       /* The client-facing reason above is curated (no workspace path); the
          raw error — with ffmpeg/ffprobe stderr, which the scrubbed message
@@ -922,7 +1150,7 @@ async function runExportJob(
     jobs.set(job.id, { ...job });
     jobControllers.delete(job.id);
     try {
-      await writeJsonAtomic(manifestPath(bookDir, job.id), job);
+      await writeJsonAtomicOrdered(manifestPath(bookDir, job.id), job);
     } catch {
       /* Manifest write is best-effort — failure to persist the manifest
          doesn't invalidate the artifact on disk. Next rehydrate will just
