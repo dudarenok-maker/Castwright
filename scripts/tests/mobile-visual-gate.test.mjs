@@ -88,3 +88,32 @@ for (const project of ['mobile-chrome', 'tablet-chrome']) {
     assert.ok(pngs.length > 0, `${dir} must contain committed .png baselines`);
   });
 }
+
+// Config spellings can all look right while the run is an all-skip (a missing
+// baseline dir, --pass-with-no-tests, a project-conditional test.skip). So the
+// visual step writes a JSON report and a follow-up step asserts its OUTCOME.
+const ASSERT = 'node scripts/assert-playwright-ran.mjs playwright-visual-report.json';
+for (const wf of ['cross-os', 'release']) {
+  test(`${wf}.yml asserts the visual run's outcome from its JSON report`, () => {
+    const doc = yaml.load(read(`.github/workflows/${wf}.yml`));
+    const steps = doc.jobs['mobile-e2e'].steps;
+    const visual = steps.findIndex((st) => st.run === VISUAL);
+    const check = steps.findIndex((st) => st.run === ASSERT);
+    assert.ok(check === visual + 1, `the step running "${ASSERT}" must directly follow the visual step`);
+    assert.equal(steps[visual].env?.PW_JSON_REPORT, 'playwright-visual-report.json');
+    assert.ok(!('if' in steps[check]), 'outcome step must have no `if:`');
+    assert.ok(!('continue-on-error' in steps[check]), 'outcome step must be blocking');
+    assert.ok(!pkg.scripts['test:e2e:mobile:visual'].includes('pass-with-no-tests'));
+  });
+}
+
+test('assert-playwright-ran fails on no tests, skips, failures; passes on a clean run', async () => {
+  const { checkStats } = await import('../assert-playwright-ran.mjs');
+  const ok = { stats: { expected: 36, skipped: 0, unexpected: 0, flaky: 0 } };
+  assert.equal(checkStats(ok), null);
+  assert.match(checkStats({ stats: { ...ok.stats, expected: 0 } }), /expected 0/);
+  assert.match(checkStats({ stats: { ...ok.stats, skipped: 2 } }), /skipped/);
+  assert.match(checkStats({ stats: { ...ok.stats, unexpected: 1 } }), /failed/);
+  assert.match(checkStats({ stats: { ...ok.stats, flaky: 1 } }), /flaky/);
+  assert.match(checkStats({}), /no stats/);
+});

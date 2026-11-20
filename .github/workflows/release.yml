@@ -172,6 +172,13 @@ jobs:
       # Serial (--workers=1) because visual.spec.ts uses mode: 'serial'.
       - name: E2E Mobile visual baselines
         run: npm run test:e2e:mobile:visual
+        env:
+          PW_JSON_REPORT: playwright-visual-report.json
+
+      # Outcome check: the gate must have RUN tests (and skipped none), not just
+      # exited 0 (an all-skip run is green).
+      - name: Assert the visual baselines actually ran
+        run: node scripts/assert-playwright-ran.mjs playwright-visual-report.json
 
       - name: Upload Playwright report + test results on failure
         if: failure()
