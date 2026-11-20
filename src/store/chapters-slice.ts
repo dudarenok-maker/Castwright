@@ -563,6 +563,10 @@ export const chaptersSlice = createSlice({
           }
           return;
         }
+        /* #3436 -- a `book-busy` refusal is not a failure: nothing ran. The row is left as the claim
+           set it and the dispatcher hands back the pre-claim row (`restoreChapterRow`), so a rendered
+           chapter never reads as failed and carries no busy sentence. */
+        if (ev.errorCode === 'book-busy') return;
         const ch = s.chapters.find((c) => c.id === ev.chapterId);
         if (ch) {
           ch.state = 'failed';
@@ -571,9 +575,7 @@ export const chaptersSlice = createSlice({
           /* fs-19 — carry the structured failure class + remediation onto the
              row so the failed-state box can render a "what to do" line under
              the reason without a state.json reload. */
-          /* #3436 -- `book-busy` is a client-only dispatcher tag, not a failure class: it has no
-             remediation copy, so the row keeps no code. */
-          ch.generationErrorCode = ev.errorCode === 'book-busy' ? undefined : ev.errorCode;
+          ch.generationErrorCode = ev.errorCode;
           ch.generationRemediation = ev.remediation;
         }
         return;
@@ -776,6 +778,13 @@ export const chaptersSlice = createSlice({
         s.lastError = null;
         s.generationStartedAt = null;
       }
+    },
+
+    /** #3436 -- put one row back exactly as it was before a queue claim flipped it (the server
+        refused the render 409 `book_busy`, so nothing ran). */
+    restoreChapterRow: (s, a: PayloadAction<Chapter>) => {
+      const i = s.chapters.findIndex((c) => c.id === a.payload.id);
+      if (i >= 0) s.chapters[i] = a.payload;
     },
 
     /* Bulk regenerate — re-queue an explicit, possibly non-contiguous list

@@ -53,6 +53,7 @@ import { notificationsActions } from './notifications-slice';
 import { uiActions, type UiState } from './ui-slice';
 import type { AppDispatch, RootState } from './index';
 import type { StreamRunner } from './generation-stream-runner';
+import type { Chapter } from '../lib/types';
 
 interface DispatcherRootState {
   ui: UiState;
@@ -107,6 +108,10 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
     /* #3436 -- per-book "refused as busy, do not claim before" timestamps (see BOOK_BUSY_HOLD_MS). */
     const busyHoldUntil = new Map<string, number>();
 
+    /* #3436 -- the viewed book's chapter row as it was BEFORE a claim flipped it to in_progress, so a
+       `book_busy` refusal can hand it back unchanged. Keyed by entry id. */
+    const priorRows = new Map<string, Chapter>();
+
     const dispatch = storeApi.dispatch as AppDispatch;
 
     const tick = (): void => {
@@ -132,6 +137,8 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
       for (const [entryId, { bookId, chapterId, review }] of [...inFlight.entries()]) {
         if (!runner.hasOpenStreamForChapter(bookId, chapterId)) {
           inFlight.delete(entryId);
+          const priorRow = priorRows.get(entryId);
+          priorRows.delete(entryId);
           /* Loud-fallback gate: the worker PARKED this chapter (entry flipped to
              `awaiting_confirm`) and closed its stream without completing. Free
              the slot but do NOT /complete it and do NOT add it to `completed` —
@@ -163,6 +170,9 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                streak below, so a race with an analysis can never pause the queue for every book. */
             const bookBusy = failure.errorCode === 'book-busy';
             if (bookBusy) {
+              if (priorRow && (storeApi.getState() as DispatcherRootState).chapters.currentBookId === bookId) {
+                dispatch(chaptersActions.restoreChapterRow(priorRow));
+              }
               busyHoldUntil.set(bookId, Date.now() + BOOK_BUSY_HOLD_MS);
               setTimeout(tick, BOOK_BUSY_HOLD_MS + 50);
             }
@@ -304,6 +314,8 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            unused `scope:'character'` on an old .queue.json row maps to the
            same chapter regen. */
         if (chapters.currentBookId === e.bookId) {
+          const prior = chapters.chapters.find((c) => c.id === e.chapterId);
+          if (prior) priorRows.set(e.id, prior);
           dispatch(chaptersActions.regenerateChapterIds({ chapterIds: [e.chapterId] }));
         }
 

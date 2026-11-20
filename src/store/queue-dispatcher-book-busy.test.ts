@@ -9,11 +9,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
-import { chaptersSlice } from './chapters-slice';
+import { chaptersSlice, chaptersActions } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { uiSlice } from './ui-slice';
 import { accountSlice } from './account-slice';
 import { notificationsSlice } from './notifications-slice';
+import { changeLogSlice } from './change-log-slice';
+import type { Chapter } from '../lib/types';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
@@ -107,6 +109,7 @@ function makeStore(generationWorkers = 3) {
       account: accountSlice.reducer,
       notifications: notificationsSlice.reducer,
       analysis: analysisSlice.reducer,
+      changeLog: changeLogSlice.reducer,
     },
     preloadedState: { account: { ...accountSlice.getInitialState(), generationWorkers } },
     middleware: (g) => g({ serializableCheck: false }).concat(queueDispatcherMiddleware(() => runner!)),
@@ -204,5 +207,36 @@ describe('#3436 a 409 book_busy render refusal (the race the dispatcher cannot s
     const store = makeStore(1);
     seed(store, [entry('a1', 'book-A', 1, 0), entry('a2', 'book-A', 2, 1), entry('a3', 'book-A', 3, 2)]);
     await vi.waitFor(() => expect(breakerToasts(store)).toHaveLength(1), { timeout: 4000 });
+  });
+});
+
+describe('#3436 a 409 book_busy refusal on the OPEN book (the row and the change log)', () => {
+  /* The row a rendered chapter had before the claim. The claim flips it to in_progress
+     (`regenerateChapterIds`); the refusal must hand it back as the skip path would have left it. */
+  const doneRow: Chapter = {
+    id: 1,
+    title: 'Chapter 1',
+    duration: '04:12',
+    state: 'done',
+    progress: 1,
+    characters: { narrator: 'done' },
+    completedSentenceIds: [1, 2],
+    audioRenderedAt: '2026-11-20T00:00:00.000Z',
+  } as Chapter;
+
+  it('leaves the chapter row unchanged (not failed, no busy sentence) and appends no change-log event', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersActions.setChapters([doneRow]));
+    store.dispatch(chaptersActions.setCurrentBookId('book-A'));
+    const logBefore = store.getState().changeLog.events.length;
+    seed(store, [entry('a1', 'book-A', 1, 0)]);
+
+    await vi.waitFor(() => expect(generationPosts.filter((b) => b === 'book-A').length).toBe(1));
+    await vi.waitFor(() => expect(statusOf('a1')).toBe('queued'));
+    await vi.waitFor(() => expect(store.getState().chapters.chapters[0].state).not.toBe('in_progress'));
+
+    expect(store.getState().chapters.chapters[0]).toEqual(doneRow);
+    expect(store.getState().changeLog.events).toHaveLength(logBefore);
+    expect(failedWrites).toEqual([]);
   });
 });
