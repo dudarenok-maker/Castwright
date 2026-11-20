@@ -2766,6 +2766,39 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
+  /* #3436 — the server refuses an include with 409 `book_busy` while an analysis
+     is registered for the book. Nothing was started or flipped, so the row shows
+     the server's sentence as a refusal, the prior snapshot is restored, and no
+     analysis-gap note is set. */
+  it('#3436 — Include flow: a book_busy refusal of the include POST shows on the row and restores the snapshot', async () => {
+    const store = makeIncludeStore();
+    const otherJobSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 40,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [5],
+    };
+    store.dispatch(analysisActions.setActiveStream(otherJobSnapshot));
+    const sentence =
+      'This book is busy (analysing). Chapters cannot be added back while it is analysing, so this chapter was not included. Wait for the analysis to finish, then include it.';
+    setChapterExcludedSpy.mockRejectedValueOnce(Object.assign(new Error(sentence), { code: 'book_busy' }));
+    renderInclude(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+
+    await screen.findByText(sentence);
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+    expect(store.getState().chapters.analysisGapById?.[3]).toBeUndefined();
+    expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
+  });
+
   /* #3774 — an include POST that FAILED (a 500 here; the server no longer
      refuses an include with `book_busy`) started no job of ours, so the
      snapshot of another chapter's still-running subset job, which this click

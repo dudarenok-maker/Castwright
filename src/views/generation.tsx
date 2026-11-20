@@ -918,6 +918,10 @@ export function GenerationView({
         (e.code === 'subset_in_progress' ||
           e.code === 'main_analysis_running' ||
           e.code === 'chapters_restructuring');
+      /* #3436 — `book_busy`: the include POST itself was refused (409) because
+         an analysis is registered for the book. Nothing was started or flipped,
+         so it is handled the same way (restore, refusal message on the row). */
+      const isIncludeBookBusy = !includePosted && (e as { code?: unknown })?.code === 'book_busy';
       /* #3435 — `resume_required`: the server attributed the chapter (an
          Include target is attributed whenever the roster is final), but the
          book is not finished, so nothing was persisted as final. No rollback;
@@ -968,10 +972,11 @@ export function GenerationView({
         });
         return;
       }
-      if (isSubsetInProgress) {
-        /* A different subset request is already running; this request never
-           started a job, so restore the prior snapshot (B2 regression guard:
-           the pre-POST clobber must not persist on rejection) and surface the
+      if (isSubsetInProgress || isIncludeBookBusy) {
+        /* A different subset request is already running (or the include POST
+           was refused with book_busy, #3436); this request never started a
+           job, so restore the prior snapshot (B2 regression guard: the
+           pre-POST clobber must not persist on rejection) and surface the
            server's message instead. */
         if (ownsSnapshot()) {
           if (priorSnapshot) {
@@ -980,7 +985,7 @@ export function GenerationView({
             dispatch(analysisActions.clearActiveStream());
           }
         }
-        patchSubset(chapterId, { error: e.message, refused: true });
+        patchSubset(chapterId, { error: (e as Error).message, refused: true });
         return;
       }
       /* Drop the snapshot on terminal failure — the server-side job
