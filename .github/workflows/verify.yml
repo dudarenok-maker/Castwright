@@ -451,7 +451,8 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if timeout -k 10 120 sudo apt-get update \n              && timeout -k 10 120 sudo apt-get install -y --no-install-recommends ffmpeg; then
+            if timeout -k 10 120 sudo apt-get update \
+              && timeout -k 10 120 sudo apt-get install -y --no-install-recommends ffmpeg; then
               echo "installed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi

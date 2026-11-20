@@ -1887,6 +1887,37 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
   }
 });
 
+test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', () => {
+  const bash = spawnSync('bash', ['-c', 'true']);
+  if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
+  const install = ffmpegFloorInstallStep();
+  assert.doesNotMatch(install, /\\n/, 'install step contains a literal backslash-n; bash passes it to apt-get as a stray argument');
+  const run = install.split(/^ {8}run: \|\n/m)[1];
+  assert.ok(run, 'install step has no `run: |` block');
+  const script = run.replace(/^ {10}/gm, '');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    // Like real apt: `update` takes no arguments, so a stray one fails the command.
+    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\n[ "$2" = update ] && [ "$#" -gt 2 ] && exit 100\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const out = join(dir, 'output');
+    const summary = join(dir, 'summary');
+    writeFileSync(out, '');
+    writeFileSync(summary, '');
+    const r = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(r.status, 0, `install step failed (exit ${r.status}): ${r.stdout}${r.stderr}`);
+    assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}`);
+    assert.match(readFileSync(out, 'utf8'), /^installed=true$/m, 'GITHUB_OUTPUT lacks installed=true when apt works');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeout (warning path reachable)', () => {
   const install = ffmpegFloorInstallStep();
   const timeoutMinutes = Number((install.match(/^ {8}timeout-minutes:\s*(\d+)\s*$/m) ?? [])[1]);
