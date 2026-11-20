@@ -45,6 +45,9 @@ const leaseDirs = vi.hoisted(
       ['skip-b1', '/skip-b1'],
       ['skip-b2', '/skip-b2'],
       ['skip-c', '/skip-c'],
+      ['skip-d', '/skip-d'],
+      ['skip-e', '/skip-e'],
+      ['skip-f', '/skip-f'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -85,6 +88,7 @@ import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
 import { afterChapterFinalized, triggerScoring, __awaitScoringSettled, __registerFakeJobForTest } from './generation.js';
 import * as cfg from '../config/resolver.js';
 import { registerSplice } from './chapter-job-coordination.js';
+import { setInFlightDesignCounter, setInFlightMintCounter } from '../gpu/active-generation-gate.js';
 
 const NO_QWEN = { keep06: false, keep17: false };
 const CH1 = { id: 1, slug: 'ch1' };
@@ -254,6 +258,39 @@ describe('afterChapterFinalized', () => {
       await vi.waitFor(() => expect(releaseOther).toBeTypeOf('function'));
       releaseOther({ usedQwenTiers: NO_QWEN, mismatchCount: 0 });
       await __awaitScoringSettled('other-book');
+    });
+
+    /* A live voice design / variant mint on ANY book holds the VoiceDesign model and the
+       1.7B Base, and the reconcile's /unload would null them mid-forward. Neither enters
+       `inFlightByBook`, so they read from the leaf gate's registered counters. */
+    it.each([
+      ['(d) a voice design is in flight', 'skip-d', setInFlightDesignCounter],
+      ['(e) a variant mint is in flight', 'skip-e', setInFlightMintCounter],
+    ] as const)('%s', async (_name, bookId, setCounter) => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      setCounter(() => 1);
+      try {
+        await afterChapterFinalized({ bookId, bookDir: `/${bookId}`, chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled(bookId);
+        expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+      } finally {
+        setCounter(() => 0);
+      }
+    });
+
+    it('(f) the resume route (no ctx.keep) skips while a design or mint is in flight', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      vi.mocked(scoreBook).mockResolvedValue({ usedQwenTiers: keep, mismatchCount: 0 });
+      for (const setCounter of [setInFlightDesignCounter, setInFlightMintCounter]) {
+        setCounter(() => 1);
+        try {
+          await triggerScoring({ bookId: 'skip-f', bookDir: '/skip-f', chapters: [CH1], justFinalizedSlugs: [] });
+          await __awaitScoringSettled('skip-f');
+          expect(reconcileResidentQwenTiers).not.toHaveBeenCalled();
+        } finally {
+          setCounter(() => 0);
+        }
+      }
     });
   });
 

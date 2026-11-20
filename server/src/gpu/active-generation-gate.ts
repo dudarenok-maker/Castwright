@@ -69,6 +69,8 @@ let spliceCounter: (() => number) | null = null;
 let spliceEpochReader: (() => number) | null = null;
 let jobEpochReader: (() => number) | null = null;
 let qualityRenderCounter: (() => number) | null = null;
+let designCounter: (() => number) | null = null;
+let mintCounter: (() => number) | null = null;
 
 /** Registered by routes/generation.ts at module init with its existing
     `activeGenerationBooks` accessor. */
@@ -114,6 +116,22 @@ export function setQualityRenderCounter(fn: () => number): void {
   qualityRenderCounter = fn;
 }
 
+/** #4445 — registered by tts/design-voice-core.ts at module init with its count of in-flight
+    voice designs (`postDesignAndCacheAudition`, purpose 'design', any book). A design is not a
+    render and never enters `inFlightByBook`, but its forwards need the sidecar's Qwen models:
+    `/unload {engine:'qwen'}` (the tier reconcile's 0.6B eviction) nulls the VoiceDesign model
+    with the base, so it would kill a live design mid-forward. Unregistered counts as zero. */
+export function setInFlightDesignCounter(fn: () => number): void {
+  designCounter = fn;
+}
+
+/** #4445 — as above for in-flight variant mints (purpose 'mint'): the 1.7B unload
+    (`unload_base17()` at its default `wait_seconds=0`) does NOT wait for the sidecar's own
+    in-flight count, and `mint_variant` raises if the model is gone. */
+export function setInFlightMintCounter(fn: () => number): void {
+  mintCounter = fn;
+}
+
 /** #4079 — true only when a running chapter render is KNOWN to use the
     Quality (1.7B) tier. Gates the render lease (gpu/render-lease.ts): a
     Kokoro-only or standard render takes no lease. */
@@ -141,13 +159,18 @@ export function isAnyGenerationActive(): boolean {
   return provider().length > 0 || spliceActive();
 }
 
-/** #4445 — true when a render on a book OTHER than `bookId`, or any splice / QA repair
-    (on any book), may be in flight. Unregistered resolves to `true` (fail closed, like
+/** #4445 — true when a voice design or a variant mint is in flight on any book. */
+export function isDesignOrMintActive(): boolean {
+  return (designCounter?.() ?? 0) > 0 || (mintCounter?.() ?? 0) > 0;
+}
+
+/** #4445 — true when a render on a book OTHER than `bookId`, or any splice / QA repair or
+    voice design / variant mint (on any book), may be in flight. Unregistered resolves to `true` (fail closed, like
     isAnyGenerationActive). For a caller whose own render is already protected by its
     keep set (the generation-path tier reconciles). */
 export function isOtherGenerationActive(bookId: string): boolean {
   if (!provider) return true;
-  return provider().some((b) => b !== bookId) || spliceActive();
+  return provider().some((b) => b !== bookId) || spliceActive() || isDesignOrMintActive();
 }
 
 /** #4075 — true only when a splice or QA repair is KNOWN to be in flight and

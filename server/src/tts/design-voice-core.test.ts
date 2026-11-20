@@ -258,4 +258,30 @@ describe('runVoiceDesign', () => {
       message: expect.stringContaining('Coqui XTTS is loaded'),
     });
   });
+
+  it('#4445 — a design / mint is counted at the leaf gate while in flight and released when it settles (success or throw)', async () => {
+    const { postDesignAndCacheAudition } = await import('./design-voice-core.js');
+    const gate = await import('../gpu/active-generation-gate.js');
+    const base = {
+      target: 'http://sidecar/qwen/x',
+      fetchBody: '{}',
+      outVoiceId: 'v',
+      cacheScope: 's',
+      modelKey: 'qwen3-tts-1.7b' as const,
+      calibrationText: 't',
+      sidecarUrl: 'http://sidecar',
+      logContext: 'x',
+    };
+    for (const purpose of ['design', 'mint'] as const) {
+      const seen: boolean[] = [];
+      mockWithCapacityRetry.mockImplementationOnce(async () => {
+        seen.push(gate.isDesignOrMintActive());
+        throw new Error('stop');
+      });
+      expect(gate.isDesignOrMintActive()).toBe(false);
+      await expect(postDesignAndCacheAudition({ ...base, purpose })).rejects.toBeTruthy();
+      expect(seen).toEqual([true]);
+      expect(gate.isDesignOrMintActive()).toBe(false);
+    }
+  });
 });

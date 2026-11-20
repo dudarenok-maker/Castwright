@@ -119,5 +119,19 @@ describe('active-generation-gate', () => {
       setInFlightSpliceCounter(() => 1);
       expect(isOtherGenerationActive('book-1')).toBe(true);
     });
+
+    it.each([
+      ['design', 'setInFlightDesignCounter'],
+      ['mint', 'setInFlightMintCounter'],
+    ] as const)('is true when a %s is in flight, even if only the given book renders', async (_k, setter) => {
+      const gate = await import('./active-generation-gate.js');
+      gate.setActiveGenerationBooksProvider(() => ['book-1']);
+      expect(gate.isOtherGenerationActive('book-1')).toBe(false);
+      gate[setter](() => 1);
+      expect(gate.isDesignOrMintActive()).toBe(true);
+      expect(gate.isOtherGenerationActive('book-1')).toBe(true);
+      gate[setter](() => 0);
+      expect(gate.isDesignOrMintActive()).toBe(false);
+    });
   });
 });

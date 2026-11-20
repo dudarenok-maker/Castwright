@@ -108,6 +108,7 @@ import {
   setQualityRenderCounter,
   isAnyGenerationActive,
   isOtherGenerationActive,
+  isDesignOrMintActive,
 } from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
@@ -129,7 +130,8 @@ function otherBookScoringInFlight(bookId: string): boolean {
 }
 
 /** #4445 — true while work OTHER than `bookId`'s own render may be using a Qwen tier: a render on
-    another book, any splice or QA repair (any book), or another book's score pass. The
+    another book, any splice or QA repair, any voice design or variant mint (any book), or another
+    book's score pass. The
     run's own render is excluded on purpose (its `keep` set protects it). */
 function otherTierWorkActive(bookId: string): boolean {
   return isOtherGenerationActive(bookId) || otherBookScoringInFlight(bookId);
@@ -231,7 +233,9 @@ export async function triggerScoring(ctx: {
        or QA repair on ANY book, or one registered after the request's 202, may be using a
        tier scoreBook did not see: skip the eviction while any is active. Another book's
        score pass (its auditions render on the same sidecar, at that book's tiers) is
-       neither a render nor a splice, so it is read from `scoringInFlight` too. The
+       neither a render nor a splice, so it is read from `scoringInFlight` too. So is a
+       voice design or variant mint (`isDesignOrMintActive`): the reconcile's `/unload`
+       nulls the VoiceDesign model and the 1.7B Base under it (#4445). The
        generation path (`ctx.keep`) skips on the same rule except that this book's own
        render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
        superset, so its own chapters are already protected (#4445).
@@ -243,7 +247,7 @@ export async function triggerScoring(ctx: {
     const keep = ctx.keep ?? result.usedQwenTiers;
     const busy = ctx.keep
       ? otherTierWorkActive(ctx.bookId)
-      : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId);
+      : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId) || isDesignOrMintActive();
     if (busy) return;
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
   });
@@ -1247,7 +1251,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        sibling chapter's fallback line may be using.
        #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
        work OTHER than this book's own is active (`otherTierWorkActive`: a render
-       on another book, any splice or QA repair, another book's score pass): the
+       on another book, any splice or QA repair, any voice design or variant mint, another
+       book's score pass): the
        reconcile can unload a Qwen tier that work is using. Same-book sibling
        chapters are excluded from that check, so they still reconcile with Kokoro
        kept, as above. */
