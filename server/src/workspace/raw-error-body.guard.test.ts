@@ -12,7 +12,7 @@
      - a template literal interpolating either (reached by the same walk).
    An occurrence is exempt when it sits inside the argument list of a seam call
    (`requestFailureMessage(`, `requestFailureMessageFs(`, `itemFailureReason(`,
-   `workspace/file-lock.ts`) or of `scrubPaths(` (`tts/ffmpeg-failure.ts`, the
+   `workspace/file-lock.ts`) or of `scrubPaths(` / `scrubChildOutput(` (`tts/ffmpeg-failure.ts`, the
    child-process-output curation below). 4xx literals are never checked.
 
    METHOD: a TypeScript-AST walk (`parseGuardSource` / `resolvedCallName` from
@@ -61,6 +61,7 @@ const SEAM_CALLS = new Set([
   'requestFailureMessageFs',
   'itemFailureReason',
   'scrubPaths', // the #3702 (2026-11-21) curation for child-process output
+  'scrubChildOutput', // ...applied line by line to multi-line child output
 ]);
 
 /** Is the `.status(<arg>)` argument one that can be a 5xx? */
@@ -166,6 +167,7 @@ describe('raw caught-error message in a 5xx body — static guard (#3702)', () =
       expect(
         scanSource('res.status(500).json({ error: scrubPaths(`failed: ${r.error?.message}`) });'),
       ).toEqual([]);
+      expect(scanSource('res.status(500).json({ error: scrubChildOutput(err.message) });')).toEqual([]);
     });
     it('does not flag a 4xx body', () => {
       expect(scanSource('res.status(400).json({ error: e.message });')).toEqual([]);

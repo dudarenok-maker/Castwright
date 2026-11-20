@@ -54,6 +54,24 @@ describe('worktrees route -- path-free 500 bodies', () => {
     expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
   });
 
+  it('a multi-line stderr keeps the lines after the path, with no absolute path', async () => {
+    const { spawnSync: realSpawnSync } = await vi.importActual<typeof import('node:child_process')>(
+      'node:child_process',
+    );
+    const script =
+      "console.error('fatal: not a git repository: ' + process.argv[1]); console.error('hint: run git init first'); process.exit(128)";
+    spawnSyncMock.mockImplementation(() =>
+      realSpawnSync(process.execPath, ['-e', script, join(scratch, 'not-a-repo')], { encoding: 'utf8' }),
+    );
+
+    const res = await request(app).get('/api/worktrees');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain('hint: run git init first');
+    expect(res.body.error).not.toContain('not-a-repo');
+    expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
+  });
+
   it('a real spawn failure (git binary missing): names the failure, not null, and no absolute path', async () => {
     const { spawnSync: realSpawnSync } = await vi.importActual<typeof import('node:child_process')>(
       'node:child_process',

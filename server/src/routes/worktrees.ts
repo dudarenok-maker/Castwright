@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import net from 'node:net';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
-import { scrubPaths } from '../tts/ffmpeg-failure.js';
+import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 const PORT_VARS = ['VITE_PORT', 'PORT', 'LOCAL_TTS_PORT', 'PLAYWRIGHT_PORT'] as const;
 
@@ -93,7 +93,7 @@ worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
          the seam cannot fire here -- scrub instead. A spawn failure (git not on PATH) leaves
          stderr/stdout null and the cause on `error`, whose message can name a path too. */
       return res.status(500).json({
-        error: scrubPaths(
+        error: scrubChildOutput(
           `git worktree list failed: ${porcelain.stderr || porcelain.stdout || porcelain.error?.message}`,
         ),
       });

@@ -139,6 +139,27 @@ describe('POST /api/lan/cert/regenerate', () => {
     expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
   });
 
+  it('a multi-line stderr keeps every line after the path (mkcert install hints survive), no absolute path (#3702)', async () => {
+    /* Same shape as setup-lan-certs.mjs's Linux branch: the first hint line ends in an
+       absolute path, the lines that follow carry the other distros' commands. */
+    const lines = [
+      '[setup-lan-certs] [FAIL] mkcert is not on PATH. Install it once with one of:',
+      '  Debian/Ubuntu: sudo apt install libnss3-tools && sudo mv mkcert-* /usr/local/bin/mkcert',
+      '  Fedora:        sudo dnf install nss-tools mkcert',
+      '  Arch:          sudo pacman -S mkcert',
+      'Then re-run this script (or restart the app).',
+    ];
+    await realFailingChild(`console.error(${JSON.stringify(lines.join('\n'))}); process.exit(1)`);
+
+    const res = await request(makeApp()).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain('Fedora:        sudo dnf install nss-tools mkcert');
+    expect(res.body.error).toContain('Arch:          sudo pacman -S mkcert');
+    expect(res.body.error).toContain('Then re-run this script (or restart the app).');
+    expect(res.body.error).not.toContain('/usr/local');
+  });
+
   it('a child that dies with no stderr: the "Command failed" fallback carries no absolute path (#3702)', async () => {
     await realFailingChild('process.exit(1)');
 
