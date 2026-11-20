@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boundedSpawn, createHangBreaker, killLiveSpawns, killTree as killTreeReal } from '../lib/bounded-spawn.mjs';
+import { boundedSpawn, createHangBreaker, killLiveSpawns, liveSpawnCount, killTree as killTreeReal } from '../lib/bounded-spawn.mjs';
 import { pidIsAlive } from '../lib/pid-alive.mjs';
 
 const BOUND_MS = 1_500;
@@ -246,10 +246,69 @@ test('boundedSpawn: an OVERFLOW while the root is alive still kills its tree', a
   assert.equal(kills.length, 1);
 });
 
-test('bounded-spawn.mjs signals a root pid only through the dead-root-aware killRoot (the stdin-error and overflow sites cannot regress to a bare killTree)', () => {
+// The source with its comments stripped, so a pin cannot be satisfied (or tripped)
+// by prose that merely quotes the code it forbids.
+function boundedSpawnCode() {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'bounded-spawn.mjs'), 'utf8');
-  assert.equal((src.match(/killTree\(child\.pid\)/g) ?? []).length, 0, 'a bare killTree(child.pid) skips the pid-reuse rule');
-  assert.ok((src.match(/killRoot\(\)/g) ?? []).length >= 3, 'timeout, overflow and stdin-error all go through killRoot()');
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+test('bounded-spawn.mjs signals a root pid only through the dead-root-aware killRoot (the stdin-error and overflow sites cannot regress to a bare kill)', () => {
+  const code = boundedSpawnCode();
+  assert.equal((code.match(/killTree\(child\.pid\)/g) ?? []).length, 0, 'a bare killTree(child.pid) skips the pid-reuse rule');
+  assert.equal((code.match(/\bkill\(child\.pid\)/g) ?? []).length, 1, 'only killRoot itself may call kill(child.pid)');
+  assert.ok((code.match(/killRoot\(\)/g) ?? []).length >= 3, 'timeout, overflow and stdin-error all go through killRoot()');
+  // The stdin-error handler is the one kill site no test can reach with a real
+  // child (a non-benign stdin error cannot be provoked), so pin its body.
+  const handler = code.slice(code.indexOf("child.stdin.on('error'"), code.indexOf('child.stdin.end(input)'));
+  assert.ok(handler.includes('killRoot()'), 'the stdin-error handler must kill through killRoot()');
+  assert.ok(!/\bkill\(/.test(handler), 'the stdin-error handler must not call kill() directly');
+});
+
+test('boundedSpawn: every settle path (close, timeout, overflow, spawn error) forgets its root, so an interrupt never signals a finished child', async () => {
+  const before = liveSpawnCount();
+  await boundedSpawn('closes', process.execPath, ['-e', ''], { timeoutMs: 20_000 });
+  assert.equal(liveSpawnCount(), before, 'close');
+  await assert.rejects(boundedSpawn('times out', process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 400 }), (err) => err.message.startsWith('HUNG: '));
+  assert.equal(liveSpawnCount(), before, 'timeout');
+  await assert.rejects(
+    boundedSpawn('floods', process.execPath, ['-e', "process.stdout.write('x'.repeat(5000)); setTimeout(() => {}, 30000)"], { timeoutMs: 20_000, maxOutputBytes: 100 }),
+    (err) => err.message.startsWith('OVERFLOW: '),
+  );
+  assert.equal(liveSpawnCount(), before, 'overflow');
+  await assert.rejects(boundedSpawn('no such binary', 'castwright-no-such-binary-4244', [], { timeoutMs: 20_000 }), (err) => err.code === 'ENOENT');
+  assert.equal(liveSpawnCount(), before, 'spawn error');
+});
+
+test('killLiveSpawns: a Windows root that already exited is not signalled (its pid may be reused); POSIX still tries the group', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bounded-spawn-'));
+  const rootPidFile = join(dir, 'root.pid');
+  const pidFile = join(dir, 'escaped.pid');
+  // The root records its pid and exits at once; its detached grandchild keeps
+  // the output pipes open for 3 s, so the entry is still registered with a dead root.
+  const rootSource = `
+    const { spawn } = require('node:child_process');
+    require('node:fs').writeFileSync(${JSON.stringify(rootPidFile)}, String(process.pid));
+    spawn(process.execPath, ['-e',
+      "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 3000)",
+      ${JSON.stringify(pidFile)}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();
+  `;
+  const running = boundedSpawn('dead root', process.execPath, ['-e', rootSource], { timeoutMs: 20_000 });
+  try {
+    assert.ok(await waitFor(() => existsSync(rootPidFile)), 'fixture root never started');
+    const rootPid = Number(readFileSync(rootPidFile, 'utf8'));
+    assert.ok(await waitFor(() => !pidIsAlive(rootPid)), 'fixture root never exited');
+    await new Promise((r) => setTimeout(r, 300)); // let node deliver the root's 'exit'
+    assert.equal(liveSpawnCount() >= 1, true, 'the escaped descendant keeps the entry registered');
+    const kills = [];
+    const attempted = killLiveSpawns((pid) => { kills.push(pid); });
+    assert.equal(attempted, process.platform === 'win32' ? 0 : 1, `attempted kills: ${kills}`);
+    assert.deepEqual(kills, process.platform === 'win32' ? [] : [rootPid]);
+  } finally {
+    await running.catch(() => {});
+    reapPidFile(pidFile);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('killLiveSpawns: kills every boundedSpawn tree still running (the interrupted-host path), then forgets them', async () => {
