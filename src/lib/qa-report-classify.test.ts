@@ -227,7 +227,7 @@ describe('speaker check off (#4454)', () => {
       mismatchCount: 1,
       inconclusiveCount: 0,
     });
-    expect(line(r)).toBe('· Voice match — 1 of 1 eligible chapters checked so far, 1 mismatches (Render-integrity QA is now off)');
+    expect(line(r)).toBe('· Voice match — partly checked before the check was turned off, 1 mismatches so far (Render-integrity QA is now off)');
     expect(needsRerenderIds(builderPending({ charactersNeedingRerender: ['narrator'] }))).toEqual([]);
   });
 
@@ -248,7 +248,7 @@ describe('speaker check off (#4454)', () => {
       mismatchCount: 0,
       inconclusiveCount: 0,
     });
-    expect(line(r)).toBe('· Voice match — 1 of 1 eligible chapters checked so far, 0 mismatches (Render-integrity QA is now off)');
+    expect(line(r)).toBe('· Voice match — partly checked before the check was turned off, 0 mismatches so far (Render-integrity QA is now off)');
   });
 
   it('(l) gate on + the same builder shape is not checkedSoFar', () => {

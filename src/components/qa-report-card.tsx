@@ -131,7 +131,7 @@ function VoiceMatchRow({
         <span className="text-sm text-ink/70">Voice match</span>
         <div className="flex items-center gap-2">
           <span className="text-sm text-ink">
-            {vd.chaptersWithVerdicts} of {vd.chaptersEligible} eligible chapters checked so far
+            {vd.chaptersScored} of {vd.chaptersEligible} eligible chapters fully checked, more pending
           </span>
           {resumed ? (
             <span className="text-xs text-ink/50">Resuming — check back in a few minutes</span>
@@ -210,7 +210,7 @@ function VoiceMatchRow({
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
         <span className="text-sm text-ink">
-          {classification.chaptersWithVerdicts} of {classification.chaptersEligible} eligible chapters checked so far, {classification.mismatchCount} mismatches{inconclusiveNote}
+          partly checked before the check was turned off, {classification.mismatchCount} mismatches so far{inconclusiveNote}
         </span>
       </div>
     );

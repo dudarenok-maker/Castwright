@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeJsonAtomic } from '../workspace/state-io.js';
@@ -649,6 +649,42 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
       mismatches: [],
       inconclusiveCount: 0,
     });
+  });
+
+  /* #4454 pass 5 — chaptersWithVerdicts is read from the verdict FILE, not from the attempted
+     marker: a scoring pass that was interrupted or failed leaves the marker with no verdict rows. */
+  it('an attempted marker with no verdict file reports no chapter with a verdict', async () => {
+    const dir = await makeBook();
+    await seedPartlyScored(dir);
+    await rm(join(audioDir(dir), 'ch1.render-integrity.json'));
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift).toMatchObject({ chaptersEligible: 1, chaptersWithVerdicts: 0 });
+  });
+
+  /* #4454 pass 5 — a chapter that is not eligible (book-wide classification moved its only
+     character off qwen after an earlier scoring pass) can still carry verdict rows on disk; it
+     must not count. */
+  it('a non-eligible chapter that still has verdict rows is not counted', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' } },
+    });
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'kokoro', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'hero' })],
+      characterSnapshots: { hero: { voiceEngine: 'kokoro' } },
+    });
+    await writeVerdicts(join(audioDir(dir), 'ch2.render-integrity.json'), [
+      { characterId: 'hero', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 2 },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift).toMatchObject({ chaptersEligible: 1, chaptersWithVerdicts: 0 });
   });
 
   /* #4454 pass 4 — the book-level centroids file outlives a chapter restructure, so

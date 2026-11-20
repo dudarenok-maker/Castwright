@@ -49,7 +49,7 @@ test.describe('QA report card', () => {
           chaptersEligible: 2,
           chaptersScored: 2,
           chaptersEmbedFailed: 0,
-          chaptersWithVerdicts: 1,
+          chaptersWithVerdicts: 2,
           charactersOnRoster: 2,
           charactersChecked: 1,
           charactersPending: ['narrator'],
@@ -207,7 +207,8 @@ test.describe('QA report card', () => {
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page, /Solway Bay/i);
 
-    await expect(page.getByText('1 of 1 eligible chapters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeVisible();
+    await expect(page.getByText('partly checked before the check was turned off, 1 mismatches so far · Render-integrity QA is now off')).toBeVisible();
+    await expect(page.getByText(/eligible chapters/)).toHaveCount(0);
     await expect(page.getByTestId('qa-speaker-check-off')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
   });

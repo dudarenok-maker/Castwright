@@ -155,7 +155,10 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
         charactersPending: ['ren'],
         mismatches: [{ characterId: 'narrator', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
       });
-      expect(screen.getByText('1 of 1 eligible chapters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeInTheDocument();
+      expect(screen.getByText('partly checked before the check was turned off, 1 mismatches so far · Render-integrity QA is now off')).toBeInTheDocument();
+      /* the old chapter ratio read as full coverage: it must not come back in any form */
+      expect(screen.queryByText(/eligible chapters/)).toBeNull();
+      expect(screen.queryByText(/checked so far/)).toBeNull();
       expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
     });
@@ -199,22 +202,23 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
     });
 
-    it('(e) gate on + the builder shape (narrator scored, ren pending): the pending row counts chapters, not characters, and still offers Resume', () => {
-      /* server qa-report.test.ts partly-scored literal: charactersChecked is the roster minus too-short
-         verdicts, so it reads 2 here although ren was never scored */
+    it('(e) gate on + a partly scored book (ren pending in two of three chapters): the pending row prints the FULLY scored count, not the with-verdicts one, and still offers Resume', () => {
+      /* charactersChecked is the roster minus too-short verdicts, so it reads 2 although ren was never
+         scored; chaptersScored (1) and chaptersWithVerdicts (2) differ so the wrong field cannot pass */
       renderWith({
         speakerCheckEnabled: true,
-        chaptersEligible: 2,
+        chaptersEligible: 3,
         chaptersScored: 1,
         chaptersEmbedFailed: 0,
-        chaptersWithVerdicts: 1,
+        chaptersWithVerdicts: 2,
         charactersOnRoster: 2,
         charactersChecked: 2,
         charactersPending: ['ren'],
         mismatches: [],
         inconclusiveCount: 0,
       });
-      expect(screen.getByText('1 of 2 eligible chapters checked so far')).toBeInTheDocument();
+      expect(screen.getByText('1 of 3 eligible chapters fully checked, more pending')).toBeInTheDocument();
+      expect(screen.queryByText(/checked so far/)).toBeNull();
       expect(screen.queryByText(/characters checked so far/)).toBeNull();
       expect(screen.getByRole('button', { name: 'Resume scoring' })).toBeInTheDocument();
     });
