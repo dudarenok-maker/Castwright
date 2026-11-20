@@ -111,7 +111,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
 
     /* #3436 -- the viewed book's chapter row as it was BEFORE a claim flipped it to in_progress, so a
        `book_busy` refusal can hand it back unchanged. Keyed by entry id. */
-    const priorRows = new Map<string, Chapter>();
+    const priorRows = new Map<string, { row: Chapter; lastError: string | null }>();
 
     const dispatch = storeApi.dispatch as AppDispatch;
 
@@ -316,7 +316,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            same chapter regen. */
         if (chapters.currentBookId === e.bookId) {
           const prior = chapters.chapters.find((c) => c.id === e.chapterId);
-          if (prior) priorRows.set(e.id, prior);
+          if (prior) priorRows.set(e.id, { row: prior, lastError: chapters.lastError });
           dispatch(chaptersActions.regenerateChapterIds({ chapterIds: [e.chapterId] }));
         }
 

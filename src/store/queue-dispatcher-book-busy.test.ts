@@ -262,4 +262,20 @@ describe('#3436 a 409 book_busy refusal on the OPEN book (the row and the change
     await new Promise((r) => setTimeout(r, 50));
     expect(store.getState().chapters.chapters[0]).toEqual(doneRow);
   });
+
+  it('keeps the "Generation halted" banner across a refused claim (the skip path would have left it up)', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersActions.setChapters([doneRow]));
+    store.dispatch(chaptersActions.setCurrentBookId('book-A'));
+    store.dispatch(
+      chaptersActions.applyGenerationTick({ type: 'chapter_failed', errorReason: 'Sidecar is not ready.' } as never),
+    );
+    expect(store.getState().chapters.lastError).toBe('Sidecar is not ready.');
+    seed(store, [entry('a1', 'book-A', 1, 0)]);
+
+    await vi.waitFor(() => expect(generationPosts.filter((b) => b === 'book-A').length).toBe(1));
+    await vi.waitFor(() => expect(statusOf('a1')).toBe('queued'));
+    await vi.waitFor(() => expect(store.getState().chapters.chapters[0].state).not.toBe('in_progress'));
+    expect(store.getState().chapters.lastError).toBe('Sidecar is not ready.');
+  });
 });

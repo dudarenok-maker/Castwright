@@ -781,10 +781,13 @@ export const chaptersSlice = createSlice({
     },
 
     /** #3436 -- put one row back exactly as it was before a queue claim flipped it (the server
-        refused the render 409 `book_busy`, so nothing ran). */
-    restoreChapterRow: (s, a: PayloadAction<Chapter>) => {
-      const i = s.chapters.findIndex((c) => c.id === a.payload.id);
-      if (i >= 0) s.chapters[i] = a.payload;
+        refused the render 409 `book_busy`, so nothing ran) -- and the "Generation halted" banner the
+        claim cleared, unless something has set the slot since (two claims landing in one tick: the
+        second saved copy is already null). */
+    restoreChapterRow: (s, a: PayloadAction<{ row: Chapter; lastError: string | null }>) => {
+      const i = s.chapters.findIndex((c) => c.id === a.payload.row.id);
+      if (i >= 0) s.chapters[i] = a.payload.row;
+      if (s.lastError === null) s.lastError = a.payload.lastError;
     },
 
     /* Bulk regenerate — re-queue an explicit, possibly non-contiguous list
