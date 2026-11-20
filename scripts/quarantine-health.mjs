@@ -175,7 +175,16 @@
    load-dependent row, and it requires every run loaded AND the last one ending
    at or beyond LATE_COVERAGE_FRACTION (75%) of the MEASURED pass. A load whose
    pass never finishes inside the budget, or that died early, is reported as
-   not loaded rather than assumed live. The loaded loop's wall-clock budget is
+   not loaded rather than assumed live.
+
+   The LOADED window is two-sided (fixed schedule, fails closed). Run 5 ends
+   ~598 s after launch, so a LOADED verdict needs a measured pass strictly
+   between ~598 s and ~797 s (598 / 0.75). A FASTER pass ends during run 5, so
+   the load is relaunched under it and that run is not loaded (4/5); a SLOWER
+   pass (the green p90 is 810 s and max 836 s) leaves run 5's end under 75% of
+   it. Both read NOT loaded, and no fixed schedule covers both ends. So a slow
+   runner reads NOT loaded even when healthy, a week's verdict can be NOT loaded,
+   and graduation may take more than one weekly run. The loaded loop's wall-clock budget is
    LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS (30 min: the paced schedule ends ~10 min
    after launch and the pass completes by ~14 min on a green runner), and an
    interrupted run (SIGINT, SIGTERM, exit) kills the load and any in-flight

@@ -56,9 +56,15 @@ name: Quarantine Lane Health
 # struck ~63% of the way through the suite, so after the last run the load is left
 # to finish its pass, the pass is MEASURED, and a LOADED verdict needs the runs to
 # end at or beyond 75% of that measured length (a load that never finishes inside
-# the budget is reported NOT loaded). Expect the Windows quarantine step to take
-# about 12-15 minutes (the last run starts ~9.7 minutes after launch, then the load
-# finishes its pass), against a 30-minute loaded-loop budget. The
+# the budget is reported NOT loaded). The window is two-sided: run 5 ends ~598 s
+# after launch, so a LOADED verdict needs a measured pass between ~598 s and
+# ~797 s (598 / 0.75). A faster pass relaunches the load during run 5; a slower
+# one (green p90 810 s, max 836 s) leaves run 5 short of 75%. Both read NOT
+# loaded, so a healthy slow runner can read NOT loaded and graduation may need
+# more than one weekly run. Expect the Windows quarantine step to take about
+# 10-14 minutes (10 min 53 s at the reviewed head: the last run starts ~9.7
+# minutes after launch, then the load finishes its pass), against a 30-minute
+# loaded-loop budget. The
 # Ubuntu leg runs the files alone (`none`). Windows gets a
 # 40-minute cap (Ubuntu keeps 30): slower checkout, `npm ci` and choco ffmpeg
 # install; 40 is 30 plus 10 minutes of setup headroom, not a measurement. release.yml's `quarantine-lane` is
