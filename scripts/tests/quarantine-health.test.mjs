@@ -1907,3 +1907,25 @@ test('quarantine-health.yml turns the load on for the Windows leg only, and feed
   const step = job.steps.find((s) => s.name === 'Quarantine lane health report');
   assert.equal(step.env.QUARANTINE_HEALTH_LOAD, '${{ matrix.load }}');
 });
+
+// --- bounded captured output + no dead spawn options (#4244 task 2) ----------
+
+test('boundedVitestSpawn: output past the cap is killed and classified crashed (the old spawnSync maxBuffer contract), not timed-out', async () => {
+  const r = await boundedVitestSpawn('node -e "process.stdout.write(\'x\'.repeat(200000)); setTimeout(()=>{}, 30000)"', {
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 20000,
+    maxOutputBytes: 1000,
+  });
+  assert.equal(r.error.code, 'ENOBUFS');
+  assert.equal(classifyRunResult(r).runOutcome, 'crashed');
+});
+
+test('runVitestJson hands its spawner only the options boundedSpawn honours (no dead maxBuffer/encoding/shell/windowsHide)', async () => {
+  let opts;
+  await runVitestJson(process.cwd(), undefined, ['src/lib/foo.test.ts'], async (_cmd, o) => {
+    opts = o;
+    return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+  });
+  assert.deepEqual(Object.keys(opts).sort(), ['cwd', 'env', 'timeout']);
+});

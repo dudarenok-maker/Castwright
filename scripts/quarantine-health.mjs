@@ -1038,11 +1038,24 @@ export function classifyRunResult(r, reportText) {
 // whole tree with `taskkill /T /F`). Resolves a spawnSync-shaped result so
 // classifyRunResult stays unchanged: a HUNG rejection becomes the same
 // `ETIMEDOUT` error + SIGTERM a spawnSync timeout produced.
-export async function boundedVitestSpawn(command, { cwd, env, timeout }) {
+//
+// The captured output is capped at `maxOutputBytes` (the 64 MB the old
+// `spawnSync({ maxBuffer })` enforced): the JSON report goes to a file, so a
+// healthy run's stdout is one line, but a test that floods its console must
+// not grow this process's memory without limit. Overflow becomes the same
+// `ENOBUFS` error spawnSync produced, which classifyRunResult tags 'crashed'
+// (not 'timed-out').
+export const VITEST_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
+export async function boundedVitestSpawn(command, { cwd, env, timeout, maxOutputBytes = VITEST_OUTPUT_LIMIT_BYTES }) {
   try {
-    const r = await boundedSpawn(command, command, [], { timeoutMs: timeout, shell: true, cwd, env });
+    const r = await boundedSpawn(command, command, [], { timeoutMs: timeout, shell: true, cwd, env, maxOutputBytes });
     return { error: undefined, signal: null, status: r.status, stdout: r.stdout, stderr: r.stderr };
   } catch (err) {
+    if (/^OVERFLOW: /.test(err.message)) {
+      const e = new Error(err.message);
+      e.code = 'ENOBUFS';
+      return { error: e, signal: 'SIGTERM', status: null, stdout: '', stderr: err.message };
+    }
     if (!/^HUNG: /.test(err.message)) {
       return { error: err, signal: null, status: null, stdout: '', stderr: '' };
     }
@@ -1125,11 +1138,7 @@ export async function runVitestJson(cwd, config, files, spawn = boundedVitestSpa
   try {
     r = await spawn(command, {
       cwd,
-      encoding: 'utf8',
-      shell: true,
-      maxBuffer: 64 * 1024 * 1024,
       timeout: VITEST_RUN_TIMEOUT_MS,
-      windowsHide: true,
       // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
       // it.skip into a real it — without it every quarantined test reports
       // 'skipped' here and would misclassify as never-passes for EVERY test,

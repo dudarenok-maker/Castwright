@@ -52,11 +52,16 @@ const BENIGN_STDIN_ERRORS = new Set(['EPIPE', 'EOF', 'ERR_STREAM_DESTROYED']);
  *  says so (on Windows the dead root's pid is NOT signalled — it may have been
  *  reused). A spawn error (ENOENT etc.) rejects with that error unchanged.
  *
+ *  `maxOutputBytes` (optional, default unbounded) caps the stdout + stderr held
+ *  in memory: past it the whole tree is killed and the promise rejects with an
+ *  `OVERFLOW: ` error (the `spawnSync({ maxBuffer })` contract, which this
+ *  accumulate-as-it-arrives design otherwise drops).
+ *
  *  `options` are passed through to `spawn` (cwd, env). `input`, if given, is
  *  written to the child's stdin; otherwise stdin is closed. `windowsHide` is
  *  always set — a literal below, because spawn-windows-hide.test.ts is
  *  syntactic and cannot see it arriving through `...options`. */
-export function boundedSpawn(label, command, args, { timeoutMs, input, ...options }) {
+export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutputBytes = Infinity, ...options }) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       ...options,
@@ -70,8 +75,20 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, ...option
     let rootExited = false;
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
+    const onData = (append) => (d) => {
+      if (settled) return;
+      append(d);
+      if (stdout.length + stderr.length <= maxOutputBytes) return;
+      settled = true;
+      clearTimeout(timer);
+      killTree(child.pid);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.stdin?.destroy();
+      reject(new Error(`OVERFLOW: "${label}" produced more than ${maxOutputBytes} bytes of output; its process tree was killed.`));
+    };
+    child.stdout.on('data', onData((d) => { stdout += d; }));
+    child.stderr.on('data', onData((d) => { stderr += d; }));
     if (input !== undefined) {
       child.stdin.on('error', (err) => {
         if (BENIGN_STDIN_ERRORS.has(err.code) || settled) return;

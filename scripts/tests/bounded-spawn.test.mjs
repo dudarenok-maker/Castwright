@@ -192,3 +192,12 @@ test('boundedSpawn: a child that exits in time resolves status/stdout/stderr (co
   ], { timeoutMs: 30_000 });
   assert.deepEqual(r, { status: 3, stdout: 'out', stderr: 'err' });
 });
+
+test('boundedSpawn: maxOutputBytes kills the tree and rejects OVERFLOW once stdout+stderr pass the cap; under it resolves normally', async () => {
+  await assert.rejects(
+    boundedSpawn('flood', process.execPath, ['-e', "process.stdout.write('x'.repeat(200000)); setTimeout(() => {}, 30000)"], { timeoutMs: 20000, maxOutputBytes: 1000 }),
+    (err) => /^OVERFLOW: "flood"/.test(err.message),
+  );
+  const ok = await boundedSpawn('quiet', process.execPath, ['-e', "process.stdout.write('hi')"], { timeoutMs: 20000, maxOutputBytes: 1000 });
+  assert.equal(ok.stdout, 'hi');
+});
