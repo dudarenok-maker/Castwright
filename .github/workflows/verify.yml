@@ -435,26 +435,36 @@ jobs:
       - name: Setup Node + deps
         uses: ./.github/actions/setup
 
+      # An apt infrastructure stall (mirror down) must not redden a PR that did not
+      # touch ffmpeg, so a failed install WARNS and skips the assert and both
+      # suites via the `installed` output; it never fails the job. Budget: per
+      # command bound 120s (+10s -k grace); 3 x (2 x 130 + 10) = 810s fits the
+      # 15-minute step timeout, so this warning path is reached before the runner
+      # would kill the step. Gated on a step output, not a blanket error-swallow
+      # flag, which would also hide a real version-assert or test failure when
+      # ffmpeg DID install.
       # supports: test:server:ffmpeg-floor
       - name: Install ffmpeg (apt, floor build)
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
-        timeout-minutes: 10
+        id: install_ffmpeg
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if timeout -k 10 240 sudo apt-get update \
-              && timeout -k 10 240 sudo apt-get install -y --no-install-recommends ffmpeg; then
+            if timeout -k 10 120 sudo apt-get update \n              && timeout -k 10 120 sudo apt-get install -y --no-install-recommends ffmpeg; then
+              echo "installed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "apt ffmpeg install attempt $attempt failed"
             sleep 10
           done
-          echo "::error::apt ffmpeg install failed after 3 attempts"
-          exit 1
+          echo "::warning::ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run"
+          echo "ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run" >> "$GITHUB_STEP_SUMMARY"
+          echo "installed=false" >> "$GITHUB_OUTPUT"
 
       # supports: test:server:ffmpeg-floor
       - name: Assert ffmpeg is on the declared floor
-        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
+        if: (fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared) && steps.install_ffmpeg.outputs.installed == 'true'
         run: |
           ffmpeg -version
           node -e '
@@ -477,7 +487,7 @@ jobs:
       # hand-kept list would drift silently.
       # leg: test:server:ffmpeg-floor
       - name: Server tests on the ffmpeg floor
-        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
+        if: (fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared) && steps.install_ffmpeg.outputs.installed == 'true'
         run: |
           cd server
           npx vitest run

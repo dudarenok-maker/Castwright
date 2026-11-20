@@ -15,7 +15,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { computeScopes } from '../ci-scope.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -1782,4 +1785,97 @@ test('ffmpeg floor leg (#4461): install, then version assert, then tests', () =>
   assert.ok(install >= 0 && assertStep >= 0 && tests >= 0, `ffmpeg-floor is missing a step (install=${install}, assert=${assertStep}, tests=${tests})`);
   assert.ok(install < assertStep, 'version-assert step runs before the ffmpeg install step; it would assert against the wrong binary');
   assert.ok(assertStep < tests, 'version-assert step runs after the test step; a wrong ffmpeg would be discovered only after the tests ran on it');
+});
+
+// ---------------------------------------------------------------------------
+// ffmpeg-floor apt-stall contract (#4461, operator decision on PR #4490). The
+// leg stays REQUIRED, but an apt infrastructure stall (mirror down) must not
+// turn `npm run verify` red on a PR that changed nothing about ffmpeg: the
+// install step warns, records the gap, and gates the version assert and both
+// suites on a step OUTPUT. A version-assert or test failure when ffmpeg DID
+// install stays red. Never `continue-on-error`: that would also swallow those.
+// ---------------------------------------------------------------------------
+
+const FFMPEG_FLOOR_WARNING =
+  '::warning::ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run';
+
+function ffmpegFloorInstallStep() {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /apt-get install\b[^\n]*\bffmpeg\b/.test(s));
+  assert.ok(step, 'ffmpeg-floor has no apt install step');
+  return step;
+}
+
+test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead of failing', () => {
+  const { body, steps } = ffmpegFloorJob();
+  const install = ffmpegFloorInstallStep();
+  const id = (install.match(/^ {8}id:\s*(\S+)\s*$/m) ?? [])[1];
+  assert.ok(id, 'install step has no `id:`; later steps cannot gate on its output');
+  assert.ok(install.includes(FFMPEG_FLOOR_WARNING), 'install step lost the exact ::warning:: line for an apt stall');
+  assert.match(install, /GITHUB_STEP_SUMMARY/, 'install step does not write the warning to $GITHUB_STEP_SUMMARY');
+  assert.match(install, /installed=true[^\n]*GITHUB_OUTPUT/, 'install step never sets installed=true');
+  assert.match(install, /installed=false[^\n]*GITHUB_OUTPUT/, 'install step never sets installed=false on failure');
+  assert.doesNotMatch(install, /::error::|^\s*exit 1\b/m, 'install step fails the job on an apt stall; it must warn and exit 0');
+  assert.doesNotMatch(body, /continue-on-error/, 'ffmpeg-floor uses continue-on-error; it would also swallow a real assert/test failure. Gate on the step output');
+  for (const s of steps.filter((x) => /readFfmpegFloor|npx vitest run/.test(x))) {
+    assert.match(
+      s,
+      new RegExp(String.raw`^ {8}if:[^\n]*steps\.${id}\.outputs\.installed == 'true'`, 'm'),
+      `step \`${s.split('\n')[0]}\` is not gated on steps.${id}.outputs.installed == 'true'`,
+    );
+  }
+});
+
+test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', () => {
+  const bash = spawnSync('bash', ['-c', 'true']);
+  if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
+  const install = ffmpegFloorInstallStep();
+  const run = install.split(/^ {8}run: \|\n/m)[1];
+  assert.ok(run, 'install step has no `run: |` block');
+  const script = run.replace(/^ {10}/gm, '');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\nexit 100\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const out = join(dir, 'output');
+    const summary = join(dir, 'summary');
+    writeFileSync(out, '');
+    writeFileSync(summary, '');
+    const r = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(r.status, 0, `install step failed on an apt stall (exit ${r.status}): ${r.stdout}${r.stderr}`);
+    assert.ok(r.stdout.includes(FFMPEG_FLOOR_WARNING), `no ::warning:: on stdout: ${r.stdout}`);
+    assert.ok(readFileSync(summary, 'utf8').includes(FFMPEG_FLOOR_WARNING.replace('::warning::', '')), 'step summary lacks the warning line');
+    assert.match(readFileSync(out, 'utf8'), /^installed=false$/m, 'GITHUB_OUTPUT lacks installed=false');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeout (warning path reachable)', () => {
+  const install = ffmpegFloorInstallStep();
+  const timeoutMinutes = Number((install.match(/^ {8}timeout-minutes:\s*(\d+)\s*$/m) ?? [])[1]);
+  const bounds = [...install.matchAll(/timeout -k (\d+) (\d+) sudo apt-get/g)];
+  const sleeps = [...install.matchAll(/^\s*sleep (\d+)\s*$/gm)];
+  const attempts = (install.match(/for attempt in ([\d ]+); do/) ?? ['', ''])[1].trim().split(/\s+/).length;
+  assert.ok(timeoutMinutes > 0 && bounds.length === 2 && sleeps.length === 1, 'cannot parse the install retry budget');
+  const bound = Number(bounds[0][2]);
+  const kill = Number(bounds[0][1]);
+  const sleep = Number(sleeps[0][1]);
+  assert.equal(attempts, 3, 'retry loop is no longer 3 attempts');
+  // attempts x (2 apt commands x bound + inter-attempt sleep) must fit the step
+  // timeout, else the runner kills the step before the warning can be emitted.
+  assert.ok(
+    attempts * (2 * bound + sleep) < timeoutMinutes * 60,
+    `3 x (2 x ${bound} + ${sleep}) = ${attempts * (2 * bound + sleep)}s does not fit timeout-minutes ${timeoutMinutes} (${timeoutMinutes * 60}s)`,
+  );
+  // Worst case also pays the -k kill grace after each command's bound.
+  assert.ok(
+    attempts * (2 * (bound + kill) + sleep) < timeoutMinutes * 60,
+    `with the -k ${kill}s kill grace the worst case exceeds timeout-minutes ${timeoutMinutes}`,
+  );
 });
