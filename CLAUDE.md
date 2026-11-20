@@ -988,7 +988,7 @@ The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features
 
 - `npm run test:e2e` (cloud `verify.yml` gate, ~90s): `playwright test --project=chromium`. Runs every spec + the chromium project of the responsive specs (`e2e/responsive/*.spec.ts`).
 - `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports. It SKIPS the mobile/tablet visual baselines (`--grep-invert="visual baselines"`).
-- `npm run test:e2e:mobile:visual` (opt-in locally): `playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1`. Reads the committed Linux mobile/tablet baselines. Runs in `cross-os.yml` (`mobile-e2e` job) and `release.yml` (blocks `publish`), NOT in `verify.yml`. The win32 mobile/tablet baselines are read by no workflow (manual compare on a Windows box only).
+- `npm run test:e2e:mobile:visual` (opt-in locally): `playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1`. Reads the committed Linux mobile/tablet baselines ON CI; run locally on Windows it reads the win32 set (that is the manual compare: run `npm run test:e2e:mobile:visual` on a Windows box). Runs in `cross-os.yml` (`mobile-e2e` job) and `release.yml` (blocks `publish`), NOT in `verify.yml`. The win32 mobile/tablet baselines are read by no workflow (manual compare on a Windows box only).
 - `npm run test:e2e:all` (opt-in, ~17min): everything across all 3 projects.
 
 Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it auto-runs at every project.
