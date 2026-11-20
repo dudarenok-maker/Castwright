@@ -1095,8 +1095,12 @@ export async function writeFoldJournal(
   characters: ReadonlyArray<{ id: string; name: string }>,
 ): Promise<void> {
   /* Cast-locked: a manual merge appends to this journal under that lock, and the
-     read -> replace -> write must not straddle it (#4031). */
+     read -> replace -> write must not straddle it (#4031). #3437 - a run superseded by now
+     writes no lineage: the fence is captured before the lock and checked inside it, so the
+     journal lands iff its run's sentences do (this call precedes the persist). */
+  const fence = currentRunEpochFence();
   await withCastLock(bookDir, async () => {
+    if (staleRunWriteDropped(fence, 'fold journal')) return;
     const journal = await loadCastMerges(bookDir);
     await saveCastMerges(
       bookDir,
@@ -1120,8 +1124,10 @@ export async function writeDedupJournal(
   preDedupSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
   preDedupRoster: ReadonlyArray<{ id: string; name: string }>,
 ): Promise<void> {
-  /* Cast-locked, as writeFoldJournal (#4031). */
+  /* Cast-locked, and fenced, as writeFoldJournal (#4031, #3437). */
+  const fence = currentRunEpochFence();
   await withCastLock(bookDir, async () => {
+    if (staleRunWriteDropped(fence, 'dedup journal')) return;
     const journal = await loadCastMerges(bookDir);
     await saveCastMerges(
       bookDir,

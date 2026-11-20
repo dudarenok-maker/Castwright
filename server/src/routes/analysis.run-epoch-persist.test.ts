@@ -36,9 +36,9 @@ const seam = vi.hoisted(() => ({
   afterPersistReturn: null as null | (() => void),
   /** runs at the persist window: after cast.json landed, before the state.json step. */
   afterCastPersist: null as null | (() => void),
-  /** runs inside the Nth (1-based) `saveCastMerges` call, before it writes: 1 = fold journal, 2 = dedup journal. */
-  beforeJournal: null as null | { nth: number; fn: () => void },
-  journalCalls: 0,
+  /** runs just before a journal writer takes the cast lock (it is the caller in the stack): the
+      window in which a Start fresh can register while the journal waits for the lock. */
+  beforeJournalLock: null as null | { writer: 'writeFoldJournal' | 'writeDedupJournal'; fn: () => void },
 }));
 
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
@@ -59,19 +59,18 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../store/cast-merges.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../store/cast-merges.js')>();
+vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/cast-lock.js')>();
   return {
     ...actual,
-    saveCastMerges: (...a: Parameters<typeof actual.saveCastMerges>) => {
-      seam.journalCalls += 1;
-      if (seam.beforeJournal && seam.beforeJournal.nth === seam.journalCalls) {
-        const { fn } = seam.beforeJournal;
-        seam.beforeJournal = null;
-        fn();
+    withCastLock: ((...a: Parameters<typeof actual.withCastLock>) => {
+      const armed = seam.beforeJournalLock;
+      if (armed && new Error().stack?.includes(`${armed.writer} `)) {
+        seam.beforeJournalLock = null;
+        armed.fn();
       }
-      return actual.saveCastMerges(...a);
-    },
+      return actual.withCastLock(...a);
+    }) as typeof actual.withCastLock,
   };
 });
 
@@ -206,7 +205,6 @@ async function runJob(
   opts: { drift?: boolean } = {},
 ): Promise<Run> {
   driftFixture = opts.drift === true;
-  seam.journalCalls = 0;
   const manuscriptId = `test-run-epoch-persist-${label}-${Date.now()}-${Math.random()}`;
   const bookId = `b_run_epoch_persist_${label}`;
   const bookDir = mkdtempSync(join(tmpdir(), `audiobook-run-epoch-persist-${label}-`));
@@ -363,7 +361,7 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
     seam.beforePersist = null;
     seam.afterCastPersist = null;
     seam.afterPersistReturn = null;
-    seam.beforeJournal = null;
+    seam.beforeJournalLock = null;
     driftFixture = false;
     __resetRunEpochsForTests();
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
@@ -477,6 +475,44 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
           await run.cleanup();
         }
       });
+    }
+  });
+
+  /* Review pass 1 (#4549), finding 2: the fold and dedup journals are written BEFORE the persist;
+     a run superseded in that window must not write its lineage (journal persisted iff its
+     sentences are). */
+  describe('a run superseded during the journal step writes no journal', () => {
+    for (const kind of ['main', 'subset'] as const) {
+      for (const [writer, which] of [
+        ['writeFoldJournal', 'fold'],
+        ['writeDedupJournal', 'dedup'],
+      ] as const) {
+        it(`${kind} job: superseded before the ${which} journal write -> cast-merges.json untouched, ends aborted`, async () => {
+          let before: string | null | undefined;
+          const run = await runJob(
+            `journal-${which}-${kind}`,
+            kind,
+            ({ manuscriptId, read }) => {
+              seam.beforeJournalLock = {
+                writer,
+                fn: () => {
+                  before = read('cast-merges.json');
+                  beginRunEpoch(manuscriptId); // a Start fresh registers here
+                },
+              };
+            },
+            { drift: true },
+          );
+          try {
+            expect(before, 'the journal seam fired').not.toBeUndefined();
+            expect(run.read('cast-merges.json')).toBe(before);
+            expect(terminal(run)?.code).toBe('aborted');
+            expect(run.logs.some((l) => l.includes(`dropped stale-run write: ${which} journal`))).toBe(true);
+          } finally {
+            await run.cleanup();
+          }
+        });
+      }
     }
   });
 
