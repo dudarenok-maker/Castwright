@@ -132,3 +132,8 @@ test('assert-playwright-ran requires passes in every expected project', async ()
   assert.match(checkProjects({ suites: [] }, want), /mobile-chrome/);
   assert.equal(checkProjects(mobileOnly, []), null);
 });
+
+test('release.yml publish job has no `if:` (a skipped-gate release must not publish)', () => {
+  const doc = yaml.load(read('.github/workflows/release.yml'));
+  assert.ok(!('if' in doc.jobs.publish), 'publish must have no `if:`');
+});
