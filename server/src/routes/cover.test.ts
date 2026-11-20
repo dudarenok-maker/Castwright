@@ -545,3 +545,33 @@ describe('PATCH /:bookId/cover/framing (plan 40)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+/* #3702 / #4508 -- a CoverSourceError that carries a node fs error shape answers the curated body. */
+describe('cover router -- fs failure curation (#4508)', () => {
+  it('POST 502 body is FS_FAILURE_REQUEST_ERROR, not the raw path-bearing message', async () => {
+    const { CoverSourceError } = await import('../cover/sources/types.js');
+    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const search = await import('../cover/search.js');
+    const fsErr = Object.assign(
+      new CoverSourceError(
+        'openlibrary',
+        'http',
+        "EPERM: operation not permitted, rename 'C:/Users/someone/castwright-workspace/x' -> 'y'",
+      ),
+      { code: 'EPERM', syscall: 'rename', path: 'C:/Users/someone/castwright-workspace/x' },
+    );
+    const spy = vi.spyOn(search, 'findCandidateById').mockRejectedValue(fsErr);
+    const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const quietErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover`)
+      .set('Content-Type', 'application/json')
+      .send({ candidateId: 'openlibrary:111' });
+    spy.mockRestore();
+    quiet.mockRestore();
+    quietErr.mockRestore();
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(res.text).not.toContain('someone');
+  });
+});

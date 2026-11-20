@@ -104,7 +104,7 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
   } catch (e) {
     if (e instanceof CoverSourceError || e instanceof CoverDownloadError) {
       console.warn('[cover] POST failed', e);
-      return res.status(502).json({ error: e.message, kind: e.kind });
+      return res.status(502).json({ error: requestFailureMessageFs(e, e.message), kind: e.kind });
     }
     console.error('[cover] POST failed', e);
     res.status(500).json({
@@ -224,7 +224,7 @@ coverRouter.post(
         jpeg = await encodeUploadedCover(file!.buffer, sniffedMime);
       } catch (e) {
         if (e instanceof UploadError && e.kind === 'transcode_failed') {
-          return res.status(502).json({ error: e.message, kind: e.kind });
+          return res.status(502).json({ error: requestFailureMessageFs(e, e.message), kind: e.kind });
         }
         throw e;
       }
