@@ -610,13 +610,14 @@ chapterSpliceRouter.post(
     } finally {
       releaseSlot();
     }
-      }, { refuseIfLive: 'analysis' });
+      }, { refuseIfLive: mode === 'rerecord' ? 'analysis' : undefined });
     } catch (e) {
       console.error('[splice] job registration failed', e);
       return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the splice.');
     }
     if (registered === BOOK_GONE) return fail('Book not found.');
-    /* #3436 -- refused while an analysis is registered. The registration check is atomic with the
+    /* #3436 -- a re-record (the only mode that rebuilds the analysis cache) is refused while an
+       analysis is registered; a remix never rebuilds it and is allowed. The registration check is atomic with the
        token add, and no header has been flushed yet (the job's first statement flushes), so this is
        a plain JSON 409. `Content-Type` was pre-set to SSE for the pre-registration `fail` frames. */
     if ('busy' in registered) {

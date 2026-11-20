@@ -97,10 +97,28 @@ const ROUTES: { name: string; send: (id: string) => request.Test }[] = [
     send: (id) =>
       request(app)
         .post(`/api/books/${id}/chapters/1/splice`)
-        .send({ mode: 'remix', characterId: 'narr', gainDb: 3 }),
+        .send({ mode: 'rerecord', characterId: 'narr', modelKey: 'coqui-xtts-v2' }),
   },
   {
     name: 'qa-repair',
+    send: (id) =>
+      request(app).post(`/api/books/${id}/chapters/1/audio-qa-repair`).send({ dryRun: false }),
+  },
+];
+
+/* Owner decision 2026-11-21 (#3436): only the modes that REBUILD the analysis cache are refused.
+   A splice `remix` (loudness fix) and a QA-repair `dryRun` scan never rebuild it, so they stay
+   allowed during an analysis. */
+const ALLOWED_ROUTES: typeof ROUTES = [
+  {
+    name: 'splice remix (loudness fix)',
+    send: (id) =>
+      request(app)
+        .post(`/api/books/${id}/chapters/1/splice`)
+        .send({ mode: 'remix', characterId: 'narr', gainDb: 3 }),
+  },
+  {
+    name: 'qa-repair dryRun scan',
     send: (id) => request(app).post(`/api/books/${id}/chapters/1/audio-qa-repair`).send({}),
   },
 ];
@@ -137,6 +155,15 @@ describe('#3436 render jobs are refused while an analysis job is live', () => {
         expect(res.body?.code).not.toBe('book_busy');
         expect(res.status).toBe(200);
       });
+    });
+  }
+
+  for (const route of ALLOWED_ROUTES) {
+    it(`${route.name} is ALLOWED while an analysis job is registered (it never rebuilds the cache)`, async () => {
+      releases.push(await holdJob(bookId, 'analysis'));
+      const res = await route.send(bookId);
+      expect(res.body?.code).not.toBe('book_busy');
+      expect(res.status).toBe(200);
     });
   }
 });

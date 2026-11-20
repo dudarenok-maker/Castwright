@@ -930,13 +930,14 @@ chapterQaRepairRouter.post(
     } finally {
       releaseSlot?.();
     }
-      }, { refuseIfLive: 'analysis' });
+      }, { refuseIfLive: dryRun ? undefined : 'analysis' });
     } catch (e) {
       console.error('[qa-repair] job registration failed', e);
       return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the audio-QA repair.');
     }
     if (registered === BOOK_GONE) return fail('Book not found.');
-    /* #3436 -- see the splice route: refused (409 JSON) while an analysis is registered. */
+    /* #3436 -- see the splice route: a repair that writes (`!dryRun`, the only one that rebuilds the
+       analysis cache) is refused (409 JSON) while an analysis is registered. */
     if ('busy' in registered) {
       res.removeHeader('Content-Type');
       return res
