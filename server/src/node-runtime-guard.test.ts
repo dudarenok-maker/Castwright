@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -130,6 +131,15 @@ describe('loadNodeMinimum', () => {
 });
 
 describe('loadCrashRanges', () => {
+  // Plan 293 invariant 1: the list in package.json equals the plan's list. The
+  // other tests here run on RANGES, a copy; this one pins the real file.
+  it('equals the plan 293 ranges exactly, and the real minimum is 24.16.0', () => {
+    expect(loadCrashRanges()).toEqual([
+      { from: '0.0.0', toExclusive: '24.16.0' },
+      { from: '25.0.0', toExclusive: '26.1.0' },
+    ]);
+    expect(loadNodeMinimum()).toBe('24.16.0');
+  });
   it('reads a non-empty list from the real package.json', () => {
     const ranges = loadCrashRanges();
     expect(ranges.length).toBeGreaterThan(0);
@@ -144,5 +154,27 @@ describe('index.ts import order', () => {
       .split(/\r?\n/)
       .find((l) => l.startsWith('import'));
     expect(first).toBe("import './node-runtime-guard-boot.js';");
+  });
+});
+
+describe('node-runtime-guard-boot.ts', () => {
+  // The boot module is what index.ts imports first; nothing else executes it.
+  // Run it for real as a child that looks like Node 24.15.0 on Windows.
+  it('refuses a known-bad Windows Node: stderr line and exit 1', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const stub = `data:text/javascript,${encodeURIComponent(
+      "Object.defineProperty(process,'version',{value:'v24.15.0',configurable:true});" +
+        "Object.defineProperty(process,'platform',{value:'win32',configurable:true});",
+    )}`;
+    const env: NodeJS.ProcessEnv = { ...process.env, CONDA_PREFIX: '' };
+    delete env.NODE_OPTIONS;
+    const r = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '--import', stub, join(here, 'node-runtime-guard-boot.ts')],
+      { cwd: join(here, '..'), env, encoding: 'utf8', timeout: 60_000, windowsHide: true },
+    );
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(1);
+    expect(r.stderr).toMatch(/Castwright can.t start on Node v24\.15\.0 on Windows/);
+    expect(r.stderr).toContain('Install Node v24.16.0 or newer');
   });
 });
