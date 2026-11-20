@@ -2,6 +2,9 @@
    Implements the upload + analysis + voice-match slice of the OpenAPI spec.
    Frontend (Vite, :5173) proxies /api/* to this server (:8080) — see vite.config.ts. */
 
+/* #4443 — refuse a Node release with the Windows loopback-connect crash before anything else loads. */
+import './node-runtime-guard-boot.js';
+
 /* MUST be the first import: it runs `process.loadEnvFile('.env')` as a
    top-level side effect, populating `process.env` before any downstream
    module in the graph evaluates. Without this, ESM hoisting means imports
