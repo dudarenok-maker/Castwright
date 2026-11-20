@@ -10614,10 +10614,12 @@ components:
             chaptersWithVerdicts:
               type: integer
               description: >-
-                How many of the current eligible chapters hold at least one
-                voice-match verdict row in their own per-chapter verdict file
-                (which a chapter restructure deletes). Evidence that something
-                was checked in the audio as it stands now, unlike
+                How many eligible chapters have a verdict file (at the
+                chapter's current slug) holding at least one voice-match
+                verdict row. A chapter restructure deletes that file with the
+                chapter, but a plain re-render with the check off does not;
+                the attempted marker is what flags such a chapter as
+                couldn't-be-embedded. Unlike
                 charactersChecked (the roster minus too-short verdicts, so a
                 never-scored book reports it whole) and charactersPending
                 (read from the book-level centroids file, which outlives a

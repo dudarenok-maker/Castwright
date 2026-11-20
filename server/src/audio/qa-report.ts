@@ -55,10 +55,11 @@ export interface AudioQaReport {
      *  attempted on any eligible chapter at all ("gate off") — see the
      *  computation below. */
     chaptersEmbedFailed: number;
-    /** #4454 — how many of the CURRENT eligible chapters hold at least one voice-match verdict row
-     *  on disk (their own per-chapter verdict file, which a restructure deletes with the chapter).
-     *  The one piece of evidence that something was checked in the audio as it stands now:
-     *  `charactersChecked` counts the roster minus too-short verdicts (a never-scored book reports
+    /** #4454 — how many eligible chapters have a verdict file (at the chapter's current slug) holding
+     *  at least one voice-match verdict row. A restructure deletes that file with the chapter, but a
+     *  plain re-render with the check off does NOT: the file stays, and the attempted marker is what
+     *  flags such a chapter as couldn't-be-embedded (`embedShortfall`) rather than checked.
+     *  Unlike it, `charactersChecked` counts the roster minus too-short verdicts (a never-scored book reports
      *  it whole), `charactersPending` reads the book-level centroids file (it outlives a
      *  restructure), and `chaptersScored` is zeroed by any pending character. */
     chaptersWithVerdicts: number;

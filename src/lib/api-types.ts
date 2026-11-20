@@ -7591,7 +7591,7 @@ export interface components {
                 chaptersScored: number;
                 /** @description Eligible chapters the voice-drift gate attempted but never produced a verdict for (an embedding failure). Nonzero for both an isolated failure (some chapters scored, this one didn't) and a fleet-wide failure (every eligible chapter was attempted but ALL of them failed, so chaptersScored is also 0) — the two are otherwise indistinguishable from chaptersScored alone. Stays 0 only when the gate was never attempted on any eligible chapter ("gate off"). */
                 chaptersEmbedFailed: number;
-                /** @description How many of the current eligible chapters hold at least one voice-match verdict row in their own per-chapter verdict file (which a chapter restructure deletes). Evidence that something was checked in the audio as it stands now, unlike charactersChecked (the roster minus too-short verdicts, so a never-scored book reports it whole) and charactersPending (read from the book-level centroids file, which outlives a restructure). #4454. */
+                /** @description How many eligible chapters have a verdict file (at the chapter's current slug) holding at least one voice-match verdict row. A chapter restructure deletes that file with the chapter, but a plain re-render with the check off does not; the attempted marker is what flags such a chapter as couldn't-be-embedded. Unlike charactersChecked (the roster minus too-short verdicts, so a never-scored book reports it whole) and charactersPending (read from the book-level centroids file, which outlives a restructure). #4454. */
                 chaptersWithVerdicts: number;
                 charactersOnRoster: number;
                 charactersChecked: number;
