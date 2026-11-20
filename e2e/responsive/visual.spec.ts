@@ -112,6 +112,16 @@ const topbarMask = (page: Page) => [
   page.getByTestId('status-pill'),
 ];
 
+/* #4391 — pin the top-bar Status chip in the full-page captures. The chip label
+   is fixed per route under mocks (summarizeStatus, src/components/top-bar.tsx:
+   "Status" with no active book, "Revisions · 1" on the Solway Bay book routes),
+   but VISUAL_DIFF_OPTS' 5% tolerance is loose enough to let a label change pass
+   unnoticed: the committed baselines kept an older "Revisions · 1" chip on the
+   no-book routes while the regen workflow rendered "Status". A DOM assertion
+   fails on a chip change instead. Runs under --update-snapshots too. */
+const expectStatusChip = (page: Page, label: string) =>
+  expect(page.getByTestId('status-pill').first()).toHaveText(label);
+
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
   test('library', async ({ page }) => {
@@ -125,6 +135,7 @@ test.describe('visual baselines', () => {
        CSS transitions at their final state but not the initial-mount
        opacity 0 → 1 if React hasn't queued the second frame yet. */
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('library.png', VISUAL_DIFF_OPTS);
   });
 
@@ -133,6 +144,7 @@ test.describe('visual baselines', () => {
     /* Wait for the upload view's primary CTA to confirm hydration. */
     await expect(page.getByRole('button', { name: /Paste text/i })).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(200);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('upload.png', VISUAL_DIFF_OPTS);
   });
 
@@ -146,6 +158,7 @@ test.describe('visual baselines', () => {
     await goToConfirm(page);
     await waitForConfirmViewReady(page);
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('confirm.png', VISUAL_DIFF_OPTS);
   });
 
@@ -158,6 +171,7 @@ test.describe('visual baselines', () => {
       timeout: 10_000,
     });
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Revisions · 1');
     await expect(page).toHaveScreenshot('ready.png', VISUAL_DIFF_OPTS);
   });
 
@@ -273,6 +287,7 @@ test.describe('visual baselines (stats)', () => {
        pays a cold Vite transform on first run. */
     await expect(page.getByTestId('stats-lede')).toBeVisible({ timeout: 25_000 });
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('stats.png', VISUAL_DIFF_OPTS);
   });
 });
@@ -308,6 +323,7 @@ test.describe('visual baselines (dark theme)', () => {
       timeout: 10_000,
     });
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('library-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -315,6 +331,7 @@ test.describe('visual baselines (dark theme)', () => {
     await page.goto('/#/new');
     await expect(page.getByRole('button', { name: /Paste text/i })).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(200);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('upload-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -328,6 +345,7 @@ test.describe('visual baselines (dark theme)', () => {
     await goToConfirm(page);
     await waitForConfirmViewReady(page);
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expect(page).toHaveScreenshot('confirm-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -337,6 +355,7 @@ test.describe('visual baselines (dark theme)', () => {
       timeout: 10_000,
     });
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Revisions · 1');
     await expect(page).toHaveScreenshot('ready-dark.png', VISUAL_DIFF_OPTS);
   });
 
