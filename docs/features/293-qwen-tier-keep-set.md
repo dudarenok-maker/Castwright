@@ -39,7 +39,7 @@ the implementing PR adds them (section 5.8; CLAUDE.md Before-shipping step 3).
 | State change: #4497 now counts designs and mints | §0 item 1 describes head `ba658ab7`. The precondition is no longer prose: §5.0 is a test that drives every design and mint transport against Stage 1's reconcile. Task 4 |
 | 1. §3.5 had the wrong mechanism | Rewritten. Both pre-pass re-derives are 0.6B `clone-voice` distils that reload and never fail. The cost is a 0.6B reload next to the 1.7B. Owner decision: accepted. The ask that #4497 count re-derives is removed. §1.2's reason and on-box row (c) changed |
 | 2. Default resolver deps can call the sidecar | §5.1: parity fixtures carry no library-backed voice, and the test makes any network call fail |
-| 3. Variant clause over-kept on 1.7B | §2.1 step 5 is tier-aware. New row H11 |
+| 3. Variant clause over-kept on 1.7B | §2.1 step 5 is tier-aware. New parity case H11 |
 | 4. Unstamped entries: never drain, version skew, own entry, boot race | §2.6 rewritten: an unstamped pending entry is evaluated at the request's key (no indefinite fall-back); the stamp is skipped until the session model is trustworthy. R12 changed, R13 and Q4 added. D8 |
 | 5. Awaited span before `registerJob` | §3.4 adds `:872`, `:878`, `:897` |
 | 6. Post-score reconcile re-reads | Owner decision. Task reinstated (Task 7); S1 back; §6's "cut" note removed |
@@ -771,7 +771,7 @@ Recorded; not reopened.
   render facts" decision on #1393.
 - **D1. Decided 2026-11-20: NO Stage 2.** #1393 closes on Stage 1. Stage 2
   (section 2.4, 2.5, 5.7, tasks 9-13) is **not planned**; it is kept below as
-  design history only. Revisit only if on-box row A132 shows an out-of-memory
+  design history only. Revisit only if the on-box acceptance check PR #4497 adds shows an out-of-memory
   during a two-book overlap. If #4497 is later rejected, Stage 2 stops being
   optional (section 6).
 - **D2. Decided 2026-11-20: accepted as recommended.** The inter-chapter gap
