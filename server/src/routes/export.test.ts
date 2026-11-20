@@ -4,7 +4,6 @@
    the download endpoint streams the zip with the expected Content-Type. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { quarantinedIt } from '../test-utils/quarantine.js';
 import {
   mkdtempSync,
   mkdirSync,
@@ -152,11 +151,19 @@ afterAll(async () => {
    disk-polling version keeps passing with that same delay in place. */
 async function waitForDone(
   exportId: string,
+  timeoutMs = 5_000,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const manifestFile = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
-  for (let i = 0; i < 50; i++) {
+  let lastSeen = 'no manifest on disk';
+  for (let i = 0; i < Math.ceil(timeoutMs / 100); i++) {
     if (existsSync(manifestFile)) {
-      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as { status?: string };
+      const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as {
+        status?: string;
+        errorReason?: string;
+      };
+      lastSeen = `last manifest status '${manifest.status}'${
+        manifest.errorReason ? `, errorReason: ${manifest.errorReason}` : ''
+      }`;
       if (manifest.status === 'done' || manifest.status === 'failed') {
         const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
         return { status: res.status, body: res.body as Record<string, unknown> };
@@ -164,7 +171,7 @@ async function waitForDone(
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`Export ${exportId} did not finish within timeout.`);
+  throw new Error(`Export ${exportId} did not finish within ${timeoutMs} ms timeout (${lastSeen}).`);
 }
 
 describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () => {
@@ -529,36 +536,26 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
      assertion about a manifest file. The 404 test's own fix (poll the
      assertion instead of trusting one shot under load) is at its call site
      below. */
-  // QUARANTINED(#2235): flaky under full-suite box contention — this case
-  // drives two REAL ffmpeg-based mp3-zip builds back-to-back, and a loaded
-  // runner (vitest retry:1 absorbing it) intermittently starves ffmpeg past
-  // waitForDone's 5 s window, failing first attempt with status 'failed' /
-  // timeout and passing on retry. That is resource contention, not a logic
-  // bug in the revoke code path (exercised green on every idle run). The
-  // crash-class sibling of #2235 — the archive-step cleanup running while a
-  // staged chapter read is still in flight, dying the process with an
-  // uncaught ENOENT — is closed by the read-stream error forwarding in
-  // build-mp3-zip.ts / build-codec-zip.ts + the _awaitInFlightExportJobs
-  // drain; this assertion remains quarantined until it is rewritten to not
-  // depend on real ffmpeg timing. See docs/testing/flaky-register.md.
-  quarantinedIt('revokes the older same-format manifest when a re-export of the same format finishes', async () => {
+  // #2235 — the 45 s waitForDone windows (and 120 s timeout) are deliberate: two real ffmpeg
+  // mp3-zip builds starve past the 5 s default on a loaded box. Do not shrink them.
+  it('revokes the older same-format manifest when a re-export of the same format finishes', async () => {
     const first = await request(app)
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const firstId = first.body.id as string;
-    const { body: firstDone } = await waitForDone(firstId);
+    const { body: firstDone } = await waitForDone(firstId, 45_000);
     // #2084 — waitForDone treats 'failed' as terminal too, so without this
     // assertion a genuine export failure under contention (this is a
     // describeIfFfmpeg suite) presents as a confusing "expected false to be
     // true" about a manifest path instead of "the export failed".
-    expect(firstDone.status).toBe('done');
+    expect(firstDone.status, `first export ended '${firstDone.status}', errorReason: ${firstDone.errorReason}`).toBe('done');
 
     const second = await request(app)
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const secondId = second.body.id as string;
-    const { body: secondDone } = await waitForDone(secondId);
-    expect(secondDone.status).toBe('done');
+    const { body: secondDone } = await waitForDone(secondId, 45_000);
+    expect(secondDone.status, `second export ended '${secondDone.status}', errorReason: ${secondDone.errorReason}`).toBe('done');
 
     /* First manifest is gone, second is present. */
     const firstManifest = join(bookDir, '.audiobook', 'export-manifests', `${firstId}.json`);
@@ -569,7 +566,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     /* And the first job's GET now 404s — its row disappears from the queue. */
     const lookupFirst = await request(app).get(`/api/books/${bookId}/exports/${firstId}`);
     expect(lookupFirst.status).toBe(404);
-  });
+  }, 120_000);
 
   it('different-format re-exports DO NOT revoke each other (one row per format)', async () => {
     const zip = await request(app)
