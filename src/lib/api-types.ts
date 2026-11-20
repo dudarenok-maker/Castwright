@@ -9118,7 +9118,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Only when `excluded` is true: a long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. Including a chapter (`excluded: false`) deletes no audio and is never refused for this reason. */
+            /** @description Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written in either case and no audio was deleted. An exclude (`excluded: true`) is refused while ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). An include (`excluded: false`) is refused only while an ANALYSIS job (main or subset, live or still stopping) is registered (#3436), because it rewrites the chapter hints that run reads; any other job kind still lets an include through. */
             409: {
                 headers: {
                     [name: string]: unknown;
