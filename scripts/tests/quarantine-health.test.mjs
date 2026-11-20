@@ -2151,7 +2151,16 @@ test('installInterruptCleanup: SIGINT/SIGTERM run the cleanup once and exit with
 // load's own spawn options), the shape that survives its parent. The child
 // writes its pid to a file, then the parent either exits with the load live
 // (the 'exit' handler must reap the tree) or, on POSIX, is sent SIGTERM.
-async function runInterruptedHost(how) {
+//
+// The host must not exit until the test has probed the load: on POSIX its exit
+// handler's stop() is a SYNCHRONOUS process.kill(-pid), so exiting in the same
+// tick as READY reaps the load before the test can observe it alive (the
+// precondition would be checked after the event that ends it). So the 'exit'
+// host waits for a line on stdin, which the test writes after its probe.
+// `syncKill` makes stop() synchronous on every OS (the load is spawned without a
+// shell and killed by process.kill, so Windows reaps it as fast as POSIX does),
+// which is how the Linux timing is exercised on a Windows box.
+async function runInterruptedHost(how, { syncKill = false } = {}) {
   const { mkdtempSync, rmSync, readFileSync: rf, existsSync: ex, writeFileSync: wf } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -2161,23 +2170,30 @@ async function runInterruptedHost(how) {
   const pidFile = join(dir, 'load.pid');
   const hostPath = join(dir, 'host.mjs');
   const modUrl = new URL('../quarantine-health.mjs', import.meta.url).href;
+  const loadScript = "require('fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(()=>{},60000)";
   wf(hostPath, `
     import { startServerSuiteLoad, installInterruptCleanup } from ${JSON.stringify(modUrl)};
     import { spawn } from 'node:child_process';
     import { existsSync } from 'node:fs';
     const pidFile = ${JSON.stringify(pidFile)};
-    const load = startServerSuiteLoad({
+    const load = startServerSuiteLoad(${syncKill
+      ? `{
+      spawnImpl: (_cmd, o) => spawn(process.execPath, ['-e', ${JSON.stringify(loadScript)}, pidFile], { ...o, shell: false }),
+      kill: (pid) => process.kill(pid, 'SIGKILL'),
+    }`
+      : `{
       spawnImpl: (_cmd, o) => spawn('node -e "require(\\'fs\\').writeFileSync(process.argv[1], String(process.pid)); setTimeout(()=>{},60000)" "' + pidFile + '"', o),
-    });
+    }`});
     installInterruptCleanup(() => load.stop());
     const t = setInterval(() => {
       if (!existsSync(pidFile)) return;
       clearInterval(t);
       console.log('READY');
-      if (${JSON.stringify(how)} === 'exit') process.exit(0);
+      if (${JSON.stringify(how)} === 'exit') process.stdin.once('data', () => process.exit(0));
     }, 50);
   `, 'utf8');
-  const host = spawn(process.execPath, [hostPath], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
+  const host = spawn(process.execPath, [hostPath], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+  host.stdin.on('error', () => { /* the host may already be gone */ });
   let out = '';
   host.stdout.on('data', (d) => { out += d; });
   const waitFor = async (pred, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return true; await new Promise((r) => setTimeout(r, 50)); } return pred(); };
@@ -2187,6 +2203,7 @@ async function runInterruptedHost(how) {
     loadPid = Number(rf(pidFile, 'utf8'));
     assert.ok(pidIsAlive(loadPid), 'the load process is running');
     if (how === 'sigterm') host.kill('SIGTERM');
+    else host.stdin.write('go\n'); // the load was seen alive: now the host may exit
     const gone = await waitFor(() => !pidIsAlive(loadPid), 15_000);
     return { gone, loadPid };
   } finally {
@@ -2199,6 +2216,11 @@ async function runInterruptedHost(how) {
 test('an interrupted host leaves no load tree behind: process.exit with the load live reaps the real shell-spawned grandchild', async () => {
   const { gone, loadPid } = await runInterruptedHost('exit');
   assert.ok(gone, `load grandchild ${loadPid} survived its host's exit`);
+});
+
+test('an interrupted host leaves no load tree behind: process.exit reaps the load even when stop() is synchronous (the POSIX timing, run on any OS)', async () => {
+  const { gone, loadPid } = await runInterruptedHost('exit', { syncKill: true });
+  assert.ok(gone, `load ${loadPid} survived its host's exit`);
 });
 
 test('an interrupted host leaves no load tree behind: SIGTERM reaps the real load process group (POSIX; Windows has no catchable SIGTERM, the exit-path test above covers its kill)', { skip: process.platform === 'win32' }, async () => {
