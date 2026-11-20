@@ -652,7 +652,8 @@ file's header says so.
 
 A Group A register row, **added by the implementing PR (Task 8), not by this
 docs PR** (CLAUDE.md Before-shipping step 3; the id is the next free Group A
-id, A132 at the time of writing). It carries the register row, the live view
+id when the implementing PR is written, read from the register's `next-id`
+marker on the then-current `main` — not A132, which PR #4497 already uses). It carries the register row, the live view
 and `register:build`:
 
 - (a) A pure-1.7B run whose cast has a silent 0.6B character, started with
