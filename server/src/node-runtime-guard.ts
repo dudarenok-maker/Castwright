@@ -1,7 +1,10 @@
 /* #4443 — Windows refuses to start under a Node release that carries the
    libuv loopback-connect crash (libuv#5106). Pure logic + a loader for the
    range list. The list itself lives ONLY in the repo-root package.json
-   (`castwright.node.windowsLoopbackCrash`) — never hardcode it here.
+   (`castwright.node.windowsLoopbackCrash`) — never hardcode it here. The
+   version a refused user is told to install is the `engines.node` floor, one
+   minimum that works, never a range's own upper bound (that bound can itself
+   be a refused version).
    Unknown is not refused: an unparseable version or a non-Windows platform
    always starts. */
 
@@ -58,13 +61,14 @@ export function nodeRuntimeRefusal(
   version: string,
   platform: string,
   ranges: readonly NodeCrashRange[],
+  minimum: string,
 ): string | null {
   const range = findCrashRange(version, platform, ranges);
   if (!range) return null;
   const running = version.trim().replace(/^v?/, 'v');
   return (
     `Castwright can't start on Node ${running} on Windows: that Node release has a known networking crash (libuv#5106). ` +
-    `Install Node v${range.toExclusive} or newer from https://nodejs.org and start Castwright again.`
+    `Install Node v${minimum} or newer from https://nodejs.org and start Castwright again.`
   );
 }
 
@@ -80,4 +84,15 @@ export function loadCrashRanges(): NodeCrashRange[] {
     (r): r is NodeCrashRange =>
       !!r && typeof r.from === 'string' && typeof r.toExclusive === 'string',
   );
+}
+
+/** The minimum Node that works: the plain `>=X.Y.Z` floor of the repo-root
+ *  package.json `engines.node`. Throws if it is absent or not a plain floor. */
+export function loadNodeMinimum(): string {
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+    engines?: { node?: unknown };
+  };
+  const m = /^>=\s*(\d+\.\d+\.\d+)$/.exec(typeof pkg.engines?.node === 'string' ? pkg.engines.node.trim() : '');
+  if (!m) throw new Error('engines.node is not a plain >=X.Y.Z floor');
+  return m[1];
 }

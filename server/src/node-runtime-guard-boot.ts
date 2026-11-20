@@ -3,10 +3,10 @@
    package.json must never stop the app, so a load failure only warns and the
    server continues. No override switch (owner decision 2026-11-20). */
 
-import { loadCrashRanges, nodeRuntimeRefusal } from './node-runtime-guard.js';
+import { loadCrashRanges, loadNodeMinimum, nodeRuntimeRefusal } from './node-runtime-guard.js';
 
 try {
-  const message = nodeRuntimeRefusal(process.version, process.platform, loadCrashRanges());
+  const message = nodeRuntimeRefusal(process.version, process.platform, loadCrashRanges(), loadNodeMinimum());
   if (message) {
     process.stderr.write(`${message}\n`);
     process.exit(1);

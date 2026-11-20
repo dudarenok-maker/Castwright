@@ -35,7 +35,9 @@ Read from raw source at each tag. Base URL: `https://raw.githubusercontent.com/n
 
 | Line | First affected | Last affected | First fixed | libuv | Evidence (raw source) |
 |---|---|---|---|---|---|
+| 20.x, 21.x | v20.19.5 and v21.7.3 (the tags read) | v20.19.5, v21.7.3 (the last 21.x) | none | not recorded | [v20.19.5](https://raw.githubusercontent.com/nodejs/node/v20.19.5/deps/uv/src/win/tcp.c), [v21.7.3](https://raw.githubusercontent.com/nodejs/node/v21.7.3/deps/uv/src/win/tcp.c): lines 741-745 |
 | 22.x (from 22.22.0) | v22.22.0 (the current `engines` floor; earlier 22.x were not read) | v22.23.5 (newest 22.x, every tag read) | none | 1.51.0 | [v22.22.0](https://raw.githubusercontent.com/nodejs/node/v22.22.0/deps/uv/src/win/tcp.c), [v22.23.5](https://raw.githubusercontent.com/nodejs/node/v22.23.5/deps/uv/src/win/tcp.c): lines 753-757 |
+| 23.x | v23.0.0 | v23.11.1 (the last 23.x) | none | 1.48.0 (23.0.0), 1.49.2 (23.6.0), 1.50.0 (23.11.1) | [v23.0.0](https://raw.githubusercontent.com/nodejs/node/v23.0.0/deps/uv/src/win/tcp.c) (741-745), [v23.6.0](https://raw.githubusercontent.com/nodejs/node/v23.6.0/deps/uv/src/win/tcp.c) (753-757), [v23.11.1](https://raw.githubusercontent.com/nodejs/node/v23.11.1/deps/uv/src/win/tcp.c) (753-757): `pRtlGetVersion(&os_info)` with no `dwOSVersionInfoSize` |
 | 24.x | v24.0.0 | v24.15.0 | v24.16.0 | 1.50.0 (24.0.0-24.1.0), 1.51.0 (to 24.15.0), 1.52.1 (24.16.0+) | [v24.0.0](https://raw.githubusercontent.com/nodejs/node/v24.0.0/deps/uv/src/win/tcp.c), [v24.15.0](https://raw.githubusercontent.com/nodejs/node/v24.15.0/deps/uv/src/win/tcp.c), [v24.16.0](https://raw.githubusercontent.com/nodejs/node/v24.16.0/deps/uv/src/win/tcp.c), [v24.22.3](https://raw.githubusercontent.com/nodejs/node/v24.22.3/deps/uv/src/win/tcp.c) |
 | 25.x | v25.0.0 | v25.9.0 (the last 25.x) | none | 1.51.0 | [v25.0.0](https://raw.githubusercontent.com/nodejs/node/v25.0.0/deps/uv/src/win/tcp.c), [v25.9.0](https://raw.githubusercontent.com/nodejs/node/v25.9.0/deps/uv/src/win/tcp.c) |
 | 26.x | v26.0.0 | v26.0.0 | v26.1.0 | 1.52.1 (both) | [v26.0.0](https://raw.githubusercontent.com/nodejs/node/v26.0.0/deps/uv/src/win/tcp.c), [v26.1.0](https://raw.githubusercontent.com/nodejs/node/v26.1.0/deps/uv/src/win/tcp.c), [v26.13.1](https://raw.githubusercontent.com/nodejs/node/v26.13.1/deps/uv/src/win/tcp.c) |
@@ -74,13 +76,12 @@ On Windows only, the server refuses to start when its Node version is in any of 
 
 ```json
 [
-  {"from": "22.0.0", "toExclusive": "23.0.0"},
-  {"from": "24.0.0", "toExclusive": "24.16.0"},
+  {"from": "0.0.0", "toExclusive": "24.16.0"},
   {"from": "25.0.0", "toExclusive": "26.1.0"}
 ]
 ```
 
-The 22.x entry reads "all 22.x": there is no fixed 22.x, so the exclusive bound is the start of the next odd line, 23.0.0. It also covers every 25.x, and 26.0.x. The first good Windows Node is 24.16.0, then 26.1.0 and up. The matching `engines` floor is `>=24.16.0`.
+The first entry reads "every release below 24.16.0": the table shows no fixed 20.x, 21.x, 22.x, 23.x or 24.0 to 24.15, so one low range covers them all (an earlier draft listed only 22.x and 24.x and let 20.x, 21.x and 23.x through). The second entry covers every 25.x and 26.0.x. The first good Windows Node is 24.16.0, then 26.1.0 and up. The matching `engines` floor is `>=24.16.0`.
 
 ## conda-forge findings
 
@@ -95,7 +96,7 @@ Source: `https://api.anaconda.org/package/conda-forge/nodejs`, files with `attrs
 
 1. The guard's list in `package.json` equals the list above, byte for byte in meaning.
 2. The guard runs on Windows only. Linux and macOS start as before.
-3. A refusal names the running Node version and the minimum Node that works.
+3. A refusal names the running Node version and one minimum Node that works: the `engines` floor (24.16.0), read from `package.json`, never the matched range's upper bound (that bound can itself be a refused version, e.g. 23.0.0 or 26.1.0 is not the answer for 22.x or 25.x).
 
 ## Test plan
 
