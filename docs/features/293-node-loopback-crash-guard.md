@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
@@ -27,7 +27,7 @@ In libuv's `deps/uv/src/win/tcp.c`, `uv__is_fast_loopback_fail_supported()` call
 - Node cherry-pick: nodejs/node#62561, first shipped in v24.16.0. User report: nodejs/node#63620.
 - Only `tcp.c` has the bug. The only other `RtlGetVersion` caller, `util.c:1580-1583` in `uv_os_uname`, sets `dwOSVersionInfoSize` first (read at v24.15.0).
 
-**Owner decision (2026-11-20), binding.** Drop Node 22 on Windows. No fixed 22.x exists, so on Windows the guard refuses every 22.x and requires >=24.16.0. Other operating systems are unaffected and keep Node 22 (`engines` stays `>=22.22.0` there). Pinokio and `engines.node` follow the same floor on Windows.
+**Owner decision (2026-11-20), binding.** Drop Node 22 on Windows. No fixed 22.x exists, so on Windows the guard refuses every 22.x and requires >=24.16.0. **Amended 2026-11-20 (owner):** Node 22 support is dropped everywhere, not only on Windows. `engines.node` is exactly `>=24.16.0` (a plain floor, no union, no upper bound), which admits the still-affected Node 25.0 to 25.9 and 26.0.0; the Windows guard still refuses those. Pinokio's pin is `nodejs>=24.16.0,<25`. The PR also closes #4442.
 
 ## Affected-release table
 
@@ -80,7 +80,7 @@ On Windows only, the server refuses to start when its Node version is in any of 
 ]
 ```
 
-The 22.x entry reads "all 22.x": there is no fixed 22.x, so the exclusive bound is the start of the next odd line, 23.0.0. It also covers every 25.x, and 26.0.x. The first good Windows Node is 24.16.0, then 26.1.0 and up. The matching `engines` floor on Windows is `>=24.16.0`.
+The 22.x entry reads "all 22.x": there is no fixed 22.x, so the exclusive bound is the start of the next odd line, 23.0.0. It also covers every 25.x, and 26.0.x. The first good Windows Node is 24.16.0, then 26.1.0 and up. The matching `engines` floor is `>=24.16.0`.
 
 ## conda-forge findings
 
@@ -110,9 +110,9 @@ Owned by the later steps: #4492 (a version-range unit test with a mutation) and 
 
 ## Pending steps
 
-- #4492 - the start-up guard, reading the range list above.
-- #4493 - Pinokio and `engines`: `nodejs>=24.16.0,<25` in `pinokio-scripts/install.js:43` and `pinokio-scripts/update.js:42`, and the Windows `engines` floor.
-- #4495 - docs and release notes (`INSTALL.md`, the wiki mirror, `.nvmrc`).
-- #4494 - the final `[verify]` child, which opens the PR.
+- [x] #4492 - the start-up guard, reading the range list above.
+- [x] #4493 - Pinokio and `engines`: `nodejs>=24.16.0,<25` in `pinokio-scripts/install.js:43` and `pinokio-scripts/update.js:42`, and the `engines` floor.
+- [x] #4495 - docs and release notes (`INSTALL.md`, the wiki mirror, `.nvmrc`).
+- [ ] #4494 - the final `[verify]` child, which opens the PR.
 
 Out of scope: the thread-pool teardown crash (the "Separate finding" in the #4443 comment).
