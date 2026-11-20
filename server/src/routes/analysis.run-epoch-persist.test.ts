@@ -63,7 +63,6 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
       return actual.persistPlannedCast(...a).then((out) => {
         const after = seam.afterPersistReturn;
         seam.afterPersistReturn = null;
-    seam.beforeSnapshot = null;
         after?.();
         return out;
       });
@@ -395,6 +394,7 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
     seam.afterCastPersist = null;
     seam.afterPersistReturn = null;
     seam.beforeJournalLock = null;
+    seam.beforeSnapshot = null;
     seam.stateWriteFault = null;
     driftFixture = false;
     __resetRunEpochsForTests();
