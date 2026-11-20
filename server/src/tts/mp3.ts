@@ -25,7 +25,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { computePeaks } from '../audio/compute-peaks.js';
@@ -493,6 +493,39 @@ export async function encodePcmToAudio(
   return encoded;
 }
 
+/* LAME always has a 576-sample encoder delay, and a decoder drops that plus its
+   own 529-sample delay (1105 in all) when the Xing/Info tag is honest. ffmpeg
+   9.1 stamps the tag with 47 (576 - 529) instead, so every decoder, 8.x
+   included, trims 529 samples too few and the whole chapter reads ~22 ms late
+   (#4573). Segment windows then catch the neighbouring take's audio and a dead
+   segment no longer scans as silent. Read the tag and return how many leading
+   samples a decode left over; 0 for a correct tag, a tag-less file or a
+   non-MP3 input. */
+const LAME_ENCODER_DELAY = 576;
+
+export function mp3StartPadShortfall(head: Buffer): number {
+  let tag = head.indexOf('Xing');
+  if (tag < 0) tag = head.indexOf('Info');
+  if (tag < 0 || tag + 8 > head.length) return 0;
+  const flags = head.readUInt32BE(tag + 4);
+  // frames, bytes, TOC (100), quality - each present only when its flag is set.
+  let enc = tag + 8;
+  if (flags & 1) enc += 4;
+  if (flags & 2) enc += 4;
+  if (flags & 4) enc += 100;
+  if (flags & 8) enc += 4;
+  if (enc + 0x18 > head.length) return 0;
+  const id = head.toString('latin1', enc, enc + 4);
+  if (id !== 'LAME' && id !== 'Lavc') return 0;
+  const delay = (head[enc + 0x15] << 4) | (head[enc + 0x16] >> 4);
+  return delay > 0 && delay < LAME_ENCODER_DELAY ? LAME_ENCODER_DELAY - delay : 0;
+}
+
+/* Drop the leftover lead-in `mp3StartPadShortfall` reports (mono s16le). */
+function trimStartPad(pcm: Buffer, head: Buffer): Buffer {
+  return pcm.subarray(Math.min(pcm.length, mp3StartPadShortfall(head) * 2));
+}
+
 /** Decode an encoded audio buffer (mp3 / m4a / ogg) back to raw 16-bit signed
     LE mono PCM at `sampleRate`. The inverse of `encodePcmToAudio`, used by the
     fs-26 splice engine to recover a rendered chapter's samples for byte-range
@@ -542,7 +575,7 @@ export async function decodeAudioToPcm(input: Buffer, sampleRate: number): Promi
     });
     child.on('close', (code) => {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
-      if (code === 0) resolve(Buffer.concat(stdoutChunks));
+      if (code === 0) resolve(trimStartPad(Buffer.concat(stdoutChunks), input.subarray(0, 2048)));
       else reject(ffmpegFailure('ffmpeg (decode)', code, stderr));
     });
     child.stdin.on('error', (err) => {
@@ -550,6 +583,17 @@ export async function decodeAudioToPcm(input: Buffer, sampleRate: number): Promi
     });
     child.stdin.end(input);
   });
+}
+
+async function readFileHead(path: string): Promise<Buffer> {
+  const fh = await open(path, 'r');
+  try {
+    const buf = Buffer.alloc(2048);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
 }
 
 /** Decode an encoded audio FILE to raw s16le mono PCM at `sampleRate`.
@@ -597,8 +641,11 @@ export async function decodeAudioFileToPcm(
     });
     child.on('close', (code) => {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
-      if (code === 0) resolve(Buffer.concat(stdoutChunks));
-      else reject(ffmpegFailure('ffmpeg (decode file)', code, `${inputPath}\n${stderr}`));
+      if (code !== 0) return reject(ffmpegFailure('ffmpeg (decode file)', code, `${inputPath}\n${stderr}`));
+      readFileHead(inputPath).then(
+        (head) => resolve(trimStartPad(Buffer.concat(stdoutChunks), head)),
+        reject,
+      );
     });
   });
 }

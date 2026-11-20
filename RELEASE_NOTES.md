@@ -2,6 +2,7 @@
 
 **What's new in 1.16.0**
 
+- **Silent or dropped lines are caught again on the newest ffmpeg.** With ffmpeg 9.1, the chapter check could miss a line that came out silent, and splicing a fix into a chapter could land a fraction of a second off. Castwright now allows for the way that version saves its audio, so both work as before.
 - **Renaming chapters no longer loses their audio.** If a chapter you've already made gets a new title and you analyse the book again, that chapter keeps its audio and still shows as done. Only the title changes.
 - **Making room for a preview no longer breaks a voice you're designing.** If a quick voice preview needs graphics-card memory while a voice design or voice variant is still being made, Castwright now leaves the voice model that job is using alone and only frees what nothing is using.
 - **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.

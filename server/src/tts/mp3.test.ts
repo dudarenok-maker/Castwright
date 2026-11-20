@@ -10,7 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import {
+  decodeAudioFileToPcm,
+  decodeAudioToPcm,
   encodePcmToAudio,
+  mp3StartPadShortfall,
   writeChapterLufsFile,
   writeChapterPeaksFile,
   type ChapterPeaksFile,
@@ -187,6 +190,70 @@ if (!ffmpegPresent) {
       'Install: winget install Gyan.FFmpeg',
   );
 }
+
+/* #4573 - the Xing/Info + LAME tag head of a real 2 s / 24 kHz mono encode, as
+   written by ffmpeg 8.1.1 (Lavc62.28) and 9.1 (Lavc63.24). Identical but for
+   the 12-bit encoder-delay field: 576 vs 47 (0x2403c0 vs 0x02f3c0). */
+const TAG_HEAD_PREFIX =
+  '49443304000000000023545353450000000f0000034c61766636' + '322e31322e3130310000000000000000000000';
+const XING_FRAME_TAIL =
+  '58696e670000000f0000005600001260001f292f3135383c3c3e42464a4d505054575b5e616565686c6f727679797d8183878a8e8e9094989b9fa3a3a5a9adb0b4c3c9c9cacbcdcecfd0d0d2d3d4d6d7d8d8dadbdcdedfe0e0e1e3e4e5e7e8e8e9ebecedeff0f0f1f2f4f5f6f8f8f9fafcfdfeff00000000';
+function tagHead(encoder: string, delayPad: string): Buffer {
+  return Buffer.from(
+    `${TAG_HEAD_PREFIX}fff384c0000000000000000000${XING_FRAME_TAIL}${encoder}000000000000000000000000${delayPad}0000000000001260`,
+    'hex',
+  );
+}
+const LAVC_8_1 = '4c61766336322e3238'; // "Lavc62.28"
+const LAVC_9_1 = '4c61766336332e3234'; // "Lavc63.24"
+
+describe('mp3StartPadShortfall (#4573)', () => {
+  it('reads 0 for the ffmpeg 8.x tag (delay 576, the honest value)', () => {
+    expect(mp3StartPadShortfall(tagHead(LAVC_8_1, '2403c0'))).toBe(0);
+  });
+
+  it('reads 529 for the ffmpeg 9.1 tag (delay 47 - decoders trim 529 samples short)', () => {
+    expect(mp3StartPadShortfall(tagHead(LAVC_9_1, '02f3c0'))).toBe(529);
+  });
+
+  it('reads 0 for a head with no Xing/Info tag, or a foreign encoder string', () => {
+    expect(mp3StartPadShortfall(Buffer.from('RIFF....WAVEfmt ', 'latin1'))).toBe(0);
+    expect(mp3StartPadShortfall(tagHead('5a5a5a5a5a5a5a5a5a', '02f3c0'))).toBe(0);
+  });
+});
+
+describeIfFfmpeg('decodeAudioToPcm / decodeAudioFileToPcm lead-in alignment (#4573)', () => {
+  const sampleRate = 24_000;
+  /* 1 s of tone then 1 s of dead silence. A decode that keeps a lead-in lets the
+     tone bleed into the second half; a correct one leaves it silent. */
+  const pcm = Buffer.concat([sinePcm(sampleRate, 1.0), Buffer.alloc(sampleRate * 2)]);
+  function peak(buf: Buffer, fromSec: number, toSec: number): number {
+    let m = 0;
+    for (let i = Math.round(fromSec * sampleRate); i < Math.round(toSec * sampleRate); i++) {
+      m = Math.max(m, Math.abs(buf.readInt16LE(i * 2)));
+    }
+    return m;
+  }
+
+  it('decodes the pipe form sample-aligned to the source', async () => {
+    const mp3 = await encodePcmToAudio(pcm, sampleRate, { quality: 2 });
+    const out = await decodeAudioToPcm(mp3, sampleRate);
+    expect(peak(out, 1.0, 2.0)).toBeLessThan(200);
+  });
+
+  it('decodes the file form sample-aligned to the source', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mp3-align-'));
+    try {
+      const file = join(dir, 'a.mp3');
+      writeFileSync(file, await encodePcmToAudio(pcm, sampleRate, { quality: 2 }));
+      const out = await decodeAudioFileToPcm(file, sampleRate);
+      expect(peak(out, 1.0, 2.0)).toBeLessThan(200);
+      expect(out.length).toBe(pcm.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 /* writeChapterPeaksFile coverage (plan 56). No ffmpeg dependency — this is
    pure compute + fs, so it runs unconditionally even on CI without ffmpeg. */
