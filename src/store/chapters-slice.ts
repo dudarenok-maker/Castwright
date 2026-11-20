@@ -571,7 +571,9 @@ export const chaptersSlice = createSlice({
           /* fs-19 — carry the structured failure class + remediation onto the
              row so the failed-state box can render a "what to do" line under
              the reason without a state.json reload. */
-          ch.generationErrorCode = ev.errorCode;
+          /* #3436 -- `book-busy` is a client-only dispatcher tag, not a failure class: it has no
+             remediation copy, so the row keeps no code. */
+          ch.generationErrorCode = ev.errorCode === 'book-busy' ? undefined : ev.errorCode;
           ch.generationRemediation = ev.remediation;
         }
         return;

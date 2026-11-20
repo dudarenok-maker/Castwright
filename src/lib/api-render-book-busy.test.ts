@@ -22,7 +22,7 @@ const busyRes = () =>
   });
 const serverError = () => new Response('boom', { status: 500, statusText: 'Internal Server Error' });
 
-type Tick = { type: string; errorReason?: string | null };
+type Tick = { type: string; errorReason?: string | null; errorCode?: string };
 
 describe('book_busy from a render start', () => {
   it('generation: chapter_failed carries the server sentence, then idle', async () => {
@@ -39,6 +39,24 @@ describe('book_busy from a render start', () => {
     await vi.waitFor(() => expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']));
     cancel();
     expect(ticks[0].errorReason).toBe(SENTENCE);
+    /* the queue dispatcher keys on this to keep the entry queued instead of failing it (#3436) */
+    expect(ticks[0].errorCode).toBe('book-busy');
+  });
+
+  it('generation: a non-busy start failure carries no book-busy code', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(serverError());
+    const ticks: Tick[] = [];
+    const cancel = api.streamGeneration({
+      bookId: 'book-A',
+      modelKey: 'kokoro-v1',
+      chapterIds: [1],
+      force: false,
+      onTick: (t: Tick) => ticks.push(t),
+    });
+    await vi.waitFor(() => expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']));
+    cancel();
+    expect(ticks[0].errorCode).toBeUndefined();
   });
 
   it('splice: chapter_failed carries the server sentence', async () => {

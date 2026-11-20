@@ -47,10 +47,11 @@
 import type { Middleware, MiddlewareAPI } from '@reduxjs/toolkit';
 import { chaptersActions, type ChaptersState } from './chapters-slice';
 import { queueActions, type QueueState } from './queue-slice';
-import { completeQueueEntry, setQueuePaused, startQueueEntry } from './queue-thunks';
+import { completeQueueEntry, retryQueueEntry, setQueuePaused, startQueueEntry } from './queue-thunks';
+import { selectAnalysisRunningForBook } from './analysis-substage-selectors';
 import { notificationsActions } from './notifications-slice';
 import { uiActions, type UiState } from './ui-slice';
-import type { AppDispatch } from './index';
+import type { AppDispatch, RootState } from './index';
 import type { StreamRunner } from './generation-stream-runner';
 
 interface DispatcherRootState {
@@ -71,6 +72,12 @@ const DEFAULT_WORKERS = 2;
    queued chapter producing the identical failure. A differing reason or a
    success resets the streak. */
 const CONSECUTIVE_FAILURE_THRESHOLD = 3;
+
+/* #3436 -- after the server refuses a render with 409 `book_busy` (an analysis registered between
+   this dispatcher's claim and the POST, e.g. one started from another tab), the book's queued
+   entries are not re-claimed for this long. Without it the requeued entry would be re-claimed on
+   the next tick and refused again, in a tight loop. */
+const BOOK_BUSY_HOLD_MS = 5000;
 
 export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middleware {
   return (storeApi: MiddlewareAPI) => {
@@ -96,6 +103,9 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
        already persist as `failed`+`errorReason`), so there's nothing worth
        surviving a restart. */
     const failureStreakByBook = new Map<string, { reason: string; count: number }>();
+
+    /* #3436 -- per-book "refused as busy, do not claim before" timestamps (see BOOK_BUSY_HOLD_MS). */
+    const busyHoldUntil = new Map<string, number>();
 
     const dispatch = storeApi.dispatch as AppDispatch;
 
@@ -147,9 +157,19 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
              `queued`, and STEP 2 must be free to re-claim it then. */
           const failure = runner.takeChapterFailure(bookId, chapterId);
           if (failure != null) {
-            void dispatch(
+            /* #3436 -- a 409 `book_busy` refusal is not a failure of the chapter: the entry is
+               put straight back to `queued` (fail, then retry: `/retry` is the only route back
+               to queued) and the book is held off for a while. It is exempt from the streak
+               below, so a race with an analysis can never pause the queue for every book. */
+            const bookBusy = failure.errorCode === 'book-busy';
+            const completed$ = dispatch(
               completeQueueEntry(entryId, { outcome: 'failed', errorReason: failure.reason }),
-            ).catch(() => {
+            );
+            if (bookBusy) {
+              busyHoldUntil.set(bookId, Date.now() + BOOK_BUSY_HOLD_MS);
+              setTimeout(tick, BOOK_BUSY_HOLD_MS + 50);
+            }
+            void (bookBusy ? completed$.then(() => dispatch(retryQueueEntry(entryId))) : completed$).catch(() => {
               /* Best-effort — the next snapshot reconciles. */
             });
 
@@ -168,7 +188,11 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                catch" reasoning. The awaiting_confirm park is ALSO exempt from
                this streak, for the same reason — neither should pause
                unrelated books' queues. */
-            if (failure.errorCode !== 'voice-not-designed' && failure.errorCode !== 'language-unset') {
+            if (
+              !bookBusy &&
+              failure.errorCode !== 'voice-not-designed' &&
+              failure.errorCode !== 'language-unset'
+            ) {
               const streak = failureStreakByBook.get(bookId);
               if (streak && streak.reason === failure.reason) {
                 streak.count += 1;
@@ -249,6 +273,11 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            queued chapters drained into `failed` before the user can act on
            the modal — skip it for the discipline's TTL (Task 6, #2515). */
         if (runner.hasPendingLanguageGuard(e.bookId)) continue;
+        /* #3436 -- the server refuses a render while the book is being analysed, so its queued
+           chapters stay queued (not failed) until the analysis ends; other books keep rendering.
+           The analysis' end is an `analysis/*` action, which re-ticks (see the trigger below). */
+        if (selectAnalysisRunningForBook(state as unknown as RootState, e.bookId)) continue;
+        if ((busyHoldUntil.get(e.bookId) ?? 0) > Date.now()) continue;
 
         /* Claim synchronously before any await so a back-to-back snapshot
            tick can't double-claim. */
@@ -307,13 +336,16 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
          - queue/setSnapshot — entries or paused flag changed.
          - chapters/setActiveStream + clearActiveStream — a stream opened/closed.
          - chapters/setCurrentBookId + hydrateFromBookState — the viewed book
-           changed (affects which claims flip rows). */
+           changed (affects which claims flip rows).
+         - analysis/* — a run of a book started or ended (#3436). */
       if (
         type === queueActions.setSnapshot.type ||
         type === 'chapters/setActiveStream' ||
         type === 'chapters/clearActiveStream' ||
         type === 'chapters/setCurrentBookId' ||
-        type === 'chapters/hydrateFromBookState'
+        type === 'chapters/hydrateFromBookState' ||
+        /* #3436 -- an analysis ending (or pausing) releases the book's held-back entries. */
+        type?.startsWith('analysis/')
       ) {
         /* Defer to a microtask so the runner's setActiveStream / clear lands
            before we re-read the open-stream set. */
