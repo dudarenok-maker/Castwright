@@ -48,6 +48,8 @@ const leaseDirs = vi.hoisted(
       ['skip-d', '/skip-d'],
       ['skip-e', '/skip-e'],
       ['skip-f', '/skip-f'],
+      ['stale-keep', '/stale-keep'],
+      ['stale-keep-ctl', '/stale-keep-ctl'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -290,6 +292,37 @@ describe('afterChapterFinalized', () => {
         } finally {
           setCounter(() => 0);
         }
+      }
+    });
+  });
+
+  /* #4445 review pass 1 - `ctx.keep` is per chapter POST, so after a mid-run tier change a
+     same-book sibling may be rendering on the 1.7B while this stale keep says keep17:false. */
+  describe('never evicts the 1.7B while a Quality render is known active (#4445)', () => {
+    it('keeps the 1.7B (forces keep17:true) when a same-book sibling renders at Quality; the 0.6B half follows ctx.keep', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      const cleanup = __registerFakeJobForTest('stale-keep', [], true);
+      try {
+        const keep = { keep06: true, keep17: false };
+        await afterChapterFinalized({ bookId: 'stale-keep', bookDir: '/stale-keep', chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled('stale-keep');
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledTimes(1);
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledWith({ keep06: true, keep17: true });
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('control: no Quality render active, the 1.7B evicts as before', async () => {
+      vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+      const cleanup = __registerFakeJobForTest('stale-keep-ctl', [], false);
+      try {
+        const keep = { keep06: true, keep17: false };
+        await afterChapterFinalized({ bookId: 'stale-keep-ctl', bookDir: '/stale-keep-ctl', chapters: [CH1], justFinalized: CH1, keep });
+        await __awaitScoringSettled('stale-keep-ctl');
+        expect(reconcileResidentQwenTiers).toHaveBeenCalledWith(keep);
+      } finally {
+        cleanup();
       }
     });
   });

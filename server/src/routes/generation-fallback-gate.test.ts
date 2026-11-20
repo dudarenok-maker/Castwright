@@ -419,6 +419,24 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
     }
   }, 10_000);
 
+  it('never evicts the 1.7B at run start while a same-book Quality render is live (#4445 review): a Standard cast POST keeps keep17', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const release = __registerFakeJobForTest(bookId, [], true);
+    try {
+      await runStream({ modelKey: 'qwen3-tts-0.6b', fallbackConfirmed: true });
+      expect(reconcileCalls.length).toBeGreaterThan(0);
+      expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true });
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('control: with no Quality render live, a Standard cast POST still evicts the 1.7B at run start (#4445 review)', async () => {
+    await runStream({ modelKey: 'qwen3-tts-0.6b', fallbackConfirmed: true });
+    expect(reconcileCalls.length).toBeGreaterThan(0);
+    expect(reconcileCalls[0]![0]).toMatchObject({ keep17: false });
+  }, 10_000);
+
   it('keys the drop on the tier the cast will LOAD, not the run default: a Standard run whose only Qwen character is set to Quality drops Kokoro', async () => {
     const castPath = join(bookDir, '.audiobook', 'cast.json');
     const { readFileSync } = await import('node:fs');

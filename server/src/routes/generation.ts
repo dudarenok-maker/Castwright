@@ -109,6 +109,7 @@ import {
   isAnyGenerationActive,
   isOtherGenerationActive,
   isDesignOrMintActive,
+  isQualityRenderKnownActive,
 } from '../gpu/active-generation-gate.js';
 import { keepForRunStart } from '../gpu/evict-idle-tts.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
@@ -135,6 +136,16 @@ function otherBookScoringInFlight(bookId: string): boolean {
     run's own render is excluded on purpose (its `keep` set protects it). */
 function otherTierWorkActive(bookId: string): boolean {
   return isOtherGenerationActive(bookId) || otherBookScoringInFlight(bookId);
+}
+
+/** #4445 — a generation-path reconcile never drops the 1.7B while any Quality render is live.
+    `ctx.keep` is computed per chapter POST, so after a mid-run tier change it can be stale
+    (keep17:false) while a same-book sibling renders on the 1.7B, and `otherTierWorkActive` leaves
+    that sibling out. The 0.6B half is NOT guarded the same way (no per-job tracker): a character
+    toggled down while 2+ workers render can still evict a 0.6B a sibling uses, which costs that
+    line a reload and retry — accepted. */
+function keepQualityResident<K extends { keep17: boolean }>(keep: K): K {
+  return isQualityRenderKnownActive() && !keep.keep17 ? { ...keep, keep17: true } : keep;
 }
 
 export async function triggerScoring(ctx: {
@@ -238,7 +249,10 @@ export async function triggerScoring(ctx: {
        nulls the VoiceDesign model and the 1.7B Base under it (#4445). The
        generation path (`ctx.keep`) skips on the same rule except that this book's own
        render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
-       superset, so its own chapters are already protected (#4445).
+       superset, so its own chapters are already protected (#4445) — except after a mid-run tier
+       change, when a sibling's keep can differ: `keepQualityResident` therefore never drops the
+       1.7B while a Quality render is live. A 0.6B toggled down with 2+ workers can still be
+       evicted under a sibling; that costs a reload and retry and is accepted.
        Two residual windows remain, each costing at most one cold reload: (a) after this
        synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
        before it posts `/unload`, so a job registering in that round trip loses its tier;
@@ -249,7 +263,7 @@ export async function triggerScoring(ctx: {
       ? otherTierWorkActive(ctx.bookId)
       : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId) || isDesignOrMintActive();
     if (busy) return;
-    if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keep);
+    if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keepQualityResident(keep));
   });
   const run = registration
     .then(async (reg): Promise<void> => {
@@ -1255,14 +1269,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        book's score pass): the
        reconcile can unload a Qwen tier that work is using. Same-book sibling
        chapters are excluded from that check, so they still reconcile with Kokoro
-       kept, as above. */
+       kept, as above. The 1.7B is additionally never dropped while a Quality render is
+       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
+       0.6B toggle-down case (2+ workers) is accepted — it costs a reload and retry. */
     if (otherTierWorkActive(bookId)) {
       console.info(
         '[generation] run-start tier reconcile skipped: other GPU work is active',
       );
     } else {
       await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
-        .then((target) => reconcileResidentQwenTiers(target))
+        .then((target) => reconcileResidentQwenTiers(keepQualityResident(target)))
         .catch((e) =>
           console.warn('[generation] tier reconcile skipped:', (e as Error).message),
         );
