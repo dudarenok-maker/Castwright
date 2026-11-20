@@ -104,7 +104,6 @@ import { _resetPairingSessionsForTests, createPairingSession } from '../workspac
 import { mayStartPairingSession, isLanTokenEnforced, isPrivateNetworkRequest } from '../lan-auth.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { createDevice, DeviceStoreDegradedError } from '../workspace/device-tokens.js';
-import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 function appWith(router: express.Router) {
   const app = express();
@@ -192,32 +191,6 @@ describe('pairing routes', () => {
 
     const second = await request(redeem).post('/api/pair/redeem-browser').send({ code });
     expect(second.status).toBe(201);
-  });
-
-  // #3702 -- a degraded store whose cause is a node fs error must not leak
-  // the workspace path to the LAN client: the body is the curated sentence.
-  it('POST /redeem and /redeem-browser 503 with FS_FAILURE_REQUEST_ERROR, not the raw path, when the degraded error is an fs error (#3702)', async () => {
-    const fsDegraded = () =>
-      Object.assign(new DeviceStoreDegradedError(), {
-        message: "EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'",
-        code: 'EPERM',
-        syscall: 'rename',
-        path: 'C:\\Users\\someone\\castwright-workspace\\x',
-      });
-    const redeem = appWith(pairRedeemRouter);
-    const session = await request(appWith(pairSessionRouter)).post('/api/pair/session').send({});
-    vi.mocked(createDevice).mockRejectedValueOnce(fsDegraded());
-    const a = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code, label: 'Pixel' });
-    expect(a.status).toBe(503);
-    expect(a.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(a.body)).not.toContain('someone');
-
-    const { code } = createPairingSession('x', undefined, 10);
-    vi.mocked(createDevice).mockRejectedValueOnce(fsDegraded());
-    const b = await request(redeem).post('/api/pair/redeem-browser').send({ code });
-    expect(b.status).toBe(503);
-    expect(b.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(b.body)).not.toContain('someone');
   });
 
   // A genuine (non-degraded) createDevice failure must still surface as a

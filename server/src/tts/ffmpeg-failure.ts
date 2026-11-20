@@ -21,7 +21,9 @@ const MAX_TAIL = 160;
    of the line is dropped. */
 const PATH_ROOT = /file:(?=\/)|\\\\|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.])~\/|(?<![\w#./])\/(?=[\w.~-])/;
 
-function scrubPaths(s: string): string {
+/* Exported for #3702: child-process stderr (git, the LAN-cert script) that a route
+   forwards to the client body goes through this same scrubber. */
+export function scrubPaths(s: string): string {
   const m = PATH_ROOT.exec(s);
   return m ? `${s.slice(0, m.index)}<path>` : s;
 }

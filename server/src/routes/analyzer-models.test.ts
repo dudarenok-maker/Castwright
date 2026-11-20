@@ -190,13 +190,14 @@ describe('POST /api/analyzer/models/test', () => {
     expect(res.body.error).not.toContain('sk-stored');
   });
 
-  it('a node fs failure in the test run answers the curated sentence, not the raw path (#3702)', async () => {
+  it('a node fs failure writing the capability record (the settings file write) answers the curated sentence (#3702)', async () => {
     h.modelTestDepsFor.mockReturnValue({});
     const fsErr = Object.assign(
       new Error("EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'"),
       { code: 'EPERM', syscall: 'rename', path: 'C:\\Users\\someone\\castwright-workspace\\x' },
     );
-    h.runModelTest.mockRejectedValue(fsErr);
+    h.runModelTest.mockResolvedValue(RECORD);
+    h.writeAnalyzerCapabilityRecord.mockRejectedValueOnce(fsErr);
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
     quiet.mockRestore();

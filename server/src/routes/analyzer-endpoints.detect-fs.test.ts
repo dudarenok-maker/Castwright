@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 const h = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('undici', async (importOriginal) => ({
@@ -29,13 +28,19 @@ afterAll(() => {
   delete process.env.WORKSPACE_DIR;
 });
 
-describe('POST /api/analyzer/endpoints/detect-context fs failure (#3702)', () => {
-  it('answers the curated sentence for a node fs error, never the raw path', async () => {
+/* #3702 -- detectServedContext wraps its "Could not reach" message in the fs seam, but its
+   only producer is an undici fetch rejection (`TypeError: fetch failed`, no `code`/`syscall`;
+   the reason rides on `cause`), which the seam never curates: the wrap is inert by
+   construction. Pin that the message passes through unchanged. */
+describe('POST /api/analyzer/endpoints/detect-context -- a real undici rejection (#3702)', () => {
+  it('answers the unchanged "Could not reach" message', async () => {
     h.fetch.mockRejectedValue(
-      Object.assign(
-        new Error("EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'"),
-        { code: 'EPERM', syscall: 'rename', path: 'C:\\Users\\someone\\castwright-workspace\\x' },
-      ),
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), {
+          code: 'ECONNREFUSED',
+          syscall: 'connect',
+        }),
+      }),
     );
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await request(app)
@@ -44,7 +49,6 @@ describe('POST /api/analyzer/endpoints/detect-context fs failure (#3702)', () =>
     quiet.mockRestore();
     expect(res.status).toBe(502);
     expect(res.body.code).toBe('detect-failed');
-    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(res.body)).not.toContain('someone');
+    expect(res.body.error).toBe('Could not reach http://127.0.0.1:1 (ECONNREFUSED).');
   });
 });

@@ -18,35 +18,12 @@ import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../worksp
 import { InstallBootstrap } from '../ollama/install-bootstrap.js';
 import { PullBootstrap } from '../ollama/pull-bootstrap.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
-import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
-
-const FS_ERR_PATH = 'C:\\Users\\someone\\castwright-workspace\\x';
-function canonicalFsError(): Error {
-  return Object.assign(
-    new Error(`EPERM: operation not permitted, rename '${FS_ERR_PATH}' -> 'y'`),
-    { code: 'EPERM', syscall: 'rename', path: FS_ERR_PATH },
-  );
-}
 
 /* Task 3 of the #2367 chain — detectOllamaGpuSplit mocked at the module
    boundary, same pattern as analyzer/ollama.test.ts's Task 2 mock, so this
    suite only pins the route's own JSON round-trip, not the detector. */
 const { detectOllamaGpuSplitMock } = vi.hoisted(() => ({ detectOllamaGpuSplitMock: vi.fn() }));
 vi.mock('../gpu/ollama-gpu-split.js', () => ({ detectOllamaGpuSplit: detectOllamaGpuSplitMock }));
-
-/* #3702 / #4506 — lets one test make the resolved-URL read throw a node fs
-   error inside unloadResidentOllama (the dependency /unload's try block calls). */
-const { resolvedUrlFailure } = vi.hoisted(() => ({ resolvedUrlFailure: { err: null as Error | null } }));
-vi.mock('../config/ollama-resolved.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../config/ollama-resolved.js')>();
-  return {
-    ...actual,
-    getResolvedOllamaUrl: (...args: Parameters<typeof actual.getResolvedOllamaUrl>) => {
-      if (resolvedUrlFailure.err) throw resolvedUrlFailure.err;
-      return actual.getResolvedOllamaUrl(...args);
-    },
-  };
-});
 
 function makeApp() {
   const app = express();
@@ -620,18 +597,6 @@ describe('POST /api/ollama/unload', () => {
     expect(evicted.sort()).toEqual(['llama3.1:8b', 'qwen3.5:4b']);
   });
 
-  it('curates an fs error thrown while unloading (#3702)', async () => {
-    resolvedUrlFailure.err = canonicalFsError();
-    try {
-      const res = await request(makeApp()).post('/api/ollama/unload').send({ model: 'qwen3.5:4b' });
-      expect(res.status).toBe(502);
-      expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-      expect(JSON.stringify(res.body)).not.toContain('someone');
-    } finally {
-      resolvedUrlFailure.err = null;
-    }
-  });
-
   it('returns the upstream error when an explicit model eviction fails', async () => {
     fetchMock.mockRejectedValue(
       Object.assign(new TypeError('fetch failed'), {
@@ -641,6 +606,9 @@ describe('POST /api/ollama/unload', () => {
     const res = await request(makeApp()).post('/api/ollama/unload').send({ model: 'qwen3.5:4b' });
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
+    /* #3702: the upstream failure is an undici rejection (no fs shape), so the seam wrapped
+       around it in the route passes the message through unchanged. */
+    expect(res.body.error).toBe('fetch failed');
   });
 
   it('unloadResidentOllama() with no targets evicts EVERY resident with keep_alive: 0', async () => {

@@ -23,6 +23,14 @@
      - A message hoisted into a local before the response
        (`const msg = e.message; res.status(500).json({ error: msg })`).
      - A shared response helper taking `(res, status, message)`.
+     - Child-process OUTPUT in a body: `.stderr` / `.stdout` (execFile's error,
+       `spawnSync`'s result, git's or the LAN-cert script's stderr) is raw text with
+       absolute paths that no `.message` scan sees, and an `execFile` rejection has a
+       numeric `code` and no `syscall`, so the fs seam never curates it either. Owner
+       decision on #3702 (2026-11-21): such text is path-scrubbed with `scrubPaths`
+       (`tts/ffmpeg-failure.ts`) before it reaches a body -- `routes/lan-cert.ts` and
+       `routes/worktrees.ts` do; their tests drive a REAL failing child. A new route
+       that forwards child output must do the same; this guard cannot tell it did.
      - SSE frames and job-poll bodies — out of scope by the #3702 decision.
      - An aliased import of the seam passes (the callee NAME is matched).
      - `.status(5xx)` split from `.json(` by another chained call

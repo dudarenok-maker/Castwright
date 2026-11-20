@@ -171,25 +171,26 @@ describe('POST /api/voice-library/clone — clone-fidelity advisory (#1945)', ()
   });
 });
 
-/* #3702 — a sidecar-shaped derive failure that also carries a node fs error's shape
-   must reach the client as the curated fs sentence, never its raw (path-bearing)
-   reason. */
-describe('POST /api/voice-library/clone — sidecar-shaped error carrying an fs error shape (#3702)', () => {
-  it('answers 5xx with FS_FAILURE_REQUEST_ERROR and no workspace path', async () => {
-    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
-    const path = 'C:\\Users\\someone\\castwright-workspace\\x';
+/* #3702 — the sidecar-shaped branch wraps its reason in the fs seam, but a real sidecar
+   failure carries a short `code` ('engine_busy', ...) and an HTTP `status`, never a node
+   `syscall`/`path`, so the seam never curates it: the wrap is inert by construction.
+   Pin that the sidecar's own reason and code pass through unchanged. */
+describe('POST /api/voice-library/clone — a real sidecar-shaped derive failure (#3702)', () => {
+  it('passes the sidecar reason and code through unchanged', async () => {
     deriveMock.mockRejectedValueOnce(
-      Object.assign(
-        new Error(`EPERM: operation not permitted, rename '${path}' -> 'y'`),
-        { name: 'SidecarDesignError', status: 500, code: 'EPERM', syscall: 'rename', path },
-      ),
+      Object.assign(new Error('sidecar refused'), {
+        name: 'SidecarDesignError',
+        status: 503,
+        code: 'engine_busy',
+        reason: 'The voice engine is busy; try again in a moment.',
+      }),
     );
 
-    await seedCandidate('cand-fs');
-    const res = await postClone('cand-fs');
+    await seedCandidate('cand-sde');
+    const res = await postClone('cand-sde');
 
     expect(res.status).toBeGreaterThanOrEqual(500);
-    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(res.body)).not.toContain('someone');
+    expect(res.body.error).toBe('The voice engine is busy; try again in a moment.');
+    expect(res.body.code).toBe('engine_busy');
   });
 });

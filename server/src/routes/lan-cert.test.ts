@@ -14,7 +14,6 @@ import request from 'supertest';
 import { copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { setLanRuntime } from '../lan-runtime.js';
-import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -118,21 +117,37 @@ describe('POST /api/lan/cert/regenerate', () => {
     expect(setSecureContext).not.toHaveBeenCalled();
   });
 
-  it('on an fs-error failure with no stderr: returns FS_FAILURE_REQUEST_ERROR, not the raw path (#3702)', async () => {
-    const err = Object.assign(
-      new Error("EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'"),
-      { code: 'EPERM', syscall: 'rename', path: 'C:\\Users\\someone\\castwright-workspace\\x' },
-    );
-    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
-      (callback as (error: Error | null, stdout: string, stderr: string) => void)(err, '', '');
-      return {} as ReturnType<typeof execFile>;
-    });
+  /* #3702 -- the failing child is a REAL one: its stderr carries a node stack with
+     absolute paths, and an execFile rejection has a numeric `code` and no `syscall`
+     (so the fs seam can never fire here). The body is path-scrubbed instead. */
+  async function realFailingChild(script: string) {
+    const real = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    vi.mocked(execFile).mockImplementation(((_cmd: string, _args: string[], opts: object, callback: unknown) =>
+      real.execFile(process.execPath, ['-e', script], opts, callback as never)) as never);
+  }
+
+  it('a child that dies on an fs error: the 500 body carries no absolute path from its stderr (#3702)', async () => {
+    const missing = join(certDir, 'no-such-dir', 'lan-key.pem');
+    await realFailingChild(`require('fs').writeFileSync(${JSON.stringify(missing)}, 'x')`);
 
     const res = await request(makeApp()).post('/api/lan/cert/regenerate');
 
     expect(res.status).toBe(500);
-    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(res.body)).not.toContain('someone');
+    expect(res.body.error).toContain('ENOENT');
+    expect(res.body.error).not.toContain('no-such-dir');
+    expect(res.body.error).not.toContain(certDir);
+    expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
+  });
+
+  it('a child that dies with no stderr: the "Command failed" fallback carries no absolute path (#3702)', async () => {
+    await realFailingChild('process.exit(1)');
+
+    const res = await request(makeApp()).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/^Command failed/);
+    expect(res.body.error).not.toContain(process.execPath);
+    expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
   });
 
   it('on a TOCTOU hot-swap read failure: still returns 200 with the host list (not a 500)', async () => {

@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import net from 'node:net';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { scrubPaths } from '../tts/ffmpeg-failure.js';
 
 const PORT_VARS = ['VITE_PORT', 'PORT', 'LOCAL_TTS_PORT', 'PLAYWRIGHT_PORT'] as const;
 
@@ -88,10 +89,11 @@ worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
       windowsHide: true,
     });
     if (porcelain.status !== 0) {
-      const failureMessage = `git worktree list failed: ${porcelain.stderr || porcelain.stdout}`;
-      return res.status(500).json({
-        error: requestFailureMessageFs(porcelain.error ?? new Error(failureMessage), failureMessage),
-      });
+      /* git's stderr names the repo path (#3702); a non-zero exit is not an fs error, so
+         the seam cannot fire here -- scrub instead. */
+      return res
+        .status(500)
+        .json({ error: scrubPaths(`git worktree list failed: ${porcelain.stderr || porcelain.stdout}`) });
     }
     const trees = parseWorktreePorcelain(porcelain.stdout);
     const enriched: WorktreeRow[] = await Promise.all(

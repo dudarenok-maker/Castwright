@@ -327,6 +327,25 @@ it('isValidDeviceToken still fails closed (returns false, does not throw) on a d
 // 404 "Unknown device.", claiming the credential never existed when the
 // truth is "can't currently read the store; that device may still be
 // valid." It now throws instead of resolving false.
+// #3702 -- the error's message reaches LAN clients (pairing / devices 503 bodies),
+// so it must not carry the absolute workspace path; the path is logged at load.
+it('DeviceStoreDegradedError message is path-free; the degraded load warns with the path (#3702)', () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  let caught: unknown;
+  try {
+    dt.listDevices();
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBeInstanceOf(dt.DeviceStoreDegradedError);
+  expect((caught as Error).message).not.toContain(dir);
+  expect((caught as Error).message).not.toContain('device-tokens.json');
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(dir, 'device-tokens.json')));
+  warn.mockRestore();
+});
+
 it('revokeDevice throws DeviceStoreDegradedError (not a false "not found") while the store is degraded', async () => {
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

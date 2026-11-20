@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import type { Express } from 'express';
-import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 vi.mock('./export-lan.js', async (orig) => ({
   ...(await orig<typeof import('./export-lan.js')>()),
@@ -191,22 +190,25 @@ describe('devices route (srv-33)', () => {
     expect(res.body.error.length).toBeGreaterThan(0);
   });
 
-  // #3702 -- a degraded error carrying an fs cause must not leak the path.
-  it('GET answers 503 with FS_FAILURE_REQUEST_ERROR, not the raw path, when the degraded error is an fs error (#3702)', async () => {
-    const spy = vi.spyOn(deviceTokens, 'listDevices').mockImplementation(() => {
-      throw Object.assign(new deviceTokens.DeviceStoreDegradedError(), {
-        message: "EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'",
-        code: 'EPERM',
-        syscall: 'rename',
-        path: 'C:\\Users\\someone\\castwright-workspace\\x',
-      });
-    });
-    const res = await request(app).get('/api/devices');
-    spy.mockRestore();
+  // #3702 -- the degraded error is a REAL one (corrupt file on disk), unmodified:
+  // its message must not carry the absolute workspace path to the LAN client.
+  it('GET/POST/DELETE 503 bodies carry no absolute workspace path when the store is degraded (#3702)', async () => {
+    await writeFile(join(workspaceRoot, 'device-tokens.json'), '{ this is not json', 'utf8');
+    deviceTokens._resetDeviceTokenCacheForTests();
 
-    expect(res.status).toBe(503);
-    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(res.body)).not.toContain('someone');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const responses = [
+      await request(app).get('/api/devices'),
+      await request(app).post('/api/devices').send({ label: 'Phone' }),
+      await request(app).delete('/api/devices/any-id'),
+    ];
+    warn.mockRestore();
+
+    for (const res of responses) {
+      expect(res.status).toBe(503);
+      expect(res.text).not.toContain(workspaceRoot);
+      expect(res.text).not.toContain('device-tokens.json');
+    }
   });
 
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {

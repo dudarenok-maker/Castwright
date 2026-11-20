@@ -303,7 +303,9 @@ function loadSync(): DeviceTokenRecord[] {
 export class DeviceStoreDegradedError extends Error {
   constructor() {
     super(
-      `[device-tokens] ${deviceTokensJsonPath()} could not be read (corrupt file or an invalid "devices" array) — existing devices are unaffected and will keep authenticating; fix or remove the file, then retry.`,
+      /* Path-free: this message reaches LAN clients in the pairing / devices 503 bodies
+         (#3702). The path is logged by the degraded load's own warning (`warnOnce`). */
+      '[device-tokens] The device store could not be read (corrupt file or an invalid "devices" array) — existing devices are unaffected and will keep authenticating; fix or remove the device store file in the workspace folder, then retry.',
     );
     this.name = 'DeviceStoreDegradedError';
   }

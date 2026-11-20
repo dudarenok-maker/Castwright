@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { NoCapacityError } from '../tts/tts-errors.js';
-import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { selectTtsProvider } from '../tts/index.js';
 
 /* vi.hoisted so the inner factory below can close over the same vi.fn()
@@ -641,22 +640,20 @@ describe('voice-sample router', () => {
       expect(res.body.code).toBe('tts_failed');
     });
 
-    it('500 provider_unavailable curates an fs error from selectTtsProvider (#3702)', async () => {
-      const p = 'C:\\Users\\someone\\castwright-workspace\\x';
+    /* #3702 -- selectTtsProvider's only failure is this plain Error (no `code`/`syscall`), so
+       the fs seam wrapped around it never curates it (inert by construction): the message
+       reaches the client unchanged. */
+    it('500 provider_unavailable passes the real selectTtsProvider error through unchanged (#3702)', async () => {
+      const message = 'Gemini TTS selected but no API key is configured.';
       vi.mocked(selectTtsProvider).mockImplementationOnce(() => {
-        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${p}' -> 'y'`), {
-          code: 'EPERM',
-          syscall: 'rename',
-          path: p,
-        });
+        throw new Error(message);
       });
       const res = await request(app)
         .post('/api/voices/v_marlow/sample')
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(500);
       expect(res.body.code).toBe('provider_unavailable');
-      expect(res.body.message).toBe(FS_FAILURE_REQUEST_ERROR);
-      expect(JSON.stringify(res.body)).not.toContain('someone');
+      expect(res.body.message).toBe(message);
     });
 
     it('503 no_capacity with the named blockers when admission gives up (#1839)', async () => {

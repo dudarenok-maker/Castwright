@@ -616,24 +616,19 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(res.body.error).toMatch(/GPU busy/i);
   });
 
-  /* #3702 — a retryable-fork error that carries a node fs error's shape must reach
-     the client as the curated fs sentence, never its raw (path-bearing) message. */
-  it('answers a RetryableForkError carrying an fs error shape with FS_FAILURE_REQUEST_ERROR, no path', async () => {
+  /* #3702 — a RetryableForkError is only ever built with a fixed, path-free sentence and no
+     `code`/`syscall`, so the fs seam wrapped around it never curates it (inert by
+     construction). Pin that the real sentence reaches the client unchanged. */
+  it('answers a RetryableForkError with its own fixed sentence', async () => {
     const { RetryableForkError } = await import('../workspace/voice-uuid-fork.js');
-    const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
-    const path = 'C:\\Users\\someone\\castwright-workspace\\x';
     withGpuLoadMock.mockImplementationOnce(() => {
-      throw Object.assign(
-        new RetryableForkError(`EPERM: operation not permitted, rename '${path}' -> 'y'`),
-        { code: 'EPERM', syscall: 'rename', path },
-      );
+      throw new RetryableForkError('A book in this series changed while the voice was being separated; try again.');
     });
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(500);
-    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
-    expect(JSON.stringify(res.body)).not.toContain('someone');
+    expect(res.body.error).toBe('A book in this series changed while the voice was being separated; try again.');
   });
 });
 
