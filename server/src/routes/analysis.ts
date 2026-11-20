@@ -187,7 +187,7 @@ import { mintEditEpoch } from '../workspace/slice-revision.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { BOOK_GONE, BookStateUnreadableError, bookJobKinds, peekBook } from '../workspace/book-op-lock.js';
-import { busySentence } from './book-state.js';
+import { busySentence } from '../workspace/busy-sentence.js';
 import { checkParseHintsPairing } from '../workspace/hints-proof.js';
 import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
 import { assertHintsPairWithState, HintsOutOfSyncError } from '../workspace/restructure.js';
