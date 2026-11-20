@@ -1593,6 +1593,41 @@ for (const [label, stdout] of [
   });
 }
 
+test('main() end-to-end: a NON-empty register report also names RUNNER_OS in its heading (#4244)', async () => {
+  const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-os-rows-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+  wf(registerPath, `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`fe case\` | \`src/lib/foo.test.ts\` | timing | flaky | — | Quarantined |
+`, 'utf8');
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalRunnerOs = process.env.RUNNER_OS;
+  const originalExitCode = process.exitCode;
+  const originalLog = console.log;
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.env.RUNNER_OS = 'Windows';
+    process.exitCode = 0;
+    console.log = () => {};
+    const fakeSpawn = () => ({ status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' });
+    await main(registerPath, fakeSpawn);
+    assert.equal(rf(summaryPath, 'utf8').split('\n')[0], '# Quarantine lane health report (Windows)');
+  } finally {
+    console.log = originalLog;
+    if (originalSummaryPath === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    if (originalRunnerOs === undefined) delete process.env.RUNNER_OS;
+    else process.env.RUNNER_OS = originalRunnerOs;
+    process.exitCode = originalExitCode;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
   // The budget check (`budgetExceeded`, called BEFORE starting each run)
   // guarantees the run loop's own total worst-case elapsed time never
@@ -1643,6 +1678,14 @@ test('quarantine-health.yml runs a per-OS matrix whose tightest leg mirrors JOB_
     assert.ok(e.timeout >= capMin, `${e.os} timeout ${e.timeout} is below JOB_CAP_MS (${capMin} min)`);
   }
   assert.equal(Math.min(...include.map((e) => e.timeout)), capMin, 'JOB_CAP_MS must equal the tightest leg timeout');
+});
+
+test('quarantine-health.yml gates each ffmpeg install step to exactly its own OS leg (#4244)', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const steps = yaml.load(readFileSync(wfPath, 'utf8')).jobs['quarantine-health'].steps;
+  const byName = (n) => steps.find((st) => st.name === n);
+  assert.equal(byName('Install ffmpeg')?.if, "matrix.os == 'ubuntu-latest'");
+  assert.equal(byName('Install ffmpeg (Windows)')?.if, "matrix.os == 'windows-latest'");
 });
 
 // --- OS-named report (#4244) -------------------------------------------------
