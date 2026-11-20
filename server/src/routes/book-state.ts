@@ -1112,7 +1112,7 @@ const BUSY_PHRASE: Record<BookJobKind, string> = {
 
 export function busySentence(
   kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'include' | 'render' | 'restore' | 'cast-save' | 'manuscript-save',
+  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'include' | 'render' | 'analyse' | 'restore' | 'cast-save' | 'manuscript-save',
 ): string {
   if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
     return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
@@ -1142,6 +1142,11 @@ export function busySentence(
      they are refused while an analysis runs. */
   if (action === 'render') {
     return `This book is busy (${what}). Rendering audio is refused while it is analysing, so this was not started. Wait for the analysis to finish, then try again.`;
+  }
+  /* #3436 -- the other direction: an analysis start is refused while the book renders (generation,
+     splice, QA repair), so render and analysis on one book are mutually exclusive. */
+  if (action === 'analyse') {
+    return `This book is busy (${what}). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.`;
   }
   /* PR #3966 review pass 2 -- a backup restore rewrites state.json and can clear
      the analysis cache under a job that may still be saving it. */

@@ -186,7 +186,8 @@ import { readStateJsonWithRecovery } from '../workspace/state-migrate.js';
 import { mintEditEpoch } from '../workspace/slice-revision.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
-import { BOOK_GONE, BookStateUnreadableError, peekBook } from '../workspace/book-op-lock.js';
+import { BOOK_GONE, BookStateUnreadableError, bookJobKinds, peekBook } from '../workspace/book-op-lock.js';
+import { busySentence } from './book-state.js';
 import { checkParseHintsPairing } from '../workspace/hints-proof.js';
 import { readEditsForHintsCheck, sentencesOf } from '../workspace/hints-proof-io.js';
 import { assertHintsPairWithState, HintsOutOfSyncError } from '../workspace/restructure.js';
@@ -5314,6 +5315,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
         const e = new HintsOutOfSyncError();
         return res.status(409).json({ error: e.message, code: e.code });
       }
+      /* #3436 -- render and analysis on one book are mutually exclusive: a START is refused while
+         the book has a live render job. The late check (runBookJob's `refuseIfLive`, below) closes
+         the window this handler's awaits leave. */
+      const busy = rec?.bookId ? bookJobKinds(rec.bookId) : [];
+      if (busy.includes('render')) {
+        console.log(`[analysis] refused book_busy (render) manuscript=${JSON.stringify(manuscriptId)}`);
+        return res.status(409).json({ error: busySentence(busy, 'analyse'), code: 'book_busy' });
+      }
     }
   }
 
@@ -5645,7 +5654,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   }
   let registered;
   try {
-    registered = await runBookJob(record.bookId, 'analysis', startMain);
+    registered = await runBookJob(record.bookId, 'analysis', startMain, { refuseIfLive: 'render' });
   } catch (e) {
     console.error('[analysis] job registration failed', e);
     send({ kind: 'error', code: 'lock-contention', message: requestFailureMessage(e, 'Could not start the analysis.') });
@@ -5654,6 +5663,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   }
   if (registered === BOOK_GONE) {
     send({ kind: 'error', code: 'book_not_found', message: 'Book not found.' });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  /* #3436 -- a render registered ahead of this start (atomic with the token add, inside book-op):
+     nothing is registered, and the headers are flushed, so the refusal is an SSE terminal frame. */
+  if ('busy' in registered) {
+    console.log(`[analysis] refused book_busy (render) manuscript=${JSON.stringify(manuscriptId)}`);
+    send({ kind: 'error', code: 'book_busy', message: busySentence(registered.busy, 'analyse') });
     clearInterval(keepAlive);
     return res.end();
   }
@@ -9012,6 +9029,14 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
         const e = new HintsOutOfSyncError();
         return res.status(409).json({ error: e.message, code: e.code });
       }
+      /* #3436 -- render and analysis on one book are mutually exclusive: a START is refused while
+         the book has a live render job. The late check (runBookJob's `refuseIfLive`, below) closes
+         the window this handler's awaits leave. */
+      const busy = rec?.bookId ? bookJobKinds(rec.bookId) : [];
+      if (busy.includes('render')) {
+        console.log(`[analysis-subset] refused book_busy (render) manuscript=${JSON.stringify(manuscriptId)}`);
+        return res.status(409).json({ error: busySentence(busy, 'analyse'), code: 'book_busy' });
+      }
     }
   }
 
@@ -9361,7 +9386,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
   let registered;
   try {
-    registered = await runBookJob(record.bookId, 'analysis', startSubset);
+    registered = await runBookJob(record.bookId, 'analysis', startSubset, { refuseIfLive: 'render' });
   } catch (e) {
     console.error('[analysis-subset] job registration failed', e);
     send({ kind: 'error', code: 'lock-contention', message: requestFailureMessage(e, 'Could not start the analysis.') });
@@ -9370,6 +9395,14 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
   if (registered === BOOK_GONE) {
     send({ kind: 'error', code: 'book_not_found', message: 'Book not found.' });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  /* #3436 -- a render registered ahead of this start (atomic with the token add, inside book-op):
+     nothing is registered, and the headers are flushed, so the refusal is an SSE terminal frame. */
+  if ('busy' in registered) {
+    console.log(`[analysis-subset] refused book_busy (render) manuscript=${JSON.stringify(manuscriptId)}`);
+    send({ kind: 'error', code: 'book_busy', message: busySentence(registered.busy, 'analyse') });
     clearInterval(keepAlive);
     return res.end();
   }
