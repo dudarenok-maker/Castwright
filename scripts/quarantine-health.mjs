@@ -99,7 +99,8 @@
    "we don't know" rather than a wrong "stale."
 
    Runner failures (a crashed or hung vitest invocation, not a failing test):
-   `spawnSync` now carries a bounded `timeout` (VITEST_RUN_TIMEOUT_MS) and
+   Each vitest run is spawned through `boundedSpawn` (scripts/lib/bounded-spawn.mjs:
+   a bounded `timeout` of VITEST_RUN_TIMEOUT_MS that kills the whole process tree) and
    `classifyRunResult` (pure, unit-tested) tags each invocation 'ok' /
    'timed-out' / 'crashed' instead of silently collapsing every failure mode
    into `{ testResults: [] }`. A timeout and a crash are DIFFERENT diagnoses —
@@ -128,7 +129,8 @@
    invocation, and one run can make up to three of them (frontend, server
    main, server slow) — worst case 5 * 3 = 15 min for a single run, and
    `RUNS` (default 5) of those would be 75 min, well past
-   `.github/workflows/quarantine-health.yml`'s `timeout-minutes: 30` job cap.
+   `.github/workflows/quarantine-health.yml`'s job cap (the tightest per-OS
+   `matrix.timeout`: 30 minutes on the Ubuntu leg, 40 on Windows).
    The REAL guarantee this script makes is a wall-clock BUDGET on the run
    loop itself (`RUN_LOOP_WALL_CLOCK_BUDGET_MS`, 20 min): before starting
    each run, it checks whether that run's own worst case (its actual number
@@ -138,7 +140,8 @@
    report rather than a promise ("a partial report is emitted even when a
    later run dies") that a timeout can silently outrun. 20 minutes leaves
    ~10 minutes of margin inside the 30-minute job cap for checkout/npm
-   install/`apt-get install ffmpeg` and the `gh issue view` calls that run
+   install/the per-OS ffmpeg install (apt on Ubuntu, choco/winget on
+   Windows) and the `gh issue view` calls that run
    AFTER this loop — see `worstCaseRunMs`/`budgetExceeded` (pure,
    unit-tested) and the arithmetic pinned in quarantine-health.test.mjs.
 

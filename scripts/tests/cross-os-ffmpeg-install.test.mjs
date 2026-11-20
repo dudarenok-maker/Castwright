@@ -25,7 +25,7 @@
 // release.yml (previously near-identical, with executable lines identical and comments reflowed) into the composite
 // action .github/actions/install-ffmpeg-windows/action.yml, so there is now
 // exactly one copy of the script to pin. The tests below exercise it there;
-// a separate check at the bottom of this file confirms both workflows still
+// a separate check at the bottom of this file confirms every workflow that installs ffmpeg on Windows still
 // reference the composite action, so a future edit can't quietly reintroduce
 // an inline duplicate.
 //

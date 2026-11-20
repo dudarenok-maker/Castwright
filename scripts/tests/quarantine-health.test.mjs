@@ -1634,9 +1634,9 @@ test('the run-loop wall-clock budget fits inside the workflow job cap with margi
   // exceeds RUN_LOOP_WALL_CLOCK_BUDGET_MS: a run only starts if elapsed +
   // its own worst case still fits inside the budget, so after that run
   // finishes (worst case), elapsed <= budget by construction. That bound
-  // must leave real margin inside JOB_CAP_MS (mirrors `timeout-minutes: 30`
-  // in .github/workflows/quarantine-health.yml) for checkout/npm-install/
-  // apt-get-ffmpeg and the post-loop `gh issue view` calls, which all run
+  // must leave real margin inside JOB_CAP_MS (mirrors the tightest per-OS
+  // `matrix.timeout`, 30 min on Ubuntu, in .github/workflows/quarantine-health.yml)
+  // for checkout/npm-install/the per-OS ffmpeg install and the post-loop `gh issue view` calls, which all run
   // OUTSIDE this budget.
   assert.ok(
     RUN_LOOP_WALL_CLOCK_BUDGET_MS <= JOB_CAP_MS,
