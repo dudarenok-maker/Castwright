@@ -39,6 +39,8 @@ let generationPosts: string[] = [];
 let retryCalls = 0;
 let failedWrites: string[] = [];
 let fetchMock: ReturnType<typeof vi.fn>;
+/* When set, book-A's /generation answer waits on it, so a test can act between the claim and the 409. */
+let generationGate: Promise<void> | null = null;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -49,13 +51,17 @@ beforeEach(() => {
   generationPosts = [];
   retryCalls = 0;
   failedWrites = [];
+  generationGate = null;
   fetchMock = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
     const u = String(url);
     const gen = /\/api\/books\/([^/]+)\/generation$/.exec(u);
     if (gen) {
       const bookId = decodeURIComponent(gen[1]);
       generationPosts.push(bookId);
-      if (bookId === 'book-A') return json({ error: SENTENCE, code: 'book_busy' }, 409);
+      if (bookId === 'book-A') {
+        if (generationGate) await generationGate;
+        return json({ error: SENTENCE, code: 'book_busy' }, 409);
+      }
       return new Response('data: {"type":"idle"}\n\n', {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
@@ -238,5 +244,22 @@ describe('#3436 a 409 book_busy refusal on the OPEN book (the row and the change
     expect(store.getState().chapters.chapters[0]).toEqual(doneRow);
     expect(store.getState().changeLog.events).toHaveLength(logBefore);
     expect(failedWrites).toEqual([]);
+  });
+
+  it('keeps a row hydrated after the claim when the book is opened before the refusal lands (no pre-claim row to restore)', async () => {
+    let release!: () => void;
+    generationGate = new Promise<void>((r) => (release = r));
+    const store = makeStore();
+    seed(store, [entry('a1', 'book-A', 1, 0)]);
+    await vi.waitFor(() => expect(generationPosts.filter((b) => b === 'book-A').length).toBe(1));
+
+    /* the book is opened AFTER the claim: its hydrated row is not the claim's doing */
+    store.dispatch(chaptersActions.setCurrentBookId('book-A'));
+    store.dispatch(chaptersActions.setChapters([doneRow]));
+    release();
+
+    await vi.waitFor(() => expect(statusOf('a1')).toBe('queued'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(store.getState().chapters.chapters[0]).toEqual(doneRow);
   });
 });
