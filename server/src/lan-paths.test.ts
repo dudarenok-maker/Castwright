@@ -225,6 +225,22 @@ describe('separator-insensitive home matching (#4446 review)', () => {
       const none = at('C:\\Users\\john.smith', 'D:\\Temp');
       expect(collapseHomePath('C:\\Users\\JOHN~1.SMI\\x', none)).toBe('C:\\Users\\JOHN~1.SMI\\x');
     });
+    it('collapses the hash-style alias Windows uses after many collisions', () => {
+      const o = at('C:\\Users\\firstname.lastname', 'C:\\Users\\FI3A4B~1.LAS\\AppData\\Local\\Temp');
+      expect(collapseHomePath('C:\\Users\\FI3A4B~1.LAS\\x', o)).toBe('~\\x');
+      expect(collapseHomePath('C:\\Users\\FI3A4B~2.LAS\\x', o)).toBe('C:\\Users\\FI3A4B~2.LAS\\x');
+    });
+    it('rejects a hash-style hint whose first two chars differ or whose tail is not hex', () => {
+      for (const h of ['C:\\Users\\XY3A4B~1.LAS\\Temp', 'C:\\Users\\FIZZZZ~1.LAS\\Temp', 'C:\\Users\\FI3A4B~1\\Temp']) {
+        const o = at('C:\\Users\\firstname.lastname', h);
+        expect(collapseHomePath(h.replace('\\Temp', '\\x'), o)).toBe(h.replace('\\Temp', '\\x'));
+      }
+    });
+    it('a base shorter than six characters keeps its short alias', () => {
+      const o = at('C:\\Users\\ab.cdefgh', 'C:\\Users\\AB~1.CDE\\Temp');
+      expect(collapseHomePath('C:\\Users\\AB~1.CDE\\x', o)).toBe('~\\x');
+      expect(collapseHomePath('C:\\Users\\AB~2.CDE\\x', o)).toBe('C:\\Users\\AB~2.CDE\\x');
+    });
     it('a valid 8.3 dotted name has no alias', () => {
       const o = at('C:\\Users\\ann.old', 'C:\\Users\\ANN~1.OLD\\Temp');
       expect(collapseHomePath('C:\\Users\\ANN~1.OLD\\x', o)).toBe('C:\\Users\\ANN~1.OLD\\x');

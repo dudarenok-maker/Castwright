@@ -30,7 +30,10 @@ function isShortFormOf(seg: string, cand: string): boolean {
   const prefix = stripInvalid83(base).slice(0, 6);
   const suffix = stripInvalid83(ext).slice(0, 3);
   if (!prefix) return false;
-  return new RegExp(`^${escRe(prefix)}~\\d+${suffix ? `\\.${escRe(suffix)}` : ''}$`, 'i').test(cand);
+  const tail = `~\\d+${suffix ? `\\.${escRe(suffix)}` : ''}$`;
+  /* After four `~N` collisions Windows switches to `<first 2 chars><4 hex digits>~N`. */
+  const hash = prefix.length >= 2 ? `|${escRe(prefix.slice(0, 2))}[0-9a-f]{4}` : '';
+  return new RegExp(`^(?:${escRe(prefix)}${hash})${tail}`, 'i').test(cand);
 }
 
 /* The user's OWN alias per home segment, learned from paths the OS itself writes in
