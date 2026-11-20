@@ -38,7 +38,7 @@
 - **The health check keeps your folder paths on your computer.** It no longer shares your Castwright folder locations with phones and tablets on your network; the computer running it still sees them.
 - **A failed upgrade no longer shows your computer's folder paths to other devices.** On a phone or tablet you now get a plain explanation of what went wrong. On the computer running Castwright you still see the full detail.
 - **A disk or permission problem while unpacking an upgrade no longer stops Castwright.** Before, the app could shut down and leave the upgrade stuck on "applying". Now it tells you the upgrade failed and keeps running your current version.
-- **A repair, Fix-audio run, voice design or emotion take is no longer cut off when another book's render finishes a chapter.** Castwright used to unload the voice models to tidy up the graphics card even while your work was using them. A repair stopped to load its voice again, and a voice design or emotion take could fail outright with a "voice-design model was unloaded" error. It now leaves the voices alone while other work is running, whether that work is on the everyday voice or the higher-quality one.
+- **A repair, Fix-audio run, voice design or emotion take is no longer cut off when another book's render finishes a chapter.** Castwright used to unload the voice models to tidy up the graphics card even while your work was using them. A repair stopped to load its voice again, and a voice design could fail outright with a "voice-design model was unloaded" error, and an emotion take with a "1.7B voice model was unloaded" one. It now leaves the voices alone while other work is running, whether that work is on the everyday voice or the higher-quality one.
 
 # Castwright 1.15.0
 
