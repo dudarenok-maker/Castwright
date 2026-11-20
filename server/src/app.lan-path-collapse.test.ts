@@ -429,19 +429,23 @@ describe('DeviceStoreDegradedError text collapse on the real app (#4446/#4498, r
   }
   afterAll(heal);
 
-  it('loopback GET /api/devices keeps the full path in the 503 text', async () => {
+  /* #3702's fs-error curation already answers a fixed path-free sentence to EVERY client
+     (loopback included), so the #4446 collapse is a no-op layered on top; what matters is
+     that the body names no home dir and no username. */
+  it('loopback GET /api/devices answers the curated, path-free 503 text', async () => {
     await degrade();
     const lo = await getJson('127.0.0.1', '/api/devices');
     expect(lo.status).toBe(503);
-    expect(lo.body.error).toContain(home);
+    expect(lo.body.error).toContain('could not be read');
+    expect(lo.body.error).not.toContain(home);
   });
 
   describe.skipIf(!lanIp)('from a LAN address', () => {
-    it('GET /api/devices 503 text has ~ and neither the fake home nor the real username', async () => {
+    it('GET /api/devices 503 text has neither the fake home nor the real username', async () => {
       await degrade();
       const lan = await getJson(lanIp!, '/api/devices');
       expect(lan.status).toBe(503);
-      expect(lan.body.error).toContain('~');
+      expect(lan.body.error).toContain('could not be read');
       expect(lan.body.error).not.toContain(home);
       if (realUser) expect(lan.body.error).not.toContain(realUser);
     });
@@ -453,7 +457,7 @@ describe('DeviceStoreDegradedError text collapse on the real app (#4446/#4498, r
       const res = await sendJson(lanIp!, 'POST', '/api/pair/redeem', { code });
       expect(res.status).toBe(503);
       const raw = JSON.stringify(res.body);
-      expect(raw).toContain('~');
+      expect(raw).toContain('could not be read');
       expect(raw).not.toContain(home);
       if (realUser) expect(raw.toLowerCase()).not.toContain(realUser.toLowerCase());
     });
