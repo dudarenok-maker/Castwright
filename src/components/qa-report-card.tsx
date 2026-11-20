@@ -188,7 +188,7 @@ function VoiceMatchRow({
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
-        <span className="text-sm text-ink/50">Not run for this book — flip on render-integrity checking to catch mismatches automatically.</span>
+        <span className="text-sm text-ink/50">Not run for this book yet — no voice match has been scored.</span>
       </div>
     );
   }

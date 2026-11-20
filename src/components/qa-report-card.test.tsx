@@ -47,7 +47,7 @@ describe('QaReportCard', () => {
     // attempted every eligible chapter, all of them failed to embed) also
     // produces chaptersScored === 0, but now surfaces a nonzero
     // chaptersEmbedFailed. The row must lead with the honest "0 of N scored"
-    // fraction, not the "flip on render-integrity checking" invitation copy
+    // fraction, not the "not run for this book yet" copy
     // that implies the gate never ran.
     const report = {
       ...MOCK_QA_REPORT,
@@ -55,7 +55,7 @@ describe('QaReportCard', () => {
     };
     render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test Book" bookId="demo-book" />);
     expect(screen.getByText(/0 of 12 eligible chapters scored/i)).toBeInTheDocument();
-    expect(screen.queryByText(/flip on render-integrity checking/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not run for this book yet/i)).not.toBeInTheDocument();
   });
 
   it('shows the inconclusive-chapter count on the voice-match row when nonzero', () => {
@@ -322,7 +322,10 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
 
     it('is absent when the gate never ran and nothing is pending (nothing was settled)', () => {
       bare(withRerender({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] }));
-      expect(screen.getByText(/flip on render-integrity checking/i)).toBeInTheDocument();
+      // notRun is reachable with the check ON (or the field absent), so the copy must not ask the
+      // user to turn on a setting that may already be on.
+      expect(screen.getByText('Not run for this book yet — no voice match has been scored.')).toBeInTheDocument();
+      expect(screen.queryByText(/flip on|turn on/i)).not.toBeInTheDocument();
       expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
     });
 
