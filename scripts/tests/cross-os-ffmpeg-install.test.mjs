@@ -419,6 +419,21 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     );
   });
 
+  // #4573: ffmpeg 9.1.0 breaks Audio-QA repair's silent-segment detection, so
+  // every install path is pinned to 9.0.2 until the code fix lands. Delete
+  // this test together with the pin.
+  test(`${rel}: every Windows ffmpeg install path is pinned to 9.0.2 (#4573)`, () => {
+    const block = windowsFfmpegStepBlock(readNormalized(path));
+    const installs = block.split('\n').filter((l) => /\b(choco|winget)\s+install\b/.test(l));
+    assert.ok(
+      installs.some((l) => /\bchoco\s+install\b/.test(l)) && installs.some((l) => /\bwinget\s+install\b/.test(l)),
+      'expected both a choco and a winget install line',
+    );
+    for (const line of installs) {
+      assert.match(line, /--version\s+9\.0\.2\b/, `install line is not pinned to 9.0.2: ${line.trim()}`);
+    }
+  });
+
   // This test asserts the PROPERTY ("a bounded repeat around the install,
   // with a delay between attempts"), not one exact loop spelling. Rewriting
   // `for ($attempt = 1; ...)` as `1..3 | ForEach-Object { ... }`, or
