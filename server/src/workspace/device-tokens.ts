@@ -304,7 +304,7 @@ export class DeviceStoreDegradedError extends Error {
   constructor() {
     super(
       /* Path-free: this message reaches LAN clients in the pairing / devices 503 bodies
-         (#3702). The path is logged by the degraded load's own warning (`warnOnce`). */
+         (#3702). The path is logged by `warnOnce`, at the load and at the write path's re-read. */
       '[device-tokens] The device store could not be read (corrupt file or an invalid "devices" array) — existing devices are unaffected and will keep authenticating; fix or remove the device store file in the workspace folder, then retry.',
     );
     this.name = 'DeviceStoreDegradedError';
@@ -376,7 +376,11 @@ function readUnclaimedRecordsFromDisk(
   if (!existsSync(path)) return [];
   try {
     const f = JSON.parse(readFileSync(path, 'utf8')) as { devices?: unknown };
-    if (!Array.isArray(f.devices)) return QUARANTINE_READ_DEGRADED;
+    if (!Array.isArray(f.devices)) {
+      /* The 503 body is path-free (#3702), so the log is where the operator finds the file. */
+      warnOnce(`[device-tokens] ${path} has no valid "devices" array — refusing to write over it until it is fixed or removed`);
+      return QUARANTINE_READ_DEGRADED;
+    }
     const liveIds = new Set(liveDevices.map((d) => d.id));
     const unclaimed: unknown[] = [];
     for (const d of f.devices) {
@@ -393,7 +397,8 @@ function readUnclaimedRecordsFromDisk(
       unclaimed.push(d); // not claimed by anything live: could be still-malformed, freshly repaired, or orphaned — kept verbatim regardless
     }
     return unclaimed;
-  } catch {
+  } catch (err) {
+    warnOnce(`[device-tokens] ${path} could not be re-read before a write (${(err as Error).message}) — refusing to write over it until it is fixed or removed`);
     return QUARANTINE_READ_DEGRADED;
   }
 }

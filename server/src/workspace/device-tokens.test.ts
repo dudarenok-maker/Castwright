@@ -1049,3 +1049,20 @@ it('an ordinary write with no hand-edit does not warn (#2208, hunted per indepen
   expect(warn).not.toHaveBeenCalled();
   warn.mockRestore();
 });
+
+// #3702 -- the 503 body no longer carries the path, so the operator must be able to
+// find the file in the log. The write path (cache already populated, file corrupted
+// after load) re-reads the disk inside `persist` and used to fail with 0 log lines.
+it.each([
+  ['createDevice', () => dt.createDevice('Second', 30)],
+  ['revokeDevice', (id: string) => dt.revokeDevice(id)],
+])('%s after the file is corrupted post-load throws DeviceStoreDegradedError AND logs the path (#3702)', async (_n, act) => {
+  const { device } = await dt.createDevice('First', 30); // populates the cache; the next loadSync won't touch the disk
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  await expect(act(device.id)).rejects.toThrow(dt.DeviceStoreDegradedError);
+
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(dir, 'device-tokens.json')));
+  warn.mockRestore();
+});
