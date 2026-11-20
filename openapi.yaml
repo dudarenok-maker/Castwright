@@ -934,8 +934,11 @@ paths:
             refusal codes above can also arrive as a terminal SSE `error` event
             when the conflict appears after the stream opened.
             `book_busy` (#3436): the book has a RENDER job registered (generation,
-            a chapter re-record, or an audio-QA repair that writes), so the analysis
-            was not started — render and analysis on one book are mutually exclusive.
+            a chapter re-record, or an audio-QA repair that writes — the renders that
+            rebuild the analysis cache), so the analysis was not started — those renders
+            and analysis on one book are mutually exclusive. A splice `remix` (loudness
+            fix) and a dry-run QA scan register as `audio-fix`, never refuse an analysis
+            start, and are never refused by one.
             Body `{ error: <curated sentence>, code: book_busy }`. When a render
             registers after the stream opened, it arrives instead as a terminal SSE
             `error` event with `code: book_busy` and the sentence in `message`. A
@@ -1031,7 +1034,8 @@ paths:
             chapters), or, at the same count, a chapter whose saved analysis
             sentences do not match its position; body `{ error: <curated sentence>, code }`
             and nothing was written. `book_busy` (#3436): the book has a RENDER job
-            registered, so the run was not started (body `{ error: <curated sentence>,
+            registered (generation, a chapter re-record or a QA repair that writes; not a
+            splice remix or a dry-run scan), so the run was not started (body `{ error: <curated sentence>,
             code: book_busy }`; arrives as a terminal SSE `error` event with
             `code: book_busy` and the sentence in `message` when the render registered
             after the stream opened). Nothing was written.

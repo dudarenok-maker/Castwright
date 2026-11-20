@@ -44,13 +44,15 @@ export function busySentence(
   if (action === 'include') {
     return `This book is busy (${what}). Chapters cannot be added back while it is analysing, so this chapter was not included. Wait for the analysis to finish, then include it.`;
   }
-  /* #3436 -- generation / chapter splice / audio-QA repair rebuild the analysis cache mid-run, so
-     they are refused while an analysis runs. */
+  /* #3436 -- generation, a chapter splice in `rerecord` mode and a non-dry-run audio-QA repair
+     rebuild the analysis cache mid-run, so they are refused while an analysis runs. A splice `remix`
+     and a dry-run scan never rebuild it and are allowed (they register as `audio-fix`). */
   if (action === 'render') {
     return `This book is busy (${what}). Rendering audio is refused while it is analysing, so this was not started. Wait for the analysis to finish, then try again.`;
   }
-  /* #3436 -- the other direction: an analysis start is refused while the book renders (generation,
-     splice, QA repair), so render and analysis on one book are mutually exclusive. */
+  /* #3436 -- the other direction: an analysis start is refused while the book has a `render` job
+     (generation, splice re-record, non-dry-run QA repair), so those and analysis on one book are
+     mutually exclusive. */
   if (action === 'analyse') {
     return `This book is busy (${what}). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.`;
   }
