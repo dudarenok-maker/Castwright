@@ -8782,6 +8782,10 @@ async function runMainAnalyzerJobBody(
            paths reach, so nothing is logged here — just park. */
         if (persistErr instanceof BookDirUnresolvedError) {
           staleBookDirError = persistErr;
+        } else if (persistErr instanceof StaleRunEpochError) {
+          /* #3437 - a superseded run's dropped write is not a persist failure: park it, so
+             it ends `aborted` (top-level catch) and never logs `failed to persist`. */
+          persistWriteError ??= persistErr;
         } else {
           console.error('[analysis] failed to persist .audiobook/* for', writeDir, persistErr);
           /* Non-fatal — only a best-effort step lands here, or the drift-refused
@@ -8845,6 +8849,10 @@ async function runMainAnalyzerJobBody(
       }
     }
 
+    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success,
+       and never a drift refusal either: it ends `aborted` (checked ahead of the drift ending,
+       whose `halted` snapshot would otherwise land against the run that replaced this one). */
+    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     if (phase1DriftExceeded) {
       /* Phase 1 produced too many orphan attributions to trust. Emit an
          `attribution_drift` error and skip the `result` event so the
@@ -8861,8 +8869,6 @@ async function runMainAnalyzerJobBody(
       return;
     }
 
-    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success. */
-    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     send({ kind: 'result', response });
     endJob(job);
     return;
@@ -10927,6 +10933,9 @@ async function runSubsetAnalyzerJobBody(
            only — the durable STALE_BOOK_DIR log lives in the run catch (V7·1). */
         if (persistErr instanceof BookDirUnresolvedError) {
           staleBookDirError = persistErr;
+        } else if (persistErr instanceof StaleRunEpochError) {
+          /* #3437 - as the main job: parked, so it ends `aborted`, not a persist failure. */
+          persistWriteError ??= persistErr;
         } else {
           console.error(
             '[analysis-subset] failed to persist .audiobook/* for',
@@ -10965,6 +10974,10 @@ async function runSubsetAnalyzerJobBody(
       }
     }
 
+    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success,
+       and never a drift refusal either: it ends `aborted` (checked ahead of the drift ending,
+       whose `halted` snapshot would otherwise land against the run that replaced this one). */
+    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     if (subsetDriftExceeded) {
       endJob(job, {
         kind: 'error',
@@ -10974,8 +10987,6 @@ async function runSubsetAnalyzerJobBody(
       return;
     }
 
-    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success. */
-    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     endJob(job, { kind: 'result', response });
   } catch (e) {
     /* #4031 N2 — a pause or failure during Phase 0a still lands a faulted re-mint. */

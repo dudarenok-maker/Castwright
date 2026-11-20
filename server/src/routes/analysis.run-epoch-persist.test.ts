@@ -32,8 +32,13 @@ import type { Response } from '../http.js';
 const seam = vi.hoisted(() => ({
   /** runs inside the `persistPlannedCast` call, before the real persist. */
   beforePersist: null as null | (() => void),
+  /** runs after the `persistPlannedCast` call RETURNED (the cast write landed or was refused). */
+  afterPersistReturn: null as null | (() => void),
   /** runs at the persist window: after cast.json landed, before the state.json step. */
   afterCastPersist: null as null | (() => void),
+  /** runs inside the Nth (1-based) `saveCastMerges` call, before it writes: 1 = fold journal, 2 = dedup journal. */
+  beforeJournal: null as null | { nth: number; fn: () => void },
+  journalCalls: 0,
 }));
 
 vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
@@ -44,7 +49,28 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
       const hook = seam.beforePersist;
       seam.beforePersist = null;
       hook?.();
-      return actual.persistPlannedCast(...a);
+      return actual.persistPlannedCast(...a).then((out) => {
+        const after = seam.afterPersistReturn;
+        seam.afterPersistReturn = null;
+        after?.();
+        return out;
+      });
+    },
+  };
+});
+
+vi.mock('../store/cast-merges.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../store/cast-merges.js')>();
+  return {
+    ...actual,
+    saveCastMerges: (...a: Parameters<typeof actual.saveCastMerges>) => {
+      seam.journalCalls += 1;
+      if (seam.beforeJournal && seam.beforeJournal.nth === seam.journalCalls) {
+        const { fn } = seam.beforeJournal;
+        seam.beforeJournal = null;
+        fn();
+      }
+      return actual.saveCastMerges(...a);
     },
   };
 });
@@ -111,7 +137,20 @@ function stage1Roster(): CharacterOutput[] {
   ];
 }
 
+/* A drift fixture: 40 sentences a chapter (120, over the 100-sentence floor), half on an id the
+   roster does not hold, so Phase 1 demotes 50% and the drift gate refuses the run. */
+let driftFixture = false;
+
 function attributionForChapter(chapterId: number): SentenceOutput[] {
+  if (driftFixture) {
+    return Array.from({ length: 40 }, (_, i) => ({
+      id: chapterId * 100 + i + 1,
+      chapterId,
+      characterId: i % 2 === 0 ? 'nova' : 'ghost-not-in-roster',
+      confidence: 0.9,
+      text: 'Are you sure this will work',
+    }));
+  }
   return [
     { id: chapterId * 100 + 1, chapterId, characterId: 'nova', confidence: 0.9, text: 'Are you sure this will work' },
   ];
@@ -164,7 +203,10 @@ async function runJob(
   kind: 'main' | 'subset',
   /** Armed once the book exists; `read` returns a file's current bytes (null = absent). */
   arm: (ctx: { manuscriptId: string; read: (name: string) => string | null }) => void,
+  opts: { drift?: boolean } = {},
 ): Promise<Run> {
+  driftFixture = opts.drift === true;
+  seam.journalCalls = 0;
   const manuscriptId = `test-run-epoch-persist-${label}-${Date.now()}-${Math.random()}`;
   const bookId = `b_run_epoch_persist_${label}`;
   const bookDir = mkdtempSync(join(tmpdir(), `audiobook-run-epoch-persist-${label}-`));
@@ -320,6 +362,9 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
   afterEach(() => {
     seam.beforePersist = null;
     seam.afterCastPersist = null;
+    seam.afterPersistReturn = null;
+    seam.beforeJournal = null;
+    driftFixture = false;
     __resetRunEpochsForTests();
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
   });
@@ -372,6 +417,66 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
       expect(run.logs.some((l) => /dropped stale-run write: state\.json /.test(l))).toBe(true);
     } finally {
       await run.cleanup();
+    }
+  });
+
+  /* Review pass 1 (#4549), finding 1: a superseded run that would also drift-refuse must end
+     `aborted`, not `attribution_drift`, and must not write a `halted` analysis-state.json. */
+  describe('a superseded run that hits the drift gate', () => {
+    for (const kind of ['main', 'subset'] as const) {
+      it(`${kind} job: control at the current epoch ends attribution_drift`, async () => {
+        const run = await runJob(`drift-current-${kind}`, kind, () => {}, { drift: true });
+        try {
+          expect(terminal(run)?.code).toBe('attribution_drift');
+          /* the observable the superseded cases must NOT produce */
+          await vi.waitFor(() => expect(JSON.parse(run.read('analysis-state.json') ?? '{}').state).toBe('halted'));
+        } finally {
+          await run.cleanup();
+        }
+      });
+
+      it(`${kind} job: superseded before the persist ends aborted - no drift banner, no persist-failure line, no halted state`, async () => {
+        const run = await runJob(
+          `drift-stale-${kind}`,
+          kind,
+          ({ manuscriptId }) => {
+            seam.beforePersist = () => {
+              beginRunEpoch(manuscriptId); // a Start fresh registers here
+            };
+          },
+          { drift: true },
+        );
+        try {
+          const t = terminal(run);
+          expect(t?.kind).toBe('error');
+          expect(t?.code).toBe('aborted');
+          expect(run.errors.filter((l) => l.includes('failed to persist'))).toEqual([]);
+          const snap = run.read('analysis-state.json');
+          expect(snap === null ? null : JSON.parse(snap).state).not.toBe('halted');
+        } finally {
+          await run.cleanup();
+        }
+      });
+
+      it(`${kind} job: superseded after the drift-refused persist returned still ends aborted, not attribution_drift`, async () => {
+        const run = await runJob(
+          `drift-after-${kind}`,
+          kind,
+          ({ manuscriptId }) => {
+            seam.afterPersistReturn = () => {
+              beginRunEpoch(manuscriptId); // a Start fresh registers here
+            };
+          },
+          { drift: true },
+        );
+        try {
+          expect(terminal(run)?.code).toBe('aborted');
+          const snap = run.read('analysis-state.json');
+          expect(snap === null ? null : JSON.parse(snap).state).not.toBe('halted');
+        } finally {
+          await run.cleanup();
+        }
+      });
     }
   });
 
