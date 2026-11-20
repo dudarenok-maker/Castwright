@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "engines": {
-    "node": ">=22.22.0"
+    "node": ">=24.16.0"
   },
   "castwright": {
     "ffmpeg": {

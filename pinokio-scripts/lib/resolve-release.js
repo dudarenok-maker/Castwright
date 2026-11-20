@@ -54,7 +54,7 @@ const path = require('node:path');
 // #2216 — scripts/git-env.mjs is ESM; this file is CommonJS
 // ("type": "commonjs" in pinokio-scripts/package.json). `require()` of an
 // ESM module is supported unflagged since Node 22.12 (this repo's engines
-// floor is >=22.22.0, and Pinokio's installer conda-installs nodejs=24), so
+// floor is >=24.16.0, and Pinokio's installer conda-installs nodejs>=24.16.0,<25), so
 // this requires the ESM file directly rather than duplicating
 // GIT_ENV_SCRUB_KEYS into a second, CommonJS-only copy that could drift from
 // the original. This file always runs from inside a full checkout of this

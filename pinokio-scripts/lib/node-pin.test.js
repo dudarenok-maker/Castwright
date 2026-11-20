@@ -8,13 +8,44 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const install = require('../install.js');
 const update = require('../update.js');
-const { engines } = require('../../package.json');
+const pkg = require('../../package.json');
+const { engines } = pkg;
 
-// Extract the conda-forge `nodejs=<major>` pin from a shell.run step's message,
-// if present.
+// Parse the conda-forge Node spec out of a shell.run step's message, if present.
+// The accepted form is `"nodejs>=A.B.C,<M"` (a floor plus a next-major ceiling).
+// A bare major (`nodejs=24`) is REFUSED with a throw: conda resolves it to any 24.x
+// build, affected ones included, and that is the exact regression #4443 closes.
+function condaNodeSpec(message) {
+  if (/\bnodejs=\d+/.test(message)) {
+    throw new Error(
+      `bare-major conda Node pin in "${message}" — it admits releases carrying the Windows loopback crash (#4443); ` +
+        'use "nodejs>=A.B.C,<M"',
+    );
+  }
+  const m = /"?\bnodejs>=(\d+\.\d+\.\d+),<(\d+)"?/.exec(message);
+  if (!m) return null;
+  return { spec: m[0].replace(/"/g, ''), lower: m[1], major: Number(m[1].split('.')[0]), upperMajor: Number(m[2]) };
+}
 function condaNodePinMajor(message) {
-  const m = /\bnodejs=(\d+)\b/.exec(message);
-  return m ? Number(m[1]) : null;
+  const spec = condaNodeSpec(message);
+  return spec ? spec.major : null;
+}
+
+// Compare dotted versions numerically: negative, zero or positive.
+function cmp(a, b) {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
+// The last version inside a [from, toExclusive) range: one patch below `v`. When the
+// patch is already 0 the true predecessor is unknowable here, so step to a patch high
+// enough (999) in the previous minor/major to stand in for it.
+function patchBefore(v) {
+  const [a, b, c] = v.split('.').map(Number);
+  if (c > 0) return `${a}.${b}.${c - 1}`;
+  if (b > 0) return `${a}.${b - 1}.999`;
+  return `${a - 1}.999.999`;
 }
 
 // The first run step (if any) that conda-installs a pinned Node.
@@ -30,27 +61,28 @@ function findFirstNodeOrNpmStep(run) {
   return run.findIndex((step) => /\b(node|npm)\b/.test(step.params.message));
 }
 
-// Pull the leading major version out of an `engines.node` range like
-// ">=22.22.0" — good enough for the single ">=" floor this repo writes, not a
-// general semver-range parser.
+// Pull the floor version out of an `engines.node` range like ">=24.16.0" — a plain
+// single ">=" floor, not a general semver-range parser (the owner dropped Node 22,
+// so no union is needed; see #4493's amendment).
 //
 // It deliberately REFUSES anything more complex rather than reading the floor
-// and ignoring the rest: on ">=22.22.0 <24.0.0" a floor-only read returns 22,
-// the pin (24) clears it, and the test passes green while the declared ceiling
-// actually EXCLUDES the pinned major. A guard that quietly stops guarding is
-// worse than no guard, so an unparseable range is a loud failure telling the
-// reader to check the pin by hand.
-function floorMajor(range) {
-  const m = /^>=?\s*(\d+)\./.exec(range);
-  if (!m) throw new Error(`unrecognised engines.node range: "${range}"`);
-  const rest = range.slice(m[0].length);
-  if (/[<|]/.test(rest)) {
+// and ignoring the rest: on ">=24.16.0 <25" a floor-only read returns 24, the
+// pin clears it, and the test passes green while the declared ceiling might
+// EXCLUDE the pinned major. A guard that quietly stops guarding is worse than
+// none, so an unparseable range is a loud failure telling the reader to check
+// the pin by hand.
+function floorVersion(range) {
+  const m = /^>=\s*(\d+\.\d+\.\d+)$/.exec(range);
+  if (!m) {
     throw new Error(
-      `engines.node "${range}" carries an upper bound or union this floor-only guard cannot reason about — ` +
-        'verify the conda `nodejs=` pin in install.js/update.js against it by hand, then teach floorMajor() the new form',
+      `engines.node "${range}" is not a plain ">=A.B.C" floor (an upper bound, union or partial version?) — ` +
+        'verify the conda `nodejs` pin in install.js/update.js against it by hand, then teach floorVersion() the new form',
     );
   }
-  return Number(m[1]);
+  return m[1];
+}
+function floorMajor(range) {
+  return Number(floorVersion(range).split('.')[0]);
 }
 
 test('install.js pins a Node major via conda install', () => {
@@ -90,12 +122,63 @@ test('install.js and update.js pin the same Node major', () => {
   assert.equal(updatePin.major, installPin.major, 'install.js and update.js drifted onto different Node majors');
 });
 
+function pinSpec(script) {
+  const step = script.run.find((st) => condaNodeSpec(st.params.message));
+  return condaNodeSpec(step.params.message);
+}
+const installSpec = () => pinSpec(install);
+const ranges = () => pkg.castwright.node.windowsLoopbackCrash;
+
 test('the pinned Node major satisfies package.json engines.node (drift guard)', () => {
   const pin = findCondaNodePinStep(install.run);
   const floor = floorMajor(engines.node);
   assert.ok(
     pin.major >= floor,
     `pinned Node major ${pin.major} no longer satisfies engines.node "${engines.node}" (floor major ${floor}) — ` +
-      'bump the conda `nodejs=` pin in install.js/update.js alongside any future engines.node floor raise',
+      'bump the conda `nodejs` pin in install.js/update.js alongside any future engines.node floor raise',
   );
+});
+
+test('the refusal of a bare-major pin is loud', () => {
+  assert.throws(() => condaNodeSpec('conda install -y -c conda-forge nodejs=24'), /bare-major/);
+  assert.throws(() => floorVersion('>=22.22.0 <23 || >=24.16.0'), /not a plain/);
+});
+
+test('(a) the pin excludes every crashing range: each is below its lower bound or at/above its ceiling', () => {
+  const { lower, upperMajor } = installSpec();
+  const upper = `${upperMajor}.0.0`;
+  for (const r of ranges()) {
+    const below = cmp(r.toExclusive, lower) <= 0;
+    const above = cmp(r.from, upper) >= 0;
+    assert.ok(below || above, `pin >=${lower},<${upperMajor} admits part of crashing range ${r.from}→${r.toExclusive}`);
+  }
+});
+
+test('(b) no version in a crashing range that sits below the engines floor satisfies engines.node', () => {
+  const floor = floorVersion(engines.node);
+  const below = ranges().filter((r) => cmp(r.from, floor) < 0);
+  assert.ok(below.length > 0, 'expected at least one crashing range below the engines floor');
+  for (const r of below) {
+    for (const v of [r.from, patchBefore(r.toExclusive)]) {
+      assert.ok(cmp(v, floor) < 0, `${v} (in crashing range ${r.from}→${r.toExclusive}) satisfies engines.node "${engines.node}"`);
+    }
+  }
+});
+
+test('accepted gap: the 25.0.0→26.1.0 range DOES satisfy engines.node (owner-accepted, #4493 amendment)', () => {
+  // The owner's 2026-11-20 amendment fixed engines.node as a plain ">=24.16.0" floor and
+  // explicitly accepted that it admits Node 25.0–25.9 and 26.0.0. On Windows the server
+  // startup guard (#4492) still refuses them. If engines is ever tightened, update this test.
+  const floor = floorVersion(engines.node);
+  const gap = ranges().find((r) => r.from === '25.0.0');
+  assert.ok(gap, 'expected the 25.0.0 range in castwright.node.windowsLoopbackCrash');
+  assert.ok(cmp(gap.from, floor) >= 0 && cmp(patchBefore(gap.toExclusive), floor) >= 0);
+});
+
+test('(c) the pinned lower bound equals the engines.node floor (drift check)', () => {
+  assert.equal(installSpec().lower, floorVersion(engines.node), 'conda pin lower bound drifted from engines.node floor');
+});
+
+test('(d) install.js and update.js carry the same Node spec', () => {
+  assert.equal(pinSpec(update).spec, pinSpec(install).spec, 'install.js and update.js pin different Node specs');
 });
