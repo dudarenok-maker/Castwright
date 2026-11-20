@@ -90,10 +90,10 @@ test.describe('QA report card', () => {
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(1);
   });
 
-  /* #4454 — with the speaker check switched off nothing is "pending": the card
+  /* #4454 — with render-integrity QA switched off nothing is "pending": the card
      must say so and offer no Resume (the server would answer 409). Same
      `__mockQaReportOverride` seam as the test above. */
-  test('says the speaker check is off and offers no Resume when the gate is off', async ({ page }) => {
+  test('says render-integrity QA is off and offers no Resume when the gate is off', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as { __mockQaReportOverride: unknown }).__mockQaReportOverride = {
         bookId: 'sb',
@@ -126,7 +126,7 @@ test.describe('QA report card', () => {
 
     const off = page.getByTestId('qa-speaker-check-off');
     await expect(off).toBeVisible();
-    await expect(off).toContainText('Speaker check is off');
+    await expect(off).toContainText('Render-integrity QA (voice match) is off');
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
   });
 });

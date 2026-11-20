@@ -117,7 +117,7 @@ describe('speaker check off (#4454)', () => {
   it('(a) gate off + pending non-empty -> gateOff, export says the check is off', () => {
     const r = off({ charactersPending: ['ren'], chaptersScored: 0 });
     expect(classifyVoiceMatch(r).kind).toBe('gateOff');
-    expect(line(r)).toContain('Voice match — speaker check is off');
+    expect(line(r)).toContain('Voice match — Render-integrity QA is off');
   });
 
   it('(a2) gate off + pending + partial scoring keeps embedShortfall and the mismatch count in the export', () => {
@@ -131,7 +131,7 @@ describe('speaker check off (#4454)', () => {
     expect(classifyVoiceMatch(r).kind).toBe('embedShortfall');
     expect(line(r)).toContain('11 of 12 eligible chapters scored');
     expect(line(r)).toContain('2 mismatches');
-    expect(line(r)).toMatch(/\(speaker check is now off\)$/);
+    expect(line(r)).toMatch(/\(Render-integrity QA is now off\)$/);
   });
 
   it('(b) gate off + notRun condition + nothing pending -> gateOff', () => {
@@ -141,7 +141,7 @@ describe('speaker check off (#4454)', () => {
   it('(c) gate off + scored keeps scored and notes the check is now off', () => {
     const r = off({});
     expect(classifyVoiceMatch(r).kind).toBe('scored');
-    expect(line(r)).toMatch(/\(speaker check is now off\)$/);
+    expect(line(r)).toMatch(/\(Render-integrity QA is now off\)$/);
   });
 
   it('(d) gate on + pending is not gateOff', () => {

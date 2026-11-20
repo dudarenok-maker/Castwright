@@ -109,13 +109,13 @@ function VoiceMatchRow({
       </div>
     );
   }
-  /* #4454 — speaker check is off: say so and offer no Resume (Resume only when it can do the work, #3680).
+  /* #4454 — render-integrity QA is off: say so and offer no Resume (Resume only when it can do the work, #3680).
      Gate off with a past result falls through to the result rows below, with no Resume. */
   if (classification.kind === 'gateOff') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
-        <span data-testid="qa-speaker-check-off" className="text-sm text-ink/50">Speaker check is off — turn it on in Settings to check character voices.</span>
+        <span data-testid="qa-speaker-check-off" className="text-sm text-ink/50">Render-integrity QA (voice match) is off. Turn it on in Advanced settings → Per-sentence QA gates to check character voices.</span>
       </div>
     );
   }
@@ -194,7 +194,7 @@ function VoiceMatchRow({
   }
   const inconclusiveNote =
     (classification.inconclusiveCount > 0 ? ` · ${classification.inconclusiveCount} chapters inconclusive` : '') +
-    (isSpeakerCheckOff(report) ? ' · speaker check is now off' : '');
+    (isSpeakerCheckOff(report) ? ' · Render-integrity QA is now off' : '');
   if (classification.kind === 'embedShortfall') {
     return (
       <div className="flex items-center justify-between py-2">

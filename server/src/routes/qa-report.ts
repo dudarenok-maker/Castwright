@@ -86,7 +86,7 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
     /* #4454 — triggerScoring returns immediately while the speaker check is off, so without this
        the route would answer 202 and do nothing. Same curated-sentence rule. */
     if (!configValue('qa.speaker.enabled')) {
-      res.status(409).json({ error: 'The speaker check is off — turn it on in Settings to score character voices.' });
+      res.status(409).json({ error: 'Render-integrity QA (voice match) is off. Turn it on in Advanced settings → Per-sentence QA gates to score character voices.' });
       return;
     }
     const registered = await runBookJob(bookId, 'scoring', async (lease) => {

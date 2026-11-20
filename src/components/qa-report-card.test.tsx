@@ -112,7 +112,7 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
   });
 
   describe('speaker check off (#4454)', () => {
-    const OFF_COPY = 'Speaker check is off — turn it on in Settings to check character voices.';
+    const OFF_COPY = 'Render-integrity QA (voice match) is off. Turn it on in Advanced settings → Per-sentence QA gates to check character voices.';
     const renderWith = (voiceDrift: Partial<typeof MOCK_QA_REPORT.voiceDrift>) =>
       render(
         <QaReportCard
@@ -138,12 +138,12 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
         chaptersEmbedFailed: 0,
         mismatches: [{ characterId: 'ren', fixable: true }, { characterId: 'mo', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
       });
-      expect(screen.getByText(/11 of 12 eligible chapters scored.*2 mismatches.*speaker check is now off/)).toBeInTheDocument();
+      expect(screen.getByText(/11 of 12 eligible chapters scored.*2 mismatches.*Render-integrity QA is now off/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
       expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
     });
 
-    it('(b) notRun shape + gate off: speaker-check copy replaces "Not run for this book"', () => {
+    it('(b) notRun shape + gate off: render-integrity copy replaces "Not run for this book"', () => {
       renderWith({ speakerCheckEnabled: false, chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] });
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
       expect(screen.queryByText(/Not run for this book/)).toBeNull();
@@ -151,7 +151,7 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
 
     it('(c) scored shape + gate off: keeps the result and appends the note, no Resume', () => {
       renderWith({ speakerCheckEnabled: false, chaptersScored: 12, charactersPending: [] });
-      expect(screen.getByText(/18 of 18 characters checked.*speaker check is now off/)).toBeInTheDocument();
+      expect(screen.getByText(/18 of 18 characters checked.*Render-integrity QA is now off/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
     });
 

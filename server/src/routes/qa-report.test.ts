@@ -547,7 +547,7 @@ describe('POST /:bookId/resume-scoring', () => {
     try {
       const res = await request(app).post(`/api/books/${bookId}/resume-scoring`);
       expect(res.status).toBe(409);
-      expect(res.body.error).toBe('The speaker check is off — turn it on in Settings to score character voices.');
+      expect(res.body.error).toBe('Render-integrity QA (voice match) is off. Turn it on in Advanced settings → Per-sentence QA gates to score character voices.');
       await __awaitScoringSettled(bookId);
       expect(scoreBook).not.toHaveBeenCalled();
     } finally {
