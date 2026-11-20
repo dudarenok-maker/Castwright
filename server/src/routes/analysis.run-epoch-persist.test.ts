@@ -27,6 +27,7 @@ import { ANALYSIS_CACHE_VERSION, clearAnalysisCache, saveAnalysisCache } from '.
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { beginRunEpoch, __resetRunEpochsForTests } from '../store/analysis-run-epoch.js';
 import type { Response } from '../http.js';
+import { LockAcquisitionTimeoutError } from '../workspace/file-lock.js';
 
 /* Seams. Each fires once, then disarms. */
 const seam = vi.hoisted(() => ({
@@ -38,6 +39,8 @@ const seam = vi.hoisted(() => ({
   afterPersistReturn: null as null | (() => void),
   /** runs at the persist window: after cast.json landed, before the state.json step. */
   afterCastPersist: null as null | (() => void),
+  /** makes the next `updateStateAtDir` reject with this error (fires once). */
+  stateWriteFault: null as null | Error,
   /** runs just before a journal writer takes the cast lock (it is the caller in the stack): the
       window in which a Start fresh can register while the journal waits for the lock. */
   beforeJournalLock: null as null | { writer: 'writeFoldJournal' | 'writeDedupJournal'; fn: () => void },
@@ -80,6 +83,21 @@ vi.mock('../workspace/cast-lock.js', async (importOriginal) => {
       }
       return actual.withCastLock(...a);
     }) as typeof actual.withCastLock,
+  };
+});
+
+vi.mock('../workspace/book-state-update.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-state-update.js')>();
+  return {
+    ...actual,
+    updateStateAtDir: ((...a: Parameters<typeof actual.updateStateAtDir>) => {
+      const fault = seam.stateWriteFault;
+      if (fault) {
+        seam.stateWriteFault = null;
+        return Promise.reject(fault);
+      }
+      return actual.updateStateAtDir(...a);
+    }) as typeof actual.updateStateAtDir,
   };
 });
 
@@ -377,6 +395,7 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
     seam.afterCastPersist = null;
     seam.afterPersistReturn = null;
     seam.beforeJournalLock = null;
+    seam.stateWriteFault = null;
     driftFixture = false;
     __resetRunEpochsForTests();
     delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
@@ -484,6 +503,43 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
         );
         try {
           expect(terminal(run)?.code).toBe('aborted');
+          const snap = run.read('analysis-state.json');
+          expect(snap === null ? null : JSON.parse(snap).state).not.toBe('halted');
+        } finally {
+          await run.cleanup();
+        }
+      });
+    }
+  });
+
+  /* Review pass 2 (#4549), finding 1: a superseded run whose parked error is NOT the stale one
+     (here a lock-acquisition timeout from the state.json write) must still end `aborted`. */
+  describe('a superseded run that also hits a lock timeout', () => {
+    for (const kind of ['main', 'subset'] as const) {
+      it(`${kind} job: control at the current epoch keeps lock-contention`, async () => {
+        const run = await runJob(`lock-current-${kind}`, kind, () => {
+          seam.beforePersist = () => {
+            seam.stateWriteFault = new LockAcquisitionTimeoutError('state-json:test', 10_000);
+          };
+        });
+        try {
+          expect(terminal(run)?.code).toBe('lock-contention');
+          await vi.waitFor(() => expect(JSON.parse(run.read('analysis-state.json') ?? '{}').state).toBe('halted'));
+        } finally {
+          await run.cleanup();
+        }
+      });
+
+      it(`${kind} job: superseded, then a lock timeout, ends aborted - no halted state, no persist-failure line`, async () => {
+        const run = await runJob(`lock-stale-${kind}`, kind, ({ manuscriptId }) => {
+          seam.beforePersist = () => {
+            beginRunEpoch(manuscriptId); // a Start fresh registers here
+            seam.stateWriteFault = new LockAcquisitionTimeoutError('state-json:test', 10_000);
+          };
+        });
+        try {
+          expect(terminal(run)?.code).toBe('aborted');
+          expect(run.errors.filter((l) => l.includes('failed to persist'))).toEqual([]);
           const snap = run.read('analysis-state.json');
           expect(snap === null ? null : JSON.parse(snap).state).not.toBe('halted');
         } finally {

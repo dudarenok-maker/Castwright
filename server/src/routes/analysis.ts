@@ -8792,6 +8792,9 @@ async function runMainAnalyzerJobBody(
           /* #3437 - a superseded run's dropped write is not a persist failure: park it, so
              it ends `aborted` (top-level catch) and never logs `failed to persist`. */
           persistWriteError ??= persistErr;
+        } else if (isRunEpochStale(job.runEpoch)) {
+          /* #3437 - a superseded run ends `aborted` (top-level catch): its late fault (a parked
+             lock timeout) is not a persist failure to report. */
         } else {
           console.error('[analysis] failed to persist .audiobook/* for', writeDir, persistErr);
           /* Non-fatal — only a best-effort step lands here, or the drift-refused
@@ -8884,7 +8887,9 @@ async function runMainAnalyzerJobBody(
        structured `aborted` error so the UI distinguishes "you paused
        this" from "the analyzer broke" — the frontend uses code:
        'aborted' to short-circuit its error-banner path. */
-    if (e instanceof AnalysisAbortedError) {
+    /* #3437 - a superseded run ends `aborted` whatever it parked or threw (a lock timeout, an
+       earlier persist failure): classifying it would halt the book on a run that no longer owns it. */
+    if (e instanceof AnalysisAbortedError || isRunEpochStale(job.runEpoch)) {
       console.log(`[analysis] aborted ${manuscriptId} (paused or displaced)`);
       endJob(job, {
         kind: 'error',
@@ -10942,6 +10947,8 @@ async function runSubsetAnalyzerJobBody(
         } else if (persistErr instanceof StaleRunEpochError) {
           /* #3437 - as the main job: parked, so it ends `aborted`, not a persist failure. */
           persistWriteError ??= persistErr;
+        } else if (isRunEpochStale(job.runEpoch)) {
+          /* #3437 - as the main job: superseded, so ends `aborted`; nothing to report. */
         } else {
           console.error(
             '[analysis-subset] failed to persist .audiobook/* for',
@@ -10997,7 +11004,8 @@ async function runSubsetAnalyzerJobBody(
   } catch (e) {
     /* #4031 N2 — a pause or failure during Phase 0a still lands a faulted re-mint. */
     await flushPendingCachePatch();
-    if (e instanceof AnalysisAbortedError) {
+    /* #3437 - a superseded run ends `aborted` whatever it parked or threw, as in the main job. */
+    if (e instanceof AnalysisAbortedError || isRunEpochStale(job.runEpoch)) {
       /* Plan 32 D1: subset retries now survive a client disconnect,
          so AnalysisAbortedError here means an EXPLICIT /pause
          aborted the run. Broadcast paused state to every still-
