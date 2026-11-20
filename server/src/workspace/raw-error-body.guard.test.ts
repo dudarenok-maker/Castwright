@@ -12,7 +12,8 @@
      - a template literal interpolating either (reached by the same walk).
    An occurrence is exempt when it sits inside the argument list of a seam call
    (`requestFailureMessage(`, `requestFailureMessageFs(`, `itemFailureReason(`,
-   `workspace/file-lock.ts`). 4xx literals are never checked.
+   `workspace/file-lock.ts`) or of `scrubPaths(` (`tts/ffmpeg-failure.ts`, the
+   child-process-output curation below). 4xx literals are never checked.
 
    METHOD: a TypeScript-AST walk (`parseGuardSource` / `resolvedCallName` from
    `server/src/test-utils/guard-scan.ts`). Comments and string literals are not
@@ -55,7 +56,12 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
 
-const SEAM_CALLS = new Set(['requestFailureMessage', 'requestFailureMessageFs', 'itemFailureReason']);
+const SEAM_CALLS = new Set([
+  'requestFailureMessage',
+  'requestFailureMessageFs',
+  'itemFailureReason',
+  'scrubPaths', // the #3702 (2026-11-21) curation for child-process output
+]);
 
 /** Is the `.status(<arg>)` argument one that can be a 5xx? */
 function statusCanBe5xx(arg: ts.Expression | undefined): boolean {
@@ -154,6 +160,11 @@ describe('raw caught-error message in a 5xx body — static guard (#3702)', () =
     it('does not flag a message wrapped in the seam', () => {
       expect(
         scanSource('res.status(500).json({ error: requestFailureMessageFs(e, (e as Error).message) });'),
+      ).toEqual([]);
+    });
+    it('does not flag a child-output message wrapped in the path scrubber (#3702 decision)', () => {
+      expect(
+        scanSource('res.status(500).json({ error: scrubPaths(`failed: ${r.error?.message}`) });'),
       ).toEqual([]);
     });
     it('does not flag a 4xx body', () => {
