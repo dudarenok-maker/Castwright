@@ -894,6 +894,21 @@ export interface AsrPassOptions {
   onProgress?: (e: { verified: number; total: number }) => void;
 }
 
+/** The narrator row id the render uses: the caller's own id when the cast has
+    it, else the first of `NARRATOR_CHARACTER_IDS` the cast has, else the
+    caller's id unchanged (the synthetic-stub case). Exported so
+    `chapterQwenTierNeeds` shares this one definition with `synthesiseChapter`
+    (#1393). `has` is the cast-membership test, so a caller passes
+    `(id) => castById.has(id)`. */
+export function resolveNarratorCharacterId(
+  has: (id: string) => boolean,
+  narratorCharacterId: string,
+): string {
+  return has(narratorCharacterId)
+    ? narratorCharacterId
+    : (NARRATOR_CHARACTER_IDS.find((id) => has(id)) ?? narratorCharacterId);
+}
+
 /** One group per sentence. Plan 70d — earlier code folded consecutive
     same-speaker sentences into one synth call to cut HTTP roundtrips.
     Two production failures pushed us to per-sentence:
@@ -1563,9 +1578,10 @@ export async function synthesiseChapter(
      re-resolve when the CALLER's own id has no cast match — a caller that
      legitimately points `narratorCharacterId` at some other real row keeps
      its own choice untouched. */
-  const resolvedNarratorCharacterId = castById.has(narratorCharacterId)
-    ? narratorCharacterId
-    : (NARRATOR_CHARACTER_IDS.find((id) => castById.has(id)) ?? narratorCharacterId);
+  const resolvedNarratorCharacterId = resolveNarratorCharacterId(
+    (id) => castById.has(id),
+    narratorCharacterId,
+  );
 
   const groups = buildSentenceGroups(sentences);
 
