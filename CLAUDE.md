@@ -744,7 +744,8 @@ Design rationale:
   `voice-override-linked`, `voice-style`, `cast-design`)
   whose fallback is the
   error's own message use (#3711) —
-  `git grep requestFailureMessage` matches both and enumerates all
+  `git grep -cE 'requestFailureMessage(Fs)?\(' -- server/src ':!*.test.ts'` (summed, minus the 2 definitions in
+  `workspace/file-lock.ts`) matches both and enumerates all
   one hundred and fifty-five call sites (`voice-library` ×17, `book-state` ×13, `queue` ×11, `cover` ×9,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
