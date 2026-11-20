@@ -206,8 +206,11 @@ describe('devices route (srv-33)', () => {
 
     for (const res of responses) {
       expect(res.status).toBe(503);
-      expect(res.text).not.toContain(workspaceRoot);
-      expect(res.text).not.toContain('device-tokens.json');
+      // res.body.error, not res.text: the JSON text doubles Windows backslashes, so a
+      // single-backslash workspaceRoot could never match it.
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.error).not.toContain(workspaceRoot);
+      expect(res.body.error).not.toContain('device-tokens.json');
     }
   });
 
