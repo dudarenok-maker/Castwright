@@ -205,11 +205,21 @@ function VoiceMatchRow({
       </div>
     );
   }
+  if (classification.kind === 'checkedSoFar') {
+    return (
+      <div className="flex items-center justify-between py-2">
+        <span className="text-sm text-ink/70">Voice match</span>
+        <span className="text-sm text-ink">
+          {classification.chaptersWithVerdicts} of {classification.chaptersEligible} eligible chapters checked so far, {classification.mismatchCount} mismatches{inconclusiveNote}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="flex items-center justify-between py-2">
       <span className="text-sm text-ink/70">Voice match</span>
       <span className="text-sm text-ink">
-        {classification.charactersChecked} of {classification.charactersOnRoster} characters checked{classification.kind === 'checkedSoFar' ? ' so far' : ''}, {classification.mismatchCount} mismatches{inconclusiveNote}
+        {classification.charactersChecked} of {classification.charactersOnRoster} characters checked, {classification.mismatchCount} mismatches{inconclusiveNote}
       </span>
     </div>
   );

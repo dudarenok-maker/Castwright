@@ -156,7 +156,11 @@ rendered book had no way to resume. Design spec:
    carries `voiceDrift.speakerCheckEnabled: false`. With nothing scored or
    attempted the card says the check is off; with a past scored result it keeps
    showing that result with a "now off" note. Either way no Resume button and
-   no needs-re-render listing are shown.)
+   no needs-re-render listing are shown. "Nothing scored" is read off
+   `voiceDrift.chaptersWithVerdicts` — the current eligible chapters holding a
+   voice-match verdict row — plus a standing mismatch / inconclusive count; not
+   off `charactersPending` or `charactersChecked`, which a never-scored book and
+   a restructured one both get wrong.)
 9. **The per-chapter roster used for "fully scored" is sourced from each
    chapter's `embeddings.json`, not from `characterSnapshots`/segments.json
    presence.** A character can speak in a chapter (on the snapshot) yet have

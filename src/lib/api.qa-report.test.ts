@@ -46,6 +46,7 @@ describe('api.getQaReport — wire contract', () => {
         chaptersEligible: 0,
         chaptersScored: 0,
         chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 0,
         charactersOnRoster: 0,
         charactersChecked: 0,
         mismatches: [],

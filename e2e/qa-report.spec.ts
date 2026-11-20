@@ -49,6 +49,7 @@ test.describe('QA report card', () => {
           chaptersEligible: 2,
           chaptersScored: 2,
           chaptersEmbedFailed: 0,
+          chaptersWithVerdicts: 1,
           charactersOnRoster: 2,
           charactersChecked: 1,
           charactersPending: ['narrator'],
@@ -109,6 +110,7 @@ test.describe('QA report card', () => {
           chaptersEligible: 2,
           chaptersScored: 0,
           chaptersEmbedFailed: 0,
+          chaptersWithVerdicts: 0,
           charactersOnRoster: 2,
           charactersChecked: 2, // the builder reports the whole roster as checked on a never-scored book (pinned in server qa-report.test.ts)
           charactersPending: ['narrator', 'halloran'],
@@ -149,6 +151,7 @@ test.describe('QA report card', () => {
           chaptersEligible: 2,
           chaptersScored: 1,
           chaptersEmbedFailed: 0,
+          chaptersWithVerdicts: 1,
           charactersOnRoster: 2,
           charactersChecked: 1,
           charactersPending: ['narrator'],
@@ -188,6 +191,7 @@ test.describe('QA report card', () => {
           chaptersEligible: 1,
           chaptersScored: 0,
           chaptersEmbedFailed: 0,
+          chaptersWithVerdicts: 1,
           charactersOnRoster: 2,
           charactersChecked: 2,
           charactersPending: ['ren'],
@@ -203,7 +207,7 @@ test.describe('QA report card', () => {
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page, /Solway Bay/i);
 
-    await expect(page.getByText('2 of 2 characters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeVisible();
+    await expect(page.getByText('1 of 1 eligible chapters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeVisible();
     await expect(page.getByTestId('qa-speaker-check-off')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
   });

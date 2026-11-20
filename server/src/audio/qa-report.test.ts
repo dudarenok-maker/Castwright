@@ -11,6 +11,7 @@ import { castIdHistoryPath } from '../store/cast-id-history.js';
 import { writeCentroids } from './render-integrity/centroids-io.js';
 import { buildAudioQaReport } from './qa-report.js';
 import * as configModule from '../config/resolver.js';
+import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
 
 async function makeBook(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'qa-report-'));
@@ -576,6 +577,7 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
       charactersOnRoster: 2,
       charactersChecked: 2,
       charactersPending: ['ren'],
+      chaptersWithVerdicts: 1,
     });
     expect(report.voiceDrift.mismatches.map((m) => m.characterId)).toEqual(['narrator']);
   });
@@ -583,7 +585,7 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
   /* #4454 pass 3 — the pinned builder shape the frontend `gateOff` cases are seeded from
      (src/lib/qa-report-classify.test.ts, src/components/qa-report-card.test.tsx,
      e2e/qa-report.spec.ts): a book that was never scored still reports charactersChecked as the
-     WHOLE roster (roster minus too-short verdicts), so only charactersPending tells it apart. */
+     WHOLE roster (roster minus too-short verdicts), so only chaptersWithVerdicts (0 here) tells it apart. */
   it('a never-scored book reports every roster character as checked AND pending, with no mismatch', async () => {
     const dir = await makeBook();
     await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
@@ -600,10 +602,106 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
       chaptersEmbedFailed: 0,
       charactersOnRoster: 2,
       charactersChecked: 2,
+      chaptersWithVerdicts: 0,
       mismatches: [],
       inconclusiveCount: 0,
     });
     expect([...report.voiceDrift.charactersPending].sort()).toEqual(['narrator', 'ren']);
+  });
+
+  /* #4454 pass 4 — the partly-scored shape with NOTHING else standing (no mismatch, no
+     inconclusive): narrator has a voice-match verdict, ren is pending. Pinned so the frontend's
+     `checkedSoFar` case (src/lib/qa-report-classify.test.ts) is seeded from what the builder
+     emits, and so the evidence side of the gate-off condition is exercised on its own. */
+  async function seedPartlyScored(dir: string) {
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, ren: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'narrator', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+      { characterId: 'ren', sentenceIds: [1], vec: Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+    ]);
+  }
+
+  it('a partly-scored book (narrator has a voice-match verdict, ren pending, nothing standing) reports one chapter with a verdict', async () => {
+    const dir = await makeBook();
+    await seedPartlyScored(dir);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift).toMatchObject({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      chaptersWithVerdicts: 1,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      charactersPending: ['ren'],
+      mismatches: [],
+      inconclusiveCount: 0,
+    });
+  });
+
+  /* #4454 pass 4 — the book-level centroids file outlives a chapter restructure, so
+     `charactersPending` cannot say what was checked in the audio as it stands: score with the
+     check on, turn it off, merge/split the chapter (the real rewriteChapterSlugs delete op), and
+     re-render with no embeddings. Every roster character still has a centroids row, so none is
+     pending; only chaptersWithVerdicts (read from the per-chapter verdict file the restructure
+     deleted) reads 0. The frontend pins this exact literal as `gateOff`
+     (src/lib/qa-report-classify.test.ts 'restructured and re-rendered with the check off'). */
+  it('a book scored, then restructured and re-rendered with the check off, reports no chapter with a verdict although the centroids outlive it', async () => {
+    const dir = await makeBook();
+    await seedPartlyScored(dir);
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+      { characterId: 'ren', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+      { characterId: 'ren', centroid: [0, 1, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+    ]);
+
+    const before = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(before.voiceDrift).toMatchObject({ chaptersScored: 1, chaptersWithVerdicts: 1, charactersPending: [] });
+
+    // The restructure's delete op, then a re-render with the check off: segments only, no embeddings.
+    const summary = await rewriteChapterSlugs(audioDir(dir), [{ kind: 'delete', from: 'ch1' }]);
+    expect(summary.errors).toEqual([]);
+    expect(summary.deleted.map((d) => d.suffix)).toEqual(expect.arrayContaining(['embeddings.json', 'render-integrity.json', 'render-integrity-attempted.json']));
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, ren: { voiceEngine: 'qwen' } },
+    });
+
+    const configSpy = vi.spyOn(configModule, 'configValue').mockReturnValue(false);
+    try {
+      const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+      expect(report.voiceDrift).toMatchObject({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 0,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: [],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
+    } finally {
+      configSpy.mockRestore();
+    }
   });
 
   it('chaptersEmbedFailed DOES count a chapter whose only unscored roster character is terminally capped (not in charactersPending)', async () => {

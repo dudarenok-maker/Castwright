@@ -55,6 +55,13 @@ export interface AudioQaReport {
      *  attempted on any eligible chapter at all ("gate off") — see the
      *  computation below. */
     chaptersEmbedFailed: number;
+    /** #4454 — how many of the CURRENT eligible chapters hold at least one voice-match verdict row
+     *  on disk (their own per-chapter verdict file, which a restructure deletes with the chapter).
+     *  The one piece of evidence that something was checked in the audio as it stands now:
+     *  `charactersChecked` counts the roster minus too-short verdicts (a never-scored book reports
+     *  it whole), `charactersPending` reads the book-level centroids file (it outlives a
+     *  restructure), and `chaptersScored` is zeroed by any pending character. */
+    chaptersWithVerdicts: number;
     charactersOnRoster: number;
     charactersChecked: number;
     /** srv-36 hardening — stochastic characters that have appeared on a
@@ -302,6 +309,10 @@ export async function buildAudioQaReport(
     })
     .map(([chapterId]) => chapterId).length;
 
+  const chaptersWithVerdicts = Array.from(eligibleChapterIds).filter(
+    (chapterId) => (outline.verdictCharactersByChapter.get(chapterId)?.size ?? 0) > 0,
+  ).length;
+
   const attemptedEligibleCount = outline.attemptedChapterIds.filter((id) => eligibleChapterIds.has(id)).length;
   const chaptersEmbedFailed = attemptedEligibleCount > 0
     ? Array.from(eligibleChapterIds).filter((chapterId) => {
@@ -332,6 +343,7 @@ export async function buildAudioQaReport(
       chaptersEligible: eligibleChapterIds.size,
       chaptersScored,
       chaptersEmbedFailed,
+      chaptersWithVerdicts,
       charactersOnRoster: stochasticCharacterIds.size,
       charactersChecked: Array.from(stochasticCharacterIds).filter((id) => !uncheckedSet.has(id)).length,
       charactersPending,

@@ -26,8 +26,8 @@ export type VoiceMatchClassification =
   | { kind: 'gateOff' }
   | {
       kind: 'checkedSoFar';
-      charactersChecked: number;
-      charactersOnRoster: number;
+      chaptersWithVerdicts: number;
+      chaptersEligible: number;
       mismatchCount: number;
       inconclusiveCount: number;
     }
@@ -84,21 +84,22 @@ export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassificati
   /* #4454 — gate off with no chapter scored or attempted. With no other evidence either, say the
      check is off. The server's chapter counts skip any chapter whose roster holds a pending
      character, so a pending character in every eligible chapter zeroes both however much was
-     checked: a roster character with a centroids row (only a score pass writes one, so
-     `charactersPending` is shorter than the roster) or a standing mismatch / inconclusive count
-     is a past result and stays, as `checkedSoFar` (the pending row's wording, no Resume).
-     `charactersChecked` is NOT evidence: the server counts the roster minus too-short verdicts, so
-     a never-scored book reports it as the whole roster. Past
-     results with chapters counted (`embedShortfall` / `scored`) below stay, pending characters or
-     not. Strict `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
+     checked. The evidence that something WAS checked is `chaptersWithVerdicts` (the current
+     eligible chapters holding a voice-match verdict row), or a standing mismatch / inconclusive
+     count: a past result, shown as `checkedSoFar` (the pending row's wording, no Resume).
+     Not `charactersChecked` (the server counts the roster minus too-short verdicts, so a
+     never-scored book reports it whole) and not `charactersPending` (it reads the book-level
+     centroids file, which a chapter restructure leaves behind). Past results with chapters
+     counted (`embedShortfall` / `scored`) below stay, pending characters or not. Strict
+     `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
   if (isSpeakerCheckOff(report) && vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
-    if (vd.charactersPending.length >= vd.charactersOnRoster && vd.mismatches.length === 0 && vd.inconclusiveCount === 0) {
+    if (vd.chaptersWithVerdicts === 0 && vd.mismatches.length === 0 && vd.inconclusiveCount === 0) {
       return { kind: 'gateOff' };
     }
     return {
       kind: 'checkedSoFar',
-      charactersChecked: vd.charactersChecked,
-      charactersOnRoster: vd.charactersOnRoster,
+      chaptersWithVerdicts: vd.chaptersWithVerdicts,
+      chaptersEligible: vd.chaptersEligible,
       mismatchCount: vd.mismatches.length,
       inconclusiveCount: vd.inconclusiveCount,
     };

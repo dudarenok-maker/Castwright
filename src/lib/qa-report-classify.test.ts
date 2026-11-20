@@ -122,6 +122,7 @@ describe('speaker check off (#4454)', () => {
       chaptersEligible: 1,
       chaptersScored: 0,
       chaptersEmbedFailed: 0,
+      chaptersWithVerdicts: 0,
       charactersOnRoster: 2,
       charactersChecked: 2,
       charactersPending: ['narrator', 'ren'],
@@ -150,8 +151,15 @@ describe('speaker check off (#4454)', () => {
     expect(line(r)).toMatch(/\(Render-integrity QA is now off\)$/);
   });
 
-  it('(b) gate off + a never-scored book with no roster pending data still reads gateOff', () => {
-    expect(classifyVoiceMatch(neverScored({ charactersOnRoster: 0, charactersChecked: 0, charactersPending: [] })).kind).toBe('gateOff');
+  /* The report buildAudioQaReport emits for a book scored with the check on, switched off, then
+     restructured (the real rewriteChapterSlugs delete op) and re-rendered with no embeddings (pinned
+     by the server test 'a book scored, then restructured and re-rendered with the check off ...'):
+     the book-level centroids file survived, so NOTHING is pending and the whole roster counts as
+     checked, but no current chapter holds a verdict. */
+  it('(b) gate off + restructured and re-rendered with the check off (centroids outlive the verdicts) reads gateOff, not checkedSoFar', () => {
+    const r = neverScored({ charactersPending: [] });
+    expect(classifyVoiceMatch(r).kind).toBe('gateOff');
+    expect(line(r)).toBe('· Voice match — Render-integrity QA is off');
   });
 
   it('(c) gate off + scored keeps scored and notes the check is now off', () => {
@@ -202,6 +210,7 @@ describe('speaker check off (#4454)', () => {
       chaptersEligible: 1,
       chaptersScored: 0,
       chaptersEmbedFailed: 0,
+      chaptersWithVerdicts: 1,
       charactersOnRoster: 2,
       charactersChecked: 2,
       charactersPending: ['ren'],
@@ -213,18 +222,33 @@ describe('speaker check off (#4454)', () => {
     const r = builderPending();
     expect(classifyVoiceMatch(r)).toEqual({
       kind: 'checkedSoFar',
-      charactersChecked: 2,
-      charactersOnRoster: 2,
+      chaptersWithVerdicts: 1,
+      chaptersEligible: 1,
       mismatchCount: 1,
       inconclusiveCount: 0,
     });
-    expect(line(r)).toBe('· Voice match — 2 of 2 characters checked so far, 1 mismatches (Render-integrity QA is now off)');
+    expect(line(r)).toBe('· Voice match — 1 of 1 eligible chapters checked so far, 1 mismatches (Render-integrity QA is now off)');
     expect(needsRerenderIds(builderPending({ charactersNeedingRerender: ['narrator'] }))).toEqual([]);
   });
 
-  it('(k) gate off + pending + only a mismatch or only an inconclusive count (nothing checked) is still evidence', () => {
-    expect(classifyVoiceMatch(builderPending({ charactersChecked: 0, inconclusiveCount: 2, mismatches: [] })).kind).toBe('checkedSoFar');
-    expect(classifyVoiceMatch(builderPending({ charactersChecked: 0 })).kind).toBe('checkedSoFar');
+  it('(k) gate off + no chapter with a verdict + only a mismatch or only an inconclusive count is still evidence', () => {
+    expect(classifyVoiceMatch(builderPending({ chaptersWithVerdicts: 0, inconclusiveCount: 2, mismatches: [] })).kind).toBe('checkedSoFar');
+    expect(classifyVoiceMatch(builderPending({ chaptersWithVerdicts: 0 })).kind).toBe('checkedSoFar');
+  });
+
+  /* The report buildAudioQaReport emits for narrator with a voice-match verdict and ren pending, with
+     no mismatch and no inconclusive (pinned by the server test 'a partly-scored book ...'): the
+     chapter count is the ONLY evidence, so it is what keeps this from reading gateOff. */
+  it('(m) gate off + partly scored with nothing standing (verdict on one chapter, ren pending) is checkedSoFar', () => {
+    const r = builderPending({ mismatches: [] });
+    expect(classifyVoiceMatch(r)).toEqual({
+      kind: 'checkedSoFar',
+      chaptersWithVerdicts: 1,
+      chaptersEligible: 1,
+      mismatchCount: 0,
+      inconclusiveCount: 0,
+    });
+    expect(line(r)).toBe('· Voice match — 1 of 1 eligible chapters checked so far, 0 mismatches (Render-integrity QA is now off)');
   });
 
   it('(l) gate on + the same builder shape is not checkedSoFar', () => {

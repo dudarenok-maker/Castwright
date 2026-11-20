@@ -205,6 +205,7 @@ test.describe('Voice-match scoring progress (srv-36 hardening)', () => {
           chaptersEligible: 2,
           chaptersScored: 1,
           chaptersEmbedFailed: 0,
+          chaptersWithVerdicts: 2,
           charactersOnRoster: 2,
           charactersChecked: 1,
           charactersPending: ['ren'],

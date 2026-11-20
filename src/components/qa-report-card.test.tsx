@@ -132,6 +132,7 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
         chaptersEligible: 1,
         chaptersScored: 0,
         chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 0,
         charactersOnRoster: 2,
         charactersChecked: 2,
         charactersPending: ['narrator', 'ren'],
@@ -148,12 +149,13 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
         chaptersEligible: 1,
         chaptersScored: 0,
         chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 1,
         charactersOnRoster: 2,
         charactersChecked: 2,
         charactersPending: ['ren'],
         mismatches: [{ characterId: 'narrator', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
       });
-      expect(screen.getByText('2 of 2 characters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeInTheDocument();
+      expect(screen.getByText('1 of 1 eligible chapters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeInTheDocument();
       expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
     });
@@ -171,19 +173,23 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
     });
 
-    it('(b) notRun shape + gate off: render-integrity copy replaces "Not run for this book"', () => {
+    it('(b) restructured and re-rendered with the check off (nothing pending, no verdict on a current chapter): gate-off copy, not a checked-so-far line', () => {
+      /* the shape buildAudioQaReport emits once a chapter restructure deleted the verdicts while the
+         book-level centroids file survived (server qa-report.test.ts) */
       renderWith({
         speakerCheckEnabled: false,
         chaptersEligible: 1,
         chaptersScored: 0,
         chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 0,
         charactersOnRoster: 2,
         charactersChecked: 2,
-        charactersPending: ['narrator', 'ren'],
+        charactersPending: [],
         mismatches: [],
         inconclusiveCount: 0,
       });
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+      expect(screen.queryByText(/checked so far/)).toBeNull();
       expect(screen.queryByText(/Not run for this book/)).toBeNull();
     });
 
