@@ -78,7 +78,10 @@ test.describe('responsive coverage (all views × all viewports)', () => {
       Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="phase-model-swap-"]')).map(
         (sel) => {
           const row = sel.closest<HTMLElement>('div.px-6.py-4');
-          return row ? sel.getBoundingClientRect().right - row.getBoundingClientRect().right : 0;
+          /* A row that is not found must fail the check, not read as "no spill". */
+          return row
+            ? sel.getBoundingClientRect().right - row.getBoundingClientRect().right
+            : Infinity;
         },
       ),
     );
