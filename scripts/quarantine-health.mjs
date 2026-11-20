@@ -1139,6 +1139,10 @@ export async function runVitestJson(cwd, config, files, spawn = boundedVitestSpa
     r = await spawn(command, {
       cwd,
       timeout: VITEST_RUN_TIMEOUT_MS,
+      // The default spawner (boundedSpawn) always sets this itself; the literal
+      // is here because spawn-windows-hide.test.ts is syntactic and cannot see
+      // it arriving through the injected spawner.
+      windowsHide: true,
       // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
       // it.skip into a real it — without it every quarantined test reports
       // 'skipped' here and would misclassify as never-passes for EVERY test,

@@ -1921,11 +1921,12 @@ test('boundedVitestSpawn: output past the cap is killed and classified crashed (
   assert.equal(classifyRunResult(r).runOutcome, 'crashed');
 });
 
-test('runVitestJson hands its spawner only the options boundedSpawn honours (no dead maxBuffer/encoding/shell/windowsHide)', async () => {
+test('runVitestJson hands its spawner only the options boundedSpawn honours (no dead maxBuffer/encoding/shell; windowsHide only as the spawn-windows-hide literal)', async () => {
   let opts;
   await runVitestJson(process.cwd(), undefined, ['src/lib/foo.test.ts'], async (_cmd, o) => {
     opts = o;
     return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
   });
-  assert.deepEqual(Object.keys(opts).sort(), ['cwd', 'env', 'timeout']);
+  assert.deepEqual(Object.keys(opts).sort(), ['cwd', 'env', 'timeout', 'windowsHide']);
+  assert.equal(opts.windowsHide, true, 'the literal that spawn-windows-hide.test.ts requires');
 });
