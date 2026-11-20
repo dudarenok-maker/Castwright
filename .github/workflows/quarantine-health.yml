@@ -50,12 +50,15 @@ name: Quarantine Lane Health
 # alongside a full `npm run test:server` (the condition of the one recorded
 # failure; 57 runs outside a full suite, 25 sequential and 32 under 4x
 # concurrency plus CPU burners, did not reproduce it), and its report's `Load:`
-# line says so. The runs are spaced across one full test:server pass (about 9.4
-# minutes on this runner class), not fired at its start: the recorded stall
-# struck ~63% of the way through the suite, so the report's `Load:` line states
-# what span of the pass the runs covered and a LOADED verdict needs the late
-# window. Expect the Windows quarantine step to take about 8-9 minutes (the last
-# run starts ~7.5 minutes in), against a 30-minute loaded-loop budget. The
+# line says so. The runs are spaced across one full test:server pass, measured
+# from the load's launch and paced against 728 s (the median of the last 40 green
+# Windows `Server tests` steps; min 573, p90 810, max 836): the recorded stall
+# struck ~63% of the way through the suite, so after the last run the load is left
+# to finish its pass, the pass is MEASURED, and a LOADED verdict needs the runs to
+# end at or beyond 75% of that measured length (a load that never finishes inside
+# the budget is reported NOT loaded). Expect the Windows quarantine step to take
+# about 12-15 minutes (the last run starts ~9.7 minutes after launch, then the load
+# finishes its pass), against a 30-minute loaded-loop budget. The
 # Ubuntu leg runs the files alone (`none`). Windows gets a
 # 40-minute cap (Ubuntu keeps 30): slower checkout, `npm ci` and choco ffmpeg
 # install; 40 is 30 plus 10 minutes of setup headroom, not a measurement. release.yml's `quarantine-lane` is
