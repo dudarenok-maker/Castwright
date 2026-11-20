@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collapseHomePath, expandHomePath } from './lan-paths.js';
+import { collapseHomePath, expandHomePath, textForClient } from './lan-paths.js';
 
 const w = (home: string) => ({ home, platform: 'win32' as const });
 const l = (home: string) => ({ home, platform: 'linux' as const });
@@ -69,5 +69,47 @@ describe('expandHomePath (#4446)', () => {
     expect(expandHomePath(collapseHomePath(wp, w('C:\\Users\\ann')), w('C:\\Users\\ann'))).toBe(wp);
     const lp = '/home/ann/Audiobooks/Lib';
     expect(expandHomePath(collapseHomePath(lp, l('/home/ann')), l('/home/ann'))).toBe(lp);
+  });
+});
+
+describe('separator-insensitive home matching (#4446 review)', () => {
+  const lan = { ip: '192.168.1.50', socket: { remoteAddress: '192.168.1.50' }, headers: {} } as any;
+  const wh = 'C:\\Users\\dudar';
+
+  it('collapseHomePath matches forward-slash and doubled-backslash spellings on win32', () => {
+    expect(collapseHomePath('C:/Users/dudar/Sync', w(wh))).toBe('~/Sync');
+    expect(collapseHomePath('C:\\\\Users\\\\dudar\\\\venv', w(wh))).toBe('~\\\\venv');
+    expect(collapseHomePath('c:/users/DUDAR', w(wh))).toBe('~');
+  });
+  it('collapseHomePath keeps the ann/anna boundary across spellings', () => {
+    expect(collapseHomePath('C:/Users/dudara/x', w(wh))).toBe('C:/Users/dudara/x');
+    expect(collapseHomePath('C:\\\\Users\\\\dudara\\\\x', w(wh))).toBe('C:\\\\Users\\\\dudara\\\\x');
+  });
+  it('collapseHomePath on linux tolerates repeated / but not backslash', () => {
+    expect(collapseHomePath('/home//ann/x', l('/home/ann'))).toBe('~/x');
+    expect(collapseHomePath('\\home\\ann\\x', l('/home/ann'))).toBe('\\home\\ann\\x');
+  });
+  it('textForClient collapses Python repr (doubled backslash) and forward-slash text', () => {
+    const o = { home: wh, platform: 'win32' as const };
+    expect(textForClient(lan, "No such file or directory: 'C:\\\\Users\\\\dudar\\\\venv'", o))
+      .toBe("No such file or directory: '~\\\\venv'");
+    expect(textForClient(lan, 'FileNotFoundError: C:/Users/dudar/x.wav', o)).toBe('FileNotFoundError: ~/x.wav');
+    expect(textForClient(lan, 'plain C:\\Users\\dudar\\x', o)).toBe('plain ~\\x');
+    expect(textForClient(lan, 'C:\\Users\\dudara\\x', o)).toBe('C:\\Users\\dudara\\x');
+  });
+  it('textForClient on linux does not treat backslash as a separator', () => {
+    const o = { home: '/home/ann', platform: 'linux' as const };
+    expect(textForClient(lan, 'open /home/ann/x and /home//ann/y', o)).toBe('open ~/x and ~/y');
+    expect(textForClient(lan, '/home\\ann/x', o)).toBe('/home\\ann/x');
+  });
+  it('collapses the 8.3 short spelling of a long home segment (win32)', () => {
+    const home = 'C:\\Users\\Michael Dudarenok';
+    expect(collapseHomePath('C:\\Users\\MICHAE~1\\AppData\\Local\\Temp\\OllamaSetup.exe', w(home)))
+      .toBe('~\\AppData\\Local\\Temp\\OllamaSetup.exe');
+    expect(textForClient(lan, "'C:\\\\Users\\\\MICHAE~1\\\\x'", { home, platform: 'win32' })).toBe("'~\\\\x'");
+    // a different user whose short name has another prefix is untouched
+    expect(collapseHomePath('C:\\Users\\SOMEON~1\\x', w(home))).toBe('C:\\Users\\SOMEON~1\\x');
+    // short names are only recognised for segments that need one
+    expect(collapseHomePath('C:\\Users\\DUDAR~1\\x', w(wh))).toBe('C:\\Users\\DUDAR~1\\x');
   });
 });

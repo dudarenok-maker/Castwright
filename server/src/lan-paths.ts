@@ -6,21 +6,44 @@ import { isLoopbackRequest } from './lan-auth.js';
    LAN peers. Loopback keeps full paths; everyone else gets the home prefix
    collapsed to `~`. A path not under home is passed through unchanged. */
 
-export function collapseHomePath(
-  p: string,
-  opts: { home?: string; platform?: NodeJS.Platform } = {},
-): string {
-  const win = (opts.platform ?? process.platform) === 'win32';
-  const isSep = (c: string | undefined) => c === '/' || (win && c === '\\');
-  let home = opts.home ?? homedir();
+type PathOpts = { home?: string; platform?: NodeJS.Platform };
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/* Windows 8.3 short form of a long segment: spaces and `. " / \ [ ] : ; = ,`
+   dropped, first six chars upper-cased, then `~N`. Only the prefix is derivable
+   without the filesystem, so any `~N` matches (over-collapses a same-prefix
+   sibling, never leaks). A segment that is already a valid 8.3 name has none. */
+function shortNameAlt(seg: string): string {
+  if (seg.length <= 8 && !/[ +,;=[\]]/.test(seg)) return '';
+  const prefix = seg.replace(/[ .",;=:[\]+]/g, '').slice(0, 6);
+  return prefix ? `|${escRe(prefix)}~\\d+` : '';
+}
+
+/* Regex source matching the home dir however a path spells it: any run of
+   separators between segments (`C:\Users\a`, `C:/Users/a`, the doubled
+   `C:\\Users\\a` of a Python repr), plus the 8.3 short spelling of long segments
+   on win32. Callers append their own boundary lookahead. */
+function homeRegexSource(home: string, win: boolean): string {
+  const sep = win ? '[\\\\/]+' : '/+';
+  const segs = home.split(win ? /[\\/]+/ : /\/+/);
+  return segs
+    .map((s, i) => (i > 0 && win ? `(?:${escRe(s)}${shortNameAlt(s)})` : escRe(s)))
+    .join(sep);
+}
+
+function trimHome(home: string, win: boolean): string {
+  const isSep = (c: string) => c === '/' || (win && c === '\\');
   while (home.length > 1 && isSep(home[home.length - 1])) home = home.slice(0, -1);
+  return home;
+}
+
+export function collapseHomePath(p: string, opts: PathOpts = {}): string {
+  const win = (opts.platform ?? process.platform) === 'win32';
+  const home = trimHome(opts.home ?? homedir(), win);
   if (!home) return p;
-  const norm = (s: string) => (win ? s.toLowerCase() : s);
-  if (norm(p) === norm(home)) return '~';
-  if (norm(p.slice(0, home.length)) === norm(home) && isSep(p[home.length])) {
-    return '~' + p.slice(home.length);
-  }
-  return p;
+  const re = new RegExp(`^${homeRegexSource(home, win)}(?=${win ? '[\\\\/]' : '/'}|$)`, win ? 'i' : '');
+  return p.replace(re, '~');
 }
 
 /* Exact inverse of collapseHomePath: a leading `~` (alone, or followed by a
@@ -46,14 +69,12 @@ export function pathForClient(req: Request, p: string): string {
 
 /* Free-text variant: collapse every `<home>` occurrence inside a message
    (error strings that embed an absolute path). Loopback keeps the text. */
-export function textForClient(req: Request, text: string): string {
+export function textForClient(req: Request, text: string, opts: PathOpts = {}): string {
   if (isLoopbackRequest(req)) return text;
-  const win = process.platform === 'win32';
-  let home = homedir();
-  while (home.length > 1 && (home.endsWith('/') || (win && home.endsWith('\\')))) home = home.slice(0, -1);
+  const win = (opts.platform ?? process.platform) === 'win32';
+  const home = trimHome(opts.home ?? homedir(), win);
   if (!home) return text;
-  const esc = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return text.replace(new RegExp(`${esc}(?=[\\\\/]|$|[^\\w])`, win ? 'gi' : 'g'), '~');
+  return text.replace(new RegExp(`${homeRegexSource(home, win)}(?=[\\\\/]|$|[^\\w])`, win ? 'gi' : 'g'), '~');
 }
 
 /* Install/bootstrap/pull job snapshots: `step` / `error` are free text that can
