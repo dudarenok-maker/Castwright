@@ -739,13 +739,13 @@ Design rationale:
   (the apply failure's LAN reason, #4322), `setup-readiness` (`POST /setup/smoke`),
   `script-review`'s `chapter-failed`
   frames, `export`'s job `errorReason` (the raw error and the ffmpeg stderr go to
-  `runExportJob`'s log) and `voice-sample`'s 502 body, and, since #3702, `sidecar-health`, `ollama-health`, `analyzer-models` (with `analyzer/endpoint-detect`), `clip`, `worktrees`, `pairing`, `devices` and `lan-cert`; the batch routes' per-item
+  `runExportJob`'s log) and `voice-sample`'s 502 body, and, since #3702, `sidecar-health`, `ollama-health`, `analyzer-models` (with `analyzer/endpoint-detect`), `clip`, `worktrees`, `pairing` and `devices`; the batch routes' per-item
   reasons compose it inside `itemFailureReason` — `cast-series-patch`,
   `voice-override-linked`, `voice-style`, `cast-design`)
   whose fallback is the
   error's own message use (#3711) —
   `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and fifty-seven call sites (`voice-library` ×17, `book-state` ×13, `queue` ×11, `cover` ×9,
+  one hundred and fifty-five call sites (`voice-library` ×17, `book-state` ×13, `queue` ×11, `cover` ×9,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
@@ -754,7 +754,7 @@ Design rationale:
   `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
   handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×6,
   `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
-  `voice-override-linked` ×2, `voice-sample` ×4, `sidecar-health` ×3, `clip` ×3, `worktrees` ×2, `pairing` ×2, `ollama-health`, `analyzer-models`, `analyzer/endpoint-detect`, `devices`, `lan-cert`, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites answer fixed relative-name sentences directly, not through this seam, #4236), `script-review` ×5 (its three
+  `voice-override-linked` ×2, `voice-sample` ×4, `sidecar-health` ×3, `clip` ×3, `worktrees`, `pairing` ×2, `ollama-health`, `analyzer-models`, `analyzer/endpoint-detect`, `devices`, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites answer fixed relative-name sentences directly, not through this seam, #4236), `script-review` ×5 (its three
   start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
@@ -791,7 +791,7 @@ Design rationale:
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
   final round) — except downstream of `withStateJsonLock` or `withBookOp`
   alone, each of which already curates its own message (`withBookOp` keeps the
-  timeout `code` too). See each site's own comment. Since #3702, `server/src/workspace/raw-error-body.guard.test.ts` fails the build on a raw caught-error message in an HTTP 5xx body anywhere under `server/src` (not only downstream of a lock), and its header lists what it cannot see.
+  timeout `code` too). See each site's own comment. Since #3702, `server/src/workspace/raw-error-body.guard.test.ts` fails the build on a raw caught-error message in an HTTP 5xx body anywhere under `server/src` (not only downstream of a lock), and its header lists what it cannot see. Child-process output that reaches a body (`lan-cert`'s script stderr, `worktrees`' git stderr; an `execFile` rejection has a numeric `code`, so the seam never fires) is path-scrubbed with `scrubPaths` (`tts/ffmpeg-failure.ts`) instead (#3702, owner decision 2026-11-21); several of the #3702 wraps are inert by construction (their only real producer is an undici rejection, a spawn failure or a fixed-sentence class), and the PR's tests pin the pass-through there rather than claiming curation.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
