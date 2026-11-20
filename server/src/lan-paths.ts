@@ -12,15 +12,25 @@ type PathOpts = { home?: string; platform?: NodeJS.Platform; shortPaths?: string
 
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/* Windows 8.3 short form of a long segment: spaces and `. " / \ [ ] : ; = ,`
-   dropped, first six chars upper-cased, then `~N`. Only the prefix is derivable
-   without the filesystem (`~N` depends on which siblings exist), so a candidate is
-   only a shape check: `MICHAE~1` and `MICHAE~2` both fit `Michael Dudarenok`. A
-   segment that is already a valid 8.3 name has none. */
+/* Windows 8.3 short form of a long segment: the base (text before the last dot) loses
+   spaces and `. " / \ [ ] : ; = , +`, keeps its first six chars, then `~N`; a dotted
+   segment also gets `.` plus the first three valid chars after the last dot. Only that
+   shape is derivable without the filesystem (`~N` depends on which siblings exist), so a
+   candidate is only a shape check: `MICHAE~1` and `MICHAE~2` both fit `Michael
+   Dudarenok`, `FIRSTN~1.LAS` fits `firstname.lastname`. A segment that is already a
+   valid 8.3 name (base <= 8, extension <= 3, one dot at most) has none. */
+const stripInvalid83 = (s: string) => s.replace(/[ .",;=:[\]+]/g, '');
+
 function isShortFormOf(seg: string, cand: string): boolean {
-  if (seg.length <= 8 && !/[ +,;=[\]]/.test(seg)) return false;
-  const prefix = seg.replace(/[ .",;=:[\]+]/g, '').slice(0, 6);
-  return !!prefix && new RegExp(`^${escRe(prefix)}~\\d+$`, 'i').test(cand);
+  const dot = seg.lastIndexOf('.');
+  const base = dot < 0 ? seg : seg.slice(0, dot);
+  const ext = dot < 0 ? '' : seg.slice(dot + 1);
+  const plain83 = !/[ +,;=[\]]/.test(seg) && !base.includes('.') && base.length > 0 && base.length <= 8 && ext.length <= 3;
+  if (plain83) return false;
+  const prefix = stripInvalid83(base).slice(0, 6);
+  const suffix = stripInvalid83(ext).slice(0, 3);
+  if (!prefix) return false;
+  return new RegExp(`^${escRe(prefix)}~\\d+${suffix ? `\\.${escRe(suffix)}` : ''}$`, 'i').test(cand);
 }
 
 /* The user's OWN alias per home segment, learned from paths the OS itself writes in

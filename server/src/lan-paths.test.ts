@@ -203,4 +203,31 @@ describe('separator-insensitive home matching (#4446 review)', () => {
         .toBe('C:\\Users\\DUDAR~1\\x');
     });
   });
+  describe('8.3 short spelling of a dotted home segment (win32)', () => {
+    const at = (home: string, hint: string) => ({ home, platform: 'win32' as const, shortPaths: [hint] });
+    it('collapses the extension form of a first.last profile', () => {
+      const o = at('C:\\Users\\firstname.lastname', 'C:\\Users\\FIRSTN~1.LAS\\AppData\\Local\\Temp');
+      expect(collapseHomePath('C:\\Users\\FIRSTN~1.LAS\\AppData\\Local\\Temp\\OllamaSetup.exe', o))
+        .toBe('~\\AppData\\Local\\Temp\\OllamaSetup.exe');
+      expect(textForClient(lan, "[WinError 5] Access is denied: 'C:\\\\Users\\\\FIRSTN~1.LAS\\\\AppData\\\\Local\\\\Temp\\\\pip-x'", o))
+        .toBe("[WinError 5] Access is denied: '~\\\\AppData\\\\Local\\\\Temp\\\\pip-x'");
+      const j = at('C:\\Users\\john.smith', 'C:\\Users\\JOHN~1.SMI\\Temp');
+      expect(collapseHomePath('C:\\Users\\JOHN~1.SMI\\x', j)).toBe('~\\x');
+    });
+    it('a short dotted name whose extension exceeds 3 characters still has an alias', () => {
+      const o = at('C:\\Users\\jo.smith', 'C:\\Users\\JO~1.SMI\\Temp');
+      expect(collapseHomePath('C:\\Users\\JO~1.SMI\\x', o)).toBe('~\\x');
+    });
+    it('never collapses a sibling alias or one without the extension', () => {
+      const o = at('C:\\Users\\john.smith', 'C:\\Users\\JOHN~1.SMI\\Temp');
+      expect(collapseHomePath('C:\\Users\\JOHN~2.SMI\\x', o)).toBe('C:\\Users\\JOHN~2.SMI\\x');
+      expect(collapseHomePath('C:\\Users\\JOHN~1\\x', o)).toBe('C:\\Users\\JOHN~1\\x');
+      const none = at('C:\\Users\\john.smith', 'D:\\Temp');
+      expect(collapseHomePath('C:\\Users\\JOHN~1.SMI\\x', none)).toBe('C:\\Users\\JOHN~1.SMI\\x');
+    });
+    it('a valid 8.3 dotted name has no alias', () => {
+      const o = at('C:\\Users\\ann.old', 'C:\\Users\\ANN~1.OLD\\Temp');
+      expect(collapseHomePath('C:\\Users\\ANN~1.OLD\\x', o)).toBe('C:\\Users\\ANN~1.OLD\\x');
+    });
+  });
 });
