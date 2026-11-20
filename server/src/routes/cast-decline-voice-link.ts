@@ -131,7 +131,7 @@ castDeclineVoiceLinkRouter.post(
       }
       console.error('[cast-decline-voice-link] failed', e);
       /* A fixed, path-free sentence that says a retry can work. */
-      if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
+      if (e instanceof RetryableForkError) return res.status(500).json({ error: requestFailureMessageFs(e, e.message) });
       return res
         .status(500)
         .json({ error: requestFailureMessageFs(e, 'Could not record the decline.') });

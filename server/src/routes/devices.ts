@@ -32,6 +32,7 @@ import {
 import { enumerateLanUrls } from './export-lan.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { configValue } from '../config/resolver.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const devicesRouter = Router();
 
@@ -40,7 +41,7 @@ export const devicesRouter = Router();
 // device." (revoke), or an opaque 500 (mint) all lie about what happened.
 function respondIfDegraded(res: Response, err: unknown): boolean {
   if (err instanceof DeviceStoreDegradedError) {
-    res.status(503).json({ error: err.message });
+    res.status(503).json({ error: requestFailureMessageFs(err, err.message) });
     return true;
   }
   return false;

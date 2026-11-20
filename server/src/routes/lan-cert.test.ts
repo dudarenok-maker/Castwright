@@ -117,6 +117,60 @@ describe('POST /api/lan/cert/regenerate', () => {
     expect(setSecureContext).not.toHaveBeenCalled();
   });
 
+  /* #3702 -- the failing child is a REAL one: its stderr carries a node stack with
+     absolute paths, and an execFile rejection has a numeric `code` and no `syscall`
+     (so the fs seam can never fire here). The body is path-scrubbed instead. */
+  async function realFailingChild(script: string) {
+    const real = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    vi.mocked(execFile).mockImplementation(((_cmd: string, _args: string[], opts: object, callback: unknown) =>
+      real.execFile(process.execPath, ['-e', script], opts, callback as never)) as never);
+  }
+
+  it('a child that dies on an fs error: the 500 body carries no absolute path from its stderr (#3702)', async () => {
+    const missing = join(certDir, 'no-such-dir', 'lan-key.pem');
+    await realFailingChild(`require('fs').writeFileSync(${JSON.stringify(missing)}, 'x')`);
+
+    const res = await request(makeApp()).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain('ENOENT');
+    expect(res.body.error).not.toContain('no-such-dir');
+    expect(res.body.error).not.toContain(certDir);
+    expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
+  });
+
+  it('a multi-line stderr keeps every line after the path (mkcert install hints survive), no absolute path (#3702)', async () => {
+    /* Same shape as setup-lan-certs.mjs's Linux branch: the first hint line ends in an
+       absolute path, the lines that follow carry the other distros' commands. */
+    const lines = [
+      '[setup-lan-certs] [FAIL] mkcert is not on PATH. Install it once with one of:',
+      '  Debian/Ubuntu: sudo apt install libnss3-tools && sudo mv mkcert-* /usr/local/bin/mkcert',
+      '  Fedora:        sudo dnf install nss-tools mkcert',
+      '  Arch:          sudo pacman -S mkcert',
+      'Then re-run this script (or restart the app).',
+    ];
+    await realFailingChild(`console.error(${JSON.stringify(lines.join('\n'))}); process.exit(1)`);
+
+    const res = await request(makeApp()).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toContain('Fedora:        sudo dnf install nss-tools mkcert');
+    expect(res.body.error).toContain('Arch:          sudo pacman -S mkcert');
+    expect(res.body.error).toContain('Then re-run this script (or restart the app).');
+    expect(res.body.error).not.toContain('/usr/local');
+  });
+
+  it('a child that dies with no stderr: the "Command failed" fallback carries no absolute path (#3702)', async () => {
+    await realFailingChild('process.exit(1)');
+
+    const res = await request(makeApp()).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/^Command failed/);
+    expect(res.body.error).not.toContain(process.execPath);
+    expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
+  });
+
   it('on a TOCTOU hot-swap read failure: still returns 200 with the host list (not a 500)', async () => {
     writeFileSync(join(certDir, 'lan-cert.pem'), 'FAKE-CERT');
     writeFileSync(join(certDir, 'lan-key.pem'), 'FAKE-KEY');
