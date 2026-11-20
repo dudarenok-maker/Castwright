@@ -24,7 +24,7 @@ function condaNodeSpec(message) {
   }
   const m = /"?\bnodejs>=(\d+\.\d+\.\d+),<(\d+)"?/.exec(message);
   if (!m) return null;
-  return { spec: m[0].replace(/"/g, ''), lower: m[1], major: Number(m[1].split('.')[0]), upperMajor: Number(m[2]) };
+  return { spec: m[0].replace(/\u0022/g, ''), lower: m[1], major: Number(m[1].split('.')[0]), upperMajor: Number(m[2]) };
 }
 function condaNodePinMajor(message) {
   const spec = condaNodeSpec(message);
