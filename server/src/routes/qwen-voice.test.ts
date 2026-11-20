@@ -615,6 +615,21 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/GPU busy/i);
   });
+
+  /* #3702 — a RetryableForkError is only ever built with a fixed, path-free sentence and no
+     `code`/`syscall`, so the fs seam wrapped around it never curates it (inert by
+     construction). Pin that the real sentence reaches the client unchanged. */
+  it('answers a RetryableForkError with its own fixed sentence', async () => {
+    const { RetryableForkError } = await import('../workspace/voice-uuid-fork.js');
+    withGpuLoadMock.mockImplementationOnce(() => {
+      throw new RetryableForkError('A book in this series changed while the voice was being separated; try again.');
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('A book in this series changed while the voice was being separated; try again.');
+  });
 });
 
 describe('fs-25 — design-voice emotion variants (Wave 3)', () => {

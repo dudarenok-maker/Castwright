@@ -32,6 +32,7 @@ import { livePartPath } from '../workspace/take-fields.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
+import { configValue } from '../config/resolver.js';
 
 export interface AudioQaReport {
   chaptersRendered: number;
@@ -40,6 +41,8 @@ export interface AudioQaReport {
   asr: { linesVerified: number; linesFlaggedDrift: number };
   voiceDrift: {
     attribution: 'full' | 'legacy-unattributed';
+    /** #4454 — the live qa.speaker.enabled gate; false means no score pass will run, so nothing in charactersPending can be resumed */
+    speakerCheckEnabled: boolean;
     chaptersEligible: number;
     chaptersScored: number;
     /** Eligible chapters that scoreBook attempted (see the attempted
@@ -52,6 +55,14 @@ export interface AudioQaReport {
      *  attempted on any eligible chapter at all ("gate off") — see the
      *  computation below. */
     chaptersEmbedFailed: number;
+    /** #4454 — how many eligible chapters have a verdict file (at the chapter's current slug) holding
+     *  at least one voice-match verdict row. A restructure deletes that file with the chapter, but a
+     *  plain re-render with the check off does NOT: the file stays, and the attempted marker is what
+     *  flags such a chapter as couldn't-be-embedded (`embedShortfall`) rather than checked.
+     *  Unlike it, `charactersChecked` counts the roster minus too-short verdicts (a never-scored book reports
+     *  it whole), `charactersPending` reads the book-level centroids file (it outlives a
+     *  restructure), and `chaptersScored` is zeroed by any pending character. */
+    chaptersWithVerdicts: number;
     charactersOnRoster: number;
     charactersChecked: number;
     /** srv-36 hardening — stochastic characters that have appeared on a
@@ -299,6 +310,10 @@ export async function buildAudioQaReport(
     })
     .map(([chapterId]) => chapterId).length;
 
+  const chaptersWithVerdicts = Array.from(eligibleChapterIds).filter(
+    (chapterId) => (outline.verdictCharactersByChapter.get(chapterId)?.size ?? 0) > 0,
+  ).length;
+
   const attemptedEligibleCount = outline.attemptedChapterIds.filter((id) => eligibleChapterIds.has(id)).length;
   const chaptersEmbedFailed = attemptedEligibleCount > 0
     ? Array.from(eligibleChapterIds).filter((chapterId) => {
@@ -325,9 +340,11 @@ export async function buildAudioQaReport(
     },
     voiceDrift: {
       attribution,
+      speakerCheckEnabled: configValue<boolean>('qa.speaker.enabled') === true,
       chaptersEligible: eligibleChapterIds.size,
       chaptersScored,
       chaptersEmbedFailed,
+      chaptersWithVerdicts,
       charactersOnRoster: stochasticCharacterIds.size,
       charactersChecked: Array.from(stochasticCharacterIds).filter((id) => !uncheckedSet.has(id)).length,
       charactersPending,

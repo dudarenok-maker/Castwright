@@ -29,6 +29,7 @@ import {
   pairingOriginHint,
 } from '../lan-auth.js';
 import { configValue } from '../config/resolver.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 /** Effective TTL for device tokens — clamped to a sane positive integer. */
 const ttl = () => clampTtlDays(configValue('lan.deviceTokenTtlDays'));
@@ -132,7 +133,7 @@ pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), 
     // caller who legitimately holds it and hasn't gotten a device yet.
     restorePairingSession(code);
     if (err instanceof DeviceStoreDegradedError) {
-      res.status(503).json({ error: textForClient(req, err.message) });
+      res.status(503).json({ error: textForClient(req, requestFailureMessageFs(err, err.message)) });
       return;
     }
     throw err;
@@ -179,7 +180,7 @@ pairRedeemRouter.post(
       // this doesn't reopen the single-use race.
       restorePairingSession(code);
       if (err instanceof DeviceStoreDegradedError) {
-        res.status(503).json({ error: textForClient(req, err.message) });
+        res.status(503).json({ error: textForClient(req, requestFailureMessageFs(err, err.message)) });
         return;
       }
       throw err;

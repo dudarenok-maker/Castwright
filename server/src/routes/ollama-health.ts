@@ -30,6 +30,7 @@ import {
   type PullBootstrap,
 } from '../ollama/pull-bootstrap.js';
 import { detectOllamaGpuSplit } from '../gpu/ollama-gpu-split.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const ollamaHealthRouter = Router();
 
@@ -549,7 +550,7 @@ ollamaHealthRouter.post('/unload', async (req: Request, res: Response) => {
     return res.json({ status: 'unloaded', unloaded });
   } catch (e) {
     const err = e as Error & { status?: number };
-    return res.status(err.status ?? 502).json({ status: 'error', error: err.message });
+    return res.status(err.status ?? 502).json({ status: 'error', error: requestFailureMessageFs(e, err.message) });
   }
 });
 

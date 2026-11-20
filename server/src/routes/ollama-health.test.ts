@@ -606,6 +606,9 @@ describe('POST /api/ollama/unload', () => {
     const res = await request(makeApp()).post('/api/ollama/unload').send({ model: 'qwen3.5:4b' });
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
+    /* #3702: the upstream failure is an undici rejection (no fs shape), so the seam wrapped
+       around it in the route passes the message through unchanged. */
+    expect(res.body.error).toBe('fetch failed');
   });
 
   it('unloadResidentOllama() with no targets evicts EVERY resident with keep_alive: 0', async () => {

@@ -2624,9 +2624,11 @@ const HOLLOW_TIDE_QA_REPORT: BookQaReport = {
   asr: { linesVerified: 640, linesFlaggedDrift: 2 },
   voiceDrift: {
     attribution: 'full',
+    speakerCheckEnabled: true,
     chaptersEligible: 7,
     chaptersScored: 7,
     chaptersEmbedFailed: 0,
+    chaptersWithVerdicts: 7,
     charactersOnRoster: 6,
     charactersChecked: 6,
     charactersPending: [],
@@ -2676,8 +2678,9 @@ async function realResumeScoring(bookId: string): Promise<void> {
       `Resume scoring failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   if (res.status === 409) {
-    /* Two distinct refusals share the 409: a live generation run, or (#4235) a splice /
-       QA repair on the book. The server's fixed, path-free sentence says which. */
+    /* Three distinct refusals share the 409: a live generation run, (#4235) a splice /
+       QA repair on the book, or (#4454) Render-integrity QA being switched off. The
+       server's fixed, path-free sentence says which. */
     const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
     const message = typeof body?.error === 'string' && body.error ? body.error : 'Scoring cannot resume right now.';
     throw Object.assign(new Error(message), { code: 'resume-scoring-refused' });
