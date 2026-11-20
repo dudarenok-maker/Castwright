@@ -2119,7 +2119,7 @@ test('formatReport names the actual reason a pass went unmeasured: budget, load 
   assert.match(died, /load died before its pass finished/, died);
   assert.ok(!died.includes('wall-clock budget'), died);
   const aborted = lineFor('aborted');
-  assert.match(aborted, /run was aborted before the load's pass finished/, aborted);
+  assert.match(aborted, /run was aborted before the load\u0027s pass finished/, aborted);
   assert.ok(!aborted.includes('wall-clock budget'), aborted);
   for (const l of [budget, died, aborted]) assert.ok(l.includes('NOT a loaded verdict') && !l.includes('This is a LOADED verdict'), l);
 });
@@ -2158,7 +2158,7 @@ test('main() reports "aborted" (not the budget) when a run throws after loaded r
   const seen = await driveMainWithLoad('server-suite', { fakePassMs: 1e12, makeSpawn });
   const line = loadLine(seen);
   assert.match(line, /2\/2 run\(s\) fully loaded/, line);
-  assert.match(line, /run was aborted before the load's pass finished/, line);
+  assert.match(line, /run was aborted before the load\u0027s pass finished/, line);
   assert.ok(!line.includes('wall-clock budget'), line);
   assert.match(seen.report, /Aborted early after 2\/5/);
 });
