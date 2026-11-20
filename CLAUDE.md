@@ -761,8 +761,8 @@ Design rationale:
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` ×2 (the stage route's catch, #4236; the apply IIFE's catch, #4322), `upgrade/apply.ts` (the apply-failure `errorLan` twin, #4322), `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
-  weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
-  not a disk fault), `annotate-emotion` and `instruct-annotation` (their
+  weight-dir removal's 500; an `ollama:` id's `execFile` message carries `ollama rm`'s stderr, so it is
+  path-scrubbed line by line with `scrubChildOutput` (#3702); a spawn error is not a disk fault), `annotate-emotion` and `instruct-annotation` (their
   `chapter-failed` frames) (#4236),
   `chapter-splice` and `chapter-qa-repair` (the catch-alls of their SSE jobs: the
   `chapter_failed` frame keeps its `Splice failed: ` / `Audio-QA repair failed: `
@@ -791,7 +791,7 @@ Design rationale:
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
   final round) — except downstream of `withStateJsonLock` or `withBookOp`
   alone, each of which already curates its own message (`withBookOp` keeps the
-  timeout `code` too). See each site's own comment. Since #3702, `server/src/workspace/raw-error-body.guard.test.ts` fails the build on a raw caught-error message in an HTTP 5xx body anywhere under `server/src` (not only downstream of a lock), and its header lists what it cannot see. Child-process output that reaches a body (`lan-cert`'s script stderr, `worktrees`' git stderr; an `execFile` rejection has a numeric `code`, so the seam never fires) is path-scrubbed with `scrubPaths` (`tts/ffmpeg-failure.ts`) instead (#3702, owner decision 2026-11-21); several of the #3702 wraps are inert by construction (their only real producer is an undici rejection, a spawn failure or a fixed-sentence class), and the PR's tests pin the pass-through there rather than claiming curation.
+  timeout `code` too). See each site's own comment. Since #3702, `server/src/workspace/raw-error-body.guard.test.ts` fails the build on a raw caught-error message in an HTTP 5xx body anywhere under `server/src` (not only downstream of a lock), and its header lists what it cannot see. Child-process output that reaches a body (`lan-cert`'s script stderr, `worktrees`' git stderr, `models-inventory`'s `ollama rm` stderr, which rides in an `execFile` rejection's `.message`; that rejection has a numeric `code`, so the seam never fires on it) is path-scrubbed instead (#3702, owner decision 2026-11-21): `scrubChildOutput` (`tts/ffmpeg-failure.ts`, line by line, for multi-line text) or `scrubPaths` (one line). The guard counts both as curation and cannot tell a NEW route forwarding child output did either, so any route that does must scrub it; several of the #3702 wraps are inert by construction (their only real producer is an undici rejection, a spawn failure or a class whose messages are path-free), and the PR's tests pin the pass-through there rather than claiming curation.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
