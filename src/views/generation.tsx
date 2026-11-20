@@ -933,7 +933,8 @@ export function GenerationView({
         e instanceof AnalysisError &&
         (e.code === 'subset_in_progress' ||
           e.code === 'main_analysis_running' ||
-          e.code === 'chapters_restructuring');
+          e.code === 'chapters_restructuring' ||
+          e.code === 'book_busy');
       /* #3436 — `book_busy`: the include POST itself was refused (409) because
          an analysis is registered for the book. Nothing was started or flipped,
          so it is handled the same way (restore, refusal message on the row). */
@@ -1268,10 +1269,14 @@ export function GenerationView({
          other job's snapshot overwritten by this one's. Surface the
          server's message instead of the generic fallback text. */
       /* #3435 — `main_analysis_running` (the main run is live or finishing)
-         never started a job either: same handling. */
+         never started a job either: same handling. #3436 — so does `book_busy` (the book is
+         rendering audio): nothing ran, so no "Re-analysis failed" and no gap on the row. */
       if (
         e instanceof AnalysisError &&
-        (e.code === 'subset_in_progress' || e.code === 'main_analysis_running' || e.code === 'chapters_restructuring')
+        (e.code === 'subset_in_progress' ||
+          e.code === 'main_analysis_running' ||
+          e.code === 'chapters_restructuring' ||
+          e.code === 'book_busy')
       ) {
         if (ownsSnapshot()) {
           if (priorSnapshot) {

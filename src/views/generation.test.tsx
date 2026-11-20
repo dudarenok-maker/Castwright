@@ -3709,6 +3709,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   it.each([
     ['main_analysis_running', 'The analysis on this book is still stopping. Try again in a moment.'],
     ['chapters_restructuring', 'The chapters of this book are being changed. Try again in a moment.'],
+    ['book_busy', 'This book is busy (rendering audio). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.'],
   ])('a 409 %s on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async (code, message) => {
     /* The paused main run is still stopping (the server's draining 409): the
        refusal restores the prior snapshot, as subset_in_progress does, rather
@@ -3743,6 +3744,9 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(store2.getState().analysis.activeStream).toEqual(pausedMain);
+    /* A refusal wrote nothing: not a failed re-analysis, and no gap on the row. */
+    expect(screen.queryByText(/Re-analysis failed/)).not.toBeInTheDocument();
+    expect(store2.getState().chapters.analysisGapById?.[1]).toBeUndefined();
   });
 
   /* #3435 - `cast_incomplete` is a soft stop (a chapter outside this batch, or
