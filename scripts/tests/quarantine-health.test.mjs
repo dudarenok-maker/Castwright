@@ -193,39 +193,38 @@ test('parseRegister excludes a row with fewer than 6 cells (no Quarantined cell)
 // docs/testing/flaky-register.md. The old parser extracted test names only
 // from backtick-quoted spans in the Test cell, but the real register's Test
 // column is prose (only the File column is backtick-quoted), so every row
-// was silently dropped and parseRegister returned []. This test fails against
-// the unfixed parser and passes after the prose-format fallback was added.
-// Also asserts that the real register parses cleanly with zero unparsed rows
-// (finding 6: the >= 2 assertion alone cannot catch a regression where a new
-// row starts failing while the old ones keep passing).
-//
-// #2496: the real register's #1981 row is NOT quarantined — its Quarantined
-// cell reads "Not quarantined — still gates" — so it must be excluded from
-// parseRegister's entries entirely, unlike #4244 which IS quarantined. Only
-// #4244 is asserted present below; #1981 is asserted absent.
-test('parseRegister returns one entry per quarantined data row of the real flaky-register.md (regression)', () => {
+// was silently dropped and parseRegister returned []. This test pins
+// register-wide invariants without naming any row: the register is live data
+// (rows graduate; the goal is an empty register), so it must not assert that
+// a particular row or a minimum entry count exists. The "Not quarantined"
+// exclusion (#2496) is covered by the fixture test above.
+test('parseRegister parses the real flaky-register.md cleanly (regression)', () => {
   const testDir = dirname(fileURLToPath(import.meta.url));
   const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
   const markdown = readFileSync(registerPath, 'utf8');
   const entries = parseRegister(markdown);
-  // The real register currently has 2 data rows (#1981, not quarantined, and
-  // #4244, quarantined) but only the quarantined one(s) become entries.
-  // Assert at least 1 to avoid brittleness when new quarantined entries are added.
-  assert.ok(entries.length >= 1, `expected at least 1 quarantined entry from the real register, got ${entries.length}`);
-  const files = entries.map((e) => e.file);
+  // Every parsed entry must carry a test file and a tracking issue number
+  // (vacuously true for an empty register).
   assert.ok(
-    !files.includes('server/src/routes/book-state-preserve-voices.test.ts'),
-    '#1981 is not quarantined and must be excluded',
+    entries.every((e) => e.file && e.issueNumbers.length > 0),
+    'every quarantined entry in the real register needs a file and a tracking issue number',
   );
-  assert.ok(files.includes('server/src/routes/book-state.queue-prune.test.ts'), 'missing #4244 row');
-  // Issue numbers must be extracted from the Issue cell, not the Test cell.
-  const by4244 = entries.find((e) => e.issueNumbers.includes(4244));
-  assert.ok(by4244, '#4244 row must carry tracking issue #4244');
   // The real register must parse cleanly with zero unparsed rows (finding 6).
-  // Excluding a non-quarantined row is not a parse failure, so this must
-  // still be 0 even though #1981 is no longer in `entries`.
+  // Excluding a non-quarantined row is not a parse failure.
   const unparsed = countUnparsedDataRows(markdown);
   assert.equal(unparsed, 0, 'the real register must parse cleanly with zero unparsed/malformed rows');
+});
+
+// Issue numbers must come from the Issue cell, not the Test cell. The Test
+// cell here cites #1981 while the tracking issue is #2226.
+test('parseRegister takes issue numbers from the Issue cell, not the Test cell', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT does not erase a concurrently planted voice | \`server/src/routes/foo.test.ts\` | intermittent | Fails intermittently | #2226 | Quarantined |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0].issueNumbers, [2226]);
 });
 
 test('countRegisterDataRows counts well-formed (≥5 cell) data rows, ignoring headers, separators, prose, and comments', () => {
