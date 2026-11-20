@@ -8975,6 +8975,14 @@ export interface operations {
              *     This code is a 409 only; it never arrives as an SSE event. The other
              *     refusal codes above can also arrive as a terminal SSE `error` event
              *     when the conflict appears after the stream opened.
+             *     `book_busy` (#3436): the book has a RENDER job registered (generation,
+             *     a chapter re-record, or an audio-QA repair that writes), so the analysis
+             *     was not started — render and analysis on one book are mutually exclusive.
+             *     Body `{ error: <curated sentence>, code: book_busy }`. When a render
+             *     registers after the stream opened, it arrives instead as a terminal SSE
+             *     `error` event with `code: book_busy` and the sentence in `message`. A
+             *     request that joins a running analysis is never refused. Wait for the
+             *     render to finish, then try again.
              */
             409: {
                 headers: {
@@ -8984,10 +8992,10 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /**
-                         * @description Present only on `hints_out_of_sync` (#3829); then `error` holds the curated sentence rather than a code.
+                         * @description Present only on `hints_out_of_sync` (#3829) and `book_busy` (#3436); then `error` holds the curated sentence rather than a code.
                          * @enum {string}
                          */
-                        code?: "hints_out_of_sync";
+                        code?: "hints_out_of_sync" | "book_busy";
                         /** @description User-facing reason (both #3435 refusals). */
                         message?: string;
                         /** @description Present on `main_analysis_running`: always true here. */
@@ -9056,7 +9064,11 @@ export interface operations {
              *     change that splits its plain text into a different number of
              *     chapters), or, at the same count, a chapter whose saved analysis
              *     sentences do not match its position; body `{ error: <curated sentence>, code }`
-             *     and nothing was written.
+             *     and nothing was written. `book_busy` (#3436): the book has a RENDER job
+             *     registered, so the run was not started (body `{ error: <curated sentence>,
+             *     code: book_busy }`; arrives as a terminal SSE `error` event with
+             *     `code: book_busy` and the sentence in `message` when the render registered
+             *     after the stream opened). Nothing was written.
              */
             409: {
                 headers: {
@@ -9073,7 +9085,7 @@ export interface operations {
                         /** @description Curated sentence: re-parse the book from its Library menu. */
                         error: string;
                         /** @enum {string} */
-                        code: "hints_out_of_sync";
+                        code: "hints_out_of_sync" | "book_busy";
                     };
                 };
             };
@@ -11044,7 +11056,9 @@ export interface operations {
             /**
              * @description Either the book has no language set (`{ error: language_unset }`; set it
              *     before requesting a splice), or:
-             *     An ANALYSIS job is registered for the book (#3436), so the splice was not started.
+             *     A `rerecord` splice only (a `remix` never rebuilds the analysis cache and is
+             *     never refused for this): an ANALYSIS job is registered for the book (#3436), so
+             *     the splice was not started.
              *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
              *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
              *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
@@ -11144,7 +11158,9 @@ export interface operations {
             /**
              * @description Either the book has no language set (`{ error: language_unset }`; set it
              *     before requesting audio QA repair), or:
-             *     An ANALYSIS job is registered for the book (#3436), so the repair was not started.
+             *     A repair that writes (`dryRun: false`; a dry-run scan never rebuilds the analysis
+             *     cache and is never refused for this): an ANALYSIS job is registered for the book
+             *     (#3436), so the repair was not started.
              *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
              *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
              *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
