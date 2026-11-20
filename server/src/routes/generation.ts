@@ -141,9 +141,13 @@ function otherTierWorkActive(bookId: string): boolean {
 /** #4445 — a generation-path reconcile never drops the 1.7B while any Quality render is live.
     `ctx.keep` is computed per chapter POST, so after a mid-run tier change it can be stale
     (keep17:false) while a same-book sibling renders on the 1.7B, and `otherTierWorkActive` leaves
-    that sibling out. The 0.6B half is NOT guarded the same way (no per-job tracker): a character
-    toggled down while 2+ workers render can still evict a 0.6B a sibling uses, which costs that
-    line a reload and retry — accepted. */
+    that sibling out. The 0.6B half is NOT guarded the same way (no per-job tracker), so a 0.6B a
+    sibling uses can still be evicted by two paths, each costing a reload and retry — accepted:
+    (1) run start with 2+ workers, when a character is RAISED to Quality (the new POST's keep is
+    keep06:false while a sibling still renders on the 0.6B); (2) the score pass with one worker
+    and qa.speaker.enabled, when a character is LOWERED (ch5's keep is {keep06:false,
+    keep17:true}, ch6 renders that character on the 0.6B, ch5's job has already deregistered, and
+    its score-pass reconcile unloads the 0.6B). */
 function keepQualityResident<K extends { keep17: boolean }>(keep: K): K {
   return isQualityRenderKnownActive() && !keep.keep17 ? { ...keep, keep17: true } : keep;
 }
@@ -251,8 +255,10 @@ export async function triggerScoring(ctx: {
        render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
        superset, so its own chapters are already protected (#4445) — except after a mid-run tier
        change, when a sibling's keep can differ: `keepQualityResident` therefore never drops the
-       1.7B while a Quality render is live. A 0.6B toggled down with 2+ workers can still be
-       evicted under a sibling; that costs a reload and retry and is accepted.
+       1.7B while a Quality render is live. A 0.6B can still be evicted under a sibling when a
+       character is lowered to Standard (this score pass, one worker, qa.speaker.enabled: the next
+       chapter renders it on the 0.6B after this job deregistered) or raised to Quality at run
+       start with 2+ workers; each costs a reload and retry and is accepted.
        Two residual windows remain, each costing at most one cold reload: (a) after this
        synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
        before it posts `/unload`, so a job registering in that round trip loses its tier;
@@ -1271,7 +1277,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        chapters are excluded from that check, so they still reconcile with Kokoro
        kept, as above. The 1.7B is additionally never dropped while a Quality render is
        live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
-       0.6B toggle-down case (2+ workers) is accepted — it costs a reload and retry. */
+       0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
+       in the score pass (one worker) — it costs a reload and retry. */
     if (otherTierWorkActive(bookId)) {
       console.info(
         '[generation] run-start tier reconcile skipped: other GPU work is active',
