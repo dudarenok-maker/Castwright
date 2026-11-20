@@ -2799,8 +2799,8 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
   });
 
-  /* #3774 — an include POST that FAILED (a 500 here; the server no longer
-     refuses an include with `book_busy`) started no job of ours, so the
+  /* #3774 — an include POST that FAILED (a 500 here; the server refuses an
+     include with `book_busy` only while an analysis is registered, #3436, the test above) started no job of ours, so the
      snapshot of another chapter's still-running subset job, which this click
      took over, is put back. */
   it('#3774 — Include flow: a failed include POST restores the other job\'s snapshot', async () => {
