@@ -199,6 +199,26 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
     });
 
+    it('(e) gate on + the builder shape (narrator scored, ren pending): the pending row counts chapters, not characters, and still offers Resume', () => {
+      /* server qa-report.test.ts partly-scored literal: charactersChecked is the roster minus too-short
+         verdicts, so it reads 2 here although ren was never scored */
+      renderWith({
+        speakerCheckEnabled: true,
+        chaptersEligible: 2,
+        chaptersScored: 1,
+        chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 1,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['ren'],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
+      expect(screen.getByText('1 of 2 eligible chapters checked so far')).toBeInTheDocument();
+      expect(screen.queryByText(/characters checked so far/)).toBeNull();
+      expect(screen.getByRole('button', { name: 'Resume scoring' })).toBeInTheDocument();
+    });
+
     it('(d) control: gate on + pending still offers Resume', () => {
       renderWith({ speakerCheckEnabled: true, charactersPending: ['ren'], chaptersScored: 6 });
       expect(screen.getByRole('button', { name: 'Resume scoring' })).toBeInTheDocument();

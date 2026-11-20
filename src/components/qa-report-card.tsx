@@ -131,7 +131,7 @@ function VoiceMatchRow({
         <span className="text-sm text-ink/70">Voice match</span>
         <div className="flex items-center gap-2">
           <span className="text-sm text-ink">
-            {vd.charactersChecked} of {vd.charactersOnRoster} characters checked so far
+            {vd.chaptersWithVerdicts} of {vd.chaptersEligible} eligible chapters checked so far
           </span>
           {resumed ? (
             <span className="text-xs text-ink/50">Resuming — check back in a few minutes</span>
