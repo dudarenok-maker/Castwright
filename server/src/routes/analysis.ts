@@ -1086,8 +1086,8 @@ export function mergeRosterChapter(
 /* srv-1 — persist a fold pass's lineage to the merge journal. Replace-all keeps
    kind:'fold' entries in lockstep with the current manuscript-edits.json
    (manual entries are preserved). Co-locate the CALL with the edits write so the
-   journal is persisted iff the sentences it describes are. Non-fatal at the call
-   site. Exported for analysis.journal-lock.test.ts only. */
+   journal and the sentences it describes are written by the same run. Non-fatal at the
+   call site. Exported for analysis.journal-lock.test.ts only. */
 export async function writeFoldJournal(
   bookDir: string,
   rewrites: Record<string, string>,
@@ -1096,8 +1096,11 @@ export async function writeFoldJournal(
 ): Promise<void> {
   /* Cast-locked: a manual merge appends to this journal under that lock, and the
      read -> replace -> write must not straddle it (#4031). #3437 - a run superseded by now
-     writes no lineage: the fence is captured before the lock and checked inside it, so the
-     journal lands iff its run's sentences do (this call precedes the persist). */
+     writes no lineage: the fence is captured before the lock and checked inside it. The
+     invariant: a journal lands only if its check ran before the bump, and Start fresh's
+     cast-locked `clearAffectedRefs` always runs after the bump, so any stale refs it left
+     are cleared. (A bump between this check and the persist's own may land the journal
+     without the sentences; that is benign.) */
   const fence = currentRunEpochFence();
   await withCastLock(bookDir, async () => {
     if (staleRunWriteDropped(fence, 'fold journal')) return;
