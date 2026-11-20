@@ -348,17 +348,34 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
      so it is subtracted — #4066's "auto-free, then design" holds for the caller.
      A non-design caller (e.g. a Coqui preview) subtracts nothing. */
   const live = (opts._inFlightDesignMint ?? inFlightDesignMintCounts)();
-  const otherDesign = live.design - (opts.purpose === 'design' ? 1 : 0) > 0;
+  let otherDesign = live.design - (opts.purpose === 'design' ? 1 : 0) > 0;
   const otherMint = live.mint - (opts.purpose === 'mint' ? 1 : 0) > 0;
-  if (otherDesign) keep.keep06 = true;
-  if (otherMint) keep.keep17 = true;
+  /* Set when the count kept a model the base keep set would have freed. */
+  let heldBack = false;
+  const holdBack = (): void => {
+    if (otherMint) {
+      if (!keep.keep17) heldBack = true;
+      keep.keep17 = true;
+    }
+    if (otherDesign) {
+      if (!keep.keep06) heldBack = true;
+      keep.keep06 = true;
+    }
+  };
+  /* A non-heavy caller (a Coqui preview) has no probe: it applies the counts now. A heavy
+     caller applies them after the probe below, where `qwenDesignResident` says a design is
+     really ON the sidecar. The counter increments before the design's own admission, so a
+     design still refused for capacity is counted yet uses no model — two of them would
+     otherwise keep the 0.6B for each other and both fail. */
+  const heavyCaller = isDesign || wants17;
+  if (!heavyCaller) holdBack();
 
   /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro. Residency
      is read up front only to decide that (and whether another design is
      resident); what the notice names comes from what reconcile really
      unloaded, so a failed probe or a failed Kokoro unload never loses or
      misstates the event. */
-  const heavy = isDesign || wants17;
+  const heavy = heavyCaller;
   if (heavy) {
     const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
     /* Fail CLOSED on an unreadable probe (throw, unregistered, or the
@@ -374,6 +391,8 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     if (health.qwenDesignResident === true && (!opts.deviceKey || health.qwenDeviceKey === opts.deviceKey)) {
       return 'declined';
     }
+    otherDesign = otherDesign && health.qwenDesignResident === true;
+    holdBack();
     if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
     if (anyGenerationActive()) return activeAnswer();
@@ -387,5 +406,7 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     ? await (freedNames ? opts._reconcile(keep, opts.signal, freedNames) : opts._reconcile(keep, opts.signal))
     : await reconcileResidentQwenTiersIfRegistered(keep, opts.signal, freedNames);
   if (freedNames) recordTtsAutoFree(freedNames, isDesign ? 'voice design' : 'Quality render');
-  return freed;
+  /* A hold-back is a "not yet" (the other op ends), not a "no": 'declined' leaves the caller's
+     one-shot latch armed so a later poll frees what is then unused, like the decline above. */
+  return heldBack ? 'declined' : freed;
 }
