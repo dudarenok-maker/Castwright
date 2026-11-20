@@ -2,7 +2,7 @@
    button that frees it" (#1839).
 
    Only lists models the USER controls and that admission deliberately will not
-   auto-evict. A resident Qwen base is excluded on purpose: evict-idle-tts.ts
+   auto-evict. An IDLE resident Qwen base is excluded on purpose: evict-idle-tts.ts
    already frees an idle one, so naming it here would be noise on top of an
    action already taken — and (since finding 5) that holds regardless of
    whether the blocked op is itself Qwen or a non-Qwen engine (Coqui/Kokoro):
@@ -31,7 +31,12 @@
    base and an on-GPU Kokoro (./evict-idle-tts.ts), EXCEPT while a render is
    in flight, where that model may be in use. In that one case the standard
    Qwen model IS the blocker and the honest remedy is to wait or pause, so it
-   is named when `generationActive` is set. */
+   is named when `generationActive` is set.
+
+   #4533 — the same goes for a base a LIVE voice design (the standard 0.6B) or
+   variant mint (the Quality 1.7B) is using: the lever deliberately holds it
+   back, so it is not idle and is named here with a "wait" remedy
+   (`designInFlight` / `mintInFlight`). */
 
 export interface VramBlocker {
   /** Display name, as the user sees it in the UI. */
@@ -83,6 +88,12 @@ export interface VramBlockerHealth {
       the one asking for capacity and is never named as what holds the Qwen
       model. Kokoro still gets the wait remedy during a render. */
   blockedOpIsRender?: boolean;
+  /** #4533 — a voice design is in flight, so the lever held the standard Qwen
+      base back for it. */
+  designInFlight?: boolean;
+  /** #4533 — a variant mint is in flight, so the lever held the Quality Qwen
+      base back for it. */
+  mintInFlight?: boolean;
 }
 
 const REPAIR_WAIT = 'A chapter repair is in progress and may be using it — wait for it to finish, then try again.';
@@ -109,6 +120,18 @@ export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
       remedy: health.repairOnly
         ? 'It is in use by the chapter repair in progress — wait for it to finish, then try again.'
         : 'It is in use by the chapter render in progress — wait for the render to finish, or pause it, then try again.',
+    });
+  }
+  if (health.designInFlight && health.qwenLoaded && !out.some((b) => b.model === 'The standard Qwen voice model')) {
+    out.push({
+      model: 'The standard Qwen voice model',
+      remedy: 'It is in use by the voice design in progress — wait for the design to finish, then try again.',
+    });
+  }
+  if (health.mintInFlight && health.qwenBase17Loaded && !out.some((b) => b.model === 'The Quality Qwen voice model')) {
+    out.push({
+      model: 'The Quality Qwen voice model',
+      remedy: 'It is in use by the voice variant being made — wait for the variant to finish, then try again.',
     });
   }
   if (health.qwenDesignResident) {

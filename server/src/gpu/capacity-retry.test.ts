@@ -924,6 +924,30 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     });
   });
 
+  it('#4533: a preview that gives up behind a live mint / design names the base that op holds', async () => {
+    // Mid-mint the 0.6B + 1.7B are resident and VoiceDesign is gone, so the
+    // old blocker list was empty and the error said only "free VRAM".
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, qwenBase17Loaded: true }));
+    const give = (live: { design: number; mint: number }) =>
+      withCapacityRetry(vi.fn(async () => noCapacityResponse(3_584, 'cuda:0')), {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 2,
+        inFlightDesignMint: () => live,
+      });
+    await expect(give({ design: 0, mint: 1 })).rejects.toThrow(
+      /Quality Qwen voice model is loaded — It is in use by the voice variant being made — wait for the variant/,
+    );
+    await expect(give({ design: 1, mint: 0 })).rejects.toThrow(
+      /standard Qwen voice model is loaded — It is in use by the voice design in progress — wait for the design/,
+    );
+    await expect(give({ design: 0, mint: 0 })).rejects.toThrow(
+      'Not enough GPU memory for coqui (3584MB) — free VRAM or attach a second GPU.',
+    );
+  });
+
   it('#2678 review finding F1: defaultDescribeBlockers does NOT name a design resident on a DIFFERENT device as a blocker', async () => {
     // Same 2-GPU repro as the isDesignResident test above (design resident on
     // cuda:0, this request denied on cuda:1) — but this pins the OTHER half:
