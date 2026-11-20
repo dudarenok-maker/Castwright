@@ -129,6 +129,31 @@ describe('separator-insensitive home matching (#4446 review)', () => {
       expect(textForClient(lan, `in C:\\Users\\ann${tail}`, o)).toBe(`in ${out}`);
     }
   });
+  it('textForClient collapses home before sentence-ending punctuation and keeps it', () => {
+    const o = { home: 'C:\\Users\\ann', platform: 'win32' as const };
+    for (const [tail, out] of [
+      ['.', '~.'],
+      ['...', '~...'],
+      ['!', '~!'],
+      ['?', '~?'],
+      ['?!', '~?!'],
+      ['. Next', '~. Next'],
+      ['.)', '~.)'],
+      ['."', '~."'],
+      ['.,', '~.,'],
+      ['.\nnext', '~.\nnext'],
+    ]) {
+      expect(textForClient(lan, `failed in C:\\Users\\ann${tail}`, o)).toBe(`failed in ${out}`);
+    }
+    const l = { home: '/home/ann', platform: 'linux' as const };
+    expect(textForClient(lan, 'failed in /home/ann.', l)).toBe('failed in ~.');
+  });
+  it('textForClient still leaves a sibling when the dot is followed by a name character', () => {
+    const o = { home: 'C:\\Users\\ann', platform: 'win32' as const };
+    for (const sib of ['C:\\Users\\ann.old', 'C:\\Users\\ann.old\\x', 'C:\\Users\\ann!x', 'C:\\Users\\ann-x', 'C:\\Users\\ann_x', 'C:\\Users\\ann+x']) {
+      expect(textForClient(lan, `open ${sib}`, o)).toBe(`open ${sib}`);
+    }
+  });
   it('textForClient on linux leaves a sibling and a backslash-continued name', () => {
     const o = { home: '/home/ann', platform: 'linux' as const };
     expect(textForClient(lan, 'see /home/ann-x/foo and /home/ann.old/foo', o))

@@ -108,8 +108,11 @@ export function textForClient(req: Request, text: string, opts: PathOpts = {}): 
   const home = trimHome(opts.home ?? homedir(), win);
   if (!home) return text;
   /* Same end-of-home boundary as collapseHomePath (a separator or end), plus the
-     characters that end a path in prose; `ann-x` / `ann.old` stay untouched. */
-  const end = `(?=${win ? '[\\\\/]' : '/'}|$|[\\s'"\`)\\]}>:,;])`;
+     characters that end a path in prose; `ann-x` / `ann.old` stay untouched. Sentence
+     punctuation (`.!?`) counts only when it is itself followed by such a terminator or
+     the end (`ann.` collapses, `ann.old` does not) and is left in the output. */
+  const stop = `$|[\\s'"\`)\\]}>:,;]`;
+  const end = `(?=${win ? '[\\\\/]' : '/'}|${stop}|[.!?]+(?:${stop}))`;
   return text.replace(new RegExp(`${homeRegexSource(home, win, opts.shortPaths)}${end}`, win ? 'gi' : 'g'), '~');
 }
 
