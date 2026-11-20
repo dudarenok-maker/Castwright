@@ -1066,3 +1066,20 @@ it.each([
   expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(dir, 'device-tokens.json')));
   warn.mockRestore();
 });
+
+// #3702 -- the other degraded-read return: the file parses but `devices` is not an
+// array. Same contract: throws, and the log names the path exactly once.
+it.each([
+  ['createDevice', () => dt.createDevice('Second', 30)],
+  ['revokeDevice', (id: string) => dt.revokeDevice(id)],
+])('%s after the file is rewritten post-load with a non-array "devices" throws AND logs the path once (#3702)', async (_n, act) => {
+  const { device } = await dt.createDevice('First', 30);
+  writeFileSync(join(dir, 'device-tokens.json'), '{"devices":{}}', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  await expect(act(device.id)).rejects.toThrow(dt.DeviceStoreDegradedError);
+
+  const named = warn.mock.calls.filter((c) => String(c[0]).includes(join(dir, 'device-tokens.json')));
+  expect(named).toHaveLength(1);
+  warn.mockRestore();
+});
