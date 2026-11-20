@@ -4161,9 +4161,10 @@ def _parse_device_hint(raw: Optional[str]) -> Optional[str]:
     falls back to unconstrained best-fit, NOT into `pinned`, which restricts
     `_gpu_candidates` to one device with no fallback at all. A hard pin here
     would be strictly worse than sending no hint: on a box where the hinted
-    card is the busy one, the derive cannot fit, `_evict_until` targets the
-    ROOMIEST card instead (`_worst_device_key`) so eviction can never satisfy
-    the constraint, `withCapacityRetry` burns ~60 s, and the resolver
+    card is the busy one, the derive cannot fit, the ladder (targeted at the
+    pinned card since #4164) can only free IDLE ladder engines there and
+    cannot clear a card busy with work nothing can evict, so the fit never
+    succeeds, `withCapacityRetry` burns ~60 s, and the resolver
     soft-fails the voice — the character then renders in a stock catalogue
     voice. A preference degrades to today's placement instead. If a hard pin
     is ever wanted it must be a separate, explicit, fail-fast opt-in.
@@ -5058,6 +5059,7 @@ class PlacementController:
             except Exception:
                 log.warning("evict step %s failed", step.name, exc_info=True)
                 continue
+            log.info("admission ladder (%s): evicted step %s on %s", engine, step.name, device_key)
             got = fits()
             if got is not None:
                 return got
@@ -5176,9 +5178,10 @@ class PlacementController:
         if cpu_capable and not heavy:
             return {"device": "cpu"}
 
-        # The credited card (when there is a credit) is the only card this
-        # request can run on, so it is also the ladder's target (#4079).
-        worst = credit_card if credit_card is not None else self._worst_device_key(devices)
+        # The credited, resident or pinned card (whichever `constraint` names)
+        # is the only card this request can run on, so it is also the
+        # ladder's target (#4079, #4164).
+        worst = constraint if constraint is not None else self._worst_device_key(devices)
         if worst is not None:
             def _fits():
                 probed = self.probe()
@@ -5191,7 +5194,7 @@ class PlacementController:
             key = await self._evict_until(worst, engine, _fits, protect)
             if key is not None:
                 return {"device": key}
-            worst = credit_card if credit_card is not None else self._worst_device_key(self.probe())
+            worst = constraint if constraint is not None else self._worst_device_key(self.probe())
         # A resident engine can only ever run on its own device, so point Node
         # at THAT device to evict from — not a roomier non-resident GPU where an
         # evict wouldn't let this (non-migratable) model fit. A pinned (but not
@@ -5455,7 +5458,7 @@ class PlacementController:
         if held is None:
             held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
-            worst = credit_card if credit_card is not None else self._worst_device_key(devices)
+            worst = constraint if constraint is not None else self._worst_device_key(devices)
             if worst is not None:
                 def _fits():
                     probed = self.probe()
@@ -6147,7 +6150,8 @@ _QWEN_BASE17_WEIGHTS_MB = 3400
 _QWEN_DESIGN_WEIGHTS_MB = 3400
 # #4102 - and for the 0.6B audition base `design_voice` always leaves resident
 # (`_ensure_base_loaded`): a warm design's probe has it out of free VRAM, and the
-# design's peak includes it, so its fit check credits it beside VoiceDesign.
+# design's peak includes it, so its fit check credits it beside VoiceDesign (or,
+# with VoiceDesign cold, alone). A mint's peak co-loads it too (#4237).
 _QWEN_BASE_WEIGHTS_MB = 1200
 
 
@@ -6165,46 +6169,83 @@ def _own_resident_qwen_card(engine: str, model: Optional[str]) -> Optional[tuple
     return (card, getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB)
 
 
-def _own_resident_design(engine: str, model: Optional[str]) -> Optional[tuple[str, int]]:
-    """`(card, weights_mb)` when a 1.7b Qwen design request finds VoiceDesign
-    resident (#4102), else None. The weights include the resident 0.6B audition
-    base, which the design itself uses and its peak already contains."""
+def _own_resident_design(engine: str, model: Optional[str]) -> tuple[Optional[str], int, Optional[str]]:
+    """`(protect, weights_mb, card)` for a 1.7b Qwen design (#4102). VoiceDesign
+    resident: `protect` is `qwen.design`, credited with the resident 0.6B audition
+    base too, which the design itself uses and its peak already contains. VoiceDesign
+    cold but the 0.6B resident (#4237, mirroring `_own_resident_mint`): `protect`
+    None (no ladder step frees the 0.6B), credited with the 0.6B alone, since
+    `design_voice` reuses it. `(None, 0, None)` when neither is resident."""
     if engine != "qwen" or "1.7b" not in (model or "").lower():
-        return None
+        return (None, 0, None)
     qwen = ENGINES.get("qwen")
-    if not isinstance(qwen, QwenEngine) or qwen._design is None:
-        return None
+    if not isinstance(qwen, QwenEngine):
+        return (None, 0, None)
+    has_design = qwen._design is not None
+    has06 = getattr(qwen, "_base", None) is not None
+    if not has_design and not has06:
+        return (None, 0, None)
     card = _qwen_resident_device_key(qwen)
     if card is None:
-        return None
-    weights = getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB
-    if getattr(qwen, "_base", None) is not None:
+        return (None, 0, None)
+    weights = 0
+    if has_design:
+        weights += getattr(qwen, "_design_weights_mb", 0) or _QWEN_DESIGN_WEIGHTS_MB
+    if has06:
         weights += getattr(qwen, "_base_weights_mb", 0) or _QWEN_BASE_WEIGHTS_MB
-    return (card, weights)
+    return ("qwen.design" if has_design else None, weights, card)
+
+
+def _own_resident_mint(engine: str, model: Optional[str]) -> tuple[Optional[str], int, Optional[str]]:
+    """`(protect, weights_mb, card)` for a 1.7b Qwen mint (#4237). A mint's peak
+    (`qwen.1.7b.mint`) co-loads the 0.6B audition base with the 1.7B-Base, and
+    both stay resident after it, so both are credited (fit check only) the way
+    `_own_resident_design` credits VoiceDesign + the 0.6B. `protect` is
+    `qwen.base17` when the 1.7B-Base is resident, else None: the evict ladder
+    has no 0.6B step to protect. `(None, 0, None)` when nothing is resident."""
+    if engine != "qwen" or "1.7b" not in (model or "").lower():
+        return (None, 0, None)
+    qwen = ENGINES.get("qwen")
+    if not isinstance(qwen, QwenEngine):
+        return (None, 0, None)
+    has17 = qwen._base17 is not None
+    has06 = getattr(qwen, "_base", None) is not None
+    if not has17 and not has06:
+        return (None, 0, None)
+    card = _qwen_resident_device_key(qwen)
+    if card is None:
+        return (None, 0, None)
+    weights = 0
+    if has17:
+        weights += getattr(qwen, "_base17_weights_mb", 0) or _QWEN_BASE17_WEIGHTS_MB
+    if has06:
+        weights += getattr(qwen, "_base_weights_mb", 0) or _QWEN_BASE_WEIGHTS_MB
+    return ("qwen.base17" if has17 else None, weights, card)
 
 
 def _own_resident_tier(
     engine: str, model: Optional[str], cfg: Optional[dict]
 ) -> tuple[Optional[str], int, Optional[str]]:
     """PlacementController.own_resident_tier: `("qwen.base17", weights_mb, card)`
-    for a 1.7b Qwen synth or mint (`op == "mint"`, #4102) while the 1.7B-Base is
-    resident, else `(None, 0, None)`. `card` is the device Qwen is on
+    for a 1.7b Qwen synth while the 1.7B-Base is resident, else `(None, 0, None)`.
+    A mint (`op == "mint"`, #4102/#4237) is `_own_resident_mint`: the same, with
+    the resident 0.6B added to the weights, and a 0.6B-only state credited with
+    protect None. `card` is the device Qwen is on
     (`_qwen_resident_device_key`, which sees `_base17` where `_is_resident` does
     not); `weights_mb` is the footprint measured at load, else the fallback. It
     is credited in the fit check only; the ledger books the FULL peak.
     A design (`op == "design"`, #4102) with VoiceDesign resident protects
-    `qwen.design` the same way (`_own_resident_design`).
+    `qwen.design` the same way, and credits a resident 0.6B with VoiceDesign cold
+    too, protect None (`_own_resident_design`).
     A resident GPU ASR or SPK (ECAPA) model (#4102) is protected on its card
     with NO credit (`("asr"|"spk", 0, card)`); the warm booking covers it."""
     if engine in ("asr", "spk"):
         card = _is_resident(engine)
         return (engine, 0, card) if card is not None else (None, 0, None)
     if (cfg or {}).get("op") == "design":
-        found = _own_resident_design(engine, model)
-        if found is None:
-            return (None, 0, None)
-        card, weights = found
-        return ("qwen.design", weights, card)
+        return _own_resident_design(engine, model)
+    if (cfg or {}).get("op") == "mint":
+        return _own_resident_mint(engine, model)
     found = _own_resident_qwen_card(engine, model)
     if found is None:
         return (None, 0, None)
@@ -11384,7 +11425,9 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
 
 def _engine_actual_card(engine: Any) -> Optional[dict]:
     """(family, index, fell_back) for a LOADED engine, else None. index is the
-    real torch ordinal for torch engines; None for ORT/CT2 (family only).
+    real torch ordinal for torch engines, the parsed "cuda:N" ordinal for
+    engines with no torch device (CT2 Whisper, Qwen), and None for ORT
+    Kokoro (family only).
     fell_back = requested cuda but resolved cpu (the silent-CPU signal)."""
     model = (
         getattr(engine, "_model", None)
@@ -11458,7 +11501,7 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
             family, index = ("cuda" if dev.type == "cuda" else dev.type), dev.index
     except Exception:
         pass
-    if family is None:  # ORT/CT2 or no params(): use the string attr (family only)
+    if family is None:  # ORT (Kokoro) or no params(): use the string attr (+ its index when there is no _resolved_device)
         # Prefer the RESOLVED device (Coqui AND Kokoro, since #2631 review B3,
         # keep the actual in _resolved_device and the pref in _device) so a
         # cpu fallback isn't masked by the cuda pref; then `device` (SPK,
@@ -11478,9 +11521,16 @@ def _engine_actual_card(engine: Any) -> Optional[dict]:
         if hasattr(engine, "_resolved_device"):
             family, _ = _parse_device(getattr(engine, "_resolved_device"))
         else:
-            family, _ = _parse_device(
+            family, index = _parse_device(
                 getattr(engine, "device", None) or getattr(engine, "_device", None)
             )
+            # #4456: an engine here has no `_resolved_device` split and no torch
+            # `.parameters()` (CT2 Whisper, Qwen's wrapper), so the string
+            # attr IS its placement (Whisper/Qwen publish the admitted "cuda:N"
+            # there); without the index `_is_resident` maps it to cuda:0.
+            # Kokoro never reaches this line (it has `_resolved_device`).
+            if family not in ("cuda", "rocm"):
+                index = None
     if family in (None, "auto"):  # Kokoro: reconcile via ORT providers (the only ground truth)
         ks = _kokoro_session_device(engine)
         if ks:
@@ -11535,7 +11585,7 @@ def _build_gpus_payload(torch_module: Any = None) -> list[dict]:
         c["reserved_ceiling_mb"] = _card_reserved_ceiling_mb(c["total_mb"])
     for c in cards:
         c["resident"] = resident.get(c["idx"], [])
-    # ORT/CT2 engines (Kokoro/Whisper) and any cpu-fallen engine carry index=None
+    # ORT engines (Kokoro) and any cpu-fallen engine carry index=None
     # → the -1 bucket, which no real card claims. Surface it as a synthetic
     # entry so a cpu_fallback (stale_reason) is visible in gpus[] rather than
     # silently dropped. Only emitted when the bucket is non-empty, so a fully

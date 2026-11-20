@@ -32,6 +32,7 @@ import { ListenView } from './listen';
 import { exportsSlice, exportsActions } from '../store/exports-slice';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
+import { castSlice } from '../store/cast-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 import type { Chapter, Character, Voice, BookExportJob } from '../lib/types';
@@ -93,6 +94,7 @@ function makeStore() {
       account: accountSlice.reducer,
       ui: uiSlice.reducer,
       notifications: notificationsSlice.reducer,
+      cast: castSlice.reducer,
     },
   });
 }
@@ -622,6 +624,7 @@ describe('ListenView — export-queue per-row actions (plan 18a)', () => {
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
         notifications: notificationsSlice.reducer,
+        cast: castSlice.reducer,
       },
     });
     /* Seed one live export job. downloadUrl is what the adapter maps to
@@ -679,6 +682,7 @@ describe('ListenView — export-queue per-row actions (plan 18a)', () => {
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
         notifications: notificationsSlice.reducer,
+        cast: castSlice.reducer,
       },
     });
     const job: BookExportJob = {

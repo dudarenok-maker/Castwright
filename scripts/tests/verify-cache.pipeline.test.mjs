@@ -795,3 +795,10 @@ test('stepTouchedByDiff + computeScopes: an audit-waivers.json-only diff puts te
   assert.equal(computeScopes(['audit-waivers.json']).step_test_hooks, true);
 });
 
+// check-audit.test.mjs also reads server/package.json at RUNTIME (the server
+// audit script's --omit-dev pin, #4380) - same #1847 trap as above.
+test('stepTouchedByDiff + computeScopes: a server/package.json-only diff puts test:hooks in scope (check-audit.test.mjs reads it at runtime)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['server/package.json']), true);
+  assert.equal(computeScopes(['server/package.json']).step_test_hooks, true);
+});
+

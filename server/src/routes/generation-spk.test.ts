@@ -77,7 +77,7 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { writeAttempted } from '../audio/render-integrity/verdicts-io.js';
 import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
-import { afterChapterFinalized, triggerScoring, __awaitScoringSettled } from './generation.js';
+import { afterChapterFinalized, triggerScoring, __awaitScoringSettled, __registerFakeJobForTest } from './generation.js';
 import * as cfg from '../config/resolver.js';
 
 const NO_QWEN = { keep06: false, keep17: false };
@@ -182,6 +182,22 @@ describe('afterChapterFinalized', () => {
     // It reconciles against ctx.keep (the run's full-cast set), NOT anything
     // derived from scoreBook's finalized-chapters view (scoreBook returns void).
     expect(reconcileResidentQwenTiers).toHaveBeenCalledWith(keep);
+  });
+
+  it('still reconciles on the generation path while the run own render is registered (#4235 skip is resume-only)', async () => {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    // In production afterChapterFinalized runs while the run's own render is
+    // registered, so isAnyGenerationActive() is true. The resume-only skip must
+    // not apply to a pass that carries ctx.keep.
+    const cleanup = __registerFakeJobForTest('b4', []);
+    try {
+      const keep = { keep06: true, keep17: false };
+      await afterChapterFinalized({ bookId: 'b4', bookDir: '/b4', chapters: [CH1], justFinalized: CH1, keep });
+      await __awaitScoringSettled('b4');
+      expect(reconcileResidentQwenTiers).toHaveBeenCalledWith(keep);
+    } finally {
+      cleanup();
+    }
   });
 
   it('skips the reconcile when the run uses no Qwen tier', async () => {

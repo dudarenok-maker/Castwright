@@ -634,3 +634,14 @@ describe('identity stamps (#3400)', () => {
     expect((await readRevisions(bookDir, ch({ uuid: 'other', audioRenderedAt: 't9' }))).pending.map((p) => p.id)).toEqual(['r-l']);
   });
 });
+
+describe('previous take with a real extension (#4334)', () => {
+  it('P5: the read view reports hasPreviousAudio: true for a legacy entry whose chapter has only .previous.ogg', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.ogg'), 'PREV-OGG');
+    seedRaw({ pending: [{ id: 'a', chapterId: 1, characterId: 'c', playable: true, segments: [] }] });
+    const file = await readRevisions(bookDir, CHAPTERS);
+    expect(file.pending).toEqual([
+      { id: 'a', chapterId: 1, characterId: 'c', playable: true, hasPreviousAudio: true, segments: [] },
+    ]);
+  });
+});

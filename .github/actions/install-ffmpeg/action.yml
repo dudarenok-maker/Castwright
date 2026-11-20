@@ -1,89 +1,113 @@
-# Composite action — replaces the three byte-duplicated `apt-get install
-# ffmpeg` steps in verify.yml (decision on parent #2449). Those steps had no
-# retry, no mirror fallback and no step-level timeout, so a hung `apt-get
-# update` against a slow Ubuntu mirror burned the whole job's timeout budget
-# and cancelled every step after it, tests included (measured on PR #2424:
-# three jobs cancelled at 15m/15m/10m before a third attempt passed clean).
+# Composite action — installs ffmpeg + ffprobe on an Ubuntu runner.
 #
-# Caching choice: this caches apt's OWN downloaded .deb packages (redirected
-# to a runner-owned temp dir, not /var/cache/apt/archives, which is
-# root-owned). Even in a runner-owned directory, apt-get runs as root via
-# sudo and creates lock/partial/ as root-owned, so the post-step cleanup also
-# removes apt's bookkeeping files and transfers ownership back to the runner
-# so actions/cache can save the directory. Rather than snapshotting the
-# installed ffmpeg binary + its shared-library closure: `apt-get install
-# ffmpeg` pulls in a long, version-drifting chain of transitive dependency
-# packages, so re-deriving and re-linking that closure by hand is the fragile
-# option the task brief explicitly allows skipping in favor of this one.
+# History: #2449 replaced three byte-duplicated `apt-get install ffmpeg` steps
+# with this action (cache the apt .debs, step-level timeout). #4453 then
+# measured that on a cache MISS the apt path still hit its 180s ceiling
+# (exit 124) in 7+ runs on 2026-11-18/19 — every red E2E / visual / Server
+# leg of that round failed in `Install ffmpeg` before a test ran. Owner
+# decision on #4453: on a cache miss, download a pinned, checksum-verified
+# static build instead of running apt at all.
+#
+# Why this build: BtbN/FFmpeg-Builds, the `autobuild-2026-10-31-12-59`
+# release (ffmpeg n8.1.3, linux64-gpl). That project keeps the last build of
+# each month for TWO YEARS (its README), unlike its daily tags, which go
+# sooner; so this pin's URL will 404 around October 2028, and the release is
+# not immutable. scripts/tests/workflow-wiring.test.mjs goes red once the pin
+# is 18 months old: re-pin to a newer month-end build well before that. The
+# asset is served from GitHub's own network, next to the runner. First attempt was johnvansickle.com's
+# versioned 7.0.2 archive (immutable, SHA-256 abda8d77...), but PR #4455's
+# first CI run showed it answering datacenter IPs with a 7 KB HTML page
+# (bot challenge) for ~2 of 10 parallel jobs; retrying the same host is not a
+# fix. This build has libmp3lame, libopus and the `loudnorm` filter (what
+# server/src/tts/mp3.ts and the Opus export need); libfdk_aac is absent, as
+# on Ubuntu's apt build, and the encoder already falls back to native `aac`
+# (docs/features/archive/72-audio-codec-aac-opus.md). 8.1 is above
+# package.json `castwright.ffmpeg.minimum` (6.0). It ships ffprobe too,
+# which server/src/export/* shells out to.
+#
+# Bumping the build: change the URL, the SHA-256 (and its prefix in the
+# cache key), and the matching constants in scripts/tests/workflow-wiring.test.mjs.
+#
+# No apt fallback, deliberately: apt IS the hang this replaces, and a
+# fallback to it would only re-introduce a 6-minute worst case. A download
+# failure or checksum mismatch is retried 3 times (each bounded by `timeout`),
+# then fails the step loudly; nothing falls through to anything else.
+#
+# Cache: the extracted binaries are cached. The key carries a prefix of the
+# pinned archive's SHA-256, so it changes exactly when the artifact does (a
+# hand-kept version label could be left behind on a bump and serve the old
+# binary from cache). It does NOT carry the runner image: the old key embedded
+# ImageOS/ImageVersion (apt .debs are image-coupled), so every image roll
+# missed, and a PR could only hit main's entry when it happened to be on the
+# same image build. A static binary is image-independent. verify.yml runs on
+# pull_request, so its entries are scoped to the PR's ref, but main does write
+# one (quarantine-health.yml weekly, cross-os.yml mobile-e2e on its cron) and
+# PRs restore the default branch's entries; a first PR run hits once main has
+# written the current key, and a miss is a ~150 MB download from GitHub's
+# network, not an apt run.
+#
+# `timeout-minutes:` is not accepted on a composite action's own steps, so
+# each download is wrapped in coreutils `timeout -k 10 150` instead.
 name: 'Install ffmpeg (cached)'
-description: 'Install ffmpeg on an Ubuntu runner, caching the apt .deb packages so a cache hit skips apt-get (and the network round trip) entirely, with a step-level timeout so a stuck mirror fails fast.'
+description: 'Install ffmpeg and ffprobe on an Ubuntu runner from a pinned, SHA-256-verified static build, cached so a hit skips the download.'
 
 inputs:
   ffmpeg-version-pin:
-    description: 'Manual cache-invalidation override. The cache key now auto-invalidates on runner image updates; use this to force a fresh apt-get fetch and cache write mid-image-version if needed.'
+    description: 'Manual cache-invalidation override: bump to force a fresh download and cache write.'
     required: false
-    default: 'v1'
+    default: 'v4'
 
 runs:
   using: 'composite'
   steps:
-    - name: Resolve runner image identity
-      id: image
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
-
-    - name: Cache ffmpeg apt packages
-      id: apt-cache
+    - name: Cache static ffmpeg
+      id: ffmpeg-cache
       uses: actions/cache@v6
       with:
-        path: ${{ runner.temp }}/apt-cache-ffmpeg
-        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}-${{ steps.image.outputs.id }}
+        path: ${{ runner.temp }}/ffmpeg-static
+        key: ${{ runner.os }}-ffmpeg-static-41e9c565594c-${{ inputs.ffmpeg-version-pin }}
 
-    # On a cache hit: install straight from the cached .deb files with
-    # `dpkg -i` — no apt-get, no `apt-get update`, no network at all.
-    # On a cache miss: hardened `apt-get update` (retries the mirror instead
-    # of failing on the first blip) then `apt-get install`, downloading into
-    # the same runner-owned dir so the cache step above has something to
-    # save.
-    #
-    # `timeout-minutes:` is a job-STEP key, not something a composite
-    # action's own steps accept — GitHub rejects the action manifest outright
-    # ("Unexpected value 'timeout-minutes'") if it's used here, which this
-    # action's first real CI run caught. Each apt/dpkg call below is instead
-    # wrapped in the coreutils `timeout` command with `-k 10 180` (180s timeout
-    # + 10s SIGKILL grace period) to guarantee termination even if the process
-    # ignores SIGTERM. This acts as a hang-detection ceiling: a normal
-    # (non-hanging) cache-miss apt-get is expected to be much faster than the
-    # 180s ceiling, but the ceiling itself can consume up to 190s per call
-    # (~380s / 6 min 20s for a two-call worst case). Note: this leaves
-    # comparatively tight headroom on jobs with small total budgets; e.g.,
-    # e2e-visual's 10-minute job timeout leaves ~4 minutes for the test battery
-    # itself after checkout + `npm ci` + Playwright setup + this install step.
-    # Still preferable to the prior unbounded step that silently ate entire job
-    # timeouts when a mirror hung.
     - name: Install ffmpeg
       shell: bash
       run: |
         set -euo pipefail
-        ARCHIVE_DIR="${{ runner.temp }}/apt-cache-ffmpeg"
-        mkdir -p "$ARCHIVE_DIR"
-        if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ]; then
-          echo "apt cache hit: installing ffmpeg from $ARCHIVE_DIR, skipping apt-get"
-          # dpkg -i skips apt's signature verification that `apt-get install` performs.
-          # This is acceptable: the cache was populated by this same action's prior
-          # `apt-get install` run (itself signature-verified), and actions/cache entries
-          # are scoped to this repo, not shared across repos.
-          sudo timeout -k 10 180 dpkg -i "$ARCHIVE_DIR"/*.deb
+        DEST="${{ runner.temp }}/ffmpeg-static"
+        if [ "${{ steps.ffmpeg-cache.outputs.cache-hit }}" = "true" ]; then
+          echo "ffmpeg cache hit: using $DEST, skipping download"
         else
-          echo "apt cache miss: installing ffmpeg via apt-get"
-          sudo timeout -k 10 180 apt-get -o Acquire::Retries=3 update
-          sudo timeout -k 10 180 apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
-          sudo rm -rf "$ARCHIVE_DIR/lock" "$ARCHIVE_DIR/partial"
-          sudo chown -R "$(id -u):$(id -g)" "$ARCHIVE_DIR"
+          echo "ffmpeg cache miss: downloading pinned static build"
+          TMP="$(mktemp -d)"
+          # 3 attempts around download + verify, so one bad body or dropped
+          # connection does not fail the job; a persistent mismatch still
+          # fails the step, with what the server sent.
+          OK=0
+          for attempt in 1 2 3; do
+            rm -f "$TMP/ffmpeg.tar.xz"
+            if timeout -k 10 150 curl -fsSL --connect-timeout 20 --max-time 120 \
+                -o "$TMP/ffmpeg.tar.xz" \
+                "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1.tar.xz" \
+              && echo "41e9c565594c390622cf968d82fa4135d9e9a11d06c1515644288cbc844e3380  $TMP/ffmpeg.tar.xz" | sha256sum -c -; then
+              OK=1
+              break
+            fi
+            echo "::warning::ffmpeg download/verify attempt $attempt/3 failed"
+            ls -l "$TMP/ffmpeg.tar.xz" || true
+            head -c 400 "$TMP/ffmpeg.tar.xz" | od -c | head -12 || true
+            sleep $((attempt * 3))
+          done
+          if [ "$OK" != "1" ]; then
+            echo "::error::ffmpeg static build failed to download and verify after 3 attempts"
+            exit 1
+          fi
+          mkdir -p "$DEST"
+          tar -xJf "$TMP/ffmpeg.tar.xz" -C "$TMP"
+          install -m 0755 "$TMP"/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1/bin/ffmpeg "$TMP"/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1/bin/ffprobe "$DEST/"
+          rm -rf "$TMP"
         fi
+        echo "$DEST" >> "$GITHUB_PATH"
 
     - name: Verify ffmpeg
       shell: bash
-      run: ffmpeg -version
+      run: |
+        ffmpeg -version
+        ffprobe -version | head -1

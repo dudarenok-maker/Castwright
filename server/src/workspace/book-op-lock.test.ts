@@ -813,7 +813,7 @@ describe('withBookOpAtDir (startup-sweep step)', () => {
     const seen: string[] = [];
     let stepP!: Promise<unknown>;
     await lock.withBookOp(bookId, async (book) => {
-      stepP = lock.withBookOpAtDir(bookDir, async (dir) => {
+      stepP = lock.withBookOpAtDir(bookDir, async ({ bookDir: dir }) => {
         seen.push(dir);
       });
       await until(() => fileLock.__keyWaitersForTest(`book-op:${bookId}`) === 1);
@@ -826,7 +826,7 @@ describe('withBookOpAtDir (startup-sweep step)', () => {
   it('runs fn unlocked on the walked dir for a book whose state.json carries no bookId', async () => {
     const { bookDir } = seedBook('Sweep', 'Ser', 'No Id', { bookId: null });
     const seen: string[] = [];
-    await lock.withBookOpAtDir(bookDir, async (dir) => {
+    await lock.withBookOpAtDir(bookDir, async ({ bookDir: dir }) => {
       seen.push(dir);
     });
     expect(seen).toEqual([bookDir]);

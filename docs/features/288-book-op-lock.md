@@ -299,7 +299,7 @@ The pattern is allowed per route **(coordinator call)**:
 | `POST /:bookId/chapters/*` restructure (`chapters-restructure.ts:154-178`) | `parseForLegacyTitleFlags` (and a cold `ManuscriptRecord` hydrate) | the same fingerprint; on a mismatch the advisory title flags are **dropped silently**, with **no 409** *(coordinator call)*. The commit re-reads the record for the manuscript id the **locked** state names (`getOrHydrateManuscript`, hydrating under the lock when cold; 404 when absent), not the prepared one: a reparse it queued behind replaces the store entry (review pass 4), and a bundle overwrite replaces the book, possibly under a new manuscript id, and drops both ids' records (review pass 5). When the ids agree, the commit's read is usually the record the prep cached. The prep's hydrate runs unlocked, so it caches only when no `putManuscript` / `removeManuscript` landed on the id while it read and parsed; otherwise it takes the writer's record or reads again once (review pass 6) |
 | `POST /:bookId/cover` (`cover.ts:66-91`) | candidate search + `fetchCoverJpeg` | nothing (a cover is title-independent once chosen) |
 | `POST /:bookId/cover/upload` (`cover.ts:156`) | upload re-encode | nothing |
-| `POST /:bookId/resume-scoring` (`qa-report.ts:56`) | early 404 / `isGenerationActive` 409 only | the chapter list comes from `lease.state` inside `runBookJob` |
+| `POST /:bookId/resume-scoring` (`qa-report.ts:56`) | early 404 / `isGenerationActive` 409 / `isSpliceOrRepairActive` 409 (#4235) only | the chapter list comes from `lease.state` inside `runBookJob` |
 | `POST /:bookId/replace-manuscript` (`:1558`) | upload parse (no disk read, no peek) | — |
 
 | Long job | Entry point(s), wrapped in `runBookJob` |

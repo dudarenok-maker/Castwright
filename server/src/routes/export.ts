@@ -48,7 +48,7 @@ import {
   type SyncStage,
 } from '../export/sync-folder.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import { findChapterAudio } from '../workspace/chapter-take.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import {
   AVG_CHAPTER_BYTES,

@@ -16,15 +16,19 @@
    a chapter that scoreBook's book-wide view never scores, producing a
    false "embed failed" count). */
 
-import { join } from 'node:path';
 import { loadSegmentsFiles } from './segments-io.js';
 import { deriveBookOutline } from './render-integrity/verdicts-io.js';
 import {
   STOCHASTIC_ENGINES,
+  charsWithCurrentVoiceLine,
+  createCurrentVoiceFacts,
+  loadCastContext,
   resolveConfiguredEngineByChar,
   resolveRowCharId,
   segKey,
 } from './render-integrity/aggregate.js';
+import type { CurrentVoiceChapter } from './render-integrity/aggregate.js';
+import { livePartPath } from '../workspace/take-fields.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
@@ -52,10 +56,24 @@ export interface AudioQaReport {
     charactersChecked: number;
     /** srv-36 hardening — stochastic characters that have appeared on a
      *  chapter's embeddings roster but have no row yet in
-     *  render-integrity.centroids.json — still mid-retry-cycle, not stuck.
-     *  A chapter whose only unscored roster character is in this list is
+     *  render-integrity.centroids.json, OR whose row is a stale no-current-voice
+     *  marker (#3680: a score-only pass clears it) — still mid-retry-cycle, not
+     *  stuck. A chapter whose only unscored roster character is in this list is
      *  excluded from chaptersEmbedFailed (see the computation below). */
     charactersPending: string[];
+    /** #3680/#3524 — CAST ids (resolved through the cast of record; a merged character
+     *  is listed once, under the id the cast shows) with a persisted
+     *  `noCurrentVoiceReference` marker on one of their render keys AND no rendered line
+     *  in that key's current cast voice, re-checked HERE at read time against the cast
+     *  of record rather than trusted from the last pass. Every line under that key is
+     *  inconclusive until a chapter holding it is re-rendered. A marker the current cast
+     *  no longer supports is in `charactersPending` instead. The marker is per KEY: a
+     *  merged character's other keys can be healthy, so see the chapters field below. */
+    charactersNeedingRerender: string[];
+    /** #3680 — per id in `charactersNeedingRerender`: the chapter ids holding lines under
+     *  the marked key(s), ascending. A re-render keys its fresh lines under the canonical
+     *  id, so each re-rendered chapter drops off this list. */
+    charactersNeedingRerenderChapters: Record<string, number[]>;
     mismatches: Array<{ characterId: string; chapterId?: number; fixable: boolean }>;
     inconclusiveCount: number;
     uncheckedCharacterIds: string[];
@@ -118,8 +136,9 @@ export async function buildAudioQaReport(
   // in the book. Sourcing the roster from embeddings keeps such a character
   // from blocking that chapter's "fully scored" check below.
   const rosterByChapter = new Map<number, Set<string>>();
+  const voiceChapters: CurrentVoiceChapter[] = [];
   for (const ch of chapters) {
-    const embPath = join(audioDir(bookDir), `${ch.slug}.embeddings.json`);
+    const embPath = livePartPath(audioDir(bookDir), ch.slug, 'embeddings');
     const embResult = await readEmbeddings(embPath);
     if (!embResult) continue;
     const stampByKey = stampByKeyByChapter.get(ch.id);
@@ -132,6 +151,17 @@ export async function buildAudioQaReport(
       if (rowCharId !== undefined && engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
     }
     if (chapterChars.size > 0) rosterByChapter.set(ch.id, chapterChars);
+
+    /* #3680 — the same per-chapter view scoreBook's phase 1 builds (a chapter with
+       BOTH an embeddings sibling and a segments file), for the stale-marker check. */
+    const segFile = segFiles.find((s) => s.chapterId === ch.id);
+    if (segFile) {
+      const segsByKey = new Map<string, NonNullable<typeof segFile.segments>[number]>();
+      for (const seg of segFile.segments ?? []) {
+        if (seg.characterId && Array.isArray(seg.sentenceIds)) segsByKey.set(segKey(seg.characterId, seg.sentenceIds), seg);
+      }
+      voiceChapters.push({ slug: ch.slug, embRows: embResult.rows, segsByKey, snapshots: ownSnapshots });
+    }
   }
 
   for (const seg of segFiles) {
@@ -172,7 +202,57 @@ export async function buildAudioQaReport(
   const uncheckedSet = new Set(outline.counts.uncheckedCharacters);
 
   const centroids = (await readCentroids(bookDir)) ?? {};
-  const charactersPending = Array.from(stochasticCharacterIds).filter((id) => !(id in centroids));
+  const markedIds = Array.from(stochasticCharacterIds).filter((id) => centroids[id]?.noCurrentVoiceReference === true);
+  /* #3680 pass 1 — the persisted marker was decided from the cast voice at the last scoring
+     pass. Re-check it against the CURRENT cast voice, with the same helpers scoreBook uses:
+     a marker is only true while the character has a current voice AND no rendered line in it.
+     A stale one (the voice was reverted, or the cast row is gone) is PENDING — a score-only
+     pass (Resume) clears it — never a re-render. */
+  const staleMarkerIds = new Set<string>();
+  /* #3680 pass 1 — the ids above are frozen-render snapshot keys (a merged character keeps
+     the key it rendered under). Resolve each through the cast of record, as scoreBook does
+     (CLAUDE.md: cast.json is the identity of record), and de-duplicate, so the listing names
+     the character the cast shows, once. */
+  const charactersNeedingRerender: string[] = [];
+  const charactersNeedingRerenderChapters: Record<string, number[]> = {};
+  const idBySlug = new Map(chapters.map((c) => [c.slug, c.id]));
+  if (markedIds.length > 0) {
+    const { castResolver, bookLanguage } = await loadCastContext(bookDir);
+    const { currentVoiceFor } = createCurrentVoiceFacts({
+      chapterData: voiceChapters,
+      configuredEngineByChar,
+      castResolver,
+      bookLanguage,
+      // Resume passes none (no run model key), so this is the pass the report predicts.
+      justFinalized: new Set<string>(),
+    });
+    const withCurrentLine = charsWithCurrentVoiceLine(voiceChapters, stochasticCharacterIds, currentVoiceFor);
+    for (const id of markedIds) {
+      if (currentVoiceFor(id) === undefined || withCurrentLine.has(id)) {
+        staleMarkerIds.add(id);
+        continue;
+      }
+      // A marker needs a current voice, which needs a live cast row, so this resolves.
+      const canonicalId = castResolver.resolve(id)?.character.id ?? id;
+      if (!charactersNeedingRerender.includes(canonicalId)) charactersNeedingRerender.push(canonicalId);
+      /* The chapters whose lines sit under THIS marked key: re-rendering one keys its fresh
+         lines under the canonical id, so it leaves this list. Another key of the same person may be
+         healthy, so the listing must not claim "no lines" for the person. */
+      const held = (charactersNeedingRerenderChapters[canonicalId] ??= []);
+      for (const cd of voiceChapters) {
+        const chapterId = idBySlug.get(cd.slug);
+        if (chapterId === undefined || held.includes(chapterId)) continue;
+        const has = cd.embRows.some((row) =>
+          resolveRowCharId(cd.segsByKey.get(segKey(row.characterId, row.sentenceIds)), row.characterId, cd.snapshots) === id);
+        if (has) held.push(chapterId);
+      }
+    }
+    // One person can have several marked keys, each pushing its own chapters in turn.
+    for (const held of Object.values(charactersNeedingRerenderChapters)) held.sort((a, b) => a - b);
+  }
+  const charactersPending = Array.from(stochasticCharacterIds).filter(
+    (id) => !(id in centroids) || staleMarkerIds.has(id),
+  );
 
   /* srv-36 hardening — chaptersScored/chaptersEmbedFailed are now
      roster-aware: a chapter is "fully scored" iff EVERY character on its
@@ -251,6 +331,8 @@ export async function buildAudioQaReport(
       charactersOnRoster: stochasticCharacterIds.size,
       charactersChecked: Array.from(stochasticCharacterIds).filter((id) => !uncheckedSet.has(id)).length,
       charactersPending,
+      charactersNeedingRerender,
+      charactersNeedingRerenderChapters,
       mismatches: outline.issues.map((r) => ({
         characterId: r.characterId,
         chapterId: r.chapterId,

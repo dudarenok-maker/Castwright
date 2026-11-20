@@ -1,5 +1,5 @@
 import type { BookQaReport } from './types';
-import { classifyHeadline, classifyVoiceMatch } from './qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from './qa-report-classify';
 
 function acousticLine(r: BookQaReport): string {
   return `Acoustic — ${r.acoustic.linesChecked} lines checked, ${r.acoustic.linesRerecorded} needed a second take`;
@@ -21,6 +21,17 @@ function voiceMatchLine(r: BookQaReport): string {
   return `Voice match — ${c.charactersChecked} of ${c.charactersOnRoster} characters checked, ${c.mismatchCount} mismatches${inconclusiveSuffix}`;
 }
 
+function needsRerenderLine(r: BookQaReport, characterNames?: Record<string, string>): string | null {
+  const ids = needsRerenderIds(r);
+  if (ids.length === 0) return null;
+  const entries = ids.map((id) => {
+    const chapters = needsRerenderChapters(r, id);
+    const name = characterNames?.[id] ?? id;
+    return chapters.length > 0 ? `${name} (${chapters.length === 1 ? 'chapter' : 'chapters'} ${chapters.join(', ')})` : name;
+  });
+  return `Voice match — needs re-render: ${entries.join(', ')}`;
+}
+
 function castContinuityLine(r: BookQaReport): string {
   const total = r.configDrift.counts.mild + r.configDrift.counts.moderate + r.configDrift.counts.severe;
   return `Cast continuity — ${total} changes since render`;
@@ -38,13 +49,15 @@ function headline(r: BookQaReport): string {
   }
 }
 
-export function formatQaReportText(report: BookQaReport, bookTitle: string): string {
+export function formatQaReportText(report: BookQaReport, bookTitle: string, characterNames?: Record<string, string>): string {
+  const rerender = needsRerenderLine(report, characterNames);
   return [
     `${bookTitle} — Castwright quality gate`,
     headline(report),
     `· ${acousticLine(report)}`,
     `· ${asrLine(report)}`,
     `· ${voiceMatchLine(report)}`,
+    ...(rerender ? [`· ${rerender}`] : []),
     `· ${castContinuityLine(report)}`,
   ].join('\n');
 }

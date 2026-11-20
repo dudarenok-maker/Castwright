@@ -22,6 +22,10 @@ const EXT_TO_FORMAT: Record<string, 'markdown' | 'plaintext' | 'pdf' | 'epub' | 
   azw3: 'mobi',
 };
 
+/** Extensions parseManuscript accepts (lowercase, no dot). One list, so tooling
+    such as the library scanner never keeps a second copy. */
+export const SUPPORTED_MANUSCRIPT_EXTENSIONS: readonly string[] = Object.keys(EXT_TO_FORMAT);
+
 function extOf(fileName?: string): string | null {
   if (!fileName) return null;
   const m = fileName.toLowerCase().match(/\.([a-z0-9]+)$/);

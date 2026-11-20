@@ -219,7 +219,7 @@ def test_engine_actual_card_loaded_coqui_on_cuda_no_fallback():
 
 
 def test_build_gpus_payload_surfaces_unindexed_cpu_fallback(monkeypatch):
-    """An ORT/CT2 (or cpu-fallen) engine has index=None → the -1 bucket, which no
+    """An ORT (Kokoro) or cpu-fallen engine has index=None → the -1 bucket, which no
     real card claims. _build_gpus_payload must surface it as a synthetic entry so the
     cpu_fallback is visible in gpus[] rather than silently dropped."""
     monkeypatch.setattr(main, "_enumerate_cuda_devices",

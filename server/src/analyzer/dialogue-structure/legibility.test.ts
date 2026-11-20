@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { measureChapterLegibility } from './legibility.js';
+import {
+  measureChapterLegibility,
+  isParagraphDegraded,
+  countTurnOpeners,
+  turnInParagraphRegex,
+  MERGED_TURNS_DEGRADED,
+  NOTICE_LANGUAGES,
+} from './legibility.js';
 import { conventionsFor } from './lang/index.js';
 
 const ru = conventionsFor('ru')!;
@@ -64,5 +71,53 @@ describe('measureChapterLegibility', () => {
   it('finds the worst paragraph in a mixed chapter', () => {
     const body = ['Тихо было.', 'Он кивнул. - Раз. - Два. - Три.', '- Обычный диалог.'].join('\n');
     expect(measureChapterLegibility(body, ru)).toBe(3);
+  });
+});
+
+const openers = (n: number): string => Array.from({ length: n }, () => 'Он кивнул. - Да.').join(' ');
+
+describe('isParagraphDegraded', () => {
+  it('threshold edge: 9 openers is false, 10 is true', () => {
+    expect(MERGED_TURNS_DEGRADED).toBe(10);
+    expect(isParagraphDegraded(openers(9), 'ru')).toBe(false);
+    expect(isParagraphDegraded(openers(10), 'ru')).toBe(true);
+  });
+
+  it('uses the max, not the sum', () => {
+    const body = [openers(5), openers(5)].join('\n');
+    expect(isParagraphDegraded(body, 'ru')).toBe(false);
+    expect(countTurnOpeners(body)).toBe(10);
+  });
+
+  it.each([null, undefined, '', 'en', 'es', 'fr', 'xx'])(
+    'is undefined, never false, for %j',
+    (lang) => {
+      expect(isParagraphDegraded(openers(12), lang)).toBeUndefined();
+    },
+  );
+
+  it('measures ru-RU like ru', () => {
+    expect(isParagraphDegraded(openers(10), 'ru-RU')).toBe(true);
+    expect(NOTICE_LANGUAGES).toEqual(['ru']);
+  });
+});
+
+describe('countTurnOpeners', () => {
+  it('sums over lines where measureChapterLegibility takes the max', () => {
+    const body = [openers(3), 'Без реплик.', openers(4)].join('\n');
+    expect(countTurnOpeners(body)).toBe(7);
+    expect(measureChapterLegibility(body, ru)).toBe(4);
+  });
+});
+
+describe('turnInParagraphRegex', () => {
+  it('returns a fresh regex each call with independent lastIndex', () => {
+    const a = turnInParagraphRegex();
+    const b = turnInParagraphRegex();
+    expect(a).not.toBe(b);
+    while (a.exec(openers(3)) !== null) {
+      /* exhaust */
+    }
+    expect(b.lastIndex).toBe(0);
   });
 });

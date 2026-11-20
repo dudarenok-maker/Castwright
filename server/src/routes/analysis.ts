@@ -124,7 +124,7 @@ import { slugKeepingTake } from '../workspace/keep-take-slug.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { isRestructuring, registerAnalysisBusyProbe } from '../workspace/restructure-gate.js';
 import { rollManuscriptEdits, type RollSnapshot } from '../workspace/edits-roll.js';
-import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
+import { carryTakeStateFields, carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { withBookLock } from '../workspace/book-lock.js';
 import { isLockAcquisitionTimeout, requestFailureMessage } from '../workspace/file-lock.js';
@@ -231,7 +231,7 @@ import {
 } from '../analyzer/cjk-honorifics.js';
 import { conventionsFor } from '../analyzer/dialogue-structure/lang/index.js';
 import { buildNameIndex } from '../analyzer/dialogue-structure/name-matcher.js';
-import { parseChapterStructure } from '../analyzer/dialogue-structure/parser.js';
+import { parseChapterStructure, type ParseChapterOptions } from '../analyzer/dialogue-structure/parser.js';
 import { resolveWindows, type WindowRoster } from '../analyzer/dialogue-structure/windows.js';
 import { alignSentences } from '../analyzer/dialogue-structure/aligner.js';
 import { crossExamine } from '../analyzer/dialogue-structure/cross-examine.js';
@@ -3559,6 +3559,37 @@ function buildCloudEscalationAnalyzer(): Analyzer | null {
   return new GeminiAnalyzer({ apiKey, model });
 }
 
+/* #2254 §4.2 — the deterministic dialogue-structure engine, lifted out of
+   attributeChapterStage2 with zero behaviour change so the 1A measurement arms
+   can drive it with their own ParseChapterOptions. `sentences` is the model's
+   output, `stage1` the already-deduplicated roster, `conventions` the non-null
+   value the caller resolved. The caller keeps the gate, `result.sentences =
+   examined.sentences`, the snapshots, escalation and the report. */
+export function runStructureEngine(args: {
+  sentences: SentenceOutput[];
+  body: string;
+  stage1: Stage1Output;
+  conventions: NonNullable<ReturnType<typeof conventionsFor>>;
+  structureOptions?: ParseChapterOptions;
+}) {
+  const { sentences, body, stage1, conventions, structureOptions } = args;
+  const index = buildNameIndex(stage1.characters, conventions);
+  const paras = parseChapterStructure(body, index, structureOptions);
+  const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
+  resolveWindows(paras, rosterGenderMap(stage1.characters), firstPersonId);
+  const alignment = alignSentences(sentences, paras, body, conventions.dialogueOpen !== null);
+  const rosterIds = new Set(stage1.characters.map((c) => c.id));
+  const examined = crossExamine(alignment, {
+    rosterIds,
+    unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+    alignmentFloorPct: 80,
+    /* #2253 — the language's own turn marker, so a merged paragraph (#2254)
+       costs the engine its structural evidence but not the speaker. */
+    dialogueOpen: conventions.dialogueOpen,
+  });
+  return { examined, paras, alignment, rosterIds };
+}
+
 /* Shared resilient stage-2 runner used by BOTH the main and subset routes
    (#528). Wraps the chapter in the large-chapter chunker (which itself wraps
    each call in the coverage guard), so an over-budget chapter is split into
@@ -3600,6 +3631,9 @@ export async function attributeChapterStage2(opts: {
      it through). Falls back to a fresh per-call budget when omitted, so
      existing callers keep working (just without the cross-chapter cap). */
   structureBudget?: { remainingWindows: number };
+  /* #2254 — internal test/measurement seam for 1A, NOT a setting: no registry
+     key, no env var, no route reads it. Passed to parseChapterStructure. */
+  structureOptions?: ParseChapterOptions;
   /* srv-59 Task 9b (review follow-up) — the 'cloud' escalation analyzer,
      built ONCE per book by the caller (mirrors structureBudget) and threaded
      through every chapter's call so a book doesn't construct a throwaway
@@ -3618,6 +3652,13 @@ export async function attributeChapterStage2(opts: {
     raw: SentenceOutput[];
     deterministic: SentenceOutput[];
     reasons: Array<{ index: number; reason: string; bucket: DecisionBucket }>;
+    /* #2254 §4.2 — the deduplicated roster the engine used (every branch). */
+    stage1: Stage1Output;
+    /* #2254 §4.2 — engine branch only, cloned when crossExamine returns, BEFORE
+       escalation splices `flags` for every line it fills. */
+    paras?: ReturnType<typeof runStructureEngine>['paras'];
+    alignment?: ReturnType<typeof runStructureEngine>['alignment'];
+    flags?: ReturnType<typeof runStructureEngine>['examined']['flags'];
   }) => void;
 }): Promise<Stage2ChunkRunResult> {
   /* Task 9 — consolidate the roster BEFORE stage-2 so the model sees CLEAN ids.
@@ -3700,6 +3741,9 @@ export async function attributeChapterStage2(opts: {
   const rawSnapshot = opts.onStages ? structuredClone(result.sentences) : null;
   let detSnapshot: SentenceOutput[] | null = null;
   let detReasons: Array<{ index: number; reason: string; bucket: DecisionBucket }> = [];
+  let detParas: ReturnType<typeof runStructureEngine>['paras'] | undefined;
+  let detAlignment: ReturnType<typeof runStructureEngine>['alignment'] | undefined;
+  let detFlags: ReturnType<typeof runStructureEngine>['examined']['flags'] | undefined;
   /* srv-59 — deterministic dialogue-structure engine: replays the model's
      per-sentence attribution against the chapter's structural evidence (dash/
      quote dialogue tags, conversation-window alternation, pronoun resolution)
@@ -3713,22 +3757,22 @@ export async function attributeChapterStage2(opts: {
      above, which already resolves conventions independently of this knob. */
   const conventions = conventionsFor(opts.stageCall.language);
   if (configValue<boolean>('analyzer.structure.enabled') && conventions) {
-    const index = buildNameIndex(stage1.characters, conventions);
-    const paras = parseChapterStructure(opts.chapter.body, index);
-    const firstPersonId = findFirstPersonCharacter(stage1.characters, conventions);
-    resolveWindows(paras, rosterGenderMap(stage1.characters), firstPersonId);
-    const alignment = alignSentences(result.sentences, paras, opts.chapter.body, conventions.dialogueOpen !== null);
-    const rosterIds = new Set(stage1.characters.map((c) => c.id));
-    const examined = crossExamine(alignment, {
-      rosterIds,
-      unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
-      alignmentFloorPct: 80,
-      /* #2253 — the language's own turn marker, so a merged paragraph (#2254)
-         costs the engine its structural evidence but not the speaker. */
-      dialogueOpen: conventions.dialogueOpen,
+    const { examined, paras, alignment, rosterIds } = runStructureEngine({
+      sentences: result.sentences,
+      body: opts.chapter.body,
+      stage1,
+      conventions,
+      structureOptions: opts.structureOptions,
     });
     result.sentences = examined.sentences;
-    if (opts.onStages) { detSnapshot = structuredClone(examined.sentences); detReasons = examined.reasons; }
+    if (opts.onStages) {
+      detSnapshot = structuredClone(examined.sentences);
+      detReasons = examined.reasons;
+      /* #2254 — cloned here, before escalation edits `examined.flags` in place. */
+      detParas = structuredClone(paras);
+      detAlignment = structuredClone(alignment);
+      detFlags = structuredClone(examined.flags);
+    }
 
     /* Task 9b — second-pass re-query of the windows crossExamine couldn't
        resolve. 'off' disables the model re-query entirely (the deterministic
@@ -3804,6 +3848,8 @@ export async function attributeChapterStage2(opts: {
       raw: rawSnapshot,
       deterministic: detSnapshot ?? structuredClone(result.sentences),
       reasons: detReasons,
+      stage1,
+      ...(detParas ? { paras: detParas, alignment: detAlignment, flags: detFlags } : {}),
     });
   }
   return result;
@@ -8606,8 +8652,12 @@ export async function runMainAnalyzerJob(
                 /* #3628 — the title-source flags are not re-derivable here, so
                    carry them from prev (both only while the title is unchanged,
                    so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
-                   strip them and a later restructure would misjudge the title. */
-                chapters: carryTitleSynthesized(
+                   strip them and a later restructure would misjudge the title.
+                   The take fields (TAKE_STATE_FIELDS, #4319) ride through the
+                   same way, matched on id AND the final slug (after #4230's
+                   keep-the-disk-slug decision), over the fresh `prev` read inside
+                   this lock; failure stamps are deliberately not carried. */
+                chapters: carryTakeStateFields(carryTitleSynthesized(
                   (getManuscript(job.manuscriptId) ?? record).chapterHints.map((h) => ({
                     id: h.id,
                     title: h.title,
@@ -8627,7 +8677,7 @@ export async function runMainAnalyzerJob(
                     titleOverridden: prevOverriddenById.get(h.id) === h.title || undefined,
                   })),
                   prev.chapters,
-                ),
+                ), prev.chapters),
                 /* srv-59 Task 11 — record which analyzer produced this cast/
                    sentence set and, when the dialogue-structure engine ran,
                    the aggregated run report. Additive + schema-tolerant: no
@@ -10751,8 +10801,12 @@ export async function runSubsetAnalyzerJob(
                 /* #3628 — the title-source flags are not re-derivable here, so
                    carry them from prev (both only while the title is unchanged,
                    so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
-                   strip them and a later restructure would misjudge the title. */
-                chapters: carryTitleSynthesized(
+                   strip them and a later restructure would misjudge the title.
+                   The take fields (TAKE_STATE_FIELDS, #4319) ride through the
+                   same way, matched on id AND the final slug (after #4230's
+                   keep-the-disk-slug decision), over the fresh `prev` read inside
+                   this lock; failure stamps are deliberately not carried. */
+                chapters: carryTakeStateFields(carryTitleSynthesized(
                   (getManuscript(job.manuscriptId) ?? record).chapterHints.map((h) => ({
                     id: h.id,
                     title: h.title,
@@ -10772,7 +10826,7 @@ export async function runSubsetAnalyzerJob(
                     titleOverridden: prevOverriddenById.get(h.id) === h.title || undefined,
                   })),
                   prev.chapters,
-                ),
+                ), prev.chapters),
                 /* srv-59 Task 11 — a subset retry supersedes whatever
                    provenance the last full run left, so this REWRITES the
                    block wholesale (fresh `at` + a report recomputed from just

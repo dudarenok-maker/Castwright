@@ -1246,30 +1246,108 @@ test('coverage parity: no derived condition silently narrows a leg', () => {
   );
 });
 
-test('ffmpeg install: timeout wrapping is present with correct bounds on all apt/dpkg commands', () => {
-  const actionPath = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg', 'action.yml');
-  const actionSource = readNormalized(actionPath);
+const FFMPEG_STATIC_URL =
+  'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-linux64-gpl-8.1.tar.xz';
+const FFMPEG_STATIC_SHA256 = '41e9c565594c390622cf968d82fa4135d9e9a11d06c1515644288cbc844e3380';
 
-  // Mutation proof: a deliberately-hung install was caught by the 180s timeout
-  // wrapper (PR #2796 mutations). Assert all three apt/dpkg calls carry the
-  // timeout, so a future edit can't drop it without this test failing.
-  const patterns = [
-    /sudo\s+timeout\s+-k\s+10\s+180\s+dpkg\s+-i/,
-    /sudo\s+timeout\s+-k\s+10\s+180\s+apt-get\s+-o\s+Acquire::Retries=3\s+update/,
-    /sudo\s+timeout\s+-k\s+10\s+180\s+apt-get\s+-o\s+Dir::Cache::Archives/,
-  ];
+function readFfmpegAction() {
+  return readNormalized(resolve(repoRoot, '.github', 'actions', 'install-ffmpeg', 'action.yml'));
+}
 
-  const missing = [];
-  for (const [idx, pattern] of patterns.entries()) {
-    if (!pattern.test(actionSource)) {
-      missing.push(`pattern ${idx}: ${pattern.source}`);
-    }
-  }
+// The shell body of the `Install ffmpeg` step only (comments in the header
+// may legitimately mention apt; the step's executable text must not).
+function ffmpegInstallRunBody() {
+  const m = readFfmpegAction().match(/- name: Install ffmpeg\n\s+shell: bash\n\s+run: \|\n((?: {8}[^\n]*\n|\n)*)/);
+  assert.ok(m, '`Install ffmpeg` run step not found in install-ffmpeg action');
+  return m[1];
+}
 
-  assert.deepEqual(
-    missing,
-    [],
-    `ffmpeg install action is missing timeout wrapping or has wrong bounds:\n${missing.join('\n')}`,
+test('ffmpeg install (#4453): cache miss downloads the pinned static build, verified by SHA-256', () => {
+  const body = ffmpegInstallRunBody();
+  assert.ok(body.includes(FFMPEG_STATIC_URL), `pinned URL ${FFMPEG_STATIC_URL} missing from install step`);
+  assert.ok(body.includes(FFMPEG_STATIC_SHA256), 'pinned SHA-256 missing from install step');
+  assert.match(body, /sha256sum\s+-c\b/, 'install step does not verify the download with `sha256sum -c`');
+  // The checksum must GATE the install: it sits inside the `if` condition and
+  // nothing (`|| true`, ...) may swallow its exit status.
+  const sumLine = body.split('\n').find((l) => /sha256sum\s+-c\b/.test(l));
+  assert.ok(sumLine, 'no line runs `sha256sum -c`');
+  assert.match(sumLine.trimEnd(), /sha256sum\s+-c\s+-;\s*then$/, '`sha256sum -c` is not the last command of the `if` condition');
+  assert.doesNotMatch(sumLine, /\|\|/, '`sha256sum -c` status is neutered by `||`');
+  // set -e must be on so a checksum mismatch aborts the step (no fallback).
+  assert.match(body, /set -euo pipefail/, 'install step lost `set -euo pipefail`; a checksum mismatch would not fail loudly');
+  // Both binaries must reach PATH: server/src/export/* shells out to ffprobe too.
+  assert.match(body, /ffprobe/, 'install step does not install ffprobe');
+  assert.match(body, /GITHUB_PATH/, 'install step does not put ffmpeg on PATH for later steps');
+});
+
+// BtbN/FFmpeg-Builds keeps the last build of each month for two years (its
+// README), then deletes it, and the release is not immutable. Go red at 18
+// months so there is ~6 months of slack to re-pin before the URL 404s and
+// every cache-miss job fails `Install ffmpeg`.
+const FFMPEG_PIN_MAX_AGE_MONTHS = 18;
+
+// Returns a failure message when the `autobuild-YYYY-MM-DD` tag in `url` is
+// more than FFMPEG_PIN_MAX_AGE_MONTHS before `now`, else null.
+function ffmpegPinTooOld(url, now) {
+  const m = url.match(/\/autobuild-(\d{4})-(\d{2})-(\d{2})-/);
+  if (!m) return `no autobuild-YYYY-MM-DD tag found in ${url}`;
+  const pinned = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  const limit = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - FFMPEG_PIN_MAX_AGE_MONTHS, now.getUTCDate()));
+  if (pinned >= limit) return null;
+  return (
+    `pinned ffmpeg build ${m[1]}-${m[2]}-${m[3]} is over ${FFMPEG_PIN_MAX_AGE_MONTHS} months old; BtbN deletes ` +
+    `month-end builds after two years, which would 404 the download. Re-pin to a newer month-end ` +
+    `autobuild (URL, SHA-256, its prefix in the cache key, test constants) in .github/actions/install-ffmpeg/action.yml.`
+  );
+}
+
+test('ffmpeg install (#4453): the pinned BtbN build is not near its two-year deletion', () => {
+  const url = ffmpegInstallRunBody().match(/https:\/\/github\.com\/BtbN\/[^\s\u0022\\]+/);
+  assert.ok(url, 'BtbN download URL not found in install step');
+  assert.equal(ffmpegPinTooOld(url[0], new Date()), null);
+  // BtbN keeps only the last 14 daily builds; only month-end builds are kept for two years.
+  const d = url[0].match(/\/autobuild-(\d{4})-(\d{2})-(\d{2})-/);
+  const lastDay = new Date(Date.UTC(Number(d[1]), Number(d[2]), 0)).getUTCDate();
+  assert.equal(Number(d[3]), lastDay, `pinned tag ${d[0]} is not a month-end build; a daily build 404s within weeks`);
+});
+
+test('ffmpeg install (#4453): the pin-age guard flags an old pin and passes a fresh one', () => {
+  const tag = (d) => `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${d}-12-59/x.tar.xz`;
+  const now = new Date(Date.UTC(2026, 10, 19));
+  assert.match(ffmpegPinTooOld(tag('2024-01-31'), now), /over 18 months old.*action\.yml/);
+  assert.equal(ffmpegPinTooOld(tag('2026-10-31'), now), null);
+  assert.match(ffmpegPinTooOld('https://example.com/x.tar.xz', now), /no autobuild/);
+  // threshold boundary for a 2026-10-31 pin: 18 months on, fires from 2028-05-01
+  assert.equal(ffmpegPinTooOld(tag('2026-10-31'), new Date(Date.UTC(2028, 3, 30))), null);
+  assert.match(ffmpegPinTooOld(tag('2026-10-31'), new Date(Date.UTC(2028, 4, 1))), /over 18 months old/);
+});
+
+test('ffmpeg install (#4453): the apt path (the #2449 hang) no longer runs on a cache miss', () => {
+  const body = ffmpegInstallRunBody();
+  assert.doesNotMatch(body, /apt-get/, 'install step still invokes apt-get');
+  assert.doesNotMatch(body, /dpkg/, 'install step still invokes dpkg');
+  const nonComment = readFfmpegAction().split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.doesNotMatch(nonComment, /apt-cache|apt-get|dpkg/, 'action still caches/installs apt packages');
+});
+
+test('ffmpeg install (#4453): the download is bounded by a timeout and retried', () => {
+  const body = ffmpegInstallRunBody();
+  assert.match(body, /timeout\s+-k\s+10\s+150\s+curl\b/, 'download is not wrapped in `timeout -k 10 150`');
+  assert.match(body, /for attempt in 1 2 3/, 'download/verify lost its 3-attempt retry loop');
+  assert.match(body, /"\$OK" != "1"/, 'install step does not fail after the retries are exhausted');
+  assert.match(body, /--max-time\s+120\b/, 'curl lost --max-time 120');
+});
+
+test('ffmpeg install (#4453): cache key does not churn with the runner image', () => {
+  const src = readFfmpegAction();
+  const key = src.match(/key:\s*([^\n]+)/);
+  assert.ok(key, 'cache key not found');
+  assert.doesNotMatch(key[1], /ImageVersion|ImageOS|steps\.image/, `cache key churns with the runner image: ${key[1]}`);
+  // Tied to the artifact, not a hand-kept label: a bump of URL + SHA that
+  // left the key behind would serve the old binary from cache.
+  assert.ok(
+    key[1].includes(FFMPEG_STATIC_SHA256.slice(0, 12)),
+    `cache key does not carry the pinned archive's SHA-256 prefix (${FFMPEG_STATIC_SHA256.slice(0, 12)}): ${key[1]}`,
   );
 });
 

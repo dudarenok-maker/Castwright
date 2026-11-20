@@ -278,9 +278,11 @@ recurring shapes are recorded in that PR's review notes; the ones that bite here
 
 ## 8. Known limitations (carried forward)
 
-- **Multi-GPU:** `_worst_device_key` returns the card with the most headroom, so
+- ~~**Multi-GPU:** `_worst_device_key` returns the card with the most headroom, so
   an idle engine on a *different* card is still skipped and the starved op still
-  fails. Pre-existing since #1721, unchanged here.
+  fails. Pre-existing since #1721, unchanged here.~~
+  **Update (#4164):** holds only for unconstrained ops now; a resident, credited
+  or pinned op runs the ladder against its own card.
 - **Kokoro is not a beneficiary:** it is CPU-capable, so a starved Kokoro op is
   placed on CPU before the evict is consulted.
 - **The 90 s unload budget is a ceiling, not a promise.** A forward longer than

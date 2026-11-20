@@ -10,7 +10,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { changeLogSlice } from '../store/change-log-slice';
-import { castSlice } from '../store/cast-slice';
+import { castSlice, castActions } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
@@ -606,6 +606,7 @@ describe('GenerationView — #3440 step 4: aliased sentences join drifted attrib
           renderedSpeakersByChapter: {},
           renderedTextByChapter: {},
           characterIdAliases: aliases,
+          paragraphsMergedChapterIds: [],
         },
       },
     });
@@ -1307,6 +1308,19 @@ describe('GenerationView — activity sidebar', () => {
 });
 
 describe('GenerationView — fs-51 QA report card', () => {
+  it('names the characters needing a re-render from the cast (#3680 pass 1: the Generate mount is wired)', async () => {
+    getQaReportSpy.mockResolvedValue({
+      ...MOCK_QA_REPORT,
+      voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, charactersNeedingRerender: ['marlow'] },
+    });
+    const { store } = renderView();
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters(characters));
+    });
+    const listing = await screen.findByTestId('qa-needs-rerender');
+    expect(listing).toHaveTextContent('Needs re-render: Marlow.');
+  });
+
   it('refetches the QA report when a chapter completes', async () => {
     const { store } = renderView();
 

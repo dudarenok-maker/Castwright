@@ -17,6 +17,8 @@ interface StoredRow {
 interface StoredFile {
   version: string;
   rows: StoredRow[];
+  /** Take identity (spec §4.1), optional beside version/rows. Nothing writes it yet. */
+  takeId?: string;
 }
 
 /** Pack vectors as base64 of their Float32 buffer and write atomically. */

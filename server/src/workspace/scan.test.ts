@@ -767,6 +767,35 @@ describe('voices_pending status', () => {
     expect(b.status).toBe('generating');
     expect(b.completedChapters).toBe(1);
   });
+
+  /* #4329 H5: completedChapters reads through the take leaf and is unchanged
+     for every live format; a lone .previous / .next-x file is never a live take. */
+  it.each(['mp3', 'm4a', 'ogg'])('H5: a book with every chapter as .%s → complete, 2/2', async (ext) => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton(`H5 ${ext} Book`, {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: `h5${ext}-1` }, { id: 2, slug: `h5${ext}-2` }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, `h5${ext}-1.${ext}`), '');
+    writeFileSync(join(audioRoot, `h5${ext}-2.${ext}`), '');
+    const b = (await flatten()).find((x) => x.title === `H5 ${ext} Book`)!;
+    expect(b.status).toBe('complete');
+    expect(b.completedChapters).toBe(2);
+  });
+
+  it('H5: a lone <slug>.previous.mp3 and a lone <slug>.next-x.mp3 are not live takes → 0/2', async () => {
+    const { bookDir, audioRoot, bookId } = bookSkeleton('H5 Lone Book', {
+      castConfirmed: true,
+      chapters: [{ id: 1, slug: 'h5l-1' }, { id: 2, slug: 'h5l-2' }],
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2]);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    writeFileSync(join(audioRoot, 'h5l-1.previous.mp3'), '');
+    writeFileSync(join(audioRoot, 'h5l-2.next-x.mp3'), '');
+    const b = (await flatten()).find((x) => x.title === 'H5 Lone Book')!;
+    expect(b.completedChapters).toBe(0);
+  });
 });
 
 /* plan 287 spec 2.2 — the library's analysis rule is `analysisCompleteFor`

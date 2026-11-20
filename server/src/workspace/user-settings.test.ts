@@ -34,6 +34,12 @@ import {
   modelCapabilityRecordSchema,
   readUserSettings,
   writeAnalyzerCapabilityRecord,
+  primeUserSettingsCacheReadOnly,
+  getCachedUserSettings,
+  wasKeyExplicitlySet,
+  USER_SETTINGS_PATH,
+  invalidEndpointsArchivePath,
+  droppedEndpointEntriesAcknowledgedPath,
 } from './user-settings.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { setMissingWaitMsForTests } from './state-io.js';
@@ -2053,4 +2059,130 @@ describe('writeAnalyzerCapabilityRecord — merges each Test into one record per
     expect(stored.reasoning).toEqual({ off: 'accepted' });
     expect(stored.digest).toBe('sha256-new');
   });
+});
+
+describe('primeUserSettingsCacheReadOnly — fills the cache and writes nothing (#2254 runner)', () => {
+  const dirFiles = (d: string): string => readdirSync(d).sort().join(',');
+
+  it('serves the saved overrides through getCachedUserSettings', () => {
+    const file = join(workspaceRoot, 'saved-settings.json');
+    writeFileSync(file, JSON.stringify({ configOverrides: { 'analyzer.ollama.numCtx': 4096 } }));
+    _resetUserSettingsCache();
+    primeUserSettingsCacheReadOnly(file);
+    expect(getCachedUserSettings().configOverrides['analyzer.ollama.numCtx']).toBe(4096);
+  });
+
+  it('does not rewrite a file that needs a legacy migration, and leaves no backup or marker', () => {
+    const file = join(workspaceRoot, 'legacy-settings.json');
+    const text = JSON.stringify({ eagerLoadKokoro: false, configOverrides: { 'analyzer.ollama.numCtx': 4096 } });
+    writeFileSync(file, text);
+    const before = dirFiles(workspaceRoot);
+    _resetUserSettingsCache();
+    primeUserSettingsCacheReadOnly(file);
+    expect(readFileSync(file, 'utf8')).toBe(text);
+    expect(dirFiles(workspaceRoot)).toBe(before);
+    // the migration still applies in memory
+    expect(getCachedUserSettings().configOverrides['tts.preload.kokoro']).toBe(false);
+  });
+
+  it('treats an absent file as the defaults and creates nothing', () => {
+    const file = join(workspaceRoot, 'absent-settings.json');
+    _resetUserSettingsCache();
+    primeUserSettingsCacheReadOnly(file);
+    expect(getCachedUserSettings().configOverrides).toEqual(DEFAULT_USER_SETTINGS.configOverrides);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it('throws on an unparseable file rather than serving defaults', () => {
+    const file = join(workspaceRoot, 'bad-settings.json');
+    writeFileSync(file, '{ not json');
+    _resetUserSettingsCache();
+    expect(() => primeUserSettingsCacheReadOnly(file)).toThrow(/could not be read/);
+  });
+});
+
+describe('primeUserSettingsCacheReadOnly agrees with readUserSettings on what a file means (#2254 runner)', () => {
+  const clean = (): void => {
+    for (const f of readdirSync(dirname(USER_SETTINGS_PATH))) {
+      if (f.startsWith(basename(USER_SETTINGS_PATH))) rmSync(join(dirname(USER_SETTINGS_PATH), f), { force: true, recursive: true });
+    }
+    rmSync(invalidEndpointsArchivePath(), { force: true, recursive: true });
+    rmSync(droppedEndpointEntriesAcknowledgedPath(), { force: true, recursive: true });
+  };
+  beforeEach(() => {
+    clean();
+    _resetUserSettingsCache();
+  });
+  afterEach(() => {
+    clean();
+    _resetUserSettingsCache();
+  });
+
+  const fixtures: Array<{ name: string; file: Record<string, unknown>; shows: (s: ReturnType<typeof getCachedUserSettings>) => void }> = [
+    {
+      name: 'the legacy eager-load fields',
+      file: { eagerLoadKokoro: false, eagerLoadQwen: true },
+      shows: (s) => expect(s.configOverrides['tts.preload.kokoro']).toBe(false),
+    },
+    {
+      name: 'a retired rate-limit override',
+      file: { configOverrides: { 'rate.rpm.gemma': 12 } },
+      shows: (s) => expect(s.analyzerRateLimitsByModel['gemma-4-31b-it']?.rpm).toBe(12),
+    },
+    {
+      name: 'the legacy analyzer model fields',
+      file: { ollamaUrl: 'http://box:11434', analyzerPhase0Model: 'p0:1b' },
+      shows: (s) => {
+        expect(s.configOverrides['analyzer.ollama.url']).toBe('http://box:11434');
+        expect(s.configOverrides['analyzer.phase0.model']).toBe('p0:1b');
+      },
+    },
+    {
+      name: 'an invalid endpoint entry',
+      file: { analyzerEndpoints: [{ id: 'Bad_Id', name: 'Lab', baseUrl: 'not a url' }] },
+      shows: (s) => expect(s.analyzerEndpoints).toEqual([]),
+    },
+    {
+      name: 'all of them with a plain saved key',
+      file: {
+        defaultThemePreference: 'dark',
+        eagerLoadKokoro: false,
+        ollamaUrl: 'http://box:11434',
+        configOverrides: { 'rate.rpm.gemma': 12 },
+        analyzerEndpoints: [{ id: 'Bad_Id', name: 'Lab', baseUrl: 'not a url' }],
+      },
+      shows: (s) => {
+        expect(s.defaultThemePreference).toBe('dark');
+        expect(s.configOverrides['tts.preload.kokoro']).toBe(false);
+        expect(s.configOverrides['analyzer.ollama.url']).toBe('http://box:11434');
+        expect(s.analyzerRateLimitsByModel['gemma-4-31b-it']?.rpm).toBe(12);
+        expect(s.analyzerEndpoints).toEqual([]);
+      },
+    },
+  ];
+
+  for (const fx of fixtures) {
+    it(`serves the same settings and explicit keys as a real read for ${fx.name}`, async () => {
+      const text = JSON.stringify(fx.file);
+      const keys = [...new Set([...Object.keys(fx.file), ...Object.keys(DEFAULT_USER_SETTINGS)])];
+      writeFileSync(USER_SETTINGS_PATH, text);
+      _resetUserSettingsCache();
+      primeUserSettingsCacheReadOnly(USER_SETTINGS_PATH);
+      const primed = structuredClone(getCachedUserSettings());
+      const primedKeys = keys.filter((k) => wasKeyExplicitlySet(k));
+      fx.shows(primed);
+
+      // a real read of the same bytes (it may rewrite the file, so restore it first)
+      writeFileSync(USER_SETTINGS_PATH, text);
+      _resetUserSettingsCache();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const read = await readUserSettings();
+        expect(primed).toEqual(read);
+        expect(primedKeys).toEqual(keys.filter((k) => wasKeyExplicitlySet(k)));
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
 });

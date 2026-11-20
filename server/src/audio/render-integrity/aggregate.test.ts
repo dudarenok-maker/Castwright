@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -65,6 +65,7 @@ describe('scoreBook', () => {
 
     await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
 
+    expect(existsSync(join(dir, 'audio', 'ch1.render-integrity.json'))).toBe(true); // #4332: verdict file name
     const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
     expect(verdicts).not.toBeNull();
     const bySent = Object.fromEntries(verdicts!.map((v) => [v.sentenceIds[0], v]));
