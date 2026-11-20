@@ -101,6 +101,7 @@ let genBookId: string;
 let designBookId: string;
 let designBookDir: string;
 let designQwenVoiceForCharacter: typeof import('./qwen-voice.js').designQwenVoiceForCharacter;
+const LIB_VOICE_UUID = 'guard-lib-voice';
 
 function writeBook(dir: string, id: string, title: string, series: string, characters: object[]) {
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
@@ -141,6 +142,8 @@ beforeAll(async () => {
      factories above (#2083). */
   const { generationRouter } = await import('./generation.js');
   ({ designQwenVoiceForCharacter } = await import('./qwen-voice.js'));
+  const { voiceLibraryRouter } = await import('./voice-library.js');
+  const voiceLib = await import('../workspace/voice-library.js');
   const { makeBookId } = await import('../workspace/paths.js');
   const cacheModule = await import('../store/analysis-cache.js');
   const settings = await import('../workspace/user-settings.js');
@@ -168,9 +171,23 @@ beforeAll(async () => {
     },
   ]);
 
+  /* A designed library voice, so `/:voiceUuid/redesign` has an entry to stage a preview for. */
+  await voiceLib.writeEntry({
+    voiceUuid: LIB_VOICE_UUID,
+    name: 'Guard Library Voice',
+    provenance: 'designed',
+    tags: [],
+    pinned: false,
+    persona: 'a warm narrator',
+    engines: {},
+    createdAt: '2026-05-23T00:00:00.000Z',
+    updatedAt: '2026-05-23T00:00:00.000Z',
+  });
+
   app = express();
   app.use(express.json());
   app.use('/api/books', generationRouter);
+  app.use('/api/voice-library', voiceLibraryRouter);
   await new Promise<void>((resolve) => {
     server = app.listen(0, () => {
       const addr = server.address();
@@ -266,6 +283,15 @@ async function assertGuardsReconcile(opts: {
   expect(reconcileCalls[0]![0]).toMatchObject(evictingKeep);
 }
 
+/** A voice-library design POST, started but not awaited: the sidecar call under it is parked. */
+function postLibrary(path: string): Promise<Response> {
+  return fetch(`${baseUrl}/api/voice-library${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Guard Voice', persona: 'a warm narrator', modelKey: QWEN_KEY }),
+  });
+}
+
 describe('G1 — a live design or mint blocks the generation run-start reconcile (plan 293 §5.0)', () => {
   it('design (/qwen/design-voice): a Quality book would drop the 0.6B VoiceDesign host, but not while it runs', async () => {
     const settle = designQwenVoiceForCharacter(params());
@@ -299,6 +325,28 @@ describe('G1 — a live design or mint blocks the generation run-start reconcile
     const held = await waitForHeld('/qwen/design-voice');
     await assertGuardsReconcile({
       settle,
+      held,
+      runModelKey: 'qwen3-tts-1.7b',
+      evictingKeep: { keep06: false, keep17: true },
+    });
+  }, 30_000);
+
+  it('voice-library POST /design (runVoiceDesign): a Quality book would drop the 0.6B host, but not while it runs', async () => {
+    const request = postLibrary('/design');
+    const held = await waitForHeld('/qwen/design-voice');
+    await assertGuardsReconcile({
+      settle: request.then((r) => r.text()),
+      held,
+      runModelKey: 'qwen3-tts-1.7b',
+      evictingKeep: { keep06: false, keep17: true },
+    });
+  }, 30_000);
+
+  it('voice-library POST /:voiceUuid/redesign (runVoiceDesign): guarded the same way', async () => {
+    const request = postLibrary(`/${LIB_VOICE_UUID}/redesign`);
+    const held = await waitForHeld('/qwen/design-voice');
+    await assertGuardsReconcile({
+      settle: request.then((r) => r.text()),
       held,
       runModelKey: 'qwen3-tts-1.7b',
       evictingKeep: { keep06: false, keep17: true },
