@@ -136,14 +136,37 @@ describe('separator-insensitive home matching (#4446 review)', () => {
     expect(textForClient(lan, '/home/ann\\x', o)).toBe('/home/ann\\x');
     expect(textForClient(lan, "'/home/ann'", o)).toBe("'~'");
   });
-  it('collapses the 8.3 short spelling of a long home segment (win32)', () => {
+  describe('8.3 short spelling of a long home segment (win32)', () => {
     const home = 'C:\\Users\\Michael Dudarenok';
-    expect(collapseHomePath('C:\\Users\\MICHAE~1\\AppData\\Local\\Temp\\OllamaSetup.exe', w(home)))
-      .toBe('~\\AppData\\Local\\Temp\\OllamaSetup.exe');
-    expect(textForClient(lan, "'C:\\\\Users\\\\MICHAE~1\\\\x'", { home, platform: 'win32' })).toBe("'~\\\\x'");
-    // a different user whose short name has another prefix is untouched
-    expect(collapseHomePath('C:\\Users\\SOMEON~1\\x', w(home))).toBe('C:\\Users\\SOMEON~1\\x');
-    // short names are only recognised for segments that need one
-    expect(collapseHomePath('C:\\Users\\DUDAR~1\\x', w(wh))).toBe('C:\\Users\\DUDAR~1\\x');
+    // the OS writes os.tmpdir() / TEMP in short form: that is where the alias is learned
+    const shortPaths = ['C:\\Users\\MICHAE~1\\AppData\\Local\\Temp'];
+    const o = { home, platform: 'win32' as const, shortPaths };
+    it("collapses the user's own alias, learned from a short-form env path", () => {
+      expect(collapseHomePath('C:\\Users\\MICHAE~1\\AppData\\Local\\Temp\\OllamaSetup.exe', o))
+        .toBe('~\\AppData\\Local\\Temp\\OllamaSetup.exe');
+      expect(collapseHomePath('c:/users/michae~1/x', o)).toBe('~/x');
+      expect(textForClient(lan, "'C:\\\\Users\\\\MICHAE~1\\\\x'", o)).toBe("'~\\\\x'");
+    });
+    it('never collapses a sibling sharing the six-character prefix', () => {
+      expect(collapseHomePath('C:\\Users\\MICHAE~2\\x', o)).toBe('C:\\Users\\MICHAE~2\\x');
+      expect(textForClient(lan, 'open C:\\Users\\MICHAE~2\\x', o)).toBe('open C:\\Users\\MICHAE~2\\x');
+      expect(collapseHomePath('C:\\Users\\SOMEON~1\\x', o)).toBe('C:\\Users\\SOMEON~1\\x');
+    });
+    it('collapses no short form when no alias is discoverable', () => {
+      for (const sp of [[], ['C:\\Users\\Michael Dudarenok\\Temp'], ['C:\\Users\\SOMEON~1\\Temp'], ['D:\\Temp']]) {
+        expect(collapseHomePath('C:\\Users\\MICHAE~1\\x', { home, platform: 'win32', shortPaths: sp }))
+          .toBe('C:\\Users\\MICHAE~1\\x');
+      }
+    });
+    it('ignores a hint whose segment is not a short form of the home segment', () => {
+      const sp = ['C:\\Users\\OTHERS~1\\Temp'];
+      expect(collapseHomePath('C:\\Users\\OTHERS~1\\x', { home, platform: 'win32', shortPaths: sp }))
+        .toBe('C:\\Users\\OTHERS~1\\x');
+    });
+    it('short names are only recognised for segments that need one', () => {
+      const sp = ['C:\\Users\\DUDAR~1\\Temp'];
+      expect(collapseHomePath('C:\\Users\\DUDAR~1\\x', { home: wh, platform: 'win32', shortPaths: sp }))
+        .toBe('C:\\Users\\DUDAR~1\\x');
+    });
   });
 });
