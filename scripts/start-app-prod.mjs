@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync, realpathS
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { enforceNodeRuntime } from './lib/node-runtime-guard.mjs';
 import { REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions } from './lib/report-exclusion.mjs';
 import net from 'node:net';
 import http from 'node:http';
@@ -468,6 +469,11 @@ export async function decideLaunchAction({
 }
 
 async function main() {
+  // #4443 — first, before anything below can open a loopback socket (probePort
+  // is the 127.0.0.1 connect that crashes an affected Windows Node). The
+  // server's own guard writes to logs/server.err.log, which a launcher user
+  // never sees; this one lands on the console.
+  enforceNodeRuntime();
   mkdirSync(runDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
 
