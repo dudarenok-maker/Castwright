@@ -1775,7 +1775,7 @@ test('ffmpeg floor leg (#4461): a null floor warns and passes the assert step (d
     mkdirSync(join(dir, 'scripts'));
     writeFileSync(join(dir, 'scripts', 'preflight-ffmpeg.cjs'), readFileSync(resolve(repoRoot, 'scripts', 'preflight-ffmpeg.cjs')));
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ castwright: { ffmpeg: { minimum: null } } }));
-    const r = spawnSync(process.execPath, ['-e', m[1]], { cwd: dir, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, ['-e', m[1]], { cwd: dir, encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `assert step failed on a null floor (exit ${r.status}): ${r.stdout}${r.stderr}`);
     assert.match(r.stdout, /^::warning::.*floor/m, `no ::warning:: on stdout: ${r.stdout}`);
   } finally {
@@ -1858,7 +1858,7 @@ test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead o
 });
 
 test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', () => {
-  const bash = spawnSync('bash', ['-c', 'true']);
+  const bash = spawnSync('bash', ['-c', 'true'], { windowsHide: true });
   if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
   const install = ffmpegFloorInstallStep();
   const run = install.split(/^ {8}run: \|\n/m)[1];
@@ -1876,6 +1876,7 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
     writeFileSync(summary, '');
     const r = spawnSync('bash', ['-c', script], {
       encoding: 'utf8',
+      windowsHide: true,
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed on an apt stall (exit ${r.status}): ${r.stdout}${r.stderr}`);
@@ -1888,7 +1889,7 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
 });
 
 test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', () => {
-  const bash = spawnSync('bash', ['-c', 'true']);
+  const bash = spawnSync('bash', ['-c', 'true'], { windowsHide: true });
   if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
   const install = ffmpegFloorInstallStep();
   assert.doesNotMatch(install, /\\n/, 'install step contains a literal backslash-n; bash passes it to apt-get as a stray argument');
@@ -1908,6 +1909,7 @@ test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no wa
     writeFileSync(summary, '');
     const r = spawnSync('bash', ['-c', script], {
       encoding: 'utf8',
+      windowsHide: true,
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed (exit ${r.status}): ${r.stdout}${r.stderr}`);
