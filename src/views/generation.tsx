@@ -71,6 +71,7 @@ function useIncludeRollbackPending(bookId: string | null | undefined): boolean {
 /* #3774 — `BookJobKind` -> the phrase the Include tooltip names. */
 const BUSY_KIND_LABELS: Record<string, string> = {
   render: 'rendering audio',
+  'audio-fix': 'fixing audio',
   scoring: 'scoring',
   analysis: 'analysing',
   design: 'designing voices',

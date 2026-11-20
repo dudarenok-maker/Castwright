@@ -68,6 +68,7 @@ export interface BookHandle {
 /** The kinds of long job `runBookJob` registers (see book-jobs.ts). */
 export type BookJobKind =
   | 'render'
+  | 'audio-fix'
   | 'scoring'
   | 'analysis'
   | 'design'

@@ -239,6 +239,18 @@ describe.each(['main', 'subset'] as const)('#3436 — a %s analysis start while 
     }
   });
 
+  it('(c2) symmetric: a splice remix / dry-run scan (kind audio-fix) never rebuilds the cache, so it does not refuse an analysis start', async () => {
+    const { manuscriptId, bookId } = await seedBook(`audiofix-${kind}`);
+    const job = await holdJob(bookId, 'audio-fix');
+    try {
+      const res = await start(await analysisApp(), manuscriptId);
+      expect(res.status).toBe(200);
+      expect(sseText(res)).not.toContain('book_busy');
+    } finally {
+      await job.finish();
+    }
+  });
+
   it('(d) race: a render that registers while the start waits on book-op still refuses it, as an SSE error frame; nothing registered', async () => {
     const { manuscriptId, bookId } = await seedBook(`race-${kind}`);
     const waiters = () =>

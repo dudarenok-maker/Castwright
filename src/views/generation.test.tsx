@@ -2864,6 +2864,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   describe('#3774 — Include is disabled while a long job holds the book', () => {
     it.each([
       ['a render', ['render'], 'rendering audio'],
+      ['a loudness fix or QA scan', ['audio-fix'], 'fixing audio'],
       ['an export', ['export'], 'exporting'],
       ['another chapter\'s subset analysis', ['analysis'], 'analysing'],
       ['two jobs at once', ['render', 'scoring'], 'rendering audio, scoring'],

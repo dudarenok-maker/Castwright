@@ -137,13 +137,15 @@ chapterQaRepairRouter.post(
 
     if (!located) return fail(`No book found for id "${bookId}".`);
 
-    /* #3711 — the repair is a registered `render` job (it re-records and rewrites the
-       chapter audio): a folder move/delete is refused while it runs. The book and its
+    /* #3711 — the repair is a registered job (it re-records and rewrites the
+       chapter audio): a folder move/delete is refused while it runs. #3436: a repair that writes
+       registers as `render` (an analysis start is refused meanwhile); a dry-run scan registers as
+       `audio-fix`, which an analysis start ignores. The book and its
        CURRENT folder come from the lease, resolved under book-op. Headers are already
        flushed, so a registration failure is the route's own `chapter_failed` frame. */
     let registered;
     try {
-      registered = await runBookJob(bookId, 'render', async (lease) => {
+      registered = await runBookJob(bookId, dryRun ? 'audio-fix' : 'render', async (lease) => {
     res.flushHeaders();
     const { bookDir, state } = lease;
 

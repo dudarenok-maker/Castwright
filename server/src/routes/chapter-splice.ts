@@ -168,13 +168,15 @@ chapterSpliceRouter.post(
 
     if (!located) return fail(`No book found for id "${bookId}".`);
 
-    /* #3711 — the splice is a registered `render` job (it re-renders audio and writes
-       the chapter): a folder move/delete is refused while it runs. The book and its
+    /* #3711 — the splice is a registered job (it re-renders audio and writes
+       the chapter): a folder move/delete is refused while it runs. #3436: a re-record registers as
+       `render` (it rebuilds the analysis cache, so an analysis start is refused meanwhile); a remix
+       registers as `audio-fix`, which an analysis start ignores. The book and its
        CURRENT folder come from the lease, resolved under book-op. Headers are already
        flushed, so a registration failure is the route's own `chapter_failed` frame. */
     let registered;
     try {
-      registered = await runBookJob(bookId, 'render', async (lease) => {
+      registered = await runBookJob(bookId, mode === 'rerecord' ? 'render' : 'audio-fix', async (lease) => {
     res.flushHeaders();
     const { bookDir, state } = lease;
 

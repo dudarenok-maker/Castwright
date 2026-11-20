@@ -7,6 +7,7 @@ import type { BookJobKind } from './book-op-lock.js';
    the verbatim #2165 sentence; every other mix names what is running. */
 const BUSY_PHRASE: Record<BookJobKind, string> = {
   render: 'rendering audio',
+  'audio-fix': 'fixing audio',
   scoring: 'scoring audio',
   analysis: 'analysing',
   design: 'designing voices',

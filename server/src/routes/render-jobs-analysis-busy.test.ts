@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,20 @@ import type { BookJobKind } from '../workspace/book-op-lock.js';
    registration (`runBookJob`'s `refuseIfLive`, inside book-op) and BEFORE any SSE header is
    flushed, so the client gets a plain JSON 409. A render of another book, and any non-analysis
    job kind, is unaffected. Jobs are registered the real way (`runBookJob(bookId, kind, gate)`). */
+
+/* Pass-through spy on the registration entry point: records the kind each route registers under, so
+   the symmetric refusal (owner decision 2) is pinned at the one place it is decided. */
+const registeredKinds: Array<{ bookId: string; kind: string }> = [];
+vi.mock('../workspace/book-jobs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/book-jobs.js')>();
+  return {
+    ...actual,
+    runBookJob: ((bookId: string, kind: string, ...rest: unknown[]) => {
+      registeredKinds.push({ bookId, kind });
+      return (actual.runBookJob as (...a: unknown[]) => unknown)(bookId, kind, ...rest);
+    }) as typeof actual.runBookJob,
+  };
+});
 
 const AUTHOR = 'Render Busy';
 const SERIES = 'Standalones';
@@ -231,4 +245,28 @@ describe('#3436 render jobs are refused while an analysis job is live', () => {
       expect(res.status).toBe(200);
     });
   }
+});
+
+/* Owner decision 2026-11-21 (#3436), symmetric: an ANALYSIS start is refused only by renders that
+   rebuild the cache (generation, splice re-record, non-dry-run QA repair), which register as
+   `render`. A splice remix and a dry-run scan register under a kind the analysis refusal does not
+   match (`audio-fix`), so an analysis start during them is allowed. They still count as a registered
+   job for every folder move / delete refusal. */
+describe('#3436 the kind each render route registers under (what an analysis start is refused by)', () => {
+  const kindOf = async (send: (id: string) => request.Test): Promise<string | undefined> => {
+    registeredKinds.length = 0;
+    await send(bookId);
+    return registeredKinds.find((r) => r.bookId === bookId)?.kind;
+  };
+  const send = (name: string) => [...ROUTES, ...ALLOWED_ROUTES].find((r) => r.name === name)!.send;
+
+  it.each([
+    ['generation', 'render'],
+    ['splice', 'render'],
+    ['qa-repair', 'render'],
+    ['splice remix (loudness fix)', 'audio-fix'],
+    ['qa-repair dryRun scan', 'audio-fix'],
+  ])('%s registers as %s', async (name, kind) => {
+    expect(await kindOf(send(name))).toBe(kind);
+  });
 });

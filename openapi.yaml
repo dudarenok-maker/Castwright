@@ -1516,7 +1516,7 @@ paths:
       summary: Which long jobs are registered for the book right now
       operationId: getBookBusy
       description: |
-        Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+        Returns `{ kinds }`, the `BookJobKind`s (render, audio-fix, scoring, analysis,
         design, script-review, export) currently registered for the book
         (#3774). Lock-free read of the in-memory busy registry; an unknown book
         is simply not busy (`kinds: []`, never a 404). The Generate view
@@ -1536,7 +1536,7 @@ paths:
                     type: array
                     items:
                       type: string
-                      enum: [render, scoring, analysis, design, script-review, export]
+                      enum: [render, audio-fix, scoring, analysis, design, script-review, export]
 
   /api/books/{bookId}/analysis/state:
     get:

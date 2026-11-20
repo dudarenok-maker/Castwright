@@ -967,7 +967,7 @@ export interface paths {
         };
         /**
          * Which long jobs are registered for the book right now
-         * @description Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+         * @description Returns `{ kinds }`, the `BookJobKind`s (render, audio-fix, scoring, analysis,
          *     design, script-review, export) currently registered for the book
          *     (#3774). Lock-free read of the in-memory busy registry; an unknown book
          *     is simply not busy (`kinds: []`, never a 404). The Generate view
@@ -9730,7 +9730,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        kinds: ("render" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
+                        kinds: ("render" | "audio-fix" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
                     };
                 };
             };
