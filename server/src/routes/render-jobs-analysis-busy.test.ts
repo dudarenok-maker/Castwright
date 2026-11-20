@@ -23,6 +23,8 @@ let app: Express;
 let bookId: string;
 let otherBookId: string;
 let bookJobs: typeof import('../workspace/book-jobs.js');
+let bookOp: typeof import('../workspace/book-op-lock.js');
+let fileLock: typeof import('../workspace/file-lock.js');
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-render-busy-'));
@@ -33,6 +35,8 @@ beforeAll(async () => {
   const { chapterQaRepairRouter } = await import('./chapter-qa-repair.js');
   const { makeBookId } = await import('../workspace/paths.js');
   bookJobs = await import('../workspace/book-jobs.js');
+  bookOp = await import('../workspace/book-op-lock.js');
+  fileLock = await import('../workspace/file-lock.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   otherBookId = makeBookId(AUTHOR, SERIES, OTHER_TITLE);
   for (const [id, title] of [
@@ -83,6 +87,56 @@ async function holdJob(forBookId: string, kind: BookJobKind): Promise<() => void
   if (typeof registered === 'symbol') throw new Error('book not found');
   return () => {
     release();
+  };
+}
+
+/** Hang guard, not a synchroniser: fails with a NAMED error rather than a bare testTimeout. */
+async function waitUntil(pred: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 4000;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+function bookOpWaiters(): number {
+  return (fileLock as unknown as { __keyWaitersForTest: (k: string) => number }).__keyWaitersForTest(
+    `book-op:${bookId}`,
+  );
+}
+
+/** The race (modelled on `raceJobAheadOfRoute`, chapters-restructure-exclude.busy.test.ts): hold
+ *  `book-op`, queue `runBookJob('analysis')` behind it, fire `route` so it queues BEHIND the
+ *  analysis, then release. The route's registration span therefore runs with the analysis already
+ *  registered -- only a refusal checked INSIDE `withBookOp` sees it. */
+async function raceAnalysisAheadOfRoute(
+  route: () => PromiseLike<request.Response>,
+): Promise<{ res: request.Response; finishJob: () => Promise<void> }> {
+  let release!: () => void;
+  const open = new Promise<void>((r) => (release = r));
+  let acquired!: () => void;
+  const held = new Promise<void>((r) => (acquired = r));
+  void bookOp.withBookOp(bookId, async () => {
+    acquired();
+    await open;
+  });
+  await held;
+  let openJob!: () => void;
+  const jobGate = new Promise<void>((r) => (openJob = r));
+  const jobP = bookJobs.runBookJob(bookId, 'analysis', () => jobGate);
+  await waitUntil(() => bookOpWaiters() >= 1, 'the analysis job to queue on book-op');
+  const routeP = Promise.resolve(route());
+  await waitUntil(() => bookOpWaiters() >= 2, 'the route to queue on book-op behind the analysis');
+  release();
+  const res = await routeP;
+  const reg = await jobP;
+  if (typeof reg === 'symbol') throw new Error('test setup: book not found');
+  return {
+    res,
+    finishJob: async () => {
+      openJob();
+      await reg.done;
+    },
   };
 }
 
@@ -140,6 +194,17 @@ describe('#3436 render jobs are refused while an analysis job is live', () => {
         expect(res.body.code).toBe('book_busy');
         expect(res.body.error).toMatch(/analysing/);
         expect(res.body.error).toMatch(/not started/);
+      });
+
+      it('race: an analysis that registers while the request waits on book-op still refuses it (check is INSIDE the registration span)', async () => {
+        const { res, finishJob } = await raceAnalysisAheadOfRoute(() => route.send(bookId));
+        try {
+          expect(res.status).toBe(409);
+          expect(res.body.code).toBe('book_busy');
+          expect(bookOp.bookJobKinds(bookId)).toEqual(['analysis']);
+        } finally {
+          await finishJob();
+        }
       });
 
       it('control: another book\'s analysis does not refuse it', async () => {
