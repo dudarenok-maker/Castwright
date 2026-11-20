@@ -155,6 +155,66 @@ describe('enqueueQueueEntries and the repair epoch (#3713, PR #4004 pass 6)', ()
   });
 });
 
+/* #1393 Q1-Q4 -- the session TTS model is stamped on an entry at enqueue only
+   when it is trustworthy (ui rehydrated AND explicit pick or hydrated account). */
+describe('enqueueQueueEntries modelKey stamping (#1393)', () => {
+  type Trust = { rehydrated: boolean; explicit: boolean; account: boolean };
+  const SESSION = 'qwen3-tts-0.6b' as const;
+  const OVERRIDE = 'qwen3-tts-1.7b' as const;
+
+  function trustStore(t: Trust) {
+    const store = configureStore({
+      reducer: {
+        queue: queueSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        ui: (s: unknown = { ttsModelKey: SESSION, ttsModelKeyExplicit: t.explicit, _persist: { version: 1, rehydrated: t.rehydrated } }) => s,
+        account: (s: unknown = { hydrated: t.account }) => s,
+      },
+    });
+    return store as unknown as { dispatch: TestDispatch };
+  }
+
+  async function postedEntry(t: Trust, modelKey?: typeof OVERRIDE): Promise<Record<string, unknown>> {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [sampleEntry({ id: 'a1' })], paused: false }));
+    await trustStore(t).dispatch(
+      enqueueQueueEntries([{ id: 'a1', bookId: 'book-A', chapterId: 1, scope: 'this', ...(modelKey ? { modelKey } : {}) }]),
+    );
+    const post = fetchMock.mock.calls.find(([url]) => url === '/api/queue/enqueue')!;
+    return (JSON.parse(post[1].body as string) as { entries: Record<string, unknown>[] }).entries[0];
+  }
+
+  it('Q1: rehydrated + account hydrated, no override -> stamps the session model', async () => {
+    const e = await postedEntry({ rehydrated: true, explicit: false, account: true });
+    expect(e.modelKey).toBe(SESSION);
+  });
+
+  it('Q2: an override is posted as given in every trust state', async () => {
+    for (const t of [
+      { rehydrated: false, explicit: false, account: false },
+      { rehydrated: true, explicit: false, account: false },
+      { rehydrated: true, explicit: true, account: true },
+    ]) {
+      fetchMock.mockReset();
+      expect((await postedEntry(t, OVERRIDE)).modelKey).toBe(OVERRIDE);
+    }
+  });
+
+  it('Q4: before rehydrate -> no modelKey key', async () => {
+    const e = await postedEntry({ rehydrated: false, explicit: true, account: true });
+    expect('modelKey' in e).toBe(false);
+  });
+
+  it('Q4: rehydrated, neither explicit pick nor hydrated account -> no modelKey key', async () => {
+    const e = await postedEntry({ rehydrated: true, explicit: false, account: false });
+    expect('modelKey' in e).toBe(false);
+  });
+
+  it('Q4: rehydrated + explicit pick, no account yet -> stamped', async () => {
+    const e = await postedEntry({ rehydrated: true, explicit: true, account: false });
+    expect(e.modelKey).toBe(SESSION);
+  });
+});
+
 describe('enqueueQueueEntries', () => {
   it('POSTs the entries to /api/queue/enqueue + dispatches the snapshot + fires toast', async () => {
     fetchMock.mockResolvedValue(
