@@ -33,8 +33,15 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { beginRunEpoch, runWithRunEpoch, type RunEpochFence } from '../store/analysis-run-epoch.js';
-import { AnalyzerReasoningOverflowError,GeminiContentBlockedError, AnalyzerTargetInputTooLargeError } from '../analyzer/errors.js';
+import {
+  beginRunEpoch,
+  currentRunEpochFence,
+  isRunEpochStale,
+  runWithRunEpoch,
+  staleRunWriteDropped,
+  type RunEpochFence,
+} from '../store/analysis-run-epoch.js';
+import { AnalyzerReasoningOverflowError,GeminiContentBlockedError, AnalyzerTargetInputTooLargeError, StaleRunEpochError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -1460,6 +1467,8 @@ async function snapshotPlannedRoster(a: {
        will refuse it too. End the run here (curated `cast-unreadable`) rather than
        running all of Phase 1 first. Nothing was written to the damaged file. */
     if (persistErr instanceof PriorCastUnreadableError) throw persistErr;
+    /* #3437 - a superseded run must stop here, not carry on through Phase 1. */
+    if (persistErr instanceof StaleRunEpochError) throw persistErr;
     console.warn(`[analysis] ${a.site} cast.json snapshot failed`, persistErr);
   }
   if (!out.s) return { characters, plan, idMap: {}, ledgers };
@@ -1732,6 +1741,9 @@ async function runPlannedPersist(
    already), anything else wrapped in `AnalysisPersistError`, whose message is fixed and
    path-free. A lock timeout never comes here: it has its own slot (`persistLockTimeout`). */
 function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknown {
+  /* #3437 - a superseded run's dropped write is not a failure: it ends as `aborted` (the
+     top-level catch), and `staleRunWriteDropped` already logged the drop. */
+  if (err instanceof StaleRunEpochError) return err;
   console.error(`${tag} failed to persist .audiobook/* for`, writeDir, err);
   return err instanceof PriorCastUnreadableError ? err : new AnalysisPersistError(err);
 }
@@ -6040,12 +6052,16 @@ async function runMainAnalyzerJobBody(
             /* Plan 289 — also rotates `editEpoch` (a wipe moves every revision
                token), so this write is no longer skipped for an unconfirmed
                book. */
-            await updateStateAtDir(freshBookDir, (freshState) => ({
-              ...freshState,
-              castConfirmed: false,
-              editEpoch: mintEditEpoch(),
-              updatedAt: new Date().toISOString(),
-            }));
+            const unconfirmFence = currentRunEpochFence();
+            await updateStateAtDir(freshBookDir, (freshState) => {
+              if (staleRunWriteDropped(unconfirmFence, 'state.json un-confirm')) return null;
+              return {
+                ...freshState,
+                castConfirmed: false,
+                editEpoch: mintEditEpoch(),
+                updatedAt: new Date().toISOString(),
+              };
+            });
           },
         );
       }
@@ -8644,7 +8660,9 @@ async function runMainAnalyzerJobBody(
              not land, so the job must end as an error rather than report
              success over an unwritten state.json. */
           try {
+            const stateFence = currentRunEpochFence();
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
+              if (staleRunWriteDropped(stateFence, 'state.json')) return null;
               /* Preserve the user-owned flags — analysis owns chapter titles/
                  durations, the user owns `excluded` and `held`. Match on id so a
                  re-run after a re-parse picks up whichever ids the parser
@@ -8843,6 +8861,8 @@ async function runMainAnalyzerJobBody(
       return;
     }
 
+    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success. */
+    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     send({ kind: 'result', response });
     endJob(job);
     return;
@@ -10813,7 +10833,9 @@ async function runSubsetAnalyzerJobBody(
              not land, so the job must end as an error rather than report
              success over an unwritten state.json. */
           try {
+            const stateFence = currentRunEpochFence();
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
+              if (staleRunWriteDropped(stateFence, 'state.json')) return null;
               /* Preserve the user-owned `excluded` + `held` flags across the
                  subset re-attribution — `held` (the "Not queued" intent) isn't
                  re-derivable from disk, so it must ride through here. */
@@ -10952,6 +10974,8 @@ async function runSubsetAnalyzerJobBody(
       return;
     }
 
+    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success. */
+    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     endJob(job, { kind: 'result', response });
   } catch (e) {
     /* #4031 N2 — a pause or failure during Phase 0a still lands a faulted re-mint. */
