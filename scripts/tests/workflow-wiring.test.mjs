@@ -1783,6 +1783,53 @@ test('ffmpeg floor leg (#4461): a null floor warns and passes the assert step (d
   }
 });
 
+// The red half of the contract: when ffmpeg DID install, a wrong version must exit
+// non-zero. Runs the real `node -e` script with `ffmpeg` swapped for a node stub
+// (a PATH stub would need a .cmd shim on Windows, which execFileSync cannot spawn).
+function runFloorAssert(banner, floor) {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  const m = step.match(/node -e '\n([\s\S]*?)\n {10}'/);
+  assert.ok(m, 'cannot extract the node -e script from the version-assert step');
+  const call = 'execFileSync("ffmpeg", ["-version"]';
+  assert.ok(m[1].includes(call), 'version-assert script no longer calls execFileSync("ffmpeg", ["-version"]); update the stub swap');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-ver-'));
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    writeFileSync(join(dir, 'scripts', 'preflight-ffmpeg.cjs'), readFileSync(resolve(repoRoot, 'scripts', 'preflight-ffmpeg.cjs')));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ castwright: { ffmpeg: { minimum: floor } } }));
+    writeFileSync(join(dir, 'stub-ffmpeg.cjs'), `process.stdout.write(${JSON.stringify(banner)});\n`);
+    const script = m[1].replace(call, 'execFileSync(process.execPath, ["stub-ffmpeg.cjs"]');
+    return spawnSync(process.execPath, ['-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('ffmpeg floor leg (#4461): the version assert stays red on a wrong ffmpeg, green on the floor build', () => {
+  const ok = runFloorAssert('ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023\n', '6.0');
+  assert.equal(ok.status, 0, `floor-build ffmpeg must pass (exit ${ok.status}): ${ok.stdout}${ok.stderr}`);
+  const cases = [
+    ['ffmpeg version 5.1.2 Copyright (c) 2000-2022\n', /ffmpeg below floor/, 'below the floor'],
+    ['ffmpeg version 7.1 Copyright (c) 2000-2024\n', /ffmpeg major differs from floor major/, 'a different major'],
+    ['not an ffmpeg banner\n', /unparseable ffmpeg version/, 'an unparseable banner'],
+  ];
+  for (const [banner, message, what] of cases) {
+    const r = runFloorAssert(banner, '6.0');
+    assert.equal(typeof r.status, 'number', `assert step did not run to an exit code: ${r.error}`);
+    assert.notEqual(r.status, 0, `assert step exited 0 on ffmpeg ${what}; a wrong ffmpeg would pass the floor leg green`);
+    assert.match(r.stderr, message, `assert step failed for the wrong reason on ${what}: ${r.stderr}`);
+  }
+});
+
+test('ffmpeg floor leg (#4461): the two suites are bare commands (no `|| true` that would swallow a red run)', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /npx vitest run/.test(s));
+  assert.ok(step, 'ffmpeg-floor has no `npx vitest run` step');
+  assert.match(step, /^\s*npx vitest run\s*$/m, 'plain `npx vitest run` has trailing text (e.g. `|| true`); a failing suite would stay green');
+  assert.match(step, /^\s*npx vitest run --config vitest\.config\.slow\.ts\s*$/m, 'slow-suite `npx vitest run --config ...` has trailing text (e.g. `|| true`); a failing suite would stay green');
+});
+
 test('ffmpeg floor leg (#4461): test step runs the full fast and slow suites, never --changed', () => {
   const { steps } = ffmpegFloorJob();
   const step = steps.find((s) => /npx vitest run/.test(s));
@@ -1927,8 +1974,9 @@ test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeou
   const sleeps = [...install.matchAll(/^\s*sleep (\d+)\s*$/gm)];
   const attempts = (install.match(/for attempt in ([\d ]+); do/) ?? ['', ''])[1].trim().split(/\s+/).length;
   assert.ok(timeoutMinutes > 0 && bounds.length === 2 && sleeps.length === 1, 'cannot parse the install retry budget');
-  const bound = Number(bounds[0][2]);
-  const kill = Number(bounds[0][1]);
+  // Both commands run every attempt, so size the worst case on the larger bound.
+  const bound = Math.max(...bounds.map((b) => Number(b[2])));
+  const kill = Math.max(...bounds.map((b) => Number(b[1])));
   const sleep = Number(sleeps[0][1]);
   assert.equal(attempts, 3, 'retry loop is no longer 3 attempts');
   // attempts x (2 apt commands x bound + inter-attempt sleep) must fit the step
