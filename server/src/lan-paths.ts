@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from 'node:os';
 import type { Request } from './http.js';
-import { isLoopbackRequest } from './lan-auth.js';
+import { isLoopbackRequest } from './loopback.js';
 
 /* #4446 — host paths in route bodies leak the OS username (the home dir) to
    LAN peers. Loopback keeps full paths; everyone else gets the home prefix
