@@ -45,9 +45,13 @@ name: Quarantine Lane Health
 # writes its OWN report (stdout plus that job's $GITHUB_STEP_SUMMARY), which
 # names the OS it ran on; verdicts are never combined across OSes, and
 # `always-passes` means "on this OS". A row graduates only when EVERY leg
-# reports `always-passes`. Windows gets a 40-minute cap (Ubuntu keeps 30):
-# slower checkout, `npm ci` and choco ffmpeg install; 40 is 30 plus 10 minutes
-# of setup headroom, not a measurement. release.yml's `quarantine-lane` is
+# reports `always-passes`, and for #4244 only on a LOADED verdict: the Windows
+# leg sets QUARANTINE_HEALTH_LOAD=server-suite, so the quarantined files run
+# alongside a full `npm run test:server` (the condition of the one recorded
+# failure; 57 isolated runs never reproduced it), and its report's `Load:` line
+# says so. The Ubuntu leg runs the files alone (`none`). Windows gets a
+# 40-minute cap (Ubuntu keeps 30): slower checkout, `npm ci` and choco ffmpeg
+# install; 40 is 30 plus 10 minutes of setup headroom, not a measurement. release.yml's `quarantine-lane` is
 # deliberately NOT mirrored: it runs `npm run test:quarantine` once, pass/fail,
 # produces no per-test verdict, and is not graduation evidence.
 
@@ -84,8 +88,10 @@ jobs:
         include:
           - os: ubuntu-latest
             timeout: 30
+            load: none
           - os: windows-latest
             timeout: 40
+            load: server-suite
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -110,3 +116,4 @@ jobs:
         run: npm run quarantine:health
         env:
           GH_TOKEN: ${{ github.token }}
+          QUARANTINE_HEALTH_LOAD: ${{ matrix.load }}

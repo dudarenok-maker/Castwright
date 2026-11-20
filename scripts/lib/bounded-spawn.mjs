@@ -24,7 +24,7 @@ const isWindows = process.platform === 'win32';
  *  gone, and a failed kill must not mask the timeout error being raised.
  *  Returns whether the kill actually reached something (taskkill exit 0 /
  *  SIGKILL delivered), so callers report what happened, not what they hoped. */
-function killTree(pid) {
+export function killTree(pid) {
   try {
     if (isWindows) {
       return spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).status === 0;

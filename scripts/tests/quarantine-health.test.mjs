@@ -1759,3 +1759,151 @@ _Empty — no tests are currently quarantined._
     } catch {}
   }
 });
+
+// --- load mode (#4244 owner decision (c)) -------------------------------------
+// A verdict from the quarantined file run ALONE cannot see a load-dependent
+// stall, so the Windows leg runs a full `npm run test:server` concurrently and
+// every report says which mode produced its verdict.
+
+test('resolveLoadMode: only the exact value server-suite turns the load on', async () => {
+  const { resolveLoadMode } = await import('../quarantine-health.mjs');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: 'server-suite' }), 'server-suite');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: ' server-suite ' }), 'server-suite');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: '' }), 'none');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: 'bogus' }), 'none');
+  assert.equal(resolveLoadMode({}), 'none');
+});
+
+const LOAD_ENTRIES = [{ testName: 'a', file: 'server/src/a.test.ts', issueNumbers: [1], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, runs: 5 }];
+
+test('formatReport states a LOADED verdict when every run was under load', () => {
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5 } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line, 'a Load line is present');
+  assert.ok(line.includes('5/5'), line);
+  assert.ok(line.includes('LOADED verdict'), line);
+});
+
+test('formatReport refuses to call a partly-loaded run a loaded verdict', () => {
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 3 } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('3/5'), line);
+  assert.ok(line.includes('NOT a loaded verdict'), line);
+});
+
+test('formatReport labels an unloaded run ISOLATED', () => {
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'none', loadedRuns: 0 } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('none'), line);
+  assert.ok(line.includes('ISOLATED'), line);
+});
+
+// Drives main() with a fake spawn and a fake loader; returns what was observed.
+async function driveMainWithLoad(loadEnv) {
+  const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-load-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+  wf(registerPath, `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`fe case\` | \`src/lib/foo.test.ts\` | timing | flaky | — | Quarantined |
+`, 'utf8');
+  const saved = { s: process.env.GITHUB_STEP_SUMMARY, l: process.env.QUARANTINE_HEALTH_LOAD, x: process.exitCode, log: console.log };
+  const seen = { started: 0, stopped: 0, liveAtSpawn: [] };
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    if (loadEnv === undefined) delete process.env.QUARANTINE_HEALTH_LOAD;
+    else process.env.QUARANTINE_HEALTH_LOAD = loadEnv;
+    console.log = () => {};
+    const startLoad = () => {
+      seen.started++;
+      return { mode: 'server-suite', isLoaded: () => seen.stopped === 0, stop: () => { seen.stopped++; } };
+    };
+    const fakeSpawn = () => {
+      seen.liveAtSpawn.push(seen.started - seen.stopped);
+      return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+    };
+    await main(registerPath, fakeSpawn, startLoad);
+    seen.report = rf(summaryPath, 'utf8');
+  } finally {
+    console.log = saved.log;
+    if (saved.s === undefined) delete process.env.GITHUB_STEP_SUMMARY; else process.env.GITHUB_STEP_SUMMARY = saved.s;
+    if (saved.l === undefined) delete process.env.QUARANTINE_HEALTH_LOAD; else process.env.QUARANTINE_HEALTH_LOAD = saved.l;
+    process.exitCode = saved.x;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+  return seen;
+}
+
+test('main() with QUARANTINE_HEALTH_LOAD=server-suite runs every vitest invocation under the load, then stops it', async () => {
+  const seen = await driveMainWithLoad('server-suite');
+  assert.equal(seen.started, 1, 'the load is started exactly once');
+  assert.equal(seen.stopped, 1, 'and stopped exactly once, after the loop');
+  assert.ok(seen.liveAtSpawn.length > 0 && seen.liveAtSpawn.every((n) => n === 1), `every vitest invocation ran while the load was live: ${seen.liveAtSpawn}`);
+  const line = seen.report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line && line.includes('LOADED verdict'), `report says loaded: ${line}`);
+});
+
+test('main() without the load env var runs isolated and says so', async () => {
+  const seen = await driveMainWithLoad(undefined);
+  assert.equal(seen.started, 0, 'no load is started');
+  const line = seen.report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line && line.includes('ISOLATED'), `report says isolated: ${line}`);
+});
+
+test('startServerSuiteLoad spawns the full test:server suite with no captured output, restarts it, and stops it', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const spawned = [];
+  const killed = [];
+  const fakeSpawn = (cmd, opts) => {
+    const handlers = {};
+    const child = { pid: 100 + spawned.length, on: (ev, fn) => { handlers[ev] = fn; return child; } };
+    spawned.push({ cmd, opts, handlers });
+    return child;
+  };
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: fakeSpawn, kill: (pid) => killed.push(pid), now: () => now });
+  assert.equal(spawned[0].cmd, 'npm run test:server');
+  assert.equal(spawned[0].opts.stdio, 'ignore', 'its output is never captured');
+  assert.equal(spawned[0].opts.shell, true);
+  assert.equal(spawned[0].opts.windowsHide, true);
+  assert.equal(spawned[0].opts.env.RUN_QUARANTINE, undefined, 'the load must not un-skip quarantined tests');
+  assert.equal(load.isLoaded(), true);
+  now = 60_000; // a healthy suite pass ended: relaunch so the load never lapses
+  spawned[0].handlers.exit(0);
+  assert.equal(spawned.length, 2, 'restarted after a long run');
+  assert.equal(load.isLoaded(), true);
+  load.stop();
+  assert.deepEqual(killed, [101], 'stop kills the live tree');
+  assert.equal(load.isLoaded(), false);
+});
+
+test('startServerSuiteLoad reports NOT loaded once the suite dies instantly (a broken load must not read as a loaded verdict)', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const spawned = [];
+  const fakeSpawn = () => {
+    const handlers = {};
+    const child = { pid: 1, on: (ev, fn) => { handlers[ev] = fn; return child; } };
+    spawned.push({ handlers });
+    return child;
+  };
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: fakeSpawn, kill: () => {}, now: () => now });
+  now = 500;
+  spawned[0].handlers.exit(1);
+  assert.equal(load.isLoaded(), false);
+  assert.equal(spawned.length, 1, 'no restart loop on an instant failure');
+});
+
+test('quarantine-health.yml turns the load on for the Windows leg only, and feeds it to the script', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const job = yaml.load(readFileSync(wfPath, 'utf8')).jobs['quarantine-health'];
+  const byOs = Object.fromEntries(job.strategy.matrix.include.map((e) => [e.os, e]));
+  assert.equal(byOs['windows-latest'].load, 'server-suite');
+  assert.equal(byOs['ubuntu-latest'].load, 'none');
+  const step = job.steps.find((s) => s.name === 'Quarantine lane health report');
+  assert.equal(step.env.QUARANTINE_HEALTH_LOAD, '${{ matrix.load }}');
+});

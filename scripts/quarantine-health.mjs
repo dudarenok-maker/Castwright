@@ -13,7 +13,7 @@
    turning the report into a long-running matrix job) and buckets each
    quarantined test by its outcome across those runs:
 
-     - always-passes  — every run on this OS passed; a candidate to graduate back to gating only when every OS leg reports always-passes.
+     - always-passes  — every run on this OS passed; a candidate to graduate back to gating only when every OS leg reports always-passes (and, for a load-dependent row, only a LOADED verdict — see "Load").
      - intermittent    — some passed, some failed. Genuinely flaky; the
                           register row is honest.
      - never-passes    — every run failed. Not flaky — broken. The register
@@ -151,6 +151,16 @@
    (which classifyEntry would otherwise happily do — 0 runs, 0 found, 0
    not-found, technically "not-found" bucket, and silently wrong).
 
+   Load (#4244): `QUARANTINE_HEALTH_LOAD=server-suite` runs a full
+   `npm run test:server` concurrently with the quarantined files for the whole
+   run loop (startServerSuiteLoad; the Windows workflow leg sets it, Ubuntu does
+   not). A quarantined file run alone takes ~15 s and cannot reproduce a stall
+   that only ever appeared inside a full Windows `test:server` run, so an
+   `always-passes` from it is an ISOLATED verdict. Every report carries a
+   `**Load:**` line naming the mode and how many runs were fully loaded; only
+   "a LOADED verdict" is graduation evidence for a load-dependent row, and a
+   load that died early is reported as not loaded rather than assumed live.
+
    An EMPTY register (true as of #1858) is a clean no-op: parseRegister()
    returns zero rows, main() short-circuits before spawning a single vitest
    process, and the report says so. This is the main path this script's very
@@ -179,7 +189,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
-import { boundedSpawn } from './lib/bounded-spawn.mjs';
+import { spawn as nodeSpawn } from 'node:child_process';
+import { boundedSpawn, killTree } from './lib/bounded-spawn.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTER_PATH = resolve(ROOT, 'docs/testing/flaky-register.md');
@@ -719,9 +730,19 @@ export function resolveOsLabel(env = process.env, platform = process.platform) {
   return runnerOs !== '' ? runnerOs : platform;
 }
 
+// QUARANTINE_HEALTH_LOAD=server-suite runs a full `npm run test:server`
+// concurrently with the quarantined files (see startServerSuiteLoad). Anything
+// else is 'none': the files get the machine to themselves.
+export function resolveLoadMode(env = process.env) {
+  return String(env.QUARANTINE_HEALTH_LOAD ?? '').trim() === 'server-suite' ? 'server-suite' : 'none';
+}
+
 // Renders the final markdown report. `issueStates` maps issue number → 'OPEN'
 // | 'CLOSED' | null (unknown — e.g. `gh` unavailable or the call failed).
-export function formatReport({ entries, runs, issueStates, os }) {
+// `load` ({ mode, loadedRuns }, optional) adds the line naming the load mode
+// that produced these verdicts, so a loaded verdict reads differently from an
+// isolated one.
+export function formatReport({ entries, runs, issueStates, os, load }) {
   const heading = typeof os === 'string' && os !== '' ? `# Quarantine lane health report (${os})` : '# Quarantine lane health report';
   const lines = [heading, ''];
 
@@ -741,9 +762,24 @@ export function formatReport({ entries, runs, issueStates, os }) {
     );
   } else {
     lines.push(`Ran the quarantine lane ${runs} time(s). Bucket legend:`);
+    if (load) {
+      lines.push('');
+      if (load.mode === 'server-suite') {
+        const all = load.loadedRuns === runs;
+        lines.push(
+          `**Load: a full \`npm run test:server\` ran concurrently — ${load.loadedRuns}/${runs} run(s) fully loaded.** ${
+            all ? 'This is a LOADED verdict.' : 'This is NOT a loaded verdict: some runs had the machine to themselves.'
+          }`,
+        );
+      } else {
+        lines.push(
+          '**Load: none — each run had the machine to itself.** This is an ISOLATED verdict: it cannot see a load-dependent stall (#4244).',
+        );
+      }
+    }
   }
   lines.push('');
-  lines.push('- **always-passes** — every run on this OS passed; a candidate to graduate back into the gating suite only when every OS leg (each job of `.github/workflows/quarantine-health.yml`) reports always-passes.');
+  lines.push('- **always-passes** — every run on this OS passed; a candidate to graduate back into the gating suite only when every OS leg (each job of `.github/workflows/quarantine-health.yml`) reports always-passes — and, for a load-dependent row (#4244), only a LOADED verdict counts (see the Load line).');
   lines.push('- **intermittent** — some runs passed, some failed; genuinely flaky, the register row is honest.');
   lines.push('- **never-passes** — every run failed; not flaky, just broken — the register row is likely lying.');
   lines.push(
@@ -1016,6 +1052,54 @@ export async function boundedVitestSpawn(command, { cwd, env, timeout }) {
   }
 }
 
+// The load behind a LOADED verdict (#4244, owner decision (c)): the original
+// failure was one stall inside a full Windows `test:server` run, which 57
+// isolated runs never reproduced, so the quarantined files run alongside the
+// whole server suite. It is relaunched whenever a pass ends, so the load never
+// lapses mid-loop, and its output is dropped (stdio 'ignore') — nothing here
+// reads it. A suite that dies within MIN_HEALTHY_LOAD_MS (npm missing, a broken
+// install) is NOT relaunched in a tight loop and `isLoaded()` goes false for
+// good, so main() cannot call those runs loaded. `spawnImpl`/`kill`/`now` are
+// injectable for unit tests.
+const MIN_HEALTHY_LOAD_MS = 10 * 1000;
+export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill = killTree, now = Date.now } = {}) {
+  let child = null;
+  let failed = false;
+  let stopped = false;
+  // RUN_QUARANTINE stays unset here: the load must not un-skip quarantined tests.
+  const env = { ...process.env };
+  delete env.RUN_QUARANTINE;
+  const launch = () => {
+    const startedAt = now();
+    child = spawnImpl('npm run test:server', {
+      cwd,
+      env,
+      shell: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      detached: process.platform !== 'win32',
+    });
+    child.on('error', () => { failed = true; });
+    child.on('exit', () => {
+      if (stopped || failed) return;
+      if (now() - startedAt < MIN_HEALTHY_LOAD_MS) {
+        failed = true;
+        return;
+      }
+      launch();
+    });
+  };
+  launch();
+  return {
+    mode: 'server-suite',
+    isLoaded: () => !failed && !stopped,
+    stop() {
+      stopped = true;
+      if (child?.pid) kill(child.pid);
+    },
+  };
+}
+
 export async function runVitestJson(cwd, config, files, spawn = boundedVitestSpawn) {
   if (files.length === 0) return { runOutcome: 'ok', testResults: [] };
   // The report goes to a private temp dir (outside the repo, removed in the
@@ -1092,7 +1176,7 @@ export function emit(report) {
   if (summaryPath) appendFileSync(summaryPath, report + '\n');
 }
 
-export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSpawn) {
+export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSpawn, startLoad = startServerSuiteLoad) {
   let markdown;
   try {
     markdown = readFileSync(registerPath, 'utf8');
@@ -1140,6 +1224,10 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
   // same file lists every iteration), so it's computed once outside the loop.
   const oneRunWorstCaseMs = worstCaseRunMs(frontendFiles.length, serverFiles.length, VITEST_RUN_TIMEOUT_MS);
   const loopStart = Date.now();
+  // Started only when something will actually run (an all-Playwright register
+  // spawns no vitest, so a load would measure nothing).
+  const load = resolveLoadMode() === 'server-suite' && (frontendFiles.length || serverFiles.length) ? startLoad() : null;
+  let loadedRuns = 0;
   try {
     for (let i = 0; i < RUNS; i++) {
       if (budgetExceeded(Date.now() - loopStart, oneRunWorstCaseMs, RUN_LOOP_WALL_CLOCK_BUDGET_MS)) {
@@ -1171,6 +1259,9 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
       }
       perRunOutcomes.push(outcomes);
       perRunFailedDomains.push(failedDomains);
+      // isLoaded() is sticky-false once the load has failed, so true here means
+      // it was live for this whole run.
+      if (load?.isLoaded()) loadedRuns++;
     }
   } catch (err) {
     // Defensive belt-and-suspenders: runVitestJson/classifyRunResult never
@@ -1181,6 +1272,8 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
     // out the rest (finding 5).
     console.error(`quarantine-health: aborted early after ${perRunOutcomes.length}/${RUNS} run(s): ${err.message}`);
     abortedEarly = true;
+  } finally {
+    load?.stop();
   }
 
   const entries = aggregate(rows, perRunOutcomes, perRunFailedDomains);
@@ -1188,7 +1281,13 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
   const uniqueIssues = [...new Set(rows.flatMap((r) => r.issueNumbers))];
   const issueStates = new Map(uniqueIssues.map((n) => [n, checkIssueState(n)]));
 
-  const report = formatReport({ entries, runs: perRunOutcomes.length, issueStates, os: resolveOsLabel() });
+  const report = formatReport({
+    entries,
+    runs: perRunOutcomes.length,
+    issueStates,
+    os: resolveOsLabel(),
+    load: { mode: load ? 'server-suite' : 'none', loadedRuns },
+  });
   let finalReport = report;
   if (abortedEarly) {
     finalReport += `\n\n**Aborted early after ${perRunOutcomes.length}/${RUNS} planned run(s)** — see the job log for the error.`;
