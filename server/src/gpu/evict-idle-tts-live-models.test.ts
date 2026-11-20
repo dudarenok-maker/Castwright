@@ -267,6 +267,6 @@ describe('evictIdleQwenBase #4533 review fixes', () => {
     ]);
     live = { design: 0, mint: 0 };
     expect(await ask1()).toBe(true);
-    expect(keeps[4]).toEqual({ keep06: true, keep17: false });
+    expect(keeps[4]).toEqual({ keep06: false, keep17: false });
   });
 });

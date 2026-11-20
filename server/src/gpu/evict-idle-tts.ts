@@ -403,9 +403,10 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
 
   /* A re-ask after a hold-back frees only what was held back: the first ask already freed
      the rest, and a live mint reloads its 0.6B in its own phases (each 0.6B
-     unload also clears the clone-prompt cache), so freeing it again on every poll costs it. */
+     unload also clears the clone-prompt cache), so freeing it again on every poll costs it. Only
+     while something is still held back: once the other op ends the 0.6B it reloaded is idle again. */
   const prior = quiet?.heldBack;
-  if (prior) {
+  if (prior && (held06 || held17)) {
     if (!prior.m06) keep.keep06 = true;
     if (!prior.m17) keep.keep17 = true;
   }
