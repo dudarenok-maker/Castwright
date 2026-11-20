@@ -171,7 +171,7 @@ async function waitUntil(pred: () => boolean, what: string): Promise<void> {
 }
 
 const sseText = (res: request.Response) => (typeof res.body === 'string' ? res.body : res.text ?? '');
-const collectText = (res: NodeJS.ReadableStream, cb: (err: Error | null, body: unknown) => void) => {
+const collectText = (res: request.Response, cb: (err: Error | null, body: unknown) => void) => {
   let data = '';
   res.on('data', (c) => (data += c));
   res.on('end', () => cb(null, data));
