@@ -70,11 +70,12 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
-// quarantine-health.yml has no `cross-os-verify` job, so it joins only the
+// quarantine-health.yml and verify.yml have no `cross-os-verify` job, so they join only the
 // Windows-ffmpeg delegation loop, not the job-timeout loop (#4244).
 const WINDOWS_FFMPEG_WORKFLOWS = [
   ...WORKFLOWS,
   resolve(repoRoot, '.github', 'workflows', 'quarantine-health.yml'),
+  resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
 ];
 
 const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
