@@ -2534,6 +2534,21 @@ paths:
                 properties:
                   error: { type: string }
                   message: { type: string }
+        '409':
+          description: |
+            An ANALYSIS job is registered for the book (#3436), so the render was not started.
+            Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+            Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+            try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+            analysis's own persist. Any other job kind on the book does not refuse this.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [book_busy] }
 
   /api/books/{bookId}/chapters/{chapterId}/splice:
     post:
@@ -2616,8 +2631,13 @@ paths:
                       QA-repair streams already send for that clear.
         '409':
           description: |
-            The book has no language set. Set the book language before
-            requesting a splice.
+            Either the book has no language set (`{ error: language_unset }`; set it
+            before requesting a splice), or:
+            An ANALYSIS job is registered for the book (#3436), so the splice was not started.
+            Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+            Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+            try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+            analysis's own persist. Any other job kind on the book does not refuse this.
           content:
             application/json:
               schema:
@@ -2625,6 +2645,7 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
+                  code: { type: string, enum: [book_busy] }
 
   /api/books/{bookId}/chapters/{chapterId}/audio-qa-repair:
     post:
@@ -2714,8 +2735,13 @@ paths:
 
         '409':
           description: |
-            The book has no language set. Set the book language before
-            requesting audio QA repair.
+            Either the book has no language set (`{ error: language_unset }`; set it
+            before requesting audio QA repair), or:
+            An ANALYSIS job is registered for the book (#3436), so the repair was not started.
+            Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+            Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+            try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+            analysis's own persist. Any other job kind on the book does not refuse this.
           content:
             application/json:
               schema:
@@ -2723,6 +2749,7 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
+                  code: { type: string, enum: [book_busy] }
 
   /api/books/{bookId}/chapters/{chapterId}/audio:
     get:

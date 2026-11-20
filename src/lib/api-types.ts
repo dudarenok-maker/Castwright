@@ -10949,6 +10949,25 @@ export interface operations {
                     };
                 };
             };
+            /**
+             * @description An ANALYSIS job is registered for the book (#3436), so the render was not started.
+             *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+             *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+             *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+             *     analysis's own persist. Any other job kind on the book does not refuse this.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "book_busy";
+                    };
+                };
+            };
         };
     };
     spliceChapter: {
@@ -11023,8 +11042,13 @@ export interface operations {
                 };
             };
             /**
-             * @description The book has no language set. Set the book language before
-             *     requesting a splice.
+             * @description Either the book has no language set (`{ error: language_unset }`; set it
+             *     before requesting a splice), or:
+             *     An ANALYSIS job is registered for the book (#3436), so the splice was not started.
+             *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+             *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+             *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+             *     analysis's own persist. Any other job kind on the book does not refuse this.
              */
             409: {
                 headers: {
@@ -11033,6 +11057,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @enum {string} */
+                        code?: "book_busy";
                     };
                 };
             };
@@ -11116,8 +11142,13 @@ export interface operations {
                 };
             };
             /**
-             * @description The book has no language set. Set the book language before
-             *     requesting audio QA repair.
+             * @description Either the book has no language set (`{ error: language_unset }`; set it
+             *     before requesting audio QA repair), or:
+             *     An ANALYSIS job is registered for the book (#3436), so the repair was not started.
+             *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+             *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+             *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+             *     analysis's own persist. Any other job kind on the book does not refuse this.
              */
             409: {
                 headers: {
@@ -11126,6 +11157,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @enum {string} */
+                        code?: "book_busy";
                     };
                 };
             };
