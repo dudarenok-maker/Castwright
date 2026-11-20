@@ -6439,7 +6439,9 @@ function realStreamGeneration({
         /* Recorded, not emitted here — the terminal-handling block after the
            reconnect loop (below) delivers the chapter_failed + idle pair once,
            whichever shape produced it. */
-        failureReason = `Generation stream failed (${res.status}): ${detail || res.statusText}`;
+        failureReason =
+          bookBusySentence(res.status, detail) ??
+          `Generation stream failed (${res.status}): ${detail || res.statusText}`;
         return { shouldReconnect: false };
       }
 
@@ -6591,7 +6593,8 @@ async function realStreamSplice({
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Splice failed (${res.status}): ${body || res.statusText}`,
+        errorReason:
+          bookBusySentence(res.status, body) ?? `Splice failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
@@ -6669,7 +6672,9 @@ async function realStreamQaRepair({
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Audio repair failed (${res.status}): ${body || res.statusText}`,
+        errorReason:
+          bookBusySentence(res.status, body) ??
+          `Audio repair failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
@@ -6703,6 +6708,19 @@ async function realStreamQaRepair({
       chapterId,
       errorReason: (e as Error).message ?? 'Audio repair failed.',
     });
+  }
+}
+
+/* #3436 — generation / splice / audio-QA repair answer 409 `book_busy` (a JSON body whose
+   `error` is the sentence to show) while an analysis is live for the book. Returns that
+   sentence, or null for any other failure so the caller keeps its status-prefixed reason. */
+function bookBusySentence(status: number, body: string): string | null {
+  if (status !== 409) return null;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
+    return parsed.code === 'book_busy' && typeof parsed.error === 'string' ? parsed.error : null;
+  } catch {
+    return null;
   }
 }
 

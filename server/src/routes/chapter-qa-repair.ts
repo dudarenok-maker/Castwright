@@ -73,6 +73,7 @@ import {
 } from '../audio/build-synth-replacement.js';
 import { finalizeChapterAudioWrite, type ChapterSegmentsFile } from '../audio/finalize-chapter-write.js';
 import { abortInFlightChapterJob } from './generation.js';
+import { busySentence } from './book-state.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { readFile } from 'node:fs/promises';
 import { configValue } from '../config/resolver.js';
@@ -126,7 +127,6 @@ chapterQaRepairRouter.post(
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
     const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
     const fail = (errorReason: string) => {
       send({ type: 'chapter_failed', chapterId, errorReason });
@@ -144,6 +144,7 @@ chapterQaRepairRouter.post(
     let registered;
     try {
       registered = await runBookJob(bookId, 'render', async (lease) => {
+    res.flushHeaders();
     const { bookDir, state } = lease;
 
     const chapter = state.chapters.find((c) => c.id === chapterId);
@@ -929,12 +930,19 @@ chapterQaRepairRouter.post(
     } finally {
       releaseSlot?.();
     }
-      });
+      }, { refuseIfLive: 'analysis' });
     } catch (e) {
       console.error('[qa-repair] job registration failed', e);
       return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the audio-QA repair.');
     }
     if (registered === BOOK_GONE) return fail('Book not found.');
+    /* #3436 -- see the splice route: refused (409 JSON) while an analysis is registered. */
+    if ('busy' in registered) {
+      res.removeHeader('Content-Type');
+      return res
+        .status(409)
+        .json({ error: busySentence(registered.busy, 'render'), code: 'book_busy' });
+    }
     await registered.done;
   },
 );

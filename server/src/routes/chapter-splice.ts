@@ -71,6 +71,7 @@ import {
 } from '../audio/finalize-chapter-write.js';
 import type { EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 import { abortInFlightChapterJob } from './generation.js';
+import { busySentence } from './book-state.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { configValue } from '../config/resolver.js';
 import {
@@ -136,7 +137,6 @@ chapterSpliceRouter.post(
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
     const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
     const fail = (errorReason: string) => {
       send({ type: 'chapter_failed', chapterId, errorReason });
@@ -175,6 +175,7 @@ chapterSpliceRouter.post(
     let registered;
     try {
       registered = await runBookJob(bookId, 'render', async (lease) => {
+    res.flushHeaders();
     const { bookDir, state } = lease;
 
     const chapter = state.chapters.find((c) => c.id === chapterId);
@@ -609,12 +610,21 @@ chapterSpliceRouter.post(
     } finally {
       releaseSlot();
     }
-      });
+      }, { refuseIfLive: 'analysis' });
     } catch (e) {
       console.error('[splice] job registration failed', e);
       return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the splice.');
     }
     if (registered === BOOK_GONE) return fail('Book not found.');
+    /* #3436 -- refused while an analysis is registered. The registration check is atomic with the
+       token add, and no header has been flushed yet (the job's first statement flushes), so this is
+       a plain JSON 409. `Content-Type` was pre-set to SSE for the pre-registration `fail` frames. */
+    if ('busy' in registered) {
+      res.removeHeader('Content-Type');
+      return res
+        .status(409)
+        .json({ error: busySentence(registered.busy, 'render'), code: 'book_busy' });
+    }
     await registered.done;
   },
 );

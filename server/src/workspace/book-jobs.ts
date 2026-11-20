@@ -46,22 +46,33 @@ export interface BookJobLease {
  *
  *  A gone book resolves to `BOOK_GONE` (fn never called, nothing registered). A
  *  timed-out registration rethrows the curated contention error. `done` already
- *  has a no-op catch attached, so an un-awaited rejection is not "unhandled". */
-export async function runBookJob<T>(
+ *  has a no-op catch attached, so an un-awaited rejection is not "unhandled".
+ *
+ *  `refuseIfLive` (#3436): when a job of that kind is already registered for the book, nothing
+ *  is registered, `fn` never runs, and the result is `{ busy }` carrying the kinds then
+ *  registered. The check runs inside the same `withBookOp` span as the token add, so it cannot
+ *  race a registration. The result type only gains `busy` when this option is passed. */
+export async function runBookJob<T, R extends BookJobKind | undefined = undefined>(
   bookId: string,
   kind: BookJobKind,
   fn: (lease: BookJobLease) => Promise<T>,
-  opts: { hintDir?: string; timeoutMs?: number } = {},
-): Promise<typeof BOOK_GONE | { done: Promise<T> }> {
+  opts: { hintDir?: string; timeoutMs?: number; refuseIfLive?: R } = {},
+): Promise<typeof BOOK_GONE | { done: Promise<T> } | (R extends BookJobKind ? { busy: BookJobKind[] } : never)> {
+  const { refuseIfLive, ...lockOpts } = opts;
   const registered = await withBookOp(
     bookId,
-    async (book) => ({
-      release: __addBookJobToken(bookId, kind),
-      lease: { bookId, bookDir: book.bookDir, state: book.state } satisfies BookJobLease,
-    }),
-    opts,
+    async (book) => {
+      const live = bookJobKinds(bookId);
+      if (refuseIfLive && live.includes(refuseIfLive)) return { busy: live };
+      return {
+        release: __addBookJobToken(bookId, kind),
+        lease: { bookId, bookDir: book.bookDir, state: book.state } satisfies BookJobLease,
+      };
+    },
+    lockOpts,
   );
   if (registered === BOOK_GONE) return BOOK_GONE;
+  if ('busy' in registered) return registered as Awaited<ReturnType<typeof runBookJob<T, R>>>;
   const run = async (): Promise<T> => {
     try {
       return await fn(registered.lease);
@@ -75,5 +86,5 @@ export async function runBookJob<T>(
      DOES await it still sees the rejection (this attaches a handler to `done`,
      it does not swallow it). */
   done.catch(() => undefined);
-  return { done };
+  return { done } as Awaited<ReturnType<typeof runBookJob<T, R>>>;
 }
