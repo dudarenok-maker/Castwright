@@ -6,8 +6,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { boundedSpawn, createHangBreaker } from '../lib/bounded-spawn.mjs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { boundedSpawn, createHangBreaker, killLiveSpawns, killTree as killTreeReal } from '../lib/bounded-spawn.mjs';
 import { pidIsAlive } from '../lib/pid-alive.mjs';
 
 const BOUND_MS = 1_500;
@@ -200,4 +201,62 @@ test('boundedSpawn: maxOutputBytes kills the tree and rejects OVERFLOW once stdo
   );
   const ok = await boundedSpawn('quiet', process.execPath, ['-e', "process.stdout.write('hi')"], { timeoutMs: 20000, maxOutputBytes: 1000 });
   assert.equal(ok.stdout, 'hi');
+});
+
+// --- dead-root / pid-reuse rule on EVERY kill site (#4244 review pass 2) ------
+
+test('boundedSpawn: an OVERFLOW that arrives after the root exited does not signal the root pid on Windows (pid reuse); POSIX still tries the group', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bounded-spawn-'));
+  const pidFile = join(dir, 'late-writer.pid');
+  // The root exits at once; its detached grandchild (stdout inherited) writes
+  // past the cap 700 ms later, so the overflow is observed with a dead root.
+  const rootSource = `
+    const { spawn } = require('node:child_process');
+    spawn(process.execPath, ['-e',
+      "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => process.stdout.write('x'.repeat(5000)), 700); setTimeout(() => {}, 30000)",
+      ${JSON.stringify(pidFile)}], { stdio: ['ignore', 'inherit', 'inherit'], detached: true }).unref();
+  `;
+  const kills = [];
+  try {
+    await assert.rejects(
+      boundedSpawn('late flood', process.execPath, ['-e', rootSource], {
+        timeoutMs: 20_000,
+        maxOutputBytes: 1000,
+        kill: (pid) => { kills.push(pid); return true; },
+      }),
+      (err) => /^OVERFLOW: "late flood"/.test(err.message),
+    );
+    assert.equal(kills.length, process.platform === 'win32' ? 0 : 1, `kill calls: ${kills}`);
+  } finally {
+    reapPidFile(pidFile);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('boundedSpawn: an OVERFLOW while the root is alive still kills its tree', async () => {
+  const kills = [];
+  await assert.rejects(
+    boundedSpawn('live flood', process.execPath, ['-e', "process.stdout.write('x'.repeat(200000)); setTimeout(() => {}, 30000)"], {
+      timeoutMs: 20_000,
+      maxOutputBytes: 1000,
+      kill: (pid) => { kills.push(pid); return killTreeReal(pid); },
+    }),
+    (err) => /^OVERFLOW: "live flood"/.test(err.message),
+  );
+  assert.equal(kills.length, 1);
+});
+
+test('bounded-spawn.mjs signals a root pid only through the dead-root-aware killRoot (the stdin-error and overflow sites cannot regress to a bare killTree)', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'bounded-spawn.mjs'), 'utf8');
+  assert.equal((src.match(/killTree\(child\.pid\)/g) ?? []).length, 0, 'a bare killTree(child.pid) skips the pid-reuse rule');
+  assert.ok((src.match(/killRoot\(\)/g) ?? []).length >= 3, 'timeout, overflow and stdin-error all go through killRoot()');
+});
+
+test('killLiveSpawns: kills every boundedSpawn tree still running (the interrupted-host path), then forgets them', async () => {
+  const running = boundedSpawn('long sleeper', process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { timeoutMs: 60_000 });
+  await new Promise((r) => setTimeout(r, 300)); // let the child exist
+  assert.equal(killLiveSpawns(), 1);
+  const r = await running; // closes because the tree was killed, long before 60 s
+  assert.notEqual(r.status, 0);
+  assert.equal(killLiveSpawns((pid) => assert.fail(`nothing is live, but ${pid} was signalled`)), 0);
 });

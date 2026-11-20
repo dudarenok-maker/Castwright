@@ -1075,8 +1075,9 @@ export async function boundedVitestSpawn(command, { cwd, env, timeout, maxOutput
 // good, so main() cannot call those runs loaded. `spawnImpl`/`kill`/`now` are
 // injectable for unit tests.
 const MIN_HEALTHY_LOAD_MS = 10 * 1000;
-export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill = killTree, now = Date.now } = {}) {
+export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill = killTree, now = Date.now, platform = process.platform } = {}) {
   let child = null;
+  let rootExited = false;
   let failed = false;
   let stopped = false;
   // RUN_QUARANTINE stays unset here: the load must not un-skip quarantined tests.
@@ -1092,8 +1093,11 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
+    rootExited = false;
+    const mine = child;
     child.on('error', () => { failed = true; });
     child.on('exit', () => {
+      if (mine === child) rootExited = true;
       if (stopped || failed) return;
       if (now() - startedAt < MIN_HEALTHY_LOAD_MS) {
         failed = true;
@@ -1108,7 +1112,10 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
     isLoaded: () => !failed && !stopped,
     stop() {
       stopped = true;
-      if (child?.pid) kill(child.pid);
+      // Windows: a dead root's pid may have been reused (the load can die within
+      // 10 s and never be relaunched), so it is never signalled — the rule
+      // bounded-spawn.mjs applies at every one of its kill sites.
+      if (child?.pid && !(rootExited && platform === 'win32')) kill(child.pid);
     },
   };
 }

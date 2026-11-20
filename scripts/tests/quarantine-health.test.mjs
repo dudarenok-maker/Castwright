@@ -1898,6 +1898,24 @@ test('startServerSuiteLoad reports NOT loaded once the suite dies instantly (a b
   assert.equal(spawned.length, 1, 'no restart loop on an instant failure');
 });
 
+test('startServerSuiteLoad.stop() never signals a Windows root that already died (its pid may be reused); POSIX still tries the group', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  for (const [platform, expected] of [['win32', []], ['linux', [7]]]) {
+    const killed = [];
+    const handlers = {};
+    const child = { pid: 7, on: (ev, fn) => { handlers[ev] = fn; return child; } };
+    const load = startServerSuiteLoad({ spawnImpl: () => child, kill: (pid) => killed.push(pid), now: () => 0, platform });
+    handlers.exit(1); // died instantly: failed, never relaunched
+    load.stop();
+    assert.deepEqual(killed, expected, platform);
+  }
+  // A live root is killed on every platform.
+  const killed = [];
+  const child = { pid: 8, on: () => child };
+  startServerSuiteLoad({ spawnImpl: () => child, kill: (pid) => killed.push(pid), now: () => 0, platform: 'win32' }).stop();
+  assert.deepEqual(killed, [8]);
+});
+
 test('quarantine-health.yml turns the load on for the Windows leg only, and feeds it to the script', () => {
   const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
   const job = yaml.load(readFileSync(wfPath, 'utf8')).jobs['quarantine-health'];

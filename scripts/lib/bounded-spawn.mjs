@@ -35,6 +35,26 @@ export function killTree(pid) {
   }
 }
 
+// Roots of boundedSpawn children still running, pid -> "has the root exited".
+// An interrupted host (SIGINT/SIGTERM/exit) kills them through
+// killLiveSpawns: on POSIX they are detached, so the terminal's signal never
+// reaches their process group on its own.
+const liveRoots = new Map();
+
+/** Kill the tree of every boundedSpawn child still running; returns how many
+ *  kills were attempted. Synchronous (killTree is), so it is safe in an
+ *  'exit' handler. A Windows root that already exited is skipped (pid reuse). */
+export function killLiveSpawns(kill = killTree) {
+  let attempted = 0;
+  for (const [pid, exited] of liveRoots) {
+    if (exited() && isWindows) continue;
+    attempted++;
+    kill(pid);
+  }
+  liveRoots.clear();
+  return attempted;
+}
+
 // A child that exits before draining `input` fails the stdin write with EPIPE
 // (POSIX) / EOF (Windows). spawnSync reports that via r.error and still returns
 // the child's own status; here the exit status speaks and the write error is
@@ -61,7 +81,7 @@ const BENIGN_STDIN_ERRORS = new Set(['EPIPE', 'EOF', 'ERR_STREAM_DESTROYED']);
  *  written to the child's stdin; otherwise stdin is closed. `windowsHide` is
  *  always set — a literal below, because spawn-windows-hide.test.ts is
  *  syntactic and cannot see it arriving through `...options`. */
-export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutputBytes = Infinity, ...options }) {
+export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutputBytes = Infinity, kill = killTree, ...options }) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       ...options,
@@ -73,6 +93,15 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutput
     let stderr = '';
     let settled = false;
     let rootExited = false;
+    child.on('exit', () => { rootExited = true; });
+    liveRoots.set(child.pid, () => rootExited);
+    // Windows: a dead root's pid may be reused, so EVERY kill below (timeout,
+    // overflow, stdin failure) skips it. POSIX: the pgid outlives the root only
+    // while a member does; once the group is empty it is free for reuse, so the
+    // kill is attempted but its outcome — not an assumption — is what the
+    // timeout message reports.
+    const mayKill = () => !rootExited || !isWindows;
+    const killRoot = () => mayKill() && kill(child.pid);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     const onData = (append) => (d) => {
@@ -81,7 +110,8 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutput
       if (stdout.length + stderr.length <= maxOutputBytes) return;
       settled = true;
       clearTimeout(timer);
-      killTree(child.pid);
+      liveRoots.delete(child.pid);
+      killRoot();
       child.stdout.destroy();
       child.stderr.destroy();
       child.stdin?.destroy();
@@ -94,23 +124,19 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutput
         if (BENIGN_STDIN_ERRORS.has(err.code) || settled) return;
         settled = true;
         clearTimeout(timer);
-        killTree(child.pid);
+        liveRoots.delete(child.pid);
+        killRoot();
         reject(err);
       });
       child.stdin.end(input);
     }
 
-    child.on('exit', () => { rootExited = true; });
-
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      // Windows: a dead root's pid may be reused, so it is never signalled.
-      // POSIX: the pgid outlives the root only while a member does; once the
-      // group is empty it is free for reuse, so the kill is attempted but its
-      // outcome — not an assumption — is what the message reports.
-      const canKill = !rootExited || !isWindows;
-      const killed = canKill && killTree(child.pid);
+      liveRoots.delete(child.pid);
+      const canKill = mayKill();
+      const killed = killRoot();
       const scope = isWindows ? 'tree' : 'group';
       const what = rootExited
         ? 'the root exited, but its output pipes stayed open — a descendant escaped'
@@ -134,12 +160,14 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, maxOutput
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      liveRoots.delete(child.pid);
       reject(err);
     });
     child.on('close', (status) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      liveRoots.delete(child.pid);
       resolvePromise({ status, stdout, stderr });
     });
   });
