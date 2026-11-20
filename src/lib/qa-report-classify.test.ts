@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHeadline, classifyVoiceMatch } from './qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, needsRerenderIds } from './qa-report-classify';
+import { formatQaReportText } from './qa-report-export';
+import type { BookQaReport } from './types';
 import { MOCK_QA_REPORT } from '../data/qa-report';
 
 describe('classifyHeadline', () => {
@@ -101,5 +103,156 @@ describe('classifyVoiceMatch', () => {
     const result = classifyVoiceMatch(report);
     expect(result.kind).toBe('embedShortfall');
     expect(result).toMatchObject({ inconclusiveCount: 2 });
+  });
+});
+
+describe('speaker check off (#4454)', () => {
+  const vd = MOCK_QA_REPORT.voiceDrift;
+  const off = (over: Partial<BookQaReport['voiceDrift']>): BookQaReport => ({
+    ...MOCK_QA_REPORT,
+    voiceDrift: { ...vd, speakerCheckEnabled: false, ...over },
+  });
+  const line = (r: BookQaReport) => formatQaReportText(r, 'Book').split('\n').find((l) => l.includes('Voice match —'));
+
+  /* The report buildAudioQaReport emits for a never-scored book (pinned by the server test
+     'a never-scored book reports every roster character as checked AND pending ...'): the roster
+     counts as fully "checked", every id is pending. */
+  const neverScored = (over: Partial<BookQaReport['voiceDrift']> = {}) =>
+    off({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      chaptersWithVerdicts: 0,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      charactersPending: ['narrator', 'ren'],
+      mismatches: [],
+      inconclusiveCount: 0,
+      ...over,
+    });
+
+  it('(a) gate off + never scored (builder shape) -> gateOff, export says the check is off', () => {
+    const r = neverScored();
+    expect(classifyVoiceMatch(r).kind).toBe('gateOff');
+    expect(line(r)).toContain('Voice match — Render-integrity QA is off');
+  });
+
+  it('(a2) gate off + pending + partial scoring keeps embedShortfall and the mismatch count in the export', () => {
+    const r = off({
+      chaptersEligible: 12,
+      chaptersScored: 11,
+      chaptersEmbedFailed: 0,
+      charactersPending: ['newcomer'],
+      mismatches: [{ characterId: 'ren', fixable: true }, { characterId: 'mo', fixable: true }] as BookQaReport['voiceDrift']['mismatches'],
+    });
+    expect(classifyVoiceMatch(r).kind).toBe('embedShortfall');
+    expect(line(r)).toContain('11 of 12 eligible chapters scored');
+    expect(line(r)).toContain('2 mismatches');
+    expect(line(r)).toMatch(/\(Render-integrity QA is now off\)$/);
+  });
+
+  /* The report buildAudioQaReport emits for a book scored with the check on, switched off, then
+     restructured (the real rewriteChapterSlugs delete op) and re-rendered with no embeddings (pinned
+     by the server test 'a book scored, then restructured and re-rendered with the check off ...'):
+     the book-level centroids file survived, so NOTHING is pending and the whole roster counts as
+     checked, but no current chapter holds a verdict. */
+  it('(b) gate off + restructured and re-rendered with the check off (centroids outlive the verdicts) reads gateOff, not checkedSoFar', () => {
+    const r = neverScored({ charactersPending: [] });
+    expect(classifyVoiceMatch(r).kind).toBe('gateOff');
+    expect(line(r)).toBe('· Voice match — Render-integrity QA is off');
+  });
+
+  it('(c) gate off + scored keeps scored and notes the check is now off', () => {
+    const r = off({});
+    expect(classifyVoiceMatch(r).kind).toBe('scored');
+    expect(line(r)).toMatch(/\(Render-integrity QA is now off\)$/);
+  });
+
+  it('(d) gate on + pending is not gateOff', () => {
+    const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...vd, charactersPending: ['ren'], chaptersScored: 0 } };
+    expect(classifyVoiceMatch(r).kind).not.toBe('gateOff');
+  });
+
+  it('(e) field absent + pending is not gateOff', () => {
+    const { speakerCheckEnabled: _omit, ...rest } = vd;
+    const r = { ...MOCK_QA_REPORT, voiceDrift: { ...rest, charactersPending: ['ren'], chaptersScored: 0 } } as unknown as BookQaReport;
+    expect(classifyVoiceMatch(r).kind).not.toBe('gateOff');
+  });
+
+  it('(f) needsRerenderIds is empty for a gateOff report carrying charactersNeedingRerender', () => {
+    const r = neverScored({ charactersNeedingRerender: ['c1'] });
+    expect(needsRerenderIds(r)).toEqual([]);
+  });
+
+  it('(g) needsRerenderIds is empty with the check off even in the scored row, and the export omits the line', () => {
+    const r = off({ charactersPending: [], charactersNeedingRerender: ['ren'], charactersNeedingRerenderChapters: { ren: [2] } });
+    expect(classifyVoiceMatch(r).kind).toBe('scored');
+    expect(needsRerenderIds(r)).toEqual([]);
+    expect(formatQaReportText(r, 'Book')).not.toContain('needs re-render');
+  });
+
+  it('(h) needsRerenderIds is empty with the check off in the embedShortfall row', () => {
+    const r = off({ chaptersEligible: 12, chaptersScored: 11, charactersNeedingRerender: ['ren'] });
+    expect(classifyVoiceMatch(r).kind).toBe('embedShortfall');
+    expect(needsRerenderIds(r)).toEqual([]);
+  });
+
+  it('(i) needsRerenderIds still lists ids when the field is absent (check on)', () => {
+    const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...vd, charactersNeedingRerender: ['ren'] } };
+    expect(needsRerenderIds(r)).toEqual(['ren']);
+  });
+
+  /* The report buildAudioQaReport emits for one eligible chapter where narrator is checked with a
+     voice-mismatch verdict and ren has no centroids row yet (pinned by the server test
+     'a pending character in every eligible chapter zeroes ...'): both chapter counts are 0. */
+  const builderPending = (over: Partial<BookQaReport['voiceDrift']> = {}) =>
+    off({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      chaptersWithVerdicts: 1,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      charactersPending: ['ren'],
+      mismatches: [{ characterId: 'narrator', fixable: true }] as BookQaReport['voiceDrift']['mismatches'],
+      ...over,
+    });
+
+  it('(j) gate off + a pending character in every eligible chapter keeps the checked-so-far result and its mismatch, no gateOff', () => {
+    const r = builderPending();
+    expect(classifyVoiceMatch(r)).toEqual({
+      kind: 'checkedSoFar',
+      chaptersWithVerdicts: 1,
+      chaptersEligible: 1,
+      mismatchCount: 1,
+      inconclusiveCount: 0,
+    });
+    expect(line(r)).toBe('· Voice match — partly checked before the check was turned off, 1 mismatches so far (Render-integrity QA is now off)');
+    expect(needsRerenderIds(builderPending({ charactersNeedingRerender: ['narrator'] }))).toEqual([]);
+  });
+
+  it('(k) gate off + no chapter with a verdict + only a mismatch or only an inconclusive count is still evidence', () => {
+    expect(classifyVoiceMatch(builderPending({ chaptersWithVerdicts: 0, inconclusiveCount: 2, mismatches: [] })).kind).toBe('checkedSoFar');
+    expect(classifyVoiceMatch(builderPending({ chaptersWithVerdicts: 0 })).kind).toBe('checkedSoFar');
+  });
+
+  /* The report buildAudioQaReport emits for narrator with a voice-match verdict and ren pending, with
+     no mismatch and no inconclusive (pinned by the server test 'a partly-scored book ...'): the
+     chapter count is the ONLY evidence, so it is what keeps this from reading gateOff. */
+  it('(m) gate off + partly scored with nothing standing (verdict on one chapter, ren pending) is checkedSoFar', () => {
+    const r = builderPending({ mismatches: [] });
+    expect(classifyVoiceMatch(r)).toEqual({
+      kind: 'checkedSoFar',
+      chaptersWithVerdicts: 1,
+      chaptersEligible: 1,
+      mismatchCount: 0,
+      inconclusiveCount: 0,
+    });
+    expect(line(r)).toBe('· Voice match — partly checked before the check was turned off, 0 mismatches so far (Render-integrity QA is now off)');
+  });
+
+  it('(l) gate on + the same builder shape is not checkedSoFar', () => {
+    const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...builderPending().voiceDrift, speakerCheckEnabled: true } };
+    expect(classifyVoiceMatch(r).kind).not.toBe('checkedSoFar');
   });
 });

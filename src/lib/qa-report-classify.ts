@@ -23,6 +23,14 @@ export function classifyHeadline(report: BookQaReport): HeadlineClassification {
 export type VoiceMatchClassification =
   | { kind: 'noEligible' }
   | { kind: 'notRun' }
+  | { kind: 'gateOff' }
+  | {
+      kind: 'checkedSoFar';
+      chaptersWithVerdicts: number;
+      chaptersEligible: number;
+      mismatchCount: number;
+      inconclusiveCount: number;
+    }
   | {
       kind: 'embedShortfall';
       chaptersScored: number;
@@ -49,6 +57,10 @@ export type VoiceMatchClassification =
 export function needsRerenderIds(report: BookQaReport): string[] {
   const ids = report.voiceDrift.charactersNeedingRerender ?? [];
   if (ids.length === 0) return [];
+  /* #4454 — with the speaker check off a re-render writes no embeddings and starts no score pass,
+     so the listing could never clear: hide it in every row, not just `gateOff` (#3680 — don't
+     offer work that can't be done). */
+  if (isSpeakerCheckOff(report)) return [];
   if (classifyVoiceMatch(report).kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return [];
   return ids;
 }
@@ -59,9 +71,39 @@ export function needsRerenderChapters(report: BookQaReport, id: string): number[
   return report.voiceDrift.charactersNeedingRerenderChapters?.[id] ?? [];
 }
 
+/** #4454 — true when the speaker check is switched off. Strict `=== false`: e2e specs seed untyped
+ *  report objects through `window.__mockQaReportOverride` and may omit the field, and an absent
+ *  field must keep today's behaviour. */
+export function isSpeakerCheckOff(report: BookQaReport): boolean {
+  return report.voiceDrift.speakerCheckEnabled === false;
+}
+
 export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassification {
   const vd = report.voiceDrift;
   if (vd.chaptersEligible === 0) return { kind: 'noEligible' };
+  /* #4454 — gate off with no chapter scored or attempted. With no other evidence either, say the
+     check is off. The server's chapter counts skip any chapter whose roster holds a pending
+     character, so a pending character in every eligible chapter zeroes both however much was
+     checked. The evidence that something WAS checked is `chaptersWithVerdicts` (the current
+     eligible chapters holding a voice-match verdict row), or a standing mismatch / inconclusive
+     count: a past result, shown as `checkedSoFar` (the pending row's wording, no Resume).
+     Not `charactersChecked` (the server counts the roster minus too-short verdicts, so a
+     never-scored book reports it whole) and not `charactersPending` (it reads the book-level
+     centroids file, which a chapter restructure leaves behind). Past results with chapters
+     counted (`embedShortfall` / `scored`) below stay, pending characters or not. Strict
+     `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
+  if (isSpeakerCheckOff(report) && vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
+    if (vd.chaptersWithVerdicts === 0 && vd.mismatches.length === 0 && vd.inconclusiveCount === 0) {
+      return { kind: 'gateOff' };
+    }
+    return {
+      kind: 'checkedSoFar',
+      chaptersWithVerdicts: vd.chaptersWithVerdicts,
+      chaptersEligible: vd.chaptersEligible,
+      mismatchCount: vd.mismatches.length,
+      inconclusiveCount: vd.inconclusiveCount,
+    };
+  }
   /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the
      gate never ran" — a fleet-wide embedding failure (the gate attempted
      every eligible chapter, but embeddings failed for literally all of

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { BookQaReport } from '../lib/types';
 import { downloadFile } from '../lib/download-file';
 import { formatQaReportJson, formatQaReportText } from '../lib/qa-report-export';
-import { classifyHeadline, classifyVoiceMatch, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
+import { classifyHeadline, classifyVoiceMatch, isSpeakerCheckOff, needsRerenderChapters, needsRerenderIds } from '../lib/qa-report-classify';
 import { api } from '../lib/api';
 import { Pill } from './primitives';
 
@@ -109,19 +109,29 @@ function VoiceMatchRow({
       </div>
     );
   }
+  /* #4454 — render-integrity QA is off: say so and offer no Resume (Resume only when it can do the work, #3680).
+     Gate off with a past result falls through to the result rows below, with no Resume. */
+  if (classification.kind === 'gateOff') {
+    return (
+      <div className="flex items-center justify-between py-2">
+        <span className="text-sm text-ink/70">Voice match</span>
+        <span data-testid="qa-speaker-check-off" className="text-sm text-ink/50">Render-integrity QA (voice match) is off. Turn it on in Advanced settings → Per-sentence QA gates to check character voices.</span>
+      </div>
+    );
+  }
   /* srv-36 hardening — charactersPending means a prior scoreBook pass was
      interrupted mid-run (e.g. server restart) and left work undone that no
      live SSE stream will ever resume on its own (Task 6/7's architecture:
      broadcastToBook only reaches subscribers of an active generation job).
      Offer a manual Resume button; see the round-2 plan-review note on why
      the button doesn't revert to clickable after a successful click. */
-  if (vd.charactersPending.length > 0) {
+  if (vd.charactersPending.length > 0 && !isSpeakerCheckOff(report)) {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
         <div className="flex items-center gap-2">
           <span className="text-sm text-ink">
-            {vd.charactersChecked} of {vd.charactersOnRoster} characters checked so far
+            {vd.chaptersScored} of {vd.chaptersEligible} eligible chapters fully checked, more pending
           </span>
           {resumed ? (
             <span className="text-xs text-ink/50">Resuming — check back in a few minutes</span>
@@ -178,17 +188,29 @@ function VoiceMatchRow({
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
-        <span className="text-sm text-ink/50">Not run for this book — flip on render-integrity checking to catch mismatches automatically.</span>
+        <span className="text-sm text-ink/50">Not run for this book yet — no voice match has been scored.</span>
       </div>
     );
   }
-  const inconclusiveNote = classification.inconclusiveCount > 0 ? ` · ${classification.inconclusiveCount} chapters inconclusive` : '';
+  const inconclusiveNote =
+    (classification.inconclusiveCount > 0 ? ` · ${classification.inconclusiveCount} chapters inconclusive` : '') +
+    (isSpeakerCheckOff(report) ? ' · Render-integrity QA is now off' : '');
   if (classification.kind === 'embedShortfall') {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>
         <span className="text-sm text-ink">
           {classification.chaptersScored} of {classification.chaptersEligible} eligible chapters scored ({classification.chaptersEmbedFailed} couldn't be embedded), {classification.mismatchCount} mismatches{inconclusiveNote}
+        </span>
+      </div>
+    );
+  }
+  if (classification.kind === 'checkedSoFar') {
+    return (
+      <div className="flex items-center justify-between py-2">
+        <span className="text-sm text-ink/70">Voice match</span>
+        <span className="text-sm text-ink">
+          partly checked before the check was turned off, {classification.mismatchCount} mismatches so far{inconclusiveNote}
         </span>
       </div>
     );

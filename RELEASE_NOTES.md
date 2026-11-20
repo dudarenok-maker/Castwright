@@ -42,6 +42,7 @@
 - **A disk or permission problem while unpacking an upgrade no longer stops Castwright.** Before, the app could shut down and leave the upgrade stuck on "applying". Now it tells you the upgrade failed and keeps running your current version.
 - **Start fresh really starts fresh.** If you start a book's analysis over while the previous run is still finishing a chapter, that chapter's old result no longer sneaks back into the new run.
 - **A repair, Fix-audio run, voice design or emotion take is no longer cut off when another book's render finishes a chapter.** Castwright used to unload the voice models to tidy up the graphics card even while your work was using them. A repair stopped to load its voice again, and a voice design could fail outright with a "voice-design model was unloaded" error, and an emotion take with a "1.7B voice model was unloaded" one. It now leaves the voices alone while other work is running, whether that work is on the everyday voice or the higher-quality one.
+- **The QA report no longer offers to resume a voice check that is switched off.** It now says Render-integrity QA (voice match) is off, and points you to Advanced settings → Per-sentence QA gates to turn it on.
 
 # Castwright 1.15.0
 
