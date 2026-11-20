@@ -5,7 +5,7 @@
 /* #4443 — refuse a Node release with the Windows loopback-connect crash before anything else loads. */
 import './node-runtime-guard-boot.js';
 
-/* MUST be the first import: it runs `process.loadEnvFile('.env')` as a
+/* MUST be the first import after the node-runtime guard boot above: it runs `process.loadEnvFile('.env')` as a
    top-level side effect, populating `process.env` before any downstream
    module in the graph evaluates. Without this, ESM hoisting means imports
    like `./workspace/paths.js` capture an empty `process.env.WORKSPACE_DIR`
