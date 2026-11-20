@@ -23,6 +23,7 @@ import {
   buildVitestArgs,
   classifyRunResult,
   runVitestJson,
+  boundedVitestSpawn,
   unparseableRunNotice,
   buildParseFailureMessage,
   worstCaseRunMs,
@@ -1182,7 +1183,7 @@ test('classifyRunResult: vitest 5 stdout alone (no report file) is unparseable a
   assert.equal(result.unparseable, true);
 });
 
-test('runVitestJson passes a temp --outputFile.json, reads the report vitest wrote there, and cleans the file up', () => {
+test('runVitestJson passes a temp --outputFile.json, reads the report vitest wrote there, and cleans the file up', async () => {
   let outPath;
   const fakeSpawn = (command) => {
     const m = /--outputFile\.json=([^"]+)"/.exec(command);
@@ -1191,29 +1192,55 @@ test('runVitestJson passes a temp --outputFile.json, reads the report vitest wro
     writeFileSync(outPath, JSON.stringify({ testResults: [{ name: 'f.ts', assertionResults: [] }] }));
     return { error: undefined, signal: null, status: 0, stdout: `JSON report written to ${outPath}`, stderr: '' };
   };
-  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  const result = await runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
   assert.equal(result.runOutcome, 'ok');
   assert.equal(result.testResults.length, 1);
   assert.ok(!outPath.startsWith(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')), 'report must live outside the repo');
   assert.ok(!existsSync(outPath), 'temp report must be removed afterwards');
 });
 
-test('runVitestJson: vitest exits without writing any report -> unparseable, surfaced (not an empty ok)', () => {
+test('runVitestJson: vitest exits without writing any report -> unparseable, surfaced (not an empty ok)', async () => {
   const fakeSpawn = () => ({ error: undefined, signal: null, status: 1, stdout: '', stderr: 'boom' });
-  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  const result = await runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
   assert.equal(result.runOutcome, 'crashed');
   assert.equal(result.unparseable, true);
 });
 
-test('runVitestJson: a spawn that THROWS still removes the temp report dir (and rethrows)', () => {
+test('runVitestJson: a spawn that THROWS still removes the temp report dir (and rethrows)', async () => {
   let outPath;
   const fakeSpawn = (command) => {
     outPath = /--outputFile\.json=([^"]+)"/.exec(command)[1];
     throw new Error('spawn exploded');
   };
-  assert.throws(() => runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn), /spawn exploded/);
+  await assert.rejects(() => runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn), /spawn exploded/);
   assert.ok(outPath, 'fake spawn must have been reached');
   assert.ok(!existsSync(dirname(outPath)), 'temp dir must be removed even when spawn throws');
+});
+
+test('boundedVitestSpawn: a timed-out run kills its whole process tree, not just the shell (#4244)', async () => {
+  const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const tmp = mkdtempSync(join(tmpdir(), 'qh-treekill-'));
+  const pidFile = join(tmp, 'child.pid');
+  const script = join(tmp, 'long-lived.cjs');
+  // The grandchild: with shell:true the direct child is cmd.exe / sh, and THIS is
+  // the node process under it. It records its own pid, then outlives the timeout.
+  wf(script, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60000);`);
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  let pid;
+  try {
+    const r = await boundedVitestSpawn(`node "${script}" qh-treekill-marker-${process.pid}`, { cwd: process.cwd(), env: process.env, timeout: 3000 });
+    assert.equal(r.error?.code, 'ETIMEDOUT', 'a run past its bound must classify as timed-out');
+    pid = Number(rf(pidFile, 'utf8'));
+    assert.ok(pid > 0, 'the long-lived child must have started before the timeout');
+    const deadline = Date.now() + 3000;
+    while (alive(pid) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
+    assert.ok(!alive(pid), `grandchild pid ${pid} survived the timeout`);
+  } finally {
+    if (pid && alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
 });
 
 test('unparseableRunNotice is silent at zero and loud (names the count) otherwise', () => {
@@ -1463,7 +1490,7 @@ test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fi
     process.exitCode = 0;
 
     // Call main() with the temp register file
-    main(registerPath);
+    await main(registerPath);
 
     // Verify exit code was set to 1
     assert.equal(process.exitCode, 1, 'main() should set exit code to 1 on parse-failure');
@@ -1539,7 +1566,7 @@ for (const [label, stdout] of [
       console.log = (...a) => logged.push(a.join(' '));
       console.error = () => {};
 
-      main(registerPath, fakeSpawn);
+      await main(registerPath, fakeSpawn);
 
       assert.equal(process.exitCode, 1, 'unparseable vitest output must exit non-zero');
       const written = readFileSync(summaryPath, 'utf8');
@@ -1673,7 +1700,7 @@ _Empty — no tests are currently quarantined._
     process.env.GITHUB_STEP_SUMMARY = summaryPath;
     process.env.RUNNER_OS = 'Windows';
     process.exitCode = 0;
-    main(registerPath);
+    await main(registerPath);
     const first = readFileSync(summaryPath, 'utf8').split('\n')[0];
     assert.equal(first, '# Quarantine lane health report (Windows)');
   } finally {

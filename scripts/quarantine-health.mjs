@@ -170,13 +170,13 @@
    Override run count for local iteration: `QUARANTINE_HEALTH_RUNS=2 node scripts/quarantine-health.mjs`
    Writes to stdout always; also appends to $GITHUB_STEP_SUMMARY when set (CI). */
 
-import { spawnSync } from 'node:child_process';
 import { readFileSync, appendFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { boundedSpawn } from './lib/bounded-spawn.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTER_PATH = resolve(ROOT, 'docs/testing/flaky-register.md');
@@ -993,7 +993,27 @@ export function classifyRunResult(r, reportText) {
   return { runOutcome: 'ok', testResults: json.testResults };
 }
 
-export function runVitestJson(cwd, config, files, spawn = spawnSync) {
+// Default vitest spawner. NOT `spawnSync({ timeout })`: with `shell: true` that
+// signals only the cmd.exe on Windows and leaves the npx -> node vitest tree
+// running into the next run (see scripts/lib/bounded-spawn.mjs, which kills the
+// whole tree with `taskkill /T /F`). Resolves a spawnSync-shaped result so
+// classifyRunResult stays unchanged: a HUNG rejection becomes the same
+// `ETIMEDOUT` error + SIGTERM a spawnSync timeout produced.
+export async function boundedVitestSpawn(command, { cwd, env, timeout }) {
+  try {
+    const r = await boundedSpawn(command, command, [], { timeoutMs: timeout, shell: true, cwd, env });
+    return { error: undefined, signal: null, status: r.status, stdout: r.stdout, stderr: r.stderr };
+  } catch (err) {
+    if (!/^HUNG: /.test(err.message)) {
+      return { error: err, signal: null, status: null, stdout: '', stderr: '' };
+    }
+    const e = new Error(err.message.split('\n')[0]);
+    e.code = 'ETIMEDOUT';
+    return { error: e, signal: 'SIGTERM', status: null, stdout: '', stderr: err.message };
+  }
+}
+
+export async function runVitestJson(cwd, config, files, spawn = boundedVitestSpawn) {
   if (files.length === 0) return { runOutcome: 'ok', testResults: [] };
   // The report goes to a private temp dir (outside the repo, removed in the
   // finally below, which also covers a spawn that throws) so a run never
@@ -1016,7 +1036,7 @@ export function runVitestJson(cwd, config, files, spawn = spawnSync) {
   let r;
   let reportText;
   try {
-    r = spawn(command, {
+    r = await spawn(command, {
       cwd,
       encoding: 'utf8',
       shell: true,
@@ -1069,7 +1089,7 @@ export function emit(report) {
   if (summaryPath) appendFileSync(summaryPath, report + '\n');
 }
 
-export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
+export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSpawn) {
   let markdown;
   try {
     markdown = readFileSync(registerPath, 'utf8');
@@ -1130,14 +1150,14 @@ export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
       const outcomes = [];
       const failedDomains = new Set();
       if (frontendFiles.length) {
-        const fe = runVitestJson(ROOT, undefined, frontendFiles, spawn);
+        const fe = await runVitestJson(ROOT, undefined, frontendFiles, spawn);
         if (fe.runOutcome !== 'ok') failedDomains.add('frontend');
         if (fe.unparseable) unparseableRuns++;
         outcomes.push(...flattenVitestJson(fe));
       }
       if (serverFiles.length) {
-        const serverMain = runVitestJson(serverRoot, 'vitest.config.ts', serverFiles, spawn);
-        const serverSlow = runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles, spawn);
+        const serverMain = await runVitestJson(serverRoot, 'vitest.config.ts', serverFiles, spawn);
+        const serverSlow = await runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles, spawn);
         // Two distinct flags, not one 'server' flag — see aggregate()'s
         // comment (re-review finding 5): a config crashing must not discard
         // the OTHER config's good results for the files it owns.
@@ -1190,4 +1210,4 @@ export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
 // scripts/lib/is-main-module.mjs — a resolve()-only comparison misses when
 // the invocation crosses a symlink/junction (#2291).
 const invokedAsCli = isDirectlyInvoked(import.meta.url);
-if (invokedAsCli) main();
+if (invokedAsCli) await main();
