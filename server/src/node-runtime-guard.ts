@@ -56,20 +56,41 @@ export function findCrashRange(
   return null;
 }
 
-/** The user-facing refusal message, or null when the version may start. */
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/** True when `execPath` lives inside the conda env named by `CONDA_PREFIX`
+ *  (Pinokio's env at <app>/env). Installing from nodejs.org cannot fix that
+ *  Node: the env's copy shadows PATH. */
+export function isCondaEnvNode(env: Readonly<Record<string, string | undefined>>, execPath: string): boolean {
+  const prefix = normalizePath(env.CONDA_PREFIX ?? '');
+  if (!prefix) return false;
+  return normalizePath(execPath).startsWith(`${prefix}/`);
+}
+
+/** The user-facing refusal message, or null when the version may start.
+ *  `env` and `execPath` let it tell a Pinokio (conda env) Node to run Update
+ *  again instead of pointing at nodejs.org. */
 export function nodeRuntimeRefusal(
   version: string,
   platform: string,
   ranges: readonly NodeCrashRange[],
   minimum: string,
+  env: Readonly<Record<string, string | undefined>> = {},
+  execPath = '',
 ): string | null {
   const range = findCrashRange(version, platform, ranges);
   if (!range) return null;
   const running = version.trim().replace(/^v?/, 'v');
-  return (
-    `Castwright can't start on Node ${running} on Windows: that Node release has a known networking crash (libuv#5106). ` +
-    `Install Node v${minimum} or newer from https://nodejs.org and start Castwright again.`
-  );
+  const head = `Castwright can't start on Node ${running} on Windows: that Node release has a known networking crash (libuv#5106). `;
+  if (isCondaEnvNode(env, execPath)) {
+    return (
+      head +
+      `This Node comes from Pinokio's environment. Run Update in Pinokio again: it installs Node v${minimum} or newer into that environment. Then start Castwright again.`
+    );
+  }
+  return head + `Install Node v${minimum} or newer from https://nodejs.org and start Castwright again.`;
 }
 
 /** Reads the range list from the repo-root package.json. Throws if the file or

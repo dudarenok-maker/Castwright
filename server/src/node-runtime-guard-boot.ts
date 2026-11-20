@@ -6,7 +6,7 @@
 import { loadCrashRanges, loadNodeMinimum, nodeRuntimeRefusal } from './node-runtime-guard.js';
 
 try {
-  const message = nodeRuntimeRefusal(process.version, process.platform, loadCrashRanges(), loadNodeMinimum());
+  const message = nodeRuntimeRefusal(process.version, process.platform, loadCrashRanges(), loadNodeMinimum(), process.env, process.execPath);
   if (message) {
     process.stderr.write(`${message}\n`);
     process.exit(1);

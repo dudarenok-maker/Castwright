@@ -80,6 +80,40 @@ describe('nodeRuntimeRefusal message', () => {
   );
 });
 
+describe('nodeRuntimeRefusal under a Pinokio conda env', () => {
+  const PREFIX = 'C:\\pinokio\\api\\castwright\\env';
+  const inEnv = { CONDA_PREFIX: PREFIX };
+  it('tells a conda-env Node to run Update again, not to install from nodejs.org', () => {
+    const msg = nodeRuntimeRefusal('v24.14.1', 'win32', RANGES, MINIMUM, inEnv, `${PREFIX}\\node.exe`);
+    expect(msg).toContain('v24.14.1');
+    expect(msg).toContain('Update');
+    expect(msg).toContain('v24.16.0');
+    expect(msg).toContain('libuv#5106');
+    expect(msg).not.toContain('nodejs.org');
+  });
+  it('matches the prefix case-insensitively and across slash styles', () => {
+    const msg = nodeRuntimeRefusal(
+      'v24.14.1', 'win32', RANGES, MINIMUM,
+      { CONDA_PREFIX: 'c:/Pinokio/api/castwright/env/' },
+      'C:\\pinokio\\api\\castwright\\env\\node.exe',
+    );
+    expect(msg).toContain('Update');
+  });
+  it('keeps the nodejs.org advice when the Node is outside the conda env', () => {
+    const msg = nodeRuntimeRefusal('v24.14.1', 'win32', RANGES, MINIMUM, inEnv, 'C:\\Program Files\\nodejs\\node.exe');
+    expect(msg).toContain('https://nodejs.org');
+    expect(msg).not.toContain('Update');
+  });
+  it('keeps the nodejs.org advice when CONDA_PREFIX is unset or empty', () => {
+    expect(nodeRuntimeRefusal('v24.14.1', 'win32', RANGES, MINIMUM, {}, `${PREFIX}\\node.exe`)).toContain('nodejs.org');
+    expect(nodeRuntimeRefusal('v24.14.1', 'win32', RANGES, MINIMUM, { CONDA_PREFIX: '' }, `${PREFIX}\\node.exe`)).toContain('nodejs.org');
+  });
+  it('a sibling directory sharing the prefix text is not inside the env', () => {
+    const msg = nodeRuntimeRefusal('v24.14.1', 'win32', RANGES, MINIMUM, inEnv, `${PREFIX}-old\\node.exe`);
+    expect(msg).toContain('nodejs.org');
+  });
+});
+
 describe('loadNodeMinimum', () => {
   it('derives the minimum from the real package.json engines floor', () => {
     expect(loadNodeMinimum()).toBe('24.16.0');
