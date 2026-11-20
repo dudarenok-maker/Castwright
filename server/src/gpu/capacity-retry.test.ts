@@ -927,7 +927,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
   it('#4533: a preview that gives up behind a live mint / design names the base that op holds', async () => {
     // Mid-mint the 0.6B + 1.7B are resident and VoiceDesign is gone, so the
     // old blocker list was empty and the error said only "free VRAM".
-    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, qwenBase17Loaded: true }));
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, qwenBase17Loaded: true, qwenDeviceKey: 'cuda:0' }));
     const give = (live: { design: number; mint: number }) =>
       withCapacityRetry(vi.fn(async () => noCapacityResponse(3_584, 'cuda:0')), {
         engine: 'coqui',
@@ -946,6 +946,55 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     await expect(give({ design: 0, mint: 0 })).rejects.toThrow(
       'Not enough GPU memory for coqui (3584MB) — free VRAM or attach a second GPU.',
     );
+  });
+
+  it("#4533: a mint / design that itself gives up is not told to wait for itself, and a base on another card is not named", async () => {
+    setProbeSidecarHealthProvider(async () => ({ qwenLoaded: true, qwenBase17Loaded: true, qwenDeviceKey: 'cuda:0' }));
+    const give = (
+      live: { design: number; mint: number },
+      purpose: 'design' | 'mint' | undefined,
+      deviceKey = 'cuda:0',
+    ) =>
+      withCapacityRetry(vi.fn(async () => noCapacityResponse(3_584, deviceKey)), {
+        engine: 'qwen',
+        purpose,
+        capacityProbe: { read: async () => fakeDevices(deviceKey, 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 2,
+        inFlightDesignMint: () => live,
+      });
+    // The caller's own increment (design-voice-core.ts) is the only live op: nothing else to wait for.
+    await expect(give({ design: 0, mint: 1 }, 'mint')).rejects.toThrow(
+      'Not enough GPU memory for qwen (3584MB) — free VRAM or attach a second GPU.',
+    );
+    await expect(give({ design: 1, mint: 0 }, 'design')).rejects.toThrow(
+      'Not enough GPU memory for qwen (3584MB) — free VRAM or attach a second GPU.',
+    );
+    // ...but another live op beside the caller is still named.
+    await expect(give({ design: 0, mint: 2 }, 'mint')).rejects.toThrow(/voice variant being made/);
+    // A base resident on a different card than the denied device is not named.
+    await expect(give({ design: 0, mint: 1 }, undefined, 'cuda:1')).rejects.toThrow(
+      'Not enough GPU memory for qwen (3584MB) — free VRAM or attach a second GPU.',
+    );
+  });
+
+  it('#4533: a design that is both in flight and resident is listed once', async () => {
+    setProbeSidecarHealthProvider(async () => ({
+      qwenLoaded: true,
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:0',
+    }));
+    const err = await withCapacityRetry(vi.fn(async () => noCapacityResponse(3_584, 'cuda:0')), {
+      engine: 'coqui',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      pollMs: 0,
+      maxAttempts: 2,
+      designMaxAttempts: 2,
+      inFlightDesignMint: () => ({ design: 1, mint: 0 }),
+    }).catch((e) => e);
+    expect((err as NoCapacityError).blockers).toHaveLength(1);
   });
 
   it('#2678 review finding F1: defaultDescribeBlockers does NOT name a design resident on a DIFFERENT device as a blocker', async () => {

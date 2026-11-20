@@ -134,7 +134,8 @@ export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
       remedy: 'It is in use by the voice variant being made — wait for the variant to finish, then try again.',
     });
   }
-  if (health.qwenDesignResident) {
+  /* The in-flight design above already says to wait for the design: don't list it twice. */
+  if (health.qwenDesignResident && !(health.designInFlight && health.qwenLoaded)) {
     out.push({
       model: 'A voice design',
       remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
