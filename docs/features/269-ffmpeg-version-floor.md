@@ -59,7 +59,8 @@ deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembl
   `BlockerCause` member.
 - **Reversibility:** set `castwright.ffmpeg.minimum` to `null`. Every consumer
   treats that as "no floor" and degrades to the previous presence-only
-  behaviour. This is the documented rollback if a CI or release leg ever goes
+  behaviour (the `ffmpeg-floor` CI leg warns with `::warning::` and skips its
+  version assert rather than failing). This is the documented rollback if a CI or release leg ever goes
   red on the version check — it does not require reverting the PR.
 
 ## Invariants to preserve
@@ -74,7 +75,9 @@ deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembl
    are near-certainly newer than the floor; rejecting one over a regex miss
    costs more than the drift being guarded.
 3. **A null floor disables the check** rather than throwing
-   (`preflight-ffmpeg.cjs:readFfmpegFloor`, `diagnostics/ffmpeg.ts:readFfmpegFloor`).
+   (`preflight-ffmpeg.cjs:readFfmpegFloor`, `diagnostics/ffmpeg.ts:readFfmpegFloor`). The `ffmpeg-floor` CI leg
+   follows suit: on a null floor its assert step emits a `::warning::` and exits 0, and
+   its wiring test skips the literal-floor checks.
 4. **Only the preflight hard-fails.** Every user-facing surface warns.
    `setup-readiness.ts:96` computes `ready` as
    `every(status === 'pass' || status === 'warn')`, so a below-floor ffmpeg must
@@ -148,6 +151,7 @@ deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembl
 - `pinokio-scripts/lib/ffmpeg-pin.test.js` (`node:test`, run by
   `npm run test:pinokio`) — the constraint is present in **both** `install.js`
   and `update.js`, both agree, and the major satisfies `package.json`.
+- `.github/workflows/verify.yml` `ffmpeg-floor` job (#4461) — runs the full server suite on `ubuntu-24.04` against the distro's apt ffmpeg 6.1.x, so the floor is tested in CI rather than only asserted. It deliberately uses apt, not `.github/actions/install-ffmpeg` (which pins the static 8.1.3 build the other legs use). It is a required leg (in the `verify` aggregator's `needs:`), but an apt infrastructure stall is non-blocking: the install step retries 3 times (each apt command bounded at `timeout -k 10 120`; 3 x (2 x 130 + 10) = 810 s fits the 15-minute step timeout, so the runner never kills the step first), and if it still fails it emits `::warning::ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run`, writes the same line to `$GITHUB_STEP_SUMMARY`, sets the step output `installed=false`, and exits 0. The version assert and both suites are gated on `steps.install_ffmpeg.outputs.installed == 'true'` (never `continue-on-error`), so they are skipped on a stall. When ffmpeg did install, a version-assert failure, a major mismatch or any test failure on 6.1 still turns the leg red. The cost is that a stalled run does not test the floor; the warning and summary line make that visible. `scripts/tests/workflow-wiring.test.mjs`'s `ffmpeg floor leg (#4461)` tests pin the job's shape.
 
 ### Manual acceptance walkthrough
 
