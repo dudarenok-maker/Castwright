@@ -64,6 +64,15 @@ describe('expandHomePath (#4446)', () => {
   it('empty home -> unchanged', () => {
     expect(expandHomePath('~/x', l(''))).toBe('~/x');
   });
+  it('trailing separator on home is trimmed before joining', () => {
+    expect(expandHomePath('~', l('/home/ann/'))).toBe('/home/ann');
+    expect(expandHomePath('~/x', l('/home/ann/'))).toBe('/home/ann/x');
+    expect(expandHomePath('~', w('C:\\Users\\ann\\'))).toBe('C:\\Users\\ann');
+    expect(expandHomePath('~\\x', w('C:\\Users\\ann\\'))).toBe('C:\\Users\\ann\\x');
+    expect(expandHomePath('~/x', w('C:\\Users\\ann\\/'))).toBe('C:\\Users\\ann/x');
+    expect(expandHomePath('~/x', l('/home/ann\\'))).toBe('/home/ann\\/x');
+    expect(expandHomePath('~', l('/'))).toBe('/');
+  });
   it('round-trips collapseHomePath for under-home paths on both platforms', () => {
     const wp = 'C:\\Users\\ann\\Audiobooks\\Lib';
     expect(expandHomePath(collapseHomePath(wp, w('C:\\Users\\ann')), w('C:\\Users\\ann'))).toBe(wp);

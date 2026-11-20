@@ -88,8 +88,7 @@ export function expandHomePath(
 ): string {
   const win = (opts.platform ?? process.platform) === 'win32';
   const isSep = (c: string | undefined) => c === '/' || (win && c === '\\');
-  let home = opts.home ?? homedir();
-  while (home.length > 1 && isSep(home[home.length - 1])) home = home.slice(0, -1);
+  const home = trimHome(opts.home ?? homedir(), win);
   if (!home) return p;
   if (p === '~') return home;
   if (p[0] === '~' && isSep(p[1])) return home + p.slice(1);
