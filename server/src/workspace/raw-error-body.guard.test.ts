@@ -40,6 +40,10 @@
        route doing `requestFailureMessageFs(err, err.message)` on an `execFile` error
        passes here and leaks -- scrub it too (models-inventory's `ollama rm` is the case).
      - SSE frames and job-poll bodies — out of scope by the #3702 decision.
+     - The scrubber exemption matches by function NAME only, so
+       `scrubPaths((e as Error).message)` passes for a lock-timeout error, whose message
+       carries the lock key and path. Scrub child output only; otherwise wrap the seam
+       around the scrubber (`requestFailureMessageFs(err, scrubChildOutput(...))`).
      - An aliased import of the seam passes (the callee NAME is matched).
      - `.status(5xx)` split from `.json(` by another chained call
        (`.status(500).type(...).json(...)`), and `e['message']` element access.
