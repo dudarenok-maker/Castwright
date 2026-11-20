@@ -2005,6 +2005,7 @@ test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeou
   const bound = Math.max(...bounds.map((b) => Number(b[2])));
   const kill = Math.max(...bounds.map((b) => Number(b[1])));
   const sleep = Number(sleeps[0][1]);
+  assert.ok(bounds.every((b) => Number(b[1]) > 0 && Number(b[2]) > 0), 'a 0 bound disables GNU timeout');
   assert.equal(attempts, 3, 'retry loop is no longer 3 attempts');
   // attempts x (2 apt commands x bound + inter-attempt sleep) must fit the step
   // timeout, else the runner kills the step before the warning can be emitted.
