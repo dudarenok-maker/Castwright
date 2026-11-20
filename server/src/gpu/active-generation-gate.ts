@@ -62,6 +62,10 @@ export interface QuietPollState {
   sawRepair: boolean;
   idleSince: number | null;
   epoch: number | null;
+  /** #4533 — the models the lever kept for a live design (`m06`) or mint (`m17`) that the
+      base keep set would have freed. A re-ask frees only those, never again what the first
+      ask already freed (a live mint reloads its 0.6B in its own phases). */
+  heldBack?: { m06: boolean; m17: boolean };
 }
 
 let provider: (() => string[]) | null = null;

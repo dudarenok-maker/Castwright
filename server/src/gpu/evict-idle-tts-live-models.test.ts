@@ -238,4 +238,35 @@ describe('evictIdleQwenBase #4533 review fixes', () => {
     expect(res.status).toBe(200);
     expect(unloads).toEqual(['1.7B']);
   });
+
+  it('re-asks during a live mint free the 0.6B at most once, and the held 1.7B only after the mint ends', async () => {
+    let live = { design: 0, mint: 1 };
+    const quiet = { minGapMs: 1, sawRepair: false, idleSince: null, epoch: null };
+    const keeps: Array<{ keep06?: boolean; keep17?: boolean }> = [];
+    const reconcile = vi.fn(async (keep: { keep06?: boolean; keep17?: boolean }) => {
+      keeps.push({ ...keep });
+      return !keep.keep06 || !keep.keep17;
+    });
+    const ask1 = () =>
+      evictIdleQwenBase({
+        modelKey: 'coqui-xtts-v2',
+        quiet,
+        _reconcile: reconcile,
+        _isAnyGenerationActive: () => false,
+        _probeHealth: async () => ({ qwenLoaded: true, kokoroLoaded: false }),
+        _inFlightDesignMint: () => live,
+      });
+    const results = [await ask1(), await ask1(), await ask1(), await ask1()];
+    expect(results).toEqual(['declined', 'declined', 'declined', 'declined']);
+    // Only the first ask frees the 0.6B; every re-ask keeps both models.
+    expect(keeps.filter((k) => !k.keep06)).toHaveLength(1);
+    expect(keeps.slice(1)).toEqual([
+      { keep06: true, keep17: true },
+      { keep06: true, keep17: true },
+      { keep06: true, keep17: true },
+    ]);
+    live = { design: 0, mint: 0 };
+    expect(await ask1()).toBe(true);
+    expect(keeps[4]).toEqual({ keep06: true, keep17: false });
+  });
 });

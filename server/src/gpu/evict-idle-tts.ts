@@ -263,7 +263,8 @@ export interface EvictIdleQwenBaseOpts {
     same is now true of a failed eviction, not just a no-op one.
     `'declined'` is a hold-off that can clear — a splice or QA repair in flight
     with NO render (#4075, before and after the health probe), another design
-    resident, or an unreadable probe (#4066) — and leaves the caller's one-shot
+    resident, an unreadable probe (#4066), or a model kept for another live
+    design or mint (#4533, after freeing the rest) — and leaves the caller's one-shot
     latch armed so a later poll asks again. A render in flight answers `false`
     and spends the latch, as before #4075: a book render is one POST per chapter,
     so there is a gap between one chapter's job deregistering and the next one
@@ -351,14 +352,15 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   let otherDesign = live.design - (opts.purpose === 'design' ? 1 : 0) > 0;
   const otherMint = live.mint - (opts.purpose === 'mint' ? 1 : 0) > 0;
   /* Set when the count kept a model the base keep set would have freed. */
-  let heldBack = false;
+  let held06 = false;
+  let held17 = false;
   const holdBack = (): void => {
     if (otherMint) {
-      if (!keep.keep17) heldBack = true;
+      if (!keep.keep17) held17 = true;
       keep.keep17 = true;
     }
     if (otherDesign) {
-      if (!keep.keep06) heldBack = true;
+      if (!keep.keep06) held06 = true;
       keep.keep06 = true;
     }
   };
@@ -399,6 +401,16 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     if (quiet?.sawRepair && epochMoved()) return restartStreak(now());
   }
 
+  /* A re-ask after a hold-back frees only what was held back: the first ask already freed
+     the rest, and a live mint reloads its 0.6B in its own phases (each 0.6B
+     unload also clears the clone-prompt cache), so freeing it again on every poll costs it. */
+  const prior = quiet?.heldBack;
+  if (prior) {
+    if (!prior.m06) keep.keep06 = true;
+    if (!prior.m17) keep.keep17 = true;
+  }
+  if (quiet) quiet.heldBack = held06 || held17 ? { m06: held06, m17: held17 } : undefined;
+
   /* Only the heavy shapes report what they freed (the light ops record no
      notice), so only they hand reconcile an out-param. */
   const freedNames: string[] | undefined = heavy ? [] : undefined;
@@ -408,5 +420,5 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
   if (freedNames) recordTtsAutoFree(freedNames, isDesign ? 'voice design' : 'Quality render');
   /* A hold-back is a "not yet" (the other op ends), not a "no": 'declined' leaves the caller's
      one-shot latch armed so a later poll frees what is then unused, like the decline above. */
-  return heldBack ? 'declined' : freed;
+  return held06 || held17 ? 'declined' : freed;
 }
