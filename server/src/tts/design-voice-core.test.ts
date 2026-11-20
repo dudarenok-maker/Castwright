@@ -285,6 +285,30 @@ describe('runVoiceDesign', () => {
     }
   });
 
+  it('#4533 — each purpose lands in ITS OWN count bucket while in flight (the lever subtracts the caller by purpose)', async () => {
+    const { postDesignAndCacheAudition } = await import('./design-voice-core.js');
+    const gate = await import('../gpu/active-generation-gate.js');
+    const base = {
+      target: 'http://sidecar/qwen/x',
+      fetchBody: '{}',
+      outVoiceId: 'v',
+      cacheScope: 's',
+      modelKey: 'qwen3-tts-1.7b' as const,
+      calibrationText: 't',
+      sidecarUrl: 'http://sidecar',
+      logContext: 'x',
+    };
+    const seen: Record<string, { design: number; mint: number }> = {};
+    for (const purpose of ['design', 'mint'] as const) {
+      mockWithCapacityRetry.mockImplementationOnce(async () => {
+        seen[purpose] = gate.inFlightDesignMintCounts();
+        throw new Error('stop');
+      });
+      await expect(postDesignAndCacheAudition({ ...base, purpose })).rejects.toBeTruthy();
+    }
+    expect(seen).toEqual({ design: { design: 1, mint: 0 }, mint: { design: 0, mint: 1 } });
+  });
+
   it('#4445 — a design that SUCCEEDS is released too (fresh module state, so a leaked count from an earlier test cannot mask it)', async () => {
     /* The throw-path test above would stay green if only the inner catch decremented. Re-import the
        core and the leaf gate so this test owns its counters: whatever earlier tests left behind is

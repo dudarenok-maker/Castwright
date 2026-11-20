@@ -33,7 +33,15 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTargetInputTooLargeError } from '../analyzer/errors.js';
+import {
+  beginRunEpoch,
+  currentRunEpochFence,
+  isRunEpochStale,
+  runWithRunEpoch,
+  staleRunWriteDropped,
+  type RunEpochFence,
+} from '../store/analysis-run-epoch.js';
+import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTargetInputTooLargeError, StaleRunEpochError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -1078,8 +1086,8 @@ export function mergeRosterChapter(
 /* srv-1 — persist a fold pass's lineage to the merge journal. Replace-all keeps
    kind:'fold' entries in lockstep with the current manuscript-edits.json
    (manual entries are preserved). Co-locate the CALL with the edits write so the
-   journal is persisted iff the sentences it describes are. Non-fatal at the call
-   site. Exported for analysis.journal-lock.test.ts only. */
+   journal and the sentences it describes are written by the same run. Non-fatal at the
+   call site. Exported for analysis.journal-lock.test.ts only. */
 export async function writeFoldJournal(
   bookDir: string,
   rewrites: Record<string, string>,
@@ -1087,8 +1095,15 @@ export async function writeFoldJournal(
   characters: ReadonlyArray<{ id: string; name: string }>,
 ): Promise<void> {
   /* Cast-locked: a manual merge appends to this journal under that lock, and the
-     read -> replace -> write must not straddle it (#4031). */
+     read -> replace -> write must not straddle it (#4031). #3437 - a run superseded by now
+     writes no lineage: the fence is captured before the lock and checked inside it. The
+     invariant: a journal lands only if its check ran before the bump, and Start fresh's
+     cast-locked `clearAffectedRefs` always runs after the bump, so any stale refs it left
+     are cleared. (A bump between this check and the persist's own may land the journal
+     without the sentences; that is benign.) */
+  const fence = currentRunEpochFence();
   await withCastLock(bookDir, async () => {
+    if (staleRunWriteDropped(fence, 'fold journal')) return;
     const journal = await loadCastMerges(bookDir);
     await saveCastMerges(
       bookDir,
@@ -1112,8 +1127,10 @@ export async function writeDedupJournal(
   preDedupSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
   preDedupRoster: ReadonlyArray<{ id: string; name: string }>,
 ): Promise<void> {
-  /* Cast-locked, as writeFoldJournal (#4031). */
+  /* Cast-locked, and fenced, as writeFoldJournal (#4031, #3437). */
+  const fence = currentRunEpochFence();
   await withCastLock(bookDir, async () => {
+    if (staleRunWriteDropped(fence, 'dedup journal')) return;
     const journal = await loadCastMerges(bookDir);
     await saveCastMerges(
       bookDir,
@@ -1459,6 +1476,8 @@ async function snapshotPlannedRoster(a: {
        will refuse it too. End the run here (curated `cast-unreadable`) rather than
        running all of Phase 1 first. Nothing was written to the damaged file. */
     if (persistErr instanceof PriorCastUnreadableError) throw persistErr;
+    /* #3437 - a superseded run must stop here, not carry on through Phase 1. */
+    if (persistErr instanceof StaleRunEpochError) throw persistErr;
     console.warn(`[analysis] ${a.site} cast.json snapshot failed`, persistErr);
   }
   if (!out.s) return { characters, plan, idMap: {}, ledgers };
@@ -1731,6 +1750,9 @@ async function runPlannedPersist(
    already), anything else wrapped in `AnalysisPersistError`, whose message is fixed and
    path-free. A lock timeout never comes here: it has its own slot (`persistLockTimeout`). */
 function parkPersistFailure(tag: string, writeDir: string, err: unknown): unknown {
+  /* #3437 - a superseded run's dropped write is not a failure: it ends as `aborted` (the
+     top-level catch), and `staleRunWriteDropped` already logged the drop. */
+  if (err instanceof StaleRunEpochError) return err;
   console.error(`${tag} failed to persist .audiobook/* for`, writeDir, err);
   return err instanceof PriorCastUnreadableError ? err : new AnalysisPersistError(err);
 }
@@ -4138,6 +4160,9 @@ export interface AnalysisJobReplayState {
 }
 
 export interface AnalysisJob {
+  /** #3437 — this run's per-manuscript epoch fence, set at registration. Optional only because
+      test harnesses build jobs by hand; the runners run their body inside it when present. */
+  runEpoch?: RunEpochFence;
   controller: AbortController;
   subscribers: Set<AnalysisSubscriber>;
   manuscriptId: string;
@@ -5586,6 +5611,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   job.settled = new Promise<void>((resolve) => {
     job.resolveSettled = resolve;
   });
+  /* #3437 — bump the per-manuscript run epoch synchronously with the registration (no await
+     before the `.set`), and before the runner starts, so it precedes this run's Start-fresh
+     clear / rm / un-confirm. */
+  job.runEpoch = beginRunEpoch(manuscriptId);
   inFlightAnalysisByManuscript.set(manuscriptId, job);
   /* #3435 decision A — a writer from here until it leaves (endJob + drain). */
   joinWriters(job);
@@ -5745,7 +5774,18 @@ export function nonStoryOverflowWarningMessage(ctx: Parameters<typeof reasoningO
   );
 }
 
-export async function runMainAnalyzerJob(
+export function runMainAnalyzerJob(
+  job: AnalysisJob,
+  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
+  selection: AnalyzerSelection,
+  opts: MainAnalyzerJobOpts,
+): Promise<void> {
+  /* #3437 — the whole body runs inside the job's run-epoch fence when it has one. */
+  const body = () => runMainAnalyzerJobBody(job, record, selection, opts);
+  return job.runEpoch ? runWithRunEpoch(job.runEpoch, body) : body();
+}
+
+async function runMainAnalyzerJobBody(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
@@ -6021,12 +6061,16 @@ export async function runMainAnalyzerJob(
             /* Plan 289 — also rotates `editEpoch` (a wipe moves every revision
                token), so this write is no longer skipped for an unconfirmed
                book. */
-            await updateStateAtDir(freshBookDir, (freshState) => ({
-              ...freshState,
-              castConfirmed: false,
-              editEpoch: mintEditEpoch(),
-              updatedAt: new Date().toISOString(),
-            }));
+            const unconfirmFence = currentRunEpochFence();
+            await updateStateAtDir(freshBookDir, (freshState) => {
+              if (staleRunWriteDropped(unconfirmFence, 'state.json un-confirm')) return null;
+              return {
+                ...freshState,
+                castConfirmed: false,
+                editEpoch: mintEditEpoch(),
+                updatedAt: new Date().toISOString(),
+              };
+            });
           },
         );
       }
@@ -8625,7 +8669,9 @@ export async function runMainAnalyzerJob(
              not land, so the job must end as an error rather than report
              success over an unwritten state.json. */
           try {
+            const stateFence = currentRunEpochFence();
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
+              if (staleRunWriteDropped(stateFence, 'state.json')) return null;
               /* Preserve the user-owned flags — analysis owns chapter titles/
                  durations, the user owns `excluded` and `held`. Match on id so a
                  re-run after a re-parse picks up whichever ids the parser
@@ -8745,6 +8791,13 @@ export async function runMainAnalyzerJob(
            paths reach, so nothing is logged here — just park. */
         if (persistErr instanceof BookDirUnresolvedError) {
           staleBookDirError = persistErr;
+        } else if (persistErr instanceof StaleRunEpochError) {
+          /* #3437 - a superseded run's dropped write is not a persist failure: park it, so
+             it ends `aborted` (top-level catch) and never logs `failed to persist`. */
+          persistWriteError ??= persistErr;
+        } else if (isRunEpochStale(job.runEpoch)) {
+          /* #3437 - a superseded run ends `aborted` (top-level catch): its late fault (a parked
+             lock timeout) is not a persist failure to report. */
         } else {
           console.error('[analysis] failed to persist .audiobook/* for', writeDir, persistErr);
           /* Non-fatal — only a best-effort step lands here, or the drift-refused
@@ -8808,6 +8861,10 @@ export async function runMainAnalyzerJob(
       }
     }
 
+    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success,
+       and never a drift refusal either: it ends `aborted` (checked ahead of the drift ending,
+       whose `halted` snapshot would otherwise land against the run that replaced this one). */
+    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     if (phase1DriftExceeded) {
       /* Phase 1 produced too many orphan attributions to trust. Emit an
          `attribution_drift` error and skip the `result` event so the
@@ -8833,7 +8890,9 @@ export async function runMainAnalyzerJob(
        structured `aborted` error so the UI distinguishes "you paused
        this" from "the analyzer broke" — the frontend uses code:
        'aborted' to short-circuit its error-banner path. */
-    if (e instanceof AnalysisAbortedError) {
+    /* #3437 - a superseded run ends `aborted` whatever it parked or threw (a lock timeout, an
+       earlier persist failure): classifying it would halt the book on a run that no longer owns it. */
+    if (e instanceof AnalysisAbortedError || isRunEpochStale(job.runEpoch)) {
       console.log(`[analysis] aborted ${manuscriptId} (paused or displaced)`);
       endJob(job, {
         kind: 'error',
@@ -9312,6 +9371,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   job.settled = new Promise<void>((resolve) => {
     job.resolveSettled = resolve;
   });
+  /* #3437 — same synchronous epoch bump as the main registration. */
+  job.runEpoch = beginRunEpoch(manuscriptId);
   inFlightSubsetByManuscript.set(manuscriptId, job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
   /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
@@ -9381,7 +9442,21 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
    (sticky semantics). Broadcasts every event to job.subscribers and
    tracks replay state via trackForReplay; endJob handles teardown +
    map deregistration on every exit path. */
-export async function runSubsetAnalyzerJob(
+export function runSubsetAnalyzerJob(
+  job: AnalysisJob,
+  record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
+  selection: AnalyzerSelection,
+  phase1Selection: AnalyzerSelection,
+  toRun: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>['chapterHints'],
+  allowStage1ShrinkSubset: boolean,
+): Promise<void> {
+  /* #3437 — the whole body runs inside the job's run-epoch fence when it has one. */
+  const body = () =>
+    runSubsetAnalyzerJobBody(job, record, selection, phase1Selection, toRun, allowStage1ShrinkSubset);
+  return job.runEpoch ? runWithRunEpoch(job.runEpoch, body) : body();
+}
+
+async function runSubsetAnalyzerJobBody(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
@@ -10778,7 +10853,9 @@ export async function runSubsetAnalyzerJob(
              not land, so the job must end as an error rather than report
              success over an unwritten state.json. */
           try {
+            const stateFence = currentRunEpochFence();
             wroteStateJson = await updateStateAtDir(writeDir, async (prev) => {
+              if (staleRunWriteDropped(stateFence, 'state.json')) return null;
               /* Preserve the user-owned `excluded` + `held` flags across the
                  subset re-attribution — `held` (the "Not queued" intent) isn't
                  re-derivable from disk, so it must ride through here. */
@@ -10870,6 +10947,11 @@ export async function runSubsetAnalyzerJob(
            only — the durable STALE_BOOK_DIR log lives in the run catch (V7·1). */
         if (persistErr instanceof BookDirUnresolvedError) {
           staleBookDirError = persistErr;
+        } else if (persistErr instanceof StaleRunEpochError) {
+          /* #3437 - as the main job: parked, so it ends `aborted`, not a persist failure. */
+          persistWriteError ??= persistErr;
+        } else if (isRunEpochStale(job.runEpoch)) {
+          /* #3437 - as the main job: superseded, so ends `aborted`; nothing to report. */
         } else {
           console.error(
             '[analysis-subset] failed to persist .audiobook/* for',
@@ -10908,6 +10990,10 @@ export async function runSubsetAnalyzerJob(
       }
     }
 
+    /* #3437 - a run whose writes were (partly) dropped as superseded never reports success,
+       and never a drift refusal either: it ends `aborted` (checked ahead of the drift ending,
+       whose `halted` snapshot would otherwise land against the run that replaced this one). */
+    if (isRunEpochStale(job.runEpoch)) throw new StaleRunEpochError();
     if (subsetDriftExceeded) {
       endJob(job, {
         kind: 'error',
@@ -10921,7 +11007,8 @@ export async function runSubsetAnalyzerJob(
   } catch (e) {
     /* #4031 N2 — a pause or failure during Phase 0a still lands a faulted re-mint. */
     await flushPendingCachePatch();
-    if (e instanceof AnalysisAbortedError) {
+    /* #3437 - a superseded run ends `aborted` whatever it parked or threw, as in the main job. */
+    if (e instanceof AnalysisAbortedError || isRunEpochStale(job.runEpoch)) {
       /* Plan 32 D1: subset retries now survive a client disconnect,
          so AnalysisAbortedError here means an EXPLICIT /pause
          aborted the run. Broadcast paused state to every still-

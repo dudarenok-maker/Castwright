@@ -263,7 +263,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
   } catch (err) {
     return res.status(500).json({
       code: 'provider_unavailable',
-      message: (err as Error).message,
+      message: requestFailureMessageFs(err, (err as Error).message),
     });
   }
 
@@ -303,7 +303,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     if (err instanceof NoCapacityError) {
       return res.status(503).json({
         code: 'no_capacity',
-        message: err.message,
+        message: requestFailureMessageFs(err, err.message),
         blockers: err.blockers,
       });
     }
