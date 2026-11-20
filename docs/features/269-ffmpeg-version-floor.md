@@ -59,7 +59,8 @@ deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembl
   `BlockerCause` member.
 - **Reversibility:** set `castwright.ffmpeg.minimum` to `null`. Every consumer
   treats that as "no floor" and degrades to the previous presence-only
-  behaviour. This is the documented rollback if a CI or release leg ever goes
+  behaviour (the `ffmpeg-floor` CI leg warns with `::warning::` and skips its
+  version assert rather than failing). This is the documented rollback if a CI or release leg ever goes
   red on the version check — it does not require reverting the PR.
 
 ## Invariants to preserve
@@ -74,7 +75,9 @@ deferred drift half) · [`272-golden-assembly-comparison.md`](272-golden-assembl
    are near-certainly newer than the floor; rejecting one over a regex miss
    costs more than the drift being guarded.
 3. **A null floor disables the check** rather than throwing
-   (`preflight-ffmpeg.cjs:readFfmpegFloor`, `diagnostics/ffmpeg.ts:readFfmpegFloor`).
+   (`preflight-ffmpeg.cjs:readFfmpegFloor`, `diagnostics/ffmpeg.ts:readFfmpegFloor`). The `ffmpeg-floor` CI leg
+   follows suit: on a null floor its assert step emits a `::warning::` and exits 0, and
+   its wiring test skips the literal-floor checks.
 4. **Only the preflight hard-fails.** Every user-facing surface warns.
    `setup-readiness.ts:96` computes `ready` as
    `every(status === 'pass' || status === 'warn')`, so a below-floor ffmpeg must

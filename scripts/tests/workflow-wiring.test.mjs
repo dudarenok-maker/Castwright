@@ -1742,14 +1742,45 @@ test('ffmpeg floor leg (#4461): version assert reads the floor from package.json
   assert.match(step, /scripts\/preflight-ffmpeg\.cjs/, 'version-assert step does not load scripts/preflight-ffmpeg.cjs');
   assert.match(step, /parseFfmpegVersion/, 'version-assert step does not use parseFfmpegVersion');
   assert.match(step, /isBelowFloor/, 'version-assert step does not use isBelowFloor');
-  const floor = ffmpegFloorValue();
-  const major = String(floor).split('.')[0];
-  assert.ok(!step.includes(floor), `version-assert step hardcodes the floor "${floor}"; read it via readFfmpegFloor() so a package.json bump cannot drift`);
-  assert.doesNotMatch(
-    step,
-    new RegExp(`(["'\`])${major}\\1`),
-    `version-assert step hardcodes the floor major "${major}" as a quoted literal; derive it from readFfmpegFloor()`,
-  );
+  const violation = floorLiteralViolation(step, ffmpegFloorValue());
+  assert.equal(violation, null, violation ?? undefined);
+});
+
+// A null floor is the documented rollback (docs/features/269, Reversibility): there is no
+// literal to hunt for, and `step.includes(null)` would coerce to "null" and match the
+// step's own "floor is null" text. Returns a failure message, or null when clean.
+function floorLiteralViolation(step, floor) {
+  if (typeof floor !== 'string' || !floor) return null;
+  const major = floor.split('.')[0];
+  if (step.includes(floor)) return `version-assert step hardcodes the floor "${floor}"; read it via readFfmpegFloor() so a package.json bump cannot drift`;
+  if (new RegExp(`(["'\`])${major}\\1`).test(step)) return `version-assert step hardcodes the floor major "${major}" as a quoted literal; derive it from readFfmpegFloor()`;
+  return null;
+}
+
+test('ffmpeg floor leg (#4461): the literal-floor check is skipped for a null floor (rollback)', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  assert.ok(step.includes('null'), 'fixture assumption: the assert step mentions a null floor');
+  assert.equal(floorLiteralViolation(step, null), null, 'null floor must not trip the literal check via includes(null)');
+  assert.notEqual(floorLiteralViolation(`x = '6.1'`, '6.1'), null, 'a real literal must still be caught');
+});
+
+test('ffmpeg floor leg (#4461): a null floor warns and passes the assert step (documented rollback)', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  const m = step.match(/node -e '\n([\s\S]*?)\n {10}'/);
+  assert.ok(m, 'cannot extract the node -e script from the version-assert step');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-null-'));
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    writeFileSync(join(dir, 'scripts', 'preflight-ffmpeg.cjs'), readFileSync(resolve(repoRoot, 'scripts', 'preflight-ffmpeg.cjs')));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ castwright: { ffmpeg: { minimum: null } } }));
+    const r = spawnSync(process.execPath, ['-e', m[1]], { cwd: dir, encoding: 'utf8' });
+    assert.equal(r.status, 0, `assert step failed on a null floor (exit ${r.status}): ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /^::warning::.*floor/m, `no ::warning:: on stdout: ${r.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('ffmpeg floor leg (#4461): test step runs the full fast and slow suites, never --changed', () => {

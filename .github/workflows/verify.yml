@@ -471,7 +471,7 @@ jobs:
             const { execFileSync } = require("child_process");
             const p = require("./scripts/preflight-ffmpeg.cjs");
             const floor = p.readFfmpegFloor();
-            if (!floor) { console.error("floor is null"); process.exit(1); }
+            if (!floor) { console.log("::warning::ffmpeg-floor: castwright.ffmpeg.minimum is null (documented rollback); floor assert skipped"); process.exit(0); }
             const out = execFileSync("ffmpeg", ["-version"], { encoding: "utf8" });
             const v = p.parseFfmpegVersion(out);
             if (!v) { console.error("unparseable ffmpeg version"); process.exit(1); }
