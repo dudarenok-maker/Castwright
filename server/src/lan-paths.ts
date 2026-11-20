@@ -1,4 +1,6 @@
+import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { basename, dirname, sep } from 'node:path';
 import type { Request } from './http.js';
 import { isLoopbackRequest } from './loopback.js';
 
@@ -7,55 +9,76 @@ import { isLoopbackRequest } from './loopback.js';
    collapsed to `~`. A path not under home is passed through unchanged. */
 
 /* `shortPaths`: paths the OS wrote in 8.3 form, the alias is learned from them (win32
-   only; default `os.tmpdir()` and the TEMP/TMP/APPDATA/LOCALAPPDATA env paths). */
-type PathOpts = { home?: string; platform?: NodeJS.Platform; shortPaths?: string[] };
+   only; default `os.tmpdir()` and the TEMP/TMP/APPDATA/LOCALAPPDATA env paths).
+   `resolve`: the filesystem resolver (default `realpathSync.native` of the longest
+   existing prefix); a test injects one because real 8.3 names can't be made on demand. */
+type PathOpts = {
+  home?: string;
+  platform?: NodeJS.Platform;
+  shortPaths?: string[];
+  resolve?: (p: string) => string;
+};
 
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/* Windows 8.3 short form of a long segment: the base (text before the last dot) loses
-   spaces and `. " / \ [ ] : ; = , +`, keeps its first six chars, then `~N`; a dotted
-   segment also gets `.` plus the first three valid chars after the last dot. Only that
-   shape is derivable without the filesystem (`~N` depends on which siblings exist), so a
-   candidate is only a shape check: `MICHAE~1` and `MICHAE~2` both fit `Michael
-   Dudarenok`, `FIRSTN~1.LAS` fits `firstname.lastname`. A segment that is already a
-   valid 8.3 name (base <= 8, extension <= 3, one dot at most) has none. */
-const stripInvalid83 = (s: string) => s.replace(/[ .",;=:[\]+]/g, '');
-
-function isShortFormOf(seg: string, cand: string): boolean {
-  const dot = seg.lastIndexOf('.');
-  const base = dot < 0 ? seg : seg.slice(0, dot);
-  const ext = dot < 0 ? '' : seg.slice(dot + 1);
-  const plain83 = !/[ +,;=[\]]/.test(seg) && !base.includes('.') && base.length > 0 && base.length <= 8 && ext.length <= 3;
-  if (plain83) return false;
-  const prefix = stripInvalid83(base).slice(0, 6);
-  const suffix = stripInvalid83(ext).slice(0, 3);
-  if (!prefix) return false;
-  const tail = `~\\d+${suffix ? `\\.${escRe(suffix)}` : ''}$`;
-  /* After four `~N` collisions Windows switches to `<first 2 chars><4 hex digits>~N`. */
-  const hash = prefix.length >= 2 ? `|${escRe(prefix.slice(0, 2))}[0-9a-f]{4}` : '';
-  return new RegExp(`^(?:${escRe(prefix)}${hash})${tail}`, 'i').test(cand);
+/* `realpathSync.native` of `p`, or of its longest existing prefix with the rest appended
+   as written. Never throws: nothing resolvable returns `p` unchanged. */
+function resolveExisting(p: string): string {
+  let cur = p;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync.native(cur);
+      return rest.length ? [real, ...rest].join(sep) : real;
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return p;
+      rest.unshift(basename(cur));
+      cur = parent;
+    }
+  }
 }
 
+const normKey = (p: string) => p.split(/[\\/]+/).filter(Boolean).join('/').toLowerCase();
+
 /* The user's OWN alias per home segment, learned from paths the OS itself writes in
-   short form (`os.tmpdir()`, TEMP, ...). A path counts only when every segment of the
-   home prefix matches (case-insensitively) or is a valid short form of it. Matching
-   only that exact alias keeps a same-prefix sibling (`MICHAE~2`) from collapsing to
-   `~`, which `expandHomePath` would turn into the user's own home. No hint, no alias. */
-function shortAliases(segs: string[], hints: string[]): (string | undefined)[] {
+   short form (`os.tmpdir()`, TEMP, ...). Windows' short-name algorithm is not modelled
+   (non-ASCII letters, hash forms and `~N` collisions all break a model); the filesystem
+   is asked instead: a hint's first `segs.length` segments count only when they resolve
+   to the home dir itself, and then each differing hint segment is the alias. A sibling
+   (`MICHAE~2`) resolves to another folder, so it never matches, which keeps it from
+   collapsing to `~` (`expandHomePath` would turn that into the user's own home). No
+   hint, an unresolvable one, or a resolver error: no alias. */
+const hintCache = new Map<string, (string | undefined)[]>();
+
+function shortAliases(
+  home: string,
+  segs: string[],
+  hints: string[],
+  resolve?: (p: string) => string,
+): (string | undefined)[] {
   const out: (string | undefined)[] = [];
+  const homeKey = normKey(home);
   for (const hint of hints) {
     const hs = hint.split(/[\\/]+/);
     if (hs.length < segs.length) continue;
-    const found: (string | undefined)[] = [];
-    const ok = segs.every((s, i) => {
-      if (hs[i].toLowerCase() === s.toLowerCase()) return true;
-      if (i > 0 && isShortFormOf(s, hs[i])) {
-        found[i] = hs[i];
-        return true;
+    const cacheKey = `${home}|${hint}`;
+    let found = resolve ? undefined : hintCache.get(cacheKey);
+    if (!found) {
+      found = [];
+      try {
+        const prefix = hs.slice(0, segs.length).join('\\');
+        if (normKey((resolve ?? resolveExisting)(prefix)) === homeKey) {
+          segs.forEach((s, i) => {
+            if (i > 0 && hs[i].toLowerCase() !== s.toLowerCase()) found![i] = hs[i];
+          });
+        }
+      } catch {
+        found = [];
       }
-      return false;
-    });
-    if (ok) found.forEach((a, i) => (out[i] ??= a));
+      if (!resolve) hintCache.set(cacheKey, found);
+    }
+    found.forEach((a, i) => (out[i] ??= a));
   }
   return out;
 }
@@ -69,13 +92,13 @@ function defaultShortPaths(): string[] {
    separators between segments (`C:\Users\a`, `C:/Users/a`, the doubled
    `C:\\Users\\a` of a Python repr), plus, on win32, the user's own discovered 8.3
    alias of a long segment. Callers append their own boundary lookahead. */
-function homeRegexSource(home: string, win: boolean, shortPaths?: string[]): string {
-  const sep = win ? '[\\\\/]+' : '/+';
+function homeRegexSource(home: string, win: boolean, shortPaths?: string[], resolve?: (p: string) => string): string {
+  const sepRe = win ? '[\\\\/]+' : '/+';
   const segs = home.split(win ? /[\\/]+/ : /\/+/);
-  const aliases = win ? shortAliases(segs, shortPaths ?? defaultShortPaths()) : [];
+  const aliases = win ? shortAliases(home, segs, shortPaths ?? defaultShortPaths(), resolve) : [];
   return segs
     .map((s, i) => (i > 0 && win && aliases[i] ? `(?:${escRe(s)}|${escRe(aliases[i]!)})` : escRe(s)))
-    .join(sep);
+    .join(sepRe);
 }
 
 function trimHome(home: string, win: boolean): string {
@@ -88,7 +111,7 @@ export function collapseHomePath(p: string, opts: PathOpts = {}): string {
   const win = (opts.platform ?? process.platform) === 'win32';
   const home = trimHome(opts.home ?? homedir(), win);
   if (!home) return p;
-  const re = new RegExp(`^${homeRegexSource(home, win, opts.shortPaths)}(?=${win ? '[\\\\/]' : '/'}|$)`, win ? 'i' : '');
+  const re = new RegExp(`^${homeRegexSource(home, win, opts.shortPaths, opts.resolve)}(?=${win ? '[\\\\/]' : '/'}|$)`, win ? 'i' : '');
   return p.replace(re, '~');
 }
 
@@ -125,7 +148,7 @@ export function textForClient(req: Request, text: string, opts: PathOpts = {}): 
      the end (`ann.` collapses, `ann.old` does not) and is left in the output. */
   const stop = `$|[\\s'"\`)\\]}>:,;]`;
   const end = `(?=${win ? '[\\\\/]' : '/'}|${stop}|[.!?]+(?:${stop}))`;
-  return text.replace(new RegExp(`${homeRegexSource(home, win, opts.shortPaths)}${end}`, win ? 'gi' : 'g'), '~');
+  return text.replace(new RegExp(`${homeRegexSource(home, win, opts.shortPaths, opts.resolve)}${end}`, win ? 'gi' : 'g'), '~');
 }
 
 /* Install/bootstrap/pull job snapshots: `step` / `error` are free text that can

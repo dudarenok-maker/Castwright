@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { collapseHomePath, expandHomePath, textForClient } from './lan-paths.js';
 
 const w = (home: string) => ({ home, platform: 'win32' as const });
@@ -170,80 +174,100 @@ describe('separator-insensitive home matching (#4446 review)', () => {
     expect(textForClient(lan, '/home/ann\\x', o)).toBe('/home/ann\\x');
     expect(textForClient(lan, "'/home/ann'", o)).toBe("'~'");
   });
-  describe('8.3 short spelling of a long home segment (win32)', () => {
-    const home = 'C:\\Users\\Michael Dudarenok';
-    // the OS writes os.tmpdir() / TEMP in short form: that is where the alias is learned
-    const shortPaths = ['C:\\Users\\MICHAE~1\\AppData\\Local\\Temp'];
-    const o = { home, platform: 'win32' as const, shortPaths };
-    it("collapses the user's own alias, learned from a short-form env path", () => {
-      expect(collapseHomePath('C:\\Users\\MICHAE~1\\AppData\\Local\\Temp\\OllamaSetup.exe', o))
-        .toBe('~\\AppData\\Local\\Temp\\OllamaSetup.exe');
-      expect(collapseHomePath('c:/users/michae~1/x', o)).toBe('~/x');
-      expect(textForClient(lan, "'C:\\\\Users\\\\MICHAE~1\\\\x'", o)).toBe("'~\\\\x'");
+  /* Real `dir /x` pairs; the resolver stands in for the filesystem, since real 8.3 names
+     can't be produced on demand. A prefix not in the table resolves to itself, like a
+     path that does not exist. */
+  const fakeFs = (table: Record<string, string>) => {
+    const key = (p: string) => p.split(/[\\/]+/).join('\\').toLowerCase();
+    const map = new Map(Object.entries(table).map(([k, v]) => [key(k), v]));
+    return (p: string) => map.get(key(p)) ?? p;
+  };
+  describe('8.3 short spelling of a home segment (win32)', () => {
+    const at = (home: string, hint: string, table: Record<string, string>) => ({
+      home,
+      platform: 'win32' as const,
+      shortPaths: [hint],
+      resolve: fakeFs(table),
     });
-    it('never collapses a sibling sharing the six-character prefix', () => {
-      expect(collapseHomePath('C:\\Users\\MICHAE~2\\x', o)).toBe('C:\\Users\\MICHAE~2\\x');
-      expect(textForClient(lan, 'open C:\\Users\\MICHAE~2\\x', o)).toBe('open C:\\Users\\MICHAE~2\\x');
-      expect(collapseHomePath('C:\\Users\\SOMEON~1\\x', o)).toBe('C:\\Users\\SOMEON~1\\x');
+    const temp = '\\AppData\\Local\\Temp';
+    const real: [string, string][] = [
+      ['Michael Dudarenok', 'MICHAE~1'],
+      ['firstname.lastname', 'FIRSTN~1.LAS'],
+      ['firstname.lastname', 'FI8B6D~1.LAS'],
+      ['john.q.smith', 'JOHNQ~1.SMI'],
+      ['mary-jane.watson', 'MARY-J~1.WAT'],
+      ['jo.smith', 'JO1CC0~1.SMI'],
+      ['Zoë.Smith', 'ZO5721~1.SMI'],
+      ['josé', 'JOS~1'],
+      ['Müller', 'MLLER~1'],
+      ['André', 'ANDR~1'],
+      ['Søren', 'SREN~1'],
+      ['François', 'FRANOI~1'],
+      ['José García', 'JOSGAR~1'],
+      ['Björn Ek', 'BJRNEK~1'],
+      ['Ana Núñez', 'ANANEZ~1'],
+      ['renée.dupont', 'RENE~1.DUP'],
+      ['j.smith', 'JCA64~1.SMI'],
+      ['x.abcd', 'X8B92~1.ABC'],
+      ['ab.cdefgh', 'ABA3E4~1.CDE'],
+    ];
+    it.each(real)('collapses the real alias of %s (%s) in both helpers', (long, short) => {
+      const home = `C:\\Users\\${long}`;
+      const o = at(home, `C:\\Users\\${short}${temp}`, { [`C:\\Users\\${short}`]: home });
+      expect(collapseHomePath(`C:\\Users\\${short}${temp}\\OllamaSetup.exe`, o)).toBe(`~${temp}\\OllamaSetup.exe`);
+      expect(collapseHomePath(`c:/users/${short.toLowerCase()}/x`, o)).toBe('~/x');
+      expect(textForClient(lan, `[WinError 5] Access is denied: 'C:\\\\Users\\\\${short}\\\\x'`, o))
+        .toBe("[WinError 5] Access is denied: '~\\\\x'");
     });
-    it('collapses no short form when no alias is discoverable', () => {
-      for (const sp of [[], ['C:\\Users\\Michael Dudarenok\\Temp'], ['C:\\Users\\SOMEON~1\\Temp'], ['D:\\Temp']]) {
-        expect(collapseHomePath('C:\\Users\\MICHAE~1\\x', { home, platform: 'win32', shortPaths: sp }))
-          .toBe('C:\\Users\\MICHAE~1\\x');
-      }
-    });
-    it('ignores a hint whose segment is not a short form of the home segment', () => {
-      const sp = ['C:\\Users\\OTHERS~1\\Temp'];
-      expect(collapseHomePath('C:\\Users\\OTHERS~1\\x', { home, platform: 'win32', shortPaths: sp }))
-        .toBe('C:\\Users\\OTHERS~1\\x');
-    });
-    it('short names are only recognised for segments that need one', () => {
-      const sp = ['C:\\Users\\DUDAR~1\\Temp'];
-      expect(collapseHomePath('C:\\Users\\DUDAR~1\\x', { home: wh, platform: 'win32', shortPaths: sp }))
-        .toBe('C:\\Users\\DUDAR~1\\x');
-    });
-  });
-  describe('8.3 short spelling of a dotted home segment (win32)', () => {
-    const at = (home: string, hint: string) => ({ home, platform: 'win32' as const, shortPaths: [hint] });
-    it('collapses the extension form of a first.last profile', () => {
-      const o = at('C:\\Users\\firstname.lastname', 'C:\\Users\\FIRSTN~1.LAS\\AppData\\Local\\Temp');
-      expect(collapseHomePath('C:\\Users\\FIRSTN~1.LAS\\AppData\\Local\\Temp\\OllamaSetup.exe', o))
-        .toBe('~\\AppData\\Local\\Temp\\OllamaSetup.exe');
-      expect(textForClient(lan, "[WinError 5] Access is denied: 'C:\\\\Users\\\\FIRSTN~1.LAS\\\\AppData\\\\Local\\\\Temp\\\\pip-x'", o))
-        .toBe("[WinError 5] Access is denied: '~\\\\AppData\\\\Local\\\\Temp\\\\pip-x'");
-      const j = at('C:\\Users\\john.smith', 'C:\\Users\\JOHN~1.SMI\\Temp');
-      expect(collapseHomePath('C:\\Users\\JOHN~1.SMI\\x', j)).toBe('~\\x');
-    });
-    it('a short dotted name whose extension exceeds 3 characters still has an alias', () => {
-      const o = at('C:\\Users\\jo.smith', 'C:\\Users\\JO~1.SMI\\Temp');
-      expect(collapseHomePath('C:\\Users\\JO~1.SMI\\x', o)).toBe('~\\x');
-    });
-    it('never collapses a sibling alias or one without the extension', () => {
-      const o = at('C:\\Users\\john.smith', 'C:\\Users\\JOHN~1.SMI\\Temp');
+    it('never collapses a sibling or the alias without its extension', () => {
+      const home = 'C:\\Users\\john.smith';
+      const o = at(home, `C:\\Users\\JOHN~1.SMI${temp}`, { 'C:\\Users\\JOHN~1.SMI': home });
       expect(collapseHomePath('C:\\Users\\JOHN~2.SMI\\x', o)).toBe('C:\\Users\\JOHN~2.SMI\\x');
       expect(collapseHomePath('C:\\Users\\JOHN~1\\x', o)).toBe('C:\\Users\\JOHN~1\\x');
-      const none = at('C:\\Users\\john.smith', 'D:\\Temp');
-      expect(collapseHomePath('C:\\Users\\JOHN~1.SMI\\x', none)).toBe('C:\\Users\\JOHN~1.SMI\\x');
+      expect(textForClient(lan, 'open C:\\Users\\JOHN~2.SMI\\x', o)).toBe('open C:\\Users\\JOHN~2.SMI\\x');
     });
-    it('collapses the hash-style alias Windows uses after many collisions', () => {
-      const o = at('C:\\Users\\firstname.lastname', 'C:\\Users\\FI3A4B~1.LAS\\AppData\\Local\\Temp');
-      expect(collapseHomePath('C:\\Users\\FI3A4B~1.LAS\\x', o)).toBe('~\\x');
-      expect(collapseHomePath('C:\\Users\\FI3A4B~2.LAS\\x', o)).toBe('C:\\Users\\FI3A4B~2.LAS\\x');
-    });
-    it('rejects a hash-style hint whose first two chars differ or whose tail is not hex', () => {
-      for (const h of ['C:\\Users\\XY3A4B~1.LAS\\Temp', 'C:\\Users\\FIZZZZ~1.LAS\\Temp', 'C:\\Users\\FI3A4B~1\\Temp']) {
-        const o = at('C:\\Users\\firstname.lastname', h);
-        expect(collapseHomePath(h.replace('\\Temp', '\\x'), o)).toBe(h.replace('\\Temp', '\\x'));
+    it('collapses no short form when no alias resolves to home', () => {
+      const home = 'C:\\Users\\Michael Dudarenok';
+      const x = 'C:\\Users\\MICHAE~1\\x';
+      const cases: Record<string, string>[] = [{}, { 'C:\\Users\\MICHAE~1': 'C:\\Users\\Someone Else' }];
+      for (const table of cases) {
+        expect(collapseHomePath(x, at(home, `C:\\Users\\MICHAE~1${temp}`, table))).toBe(x);
+      }
+      for (const hint of ['C:\\Users\\Michael Dudarenok\\Temp', 'D:\\Temp', 'C:\\Users']) {
+        expect(collapseHomePath(x, at(home, hint, { 'C:\\Users\\MICHAE~1': home }))).toBe(x);
       }
     });
-    it('a base shorter than six characters keeps its short alias', () => {
-      const o = at('C:\\Users\\ab.cdefgh', 'C:\\Users\\AB~1.CDE\\Temp');
-      expect(collapseHomePath('C:\\Users\\AB~1.CDE\\x', o)).toBe('~\\x');
-      expect(collapseHomePath('C:\\Users\\AB~2.CDE\\x', o)).toBe('C:\\Users\\AB~2.CDE\\x');
+    it('never throws when the resolver does', () => {
+      const o = {
+        home: 'C:\\Users\\Müller',
+        platform: 'win32' as const,
+        shortPaths: ['C:\\Users\\MLLER~1\\Temp'],
+        resolve: () => {
+          throw new Error('EPERM');
+        },
+      };
+      expect(collapseHomePath('C:\\Users\\MLLER~1\\x', o)).toBe('C:\\Users\\MLLER~1\\x');
+      expect(collapseHomePath('C:\\Users\\Müller\\x', o)).toBe('~\\x');
     });
-    it('a valid 8.3 dotted name has no alias', () => {
-      const o = at('C:\\Users\\ann.old', 'C:\\Users\\ANN~1.OLD\\Temp');
-      expect(collapseHomePath('C:\\Users\\ANN~1.OLD\\x', o)).toBe('C:\\Users\\ANN~1.OLD\\x');
+    it('resolves a hint whose tail does not exist through its existing prefix', () => {
+      const home = process.cwd();
+      const o = { home, platform: 'win32' as const, shortPaths: [`${home}\\no-such-dir\\Temp`] };
+      expect(collapseHomePath(`${home}\\x`, o)).toBe('~\\x');
+    });
+    it.skipIf(process.platform !== 'win32')('matches the alias the OS itself assigns to a non-ASCII profile', () => {
+      const parent = mkdtempSync(join(tmpdir(), 'lanp-'));
+      try {
+        const home = join(parent, 'José García');
+        mkdirSync(home);
+        const dir = execFileSync('cmd', ['/c', 'dir', '/x', '/ad', parent], { encoding: 'utf8' });
+        const m = /(\S+~\d+\S*)\s+José García/i.exec(dir);
+        if (!m) return; // 8.3 name generation is disabled on this volume
+        const o = { home, platform: 'win32' as const, shortPaths: [join(parent, m[1], 'Temp')] };
+        expect(collapseHomePath(join(parent, m[1], 'x'), o)).toBe('~\\x');
+        expect(collapseHomePath(`${join(parent, m[1])}0\\x`, o)).not.toMatch(/^~/);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
+      }
     });
   });
 });
