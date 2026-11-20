@@ -521,3 +521,45 @@ describe('install job routes collapse step/error on the real app (#4446/#4498, r
     }
   });
 });
+
+/* ---- #4446: unauthenticated GET /cert/root.crt 404 `probed` paths ---- */
+
+describe('GET /cert/root.crt 404 probed paths collapse on the real app (#4446, real-app test)', () => {
+  const envKeys = ['MKCERT_CAROOT', 'LOCALAPPDATA', 'XDG_DATA_HOME', 'PATH'];
+  const prev: Record<string, string | undefined> = {};
+  beforeAll(() => {
+    for (const k of envKeys) prev[k] = process.env[k];
+    // Force the no-CA 404: no env CA, a fake default dir under the fake home, no mkcert on PATH.
+    process.env.MKCERT_CAROOT = join(home, 'caroot');
+    process.env.LOCALAPPDATA = join(home, 'AppData', 'Local');
+    process.env.XDG_DATA_HOME = join(home, '.local', 'share');
+    process.env.PATH = join(home, 'empty-bin');
+  });
+  afterAll(() => {
+    for (const k of envKeys) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  });
+
+  it('loopback: probed.env and probed.defaultForPlatform stay absolute under the fake home', async () => {
+    const lo = await getJson('127.0.0.1', '/cert/root.crt');
+    expect(lo.status).toBe(404);
+    expect(lo.body.probed.env.startsWith(home)).toBe(true);
+    expect(lo.body.probed.defaultForPlatform.startsWith(home)).toBe(true);
+  });
+
+  describe.skipIf(!lanIp)('from a LAN address', () => {
+    it('collapses home to ~ in every probed field and leaks neither the fake home nor the real username', async () => {
+      const lo = await getJson('127.0.0.1', '/cert/root.crt');
+      const lan = await getJson(lanIp!, '/cert/root.crt');
+      expect(lan.status).toBe(404);
+      expect(lan.body.probed.env).toBe('~' + lo.body.probed.env.slice(home.length));
+      expect(lan.body.probed.defaultForPlatform).toBe('~' + lo.body.probed.defaultForPlatform.slice(home.length));
+      expect(lan.body.probed.mkcertCli).toBeNull();
+      const raw = JSON.stringify(lan.body);
+      expect(raw).not.toContain(home);
+      if (realUser) expect(raw.toLowerCase()).not.toContain(realUser.toLowerCase());
+    });
+  });
+});
