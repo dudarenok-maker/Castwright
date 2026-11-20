@@ -21,6 +21,10 @@
      freed is recorded in ./tts-auto-free-notice.ts so the browser can show
      the "unloaded to free VRAM" notice. The no-render-in-flight gate below
      applies unchanged.
+   - #4533 (owner decision, model-scoped, count-minus-self): it never unloads
+     a model ANOTHER live design or mint is using. A live design keeps the
+     0.6B base (and VoiceDesign with it), a live mint keeps the 1.7B base; the
+     rest is freed as before. The caller's own design/mint is subtracted.
    - Only when NO render is in flight anywhere. A resident base during a render
      may be in active use, and a mixed-tier book can have both tiers live at
      once (a character pinned above its book's tier). This also makes the lever
@@ -89,6 +93,7 @@
    an edge for cycle detection (see qwen-tier-reconcile-gate.ts), so the
    injection type below is spelled out locally instead. */
 import {
+  inFlightDesignMintCounts,
   isAnyGenerationActive,
   isRepairOnlyKnownActive,
   readSpliceEpoch,
@@ -242,6 +247,9 @@ export interface EvictIdleQwenBaseOpts {
       the leaf gate's `probeSidecarHealthIfRegistered`. Only consulted for a
       design or Quality op (#4066). */
   _probeHealth?: () => Promise<SidecarHealthSnapshot | null>;
+  /** Injected for tests. In-flight design / mint counts (#4533) — defaults to
+      the leaf gate's `inFlightDesignMintCounts`. */
+  _inFlightDesignMint?: () => { design: number; mint: number };
 }
 
 /** Returns true when the underlying `reconcileResidentQwenTiers` actually
@@ -255,7 +263,8 @@ export interface EvictIdleQwenBaseOpts {
     same is now true of a failed eviction, not just a no-op one.
     `'declined'` is a hold-off that can clear — a splice or QA repair in flight
     with NO render (#4075, before and after the health probe), another design
-    resident, or an unreadable probe (#4066) — and leaves the caller's one-shot
+    resident, an unreadable probe (#4066), or a model kept for another live
+    design or mint (#4533, after freeing the rest) — and leaves the caller's one-shot
     latch armed so a later poll asks again. A render in flight answers `false`
     and spends the latch, as before #4075: a book render is one POST per chapter,
     so there is a gap between one chapter's job deregistering and the next one
@@ -332,12 +341,43 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
       ? { keep06: !wants17, keep17: wants17 }
       : { keep06: false, keep17: false };
 
+  /* #4533 — model-scoped, count-minus-self: never unload a model ANOTHER live
+     design or mint is using. A live design needs the 0.6B base AND VoiceDesign
+     (`/unload {engine:'qwen'}` nulls both), a live mint needs the 1.7B base
+     (`unload_base17()` does not wait for it). The caller's own design/mint is
+     already counted (design-voice-core increments before it asks this lever),
+     so it is subtracted — #4066's "auto-free, then design" holds for the caller.
+     A non-design caller (e.g. a Coqui preview) subtracts nothing. */
+  const live = (opts._inFlightDesignMint ?? inFlightDesignMintCounts)();
+  let otherDesign = live.design - (opts.purpose === 'design' ? 1 : 0) > 0;
+  const otherMint = live.mint - (opts.purpose === 'mint' ? 1 : 0) > 0;
+  /* Set when the count kept a model the base keep set would have freed. */
+  let held06 = false;
+  let held17 = false;
+  const holdBack = (): void => {
+    if (otherMint) {
+      if (!keep.keep17) held17 = true;
+      keep.keep17 = true;
+    }
+    if (otherDesign) {
+      if (!keep.keep06) held06 = true;
+      keep.keep06 = true;
+    }
+  };
+  /* A non-heavy caller (a Coqui preview) has no probe: it applies the counts now. A heavy
+     caller applies them after the probe below, where `qwenDesignResident` says a design is
+     really ON the sidecar. The counter increments before the design's own admission, so a
+     design still refused for capacity is counted yet uses no model — two of them would
+     otherwise keep the 0.6B for each other and both fail. */
+  const heavyCaller = isDesign || wants17;
+  if (!heavyCaller) holdBack();
+
   /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro. Residency
      is read up front only to decide that (and whether another design is
      resident); what the notice names comes from what reconcile really
      unloaded, so a failed probe or a failed Kokoro unload never loses or
      misstates the event. */
-  const heavy = isDesign || wants17;
+  const heavy = heavyCaller;
   if (heavy) {
     const health = await (opts._probeHealth ?? probeSidecarHealthIfRegistered)().catch(() => null);
     /* Fail CLOSED on an unreadable probe (throw, unregistered, or the
@@ -353,11 +393,24 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     if (health.qwenDesignResident === true && (!opts.deviceKey || health.qwenDeviceKey === opts.deviceKey)) {
       return 'declined';
     }
+    otherDesign = otherDesign && health.qwenDesignResident === true;
+    holdBack();
     if (health.kokoroLoaded === true && isGpuFamily(health.devices?.kokoro)) keep.keepKokoro = false;
     /* The probe above can take up to ~2 s; a render may have started in it. */
     if (anyGenerationActive()) return activeAnswer();
     if (quiet?.sawRepair && epochMoved()) return restartStreak(now());
   }
+
+  /* A re-ask after a hold-back frees only what was held back: the first ask already freed
+     the rest, and a live mint reloads its 0.6B in its own phases (each 0.6B
+     unload also clears the clone-prompt cache), so freeing it again on every poll costs it. Only
+     while something is still held back: once the other op ends the 0.6B it reloaded is idle again. */
+  const prior = quiet?.heldBack;
+  if (prior && (held06 || held17)) {
+    if (!prior.m06) keep.keep06 = true;
+    if (!prior.m17) keep.keep17 = true;
+  }
+  if (quiet) quiet.heldBack = held06 || held17 ? { m06: held06, m17: held17 } : undefined;
 
   /* Only the heavy shapes report what they freed (the light ops record no
      notice), so only they hand reconcile an out-param. */
@@ -366,5 +419,7 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     ? await (freedNames ? opts._reconcile(keep, opts.signal, freedNames) : opts._reconcile(keep, opts.signal))
     : await reconcileResidentQwenTiersIfRegistered(keep, opts.signal, freedNames);
   if (freedNames) recordTtsAutoFree(freedNames, isDesign ? 'voice design' : 'Quality render');
-  return freed;
+  /* A hold-back is a "not yet" (the other op ends), not a "no": 'declined' leaves the caller's
+     one-shot latch armed so a later poll frees what is then unused, like the decline above. */
+  return held06 || held17 ? 'declined' : freed;
 }
