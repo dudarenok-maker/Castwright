@@ -31,6 +31,7 @@ import {
   type SidecarHealthSnapshot,
 } from './sidecar-health-gate.js';
 import {
+  inFlightDesignMintCounts,
   isGenerationKnownActive,
   isRepairOnlyKnownActive,
   type QuietPollState,
@@ -182,6 +183,14 @@ export interface CapacityRetryOpts {
       for the default `describeBlockers`; defaults to the leaf gate's
       `isRepairOnlyKnownActive`. */
   isRepairOnlyKnownActive?: () => boolean;
+  /** #4533 — injected in-flight design / mint counts for the default
+      `describeBlockers`; defaults to the leaf gate's `inFlightDesignMintCounts`. */
+  inFlightDesignMint?: () => { design: number; mint: number };
+  /** #4533 — the caller's own design / mint purpose. Its own in-flight count is
+      already in `inFlightDesignMint` (design-voice-core increments before it
+      calls here), so the give-up error subtracts it rather than telling the op to
+      wait for itself. */
+  purpose?: 'design' | 'mint';
   /** #4066 — true when the blocked op is a chapter render's own synth call
       (`SidecarTtsProvider`). The render is then the one asking for capacity,
       so the give-up message never names it as what holds the model. */
@@ -218,6 +227,10 @@ interface BlockerMessageContext {
   isGenerationKnownActive: () => boolean;
   isRepairOnlyKnownActive: () => boolean;
   isRenderSynth: boolean;
+  /** #4533 — in-flight voice design / variant mint counts. */
+  inFlightDesignMint: () => { design: number; mint: number };
+  /** #4533 — the caller's own purpose, subtracted from the counts above. */
+  purpose?: 'design' | 'mint';
 }
 
 /* #4066 — the effective "Preload Kokoro at startup" setting, so a resident
@@ -240,12 +253,19 @@ async function defaultDescribeBlockers(
     isGenerationKnownActive,
     isRepairOnlyKnownActive,
     isRenderSynth: false,
+    inFlightDesignMint: inFlightDesignMintCounts,
   },
 ): Promise<VramBlocker[]> {
   try {
     const health = await fetchHealth();
     if (!health) return [];
+    const live = ctx.inFlightDesignMint();
+    /* #4533 — count-minus-self, and device-qualified like `qwenDesignResident`
+       below: a base resident on another card is not what blocks this one. */
+    const sameDevice = health.qwenDeviceKey === deviceKey;
     return describeVramBlockers({
+      designInFlight: sameDevice && live.design - (ctx.purpose === 'design' ? 1 : 0) > 0,
+      mintInFlight: sameDevice && live.mint - (ctx.purpose === 'mint' ? 1 : 0) > 0,
       coquiLoaded: health.modelLoaded,
       kokoroLoaded: health.kokoroLoaded,
       kokoroDevice: health.devices?.kokoro,
@@ -337,6 +357,8 @@ export async function withCapacityRetry(
     isGenerationKnownActive: opts.isGenerationKnownActive ?? isGenerationKnownActive,
     isRepairOnlyKnownActive: opts.isRepairOnlyKnownActive ?? isRepairOnlyKnownActive,
     isRenderSynth: opts.isRenderSynth === true,
+    inFlightDesignMint: opts.inFlightDesignMint ?? inFlightDesignMintCounts,
+    purpose: opts.purpose,
   };
   const describeBlockers =
     opts.describeBlockers ?? ((deviceKey: string) => defaultDescribeBlockers(deviceKey, undefined, messageCtx));

@@ -20,6 +20,16 @@ export class AnalysisAbortedError extends Error {
   }
 }
 
+/** #3437 — a newer analysis run has started for this manuscript, so this (superseded) run
+    must stop writing. Extends AnalysisAbortedError so both job runners' top-level catch ends
+    it as the quiet `code: 'aborted'` ending. */
+export class StaleRunEpochError extends AnalysisAbortedError {
+  constructor(message = 'analysis run superseded by a newer run for this manuscript') {
+    super(message);
+    this.name = 'StaleRunEpochError';
+  }
+}
+
 /** "Couldn't reach the analyzer at all", from any transport. FallbackAnalyzer
     (index.ts) uses `instanceof AnalyzerUnreachableError` as the SOLE trigger
     for Gemini fallback; every other error propagates and hard-fails. */

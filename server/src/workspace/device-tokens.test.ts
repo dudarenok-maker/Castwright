@@ -327,6 +327,25 @@ it('isValidDeviceToken still fails closed (returns false, does not throw) on a d
 // 404 "Unknown device.", claiming the credential never existed when the
 // truth is "can't currently read the store; that device may still be
 // valid." It now throws instead of resolving false.
+// #3702 -- the error's message reaches LAN clients (pairing / devices 503 bodies),
+// so it must not carry the absolute workspace path; the path is logged at load.
+it('DeviceStoreDegradedError message is path-free; the degraded load warns with the path (#3702)', () => {
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  let caught: unknown;
+  try {
+    dt.listDevices();
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBeInstanceOf(dt.DeviceStoreDegradedError);
+  expect((caught as Error).message).not.toContain(dir);
+  expect((caught as Error).message).not.toContain('device-tokens.json');
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(dir, 'device-tokens.json')));
+  warn.mockRestore();
+});
+
 it('revokeDevice throws DeviceStoreDegradedError (not a false "not found") while the store is degraded', async () => {
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1028,5 +1047,39 @@ it('an ordinary write with no hand-edit does not warn (#2208, hunted per indepen
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   await dt.touchLastSeen('g1', Date.now()); // ordinary write — g1's disk copy is untouched and still valid
   expect(warn).not.toHaveBeenCalled();
+  warn.mockRestore();
+});
+
+// #3702 -- the 503 body no longer carries the path, so the operator must be able to
+// find the file in the log. The write path (cache already populated, file corrupted
+// after load) re-reads the disk inside `persist` and used to fail with 0 log lines.
+it.each([
+  ['createDevice', () => dt.createDevice('Second', 30)],
+  ['revokeDevice', (id: string) => dt.revokeDevice(id)],
+])('%s after the file is corrupted post-load throws DeviceStoreDegradedError AND logs the path (#3702)', async (_n, act) => {
+  const { device } = await dt.createDevice('First', 30); // populates the cache; the next loadSync won't touch the disk
+  writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  await expect(act(device.id)).rejects.toThrow(dt.DeviceStoreDegradedError);
+
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining(join(dir, 'device-tokens.json')));
+  warn.mockRestore();
+});
+
+// #3702 -- the other degraded-read return: the file parses but `devices` is not an
+// array. Same contract: throws, and the log names the path exactly once.
+it.each([
+  ['createDevice', () => dt.createDevice('Second', 30)],
+  ['revokeDevice', (id: string) => dt.revokeDevice(id)],
+])('%s after the file is rewritten post-load with a non-array "devices" throws AND logs the path once (#3702)', async (_n, act) => {
+  const { device } = await dt.createDevice('First', 30);
+  writeFileSync(join(dir, 'device-tokens.json'), '{"devices":{}}', 'utf8');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  await expect(act(device.id)).rejects.toThrow(dt.DeviceStoreDegradedError);
+
+  const named = warn.mock.calls.filter((c) => String(c[0]).includes(join(dir, 'device-tokens.json')));
+  expect(named).toHaveLength(1);
   warn.mockRestore();
 });

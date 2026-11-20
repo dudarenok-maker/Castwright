@@ -545,3 +545,29 @@ describe('PATCH /:bookId/cover/framing (plan 40)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+/* #3702 / #4508 -- the cover 502 bodies wrap the error's message in the fs seam, but a
+   CoverSourceError / CoverDownloadError / UploadError is built with a fixed sentence and
+   no `code`/`syscall`, so the seam never curates it: the wrap is inert by construction.
+   Pin that a real source failure's message reaches the client unchanged. */
+describe('cover router -- a real CoverSourceError reaches the client unchanged (#4508)', () => {
+  it('POST 502 body is the source error message', async () => {
+    const { CoverSourceError } = await import('../cover/sources/types.js');
+    const search = await import('../cover/search.js');
+    const spy = vi
+      .spyOn(search, 'findCandidateById')
+      .mockRejectedValue(new CoverSourceError('openlibrary', 'http', 'openlibrary search returned HTTP 503.'));
+    const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const quietErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover`)
+      .set('Content-Type', 'application/json')
+      .send({ candidateId: 'openlibrary:111' });
+    spy.mockRestore();
+    quiet.mockRestore();
+    quietErr.mockRestore();
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('openlibrary search returned HTTP 503.');
+    expect(res.body.kind).toBe('http');
+  });
+});

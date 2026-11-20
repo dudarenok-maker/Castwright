@@ -53,6 +53,7 @@ import {
 import { classifyPackageFault } from '../tts/models-status.js';
 import type { AnalysisEngine } from '../analyzer/model-id.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -561,7 +562,11 @@ modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) =>
       });
     }
     console.error('[models-inventory] removal failed', err);
-    return res.status(500).json({ error: requestFailureMessageFs(err, err.message || 'Removal failed.') });
+    /* `ollama rm`'s execFile rejection carries the child's stderr in `.message` (with a
+       numeric `code`, so the fs seam never fires on it) -- scrub it line by line (#3702). */
+    return res
+      .status(500)
+      .json({ error: requestFailureMessageFs(err, scrubChildOutput(err.message || 'Removal failed.')) });
   }
 });
 
