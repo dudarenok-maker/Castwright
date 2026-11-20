@@ -3,7 +3,10 @@
 // still be all-skips (a missing baseline dir, --pass-with-no-tests, a
 // project-conditional test.skip); a config-spelling test cannot see that.
 //
-//   node scripts/assert-playwright-ran.mjs <report.json>
+//   node scripts/assert-playwright-ran.mjs <report.json> [--projects a,b]
+//
+// Deliberately strict: any `failed` OR `flaky` test fails the check, so a test
+// that only passed on retry blocks `publish` (owner decision 2026-11-21).
 import { readFileSync } from 'node:fs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
@@ -18,10 +21,28 @@ export function checkStats(report) {
   return null;
 }
 
+// Passing tests per project, so a testIgnore that empties one project fails
+// even when the totals look healthy.
+export function checkProjects(report, projects) {
+  const passed = Object.fromEntries(projects.map((p) => [p, 0]));
+  const walk = (suite) => {
+    for (const spec of suite.specs ?? []) {
+      for (const t of spec.tests ?? []) {
+        if (t.status === 'expected' && t.projectName in passed) passed[t.projectName]++;
+      }
+    }
+    for (const child of suite.suites ?? []) walk(child);
+  };
+  for (const suite of report?.suites ?? []) walk(suite);
+  const empty = projects.filter((p) => passed[p] === 0);
+  return empty.length ? `no passing tests in project(s): ${empty.join(', ')}` : null;
+}
+
 if (isDirectlyInvoked(import.meta.url)) {
-  const file = process.argv[2];
+  const [file, flag, list] = process.argv.slice(2);
+  const projects = flag === '--projects' && list ? list.split(',') : [];
   if (!file) {
-    console.error('usage: assert-playwright-ran.mjs <report.json>');
+    console.error('usage: assert-playwright-ran.mjs <report.json> [--projects a,b]');
     process.exit(2);
   }
   let report;
@@ -31,10 +52,13 @@ if (isDirectlyInvoked(import.meta.url)) {
     console.error(`cannot read the Playwright JSON report ${file}: ${e.message}`);
     process.exit(1);
   }
-  const problem = checkStats(report);
+  const problem = checkStats(report) ?? checkProjects(report, projects);
   if (problem) {
     console.error(`Playwright outcome check failed: ${problem}`);
     process.exit(1);
   }
-  console.log(`Playwright outcome check ok: ${report.stats.expected} passed, 0 skipped`);
+  console.log(
+    `Playwright outcome check ok: ${report.stats.expected} passed, 0 skipped` +
+      (projects.length ? ` (projects: ${projects.join(', ')})` : ''),
+  );
 }

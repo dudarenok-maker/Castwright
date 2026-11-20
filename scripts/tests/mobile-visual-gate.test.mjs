@@ -92,7 +92,8 @@ for (const project of ['mobile-chrome', 'tablet-chrome']) {
 // Config spellings can all look right while the run is an all-skip (a missing
 // baseline dir, --pass-with-no-tests, a project-conditional test.skip). So the
 // visual step writes a JSON report and a follow-up step asserts its OUTCOME.
-const ASSERT = 'node scripts/assert-playwright-ran.mjs playwright-visual-report.json';
+const ASSERT =
+  'node scripts/assert-playwright-ran.mjs playwright-visual-report.json --projects mobile-chrome,tablet-chrome';
 for (const wf of ['cross-os', 'release']) {
   test(`${wf}.yml asserts the visual run's outcome from its JSON report`, () => {
     const doc = yaml.load(read(`.github/workflows/${wf}.yml`));
@@ -116,4 +117,18 @@ test('assert-playwright-ran fails on no tests, skips, failures; passes on a clea
   assert.match(checkStats({ stats: { ...ok.stats, unexpected: 1 } }), /failed/);
   assert.match(checkStats({ stats: { ...ok.stats, flaky: 1 } }), /flaky/);
   assert.match(checkStats({}), /no stats/);
+});
+
+// A report can pass the totals while one project ran nothing (a testIgnore that
+// empties tablet-chrome): require passes PER expected project.
+const pw = (project, status = 'expected') => ({ specs: [{ tests: [{ projectName: project, status }] }] });
+test('assert-playwright-ran requires passes in every expected project', async () => {
+  const { checkProjects } = await import('../assert-playwright-ran.mjs');
+  const both = { suites: [{ suites: [pw('mobile-chrome'), pw('tablet-chrome')] }] };
+  const mobileOnly = { suites: [{ suites: [pw('mobile-chrome'), pw('mobile-chrome')] }] };
+  const want = ['mobile-chrome', 'tablet-chrome'];
+  assert.equal(checkProjects(both, want), null);
+  assert.match(checkProjects(mobileOnly, want), /tablet-chrome/);
+  assert.match(checkProjects({ suites: [] }, want), /mobile-chrome/);
+  assert.equal(checkProjects(mobileOnly, []), null);
 });

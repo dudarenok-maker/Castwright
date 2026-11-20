@@ -178,7 +178,7 @@ jobs:
       # Outcome check: the gate must have RUN tests (and skipped none), not just
       # exited 0 (an all-skip run is green).
       - name: Assert the visual baselines actually ran
-        run: node scripts/assert-playwright-ran.mjs playwright-visual-report.json
+        run: node scripts/assert-playwright-ran.mjs playwright-visual-report.json --projects mobile-chrome,tablet-chrome
 
       - name: Upload Playwright report + test results on failure
         if: failure()
