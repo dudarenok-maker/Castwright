@@ -107,6 +107,45 @@ test.describe('QA report card', () => {
           speakerCheckEnabled: false,
           attribution: 'full',
           chaptersEligible: 2,
+          chaptersScored: 0,
+          chaptersEmbedFailed: 0,
+          charactersOnRoster: 2,
+          charactersChecked: 0,
+          charactersPending: ['narrator', 'halloran'],
+          charactersNeedingRerender: [],
+          mismatches: [],
+          inconclusiveCount: 0,
+          uncheckedCharacterIds: [],
+        },
+        configDrift: { counts: { mild: 0, moderate: 0, severe: 0 }, events: [] },
+      };
+    });
+
+    await page.goto('/#/books/sb/listen');
+    await waitForListenViewReady(page, /Solway Bay/i);
+
+    const off = page.getByTestId('qa-speaker-check-off');
+    await expect(off).toBeVisible();
+    await expect(off).toContainText('Render-integrity QA (voice match) is off');
+    await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
+  });
+
+  /* #4454 — check off but chapters already scored: the past result stays (it is true for the
+     audio scored) with a "now off" suffix, no gate-off row, and still no Resume. */
+  test('keeps the past voice-match result with a "now off" note when the gate is off after scoring', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __mockQaReportOverride: unknown }).__mockQaReportOverride = {
+        bookId: 'sb',
+        generatedAt: '2026-07-08T00:00:00.000Z',
+        chaptersRendered: 2,
+        chaptersTotal: 2,
+        totalLines: 40,
+        acoustic: { linesChecked: 40, linesRerecorded: 0, chaptersFlagged: 0 },
+        asr: { linesVerified: 40, linesFlaggedDrift: 0 },
+        voiceDrift: {
+          speakerCheckEnabled: false,
+          attribution: 'full',
+          chaptersEligible: 2,
           chaptersScored: 2,
           chaptersEmbedFailed: 0,
           charactersOnRoster: 2,
@@ -124,9 +163,8 @@ test.describe('QA report card', () => {
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page, /Solway Bay/i);
 
-    const off = page.getByTestId('qa-speaker-check-off');
-    await expect(off).toBeVisible();
-    await expect(off).toContainText('Render-integrity QA (voice match) is off');
+    await expect(page.getByText('1 of 2 characters checked, 0 mismatches · Render-integrity QA is now off')).toBeVisible();
+    await expect(page.getByTestId('qa-speaker-check-off')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
   });
 });
