@@ -201,15 +201,15 @@ test('parseRegister excludes a row with fewer than 6 cells (no Quarantined cell)
 //
 // #2496: the real register's #1981 row is NOT quarantined — its Quarantined
 // cell reads "Not quarantined — still gates" — so it must be excluded from
-// parseRegister's entries entirely, unlike #2235 which IS quarantined. Only
-// #2235 is asserted present below; #1981 is asserted absent.
+// parseRegister's entries entirely, unlike #4244 which IS quarantined. Only
+// #4244 is asserted present below; #1981 is asserted absent.
 test('parseRegister returns one entry per quarantined data row of the real flaky-register.md (regression)', () => {
   const testDir = dirname(fileURLToPath(import.meta.url));
   const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
   const markdown = readFileSync(registerPath, 'utf8');
   const entries = parseRegister(markdown);
   // The real register currently has 2 data rows (#1981, not quarantined, and
-  // #2235, quarantined) but only the quarantined one(s) become entries.
+  // #4244, quarantined) but only the quarantined one(s) become entries.
   // Assert at least 1 to avoid brittleness when new quarantined entries are added.
   assert.ok(entries.length >= 1, `expected at least 1 quarantined entry from the real register, got ${entries.length}`);
   const files = entries.map((e) => e.file);
@@ -217,10 +217,10 @@ test('parseRegister returns one entry per quarantined data row of the real flaky
     !files.includes('server/src/routes/book-state-preserve-voices.test.ts'),
     '#1981 is not quarantined and must be excluded',
   );
-  assert.ok(files.includes('server/src/routes/export.test.ts'), 'missing #2235 row');
+  assert.ok(files.includes('server/src/routes/book-state.queue-prune.test.ts'), 'missing #4244 row');
   // Issue numbers must be extracted from the Issue cell, not the Test cell.
-  const by2235 = entries.find((e) => e.issueNumbers.includes(2235));
-  assert.ok(by2235, '#2235 row must carry tracking issue #2235');
+  const by4244 = entries.find((e) => e.issueNumbers.includes(4244));
+  assert.ok(by4244, '#4244 row must carry tracking issue #4244');
   // The real register must parse cleanly with zero unparsed rows (finding 6).
   // Excluding a non-quarantined row is not a parse failure, so this must
   // still be 0 even though #1981 is no longer in `entries`.
