@@ -793,7 +793,7 @@ export function formatReport({ entries, runs, issueStates, os, load }) {
         const all = runs > 0 && load.loadedRuns === runs;
         const span = cov
           ? `, spanning +${Math.round(cov.firstStartMs / 1000)}s to +${Math.round(cov.lastEndMs / 1000)}s from the load's launch${measured
-            ? ` (${cov.firstPct}%-${cov.lastPct}% of that load's measured ${Math.round(cov.passMs / 1000)}s pass)`
+            ? ` (${cov.firstPct}%-${cov.lastPct}% of that load's measured ${Math.round(cov.passMs / 1000)}s pass, exit ${load.passExitCode ?? 'unknown'})`
             : ' (that load\'s pass did not finish inside the wall-clock budget, so its length and the share covered are unknown)'}`
           : '';
         const verdict = all && late
@@ -803,8 +803,13 @@ export function formatReport({ entries, runs, issueStates, os, load }) {
             : all
               ? `This is NOT a loaded verdict: the late window of the pass (the last ${Math.round(100 - 100 * LATE_COVERAGE_FRACTION)}%, where the recorded stall struck) was not covered.`
               : 'This is NOT a loaded verdict: some runs had the machine to themselves, or the load was not past startup or was relaunched under them.';
+        // A non-zero exit is reported, never folded into the verdict: a suite that
+        // ran to its end and failed was still a real load for the runs inside it.
+        const failedNote = measured && typeof load.passExitCode === 'number' && load.passExitCode !== 0
+          ? ` NOTE: the load suite itself failed (\`npm run test:server\` exited ${load.passExitCode}); the verdict above is computed as usual.`
+          : '';
         lines.push(
-          `**Load: a full \`npm run test:server\` ran concurrently — ${load.loadedRuns}/${runs} run(s) fully loaded${span}.** ${verdict}`,
+          `**Load: a full \`npm run test:server\` ran concurrently — ${load.loadedRuns}/${runs} run(s) fully loaded${span}.** ${verdict}${failedNote}`,
         );
       } else {
         lines.push(
@@ -1156,6 +1161,7 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
   let startedAt = 0;
   let readyAt = null;
   const passes = new Map(); // instance -> measured wall time of its suite
+  const exitCodes = new Map(); // instance -> its suite's exit code (null: killed by a signal)
   // RUN_QUARANTINE stays unset here: the load must not un-skip quarantined tests.
   const env = { ...process.env };
   delete env.RUN_QUARANTINE;
@@ -1184,7 +1190,7 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
     mine.stdout?.on('data', scan);
     mine.stderr?.on('data', scan);
     mine.on('error', () => { failed = true; });
-    mine.on('exit', () => {
+    mine.on('exit', (code) => {
       if (mine === child) rootExited = true;
       if (stopped || failed) return;
       if (now() - startedAt < MIN_HEALTHY_LOAD_MS) {
@@ -1192,6 +1198,7 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
         return;
       }
       passes.set(id, now() - startedAt);
+      exitCodes.set(id, typeof code === 'number' ? code : null);
       launch();
     });
   };
@@ -1214,6 +1221,10 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
     // The measured wall time of one instance's suite once it ended, else null.
     passDurationMs(inst) {
       return passes.get(inst) ?? null;
+    },
+    // The exit code of that suite, recorded with its length; null while it runs.
+    passExitCode(inst) {
+      return exitCodes.get(inst) ?? null;
     },
     stop() {
       stopped = true;
@@ -1412,6 +1423,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
   // is about ONE pass, so a relaunched instance's runs are not mixed into it.
   const anchorInstance = load?.status().instance ?? null;
   let loadPassDurationMs = null;
+  let loadPassExitCode = null;
   // The load and any in-flight vitest must not outlive an interrupted run.
   const uninstallInterruptCleanup = load
     ? installInterruptCleanup(() => { load.stop(); killLiveSpawns(); }, proc)
@@ -1482,6 +1494,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
         await sleep(LOAD_POLL_MS);
       }
       loadPassDurationMs = load.passDurationMs(anchorInstance);
+      loadPassExitCode = load.passExitCode(anchorInstance);
     }
   } catch (err) {
     // Defensive belt-and-suspenders: runVitestJson/classifyRunResult never
@@ -1507,7 +1520,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
     runs: perRunOutcomes.length,
     issueStates,
     os: resolveOsLabel(),
-    load: { mode: load ? 'server-suite' : 'none', loadedRuns, coverage: loadCoverage(loadedSpans, loadPassDurationMs) },
+    load: { mode: load ? 'server-suite' : 'none', loadedRuns, coverage: loadCoverage(loadedSpans, loadPassDurationMs), passExitCode: loadPassExitCode },
   });
   let finalReport = report;
   if (abortedEarly) {

@@ -1816,7 +1816,7 @@ const RUN_COST_MS = 7_000;
 const FAKE_PASS_MS = 728_000; // the green median
 
 // Drives main() with a fake spawn and a fake loader; returns what was observed.
-async function driveMainWithLoad(loadEnv, { shape = () => ({}), passMs, proc, fakePassMs = FAKE_PASS_MS, runCostMs = RUN_COST_MS, makeSpawn } = {}) {
+async function driveMainWithLoad(loadEnv, { shape = () => ({}), passMs, proc, fakePassMs = FAKE_PASS_MS, runCostMs = RUN_COST_MS, makeSpawn, exitCode = 0 } = {}) {
   const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -1849,6 +1849,7 @@ async function driveMainWithLoad(loadEnv, { shape = () => ({}), passMs, proc, fa
           ...shape(seen, clock),
         }),
         passDurationMs: (inst) => (inst === 1 && clock.t >= fakePassMs ? fakePassMs : null),
+        passExitCode: (inst) => (inst === 1 && clock.t >= fakePassMs ? exitCode : null),
         stop: () => { seen.stopped++; },
       };
     };
@@ -1895,7 +1896,7 @@ test('main() spaces the loaded runs from the load\'s launch across one full test
   assert.equal(seen.spawnAt[0], READY_AT_MS, 'the first run starts as soon as the load is past startup, not before');
   assert.ok(seen.spawnAt[4] >= 0.75 * LOAD_PASS_ESTIMATE_MS, `the last run starts in the late window: +${seen.spawnAt[4]}ms`);
   const line = loadLine(seen);
-  assert.match(line, /spanning \+5s to \+5\d\ds from the load\u0027s launch \(1%-8\d% of that load\u0027s measured 728s pass\)/, line);
+  assert.match(line, /spanning \+5s to \+5\d\ds from the load\u0027s launch \(1%-8\d% of that load\u0027s measured 728s pass, exit 0\)/, line);
 });
 
 test('main() lets the load finish its pass after the last run and scores the runs against the MEASURED pass: a pass longer than the estimate is NOT loaded', async () => {
@@ -2056,6 +2057,56 @@ test('loadCoverage: spans the loaded runs against the measured pass; null when n
   const spans = [{ startMs: 100_000, endMs: 120_000 }, { startMs: 0, endMs: 20_000 }, { startMs: 400_000, endMs: 425_000 }];
   assert.deepEqual(loadCoverage(spans, 500_000), { firstStartMs: 0, lastEndMs: 425_000, passMs: 500_000, firstPct: 0, lastPct: 85 });
   assert.deepEqual(loadCoverage(spans, null), { firstStartMs: 0, lastEndMs: 425_000, passMs: null, firstPct: null, lastPct: null });
+});
+
+// --- the load's exit code, and WHY a pass went unmeasured (#4489 pass 4) ------
+
+test('startServerSuiteLoad records each ended pass\'s exit code beside its measured length (null while running)', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const children = [];
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: () => { const c = fakeLoadChild(children.length + 1); children.push(c); return c; }, kill: () => {}, now: () => now });
+  assert.equal(load.passExitCode(1), null, 'a running suite has no exit code yet');
+  now = 60_000;
+  children[0].handlers.exit(0);
+  assert.equal(load.passExitCode(1), 0);
+  now = 120_000;
+  children[1].handlers.exit(3);
+  assert.equal(load.passExitCode(2), 3, 'a failing suite that ran to its end is measured AND its code kept');
+  assert.equal(load.passDurationMs(2), 60_000);
+});
+
+test('startServerSuiteLoad: an `error` event on the load makes it not alive, sticky', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  let child;
+  const load = startServerSuiteLoad({ spawnImpl: () => (child = fakeLoadChild()), kill: () => {}, now: () => 0 });
+  assert.equal(load.status().alive, true);
+  child.handlers.error(new Error('spawn failed'));
+  assert.equal(load.status().alive, false);
+});
+
+const MEASURED_COVERAGE = { firstStartMs: 5_000, lastEndMs: 590_000, passMs: 728_000, firstPct: 1, lastPct: 81 };
+
+test('formatReport: the Load line records the load\'s exit code with its measured pass; a non-zero code adds a note and leaves the verdict alone', () => {
+  const lineFor = (passExitCode) => formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: MEASURED_COVERAGE, passExitCode } })
+    .split('\n').find((l) => l.startsWith('**Load:'));
+  const ok = lineFor(0);
+  assert.ok(ok.includes('measured 728s pass, exit 0'), ok);
+  assert.ok(ok.includes('This is a LOADED verdict') && !ok.includes('suite itself failed'), ok);
+  const bad = lineFor(1);
+  assert.ok(bad.includes('measured 728s pass, exit 1'), bad);
+  assert.ok(bad.includes('the load suite itself failed'), bad);
+  assert.ok(bad.includes('This is a LOADED verdict'), `the verdict computation is unchanged: ${bad}`);
+});
+
+test('main() prints the anchor load\'s exit code on the Load line: 0 plain, non-zero with the load-suite-failed note', async () => {
+  const ok = loadLine(await driveMainWithLoad('server-suite', { exitCode: 0 }));
+  assert.match(ok, /measured 728s pass, exit 0/, ok);
+  assert.ok(!ok.includes('suite itself failed'), ok);
+  const bad = loadLine(await driveMainWithLoad('server-suite', { exitCode: 1 }));
+  assert.match(bad, /measured 728s pass, exit 1/, bad);
+  assert.match(bad, /the load suite itself failed/, bad);
+  assert.match(bad, /This is a LOADED verdict/, bad);
 });
 
 // A fake spawned child whose stdout/stderr are observable.
