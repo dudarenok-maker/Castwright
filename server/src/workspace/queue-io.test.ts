@@ -336,6 +336,16 @@ describe('queue-io.resetEntryToQueued (srv-12 single-entry orphan recovery)', ()
     ]);
   });
 
+  it('clears the run state it leaves behind (errorReason, progress)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    f = markInProgress(f, 'e1');
+    f = { ...f, entries: f.entries.map((e) => ({ ...e, progress: 0.4, errorReason: 'stale' })) };
+    const [e] = resetEntryToQueued(f, 'e1').entries;
+    expect(e.status).toBe('queued');
+    expect(e.errorReason).toBeNull();
+    expect(e.progress).toBeUndefined();
+  });
+
   it('is a no-op for a missing id', () => {
     const f = markInProgress(enqueue(emptyFile(), [sampleEntry('e1')]), 'e1');
     const reset = resetEntryToQueued(f, 'nope');

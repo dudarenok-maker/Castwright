@@ -278,16 +278,7 @@ export function completeEntry(
   /* #3436 -- `requeued`: the render was refused 409 `book_busy` (the book is analysing), so nothing
      ran. in_progress -> queued in one step: `failed` is never written, so the entry is never left `failed`
      (it stays `in_progress` until this lands, as before). A no-op unless the entry is `in_progress`. */
-  if (outcome === 'requeued') {
-    if (target?.status !== 'in_progress') return file;
-    return renumber({
-      ...file,
-      entries: file.entries.map(
-        (e): QueueEntry =>
-          e.id === entryId ? { ...e, status: 'queued', errorReason: null, progress: undefined } : e,
-      ),
-    });
-  }
+  if (outcome === 'requeued') return resetEntryToQueued(file, entryId);
   const next = file.entries.map(
     (e): QueueEntry =>
       e.id === entryId
@@ -414,14 +405,17 @@ export function resetInProgressToQueued(file: QueueFile): QueueFile {
  *  entry must go back to `queued` for the dispatcher to re-claim. Guarded to a
  *  single id and a no-op unless that entry is `in_progress` — a missing id or a
  *  done/queued/failed entry is returned unchanged so we never resurrect a
- *  finished entry or fight the frontend-owned lifecycle. Order is preserved. */
+ *  finished entry or fight the frontend-owned lifecycle. Order is preserved.
+ *  Clears `errorReason` / `progress` so the requeued entry carries no stale
+ *  run state; also what `completeEntry(..., 'requeued')` (#3436) does. */
 export function resetEntryToQueued(file: QueueFile, entryId: string): QueueFile {
   const target = file.entries.find((e) => e.id === entryId);
   if (!target || target.status !== 'in_progress') return file;
   return renumber({
     ...file,
     entries: file.entries.map(
-      (e): QueueEntry => (e.id === entryId ? { ...e, status: 'queued' } : e),
+      (e): QueueEntry =>
+        e.id === entryId ? { ...e, status: 'queued', errorReason: null, progress: undefined } : e,
     ),
   });
 }
