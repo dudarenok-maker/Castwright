@@ -50,8 +50,10 @@ export type VoiceMatchClassification =
 export function needsRerenderIds(report: BookQaReport): string[] {
   const ids = report.voiceDrift.charactersNeedingRerender ?? [];
   if (ids.length === 0) return [];
-  /* #4454 — with the speaker check off no pass will settle anything, same as the `notRun` rule. */
-  if (classifyVoiceMatch(report).kind === 'gateOff') return [];
+  /* #4454 — with the speaker check off a re-render writes no embeddings and starts no score pass,
+     so the listing could never clear: hide it in every row, not just `gateOff` (#3680 — don't
+     offer work that can't be done). */
+  if (isSpeakerCheckOff(report)) return [];
   if (classifyVoiceMatch(report).kind === 'notRun' && report.voiceDrift.charactersPending.length === 0) return [];
   return ids;
 }

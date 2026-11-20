@@ -159,4 +159,22 @@ describe('speaker check off (#4454)', () => {
     const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersNeedingRerender: ['c1'] });
     expect(needsRerenderIds(r)).toEqual([]);
   });
+
+  it('(g) needsRerenderIds is empty with the check off even in the scored row, and the export omits the line', () => {
+    const r = off({ charactersPending: [], charactersNeedingRerender: ['ren'], charactersNeedingRerenderChapters: { ren: [2] } });
+    expect(classifyVoiceMatch(r).kind).toBe('scored');
+    expect(needsRerenderIds(r)).toEqual([]);
+    expect(formatQaReportText(r, 'Book')).not.toContain('needs re-render');
+  });
+
+  it('(h) needsRerenderIds is empty with the check off in the embedShortfall row', () => {
+    const r = off({ chaptersEligible: 12, chaptersScored: 11, charactersNeedingRerender: ['ren'] });
+    expect(classifyVoiceMatch(r).kind).toBe('embedShortfall');
+    expect(needsRerenderIds(r)).toEqual([]);
+  });
+
+  it('(i) needsRerenderIds still lists ids when the field is absent (check on)', () => {
+    const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...vd, charactersNeedingRerender: ['ren'] } };
+    expect(needsRerenderIds(r)).toEqual(['ren']);
+  });
 });
