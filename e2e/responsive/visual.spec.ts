@@ -114,12 +114,25 @@ const topbarMask = (page: Page) => [
   page.getByTestId('status-pill'),
 ];
 
-/* #4203 — the Generate view must not scroll on a plain load (#4199). The old
-   scroll started ~0.9 s after navigation, so wait past it, then pin the capture to the top. */
-const expectGenerateAtTop = async (page: Page) => {
-  await page.waitForTimeout(2000);
-  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+/* #4203 — a visual capture must be taken at the top of the page: the committed
+   baselines show the unscrolled view, and a scrolled capture is the #4199 failure
+   mode (a header-less baseline committed for months). Assert it instead of
+   scrolling the page back ourselves, so a view that scrolls itself on a phone
+   fails here rather than being hidden. `settleMs` waits past a late scroll first:
+   the old Generate scroll started ~0.9 s after navigation, so it passes 2000. */
+const expectAtTop = async (page: Page, settleMs = 0) => {
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
+  /* The capture is the VISUAL viewport. The top bar is `sticky top-0`, so a plain
+     window scroll would leave it in place; a header that moves with the content
+     (as in cross-os run 44021881430) means the visual viewport is offset inside
+     the layout viewport, which `scrollY` alone does not see. Pin both. */
+  const pos = await page.evaluate(() => ({
+    scrollY: window.scrollY,
+    visualViewportOffsetTop: window.visualViewport?.offsetTop ?? 0,
+  }));
+  expect(pos).toEqual({ scrollY: 0, visualViewportOffsetTop: 0 });
 };
+const expectGenerateAtTop = (page: Page) => expectAtTop(page, 2000);
 
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
@@ -148,6 +161,7 @@ test.describe('visual baselines', () => {
   test('analysing (pre-start)', async ({ page }) => {
     await goToAnalysing(page);
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('analysing.png', VISUAL_DIFF_OPTS);
   });
 
@@ -155,6 +169,7 @@ test.describe('visual baselines', () => {
     await goToConfirm(page);
     await waitForConfirmViewReady(page);
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('confirm.png', VISUAL_DIFF_OPTS);
   });
 
@@ -282,6 +297,7 @@ test.describe('visual baselines (stats)', () => {
        pays a cold Vite transform on first run. */
     await expect(page.getByTestId('stats-lede')).toBeVisible({ timeout: 25_000 });
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('stats.png', VISUAL_DIFF_OPTS);
   });
 });
@@ -330,6 +346,7 @@ test.describe('visual baselines (dark theme)', () => {
   test('analysing (pre-start, dark)', async ({ page }) => {
     await goToAnalysing(page);
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('analysing-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -337,6 +354,7 @@ test.describe('visual baselines (dark theme)', () => {
     await goToConfirm(page);
     await waitForConfirmViewReady(page);
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('confirm-dark.png', VISUAL_DIFF_OPTS);
   });
 
