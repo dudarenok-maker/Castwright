@@ -486,6 +486,11 @@ export async function persistPlannedCast(a: {
 }): Promise<PersistOutcome> {
   const fence = currentRunEpochFence(); // #3437: captured synchronously, before the lock
   return withCastLock(a.bookDir, async () => {
+    /* This ONE check also covers the manuscript-edits.json write nested below, with no check of
+       its own: Start fresh takes the cast lock (`readPriorCastForMerge`) BEFORE its book-locked
+       `rm` of that file, so once this run is inside the cast lock past this check, Start fresh's
+       rm cannot land between the check and the edits write. Moving Start fresh's rm ahead of its
+       cast-lock read would void this: the edits write would then need its own check. */
     if (staleRunWriteDropped(fence, 'persist cast.json')) throw new StaleRunEpochError();
     const current = await readCurrentCast(a.bookDir);
     const historyRead = await loadCastIdHistoryWithStatus(a.bookDir);

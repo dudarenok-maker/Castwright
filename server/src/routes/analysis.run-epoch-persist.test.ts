@@ -32,6 +32,8 @@ import type { Response } from '../http.js';
 const seam = vi.hoisted(() => ({
   /** runs inside the `persistPlannedCast` call, before the real persist. */
   beforePersist: null as null | (() => void),
+  /** runs inside a `writePlanSnapshot` call (the interim cast.json snapshot), before it writes. */
+  beforeSnapshot: null as null | (() => void),
   /** runs after the `persistPlannedCast` call RETURNED (the cast write landed or was refused). */
   afterPersistReturn: null as null | (() => void),
   /** runs at the persist window: after cast.json landed, before the state.json step. */
@@ -45,6 +47,12 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../workspace/analysis-cast-io.js')>();
   return {
     ...actual,
+    writePlanSnapshot: (...a: Parameters<typeof actual.writePlanSnapshot>) => {
+      const hook = seam.beforeSnapshot;
+      seam.beforeSnapshot = null;
+      hook?.();
+      return actual.writePlanSnapshot(...a);
+    },
     persistPlannedCast: (...a: Parameters<typeof actual.persistPlannedCast>) => {
       const hook = seam.beforePersist;
       seam.beforePersist = null;
@@ -52,6 +60,7 @@ vi.mock('../workspace/analysis-cast-io.js', async (importOriginal) => {
       return actual.persistPlannedCast(...a).then((out) => {
         const after = seam.afterPersistReturn;
         seam.afterPersistReturn = null;
+    seam.beforeSnapshot = null;
         after?.();
         return out;
       });
@@ -139,6 +148,8 @@ function stage1Roster(): CharacterOutput[] {
 /* A drift fixture: 40 sentences a chapter (120, over the 100-sentence floor), half on an id the
    roster does not hold, so Phase 1 demotes 50% and the drift gate refuses the run. */
 let driftFixture = false;
+/** Phase-1 (attribution) calls made by the run under test. */
+let phase1Calls = 0;
 
 function attributionForChapter(chapterId: number): SentenceOutput[] {
   if (driftFixture) {
@@ -174,6 +185,7 @@ function buildPhase1Analyzer(): Analyzer {
     runStage1: () => Promise.reject(new Error('not used')),
     runStage1Chapter: () => Promise.reject(new Error('Phase-1 analyzer does not run Phase-0 calls')),
     async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
+      phase1Calls += 1;
       return { sentences: attributionForChapter(chapterId) };
     },
     runEmotionChapter: () => Promise.reject(new Error('not used')),
@@ -191,6 +203,7 @@ interface Run {
   events: Array<{ kind?: string; code?: string; message?: string }>;
   logs: string[];
   errors: string[];
+  phase1Calls: number;
   bookDir: string;
   manuscriptId: string;
   read: (name: string) => string | null;
@@ -205,6 +218,7 @@ async function runJob(
   opts: { drift?: boolean } = {},
 ): Promise<Run> {
   driftFixture = opts.drift === true;
+  phase1Calls = 0;
   const manuscriptId = `test-run-epoch-persist-${label}-${Date.now()}-${Math.random()}`;
   const bookId = `b_run_epoch_persist_${label}`;
   const bookDir = mkdtempSync(join(tmpdir(), `audiobook-run-epoch-persist-${label}-`));
@@ -339,6 +353,7 @@ async function runJob(
     events,
     logs,
     errors,
+    phase1Calls,
     bookDir,
     manuscriptId,
     read,
@@ -513,6 +528,49 @@ describe('a superseded analysis run ends as aborted and drops its state.json wri
           }
         });
       }
+    }
+  });
+
+  /* Review pass 1 (#4549): the snapshotPlannedRoster rethrow. A run superseded at its interim
+     cast.json snapshot must stop there, not carry on through Phase 1 with every write dropped. */
+  for (const kind of ['main', 'subset'] as const) {
+    it(`${kind} job: superseded at the interim cast snapshot stops before Phase 1 and ends aborted`, async () => {
+      const run = await runJob(`snapshot-${kind}`, kind, ({ manuscriptId }) => {
+        seam.beforeSnapshot = () => {
+          beginRunEpoch(manuscriptId); // a Start fresh registers here
+        };
+      });
+      try {
+        expect(run.logs.some((l) => l.includes('dropped stale-run write'))).toBe(true);
+        expect(run.phase1Calls).toBe(0);
+        expect(terminal(run)?.code).toBe('aborted');
+      } finally {
+        await run.cleanup();
+      }
+    });
+  }
+
+  /* Review pass 1 (#4549): the success-path check of the subset job (the main job's is covered
+     above). The cast.json persist landed, state.json was dropped as superseded, and the run
+     must still not report a result. */
+  it('subset job: superseded after the cast.json persist landed -> state.json untouched, ends aborted, no result', async () => {
+    const before: Record<string, string | null> = {};
+    const run = await runJob('after-subset', 'subset', ({ manuscriptId, read }) => {
+      seam.beforePersist = () => {
+        before['state.json'] = read('state.json');
+      };
+      seam.afterPersistReturn = () => {
+        beginRunEpoch(manuscriptId);
+      };
+    });
+    try {
+      const t = terminal(run);
+      expect(t?.kind).toBe('error');
+      expect(t?.code).toBe('aborted');
+      expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+      expect(run.read('state.json')).toBe(before['state.json']);
+    } finally {
+      await run.cleanup();
     }
   });
 

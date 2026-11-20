@@ -41,7 +41,7 @@ import {
   staleRunWriteDropped,
   type RunEpochFence,
 } from '../store/analysis-run-epoch.js';
-import { AnalyzerReasoningOverflowError,GeminiContentBlockedError, AnalyzerTargetInputTooLargeError, StaleRunEpochError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTargetInputTooLargeError, StaleRunEpochError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';

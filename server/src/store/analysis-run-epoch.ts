@@ -5,7 +5,7 @@
    this manuscript?" without a parameter threaded through every call site.
 
    Named `runEpoch` everywhere: state.json's unrelated `editEpoch` (plan 289) is a different thing.
-   Leaf module: imports only node:async_hooks and the errors module. */
+   Leaf module: imports only node:async_hooks. */
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface RunEpochFence {
