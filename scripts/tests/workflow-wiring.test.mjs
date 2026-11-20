@@ -1906,10 +1906,17 @@ test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead o
 
 // The install step is an ubuntu-only `run:` block (`timeout`, `sudo`, `apt-get`). The two
 // behavioural cases below run it under bash with ALL THREE stubbed on PATH, so they depend on
-// neither GNU `timeout` (absent on macOS runners, #4569) nor a real apt. Without bash (a bare
-// Windows PowerShell box) they SKIP with a message rather than passing silently.
+// neither GNU `timeout` (absent on macOS runners, #4569) nor a real apt. PATH is set inside the
+// script text, because Git for Windows' `bin\bash.exe` launcher reorders an inherited PATH and
+// would put the real `sleep`/`timeout` ahead of the stubs. Without bash (a bare Windows
+// PowerShell box) they SKIP with a message rather than passing silently.
 const HAS_BASH = spawnSync('bash', ['-c', 'true'], { windowsHide: true }).status === 0;
 const NO_BASH_SKIP = HAS_BASH ? false : 'no bash on PATH; the static ffmpeg-floor pins still run';
+
+// Prepends the stub dir to PATH inside the script itself (cygpath converts it under Git Bash).
+function withStubPath(script) {
+  return 'PATH="$(cygpath -u "$STUB_BIN" 2>/dev/null || printf %s "$STUB_BIN"):$PATH"\n' + script;
+}
 
 // `timeout -k 10 120 CMD...` -> run CMD directly (drops the three leading args).
 function writeFfmpegFloorStubs(bin, sudoBody) {
@@ -1939,10 +1946,10 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
     const summary = join(dir, 'summary');
     writeFileSync(out, '');
     writeFileSync(summary, '');
-    const r = spawnSync('bash', ['-c', script], {
+    const r = spawnSync('bash', ['-c', withStubPath(script)], {
       encoding: 'utf8',
       windowsHide: true,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, STUB_BIN: bin, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed on an apt stall (exit ${r.status}): ${r.stdout}${r.stderr}`);
     assert.ok(r.stdout.includes(FFMPEG_FLOOR_WARNING), `no ::warning:: on stdout: ${r.stdout}`);
@@ -1969,10 +1976,10 @@ test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no wa
     const summary = join(dir, 'summary');
     writeFileSync(out, '');
     writeFileSync(summary, '');
-    const r = spawnSync('bash', ['-c', script], {
+    const r = spawnSync('bash', ['-c', withStubPath(script)], {
       encoding: 'utf8',
       windowsHide: true,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, STUB_BIN: bin, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed (exit ${r.status}): ${r.stdout}${r.stderr}`);
     assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}${r.stderr}`);
