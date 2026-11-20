@@ -6,6 +6,7 @@
 
 import { Agent, fetch as undiciFetch } from 'undici';
 import { redactKnownSecrets } from './redact.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 /* headers/body timeouts off: llama-swap's /props?model= blocks while it loads
    the model. The absolute bound is the per-flavor AbortSignal.timeout below. */
@@ -57,7 +58,7 @@ export async function detectServedContext(input: {
   } catch (err) {
     const e = err as { name?: string; message?: string; cause?: { code?: string } };
     const why = e.name === 'TimeoutError' ? 'timed out' : (e.cause?.code ?? e.message ?? 'unknown error');
-    return { ok: false, error: redact(`Could not reach ${url.origin} (${why}).`) };
+    return { ok: false, error: requestFailureMessageFs(err, redact(`Could not reach ${url.origin} (${why}).`)) };
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => {});
