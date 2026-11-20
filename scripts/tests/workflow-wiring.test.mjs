@@ -1912,6 +1912,7 @@ test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead o
 // PowerShell box) they SKIP with a message rather than passing silently.
 const HAS_BASH = spawnSync('bash', ['-c', 'true'], { windowsHide: true }).status === 0;
 const NO_BASH_SKIP = HAS_BASH ? false : 'no bash on PATH; the static ffmpeg-floor pins still run';
+let behaviouralCasesRun = 0;
 
 // Prepends the stub dir to PATH inside the script itself (cygpath converts it under Git Bash).
 function withStubPath(script) {
@@ -1925,14 +1926,8 @@ function writeFfmpegFloorStubs(bin, sudoBody) {
   writeFileSync(join(bin, 'timeout'), '#!/bin/sh\nshift 3\nexec "$@"\n', { mode: 0o755 });
 }
 
-test('ffmpeg floor leg (#4461): the behavioural cases cannot silently do nothing on a bash platform (#4569)', () => {
-  if (process.platform !== 'win32') {
-    assert.ok(HAS_BASH, 'bash is missing on a POSIX runner; the two ffmpeg-floor behavioural cases would silently skip');
-  }
-  assert.equal(NO_BASH_SKIP === false, HAS_BASH, 'skip flag disagrees with bash availability');
-});
-
 test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', { skip: NO_BASH_SKIP }, () => {
+  behaviouralCasesRun++;
   const install = ffmpegFloorInstallStep();
   const run = install.split(/^ {8}run: \|\n/m)[1];
   assert.ok(run, 'install step has no `run: |` block');
@@ -1961,6 +1956,7 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
 });
 
 test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', { skip: NO_BASH_SKIP }, () => {
+  behaviouralCasesRun++;
   const install = ffmpegFloorInstallStep();
   assert.doesNotMatch(install, /\\n/, 'install step contains a literal backslash-n; bash passes it to apt-get as a stray argument');
   const run = install.split(/^ {8}run: \|\n/m)[1];
@@ -1986,6 +1982,15 @@ test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no wa
     assert.match(readFileSync(out, 'utf8'), /^installed=true$/m, 'GITHUB_OUTPUT lacks installed=true when apt works');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ffmpeg floor leg (#4461): both behavioural cases actually ran on a bash platform (#4569)', () => {
+  if (process.platform !== 'win32') {
+    assert.ok(HAS_BASH, 'bash is missing on a POSIX runner; the two ffmpeg-floor behavioural cases would silently skip');
+  }
+  if (HAS_BASH) {
+    assert.equal(behaviouralCasesRun, 2, 'an ffmpeg-floor behavioural case was skipped although bash is present');
   }
 });
 
