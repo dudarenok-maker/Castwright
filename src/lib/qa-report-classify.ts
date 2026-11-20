@@ -72,10 +72,11 @@ export function isSpeakerCheckOff(report: BookQaReport): boolean {
 export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassification {
   const vd = report.voiceDrift;
   if (vd.chaptersEligible === 0) return { kind: 'noEligible' };
-  /* #4454 — gate off with nothing real to report (pending is not resumable work, or never run):
-     say so. Past results (`embedShortfall` / `scored`) below stay: true for the audio scored.
-     Strict `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
-  if (isSpeakerCheckOff(report) && (vd.charactersPending.length > 0 || (vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0))) {
+  /* #4454 — gate off with nothing scored or attempted: say so. Past results (`embedShortfall` /
+     `scored`) below stay, pending characters or not: true for the audio scored, and the headline
+     counts their mismatches. Strict `=== false` via isSpeakerCheckOff — an absent field keeps
+     today's behaviour. */
+  if (isSpeakerCheckOff(report) && vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
     return { kind: 'gateOff' };
   }
   /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the

@@ -120,6 +120,20 @@ describe('speaker check off (#4454)', () => {
     expect(line(r)).toContain('Voice match — speaker check is off');
   });
 
+  it('(a2) gate off + pending + partial scoring keeps embedShortfall and the mismatch count in the export', () => {
+    const r = off({
+      chaptersEligible: 12,
+      chaptersScored: 11,
+      chaptersEmbedFailed: 0,
+      charactersPending: ['newcomer'],
+      mismatches: [{ characterId: 'ren', fixable: true }, { characterId: 'mo', fixable: true }] as BookQaReport['voiceDrift']['mismatches'],
+    });
+    expect(classifyVoiceMatch(r).kind).toBe('embedShortfall');
+    expect(line(r)).toContain('11 of 12 eligible chapters scored');
+    expect(line(r)).toContain('2 mismatches');
+    expect(line(r)).toMatch(/\(speaker check is now off\)$/);
+  });
+
   it('(b) gate off + notRun condition + nothing pending -> gateOff', () => {
     expect(classifyVoiceMatch(off({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] })).kind).toBe('gateOff');
   });

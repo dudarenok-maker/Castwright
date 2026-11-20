@@ -110,7 +110,7 @@ function VoiceMatchRow({
     );
   }
   /* #4454 — speaker check is off: say so and offer no Resume (Resume only when it can do the work, #3680).
-     MUST stay before the charactersPending branch: gateOff covers every gate-off report with pending characters. */
+     Gate off with a past result falls through to the result rows below, with no Resume. */
   if (classification.kind === 'gateOff') {
     return (
       <div className="flex items-center justify-between py-2">
@@ -125,7 +125,7 @@ function VoiceMatchRow({
      broadcastToBook only reaches subscribers of an active generation job).
      Offer a manual Resume button; see the round-2 plan-review note on why
      the button doesn't revert to clickable after a successful click. */
-  if (vd.charactersPending.length > 0) {
+  if (vd.charactersPending.length > 0 && !isSpeakerCheckOff(report)) {
     return (
       <div className="flex items-center justify-between py-2">
         <span className="text-sm text-ink/70">Voice match</span>

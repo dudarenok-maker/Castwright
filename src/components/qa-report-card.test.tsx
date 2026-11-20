@@ -125,9 +125,22 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       );
 
     it('(a) pending + gate off: says so and offers no Resume', () => {
-      renderWith({ speakerCheckEnabled: false, charactersPending: ['ren'], chaptersScored: 6 });
+      renderWith({ speakerCheckEnabled: false, charactersPending: ['ren'], chaptersScored: 0 });
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+    });
+
+    it('(a2) pending + partial scoring + gate off: keeps the past result and mismatch count, no Resume', () => {
+      renderWith({
+        speakerCheckEnabled: false,
+        charactersPending: ['newcomer'],
+        chaptersScored: 11,
+        chaptersEmbedFailed: 0,
+        mismatches: [{ characterId: 'ren', fixable: true }, { characterId: 'mo', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
+      });
+      expect(screen.getByText(/11 of 12 eligible chapters scored.*2 mismatches.*speaker check is now off/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+      expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
     });
 
     it('(b) notRun shape + gate off: speaker-check copy replaces "Not run for this book"', () => {
