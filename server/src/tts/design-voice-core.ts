@@ -18,6 +18,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { withCapacityRetry } from '../gpu/capacity-retry.js';
 import { evictIdleQwenBase } from '../gpu/evict-idle-tts.js';
+import { setInFlightDesignCounter, setInFlightMintCounter } from '../gpu/active-generation-gate.js';
 import { NoCapacityError } from './tts-errors.js';
 import { encodePcmToAudio } from './mp3.js';
 import {
@@ -32,6 +33,14 @@ import type { TtsModelKey } from './model-keys.js';
 import { sidecarLanguageName } from './language.js';
 import { fetch as undiciFetch, Agent } from 'undici';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+
+/* #4445 — live design / mint calls, read by the generation-path tier reconcile through the leaf
+   gate (gpu/active-generation-gate.ts). The sidecar's `/unload {engine:'qwen'}` nulls the
+   VoiceDesign model along with the base, and `/unload {model:'1.7b'}` nulls the 1.7B Base
+   without waiting for a mint, so either would kill the call mid-forward. */
+const inFlightByPurpose = { design: 0, mint: 0 };
+setInFlightDesignCounter(() => inFlightByPurpose.design);
+setInFlightMintCounter(() => inFlightByPurpose.mint);
 
 export class SidecarDesignError extends Error {
   status: number;
@@ -172,6 +181,7 @@ export async function postDesignAndCacheAudition(
     if (signal.aborted) controller.abort();
     else signal.addEventListener('abort', onExternalAbort, { once: true });
   }
+  inFlightByPurpose[purpose]++;
   try {
     let upstream: Response;
     try {
@@ -282,6 +292,7 @@ export async function postDesignAndCacheAudition(
     await maybeSampleSidecarEngine('qwen:design');
     return { voiceId: outVoiceId, url };
   } finally {
+    inFlightByPurpose[purpose]--;
     clearInterval(livenessTimer);
     if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
