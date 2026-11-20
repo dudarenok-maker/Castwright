@@ -28,10 +28,17 @@
        `spawnSync`'s result, git's or the LAN-cert script's stderr) is raw text with
        absolute paths that no `.message` scan sees, and an `execFile` rejection has a
        numeric `code` and no `syscall`, so the fs seam never curates it either. Owner
-       decision on #3702 (2026-11-21): such text is path-scrubbed with `scrubPaths`
-       (`tts/ffmpeg-failure.ts`) before it reaches a body -- `routes/lan-cert.ts` and
-       `routes/worktrees.ts` do; their tests drive a REAL failing child. A new route
-       that forwards child output must do the same; this guard cannot tell it did.
+       decision on #3702 (2026-11-21): such text is path-scrubbed (`scrubPaths`, or
+       `scrubChildOutput` for multi-line text -- `tts/ffmpeg-failure.ts`) before it
+       reaches a body -- `routes/lan-cert.ts`, `routes/worktrees.ts` and
+       `routes/models-inventory.ts` (`ollama rm`) do; their tests drive a REAL failing
+       child. A new route that forwards child output must do the same; this guard
+       cannot tell it did.
+     - An `execFile` rejection's `.message`: it IS `Command failed: <cmd>\n<stderr>`,
+       so a seam-wrapped `.message` still carries the child's stderr (the fs seam never
+       fires on its numeric `code`). The guard counts the seam wrap as curation, so a
+       route doing `requestFailureMessageFs(err, err.message)` on an `execFile` error
+       passes here and leaks -- scrub it too (models-inventory's `ollama rm` is the case).
      - SSE frames and job-poll bodies — out of scope by the #3702 decision.
      - An aliased import of the seam passes (the callee NAME is matched).
      - `.status(5xx)` split from `.json(` by another chained call
