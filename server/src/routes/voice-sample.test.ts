@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
+import { selectTtsProvider } from '../tts/index.js';
 
 /* vi.hoisted so the inner factory below can close over the same vi.fn()
    instance we drive from the tests. selectTtsProvider() returns this stub
@@ -637,6 +639,24 @@ describe('voice-sample router', () => {
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');
+    });
+
+    it('500 provider_unavailable curates an fs error from selectTtsProvider (#3702)', async () => {
+      const p = 'C:\\Users\\someone\\castwright-workspace\\x';
+      vi.mocked(selectTtsProvider).mockImplementationOnce(() => {
+        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${p}' -> 'y'`), {
+          code: 'EPERM',
+          syscall: 'rename',
+          path: p,
+        });
+      });
+      const res = await request(app)
+        .post('/api/voices/v_marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('provider_unavailable');
+      expect(res.body.message).toBe(FS_FAILURE_REQUEST_ERROR);
+      expect(JSON.stringify(res.body)).not.toContain('someone');
     });
 
     it('503 no_capacity with the named blockers when admission gives up (#1839)', async () => {
