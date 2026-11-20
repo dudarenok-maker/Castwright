@@ -1,7 +1,7 @@
 /* #3711 — the long-job busy registry. A LEAF: imports nothing from `routes/`.
    Design of record: docs/features/288-book-op-lock.md "Busy registry".
 
-   A long job (render, scoring, analysis, design, script-review, export) holds NO
+   A long job (render, audio-fix, scoring, analysis, design, script-review, export) holds NO
    book-op while it runs; it registers a token keyed by bookId and a folder
    move/delete is REFUSED (BookBusyError -> 409 `book_busy`) while any token is
    held. `runBookJob` is the ONLY way to register, so there is no separate

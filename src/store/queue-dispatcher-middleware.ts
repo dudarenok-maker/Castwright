@@ -74,9 +74,10 @@ const DEFAULT_WORKERS = 2;
    success resets the streak. */
 const CONSECUTIVE_FAILURE_THRESHOLD = 3;
 
-/* #3436 -- after the server refuses a render with 409 `book_busy` (an analysis registered between
-   this dispatcher's claim and the POST: one started from another device, or one this tab's single
-   snapshot slot does not hold, since another tab's run IS synced here by broadcast-middleware), the book's queued
+/* #3436 -- after the server refuses a render with 409 `book_busy` (an analysis the dispatcher
+   could not see at claim time: a paused run still draining, one started from another device, or one
+   this tab's single snapshot slot does not hold; another tab's run IS synced here by
+   broadcast-middleware), the book's queued
    entries are not re-claimed for this long. Without it the requeued entry would be re-claimed on
    the next tick and refused again, in a tight loop. */
 const BOOK_BUSY_HOLD_MS = 5000;

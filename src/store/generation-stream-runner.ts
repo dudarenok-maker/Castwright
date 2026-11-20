@@ -240,8 +240,9 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     const handle = handles.get(key);
     if (!handle) return;
     /* Flush the per-run rollup before tearing down. Empty runs (pause before
-       any chapter finished, queue drained immediately) write nothing — there
-       was already a generation_started anchor for those. */
+       any chapter finished, queue drained immediately) write nothing. A run closed
+       before its first tick (a pause while the POST is in flight) has no
+       generation_started anchor either: that line waits for the first tick. */
     if (handle.completedChapterIds.length > 0) {
       dispatch(
         changeLogActions.appendLogEvent(

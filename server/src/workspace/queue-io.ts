@@ -276,8 +276,8 @@ export function completeEntry(
     return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
   }
   /* #3436 -- `requeued`: the render was refused 409 `book_busy` (the book is analysing), so nothing
-     ran. in_progress -> queued in one step: `failed` is never written, so a tab closing mid-way cannot
-     strand the chapter. A no-op unless the entry is `in_progress`. */
+     ran. in_progress -> queued in one step: `failed` is never written, so the entry is never left `failed`
+     (it stays `in_progress` until this lands, as before). A no-op unless the entry is `in_progress`. */
   if (outcome === 'requeued') {
     if (target?.status !== 'in_progress') return file;
     return renumber({
