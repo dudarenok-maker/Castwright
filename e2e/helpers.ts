@@ -16,6 +16,22 @@ const PASTED_MANUSCRIPT =
   '# The E2E Test Book\n\n# Chapter 1\n\nA tiny test paragraph.\n\n' +
   '# Chapter 2\n\nA second paragraph.\n';
 
+/* #4203 / #4531 — submit the new-book form WITHOUT leaving the page scrolled.
+ * The paste form is taller than a phone, so filling the textarea and clicking
+ * the Save button (Playwright scrolls it into view) leaves the page scrolled
+ * ~200-400 px when the route changes. The app resets scroll to 0 on the route
+ * change, and on Linux Chromium mobile emulation that jump after a scroll
+ * leaves the browser-controls state stuck: innerHeight 854 vs visualViewport
+ * 839 and visualViewport.offsetTop 10 on every later view (cross-os run
+ * 44679080555 diagnostics), shifting the header ~10 px up in the capture.
+ * Scrolling back to the top first and clicking via the DOM (no auto-scroll)
+ * keeps the page at scrollY 0 across the navigation. */
+async function saveBookFromTop(page: Page): Promise<void> {
+  const save = page.getByRole('button', { name: /Save book and start analysis/i });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await save.evaluate((el) => (el as HTMLButtonElement).click());
+}
+
 /* Drive from cold boot to the analysing route, stopping BEFORE the user
  * clicks "Start analysis" — the view is then in its deterministic
  * "ready to fire" state with no live phase progress, ideal for visual
@@ -43,7 +59,7 @@ export async function goToAnalysing(page: Page): Promise<void> {
     timeout: 5_000,
   });
   await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('E2E Author');
-  await page.getByRole('button', { name: /Save book and start analysis/i }).click();
+  await saveBookFromTop(page);
 
   await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
   /* Cold first-compile: the analysing route's React.lazy chunk can outlast the
@@ -169,7 +185,7 @@ export async function bootFreshBookIntoAnalysing(page: Page): Promise<void> {
     timeout: 5_000,
   });
   await page.getByPlaceholder(/Ursula K\. Le Guin/i).fill('Analysing Spec Author');
-  await page.getByRole('button', { name: /Save book and start analysis/i }).click();
+  await saveBookFromTop(page);
   await expect(page).toHaveURL(/#\/books\/.+\/analysing$/, { timeout: 5_000 });
   await expect(page.getByRole('button', { name: /Start analysis/i })).toBeVisible({
     timeout: 5_000,
