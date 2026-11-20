@@ -152,14 +152,29 @@
    not-found, technically "not-found" bucket, and silently wrong).
 
    Load (#4244): `QUARANTINE_HEALTH_LOAD=server-suite` runs a full
-   `npm run test:server` concurrently with the quarantined files for the whole
-   run loop (startServerSuiteLoad; the Windows workflow leg sets it, Ubuntu does
-   not). A quarantined file run alone takes ~15 s and cannot reproduce a stall
-   that only ever appeared inside a full Windows `test:server` run, so an
-   `always-passes` from it is an ISOLATED verdict. Every report carries a
-   `**Load:**` line naming the mode and how many runs were fully loaded; only
-   "a LOADED verdict" is graduation evidence for a load-dependent row, and a
-   load that died early is reported as not loaded rather than assumed live.
+   `npm run test:server` concurrently with the quarantined files
+   (startServerSuiteLoad; the Windows workflow leg sets it, Ubuntu does not). A
+   quarantined file run alone takes ~15 s and has not reproduced a stall that
+   only ever appeared inside a full Windows `test:server` run (about 7.5 min
+   into a ~12 min suite), so an `always-passes` from it is an ISOLATED verdict.
+   The loaded runs are SPACED across one full pass of that suite, not fired in
+   its first ~96 s: run i starts pacedStartOffsetMs(i) after the load is past
+   startup, i.e. at i/RUNS of LOAD_PASS_ESTIMATE_MS (562 s, the measured pass on
+   a windows-latest runner), so five runs sample 0%, 20%, 40%, 60% and 80% of
+   the pass, including the ~63% mark where the stall struck. A run counts as
+   loaded only if the SAME load instance spans it (a relaunch is a new
+   instance) and that instance was past startup when the run began (its first
+   test-file result seen on stdout; LOAD_READY_FALLBACK_MS of uptime if none).
+   Every report carries a `**Load:**` line naming the mode, how many runs were
+   loaded and what span of the load's pass they covered; only "a LOADED
+   verdict" is graduation evidence for a load-dependent row, and it requires
+   every run loaded AND the last one ending at or beyond LATE_COVERAGE_FRACTION
+   (75%) of the pass, so an uncovered late window never reads as LOADED. A load
+   that died early is reported as not loaded rather than assumed live. The
+   loaded loop's wall-clock budget is LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS (30
+   min: ~8 min of it is the paced wait), and an interrupted run (SIGINT,
+   SIGTERM, exit) kills the load and any in-flight vitest tree
+   (installInterruptCleanup).
 
    An EMPTY register (true as of #1858) is a clean no-op: parseRegister()
    returns zero rows, main() short-circuits before spawning a single vitest
@@ -190,7 +205,7 @@ import { dirname, resolve, join } from 'node:path';
 import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { boundedSpawn, killTree } from './lib/bounded-spawn.mjs';
+import { boundedSpawn, killTree, killLiveSpawns } from './lib/bounded-spawn.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REGISTER_PATH = resolve(ROOT, 'docs/testing/flaky-register.md');
@@ -739,7 +754,7 @@ export function resolveLoadMode(env = process.env) {
 
 // Renders the final markdown report. `issueStates` maps issue number → 'OPEN'
 // | 'CLOSED' | null (unknown — e.g. `gh` unavailable or the call failed).
-// `load` ({ mode, loadedRuns }, optional) adds the line naming the load mode
+// `load` ({ mode, loadedRuns, coverage }, optional) adds the line naming the load mode
 // that produced these verdicts, so a loaded verdict reads differently from an
 // isolated one.
 export function formatReport({ entries, runs, issueStates, os, load }) {
@@ -765,11 +780,19 @@ export function formatReport({ entries, runs, issueStates, os, load }) {
     if (load) {
       lines.push('');
       if (load.mode === 'server-suite') {
-        const all = load.loadedRuns === runs;
+        const cov = load.coverage ?? null;
+        const late = cov !== null && cov.lastEndMs >= LATE_COVERAGE_FRACTION * cov.passMs;
+        const all = runs > 0 && load.loadedRuns === runs;
+        const span = cov
+          ? `, spanning +${Math.round(cov.firstStartMs / 1000)}s to +${Math.round(cov.lastEndMs / 1000)}s into that load's pass (${cov.firstPct}%-${cov.lastPct}% of the ~${Math.round(cov.passMs / 1000)}s pass the runs are paced across)`
+          : '';
+        const verdict = all && late
+          ? 'This is a LOADED verdict.'
+          : all
+            ? `This is NOT a loaded verdict: the late window of the pass (the last ${Math.round(100 - 100 * LATE_COVERAGE_FRACTION)}%, where the recorded stall struck) was not covered.`
+            : 'This is NOT a loaded verdict: some runs had the machine to themselves, or the load was not past startup or was relaunched under them.';
         lines.push(
-          `**Load: a full \`npm run test:server\` ran concurrently — ${load.loadedRuns}/${runs} run(s) fully loaded.** ${
-            all ? 'This is a LOADED verdict.' : 'This is NOT a loaded verdict: some runs had the machine to themselves.'
-          }`,
+          `**Load: a full \`npm run test:server\` ran concurrently — ${load.loadedRuns}/${runs} run(s) fully loaded${span}.** ${verdict}`,
         );
       } else {
         lines.push(
@@ -947,6 +970,12 @@ const GH_TIMEOUT_MS = 30 * 1000;
 // quarantine-health.test.mjs so a future bump to either constant can't
 // silently blow the job's timeout budget again.
 export const RUN_LOOP_WALL_CLOCK_BUDGET_MS = 20 * 60 * 1000;
+// A loaded run loop spends ~LOAD_PASS_ESTIMATE_MS of it waiting for the paced
+// slots (the last run starts at 80% of the pass, ~7.5 min in), and the last run
+// can still cost its full worst case on top, so the loaded loop gets 30 min.
+// The Windows leg's job cap is 40: setup (checkout, npm ci, choco ffmpeg) and
+// the `gh` calls after the loop fit in the remaining 10.
+export const LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS = 30 * 60 * 1000;
 // Mirrors the TIGHTEST matrix leg's `timeout` (Ubuntu, 30) in
 // .github/workflows/quarantine-health.yml — a test pins it, so keep them in
 // sync if that leg's cap ever changes.
@@ -1066,37 +1095,70 @@ export async function boundedVitestSpawn(command, { cwd, env, timeout, maxOutput
 }
 
 // The load behind a LOADED verdict (#4244, owner decision (c)): the original
-// failure was one stall inside a full Windows `test:server` run, which 57
-// isolated runs never reproduced, so the quarantined files run alongside the
-// whole server suite. It is relaunched whenever a pass ends, so the load never
-// lapses mid-loop, and its output is dropped (stdio 'ignore') — nothing here
-// reads it. A suite that dies within MIN_HEALTHY_LOAD_MS (npm missing, a broken
-// install) is NOT relaunched in a tight loop and `isLoaded()` goes false for
-// good, so main() cannot call those runs loaded. `spawnImpl`/`kill`/`now` are
-// injectable for unit tests.
+// failure was one stall inside a full Windows `test:server` run (about 7.5 min
+// into a ~12 min suite), which 57 runs outside a full suite (25 sequential, 32
+// under 4x concurrency plus CPU burners) did not reproduce, so the quarantined
+// files run alongside the whole server suite, SPACED across one full pass (see
+// pacedStartOffsetMs). A run counts as loaded only when the SAME load instance
+// spans it and that instance is past startup when it begins (status()).
+// The suite's stdout is drained and scanned for its first test-file result
+// (the readiness signal); LOAD_READY_FALLBACK_MS of uptime is the fallback if
+// that line never shows. A suite that dies within MIN_HEALTHY_LOAD_MS (npm
+// missing, a broken install) is NOT relaunched in a tight loop and status()
+// reports it dead for good. A suite that ends after a healthy run IS relaunched
+// (a new `instance`, with its own bootstrap gap), so a run straddling the
+// relaunch is not loaded. `spawnImpl`/`kill`/`now`/`platform` are injectable
+// for unit tests.
 const MIN_HEALTHY_LOAD_MS = 10 * 1000;
+export const LOAD_READY_FALLBACK_MS = 60 * 1000;
+// Wall time of one full Windows `test:server` pass on a windows-latest runner
+// (561.8 s, run 44810250588; 724 s in the failing job 133612532751). The runs
+// are paced against this estimate, not measured live.
+export const LOAD_PASS_ESTIMATE_MS = 562 * 1000;
+// A LOADED verdict must reach this far into the pass: the recorded stall struck
+// at ~63% of it, so the loaded runs must end at or beyond 75%.
+export const LATE_COVERAGE_FRACTION = 0.75;
+// vitest's default reporter prints one status-glyph line per finished file,
+// e.g. " ✓ src/foo.test.ts (3 tests) 12ms".
+const TEST_FILE_RESULT = /(?:^|\n)\s*[✓✔❯×↓]\s[^\n]*\.test\.[cm]?[jt]sx?/;
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill = killTree, now = Date.now, platform = process.platform } = {}) {
   let child = null;
   let rootExited = false;
   let failed = false;
   let stopped = false;
+  let instance = 0;
+  let startedAt = 0;
+  let readyAt = null;
   // RUN_QUARANTINE stays unset here: the load must not un-skip quarantined tests.
   const env = { ...process.env };
   delete env.RUN_QUARANTINE;
   const launch = () => {
-    const startedAt = now();
+    const id = ++instance;
+    startedAt = now();
+    readyAt = null;
     child = spawnImpl('npm run test:server', {
       cwd,
       env,
       shell: true,
-      stdio: 'ignore',
+      // Piped, not ignored: stdout is the readiness signal. Both streams are
+      // drained below, so a full pipe can never stall the suite.
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      detached: process.platform !== 'win32',
+      detached: platform !== 'win32',
     });
     rootExited = false;
     const mine = child;
-    child.on('error', () => { failed = true; });
-    child.on('exit', () => {
+    let tail = '';
+    const scan = (chunk) => {
+      if (id !== instance || readyAt !== null) return;
+      tail = (tail + String(chunk).replace(ANSI, '')).slice(-4096);
+      if (TEST_FILE_RESULT.test(tail)) readyAt = now();
+    };
+    mine.stdout?.on('data', scan);
+    mine.stderr?.on('data', scan);
+    mine.on('error', () => { failed = true; });
+    mine.on('exit', () => {
       if (mine === child) rootExited = true;
       if (stopped || failed) return;
       if (now() - startedAt < MIN_HEALTHY_LOAD_MS) {
@@ -1109,7 +1171,20 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
   launch();
   return {
     mode: 'server-suite',
-    isLoaded: () => !failed && !stopped,
+    // `instance` identifies the load process; `alive` is false once it failed or
+    // was stopped (sticky); `ready` once it has reported its first test file
+    // (or LOAD_READY_FALLBACK_MS of uptime); `sinceReadyMs` is how far into
+    // that instance's pass this moment is.
+    status() {
+      const t = now();
+      const readyTime = readyAt ?? (t - startedAt >= LOAD_READY_FALLBACK_MS ? startedAt + LOAD_READY_FALLBACK_MS : null);
+      return {
+        instance,
+        alive: !failed && !stopped,
+        ready: readyTime !== null,
+        sinceReadyMs: readyTime === null ? null : t - readyTime,
+      };
+    },
     stop() {
       stopped = true;
       // Windows: a dead root's pid may have been reused (the load can die within
@@ -1117,6 +1192,50 @@ export function startServerSuiteLoad({ cwd = ROOT, spawnImpl = nodeSpawn, kill =
       // bounded-spawn.mjs applies at every one of its kill sites.
       if (child?.pid && !(rootExited && platform === 'win32')) kill(child.pid);
     },
+  };
+}
+
+// When run `i` of `runs` should start, in ms after the load instance became
+// ready: evenly spaced fractions (0, 1/runs, 2/runs, ...) of the estimated
+// pass, so the last run starts at (runs-1)/runs of it (80% for 5) and the
+// runs together sample the whole pass, including the ~63% mark where the
+// recorded stall struck. Pure.
+export function pacedStartOffsetMs(i, runs, passMs) {
+  return Math.round((i * passMs) / runs);
+}
+
+// What the loaded runs covered, as offsets into their load instance's pass:
+// `spans` is [{ startMs, endMs }] for the runs that counted as loaded. null when
+// none did. Pure.
+export function loadCoverage(spans, passMs) {
+  if (spans.length === 0) return null;
+  const firstStartMs = Math.min(...spans.map((x) => x.startMs));
+  const lastEndMs = Math.max(...spans.map((x) => x.endMs));
+  return { firstStartMs, lastEndMs, passMs, firstPct: Math.round((100 * firstStartMs) / passMs), lastPct: Math.round((100 * lastEndMs) / passMs) };
+}
+
+// Installs SIGINT/SIGTERM/exit handlers that run `cleanup` once (the load, and
+// any in-flight vitest, would otherwise outlive an interrupted run: a POSIX
+// detached child never sees the terminal's signal, and on Windows the
+// node grandchild survives its cmd.exe parent). Returns an uninstaller. The
+// signal handlers must exit, because registering one removes node's default
+// termination. `proc` is injectable for unit tests.
+export function installInterruptCleanup(cleanup, proc = process) {
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    try { cleanup(); } catch { /* best-effort: the process is going away */ }
+  };
+  const onSigint = () => { run(); proc.exit(130); };
+  const onSigterm = () => { run(); proc.exit(143); };
+  proc.on('SIGINT', onSigint);
+  proc.on('SIGTERM', onSigterm);
+  proc.on('exit', run);
+  return () => {
+    proc.off('SIGINT', onSigint);
+    proc.off('SIGTERM', onSigterm);
+    proc.off('exit', run);
   };
 }
 
@@ -1196,7 +1315,13 @@ export function emit(report) {
   if (summaryPath) appendFileSync(summaryPath, report + '\n');
 }
 
-export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSpawn, startLoad = startServerSuiteLoad) {
+const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LOAD_POLL_MS = 1000;
+
+// `opts` is for tests: `sleep` (the pacing wait), `loadPassMs` (the pass the runs
+// are spread across) and `proc` (what the interrupt handlers attach to).
+export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSpawn, startLoad = startServerSuiteLoad, opts = {}) {
+  const { sleep = defaultSleep, loadPassMs = LOAD_PASS_ESTIMATE_MS, proc = process } = opts;
   let markdown;
   try {
     markdown = readFileSync(registerPath, 'utf8');
@@ -1248,16 +1373,36 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
   // spawns no vitest, so a load would measure nothing).
   const load = resolveLoadMode() === 'server-suite' && (frontendFiles.length || serverFiles.length) ? startLoad() : null;
   let loadedRuns = 0;
+  const loadedSpans = [];
+  // The load and any in-flight vitest must not outlive an interrupted run.
+  const uninstallInterruptCleanup = load
+    ? installInterruptCleanup(() => { load.stop(); killLiveSpawns(); }, proc)
+    : () => {};
+  const budgetMs = load ? LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS : RUN_LOOP_WALL_CLOCK_BUDGET_MS;
   try {
     for (let i = 0; i < RUNS; i++) {
-      if (budgetExceeded(Date.now() - loopStart, oneRunWorstCaseMs, RUN_LOOP_WALL_CLOCK_BUDGET_MS)) {
+      // Loaded: hold this run until the load is past startup AND this run's
+      // paced offset into its pass has been reached (pacedStartOffsetMs).
+      // Gives up waiting on a dead load (the run then counts as unloaded) or
+      // once the wall-clock budget is spent (the check below stops the loop).
+      if (load) {
+        const target = pacedStartOffsetMs(i, RUNS, loadPassMs);
+        for (;;) {
+          const st = load.status();
+          if (!st.alive || (st.ready && st.sinceReadyMs >= target)) break;
+          if (Date.now() - loopStart > budgetMs) break;
+          await sleep(LOAD_POLL_MS);
+        }
+      }
+      if (budgetExceeded(Date.now() - loopStart, oneRunWorstCaseMs, budgetMs)) {
         console.error(
-          `quarantine-health: stopping after ${perRunOutcomes.length}/${RUNS} planned run(s) — starting another run risks exceeding the ${RUN_LOOP_WALL_CLOCK_BUDGET_MS / 60000}-minute wall-clock budget.`,
+          `quarantine-health: stopping after ${perRunOutcomes.length}/${RUNS} planned run(s) — starting another run risks exceeding the ${budgetMs / 60000}-minute wall-clock budget.`,
         );
         budgetExhausted = true;
         break;
       }
       console.log(`quarantine-health: run ${i + 1}/${RUNS}`);
+      const loadBefore = load?.status();
       const outcomes = [];
       const failedDomains = new Set();
       if (frontendFiles.length) {
@@ -1279,9 +1424,16 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
       }
       perRunOutcomes.push(outcomes);
       perRunFailedDomains.push(failedDomains);
-      // isLoaded() is sticky-false once the load has failed, so true here means
-      // it was live for this whole run.
-      if (load?.isLoaded()) loadedRuns++;
+      // Loaded only if the SAME load instance spanned the whole run and was
+      // already past startup when it began (a relaunch changes `instance`; a
+      // dead or stopped load is not `alive`).
+      if (load) {
+        const loadAfter = load.status();
+        if (loadBefore.alive && loadAfter.alive && loadBefore.ready && loadBefore.instance === loadAfter.instance) {
+          loadedRuns++;
+          loadedSpans.push({ startMs: loadBefore.sinceReadyMs, endMs: loadAfter.sinceReadyMs });
+        }
+      }
     }
   } catch (err) {
     // Defensive belt-and-suspenders: runVitestJson/classifyRunResult never
@@ -1294,6 +1446,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
     abortedEarly = true;
   } finally {
     load?.stop();
+    uninstallInterruptCleanup();
   }
 
   const entries = aggregate(rows, perRunOutcomes, perRunFailedDomains);
@@ -1306,7 +1459,7 @@ export async function main(registerPath = REGISTER_PATH, spawn = boundedVitestSp
     runs: perRunOutcomes.length,
     issueStates,
     os: resolveOsLabel(),
-    load: { mode: load ? 'server-suite' : 'none', loadedRuns },
+    load: { mode: load ? 'server-suite' : 'none', loadedRuns, coverage: loadCoverage(loadedSpans, loadPassMs) },
   });
   let finalReport = report;
   if (abortedEarly) {
