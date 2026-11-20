@@ -115,7 +115,7 @@ describe('speaker check off (#4454)', () => {
   const line = (r: BookQaReport) => formatQaReportText(r, 'Book').split('\n').find((l) => l.includes('Voice match —'));
 
   it('(a) gate off + pending non-empty -> gateOff, export says the check is off', () => {
-    const r = off({ charactersPending: ['ren'], chaptersScored: 0 });
+    const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersChecked: 0 });
     expect(classifyVoiceMatch(r).kind).toBe('gateOff');
     expect(line(r)).toContain('Voice match — Render-integrity QA is off');
   });
@@ -135,7 +135,7 @@ describe('speaker check off (#4454)', () => {
   });
 
   it('(b) gate off + notRun condition + nothing pending -> gateOff', () => {
-    expect(classifyVoiceMatch(off({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] })).kind).toBe('gateOff');
+    expect(classifyVoiceMatch(off({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersChecked: 0, charactersPending: [] })).kind).toBe('gateOff');
   });
 
   it('(c) gate off + scored keeps scored and notes the check is now off', () => {
@@ -156,7 +156,7 @@ describe('speaker check off (#4454)', () => {
   });
 
   it('(f) needsRerenderIds is empty for a gateOff report carrying charactersNeedingRerender', () => {
-    const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersNeedingRerender: ['c1'] });
+    const r = off({ charactersPending: ['ren'], chaptersScored: 0, charactersChecked: 0, charactersNeedingRerender: ['c1'] });
     expect(needsRerenderIds(r)).toEqual([]);
   });
 
@@ -176,5 +176,43 @@ describe('speaker check off (#4454)', () => {
   it('(i) needsRerenderIds still lists ids when the field is absent (check on)', () => {
     const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...vd, charactersNeedingRerender: ['ren'] } };
     expect(needsRerenderIds(r)).toEqual(['ren']);
+  });
+
+  /* The report buildAudioQaReport emits for one eligible chapter where narrator is checked with a
+     voice-mismatch verdict and ren has no centroids row yet (pinned by the server test
+     'a pending character in every eligible chapter zeroes ...'): both chapter counts are 0. */
+  const builderPending = (over: Partial<BookQaReport['voiceDrift']> = {}) =>
+    off({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      charactersPending: ['ren'],
+      mismatches: [{ characterId: 'narrator', fixable: true }] as BookQaReport['voiceDrift']['mismatches'],
+      ...over,
+    });
+
+  it('(j) gate off + a pending character in every eligible chapter keeps the checked-so-far result and its mismatch, no gateOff', () => {
+    const r = builderPending();
+    expect(classifyVoiceMatch(r)).toEqual({
+      kind: 'checkedSoFar',
+      charactersChecked: 2,
+      charactersOnRoster: 2,
+      mismatchCount: 1,
+      inconclusiveCount: 0,
+    });
+    expect(line(r)).toBe('· Voice match — 2 of 2 characters checked so far, 1 mismatches (Render-integrity QA is now off)');
+    expect(needsRerenderIds(builderPending({ charactersNeedingRerender: ['narrator'] }))).toEqual([]);
+  });
+
+  it('(k) gate off + pending + only a mismatch or only an inconclusive count (nothing checked) is still evidence', () => {
+    expect(classifyVoiceMatch(builderPending({ charactersChecked: 0, inconclusiveCount: 2, mismatches: [] })).kind).toBe('checkedSoFar');
+    expect(classifyVoiceMatch(builderPending({ charactersChecked: 0 })).kind).toBe('checkedSoFar');
+  });
+
+  it('(l) gate on + the same builder shape is not checkedSoFar', () => {
+    const r: BookQaReport = { ...MOCK_QA_REPORT, voiceDrift: { ...builderPending().voiceDrift, speakerCheckEnabled: true } };
+    expect(classifyVoiceMatch(r).kind).not.toBe('checkedSoFar');
   });
 });

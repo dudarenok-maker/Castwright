@@ -25,6 +25,13 @@ export type VoiceMatchClassification =
   | { kind: 'notRun' }
   | { kind: 'gateOff' }
   | {
+      kind: 'checkedSoFar';
+      charactersChecked: number;
+      charactersOnRoster: number;
+      mismatchCount: number;
+      inconclusiveCount: number;
+    }
+  | {
       kind: 'embedShortfall';
       chaptersScored: number;
       chaptersEligible: number;
@@ -74,12 +81,24 @@ export function isSpeakerCheckOff(report: BookQaReport): boolean {
 export function classifyVoiceMatch(report: BookQaReport): VoiceMatchClassification {
   const vd = report.voiceDrift;
   if (vd.chaptersEligible === 0) return { kind: 'noEligible' };
-  /* #4454 — gate off with nothing scored or attempted: say so. Past results (`embedShortfall` /
-     `scored`) below stay, pending characters or not: true for the audio scored, and the headline
-     counts their mismatches. Strict `=== false` via isSpeakerCheckOff — an absent field keeps
-     today's behaviour. */
+  /* #4454 — gate off with no chapter scored or attempted. With no other evidence either, say the
+     check is off. The server's chapter counts skip any chapter whose roster holds a pending
+     character, so a pending character in every eligible chapter zeroes both however much was
+     checked: a checked character (`charactersChecked`) or a standing mismatch / inconclusive count
+     is a past result and stays, as `checkedSoFar` (the pending row's wording, no Resume). Past
+     results with chapters counted (`embedShortfall` / `scored`) below stay, pending characters or
+     not. Strict `=== false` via isSpeakerCheckOff — an absent field keeps today's behaviour. */
   if (isSpeakerCheckOff(report) && vd.chaptersScored === 0 && vd.chaptersEmbedFailed === 0) {
-    return { kind: 'gateOff' };
+    if (vd.charactersChecked === 0 && vd.mismatches.length === 0 && vd.inconclusiveCount === 0) {
+      return { kind: 'gateOff' };
+    }
+    return {
+      kind: 'checkedSoFar',
+      charactersChecked: vd.charactersChecked,
+      charactersOnRoster: vd.charactersOnRoster,
+      mismatchCount: vd.mismatches.length,
+      inconclusiveCount: vd.inconclusiveCount,
+    };
   }
   /* fs-51 correctness fix: chaptersScored === 0 alone no longer means "the
      gate never ran" — a fleet-wide embedding failure (the gate attempted

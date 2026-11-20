@@ -545,6 +545,41 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
   });
 
+  /* #4454 pass 2 — the pinned builder shape the frontend `checkedSoFar` row is seeded from
+     (src/lib/qa-report-classify.test.ts, e2e/qa-report.spec.ts): a pending character that
+     speaks in every eligible chapter zeroes BOTH chapter counts however much was checked. */
+  it('a pending character in every eligible chapter zeroes chaptersScored and chaptersEmbedFailed while characters are checked and a mismatch stands', async () => {
+    const dir = await makeBook();
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'narrator' }), seg({ characterId: 'ren' })],
+      characterSnapshots: { narrator: { voiceEngine: 'qwen' }, ren: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'narrator', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+      { characterId: 'ren', sentenceIds: [1], vec: Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'narrator', sentenceIds: [1], verdict: 'voice-mismatch', cosine: 0.2, severity: 'severe', fixable: true, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+    await writeCentroids(dir, [
+      { characterId: 'narrator', centroid: [1, 0, 0, 0, 0, 0, 0, 0], cleanMean: 0.9, pSevere: 0.5, pBand: 0.7, referenceKind: 'in-book' },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift).toMatchObject({
+      chaptersEligible: 1,
+      chaptersScored: 0,
+      chaptersEmbedFailed: 0,
+      charactersOnRoster: 2,
+      charactersChecked: 2,
+      charactersPending: ['ren'],
+    });
+    expect(report.voiceDrift.mismatches.map((m) => m.characterId)).toEqual(['narrator']);
+  });
+
   it('chaptersEmbedFailed DOES count a chapter whose only unscored roster character is terminally capped (not in charactersPending)', async () => {
     // Deliberately hand-authored disk state (NOT a state a single scoreBook
     // run produces on its own — that's the point: this test exercises the

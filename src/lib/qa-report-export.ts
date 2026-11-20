@@ -17,6 +17,9 @@ function voiceMatchLine(r: BookQaReport): string {
   if (c.kind === 'gateOff') return 'Voice match — Render-integrity QA is off';
   const offSuffix = isSpeakerCheckOff(r) ? ' (Render-integrity QA is now off)' : '';
   const inconclusiveSuffix = c.inconclusiveCount > 0 ? `, ${c.inconclusiveCount} chapters inconclusive` : '';
+  if (c.kind === 'checkedSoFar') {
+    return `Voice match — ${c.charactersChecked} of ${c.charactersOnRoster} characters checked so far, ${c.mismatchCount} mismatches${inconclusiveSuffix}${offSuffix}`;
+  }
   if (c.kind === 'embedShortfall') {
     return `Voice match — ${c.chaptersScored} of ${c.chaptersEligible} eligible chapters scored (${c.chaptersEmbedFailed} couldn't be embedded), ${c.mismatchCount} mismatches${inconclusiveSuffix}${offSuffix}`;
   }

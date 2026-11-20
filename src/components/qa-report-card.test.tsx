@@ -125,9 +125,25 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
       );
 
     it('(a) pending + gate off: says so and offers no Resume', () => {
-      renderWith({ speakerCheckEnabled: false, charactersPending: ['ren'], chaptersScored: 0 });
+      renderWith({ speakerCheckEnabled: false, charactersPending: ['ren'], chaptersScored: 0, charactersChecked: 0 });
       expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+    });
+
+    it('(a3) the builder shape (pending character in every chapter, both chapter counts 0, a mismatch standing) + gate off: keeps the result, no gate-off row, no Resume', () => {
+      renderWith({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['ren'],
+        mismatches: [{ characterId: 'narrator', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
+      });
+      expect(screen.getByText('2 of 2 characters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeInTheDocument();
+      expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
     });
 
     it('(a2) pending + partial scoring + gate off: keeps the past result and mismatch count, no Resume', () => {
@@ -144,7 +160,7 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     });
 
     it('(b) notRun shape + gate off: render-integrity copy replaces "Not run for this book"', () => {
-      renderWith({ speakerCheckEnabled: false, chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] });
+      renderWith({ speakerCheckEnabled: false, chaptersScored: 0, chaptersEmbedFailed: 0, charactersChecked: 0, charactersPending: [] });
       expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
       expect(screen.queryByText(/Not run for this book/)).toBeNull();
     });

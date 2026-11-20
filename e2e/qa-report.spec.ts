@@ -131,7 +131,8 @@ test.describe('QA report card', () => {
   });
 
   /* #4454 — check off but chapters already scored: the past result stays (it is true for the
-     audio scored) with a "now off" suffix, no gate-off row, and still no Resume. */
+     audio scored) with a "now off" suffix, no gate-off row, and still no Resume. Shape the real
+     builder emits: chapter 1 fully scored, chapter 2's only roster character still pending. */
   test('keeps the past voice-match result with a "now off" note when the gate is off after scoring', async ({ page }) => {
     await page.addInitScript(() => {
       (window as unknown as { __mockQaReportOverride: unknown }).__mockQaReportOverride = {
@@ -146,7 +147,7 @@ test.describe('QA report card', () => {
           speakerCheckEnabled: false,
           attribution: 'full',
           chaptersEligible: 2,
-          chaptersScored: 2,
+          chaptersScored: 1,
           chaptersEmbedFailed: 0,
           charactersOnRoster: 2,
           charactersChecked: 1,
@@ -163,7 +164,46 @@ test.describe('QA report card', () => {
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page, /Solway Bay/i);
 
-    await expect(page.getByText('1 of 2 characters checked, 0 mismatches · Render-integrity QA is now off')).toBeVisible();
+    await expect(page.getByText("1 of 2 eligible chapters scored (0 couldn't be embedded), 0 mismatches · Render-integrity QA is now off")).toBeVisible();
+    await expect(page.getByTestId('qa-speaker-check-off')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
+  });
+
+  /* #4454 — a pending character speaks in every eligible chapter, so the server zeroes both chapter
+     counts however much was checked (pinned by the buildAudioQaReport test of that name): the
+     checked characters and the standing mismatch stay, no gate-off row, no Resume. */
+  test('keeps the checked-so-far result when a pending character zeroes both chapter counts and the gate is off', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __mockQaReportOverride: unknown }).__mockQaReportOverride = {
+        bookId: 'sb',
+        generatedAt: '2026-07-08T00:00:00.000Z',
+        chaptersRendered: 1,
+        chaptersTotal: 1,
+        totalLines: 20,
+        acoustic: { linesChecked: 20, linesRerecorded: 0, chaptersFlagged: 0 },
+        asr: { linesVerified: 20, linesFlaggedDrift: 0 },
+        voiceDrift: {
+          speakerCheckEnabled: false,
+          attribution: 'full',
+          chaptersEligible: 1,
+          chaptersScored: 0,
+          chaptersEmbedFailed: 0,
+          charactersOnRoster: 2,
+          charactersChecked: 2,
+          charactersPending: ['ren'],
+          charactersNeedingRerender: [],
+          mismatches: [{ characterId: 'narrator', fixable: true }],
+          inconclusiveCount: 0,
+          uncheckedCharacterIds: [],
+        },
+        configDrift: { counts: { mild: 0, moderate: 0, severe: 0 }, events: [] },
+      };
+    });
+
+    await page.goto('/#/books/sb/listen');
+    await waitForListenViewReady(page, /Solway Bay/i);
+
+    await expect(page.getByText('2 of 2 characters checked so far, 1 mismatches · Render-integrity QA is now off')).toBeVisible();
     await expect(page.getByTestId('qa-speaker-check-off')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Resume scoring', exact: true })).toHaveCount(0);
   });
