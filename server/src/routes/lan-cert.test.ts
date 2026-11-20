@@ -14,6 +14,7 @@ import request from 'supertest';
 import { copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { setLanRuntime } from '../lan-runtime.js';
+import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -115,6 +116,23 @@ describe('POST /api/lan/cert/regenerate', () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toContain('mkcert is not on PATH');
     expect(setSecureContext).not.toHaveBeenCalled();
+  });
+
+  it('on an fs-error failure with no stderr: returns FS_FAILURE_REQUEST_ERROR, not the raw path (#3702)', async () => {
+    const err = Object.assign(
+      new Error("EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'"),
+      { code: 'EPERM', syscall: 'rename', path: 'C:\\Users\\someone\\castwright-workspace\\x' },
+    );
+    vi.mocked(execFile).mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as (error: Error | null, stdout: string, stderr: string) => void)(err, '', '');
+      return {} as ReturnType<typeof execFile>;
+    });
+
+    const res = await request(makeApp()).post('/api/lan/cert/regenerate');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('someone');
   });
 
   it('on a TOCTOU hot-swap read failure: still returns 200 with the host list (not a 500)', async () => {

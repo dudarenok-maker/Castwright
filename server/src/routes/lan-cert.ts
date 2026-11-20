@@ -22,6 +22,7 @@ import { enumerateLanIps } from '../lan-hosts.js';
 import { parseCertIps, computeCertHealth, type CertHealth } from '../lan-cert-health.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { isLanHttpsEnabled } from './export-lan.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const lanCertRouter = Router();
 
@@ -175,7 +176,7 @@ lanCertRouter.post('/cert/regenerate', async (req: Request, res: Response) => {
     } catch (err) {
       const stderr = (err as { stderr?: Buffer | string } | undefined)?.stderr;
       const message = stderr ? stderr.toString() : (err as Error).message;
-      res.status(500).json({ error: message });
+      res.status(500).json({ error: requestFailureMessageFs(err, message) });
       return;
     }
 

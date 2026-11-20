@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import express from 'express';
 import request from 'supertest';
 import type { Express } from 'express';
+import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 vi.mock('./export-lan.js', async (orig) => ({
   ...(await orig<typeof import('./export-lan.js')>()),
@@ -188,6 +189,24 @@ describe('devices route (srv-33)', () => {
     expect(res.status).toBe(503);
     expect(typeof res.body.error).toBe('string');
     expect(res.body.error.length).toBeGreaterThan(0);
+  });
+
+  // #3702 -- a degraded error carrying an fs cause must not leak the path.
+  it('GET answers 503 with FS_FAILURE_REQUEST_ERROR, not the raw path, when the degraded error is an fs error (#3702)', async () => {
+    const spy = vi.spyOn(deviceTokens, 'listDevices').mockImplementation(() => {
+      throw Object.assign(new deviceTokens.DeviceStoreDegradedError(), {
+        message: "EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'",
+        code: 'EPERM',
+        syscall: 'rename',
+        path: 'C:\\Users\\someone\\castwright-workspace\\x',
+      });
+    });
+    const res = await request(app).get('/api/devices');
+    spy.mockRestore();
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('someone');
   });
 
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
