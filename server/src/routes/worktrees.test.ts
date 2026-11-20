@@ -54,6 +54,24 @@ describe('worktrees route -- path-free 500 bodies', () => {
     expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
   });
 
+  it('a real spawn failure (git binary missing): names the failure, not null, and no absolute path', async () => {
+    const { spawnSync: realSpawnSync } = await vi.importActual<typeof import('node:child_process')>(
+      'node:child_process',
+    );
+    const missingGit = join(scratch, 'no-such-git');
+    spawnSyncMock.mockImplementation(() => realSpawnSync(missingGit, ['worktree', 'list'], { encoding: 'utf8' }));
+
+    const res = await request(app).get('/api/worktrees');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/^git worktree list failed: /);
+    expect(res.body.error).toContain('spawnSync');
+    expect(res.body.error).not.toContain('null');
+    expect(res.body.error).not.toContain('no-such-git');
+    expect(res.body.error).not.toContain(scratch);
+    expect(res.body.error).not.toMatch(/[A-Za-z]:[/\\]/);
+  });
+
   it('a real node fs error while reading a worktree .env.local answers the curated fs sentence', async () => {
     const { FS_FAILURE_REQUEST_ERROR } = await import('../workspace/file-lock.js');
     const tree = join(scratch, 'tree');

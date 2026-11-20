@@ -90,10 +90,13 @@ worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
     });
     if (porcelain.status !== 0) {
       /* git's stderr names the repo path (#3702); a non-zero exit is not an fs error, so
-         the seam cannot fire here -- scrub instead. */
-      return res
-        .status(500)
-        .json({ error: scrubPaths(`git worktree list failed: ${porcelain.stderr || porcelain.stdout}`) });
+         the seam cannot fire here -- scrub instead. A spawn failure (git not on PATH) leaves
+         stderr/stdout null and the cause on `error`, whose message can name a path too. */
+      return res.status(500).json({
+        error: scrubPaths(
+          `git worktree list failed: ${porcelain.stderr || porcelain.stdout || porcelain.error?.message}`,
+        ),
+      });
     }
     const trees = parseWorktreePorcelain(porcelain.stdout);
     const enriched: WorktreeRow[] = await Promise.all(
