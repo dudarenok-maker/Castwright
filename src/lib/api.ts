@@ -2628,7 +2628,7 @@ const HOLLOW_TIDE_QA_REPORT: BookQaReport = {
     chaptersEligible: 7,
     chaptersScored: 7,
     chaptersEmbedFailed: 0,
-    chaptersWithVerdicts: 0,
+    chaptersWithVerdicts: 7,
     charactersOnRoster: 6,
     charactersChecked: 6,
     charactersPending: [],

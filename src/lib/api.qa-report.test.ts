@@ -9,6 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
+import { MOCK_QA_REPORT } from '../data/qa-report';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -80,5 +81,12 @@ describe('api.getQaReport — wire contract', () => {
 
     await api.getQaReport('weird id/with slashes');
     expect(fetchMock).toHaveBeenCalledWith('/api/books/weird%20id%2Fwith%20slashes/qa-report');
+  });
+});
+
+describe('canned qa-report fixtures keep the builder invariant', () => {
+  it('MOCK_QA_REPORT: chaptersWithVerdicts >= chaptersScored (a fully scored chapter has a verdict file)', () => {
+    const vd = MOCK_QA_REPORT.voiceDrift;
+    expect(vd.chaptersWithVerdicts).toBeGreaterThanOrEqual(vd.chaptersScored);
   });
 });
