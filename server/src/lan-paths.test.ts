@@ -102,6 +102,40 @@ describe('separator-insensitive home matching (#4446 review)', () => {
     expect(textForClient(lan, 'open /home/ann/x and /home//ann/y', o)).toBe('open ~/x and ~/y');
     expect(textForClient(lan, '/home\\ann/x', o)).toBe('/home\\ann/x');
   });
+  it('textForClient leaves a sibling that merely shares the home prefix (win32)', () => {
+    const o = { home: 'C:\\Users\\ann', platform: 'win32' as const };
+    for (const sib of ['C:\\Users\\ann-x\\foo', 'C:\\Users\\ann.old\\foo', 'C:\\Users\\ann_x', 'C:\\Users\\ann+x']) {
+      expect(textForClient(lan, `open ${sib}`, o)).toBe(`open ${sib}`);
+      expect(collapseHomePath(sib, w(o.home))).toBe(sib);
+    }
+  });
+  it('textForClient collapses home before whitespace, quotes, closers and punctuation', () => {
+    const o = { home: 'C:\\Users\\ann', platform: 'win32' as const };
+    for (const [tail, out] of [
+      [' is missing', '~ is missing'],
+      ["'", "~'"],
+      ['"', '~"'],
+      ['`', '~`'],
+      [')', '~)'],
+      [']', '~]'],
+      ['}', '~}'],
+      [':', '~:'],
+      [',', '~,'],
+      [';', '~;'],
+      ['\\', '~\\'],
+      ['/', '~/'],
+      ['', '~'],
+    ]) {
+      expect(textForClient(lan, `in C:\\Users\\ann${tail}`, o)).toBe(`in ${out}`);
+    }
+  });
+  it('textForClient on linux leaves a sibling and a backslash-continued name', () => {
+    const o = { home: '/home/ann', platform: 'linux' as const };
+    expect(textForClient(lan, 'see /home/ann-x/foo and /home/ann.old/foo', o))
+      .toBe('see /home/ann-x/foo and /home/ann.old/foo');
+    expect(textForClient(lan, '/home/ann\\x', o)).toBe('/home/ann\\x');
+    expect(textForClient(lan, "'/home/ann'", o)).toBe("'~'");
+  });
   it('collapses the 8.3 short spelling of a long home segment (win32)', () => {
     const home = 'C:\\Users\\Michael Dudarenok';
     expect(collapseHomePath('C:\\Users\\MICHAE~1\\AppData\\Local\\Temp\\OllamaSetup.exe', w(home)))

@@ -74,7 +74,10 @@ export function textForClient(req: Request, text: string, opts: PathOpts = {}): 
   const win = (opts.platform ?? process.platform) === 'win32';
   const home = trimHome(opts.home ?? homedir(), win);
   if (!home) return text;
-  return text.replace(new RegExp(`${homeRegexSource(home, win)}(?=[\\\\/]|$|[^\\w])`, win ? 'gi' : 'g'), '~');
+  /* Same end-of-home boundary as collapseHomePath (a separator or end), plus the
+     characters that end a path in prose; `ann-x` / `ann.old` stay untouched. */
+  const end = `(?=${win ? '[\\\\/]' : '/'}|$|[\\s'"\`)\\]}>:,;])`;
+  return text.replace(new RegExp(`${homeRegexSource(home, win)}${end}`, win ? 'gi' : 'g'), '~');
 }
 
 /* Install/bootstrap/pull job snapshots: `step` / `error` are free text that can
