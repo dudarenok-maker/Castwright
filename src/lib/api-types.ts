@@ -1623,6 +1623,11 @@ export interface paths {
          *
          *     Gated like `/start` (#4029): an entry for a repaired bookId needs the
          *     current `X-Repair-Epoch`.
+         *
+         *     Body `outcome` (default `done`): `failed` keeps the entry as `failed` with `errorReason`.
+         *     `requeued` (#3436) flips an `in_progress` entry straight back to `queued` in one step and
+         *     writes no `failed` state, for a render the server refused 409 `book_busy` because its book is
+         *     analysing (nothing ran). A no-op for a missing or non-`in_progress` entry.
          */
         post: operations["completeQueueEntry"];
         delete?: never;
@@ -10767,7 +10772,15 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    outcome?: "done" | "failed" | "requeued";
+                    errorReason?: string;
+                };
+            };
+        };
         responses: {
             /** @description Resulting queue snapshot */
             200: {

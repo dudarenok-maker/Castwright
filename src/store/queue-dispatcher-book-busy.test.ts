@@ -34,6 +34,8 @@ const entry = (id: string, bookId: string, chapterId: number, order: number): Qu
 let queueEntries: QueueEntry[] = [];
 let queuePaused = false;
 let generationPosts: string[] = [];
+let retryCalls = 0;
+let failedWrites: string[] = [];
 let fetchMock: ReturnType<typeof vi.fn>;
 
 const json = (body: unknown, status = 200): Response =>
@@ -43,6 +45,8 @@ beforeEach(() => {
   queueEntries = [];
   queuePaused = false;
   generationPosts = [];
+  retryCalls = 0;
+  failedWrites = [];
   fetchMock = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
     const u = String(url);
     const gen = /\/api\/books\/([^/]+)\/generation$/.exec(u);
@@ -61,6 +65,7 @@ beforeEach(() => {
       const id = u.split('/').slice(-2)[0];
       queueEntries = queueEntries.map((e) => (e.id === id ? { ...e, status: 'in_progress' } : e));
     } else if (init?.method === 'POST' && u.endsWith('/retry')) {
+      retryCalls += 1;
       const id = u.split('/').slice(-2)[0];
       queueEntries = queueEntries.map((e) =>
         e.id === id && e.status === 'failed' ? { ...e, status: 'queued', errorReason: null } : e,
@@ -68,12 +73,18 @@ beforeEach(() => {
     } else if (init?.method === 'POST' && u.endsWith('/complete')) {
       const id = u.split('/').slice(-2)[0];
       const body = init?.body ? (JSON.parse(init.body) as { outcome?: string; errorReason?: string }) : {};
+      /* the server's `completeEntry`: requeued is in_progress -> queued, never through `failed` */
       queueEntries =
         body.outcome === 'failed'
           ? queueEntries.map((e) =>
               e.id === id ? { ...e, status: 'failed', errorReason: body.errorReason ?? null } : e,
             )
-          : queueEntries.filter((e) => e.id !== id);
+          : body.outcome === 'requeued'
+            ? queueEntries.map((e) =>
+                e.id === id && e.status === 'in_progress' ? { ...e, status: 'queued', errorReason: null } : e,
+              )
+            : queueEntries.filter((e) => e.id !== id);
+      if (body.outcome === 'failed') failedWrites.push(id);
     }
     return json({ entries: queueEntries, paused: queuePaused });
   });
@@ -164,6 +175,9 @@ describe('#3436 a 409 book_busy render refusal (the race the dispatcher cannot s
     expect(store.getState().queue.paused).toBe(false);
     expect(queuePaused).toBe(false);
     expect(breakerToasts(store)).toHaveLength(0);
+    /* the atomic requeue: `failed` is never written to the queue file and /retry is never called */
+    expect(failedWrites).toEqual([]);
+    expect(retryCalls).toBe(0);
     /* held back, not retried in a loop */
     await new Promise((r) => setTimeout(r, 300));
     expect(generationPosts.filter((b) => b === 'book-A').length).toBe(3);

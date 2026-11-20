@@ -47,7 +47,7 @@
 import type { Middleware, MiddlewareAPI } from '@reduxjs/toolkit';
 import { chaptersActions, type ChaptersState } from './chapters-slice';
 import { queueActions, type QueueState } from './queue-slice';
-import { completeQueueEntry, retryQueueEntry, setQueuePaused, startQueueEntry } from './queue-thunks';
+import { completeQueueEntry, setQueuePaused, startQueueEntry } from './queue-thunks';
 import { selectAnalysisRunningForBook } from './analysis-substage-selectors';
 import { notificationsActions } from './notifications-slice';
 import { uiActions, type UiState } from './ui-slice';
@@ -157,19 +157,21 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
              `queued`, and STEP 2 must be free to re-claim it then. */
           const failure = runner.takeChapterFailure(bookId, chapterId);
           if (failure != null) {
-            /* #3436 -- a 409 `book_busy` refusal is not a failure of the chapter: the entry is
-               put straight back to `queued` (fail, then retry: `/retry` is the only route back
-               to queued) and the book is held off for a while. It is exempt from the streak
-               below, so a race with an analysis can never pause the queue for every book. */
+            /* #3436 -- a 409 `book_busy` refusal is not a failure of the chapter: the server
+               requeues the entry (`outcome: 'requeued'`, in_progress -> queued in one atomic step, so
+               `failed` is never written) and the book is held off for a while. It is exempt from the
+               streak below, so a race with an analysis can never pause the queue for every book. */
             const bookBusy = failure.errorCode === 'book-busy';
-            const completed$ = dispatch(
-              completeQueueEntry(entryId, { outcome: 'failed', errorReason: failure.reason }),
-            );
             if (bookBusy) {
               busyHoldUntil.set(bookId, Date.now() + BOOK_BUSY_HOLD_MS);
               setTimeout(tick, BOOK_BUSY_HOLD_MS + 50);
             }
-            void (bookBusy ? completed$.then(() => dispatch(retryQueueEntry(entryId))) : completed$).catch(() => {
+            void dispatch(
+              completeQueueEntry(
+                entryId,
+                bookBusy ? { outcome: 'requeued' } : { outcome: 'failed', errorReason: failure.reason },
+              ),
+            ).catch(() => {
               /* Best-effort — the next snapshot reconciles. */
             });
 

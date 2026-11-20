@@ -260,7 +260,7 @@ export function startEntry(file: QueueFile, entryId: string): QueueFile {
 export function completeEntry(
   file: QueueFile,
   entryId: string,
-  outcome: 'done' | 'failed',
+  outcome: 'done' | 'failed' | 'requeued',
   errorReason?: string,
 ): QueueFile {
   /* Loud-fallback gate guard: NEVER complete a parked entry. When the worker
@@ -274,6 +274,19 @@ export function completeEntry(
   if (target?.status === 'awaiting_confirm') return file;
   if (outcome === 'done') {
     return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
+  }
+  /* #3436 -- `requeued`: the render was refused 409 `book_busy` (the book is analysing), so nothing
+     ran. in_progress -> queued in one step: `failed` is never written, so a tab closing mid-way cannot
+     strand the chapter. A no-op unless the entry is `in_progress`. */
+  if (outcome === 'requeued') {
+    if (target?.status !== 'in_progress') return file;
+    return renumber({
+      ...file,
+      entries: file.entries.map(
+        (e): QueueEntry =>
+          e.id === entryId ? { ...e, status: 'queued', errorReason: null, progress: undefined } : e,
+      ),
+    });
   }
   const next = file.entries.map(
     (e): QueueEntry =>
