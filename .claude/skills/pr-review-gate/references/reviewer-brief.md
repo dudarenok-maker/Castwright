@@ -1260,6 +1260,23 @@ recite:
     (Numbered 94 after #4437's 93, which is already on main; no other open PR
     holds a number.)
 
+95. **A self-exclusion justified by "our own target protects our siblings",
+    where each sibling computed its target from a different snapshot** — PR
+    #4497 pass 1 (#4445): the generation-path tier reconciles skipped the
+    busy check for the run's own book because the book's tier target
+    (`ctx.keep` / `keepForRunStart`) "covers its own chapters". But the
+    target is computed per chapter POST, so after a mid-run tier change a
+    sibling chapter's target differs from the caller's: the caller's target
+    said `keep17:false` while a same-book sibling still rendered on the 1.7B,
+    and the reconcile unloaded it. Checkable: for every exclusion of the form
+    "own work is protected by our own set/target/keep", ask whether each
+    member of "own work" computed that target from the same snapshot as the
+    caller (same call, same tick) or from its own earlier one; if the latter,
+    the exclusion needs a guard reading the live state (here
+    `keepQualityResident`), and a test should change the input between two
+    siblings' computations and assert the stale one cannot evict.
+    (Numbered 95 after #4436's 94; no other open PR holds a number.)
+
 ### Keeping the catalogue current
 
 A catalogue written once is a snapshot that decays, and the next new shape
