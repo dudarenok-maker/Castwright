@@ -7,7 +7,7 @@
 // `test:e2e:mobile:visual` script reads exactly those baselines, serially.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
@@ -51,3 +51,40 @@ for (const wf of ['cross-os', 'release']) {
 test('verify.yml (the PR path) does not run the mobile visual script', () => {
   assert.ok(!read('.github/workflows/verify.yml').includes('test:e2e:mobile:visual'));
 });
+
+// The step existing is not enough: a step marked non-blocking or skipped, or a
+// publish that no longer waits on the job, lets a release ship past a red (or
+// never-run) visual gate.
+for (const wf of ['cross-os', 'release']) {
+  test(`${wf}.yml visual step and mobile-e2e job are blocking and always run`, () => {
+    const doc = yaml.load(read(`.github/workflows/${wf}.yml`));
+    const job = doc.jobs['mobile-e2e'];
+    const step = job.steps.find((st) => st.run === VISUAL);
+    assert.ok(step, `missing step with run exactly "${VISUAL}"`);
+    assert.ok(!('if' in step), 'visual step must have no `if:` (it would be skippable)');
+    assert.ok(
+      !('continue-on-error' in step),
+      'visual step must not set continue-on-error (a red run must fail the job)',
+    );
+    assert.ok(!('continue-on-error' in job), 'mobile-e2e job must not set continue-on-error');
+    // cross-os.yml's job is legitimately scope-gated (and always runs on dispatch);
+    // a release tag has no such gate, so any `if:` there skips the gate.
+    if (wf === 'release') assert.ok(!('if' in job), 'release mobile-e2e job must have no `if:`');
+  });
+}
+
+test('release.yml publish waits on the mobile-e2e job', () => {
+  const doc = yaml.load(read('.github/workflows/release.yml'));
+  const needs = [].concat(doc.jobs.publish.needs);
+  assert.ok(needs.includes('mobile-e2e'), 'publish.needs must include mobile-e2e');
+});
+
+// visual.spec.ts skips every test when its e2e/linux/... baseline dir is absent,
+// which would turn the gate green with all skips. Pin the dirs as non-empty.
+for (const project of ['mobile-chrome', 'tablet-chrome']) {
+  test(`${project} linux visual baselines exist (otherwise the gate is all-skips)`, () => {
+    const dir = resolve(ROOT, 'e2e', 'linux', 'responsive', 'visual.spec.ts', project);
+    const pngs = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.png')) : [];
+    assert.ok(pngs.length > 0, `${dir} must contain committed .png baselines`);
+  });
+}
