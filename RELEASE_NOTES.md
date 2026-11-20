@@ -3,6 +3,7 @@
 **What's new in 1.16.0**
 
 - **Renaming chapters no longer loses their audio.** If a chapter you've already made gets a new title and you analyse the book again, that chapter keeps its audio and still shows as done. Only the title changes.
+- **Making room for a preview no longer breaks a voice you're designing.** If a quick voice preview needs graphics-card memory while a voice design or voice variant is still being made, Castwright now leaves the voice model that job is using alone and only frees what nothing is using.
 - **Two voices on one graphics card, without the false alarms.** When more than one speech engine shares your graphics card, Castwright now sizes each job by what that voice really needs, so it stops turning work away or unloading a voice to make room it never needed.
 - **Failed chapters no longer leave big files behind.** When a chapter fails part-way through being saved, Castwright now deletes the unsaved audio it was holding instead of leaving it on your disk. Leftovers from earlier failures stay until you delete them.
 - **Castwright now flags Russian books whose dialogue may have been run together.** If the imported text packs many lines of dialogue into one paragraph, the import screen names those chapters and suggests that a different copy or format of the book may give a better result, and the manuscript view marks each of those chapters, so books already in your library are covered too. It's a prompt to take a look, not a verdict: now and then a chapter is flagged that is fine as it stands.

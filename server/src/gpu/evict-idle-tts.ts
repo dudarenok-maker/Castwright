@@ -21,6 +21,10 @@
      freed is recorded in ./tts-auto-free-notice.ts so the browser can show
      the "unloaded to free VRAM" notice. The no-render-in-flight gate below
      applies unchanged.
+   - #4533 (owner decision, model-scoped, count-minus-self): it never unloads
+     a model ANOTHER live design or mint is using. A live design keeps the
+     0.6B base (and VoiceDesign with it), a live mint keeps the 1.7B base; the
+     rest is freed as before. The caller's own design/mint is subtracted.
    - Only when NO render is in flight anywhere. A resident base during a render
      may be in active use, and a mixed-tier book can have both tiers live at
      once (a character pinned above its book's tier). This also makes the lever
@@ -89,6 +93,7 @@
    an edge for cycle detection (see qwen-tier-reconcile-gate.ts), so the
    injection type below is spelled out locally instead. */
 import {
+  inFlightDesignMintCounts,
   isAnyGenerationActive,
   isRepairOnlyKnownActive,
   readSpliceEpoch,
@@ -242,6 +247,9 @@ export interface EvictIdleQwenBaseOpts {
       the leaf gate's `probeSidecarHealthIfRegistered`. Only consulted for a
       design or Quality op (#4066). */
   _probeHealth?: () => Promise<SidecarHealthSnapshot | null>;
+  /** Injected for tests. In-flight design / mint counts (#4533) — defaults to
+      the leaf gate's `inFlightDesignMintCounts`. */
+  _inFlightDesignMint?: () => { design: number; mint: number };
 }
 
 /** Returns true when the underlying `reconcileResidentQwenTiers` actually
@@ -331,6 +339,19 @@ export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<bo
     : isQwenOp && !isDesign
       ? { keep06: !wants17, keep17: wants17 }
       : { keep06: false, keep17: false };
+
+  /* #4533 — model-scoped, count-minus-self: never unload a model ANOTHER live
+     design or mint is using. A live design needs the 0.6B base AND VoiceDesign
+     (`/unload {engine:'qwen'}` nulls both), a live mint needs the 1.7B base
+     (`unload_base17()` does not wait for it). The caller's own design/mint is
+     already counted (design-voice-core increments before it asks this lever),
+     so it is subtracted — #4066's "auto-free, then design" holds for the caller.
+     A non-design caller (e.g. a Coqui preview) subtracts nothing. */
+  const live = (opts._inFlightDesignMint ?? inFlightDesignMintCounts)();
+  const otherDesign = live.design - (opts.purpose === 'design' ? 1 : 0) > 0;
+  const otherMint = live.mint - (opts.purpose === 'mint' ? 1 : 0) > 0;
+  if (otherDesign) keep.keep06 = true;
+  if (otherMint) keep.keep17 = true;
 
   /* #4066 — the two heavy op shapes also reclaim an on-GPU Kokoro. Residency
      is read up front only to decide that (and whether another design is

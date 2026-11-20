@@ -164,6 +164,13 @@ export function isDesignOrMintActive(): boolean {
   return (designCounter?.() ?? 0) > 0 || (mintCounter?.() ?? 0) > 0;
 }
 
+/** #4533 — the in-flight voice-design and variant-mint counts. `evictIdleQwenBase` subtracts
+    the CALLER's own (design-voice-core increments before it asks the lever) to learn what
+    ANOTHER op is using. Unregistered counts as zero, like the counters above. */
+export function inFlightDesignMintCounts(): { design: number; mint: number } {
+  return { design: designCounter?.() ?? 0, mint: mintCounter?.() ?? 0 };
+}
+
 /** #4445 — true when a render on a book OTHER than `bookId`, or any splice / QA repair or
     voice design / variant mint (on any book), may be in flight. Unregistered resolves to `true` (fail closed, like
     isAnyGenerationActive). For a caller whose own render is already protected by its

@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 53 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 54 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**89 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**90 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-20 (#4445), 88 → 89.** Row **A132** (the generation path's Qwen tier reconciles skip their eviction while other GPU work is active: a repair on a Quality book keeps its 1.7B while another book's render finishes a chapter) added. Group A 52 → 53. `next-id` bumped A132 → A133 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-21 (#4533), 89 → 90.** Row **A133** (the capacity-denied eviction lever keeps the Qwen models another live voice design or variant mint is using: a Coqui preview denied capacity during a mint leaves the 1.7B, and during a design leaves the 0.6B and VoiceDesign) added. Group A 53 → 54. `next-id` bumped A133 → A134 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-20 (#4445), 88 → 89.** Row **A132** (the generation path's Qwen tier reconciles skip their eviction while other GPU work is active: a repair on a Quality book keeps its 1.7B while another book's render finishes a chapter) added. Group A 52 → 53. `next-id` bumped A132 → A133 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-19 (#4456), 87 → 88.** Row **A131** (a GPU Whisper or Qwen on the second card is fit-checked and evicted against that card) added. Group A 51 → 52. `next-id` bumped A131 → A132 in the same change. Row is owed; not run here.
 >
@@ -1962,7 +1964,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A133 -->
+<!-- next-id: A134 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6748,6 +6750,18 @@ The automated tests prove the skip decision with fakes: the post-audition reconc
 - **Record the co-residency outcome.** Record whether the 0.6B and the 1.7B were resident together (`GET /health`: `qwen_loaded` and `qwen_base17_loaded`) and whether anything ran out of memory. Record the outcome either way; an OOM alone does not fail the row.
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and two books (Quality and Standard). *Criteria:* #4445 and this row. Clears when each bullet is recorded with the log line it produced.
+
+### A133 · The eviction lever keeps the Qwen models another live design or mint is using ([#4533](https://github.com/dudarenok-maker/Castwright/issues/4533)) · **single 8 GB card, real Qwen sidecar with the 0.6B and 1.7B-Base installed**
+
+The automated tests prove the keep set `evictIdleQwenBase` hands the tier reconcile, with counts injected: another live design keeps the 0.6B base (and so VoiceDesign, which `/unload {engine:'qwen'}` nulls with it), another live mint keeps the 1.7B base, a model neither uses is still freed, and the caller's own design or mint is subtracted so #4066's "auto-free, then design" still holds for it. They cannot show what the real sidecar does when a Coqui or Kokoro preview is denied capacity while a design or mint is mid-forward. The server log is `logs/server.log`; the sidecar's own log is `logs/tts.err.log`.
+
+- **Setup.** One book with a cast, both Qwen weights installed, Coqui installed and loadable.
+- **A mint survives a capacity-denied preview.** Start an emotion-variant mint, so the 1.7B Base is resident. While it runs, press a Coqui voice preview that the card cannot fit beside it. Observe: the mint completes and its audition plays, with no "Qwen 1.7B-Base model was unloaded before this mint's anchoring forward started" error; `logs/tts.err.log` shows no `/unload` for the 1.7B during the mint; the preview waits or reports no capacity instead of evicting it.
+- **A design survives a capacity-denied preview.** Start a single voice design (not "Design full cast"). While it runs, press a Coqui voice preview that cannot fit. Observe: the design completes and its audition plays, with no "VoiceDesign model was unloaded before this design could render" error, and `logs/tts.err.log` shows no `/unload {engine:'qwen'}` during the design.
+- **The rest is still freed.** With only an idle 1.7B resident (no design or mint live), press the same preview. Observe: the 1.7B is unloaded for it, as before.
+- **A design still frees for itself.** With an idle 1.7B resident and nothing else live, start a single voice design. Observe: the "unloaded to free VRAM" notice appears and the design runs.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and Coqui. *Criteria:* #4533 and this row. Clears when each bullet is recorded with the log line it produced.
 
 ## Group B — local Ollama analyzer only
 

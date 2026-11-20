@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">89</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">90</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->53<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->54<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">53 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">54 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -1041,6 +1041,20 @@
         <li><strong>Record the co-residency outcome.</strong> Record whether the 0.6B and the 1.7B were resident together (<code>GET /health</code>: <code>qwen_loaded</code> and <code>qwen_base17_loaded</code>) and whether anything ran out of memory. Record the outcome either way; an OOM alone does not fail the row.</li>
         </ul>
         <p class="src">the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and two books (Quality and Standard) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4445">#4445</a> &#183; criteria in this row</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A133</span><span class="iname">The eviction lever keeps the Qwen models another live design or mint is using</span><span class="risk">single 8 GB card, real Qwen sidecar with the 0.6B and 1.7B-Base installed</span><span class="chev">&#8250;</span></summary>
+      <div class="body">
+        <p>The automated tests prove the keep set <code>evictIdleQwenBase</code> hands the tier reconcile, with counts injected: another live design keeps the 0.6B base (and so VoiceDesign, which <code>/unload {engine:&#39;qwen&#39;}</code> nulls with it), another live mint keeps the 1.7B base, a model neither uses is still freed, and the caller&#39;s own design or mint is subtracted so #4066&#39;s "auto-free, then design" still holds for it. They cannot show what the real sidecar does when a Coqui or Kokoro preview is denied capacity while a design or mint is mid-forward. The server log is <code>logs/server.log</code>; the sidecar&#39;s own log is <code>logs/tts.err.log</code>.</p>
+        <ul>
+        <li><strong>Setup.</strong> One book with a cast, both Qwen weights installed, Coqui installed and loadable.</li>
+        <li><strong>A mint survives a capacity-denied preview.</strong> Start an emotion-variant mint, so the 1.7B Base is resident. While it runs, press a Coqui voice preview that the card cannot fit beside it. Observe: the mint completes and its audition plays, with no "Qwen 1.7B-Base model was unloaded before this mint&#39;s anchoring forward started" error; <code>logs/tts.err.log</code> shows no <code>/unload</code> for the 1.7B during the mint; the preview waits or reports no capacity instead of evicting it.</li>
+        <li><strong>A design survives a capacity-denied preview.</strong> Start a single voice design (not "Design full cast"). While it runs, press a Coqui voice preview that cannot fit. Observe: the design completes and its audition plays, with no "VoiceDesign model was unloaded before this design could render" error, and <code>logs/tts.err.log</code> shows no <code>/unload {engine:&#39;qwen&#39;}</code> during the design.</li>
+        <li><strong>The rest is still freed.</strong> With only an idle 1.7B resident (no design or mint live), press the same preview. Observe: the 1.7B is unloaded for it, as before.</li>
+        <li><strong>A design still frees for itself.</strong> With an idle 1.7B resident and nothing else live, start a single voice design. Observe: the "unloaded to free VRAM" notice appears and the design runs.</li>
+        </ul>
+        <p class="src">the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and Coqui &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4533">#4533</a> &#183; criteria in this row</p>
       </div>
     </details>
 
