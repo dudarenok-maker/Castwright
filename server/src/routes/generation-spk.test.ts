@@ -70,6 +70,8 @@ const leaseDirs = vi.hoisted(
       ['recon-s6', '/recon-s6'],
       ['recon-s7', '/recon-s7'],
       ['recon-s8', '/recon-s8'],
+      ['recon-s9', '/recon-s9'],
+      ['recon-s10', '/recon-s10'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -561,6 +563,19 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
       fullCastKeep: BOTH,
     });
     expect(resolved).toEqual({ keep06: false, keep17: true });
+  });
+
+  it('S9: a re-queue of the finished chapter itself (queued) counts at its stamp; only its in_progress entry is excluded', async () => {
+    const bookId = 'recon-s9';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [
+        entry(bookId, 1, 'in_progress'),
+        { ...entry(bookId, 1, 'queued', T06), id: `${bookId}-1-requeue` },
+      ],
+      analysis: { 1: [sent('pip')] },
+      captured: { keep06: false, keep17: true },
+    });
+    expect(resolved).toEqual(BOTH);
   });
 
   it('S6: the last chapter keeps every tier the run used (run-start keep with both tiers)', async () => {

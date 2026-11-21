@@ -1151,6 +1151,15 @@ describe('#4556 run needs: the reconcile keeps only the tiers the unfinished cha
     expect(lastKeep()).toEqual({ keep06: false, keep17: true });
   }, 10_000);
 
+  it("R14: a re-queue of the POST's own chapter at another tier counts (only the own in_progress entry is skipped)", async () => {
+    await writeQueue([
+      entry({ id: OWN_ENTRY, chapterId: 3, status: 'in_progress', modelKey: 'qwen3-tts-0.6b' }),
+      entry({ id: 'q14', chapterId: 3, status: 'queued', modelKey: 'qwen3-tts-1.7b' }),
+    ]);
+    await post(3, { queueEntryId: OWN_ENTRY });
+    expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+  }, 10_000);
+
   /* #4557 — K(book) = runNeeds ∪ the tierNeeds of this book's live (non-aborted) jobs.
      post(2) alone needs only 0.6B ({true,false}). */
   it('R6: a same-book job declaring 1.7B is unioned into the keep', async () => {

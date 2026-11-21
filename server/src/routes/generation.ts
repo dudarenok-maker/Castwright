@@ -208,7 +208,8 @@ export function makePostScoreKeepRecompute(
   return async () => {
     try {
       const queueEntries = (await readQueueFile(queueJsonPath())).entries.filter(
-        (e) => !(e.bookId === input.bookId && e.chapterId === finishedChapterId),
+        (e) =>
+          !(e.bookId === input.bookId && e.chapterId === finishedChapterId && e.status === 'in_progress'),
       );
       return computeRunQwenNeeds({ ...needsInput, targetChapterIds: [], queueEntries });
     } catch (e) {

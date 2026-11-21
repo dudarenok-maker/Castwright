@@ -75,3 +75,29 @@ describe('computeRunQwenNeeds: every pending entry of a chapter counts (#1393)',
     ).toEqual({ keep06: true, keep17: true });
   });
 });
+
+describe("computeRunQwenNeeds: only a target chapter's own in_progress entry is skipped (#1393)", () => {
+  const narrator = chr('narrator', { ttsEngine: undefined });
+
+  it('a target chapter re-queued at another tier keeps both (the own in_progress entry is skipped)', () => {
+    expect(
+      run({
+        targetChapterIds: [3],
+        queueEntries: [entry('own', 3, 'in_progress', T06), entry('requeue', 3, 'queued', T17)],
+        analysisChapters: { 3: [sent('narrator')] },
+        cast: [narrator],
+      }),
+    ).toEqual({ keep06: true, keep17: true });
+  });
+
+  it("a target chapter's own in_progress entry alone adds nothing beyond the request key", () => {
+    expect(
+      run({
+        targetChapterIds: [3],
+        queueEntries: [entry('own', 3, 'in_progress', T17)],
+        analysisChapters: { 3: [sent('narrator')] },
+        cast: [narrator],
+      }),
+    ).toEqual({ keep06: true, keep17: false });
+  });
+});
