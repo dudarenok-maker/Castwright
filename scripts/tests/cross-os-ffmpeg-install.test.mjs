@@ -25,7 +25,7 @@
 // release.yml (previously near-identical, with executable lines identical and comments reflowed) into the composite
 // action .github/actions/install-ffmpeg-windows/action.yml, so there is now
 // exactly one copy of the script to pin. The tests below exercise it there;
-// a separate check at the bottom of this file confirms both workflows still
+// a separate check at the bottom of this file confirms every workflow that installs ffmpeg on Windows still
 // reference the composite action, so a future edit can't quietly reintroduce
 // an inline duplicate.
 //
@@ -70,6 +70,14 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
+// quarantine-health.yml and verify.yml have no `cross-os-verify` job, so they join only the
+// Windows-ffmpeg delegation loop, not the job-timeout loop (#4244).
+const WINDOWS_FFMPEG_WORKFLOWS = [
+  ...WORKFLOWS,
+  resolve(repoRoot, '.github', 'workflows', 'quarantine-health.yml'),
+  resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
+];
+
 // Every workflow that calls the composite action. A superset of WORKFLOWS:
 // verify.yml's windows-tests leg (a required check) also installs ffmpeg through
 // it, but has no cross-os-verify job, so it cannot join WORKFLOWS (the #3696
@@ -79,7 +87,7 @@ const COMPOSITE_CALLERS = [
   ...WORKFLOWS,
 ];
 
-const ACTION_FILE =resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
+const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
 
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
 // the next step at the same (6-space) indentation, a shallower-indented key
@@ -678,7 +686,9 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
 // inline (reintroducing the #2480 duplication) must not go unnoticed. Each
 // workflow's "Install ffmpeg (Windows)" step must reference the composite
 // action rather than embed its own `run: |` block.
-for (const path of COMPOSITE_CALLERS) {
+// COMPOSITE_CALLERS (verify.yml + WORKFLOWS) and WINDOWS_FFMPEG_WORKFLOWS (adds
+// quarantine-health.yml) overlap; iterate their union so no caller loses coverage.
+for (const path of new Set([...COMPOSITE_CALLERS, ...WINDOWS_FFMPEG_WORKFLOWS])) {
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {

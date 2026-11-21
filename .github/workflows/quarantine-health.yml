@@ -37,6 +37,39 @@ name: Quarantine Lane Health
 # register realistically needs (it is usually empty, and even non-empty this
 # job is cheap: only the specific quarantined files run, not the full gating
 # suites).
+#
+# Per-OS matrix (#4244): the job runs on ubuntu-latest AND windows-latest,
+# because the quarantined case behind #4244 only ever stalled on Windows CI and
+# an Ubuntu-only run could call it `always-passes` from an OS where it never
+# failed. Each leg runs scripts/quarantine-health.mjs as its own process and
+# writes its OWN report (stdout plus that job's $GITHUB_STEP_SUMMARY), which
+# names the OS it ran on; verdicts are never combined across OSes, and
+# `always-passes` means "on this OS". A row graduates only when EVERY leg
+# reports `always-passes`, and for #4244 only on a LOADED verdict: the Windows
+# leg sets QUARANTINE_HEALTH_LOAD=server-suite, so the quarantined files run
+# alongside a full `npm run test:server` (the condition of the one recorded
+# failure; 57 runs outside a full suite, 25 sequential and 32 under 4x
+# concurrency plus CPU burners, did not reproduce it), and its report's `Load:`
+# line says so. The runs are spaced across one full test:server pass, measured
+# from the load's launch and paced against 728 s (the median of the last 40 green
+# Windows `Server tests` steps; min 573, p90 810, max 836): the recorded stall
+# struck ~63% of the way through the suite, so after the last run the load is left
+# to finish its pass, the pass is MEASURED, and a LOADED verdict needs the runs to
+# end at or beyond 75% of that measured length (a load that never finishes inside
+# the budget is reported NOT loaded). The window is two-sided: run 5 ends ~598 s
+# after launch, so a LOADED verdict needs a measured pass between ~598 s and
+# ~797 s (598 / 0.75). A faster pass relaunches the load during run 5; a slower
+# one (green p90 810 s, max 836 s) leaves run 5 short of 75%. Both read NOT
+# loaded, so a healthy slow runner can read NOT loaded and graduation may need
+# more than one weekly run. Expect the Windows quarantine step to take about
+# 10-14 minutes (10 min 53 s at the reviewed head: the last run starts ~9.7
+# minutes after launch, then the load finishes its pass), against a 30-minute
+# loaded-loop budget. The
+# Ubuntu leg runs the files alone (`none`). Windows gets a
+# 40-minute cap (Ubuntu keeps 30): slower checkout, `npm ci` and choco ffmpeg
+# install; 40 is 30 plus 10 minutes of setup headroom, not a measurement. release.yml's `quarantine-lane` is
+# deliberately NOT mirrored: it runs `npm run test:quarantine` once, pass/fail,
+# produces no per-test verdict, and is not graduation evidence.
 
 on:
   workflow_dispatch:
@@ -58,13 +91,23 @@ concurrency:
 
 jobs:
   quarantine-health:
-    name: npm run quarantine:health
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: npm run quarantine:health (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     # Belt-and-suspenders alongside the script's own always-exit-0-for-test-
     # outcomes contract: this job's result can never block anything even if
     # the runner itself crashes (e.g. an unreadable register file).
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            timeout: 30
+            load: none
+          - os: windows-latest
+            timeout: 40
+            load: server-suite
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -78,9 +121,15 @@ jobs:
       # quarantined, if any, is exactly what this job doesn't know ahead of
       # time.
       - name: Install ffmpeg
+        if: matrix.os == 'ubuntu-latest'
         uses: ./.github/actions/install-ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/install-ffmpeg-windows
 
       - name: Quarantine lane health report
         run: npm run quarantine:health
         env:
           GH_TOKEN: ${{ github.token }}
+          QUARANTINE_HEALTH_LOAD: ${{ matrix.load }}

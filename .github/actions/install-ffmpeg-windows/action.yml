@@ -17,8 +17,8 @@
 #
 # Deliberately NOT folded into .github/actions/setup/action.yml: that action
 # is the OS-agnostic dependency-install preamble every job runs unconditionally;
-# this is Windows-only and only two of its three call sites (cross-os.yml,
-# release.yml) need it. The macOS/Ubuntu ffmpeg-install steps stay
+# this is Windows-only and only the jobs with a Windows leg that needs ffmpeg
+# (cross-os.yml, release.yml, verify.yml, quarantine-health.yml) call it. The macOS/Ubuntu ffmpeg-install steps stay
 # per-workflow and out of scope here for the same OS-specific reasons that
 # action's own header documents for skipping ffmpeg entirely.
 #
