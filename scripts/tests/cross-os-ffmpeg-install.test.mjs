@@ -70,7 +70,16 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
-const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
+// Every workflow that calls the composite action. A superset of WORKFLOWS:
+// verify.yml's windows-tests leg (a required check) also installs ffmpeg through
+// it, but has no cross-os-verify job, so it cannot join WORKFLOWS (the #3696
+// timeout loop below iterates that one).
+const COMPOSITE_CALLERS = [
+  resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
+  ...WORKFLOWS,
+];
+
+const ACTION_FILE =resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
 
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
 // the next step at the same (6-space) indentation, a shallower-indented key
@@ -669,7 +678,7 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
 // inline (reintroducing the #2480 duplication) must not go unnoticed. Each
 // workflow's "Install ffmpeg (Windows)" step must reference the composite
 // action rather than embed its own `run: |` block.
-for (const path of WORKFLOWS) {
+for (const path of COMPOSITE_CALLERS) {
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {
@@ -686,6 +695,12 @@ for (const path of WORKFLOWS) {
       block,
       /choco install ffmpeg/,
       'step embeds its own choco install call -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
+
+    assert.doesNotMatch(
+      block,
+      /winget install[^\n]*ffmpeg/i,
+      'step embeds its own winget ffmpeg install -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
     );
 
     // Guard against a second/different inline `choco install ffmpeg` elsewhere
