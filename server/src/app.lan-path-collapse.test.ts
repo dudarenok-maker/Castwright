@@ -429,9 +429,9 @@ describe('DeviceStoreDegradedError text collapse on the real app (#4446/#4498, r
   }
   afterAll(heal);
 
-  /* #3702's fs-error curation already answers a fixed path-free sentence to EVERY client
-     (loopback included), so the #4446 collapse is a no-op layered on top; what matters is
-     that the body names no home dir and no username. */
+  /* `DeviceStoreDegradedError`'s own message (workspace/device-tokens.ts) is a fixed
+     path-free sentence for EVERY client (loopback included), so the #4446 collapse is a
+     no-op layered on top; what matters is that the body names no home dir and no username. */
   it('loopback GET /api/devices answers the curated, path-free 503 text', async () => {
     await degrade();
     const lo = await getJson('127.0.0.1', '/api/devices');
