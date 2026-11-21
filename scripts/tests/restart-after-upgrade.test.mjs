@@ -254,7 +254,15 @@ test('a pointer write failure still relaunches whatever the pointer names (P4-2)
 test('runRestart spawns the launcher even if the guard itself throws (P4-2)', async () => {
   const root = fakeInstall();
   try {
-    const { launched } = await drive(root, { version: AFFECTED, guard: () => { throw new Error('boom'); } });
+    let called = 0;
+    const { launched } = await drive(root, {
+      version: AFFECTED,
+      guard: () => {
+        called += 1;
+        throw new Error('boom');
+      },
+    });
+    assert.equal(called, 1, 'the injected guard ran');
     assert.equal(launched.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -338,6 +346,31 @@ test('a release whose npm ci never finished is skipped as a rollback target (P5-
     const { result } = await drive(root, { version: AFFECTED });
     assert.equal(result.to, '1.14.0');
     assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.14.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a release with an unreadable package.json is skipped (P5-3)', async () => {
+  const root = fakeInstall('1.16.1', ['v1.14.0']);
+  fakeRelease(root, 'v1.16.1', GUARD_RANGES);
+  fakeRelease(root, 'v1.15.0');
+  writeFileSync(join(root, 'releases', 'v1.15.0', 'package.json'), '{ not json');
+  try {
+    const { result } = await drive(root, { version: AFFECTED });
+    assert.equal(result.to, '1.14.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a release whose crash-range list is not an array is skipped (P5-3)', async () => {
+  const root = fakeInstall('1.16.1', ['v1.14.0']);
+  fakeRelease(root, 'v1.16.1', GUARD_RANGES);
+  fakeRelease(root, 'v1.15.0', { from: '24.0.0', toExclusive: '24.16.0' });
+  try {
+    const { result } = await drive(root, { version: AFFECTED });
+    assert.equal(result.to, '1.14.0');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
