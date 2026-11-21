@@ -341,13 +341,14 @@ export async function triggerScoring(ctx: {
        voice design or variant mint (`isDesignOrMintActive`): the reconcile's `/unload`
        nulls the VoiceDesign model and the 1.7B Base under it (#4445). The
        generation path (`ctx.keep`) skips on the same rule except that this book's own
-       render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
-       superset, so its own chapters are already protected (#4445) — except after a mid-run tier
-       change, when a sibling's keep can differ: `keepQualityResident` therefore never drops the
-       1.7B while a Quality render is live. A 0.6B can still be evicted under a sibling when a
-       character is lowered to Standard (this score pass, one worker, qa.speaker.enabled: the next
-       chapter renders it on the 0.6B after this job deregistered) or raised to Quality at run
-       start with 2+ workers; each costs a reload and retry and is accepted.
+       render is excluded (`otherTierWorkActive`): `ctx.keep` is K(book) at the run's start, and
+       the keep resolved here is the book's needs re-read now, unioned with every live same-book
+       job's `tierNeeds` (`sameBookTierUnion`), so a sibling's tiers are protected (#4445) even
+       after a mid-run tier change; `keepQualityResident` additionally never drops the
+       1.7B while a Quality render is live. A 0.6B can still be evicted when a character is
+       lowered to Standard (this score pass, one worker, qa.speaker.enabled: the next
+       chapter renders it on the 0.6B after this job deregistered, so nothing declared it yet);
+       that costs a reload and retry and is accepted.
        Two residual windows remain, each costing at most one cold reload: (a) after this
        synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
        before it posts `/unload`, so a job registering in that round trip loses its tier
@@ -2692,9 +2693,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        reconcile can unload a Qwen tier that work is using. Same-book sibling
        chapters are excluded from that check, so they still reconcile with Kokoro
        kept, as above. The 1.7B is additionally never dropped while a Quality render is
-       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
-       0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
-       in the score pass (one worker) — it costs a reload and retry.
+       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); a
+       sibling's 0.6B is covered by `sameBookTierUnion` (its `tierNeeds`, also when a character
+       was RAISED to Quality with 2+ workers). Only a character LOWERED in the score pass (one
+       worker) stays accepted — it costs a reload and retry.
        The reconcile awaits `GET /health` before it posts `/unload`, so it is handed a
        function: after the health probe it re-reads `otherTierWorkActive` and K(book) and
        returns null (skip) when other work registered in that round trip. */
