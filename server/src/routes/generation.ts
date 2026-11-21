@@ -144,15 +144,53 @@ function otherTierWorkActive(bookId: string): boolean {
 /** #4445 — a generation-path reconcile never drops the 1.7B while any Quality render is live.
     `ctx.keep` is computed per chapter POST, so after a mid-run tier change it can be stale
     (keep17:false) while a same-book sibling renders on the 1.7B, and `otherTierWorkActive` leaves
-    that sibling out. The 0.6B half is NOT guarded the same way (no per-job tracker), so a 0.6B a
-    sibling uses can still be evicted by two paths, each costing a reload and retry — accepted:
-    (1) run start with 2+ workers, when a character is RAISED to Quality (the new POST's keep is
-    keep06:false while a sibling still renders on the 0.6B); (2) the score pass with one worker
-    and qa.speaker.enabled, when a character is LOWERED (ch5's keep is {keep06:false,
-    keep17:true}, ch6 renders that character on the 0.6B, ch5's job has already deregistered, and
-    its score-pass reconcile unloads the 0.6B). */
+    that sibling out. The 0.6B half is not guarded here: it is covered by the same-book union
+    (`sameBookTierUnion`: a live sibling's `RunningJob.tierNeeds`, so a character RAISED to Quality
+    at run start with 2+ workers keeps the 0.6B a sibling still renders on) and by the post-score
+    keep re-read from the queue. What stays accepted is a character LOWERED after the sibling
+    deregistered (the next chapter renders it on the 0.6B, nothing declared it yet): one reload
+    and retry. */
 function keepQualityResident<K extends { keep17: boolean }>(keep: K): K {
   return isQualityRenderKnownActive() && !keep.keep17 ? { ...keep, keep17: true } : keep;
+}
+
+/** #4557 / #4560 — a book's tier keep: `base` (a run's own needs) ∪ the `tierNeeds` of this
+    book's registered, NON-aborted jobs. `fullCast` stands in when a live job declared no
+    `tierNeeds` (an unknown never narrows) and, only when `ownScorePassFallsBack`, when this
+    book's own score pass is in flight (its audition renders on tiers of RENDERED chapters, which
+    a run's needs exclude; the post-score reconcile runs INSIDE that pass, so it never sets the
+    flag). Shared by the run-start and the post-score reconcile. */
+function sameBookTierUnion(
+  bookId: string,
+  base: { keep06: boolean; keep17: boolean },
+  fullCast: { keep06: boolean; keep17: boolean },
+  ownScorePassFallsBack: boolean,
+): { keep06: boolean; keep17: boolean } {
+  const live = [...(inFlightByBook.get(bookId) ?? [])].filter((j) => !j.controller.signal.aborted);
+  if ((ownScorePassFallsBack && scoringInFlight.has(bookId)) || live.some((j) => !j.tierNeeds)) {
+    return fullCast;
+  }
+  return {
+    keep06: base.keep06 || live.some((j) => j.tierNeeds?.keep06),
+    keep17: base.keep17 || live.some((j) => j.tierNeeds?.keep17),
+  };
+}
+
+/** The keep a generation-path reconcile resolves right after its `GET /health` round trip
+    (`reconcileResidentQwenTiers` calls this): null (skip) when work other than this book's own
+    registered in that round trip. An empty `union` (nothing left to render) falls to `whenEmpty`
+    (the run-start keep, for the post-score reconcile; null = skip). A resolved keep that is
+    still empty is null too, never both tiers evicted on a computed-empty keep (D3). */
+function keepAfterHealth<E extends object>(
+  bookId: string,
+  union: { keep06: boolean; keep17: boolean },
+  whenEmpty: { keep06: boolean; keep17: boolean } | null,
+  extra?: E,
+): ({ keep06: boolean; keep17: boolean } & E) | null {
+  if (otherTierWorkActive(bookId)) return null;
+  const base = union.keep06 || union.keep17 ? union : (whenEmpty ?? union);
+  const keep = keepQualityResident({ ...extra, ...base } as { keep06: boolean; keep17: boolean } & E);
+  return keep.keep06 || keep.keep17 ? keep : null;
 }
 
 /** #4560 — builds the post-score reconcile's `recomputeKeep`: the book's needs read when the
@@ -324,20 +362,12 @@ export async function triggerScoring(ctx: {
          this reconcile runs inside this book's own score pass, so it would always fire. */
       const needs = await ctx.recomputeKeep();
       const fullCast = ctx.fullCastKeep ?? ctx.keep;
-      await reconcileResidentQwenTiers(() => {
-        if (otherTierWorkActive(ctx.bookId)) return null;
-        const live = [...(inFlightByBook.get(ctx.bookId) ?? [])].filter(
-          (j) => !j.controller.signal.aborted,
-        );
-        const union = live.some((j) => !j.tierNeeds)
-          ? fullCast
-          : {
-              keep06: needs.keep06 || live.some((j) => j.tierNeeds?.keep06),
-              keep17: needs.keep17 || live.some((j) => j.tierNeeds?.keep17),
-            };
-        if (!union.keep06 && !union.keep17) return null; // D3: nothing to keep, nothing to reconcile
-        return keepQualityResident(union);
-      });
+      /* After the book's last chapter the union is empty: fall back to the keep computed at this
+         run's start (`ctx.keep`; owner decision on #1393), so a tier only the audition pulled is
+         still evicted and the tiers the run used stay. */
+      await reconcileResidentQwenTiers(() =>
+        keepAfterHealth(ctx.bookId, sameBookTierUnion(ctx.bookId, needs, fullCast, false), ctx.keep),
+      );
       return;
     }
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keepQualityResident(keep));
@@ -774,7 +804,7 @@ export function __registerFakeJobForTest(
   subscribers: { send: (ev: unknown) => void; res: Response }[],
   usesQuality17 = false,
   tierNeeds?: { keep06: boolean; keep17: boolean },
-): () => void {
+): (() => void) & { abort: () => void } {
   const key = `${bookId}::test-${Math.random().toString(36).slice(2)}`;
   const job: RunningJob = {
     usesQuality17,
@@ -796,7 +826,7 @@ export function __registerFakeJobForTest(
     children: [],
   };
   registerJob(key, job);
-  return () => deregisterJob(key, job);
+  return Object.assign(() => deregisterJob(key, job), { abort: () => job.controller.abort() });
 }
 
 /** True when any generation job is currently in flight for the book. Exposed
@@ -1327,18 +1357,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      job that declared no `tierNeeds`, or this book's own score pass in flight (its
      audition renders on tiers of RENDERED chapters, which runNeeds excludes). The
      union is correct whether or not this run's own job is already registered. */
-  const bookTierKeep = (): { keep06: boolean; keep17: boolean } => {
-    const liveSameBook = [...(inFlightByBook.get(bookId) ?? [])].filter(
-      (j) => !j.controller.signal.aborted,
-    );
-    if (scoringInFlight.has(bookId) || liveSameBook.some((j) => !j.tierNeeds)) {
-      return fullCastQwenTiers();
-    }
-    return {
-      keep06: runNeeds.keep06 || liveSameBook.some((j) => j.tierNeeds?.keep06),
-      keep17: runNeeds.keep17 || liveSameBook.some((j) => j.tierNeeds?.keep17),
-    };
-  };
+  const bookTierKeep = (): { keep06: boolean; keep17: boolean } =>
+    sameBookTierUnion(bookId, runNeeds, fullCastQwenTiers(), true);
   let usedQwenTiers = runNeeds;
   if (qwenInUse) usedQwenTiers = bookTierKeep();
 
@@ -2678,12 +2698,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     } else {
       await keepForRunStart(usedQwenTiers, anotherGenerationActiveAtStart)
         .then((target) =>
-          reconcileResidentQwenTiers(() => {
-            if (otherTierWorkActive(bookId)) return null;
-            const fresh = keepQualityResident({ ...target, ...bookTierKeep() });
-            // empty-keep guard (D3): never evict both tiers on a computed-empty keep
-            return fresh.keep06 || fresh.keep17 ? fresh : null;
-          }),
+          reconcileResidentQwenTiers(() => keepAfterHealth(bookId, bookTierKeep(), null, target)),
         )
         .catch((e) =>
           console.warn('[generation] tier reconcile skipped:', (e as Error).message),

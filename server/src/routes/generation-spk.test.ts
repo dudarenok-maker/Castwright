@@ -66,6 +66,10 @@ const leaseDirs = vi.hoisted(
       ['recon-s2', '/recon-s2'],
       ['recon-s3', '/recon-s3'],
       ['recon-s4', '/recon-s4'],
+      ['recon-s5', '/recon-s5'],
+      ['recon-s6', '/recon-s6'],
+      ['recon-s7', '/recon-s7'],
+      ['recon-s8', '/recon-s8'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -452,6 +456,8 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
       captured?: Keep;
       /** Runs while `scoreBook` is held open (a chapter queued, a sibling registered). */
       during?: () => Promise<void> | void;
+      /** Runs inside the reconcile call, after the busy check and before the keep function is read. */
+      beforeResolve?: () => void;
     },
   ): Promise<Keep | null> {
     vi.spyOn(cfg, 'configValue').mockReturnValue(true);
@@ -466,6 +472,7 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
        this book's own score pass is still registered), not after the pass has settled. */
     let resolved: Keep | null | undefined;
     vi.mocked(reconcileResidentQwenTiers).mockImplementationOnce(async (arg) => {
+      o.beforeResolve?.();
       resolved = typeof arg === 'function' ? arg() : arg;
       return true;
     });
@@ -540,5 +547,67 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
       analysis: { 1: [sent('pip')], 2: [sent('wren')] },
     });
     expect(resolved).toEqual({ keep06: false, keep17: true });
+  });
+
+  /* Owner decision on #1393 (2026-11-22): after the book's LAST chapter the recomputed union is
+     empty; the post-score reconcile then falls back to the keep computed at this run's start
+     (`ctx.keep`) instead of skipping, so a 0.6B only the audition pulled is still evicted. */
+  it('S5: the last chapter (nothing pending) falls back to the run-start keep: the audition-only 0.6B is evicted', async () => {
+    const bookId = 'recon-s5';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')] },
+      captured: { keep06: false, keep17: true },
+      fullCastKeep: BOTH,
+    });
+    expect(resolved).toEqual({ keep06: false, keep17: true });
+  });
+
+  it('S6: the last chapter keeps every tier the run used (run-start keep with both tiers)', async () => {
+    const bookId = 'recon-s6';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')] },
+      captured: BOTH,
+    });
+    expect(resolved).toEqual(BOTH);
+  });
+
+  /* The post-score keep shares its same-book union and its post-/health re-check with the run-start
+     keep; these two pin the post-score call site (twins of F4 and R7). */
+  it('S7 (F4 twin): other-book work registering after the busy check resolves to null (skipped)', async () => {
+    const bookId = 'recon-s7';
+    let cleanup: (() => void) | undefined;
+    try {
+      const resolved = await postScoreKeep(bookId, {
+        queue: [entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')],
+        analysis: { 1: [sent('wren')], 2: [sent('wren')] },
+        beforeResolve: () => {
+          cleanup = __registerFakeJobForTest('other-book', [], false, BOTH);
+        },
+      });
+      expect(resolved).toBeNull();
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  it('S8 (R7 twin): an ABORTED same-book sibling contributes nothing', async () => {
+    const bookId = 'recon-s8';
+    let cleanup: (() => void) | undefined;
+    try {
+      const resolved = await postScoreKeep(bookId, {
+        queue: [entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')],
+        analysis: { 1: [sent('wren')], 2: [sent('wren')] },
+        beforeResolve: () => {
+          const fake = __registerFakeJobForTest(bookId, [], false, { keep06: true, keep17: false });
+          cleanup = fake;
+          fake.abort();
+        },
+      });
+      expect(resolved).toEqual({ keep06: false, keep17: true });
+    } finally {
+      cleanup?.();
+    }
   });
 });
