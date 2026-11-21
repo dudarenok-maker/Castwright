@@ -195,21 +195,27 @@ function keepAfterHealth<E extends object>(
 
 /** #4560 — builds the post-score reconcile's `recomputeKeep`: the book's needs read when the
     reconcile runs, from a FRESH `.queue.json` read (plain read, no lock) and the POST's cast,
-    analysis and cast-id history. P is this book's still-pending entries only, the finished chapter
-    EXCLUDED even if the file still says `in_progress` (plan 293 §2.7), with no target term. A queue
+    analysis and cast-id history. P is this book's still-pending entries with no target term; only
+    the finished job's OWN entry is left out (by `finishedQueueEntryId`, else, for a back-compat job
+    with no entry, the finished chapter's `in_progress` entries), so a re-queue of the finished
+    chapter, even a claimed one, counts at its stamp (plan 293 §2.7). A queue
     read or helper throw falls back to the full cast (`fullCastKeep`): an unknown never narrows. */
 export function makePostScoreKeepRecompute(
   input: Omit<RunQwenNeedsInput, 'targetChapterIds' | 'queueEntries'> & {
     finishedChapterId: number;
+    /** The finished job's own queue entry id; null for a back-compat job (chapter + status match). */
+    finishedQueueEntryId: string | null;
     fullCastKeep: { keep06: boolean; keep17: boolean };
   },
 ): () => Promise<{ keep06: boolean; keep17: boolean }> {
-  const { finishedChapterId, fullCastKeep, ...needsInput } = input;
+  const { finishedChapterId, finishedQueueEntryId, fullCastKeep, ...needsInput } = input;
   return async () => {
     try {
       const queueEntries = (await readQueueFile(queueJsonPath())).entries.filter(
         (e) =>
-          !(e.bookId === input.bookId && e.chapterId === finishedChapterId && e.status === 'in_progress'),
+          finishedQueueEntryId != null
+            ? e.id !== finishedQueueEntryId
+            : !(e.bookId === input.bookId && e.chapterId === finishedChapterId && e.status === 'in_progress'),
       );
       return computeRunQwenNeeds({ ...needsInput, targetChapterIds: [], queueEntries });
     } catch (e) {
@@ -318,8 +324,8 @@ export async function triggerScoring(ctx: {
        fallback), which would then linger co-resident with the 1.7B synth (the
        8GB-card OOM). On the generation path the keep is NOT the capture from the
        chapter's POST (minutes stale by now, #1393): `ctx.recomputeKeep` re-reads the
-       book's needs from a fresh `.queue.json` (this book's still-pending entries, the
-       just-finished chapter excluded), and the reconcile gets a keep FUNCTION that
+       book's needs from a fresh `.queue.json` (this book's still-pending entries, only the
+       just-finished job's own entry left out), and the reconcile gets a keep FUNCTION that
        unions that with this book's live non-aborted jobs' `tierNeeds` when it is
        called, right after `/health` (#4559). A live same-book job with no `tierNeeds`
        falls back to the full cast; the run-start own-score-pass fall-back is NOT
@@ -1342,6 +1348,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       runNeeds = computeRunQwenNeeds({
         bookId,
         targetChapterIds: targetChapters.map((c) => c.id),
+        ownQueueEntryId: queueEntryId,
         queueEntries,
         analysisChapters: analysis.chapters,
         cast: cast.characters,
@@ -2263,6 +2270,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                 recomputeKeep: makePostScoreKeepRecompute({
                   bookId,
                   finishedChapterId: chapter.id,
+                  finishedQueueEntryId: job.queueEntryId,
                   analysisChapters: analysis.chapters,
                   cast: cast.characters,
                   castIdHistory: postScoreCastIdHistory,

@@ -3,8 +3,8 @@
    A run's keep set is the OR of `chapterQwenTierNeeds` over P, where
    P = this POST's target chapters ∪ the chapters of THIS book that still hold a
    pending queue entry (queued | in_progress | paused | awaiting_confirm).
-   A target chapter is evaluated at the REQUEST's Qwen key (the POST's own `in_progress`
-   queue entry is never consulted for it; its other pending entries are); a pending non-target chapter is evaluated
+   A target chapter is evaluated at the REQUEST's Qwen key (the POST's own queue entry,
+   by id, is never consulted for it; its other pending entries are); a pending non-target chapter is evaluated
    at its entry's stamped `modelKey` (engine and Qwen tier), or at the request's
    engine and key when unstamped (§2.6, D8); several pending entries of one chapter
    each count. `done` / `failed` entries, other books' entries and chapters that
@@ -33,6 +33,8 @@ export interface RunQwenNeedsInput {
   bookId: string;
   /** This POST's target chapter ids. */
   targetChapterIds: readonly number[];
+  /** This POST's own queue entry id; null/absent for a caller with none (chapter + status match). */
+  ownQueueEntryId?: string | null;
   /** Entries of the (already-read) queue file; any book, any status. */
   queueEntries: readonly QueueEntry[];
   /** `analysis.chapters`: sentences by chapter id. */
@@ -67,11 +69,13 @@ export function computeRunQwenNeeds(input: RunQwenNeedsInput): { keep06: boolean
      its Qwen tier; an unstamped one follows the request. */
   for (const e of input.queueEntries) {
     if (e.bookId !== input.bookId || !PENDING_STATUSES.has(e.status)) continue;
-    /* Only a target chapter's own `in_progress` entry (the one this POST runs) is skipped: the
-       dispatcher flips an entry to `in_progress` at claim, before its POST, and the target is already
-       evaluated at the request's key. Its queued / paused / awaiting_confirm entries (a re-queue at
-       another tier) still render on their own POST and count at their stamps. */
-    if (targets.has(e.chapterId) && e.status === 'in_progress') continue;
+    /* Only this POST's own entry is skipped (by id): the target is already evaluated at the request's
+       key. With no entry id, a target chapter's `in_progress` entry stands in for it (the dispatcher
+       flips an entry to `in_progress` at claim, before its POST). Every other entry (a re-queue at
+       another tier, even a claimed one) renders on its own POST and counts at its stamp. */
+    if (input.ownQueueEntryId != null) {
+      if (e.id === input.ownQueueEntryId) continue;
+    } else if (targets.has(e.chapterId) && e.status === 'in_progress') continue;
     add({
       chapterId: e.chapterId,
       defaultEngine: e.modelKey ? engineForModelKey(e.modelKey) : input.defaultEngine,

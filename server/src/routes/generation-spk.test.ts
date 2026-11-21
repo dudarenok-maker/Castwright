@@ -72,6 +72,7 @@ const leaseDirs = vi.hoisted(
       ['recon-s8', '/recon-s8'],
       ['recon-s9', '/recon-s9'],
       ['recon-s10', '/recon-s10'],
+      ['recon-s11', '/recon-s11'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -417,7 +418,7 @@ describe('afterChapterFinalized — forwards the run model key to scoring (#3524
 });
 
 /* #1393 / #4560 (plan 293 §2.7, S1-S5) — the post-score reconcile re-reads the book's needs when
-   it runs: a fresh `.queue.json` read (the finished chapter excluded) unioned, at the moment the
+   it runs: a fresh `.queue.json` read (the finished job's own entry left out) unioned, at the moment the
    keep function is called, with this book's live non-aborted jobs' `tierNeeds`. The reconcile is
    mocked, so the keep function it was handed is called here to read the resolved keep. */
 describe('post-score reconcile recomputes its keep when it runs (#4560)', () => {
@@ -456,6 +457,8 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
       analysis: Record<number, ReturnType<typeof sent>[]>;
       fullCastKeep?: Keep;
       captured?: Keep;
+      /** The finished job's own queue entry id (null: chapter + status fallback). */
+      finishedQueueEntryId?: string | null;
       /** Runs while `scoreBook` is held open (a chapter queued, a sibling registered). */
       during?: () => Promise<void> | void;
       /** Runs inside the reconcile call, after the busy check and before the keep function is read. */
@@ -488,6 +491,7 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
       recomputeKeep: makePostScoreKeepRecompute({
         bookId,
         finishedChapterId: CH1.id,
+        finishedQueueEntryId: o.finishedQueueEntryId ?? null,
         analysisChapters: o.analysis,
         cast,
         defaultEngine: 'qwen',
@@ -572,6 +576,20 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
         entry(bookId, 1, 'in_progress'),
         { ...entry(bookId, 1, 'queued', T06), id: `${bookId}-1-requeue` },
       ],
+      analysis: { 1: [sent('pip')] },
+      captured: { keep06: false, keep17: true },
+    });
+    expect(resolved).toEqual(BOTH);
+  });
+
+  it('S11: a claimed (in_progress) re-queue of the finished chapter counts when the finished entry is skipped by id', async () => {
+    const bookId = 'recon-s11';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [
+        entry(bookId, 1, 'done'),
+        { ...entry(bookId, 1, 'in_progress', T06), id: `${bookId}-1-requeue` },
+      ],
+      finishedQueueEntryId: `${bookId}-1`,
       analysis: { 1: [sent('pip')] },
       captured: { keep06: false, keep17: true },
     });

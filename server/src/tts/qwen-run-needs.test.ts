@@ -90,6 +90,18 @@ describe("computeRunQwenNeeds: only a target chapter's own in_progress entry is 
     ).toEqual({ keep06: true, keep17: true });
   });
 
+  it("with the POST's own entry id, a claimed in_progress re-queue of the target counts at its stamp", () => {
+    expect(
+      run({
+        targetChapterIds: [3],
+        ownQueueEntryId: 'own',
+        queueEntries: [entry('own', 3, 'queued', T06), entry('requeue', 3, 'in_progress', T17)],
+        analysisChapters: { 3: [sent('narrator')] },
+        cast: [narrator],
+      }),
+    ).toEqual({ keep06: true, keep17: true });
+  });
+
   it("a target chapter's own in_progress entry alone adds nothing beyond the request key", () => {
     expect(
       run({
