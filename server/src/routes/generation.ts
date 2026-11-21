@@ -1299,55 +1299,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     }
   }
 
-  /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
-     use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
-     vice-versa. Runs before this POST's chapter synth (the queue dispatcher
-     sends one POST per chapter, so it re-runs per chapter; the tier target is
-     the same each time, so the in-use tier stays warm across the book — load
-     price paid on chapter 1 only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
-     against the run default with the SAME elevate-only precedence
-     synthesise-chapter's routeFor uses, so a character whose stored tier is
-     stale/lower than the run default can't make this precompute evict the tier
-     routeFor is about to request (which forced a cold mid-run load on chapter 1,
-     defeating the whole point of this precompute). A genuinely mixed-tier book
-     still keeps both. Best-effort; a down / recycling sidecar skips. */
-  if (qwenInUse && targetChapters.length > 0 && (usedQwenTiers.keep06 || usedQwenTiers.keep17)) {
-    /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
-       Kokoro here (owner decision); a run with no 1.7B is unchanged. This
-       POST has not registered its own job yet (registerJob is below), so
-       the gate sees only OTHER work: generation jobs plus an in-flight splice
-       or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
-       therefore applies to the first chapter POST of a run, and is skipped
-       while anything else is live — but two first POSTs arriving together can
-       both see nothing and both drop. Bounded cost, not a no-op: the second
-       drop can unload a Kokoro the first job just reloaded for a fallback
-       line; that line then fails and goes through the transient retry. A later
-       chapter's POST (one per chapter, sibling chapters are live) and the
-       post-score re-assert in triggerScoring must not unload a Kokoro a
-       sibling chapter's fallback line may be using.
-       #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
-       work OTHER than this book's own is active (`otherTierWorkActive`: a render
-       on another book, any splice or QA repair, any voice design or variant mint, another
-       book's score pass): the
-       reconcile can unload a Qwen tier that work is using. Same-book sibling
-       chapters are excluded from that check, so they still reconcile with Kokoro
-       kept, as above. The 1.7B is additionally never dropped while a Quality render is
-       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
-       0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
-       in the score pass (one worker) — it costs a reload and retry. */
-    if (otherTierWorkActive(bookId)) {
-      console.info(
-        '[generation] run-start tier reconcile skipped: other GPU work is active',
-      );
-    } else {
-      await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
-        .then((target) => reconcileResidentQwenTiers(keepQualityResident(target)))
-        .catch((e) =>
-          console.warn('[generation] tier reconcile skipped:', (e as Error).message),
-        );
-    }
-  }
-
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio
      on disk (rendered before a crash/restart, so it's excluded from
      targetChapters and nothing will render), no chapter_complete fires to drive
@@ -1539,6 +1490,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     tierNeeds: runNeeds,
     children: [],
   };
+  /* #1393 — read BEFORE registerJob: once registered, `isAnyGenerationActive()` counts this
+     run's own job. The run-start reconcile (just before the chapter loop) reuses this value. */
+  const anotherGenerationActiveAtStart = isAnyGenerationActive();
   registerJob(key, job);
   /* #3711 — from here on the job can own children, so the wait for them lives in the
      `finally` that closes this `try` (an early return above has no job to drain). */
@@ -2574,6 +2528,60 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       controller.signal.removeEventListener('abort', onParentAbort);
     }
   };
+
+  /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
+     use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
+     vice-versa. Runs before this POST's chapter synth (the queue dispatcher
+     sends one POST per chapter, so it re-runs per chapter; the tier target is
+     the same each time, so the in-use tier stays warm across the book — load
+     price paid on chapter 1 only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
+     against the run default with the SAME elevate-only precedence
+     synthesise-chapter's routeFor uses, so a character whose stored tier is
+     stale/lower than the run default can't make this precompute evict the tier
+     routeFor is about to request (which forced a cold mid-run load on chapter 1,
+     defeating the whole point of this precompute). A genuinely mixed-tier book
+     still keeps both. Best-effort; a down / recycling sidecar skips. */
+  if (qwenInUse && targetChapters.length > 0 && (usedQwenTiers.keep06 || usedQwenTiers.keep17)) {
+    /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
+       Kokoro here (owner decision); a run with no 1.7B is unchanged. #1393 —
+       this POST has registered its own job by now (the reconcile runs just
+       before the chapter loop), so the starting run is visible to every other
+       evictor for the reconcile's own round trip. "Another generation active"
+       is therefore `anotherGenerationActiveAtStart`, captured BEFORE
+       registerJob: read here, `isAnyGenerationActive()` would count this run's
+       own job and Kokoro would never drop. The gate sees only
+       OTHER work: generation jobs plus an in-flight splice
+       or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
+       therefore applies to the first chapter POST of a run, and is skipped
+       while anything else is live — but two first POSTs arriving together can
+       both see nothing and both drop. Bounded cost, not a no-op: the second
+       drop can unload a Kokoro the first job just reloaded for a fallback
+       line; that line then fails and goes through the transient retry. A later
+       chapter's POST (one per chapter, sibling chapters are live) and the
+       post-score re-assert in triggerScoring must not unload a Kokoro a
+       sibling chapter's fallback line may be using.
+       #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
+       work OTHER than this book's own is active (`otherTierWorkActive`: a render
+       on another book, any splice or QA repair, any voice design or variant mint, another
+       book's score pass): the
+       reconcile can unload a Qwen tier that work is using. Same-book sibling
+       chapters are excluded from that check, so they still reconcile with Kokoro
+       kept, as above. The 1.7B is additionally never dropped while a Quality render is
+       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
+       0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
+       in the score pass (one worker) — it costs a reload and retry. */
+    if (otherTierWorkActive(bookId)) {
+      console.info(
+        '[generation] run-start tier reconcile skipped: other GPU work is active',
+      );
+    } else {
+      await keepForRunStart(usedQwenTiers, anotherGenerationActiveAtStart)
+        .then((target) => reconcileResidentQwenTiers(keepQualityResident(target)))
+        .catch((e) =>
+          console.warn('[generation] tier reconcile skipped:', (e as Error).message),
+        );
+    }
+  }
 
   /* One queue worker = one chapter. The dispatcher fires a separate POST per
      chapter (chapterIds:[id], force:true), so the queue's N workers ARE the

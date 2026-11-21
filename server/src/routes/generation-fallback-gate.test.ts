@@ -31,6 +31,8 @@ let lastSynthArgs: {
 let synthesiseImpl: (args: unknown) => Promise<unknown>;
 /* Every call the mocked run-start `reconcileResidentQwenTiers` received (#4066). */
 const reconcileCalls: unknown[][] = [];
+/* #1393 — runs inside the mocked reconcile, to observe server state at the moment it is entered. */
+let reconcileHook: (() => void) | null = null;
 vi.mock('../tts/synthesise-chapter.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/synthesise-chapter.js')>();
   return {
@@ -75,6 +77,7 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
   reconcileResidentQwenTiers: async (...args: unknown[]) => {
     reconcileCalls.push(args);
+    reconcileHook?.();
     return undefined;
   },
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
@@ -484,6 +487,44 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
     await runStream({ modelKey: 'qwen3-tts-0.6b' });
     expect(reconcileCalls.length).toBeGreaterThan(0);
     expect(reconcileCalls[0]![0]).not.toHaveProperty('keepKokoro');
+  }, 10_000);
+
+  it('O1 (#1393): the run is already registered (visible to the gate) when its run-start reconcile is entered', async () => {
+    const { isGenerationActive } = await import('./generation.js');
+    const seen: boolean[] = [];
+    reconcileHook = () => {
+      seen.push(isGenerationActive(bookId));
+    };
+    try {
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+    } finally {
+      reconcileHook = null;
+    }
+    expect(seen).toEqual([true]);
+  }, 10_000);
+
+  it('O2 (#1393): a bare-resume POST while a job is live for the book makes NO reconcile call', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const release = __registerFakeJobForTest(bookId, []);
+    try {
+      const res = await fetch(`${baseUrl}/api/books/${bookId}/generation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelKey: 'qwen3-tts-1.7b' }),
+      });
+      /* The bare resume subscribes and keeps the response open; headers arrived, so the
+         handler has run past the subscribe branch. Drop the connection. */
+      await res.body?.cancel();
+      expect(reconcileCalls.length).toBe(0);
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('O3 (#1393): Kokoro is still dropped on a first POST although the job is registered before the reconcile', async () => {
+    await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+    expect(reconcileCalls.length).toBeGreaterThan(0);
+    expect(reconcileCalls[0]![0]).toMatchObject({ keep17: true, keepKokoro: false });
   }, 10_000);
 });
 
