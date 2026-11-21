@@ -92,7 +92,7 @@ test('the Windows ffmpeg composite action stays unpinned (#4573)', () => {
     .split('\n')
     .filter((l) => !l.trim().startsWith('#'))
     .join('\n')
-    .replace(/`[ \t]*\n/g, ' ')
+    .replace(/\x60[ \t]*\n/g, ' ') // \x60 = backtick; a bare one trips the spawn-windows-hide scanner
     .split('\n');
   const choco = statements.filter((l) => /\bchoco\s+install\b/.test(l));
   const winget = statements.filter((l) => /\bwinget\s+install\b/.test(l));
