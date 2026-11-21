@@ -56,9 +56,12 @@ Windows box). Graduated on the owner's rule (#4244 comments, 2026-11-20 and
 `test:server` running concurrently, with the runs spread across one whole pass.
 quarantine-health run
 https://github.com/dudarenok-maker/Castwright/actions/runs/44950756949 (main)
-gave exactly that. Windows: "LOADED verdict, 5/5 runs fully loaded, spanning +60s
-to +588s (9%-87% of that load's measured 672s pass, exit 0)", and this test was
-always-passes 5/5. The earlier run
+gave exactly that. Windows leg, log text: "**Load: a full `npm run test:server` ran
+concurrently — 5/5 run(s) fully loaded, spanning +60s to +588s from the load's
+launch (9%-87% of that load's measured 672s pass, exit 0).** This is a LOADED
+verdict.", and this test was always-passes 5/5. The Ubuntu leg of the same run
+was an ISOLATED verdict ("Load: none — each run had the machine to itself."),
+and this test was always-passes 5/5 there too. The earlier run
 https://github.com/dudarenok-maker/Castwright/actions/runs/44949308168 did NOT
 qualify: it covered only 7-68% of the pass and missed the late window. The test
 is a normal `it` again and gates. -->

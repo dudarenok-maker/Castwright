@@ -212,8 +212,9 @@ async function stopAttempt(attempt: PruneAttempt): Promise<void> {
   await attempt.inFlight.catch(() => undefined);
 }
 
-/* The loop and the onTestFinished registration, shared by the same-tick case and the gating A/B pair, so
-   deleting either line of the stop/drain wiring is visible to both. */
+/* The loop and the onTestFinished registration, shared by the same-tick case and the gating A/B pair. Each
+   line of the stop/drain wiring is pinned by its own test: deleting `if (attempt.stopped) return;` fails "a
+   stopped attempt starts no further round", and deleting the onTestFinished registration fails test B. */
 function runPruneAttempt(rounds: number): { attempt: PruneAttempt; done: Promise<void> } {
   const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
   onTestFinished(() => stopAttempt(attempt));
