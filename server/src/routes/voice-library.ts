@@ -1447,7 +1447,7 @@ voiceLibraryRouter.post('/clone', async (req: Request, res: Response) => {
          to. Body shape (reason/code) is this route's own. */
       return res
         .status(httpStatusForSidecarError(sde))
-        .json({ error: sde.reason ?? sde.message ?? 'Clone derivation failed.', code: sde.code });
+        .json({ error: requestFailureMessageFs(e, sde.reason ?? sde.message ?? 'Clone derivation failed.'), code: sde.code });
     }
     console.error('[voice-library] clone failed', e);
     return res.status(502).json({

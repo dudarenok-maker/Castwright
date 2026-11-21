@@ -3,7 +3,7 @@
    case is a realistic ffmpeg last line plus a fragment that must not survive. */
 
 import { describe, expect, it } from 'vitest';
-import { ffmpegFailure } from './ffmpeg-failure.js';
+import { ffmpegFailure, scrubChildOutput } from './ffmpeg-failure.js';
 
 const longDrive = 'Error opening input file C:\\Users\\bob\\' + 'verylongfolder\\'.repeat(15) + 'ch1.mp3.';
 const longPosix = 'Error opening input file /home/bob/' + 'a'.repeat(120) + ' b/ch1.mp3.';
@@ -92,5 +92,31 @@ describe('ffmpegFailure path scrub (#4233)', () => {
     const err = ffmpegFailure('ffmpeg', 1, '[out#0/mp3 @ 0x1] I/O error, and/or N/A');
     expect(err.message).toContain('I/O error, and/or N/A');
     expect(err.message).toContain('out#0/mp3');
+  });
+});
+
+/* #3702 -- `scrubPaths` is a ONE-LINE scrubber (a path drops everything to the end of
+   its line). Child output with several lines (mkcert's install hints, a node stack)
+   goes through `scrubChildOutput`, which keeps every line and drops only the paths. */
+describe('scrubChildOutput (#3702)', () => {
+  it("keeps every line of setup-lan-certs.mjs's Linux-branch text and drops only the path", () => {
+    const text = [
+      '[setup-lan-certs] [FAIL] mkcert is not on PATH. Install it once with one of:',
+      '  Debian/Ubuntu: sudo apt install libnss3-tools && curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64" && chmod +x mkcert-* && sudo mv mkcert-* /usr/local/bin/mkcert',
+      '  Fedora:        sudo dnf install nss-tools mkcert',
+      '  Arch:          sudo pacman -S mkcert',
+      'Then re-run this script (or restart the app).',
+    ].join('\n');
+    const out = scrubChildOutput(text);
+    expect(out).not.toContain('/usr/local');
+    expect(out).toContain('Fedora:        sudo dnf install nss-tools mkcert');
+    expect(out).toContain('Arch:          sudo pacman -S mkcert');
+    expect(out).toContain('Then re-run this script (or restart the app).');
+    expect(out.split('\n')).toHaveLength(5);
+  });
+
+  it('preserves CRLF line endings, and leaves path-free text untouched', () => {
+    expect(scrubChildOutput('a C:\\Users\\bob\\file\r\nsecond line\r\n')).toBe('a <path>\r\nsecond line\r\n');
+    expect(scrubChildOutput('plain\nlines')).toBe('plain\nlines');
   });
 });

@@ -3,6 +3,7 @@
 
 import { withVerifiedBookDir, type WithVerifiedBookDirOpts } from './book-dir-guard.js';
 import { withBookLock } from './book-lock.js';
+import { currentRunEpochFence, staleRunWriteDropped } from '../store/analysis-run-epoch.js';
 import { applyMergeTombstones, tombstoneKeys } from './merge-tombstones.js';
 import { manuscriptEditsJsonPath } from './paths.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
@@ -43,6 +44,7 @@ export async function rollManuscriptEdits(
      where the file has no sentences for the chapter, never over what it has. */
   fallback?: () => unknown[],
 ): Promise<void> {
+  const fence = currentRunEpochFence(); // #3437: captured before any await
   await withVerifiedBookDir(opts, async (bookDir) => {
     /* `withVerifiedBookDir` awaits a state.json read (with a sleeping retry on a
        transient failure) before this callback runs, so rolls reach here in
@@ -51,6 +53,7 @@ export async function rollManuscriptEdits(
        position are one synchronous step: whichever roll joins the queue last
        also holds the freshest snapshot. */
     const roll = async (): Promise<void> => {
+      if (staleRunWriteDropped(fence, 'manuscript-edits roll')) return;
       const path = manuscriptEditsJsonPath(bookDir);
       /* The plain branch reads BEFORE it builds its snapshot, so the snapshot and the
          queue position stay one synchronous step (see above). */
