@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -308,4 +308,17 @@ test('the state file path matches the one the server reads (server/src/upgrade/p
   const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'server', 'src', 'upgrade', 'paths.ts'), 'utf8');
   assert.ok(src.includes(`stagingDir = join(installRoot, '${UPGRADE_STATE_PATH[0]}')`));
   assert.ok(src.includes(`stateFile: join(stagingDir, '${UPGRADE_STATE_PATH[1]}')`));
+});
+
+test('a read-only .current-version is still switched back (P5-1)', async () => {
+  const root = fakeInstall();
+  chmodSync(join(root, '.current-version'), 0o444); // EPERM on win32 for a bare rename over it
+  try {
+    const { result, launched } = await drive(root, { version: AFFECTED });
+    assert.equal(result.action, 'rolled-back');
+    assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.15.0');
+    assert.equal(launched[0].pointer, '1.15.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -23,7 +23,7 @@
    /api/upgrade/state. An upgrade never leaves nothing running. */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -104,8 +104,23 @@ function writePointer(installRoot, version) {
   const tmp = `${pointer}.tmp`;
   writeFileSync(tmp, version, 'utf8');
   // renameSync replaces an existing file (Windows and POSIX), so the pointer
-  // is never absent between the two calls.
-  renameSync(tmp, pointer);
+  // is never absent between the two calls. On Windows it fails with
+  // EPERM/EACCES/EBUSY while the pointer is read-only or held open elsewhere:
+  // clear the read-only bit and retry for about a second. Never delete first.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, pointer);
+      return;
+    } catch (err) {
+      if (attempt >= 4 || !['EPERM', 'EACCES', 'EBUSY'].includes(err?.code)) throw err;
+      try {
+        chmodSync(pointer, 0o666);
+      } catch {
+        /* retry regardless */
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
 }
 
 function writeUpgradeError(installRoot, candidateVersion, message) {
