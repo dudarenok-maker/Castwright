@@ -1186,6 +1186,37 @@ describe('#4556 run needs: the reconcile keeps only the tiers the unfinished cha
     }
   }, 10_000);
 
+  it('R15 (F4 twin): a same-book sibling that registers during /health is unioned into the run-start keep', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const releases: Array<() => void> = [];
+    reconcileHook = () => {
+      releases.push(__registerFakeJobForTest(needsBookId, [], false, { keep06: false, keep17: true }));
+    };
+    try {
+      await post(2); // alone: {keep06: true, keep17: false}
+    } finally {
+      reconcileHook = null;
+      releases.forEach((r) => r());
+    }
+    expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+  }, 10_000);
+
+  it('R16 (D3): a keep that is empty after /health is skipped (null), never both tiers evicted', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    /* A sibling declaring the 0.6B makes the run-start keep non-empty (reconcile is entered); it
+       deregisters during /health, leaving ch4's own needs (a Kokoro-fallback speaker): empty. */
+    const release = __registerFakeJobForTest(needsBookId, [], false, { keep06: true, keep17: false });
+    reconcileHook = () => release();
+    try {
+      await post(4);
+    } finally {
+      reconcileHook = null;
+      release();
+    }
+    expect(reconcileCalls.length).toBe(1);
+    expect(reconcileCalls[0]![0]).toBeNull();
+  }, 10_000);
+
   it('R8: a same-book job with NO tierNeeds falls back to the full-cast value', async () => {
     const { __registerFakeJobForTest } = await import('./generation.js');
     const release = __registerFakeJobForTest(needsBookId, []);

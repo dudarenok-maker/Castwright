@@ -578,6 +578,16 @@ describe('post-score reconcile recomputes its keep when it runs (#4560)', () => 
     expect(resolved).toEqual(BOTH);
   });
 
+  it('S10 (D3): an empty run-start keep and an empty union resolve to null, never both tiers evicted', async () => {
+    const bookId = 'recon-s10';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')] },
+      captured: NO_QWEN,
+    });
+    expect(resolved).toBeNull();
+  });
+
   it('S6: the last chapter keeps every tier the run used (run-start keep with both tiers)', async () => {
     const bookId = 'recon-s6';
     const resolved = await postScoreKeep(bookId, {
