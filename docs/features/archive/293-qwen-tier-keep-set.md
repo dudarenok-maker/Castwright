@@ -656,11 +656,19 @@ id when the implementing PR is written, read from the register's `next-id`
 marker on the then-current `main` — not A132, which PR #4497 already uses). It carries the register row, the live view
 and `register:build`:
 
-- (a) A pure-1.7B run whose cast has a silent 0.6B character, started with
-  the 0.6B resident: `/unload` for the 0.6B at run start, then
-  `qwen_loaded: false`.
-- (b) A mixed-tier book: no `/unload` for either tier until its last chapter
-  using that tier has finished.
+- (a) Session model **Standard (0.6B)**, every speaker of the chapters to
+  render pinned to Quality (1.7B), **the narrator included** (the title beat
+  always speaks), and one silent character left unpinned, with the 0.6B
+  resident. On this PR: `evicting unused Qwen tier(s) [0.6B]` at run start,
+  then `qwen_loaded: false`. On main the silent unpinned character pins the
+  0.6B (no eviction line). Under a Quality session model it proves nothing:
+  tiers only elevate, so main's full-cast keep is already 1.7B only.
+- (b) A chapter order where one tier has a last user before the final
+  chapter (chapters 1 and 2: a Quality-pinned speaker plus a Standard
+  narrator; chapter 3: Standard speakers only), rendered through the queue so
+  each chapter is its own POST. No `/unload` at chapters 1 and 2; at chapter
+  3's POST `evicting unused Qwen tier(s) [1.7B]` and `qwen_base17_loaded:
+  false`. On main neither tier is ever unloaded on this book.
 - (c) **Record, do not pass/fail:** on a book whose keep has `keep06` false,
   remove one speaker's voice artifact and render a chapter. Record
   `qwen_loaded` and `qwen_base17_loaded` from `GET /health` after the
@@ -778,6 +786,12 @@ Recorded; not reopened.
   costs one reload per hit; no per-book linger.
 - **D3. Decided 2026-11-20: accepted as recommended.** A run that needs no Qwen
   tier skips the reconcile.
+  **Amended 2026-11-22 (owner decision on the #4580 review, #1393): the
+  post-score reconcile does not skip when the recomputed keep is empty (the
+  book's last chapter just finished).** It falls back to the keep computed at
+  THIS run's start, so a tier only the scoring audition pulled in (a 0.6B on a
+  legacy-segments fall-back) is evicted as on main, and the tiers the run used
+  stay. A run-start keep that is itself empty still skips.
 - **D4. Decided 2026-11-20: accepted as recommended.** The lease and the Kokoro
   drop follow the narrower `keep17` (one variable).
 - **D5. Decided 2026-11-20: accepted as recommended.** Paused and parked
@@ -799,7 +813,7 @@ Recorded; not reopened.
 
 ## Ship notes
 
-Shipped 2026-11-21 (Stage 1 only; Stage 2 is not planned, see D1). Branch `fix/server-1393-qwen-keep-set`; the PR number is added by the verify child #4562.
+Shipped 2026-11-21 (Stage 1 only; Stage 2 is not planned, see D1). Branch `fix/server-1393-qwen-keep-set`; the PR is #4580 (opened by the verify child #4579 after #4562 failed on the #2128 guard).
 
 Commits, in order:
 
@@ -812,5 +826,8 @@ Commits, in order:
 - `5bf6a958` run-start reconcile runs after the job registers
 - `119b488d` run-start keep is read after the sidecar health probe
 - `ef0bbe7a` post-score reconcile recomputes the keep when it runs
+- `33f77c02` the handler reads the cast id history once (the #2128 guard)
+- `2365c46b` a pending entry is evaluated at its own stamp's engine and every pending entry of a chapter counts
+- `cfa1df7a` the post-score keep falls back to the run-start keep when empty; one shared same-book union
 
 On-box row: **A134** in `docs/testing/onbox-acceptance-register.md` (plan section 5.8, owed, not run here; no separate run sheet). Release notes: D7 (i) and (ii) stated in `docs/release-notes-next.md` and `RELEASE_NOTES.md`; D7 (iii) is mentioned in the technical entry only. No behaviour delta against the plan was found while writing these notes.
