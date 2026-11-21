@@ -4,12 +4,19 @@
   "private": true,
   "type": "commonjs",
   "engines": {
-    "node": ">=22.22.0"
+    "node": ">=24.16.0"
   },
   "castwright": {
     "ffmpeg": {
       "minimum": "6.0",
       "rationale": "ops-35 (#1877). A SUPPORT floor, not a capability floor: the oldest ffmpeg we test against. Anchored to Ubuntu 24.04 LTS (ships 6.1.1) and tested by verify.yml's ffmpeg-floor job: ubuntu-24.04, apt ffmpeg 6.1.x, the full server suite, a required leg (#4461). The audio path parses ffmpeg's loudnorm JSON output, which is a version-sensitive contract. Read by scripts/preflight-ffmpeg.cjs, server/src/diagnostics/ffmpeg.ts and pinokio-scripts/lib/ffmpeg-pin.test.js — never hardcode it elsewhere. Set to null to disable the preflight check (the documented rollback)."
+    },
+    "node": {
+      "windowsLoopbackCrash": [
+        { "from": "0.0.0", "toExclusive": "24.16.0" },
+        { "from": "25.0.0", "toExclusive": "26.1.0" }
+      ],
+      "rationale": "Node loopback-connect crash (#4443). On Windows, libuv's uv__is_fast_loopback_fail_supported() calls RtlGetVersion on an OSVERSIONINFOW whose dwOSVersionInfoSize is never set (libuv#5106, fixed by libuv#5107), so the first TCP connect to 127.0.0.1 can fail-fast with 0xC0000409. Every Node release below 24.16.0 carries it (read from source at 20.19.5, 21.7.3, 22.22.0 to 22.23.5, 23.0.0, 23.6.0, 23.11.1 and 24.0.0 to 24.15.0), as do 25.x and 26.0.0; there is no fixed 20.x, 21.x, 22.x or 23.x. The refusal names the engines.node floor as the one minimum that works, not a range bound. Windows only. Read by scripts/lib/node-runtime-guard.mjs (server and launcher) and pinokio-scripts/lib/node-pin.test.js — never hardcode it elsewhere."
     }
   },
   "scripts": {

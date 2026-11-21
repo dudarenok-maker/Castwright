@@ -100,6 +100,8 @@ export const MANIFEST = {
     'scripts/lib/prevent-sleep.psm1',
     // #4054 — start-app-prod.mjs imports it for the server child's NODE_OPTIONS.
     'scripts/lib/report-exclusion.mjs',
+    // #4443 — start-app-prod.mjs and the server's node-runtime-guard.ts import it.
+    'scripts/lib/node-runtime-guard.mjs',
 
     // Frontend source + pre-built bundle
     'src/**',
