@@ -446,6 +446,18 @@ the tier this run is about to keep.
   a designed or cloned Qwen voice", is true of nearly every Qwen book and
   would pin `keep06` permanently. The re-derive fires once per missing
   artifact, then the artifact exists. On-box row (c) records it (§5.8).
+- **The non-English engine forcing is applied once, at the request's engine
+  (accepted, pre-existing).** `generation.ts` forces each character's
+  `ttsEngine` with the POST's engine (`resolveClonedRetargetEngine`), and
+  `computeRunQwenNeeds` reuses that forced cast for every pending entry. A
+  character cloned on both Qwen and Coqui keeps the request's engine there, so
+  under a Coqui request a Qwen-stamped pending chapter whose speakers are all
+  such characters predicts no Qwen tier, while that chapter's own POST retargets
+  them to Qwen. `main`'s full-cast keep reads the same forced cast and evicts
+  the same tier, so this is not a regression; each hit costs one reload. Not
+  fixed: re-forcing the cast per stamp engine means passing the book's eligible
+  engines into the helper and choosing what a Kokoro or unstamped entry
+  retargets to, which is a behaviour choice, not a one-line change.
 - **The inter-chapter gap.** Another book's reconcile in the gap evicts this
   book's tier. One reload per hit. D2 (accepted).
 - **An unstamped pending entry's tier is an estimate** (§2.6).
@@ -835,5 +847,6 @@ Commits, in order:
 - `33f77c02` the handler reads the cast id history once (the #2128 guard)
 - `2365c46b` a pending entry is evaluated at its own stamp's engine and every pending entry of a chapter counts
 - `cfa1df7a` the post-score keep falls back to the run-start keep when empty; one shared same-book union
+- Review pass 2 fixes: only the `in_progress` entry of a target or just-finished chapter is skipped, so a re-queue of that chapter counts at its stamp (`bcc95469`); the spread order and empty-to-null of `keepAfterHealth` are pinned at both call sites (`b22ed74c`); two stale comment copies corrected (`da184b96`); on-box row A134 (b) gains the Standard session model and one-worker, QA-off preconditions (`0021ac42`); the non-English engine forcing is recorded in section 3.5 as an accepted residual
 
 On-box row: **A134** in `docs/testing/onbox-acceptance-register.md` (plan section 5.8, owed, not run here; no separate run sheet). Release notes: D7 (i) and (ii) stated in `docs/release-notes-next.md` and `RELEASE_NOTES.md`; D7 (iii) is mentioned in the technical entry only. No behaviour delta against the plan was found while writing these notes.
