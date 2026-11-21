@@ -83,7 +83,7 @@ import {
 } from '../tts/synthesise-chapter.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
-import { computeRunQwenNeeds } from '../tts/qwen-run-needs.js';
+import { computeRunQwenNeeds, type RunQwenNeedsInput } from '../tts/qwen-run-needs.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import {
@@ -153,11 +153,47 @@ function keepQualityResident<K extends { keep17: boolean }>(keep: K): K {
   return isQualityRenderKnownActive() && !keep.keep17 ? { ...keep, keep17: true } : keep;
 }
 
+/** #4560 — builds the post-score reconcile's `recomputeKeep`: the book's needs read when the
+    reconcile runs, from a FRESH `.queue.json` read (plain read, no lock) and the POST's cast,
+    analysis and cast-id history. P is this book's still-pending entries only, the finished chapter
+    EXCLUDED even if the file still says `in_progress` (plan 293 §2.7), with no target term. A queue
+    read or helper throw falls back to the full cast (`fullCastKeep`): an unknown never narrows. */
+export function makePostScoreKeepRecompute(
+  input: Omit<RunQwenNeedsInput, 'targetChapterIds' | 'queueEntries'> & {
+    finishedChapterId: number;
+    fullCastKeep: { keep06: boolean; keep17: boolean };
+  },
+): () => Promise<{ keep06: boolean; keep17: boolean }> {
+  const { finishedChapterId, fullCastKeep, ...needsInput } = input;
+  return async () => {
+    try {
+      const queueEntries = (await readQueueFile(queueJsonPath())).entries.filter(
+        (e) => !(e.bookId === input.bookId && e.chapterId === finishedChapterId),
+      );
+      return computeRunQwenNeeds({ ...needsInput, targetChapterIds: [], queueEntries });
+    } catch (e) {
+      console.warn(
+        '[generation] post-score tier recompute failed; keeping the full cast tiers:',
+        (e as Error).message,
+      );
+      return fullCastKeep;
+    }
+  };
+}
+
 export async function triggerScoring(ctx: {
   bookId: string;
   bookDir: string;
   chapters: { id: number; slug: string }[];
   justFinalizedSlugs: Iterable<string>;
+  /** #4560 — when present (the chapter-finalize path), the post-score reconcile does NOT use
+      `keep` verbatim: it calls this when the pass finishes and reconciles against a keep
+      FUNCTION (this result ∪ this book's live non-aborted jobs' `tierNeeds`). Absent → today's
+      path with `keep` as a plain object. */
+  recomputeKeep?: () => Promise<{ keep06: boolean; keep17: boolean }>;
+  /** #4560 — the full cast's tiers: the union's fall-back when a live same-book job declared no
+      `tierNeeds`. Defaults to `keep`. */
+  fullCastKeep?: { keep06: boolean; keep17: boolean };
   /** Full-cast-superset tier set, supplied by the chapter-finalize path
       protects an in-flight sibling chapter's tier, see the reconcile comment below;
       the reconcile is also skipped while other work is active, #4445). Omitted by the resume route, which
@@ -237,10 +273,19 @@ export async function triggerScoring(ctx: {
        Option-B audition can transiently pull a base tier the render doesn't
        use (a legacy segments file with no stamped modelKey → the 0.6B audition
        fallback), which would then linger co-resident with the 1.7B synth (the
-       8GB-card OOM). Reconcile against the run's FULL-cast tier set (`ctx.keep`,
-       the same target the run-start reconcile used) when supplied — NOT the
-       finalized-chapters view scoreBook sees, which misses an in-flight
-       sibling chapter's tier and would evict it mid-render (Finding 2). The
+       8GB-card OOM). On the generation path the keep is NOT the capture from the
+       chapter's POST (minutes stale by now, #1393): `ctx.recomputeKeep` re-reads the
+       book's needs from a fresh `.queue.json` (this book's still-pending entries, the
+       just-finished chapter excluded), and the reconcile gets a keep FUNCTION that
+       unions that with this book's live non-aborted jobs' `tierNeeds` when it is
+       called, right after `/health` (#4559). A live same-book job with no `tierNeeds`
+       falls back to the full cast; the run-start own-score-pass fall-back is NOT
+       applied (this IS that pass). A back-compat `*` job rendering several chapters is
+       still registered here and its `tierNeeds` includes the finished chapter: a
+       safe-direction over-keep, deliberately not excluded. Without `ctx.recomputeKeep`
+       the run's `ctx.keep` is used verbatim — NOT the finalized-chapters view scoreBook
+       sees, which misses an in-flight sibling chapter's tier and would evict it
+       mid-render (Finding 2). The
        resume route has no such superset to protect, so it falls back to
        scoreBook's own precise usedQwenTiers. reconcile only evicts tiers NOT
        in the target set, so the in-use tier stays warm and a mixed-tier book
@@ -262,7 +307,8 @@ export async function triggerScoring(ctx: {
        start with 2+ workers; each costs a reload and retry and is accepted.
        Two residual windows remain, each costing at most one cold reload: (a) after this
        synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
-       before it posts `/unload`, so a job registering in that round trip loses its tier;
+       before it posts `/unload`, so a job registering in that round trip loses its tier
+       (narrowed on the generation path by the keep function's post-`/health` re-read);
        (b) between a Fix-audio batch's per-chapter splice POSTs nothing is registered, so a
        pass finishing in that gap drops the tier at the chapter boundary. */
     const keep = ctx.keep ?? result.usedQwenTiers;
@@ -270,6 +316,28 @@ export async function triggerScoring(ctx: {
       ? otherTierWorkActive(ctx.bookId)
       : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId) || isDesignOrMintActive();
     if (busy) return;
+    if (ctx.recomputeKeep && ctx.keep) {
+      /* #4560 — re-read the book's needs NOW (not the capture from the chapter's POST), then
+         resolve the keep again right after `/health` (#4559). No own-score-pass fall-back here:
+         this reconcile runs inside this book's own score pass, so it would always fire. */
+      const needs = await ctx.recomputeKeep();
+      const fullCast = ctx.fullCastKeep ?? ctx.keep;
+      await reconcileResidentQwenTiers(() => {
+        if (otherTierWorkActive(ctx.bookId)) return null;
+        const live = [...(inFlightByBook.get(ctx.bookId) ?? [])].filter(
+          (j) => !j.controller.signal.aborted,
+        );
+        const union = live.some((j) => !j.tierNeeds)
+          ? fullCast
+          : {
+              keep06: needs.keep06 || live.some((j) => j.tierNeeds?.keep06),
+              keep17: needs.keep17 || live.some((j) => j.tierNeeds?.keep17),
+            };
+        if (!union.keep06 && !union.keep17) return null; // D3: nothing to keep, nothing to reconcile
+        return keepQualityResident(union);
+      });
+      return;
+    }
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keepQualityResident(keep));
   });
   const run = registration
@@ -325,6 +393,9 @@ export async function afterChapterFinalized(ctx: {
       NOT derived from the finalized-chapters-only score pass, which can't see
       an in-flight sibling chapter's tier (the Finding-2 race). */
   keep: { keep06: boolean; keep17: boolean };
+  /** #4560 — forwarded to `triggerScoring` (see there). */
+  recomputeKeep?: () => Promise<{ keep06: boolean; keep17: boolean }>;
+  fullCastKeep?: { keep06: boolean; keep17: boolean };
   /** #3524 — the run's model key, forwarded to `triggerScoring`. */
   runModelKey?: TtsModelKey;
 }) {
@@ -351,7 +422,14 @@ export async function afterChapterFinalized(ctx: {
      own attempted stamp entirely if its trigger is coalesced away. */
   await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
 
-  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep, runModelKey: ctx.runModelKey });
+  await triggerScoring({
+    ...ctx,
+    justFinalizedSlugs: [ctx.justFinalized.slug],
+    keep: ctx.keep,
+    recomputeKeep: ctx.recomputeKeep,
+    fullCastKeep: ctx.fullCastKeep,
+    runModelKey: ctx.runModelKey,
+  });
 }
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
@@ -1203,8 +1281,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      does not reconcile at all (D3).
 
      Read for BOTH the run-start VRAM reconcile and `usesQuality17` (the render
-     lease). The post-score reconcile still passes this same value as `keep`
-     (#4560 narrows that path).
+     lease). The post-score reconcile passes this as `keep` too, but re-reads the
+     needs when it runs (`recomputeKeep`, #4560).
 
      Fall-back: if the queue file cannot be read (a MISSING file is an empty
      queue, i.e. no pending entries; only a corrupt / unreadable file throws) or
@@ -1218,16 +1296,18 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey);
   /* This run's own needs (#4556). `usedQwenTiers` below widens it to K(book). */
   let runNeeds: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
+  let postScoreCastIdHistory: RunQwenNeedsInput['castIdHistory'];
   if (qwenInUse) {
     try {
       const queueEntries = (await readQueueFile(queueJsonPath())).entries;
+      postScoreCastIdHistory = await loadCastIdHistory(bookDir);
       runNeeds = computeRunQwenNeeds({
         bookId,
         targetChapterIds: targetChapters.map((c) => c.id),
         queueEntries,
         analysisChapters: analysis.chapters,
         cast: cast.characters,
-        castIdHistory: await loadCastIdHistory(bookDir),
+        castIdHistory: postScoreCastIdHistory,
         defaultEngine: engine,
         requestQwenModelKey: resolveForEngine('qwen').modelKey,
         qwenUnavailable,
@@ -2150,6 +2230,22 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
           justFinalized: { id: chapter.id, slug: chapter.slug },
           keep: usedQwenTiers,
+          ...(qwenInUse
+            ? {
+                recomputeKeep: makePostScoreKeepRecompute({
+                  bookId,
+                  finishedChapterId: chapter.id,
+                  analysisChapters: analysis.chapters,
+                  cast: cast.characters,
+                  castIdHistory: postScoreCastIdHistory,
+                  defaultEngine: engine,
+                  requestQwenModelKey: resolveForEngine('qwen').modelKey,
+                  qwenUnavailable,
+                  fullCastKeep: fullCastQwenTiers(),
+                }),
+                fullCastKeep: fullCastQwenTiers(),
+              }
+            : {}),
           runModelKey: modelKey,
         }),
       );
