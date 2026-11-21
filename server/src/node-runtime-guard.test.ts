@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
@@ -166,15 +167,27 @@ describe('node-runtime-guard-boot.ts', () => {
       "Object.defineProperty(process,'version',{value:'v24.15.0',configurable:true});" +
         "Object.defineProperty(process,'platform',{value:'win32',configurable:true});",
     )}`;
-    const env: NodeJS.ProcessEnv = { ...process.env, CONDA_PREFIX: '' };
+    // APP_LOG_DIR keeps the refusal file out of the checkout's real logs/ (and out
+    // of any APP_LOG_DIR the shell exports), where it would read as a real refusal.
+    const logDir = mkdtempSync(join(tmpdir(), 'castwright-node-guard-'));
+    const realLog = join(here, '..', '..', 'logs', 'node-refused.log');
+    const snapshotRealLog = () => (existsSync(realLog) ? readFileSync(realLog, 'utf8') : null);
+    const before = snapshotRealLog();
+    const env: NodeJS.ProcessEnv = { ...process.env, CONDA_PREFIX: '', APP_LOG_DIR: logDir };
     delete env.NODE_OPTIONS;
-    const r = spawnSync(
-      process.execPath,
-      ['--import', 'tsx', '--import', stub, join(here, 'node-runtime-guard-boot.ts')],
-      { cwd: join(here, '..'), env, encoding: 'utf8', timeout: 60_000, windowsHide: true },
-    );
-    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(1);
-    expect(r.stderr).toMatch(/Castwright can.t start on Node v24\.15\.0 on Windows/);
-    expect(r.stderr).toContain('Install Node v24.16.0 or newer');
+    try {
+      const r = spawnSync(
+        process.execPath,
+        ['--import', 'tsx', '--import', stub, join(here, 'node-runtime-guard-boot.ts')],
+        { cwd: join(here, '..'), env, encoding: 'utf8', timeout: 60_000, windowsHide: true },
+      );
+      expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(1);
+      expect(r.stderr).toMatch(/Castwright can.t start on Node v24\.15\.0 on Windows/);
+      expect(r.stderr).toContain('Install Node v24.16.0 or newer');
+      expect(readFileSync(join(logDir, 'node-refused.log'), 'utf8')).toContain('Install Node v24.16.0 or newer');
+      expect(snapshotRealLog()).toBe(before);
+    } finally {
+      rmSync(logDir, { recursive: true, force: true });
+    }
   });
 });
