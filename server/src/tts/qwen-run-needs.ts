@@ -5,8 +5,9 @@
    pending queue entry (queued | in_progress | paused | awaiting_confirm).
    A target chapter is evaluated at the REQUEST's Qwen key (the POST's own queue
    entry is never consulted for it); a pending non-target chapter is evaluated
-   at its entry's stamped `modelKey`, or at the request's key when unstamped
-   (§2.6, D8). `done` / `failed` entries, other books' entries and chapters that
+   at its entry's stamped `modelKey` (engine and Qwen tier), or at the request's
+   engine and key when unstamped (§2.6, D8); several pending entries of one chapter
+   each count. `done` / `failed` entries, other books' entries and chapters that
    are neither a target nor pending contribute nothing; a pending chapter with
    no cached sentences contributes nothing.
 
@@ -17,7 +18,7 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import type { CastIdHistory } from '../store/cast-id-history.js';
 import type { QueueEntry, QueueStatus } from '../workspace/queue-io.js';
 import type { TtsEngine } from './index.js';
-import { canonicalModelKeyForEngine, type TtsModelKey } from './model-keys.js';
+import { canonicalModelKeyForEngine, engineForModelKey, type TtsModelKey } from './model-keys.js';
 import { chapterQwenTierNeeds } from './qwen-tier-needs.js';
 import type { CastCharacter } from './synthesise-chapter.js';
 
@@ -45,50 +46,47 @@ export interface RunQwenNeedsInput {
   qwenUnavailable: boolean;
 }
 
-/** Chapter ids of `bookId` with a pending entry, mapped to the Qwen key they
-    will render at (the entry's stamp, else the request's key). */
-export function pendingChapterQwenKeys(
-  entries: readonly QueueEntry[],
-  bookId: string,
-  requestQwenModelKey: TtsModelKey,
-): Map<number, TtsModelKey> {
-  const out = new Map<number, TtsModelKey>();
-  for (const e of entries) {
-    if (e.bookId !== bookId || !PENDING_STATUSES.has(e.status)) continue;
-    const key = canonicalModelKeyForEngine('qwen', e.modelKey ?? requestQwenModelKey);
-    /* Several pending entries for one chapter: the higher tier wins (keep both
-       would over-keep; 1.7B outranks 0.6B). */
-    const prev = out.get(e.chapterId);
-    if (prev === undefined || (key === 'qwen3-tts-1.7b' && prev !== key)) out.set(e.chapterId, key);
-  }
-  return out;
+/** One render of a chapter: the engine its POST defaults to and the Qwen key it runs at. */
+interface ChapterRun {
+  chapterId: number;
+  defaultEngine: TtsEngine;
+  qwenModelKey: TtsModelKey;
 }
 
 export function computeRunQwenNeeds(input: RunQwenNeedsInput): { keep06: boolean; keep17: boolean } {
   const sentencesOf = (id: number): SentenceOutput[] =>
     (input.analysisChapters as Record<number, SentenceOutput[] | undefined>)[id] ?? [];
   const targets = new Set(input.targetChapterIds);
-  const chapters = new Map<number, TtsModelKey>();
-  for (const id of targets) chapters.set(id, input.requestQwenModelKey);
-  for (const [id, key] of pendingChapterQwenKeys(
-    input.queueEntries,
-    input.bookId,
-    input.requestQwenModelKey,
-  )) {
-    if (!targets.has(id)) chapters.set(id, key);
+  const runs = new Map<string, ChapterRun>();
+  const add = (r: ChapterRun) => runs.set(`${r.chapterId}|${r.defaultEngine}|${r.qwenModelKey}`, r);
+  for (const chapterId of targets) {
+    add({ chapterId, defaultEngine: input.defaultEngine, qwenModelKey: input.requestQwenModelKey });
+  }
+  /* Every pending entry renders on its own POST, so a chapter with several counts once per entry
+     (a re-queue at another tier needs both). A stamped entry runs at its stamp's ENGINE as well as
+     its Qwen tier; an unstamped one follows the request. */
+  for (const e of input.queueEntries) {
+    if (e.bookId !== input.bookId || !PENDING_STATUSES.has(e.status) || targets.has(e.chapterId)) {
+      continue;
+    }
+    add({
+      chapterId: e.chapterId,
+      defaultEngine: e.modelKey ? engineForModelKey(e.modelKey) : input.defaultEngine,
+      qwenModelKey: canonicalModelKeyForEngine('qwen', e.modelKey ?? input.requestQwenModelKey),
+    });
   }
 
   let keep06 = false;
   let keep17 = false;
-  for (const [id, key] of chapters) {
-    const sentences = sentencesOf(id);
-    if (sentences.length === 0 && !targets.has(id)) continue;
+  for (const r of runs.values()) {
+    const sentences = sentencesOf(r.chapterId);
+    if (sentences.length === 0 && !targets.has(r.chapterId)) continue;
     const need = chapterQwenTierNeeds({
       sentences,
       cast: input.cast,
       castIdHistory: input.castIdHistory,
-      defaultEngine: input.defaultEngine,
-      runQwenModelKey: key,
+      defaultEngine: r.defaultEngine,
+      runQwenModelKey: r.qwenModelKey,
       qwenUnavailable: input.qwenUnavailable,
       includesTitleBeat: true,
     });
