@@ -81,6 +81,19 @@ const COMPOSITE_CALLERS = [
 
 const ACTION_FILE =resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
 
+// #4573: Windows CI deliberately runs the newest ffmpeg (9.1.0 at time of
+// writing) so the encoder-delay / tag-CRC fix is exercised against it. A
+// version pin on either install path would silently drop that coverage.
+test('the Windows ffmpeg composite action stays unpinned (#4573)', () => {
+  const installs = readNormalized(ACTION_FILE)
+    .split('\n')
+    .filter((l) => /\b(choco|winget)\s+install\b/.test(l));
+  assert.ok(installs.length >= 2, 'expected both a choco and a winget install line');
+  for (const line of installs) {
+    assert.doesNotMatch(line, /--version\b/, `install line is pinned: ${line.trim()}`);
+  }
+});
+
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
 // the next step at the same (6-space) indentation, a shallower-indented key
 // (the next job), or end of file) out of a workflow's or composite action's
@@ -426,21 +439,6 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
       "step's failure message does not mention CI — risks repeating the " +
         'developer-workstation-oriented message that made the original failure hard to diagnose',
     );
-  });
-
-  // #4573: ffmpeg 9.1.0 breaks Audio-QA repair's silent-segment detection, so
-  // every install path is pinned to 9.0.2 until the code fix lands. Delete
-  // this test together with the pin.
-  test(`${rel}: every Windows ffmpeg install path is pinned to 9.0.2 (#4573)`, () => {
-    const block = windowsFfmpegStepBlock(readNormalized(path));
-    const installs = block.split('\n').filter((l) => /\b(choco|winget)\s+install\b/.test(l));
-    assert.ok(
-      installs.some((l) => /\bchoco\s+install\b/.test(l)) && installs.some((l) => /\bwinget\s+install\b/.test(l)),
-      'expected both a choco and a winget install line',
-    );
-    for (const line of installs) {
-      assert.match(line, /--version\s+9\.0\.2\b/, `install line is not pinned to 9.0.2: ${line.trim()}`);
-    }
   });
 
   // This test asserts the PROPERTY ("a bounded repeat around the install,
