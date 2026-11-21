@@ -132,9 +132,9 @@ describe('loadNodeMinimum', () => {
 });
 
 describe('loadCrashRanges', () => {
-  // Plan 293 invariant 1: the list in package.json equals the plan's list. The
+  // Plan 294 invariant 1: the list in package.json equals the plan's list. The
   // other tests here run on RANGES, a copy; this one pins the real file.
-  it('equals the plan 293 ranges exactly, and the real minimum is 24.16.0', () => {
+  it('equals the plan 294 ranges exactly, and the real minimum is 24.16.0', () => {
     expect(loadCrashRanges()).toEqual([
       { from: '0.0.0', toExclusive: '24.16.0' },
       { from: '25.0.0', toExclusive: '26.1.0' },

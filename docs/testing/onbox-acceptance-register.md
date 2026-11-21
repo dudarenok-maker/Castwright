@@ -7407,7 +7407,7 @@ sidecar**, and **confirming the pinned Node is the one actually used**.
 > the pin landed in a follow-up chore.** The Node question used to be "which Node does
 > Pinokio's bundled kernel ship, and is it ≥ 22.22" — that's now moot: `install.js`
 > step 1 conda-installs `nodejs>=24.16.0,<25` (matching `.nvmrc`/CI; it was `nodejs=24`
-> until plan 293 raised the floor past the Windows loopback-crash builds, and the refusal
+> until plan 294 raised the floor past the Windows loopback-crash builds, and the refusal
 > that floor backs is row E117), and `update.js` re-asserts
 > the same pin so a pre-existing install picks it up on its next Update rather than
 > staying on whatever Node it started with. `pinokio-scripts/lib/node-pin.test.js`
@@ -8141,14 +8141,14 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 
 ### E117 · Windows Node loopback-crash guard: the refusal, the Pinokio "run Update again" message, two-Update convergence and `logs/node-refused.log` ([#4443](https://github.com/dudarenok-maker/Castwright/issues/4443), PR [#4535](https://github.com/dudarenok-maker/Castwright/pull/4535)) · **a Windows box; no GPU needed**
 
-The automated tests pin the range list, the message text and the log write against injected versions and paths. They cannot start a real affected Node, see Pinokio's conda environment shadow PATH, or see the in-app upgrade's hidden restart. Plan [`293-node-loopback-crash-guard.md`](../features/293-node-loopback-crash-guard.md) holds the affected-release table. The Pinokio pin itself is E1's job; this row is the refusal.
+The automated tests pin the range list, the message text and the log write against injected versions and paths. They cannot start a real affected Node, see Pinokio's conda environment shadow PATH, or see the in-app upgrade's hidden restart. Plan [`294-node-loopback-crash-guard.md`](../features/294-node-loopback-crash-guard.md) holds the affected-release table. The Pinokio pin itself is E1's job; this row is the refusal.
 
 - **The refusal on an affected Node.** On Windows with an affected Node on PATH (24.15.0 is the plan's example; nodejs.org keeps the older installers), run `npm run start:prod` (the launcher refuses first, on the console) and `npm start` (the server's own guard refuses; its message lands in `logs/server.err.log`). Each exits non-zero and names the running Node and a Node v24.16.0 or newer to install from nodejs.org. Neither dies with the `0xC0000409` crash. Repeat on 24.16.0 or newer: it starts as before.
 - **The conda-environment message.** On a Pinokio install whose conda env holds an affected Node, press Start. The message says the Node comes from Pinokio's environment and tells you to run Update in Pinokio again. It does not point at nodejs.org.
 - **Two-Update convergence.** From a pre-pin release on an affected conda Node, run Update once and then Start: expect the refusal above (the first Update runs the old `update.js`; see E1). Run Update a second time: `node --version` in a Pinokio shell reports 24.16.0 or newer below 25, and Start now works. Record the Node version after each Update.
 - **`logs/node-refused.log` after an in-app upgrade.** From an install on an affected Node, use "Upgrade & restart" in the app to move to a release carrying the guard. The new release's restarter checks your Node before it launches, so the app must come back on the PREVIOUS release rather than staying on the "app is restarting" page: `.current-version` names the previous release again, and the app's upgrade card shows "Upgrade to vX was held back and you are still running vY" with the Node to install. No `node-refused.log` is expected on this path (the restarter intercepts first; a direct `npm run start:prod` on the new release still writes `logs/node-refused.log` in the install root's `logs` folder, or under `APP_LOG_DIR` when set). Then install Node v24.16.0 or newer and upgrade again: it switches and starts the new release. Prove the file separately with a manual `npm run start:prod` on the affected Node, including once with `logs/` absent.
 
-*Needs:* a Windows box with an affected Node (and, for the second and third bullets, Pinokio with a pre-pin install); no GPU. *Criteria:* the bullets above; plan [`293-node-loopback-crash-guard.md`](../features/293-node-loopback-crash-guard.md), "Manual acceptance walkthrough". Clears when each bullet is recorded.
+*Needs:* a Windows box with an affected Node (and, for the second and third bullets, Pinokio with a pre-pin install); no GPU. *Criteria:* the bullets above; plan [`294-node-loopback-crash-guard.md`](../features/294-node-loopback-crash-guard.md), "Manual acceptance walkthrough". Clears when each bullet is recorded.
 
 ## Group G — GitHub Actions itself
 
