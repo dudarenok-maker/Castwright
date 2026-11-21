@@ -17,8 +17,8 @@
 #
 # Deliberately NOT folded into .github/actions/setup/action.yml: that action
 # is the OS-agnostic dependency-install preamble every job runs unconditionally;
-# this is Windows-only and only two of its three call sites (cross-os.yml,
-# release.yml) need it. The macOS/Ubuntu ffmpeg-install steps stay
+# this is Windows-only and only the jobs with a Windows leg that needs ffmpeg
+# (cross-os.yml, release.yml, verify.yml, quarantine-health.yml) call it. The macOS/Ubuntu ffmpeg-install steps stay
 # per-workflow and out of scope here for the same OS-specific reasons that
 # action's own header documents for skipping ffmpeg entirely.
 #
@@ -26,6 +26,11 @@
 # coverage (parser-level checks plus stubbed choco/winget/ffmpeg behavioural
 # checks) that pins this script's control flow, including the PATH-persist
 # trap and the LOCALAPPDATA-absent edge case documented inline below.
+# PINNED to ffmpeg 9.0.2 (#4573): 9.1.0 breaks Audio-QA repair's
+# silent-segment detection (chapter-qa-repair.test.ts fails 27 tests on
+# windows-latest). Both the choco and the winget install pin it, so neither
+# path can silently land a different version. Remove the pin when #4573's
+# code fix lands.
 name: 'Install ffmpeg (Windows)'
 description: 'Install ffmpeg via choco with a winget fallback and a bounded retry, verifying ffmpeg is actually runnable afterward.'
 
@@ -37,7 +42,7 @@ runs:
       run: |
         $maxAttempts = 3
         for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-          choco install ffmpeg -y --no-progress
+          choco install ffmpeg --version 9.0.2 -y --no-progress
           $ffmpegOk = $false
           try {
             & ffmpeg -version | Out-Null
@@ -50,7 +55,7 @@ runs:
             Write-Host "Attempt $attempt/${maxAttempts}: choco reported success but ffmpeg is not runnable (a transient Chocolatey feed error is the likely cause -- see the choco output above). Trying the winget fallback."
             if (Get-Command winget -ErrorAction SilentlyContinue) {
               try {
-                winget install --id Gyan.FFmpeg --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+                winget install --id Gyan.FFmpeg --version 9.0.2 --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
                 # winget updates the registry PATH at install time, but this
                 # already-running process keeps the PATH it inherited at
                 # startup (the same trap scripts/preflight-ffmpeg.cjs
