@@ -23,7 +23,7 @@
    /api/upgrade/state. An upgrade never leaves nothing running. */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -103,7 +103,8 @@ function writePointer(installRoot, version) {
   const pointer = join(installRoot, '.current-version');
   const tmp = `${pointer}.tmp`;
   writeFileSync(tmp, version, 'utf8');
-  rmSync(pointer, { force: true });
+  // renameSync replaces an existing file (Windows and POSIX), so the pointer
+  // is never absent between the two calls.
   renameSync(tmp, pointer);
 }
 
@@ -149,8 +150,19 @@ export function guardNewRelease({
   const previous = findPreviousRelease(installRoot, candidate, undefined, (r) => releaseCanStart(installRoot, r, version, platform));
   if (!previous) return { action: 'no-fallback', reason: heldBack };
   const reason = `Upgrade to v${candidate} was held back and you are still running v${previous}. ${heldBack}`;
-  writePointer(installRoot, previous);
-  writeUpgradeError(installRoot, candidate, reason);
+  try {
+    writePointer(installRoot, previous);
+  } catch (err) {
+    // Nothing was switched, so the launcher boots whatever the pointer names.
+    log(`[restart] could not switch back to v${previous}, launching what the pointer names: ${err instanceof Error ? err.message : String(err)}\n`);
+    return { action: 'no-fallback', reason: heldBack };
+  }
+  try {
+    writeUpgradeError(installRoot, candidate, reason);
+  } catch (err) {
+    // The rollback itself stands; only the card's explanation is lost.
+    log(`[restart] could not record the held-back upgrade: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
   log(`[restart] ${reason}\n`);
   return { action: 'rolled-back', reason, to: previous };
 }
@@ -163,6 +175,7 @@ export async function runRestart({
   execPath,
   loadRanges,
   loadMinimum,
+  guard = guardNewRelease,
   wait = waitForExit,
   spawnLauncher = (opts) => {
     const child = spawn(process.execPath, [opts.launcher], {
@@ -192,7 +205,14 @@ export async function runRestart({
     }
   }
 
-  const result = guardNewRelease({ installRoot, version, platform, env, execPath, loadRanges, loadMinimum, log: stderr });
+  // The launcher ALWAYS spawns: an upgrade must never leave nothing running.
+  let result;
+  try {
+    result = guard({ installRoot, version, platform, env, execPath, loadRanges, loadMinimum, log: stderr });
+  } catch (err) {
+    stderr(`[restart] the Node check failed, launching anyway: ${err instanceof Error ? err.message : String(err)}\n`);
+    result = { action: 'proceed' };
+  }
 
   stdout(`[restart] launching ${launcher}\n`);
   spawnLauncher({ launcher, installRoot });

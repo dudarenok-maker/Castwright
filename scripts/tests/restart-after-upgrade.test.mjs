@@ -220,6 +220,52 @@ test('no runnable release below: no-fallback, the pointer and the state file are
   }
 });
 
+test('an unwritable state file still relaunches, with the rollback in place (P4-2)', async () => {
+  const root = fakeInstall();
+  mkdirSync(join(root, '.upgrade-staging', 'state.json'), { recursive: true }); // EISDIR on write
+  try {
+    const { result, launched, out } = await drive(root, { version: AFFECTED });
+    assert.equal(result.action, 'rolled-back');
+    assert.equal(launched.length, 1);
+    assert.equal(launched[0].pointer, '1.15.0');
+    assert.match(out.join(''), /could not record/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a pointer write failure still relaunches whatever the pointer names (P4-2)', async () => {
+  const root = fakeInstall();
+  mkdirSync(join(root, '.current-version.tmp'), { recursive: true }); // the temp write throws EISDIR
+  try {
+    const { launched, out } = await drive(root, { version: AFFECTED });
+    assert.equal(launched.length, 1);
+    assert.equal(launched[0].pointer, '1.16.0');
+    assert.match(out.join(''), /could not switch/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runRestart spawns the launcher even if the guard itself throws (P4-2)', async () => {
+  const root = fakeInstall();
+  try {
+    const { launched } = await drive(root, { version: AFFECTED, guard: () => { throw new Error('boom'); } });
+    assert.equal(launched.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('neither pointer writer deletes .current-version before the rename (P4-2)', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const rel of [['..', 'restart-after-upgrade.mjs'], ['..', '..', 'server', 'src', 'upgrade', 'apply.ts']]) {
+    const src = readFileSync(resolve(here, ...rel), 'utf8');
+    assert.ok(src.includes('renameSync(tmp, pointer)'), `${rel.at(-1)} still renames over the pointer`);
+    assert.doesNotMatch(src, /rmSync\(pointer/, `${rel.at(-1)} must not delete the pointer first`);
+  }
+});
+
 test('the state file path matches the one the server reads (server/src/upgrade/paths.ts)', () => {
   const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'server', 'src', 'upgrade', 'paths.ts'), 'utf8');
   assert.ok(src.includes(`stagingDir = join(installRoot, '${UPGRADE_STATE_PATH[0]}')`));

@@ -376,8 +376,7 @@ export function createApplySteps(
       const pointer = join(installRoot, '.current-version');
       const tmp = `${pointer}.tmp`;
       writeFileSync(tmp, version, 'utf8');
-      // rename is atomic on the same volume.
-      rmSync(pointer, { force: true });
+      // rename is atomic on the same volume, and replaces an existing pointer.
       const { renameSync } = await import('node:fs');
       renameSync(tmp, pointer);
     },
