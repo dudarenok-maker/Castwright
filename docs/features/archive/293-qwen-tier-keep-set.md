@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-11-21
 owner: null
 issue: 1393
 refs: [1388, 1395, 1839, 4066, 4075, 4079, 4235, 4445, 4497]
@@ -9,7 +9,7 @@ date: 2026-11-20
 
 # Plan 293: Qwen tier keep set for the generation-path reconcile (#1393)
 
-> Status: active (Stage 1 only; Stage 2 not planned, see D1)
+> Status: stable (Stage 1 shipped on branch `fix/server-1393-qwen-keep-set`; Stage 2 not planned, see D1)
 > Key files: `server/src/routes/generation.ts`, `server/src/tts/qwen-tier-needs.ts` (new), `server/src/tts/ensure-sidecar-loaded.ts`, `server/src/tts/synthesise-chapter.ts`, `src/store/queue-thunks.ts`
 > URL surface: indirect (server-side GPU residency; the queue stamp is client-visible)
 > OpenAPI ops: none (`modelKey` on a queue entry is already accepted, `routes/queue.ts:126`)
@@ -796,3 +796,21 @@ Recorded; not reopened.
 - **D8. Decided 2026-11-20: accepted as recommended.** An unstamped pending entry
   is evaluated at the request's model key (section 2.6); an occasional wrong
   estimate costs one reload.
+
+## Ship notes
+
+Shipped 2026-11-21 (Stage 1 only; Stage 2 is not planned, see D1). Branch `fix/server-1393-qwen-keep-set`; the PR number is added by the verify child #4562.
+
+Commits, in order:
+
+- `a05242a0` pure Qwen tier-needs helper (`chapterQwenTierNeeds`)
+- `b75d6543` parity test pinning it to the real `synthesiseChapter` synth calls
+- `7224d839` frontend stamps the session TTS model on queue entries at enqueue
+- `5529d7e8`, `4b58d736`, `788c6fd7` transport guards G1/G2 on designs and mints
+- `9d30452f` the reconcile keeps only the tiers the book's unfinished chapters will use
+- `c312d7d9` unions live same-book jobs' tier needs into the keep
+- `5bf6a958` run-start reconcile runs after the job registers
+- `119b488d` run-start keep is read after the sidecar health probe
+- `ef0bbe7a` post-score reconcile recomputes the keep when it runs
+
+On-box row: **A134** in `docs/testing/onbox-acceptance-register.md` (plan section 5.8, owed, not run here; no separate run sheet). Release notes: D7 (i) and (ii) stated in `docs/release-notes-next.md` and `RELEASE_NOTES.md`; D7 (iii) is mentioned in the technical entry only. No behaviour delta against the plan was found while writing these notes.

@@ -39,6 +39,7 @@
 - **A failed upgrade no longer shows your computer's folder paths to other devices.** On a phone or tablet you now get a plain explanation of what went wrong. On the computer running Castwright you still see the full detail.
 - **A disk or permission problem while unpacking an upgrade no longer stops Castwright.** Before, the app could shut down and leave the upgrade stuck on "applying". Now it tells you the upgrade failed and keeps running your current version.
 - **A repair, Fix-audio run, voice design or emotion take is no longer cut off when another book's render finishes a chapter.** Castwright used to unload the voice models to tidy up the graphics card even while your work was using them. A repair stopped to load its voice again, and a voice design could fail outright with a "voice-design model was unloaded" error, and an emotion take with a "1.7B voice model was unloaded" one. It now leaves the voices alone while other work is running, whether that work is on the everyday voice or the higher-quality one.
+- **A chapter in your queue keeps the voice quality it was queued with.** If you switch between Standard and Quality voice while chapters are waiting, each waiting chapter still renders with the one it was queued under, and it follows the browser that queued it, not the one that happens to pick it up. Castwright also frees only the voice models your unfinished chapters won't need, instead of the whole cast's.
 
 # Castwright 1.15.0
 

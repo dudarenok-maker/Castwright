@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 53 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 54 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**89 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**90 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-20 (#4445), 88 → 89.** Row **A132** (the generation path's Qwen tier reconciles skip their eviction while other GPU work is active: a repair on a Quality book keeps its 1.7B while another book's render finishes a chapter) added. Group A 52 → 53. `next-id` bumped A132 → A133 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-21 (#1393), 89 → 90.** Row **A134** (the generation path keeps only the Qwen tiers a book's unfinished chapters will use: a pure-1.7B run drops a silent 0.6B character's tier, a mixed-tier book unloads neither early, and the missing-artifact co-residency outcome is recorded) added. Group A 53 → 54. `next-id` bumped A133 → A135 in the same change (A133 is #4533's row on `main`). Row is owed; not run here.
+>
+> **Previous change: 2026-11-20 (#4445), 88 → 89.** Row **A132** (the generation path's Qwen tier reconciles skip their eviction while other GPU work is active: a repair on a Quality book keeps its 1.7B while another book's render finishes a chapter) added. Group A 52 → 53. `next-id` bumped A132 → A133 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-19 (#4456), 87 → 88.** Row **A131** (a GPU Whisper or Qwen on the second card is fit-checked and evicted against that card) added. Group A 51 → 52. `next-id` bumped A131 → A132 in the same change. Row is owed; not run here.
 >
@@ -1962,7 +1964,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A133 -->
+<!-- next-id: A135 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6748,6 +6750,16 @@ The automated tests prove the skip decision with fakes: the post-audition reconc
 - **Record the co-residency outcome.** Record whether the 0.6B and the 1.7B were resident together (`GET /health`: `qwen_loaded` and `qwen_base17_loaded`) and whether anything ran out of memory. Record the outcome either way; an OOM alone does not fail the row.
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and two books (Quality and Standard). *Criteria:* #4445 and this row. Clears when each bullet is recorded with the log line it produced.
+
+### A134 · The generation path keeps only the Qwen tiers a book's unfinished chapters will use ([#1393](https://github.com/dudarenok-maker/Castwright/issues/1393)) · **single 8 GB card, real Qwen sidecar with the 0.6B and 1.7B-Base installed**
+
+The automated tests prove the keep set with fakes: `chapterQwenTierNeeds` is pinned to the synth calls the real `synthesiseChapter` makes, the keep is the speakers of the book's unfinished chapters (fallback-aware) unioned with its pending queue entries and its live same-book jobs, the run-start reconcile runs after the job registers and reads the keep after the sidecar health probe, and the post-score reconcile recomputes the book's needs when it runs. They cannot show what the real sidecar does with the 0.6B and the 1.7B on a real 8 GB card. The sidecar's own log is `logs/tts.err.log` (stderr, the loads); `logs/tts.log` holds only uvicorn's access lines, which carry no request body and cannot say which tier an `/unload` named, so do not judge this row from it. The server log is `logs/server.log`: look for `[generation] VRAM reconcile: evicting unused Qwen tier(s) [...]` and the run-start skip line `[generation] run-start tier reconcile skipped: other GPU work is active`. Plan 293 section 5.8 is the criteria; no separate run sheet is needed (A132 has none).
+
+- **A pure-1.7B run drops a silent 0.6B character's tier.** Use a book whose cast is all Quality (1.7B Base) but has one 0.6B character who never speaks in the chapters to render. Start with the 0.6B resident (render one Standard line first). Start the run. Observe: `logs/server.log` has `[generation] VRAM reconcile: evicting unused Qwen tier(s) [0.6B]` at run start and no 1.7B eviction; `GET /health` then reports `qwen_loaded: false` with `qwen_base17_loaded: true`; and the sidecar was told to unload the 0.6B only.
+- **A mixed-tier book unloads neither tier early.** Use a book with Quality and Standard speakers across several chapters. Render the book. Observe: no `/unload` for either tier until the last chapter that uses that tier has finished (`logs/server.log` reconcile lines, `logs/tts.err.log` loads); a tier is evicted only after its last user, and the unused tier is then freed.
+- **Record, do not pass or fail: a missing voice artifact on a book whose keep has no 0.6B.** On a book whose keep has `keep06` false, remove one speaker's voice artifact and render a chapter. Record `qwen_loaded` and `qwen_base17_loaded` from `GET /health` after the run-start reconcile, during the chapter, and after the next chapter's POST, and whether anything ran out of memory. The expected reading is both true during the chapter (plan 293 section 3.5); the row records what was seen. An out-of-memory alone does not fail it.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights (0.6B and 1.7B-Base installed), and books with a Quality-only, a mixed and a Standard cast. *Criteria:* plan 293 section 5.8 and this row. Clears when each bullet is recorded with the log line it produced.
 
 ## Group B — local Ollama analyzer only
 
