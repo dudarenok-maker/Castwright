@@ -665,7 +665,13 @@ and `register:build`:
   tiers only elevate, so main's full-cast keep is already 1.7B only.
 - (b) A chapter order where one tier has a last user before the final
   chapter (chapters 1 and 2: a Quality-pinned speaker plus a Standard
-  narrator; chapter 3: Standard speakers only), rendered through the queue so
+  narrator; chapter 3: Standard speakers only), under a Standard (0.6B)
+  session model (a Standard narrator exists only there), with one generation
+  worker and render-integrity QA off (the defaults: with 2+ workers chapter
+  3's POST overlaps chapter 2, whose job keeps the 1.7B, and with QA off
+  nothing reconciles after chapter 2 ends; with QA on and one worker the
+  eviction comes from chapter 2's post-score reconcile, so accept the line at
+  any point after chapter 2 finishes), rendered through the queue so
   each chapter is its own POST. No `/unload` at chapters 1 and 2; at chapter
   3's POST `evicting unused Qwen tier(s) [1.7B]` and `qwen_base17_loaded:
   false`. On main neither tier is ever unloaded on this book.
