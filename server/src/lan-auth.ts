@@ -17,6 +17,11 @@ import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
 import { isValidDeviceToken } from './workspace/device-tokens.js';
 import { getLanRuntime } from './lan-runtime.js';
+import { isLoopbackRequest } from './loopback.js';
+
+/* Moved to loopback.ts (#4446) so lan-paths.ts need not import this module; re-exported
+   so existing `./lan-auth.js` callers keep working. */
+export { isLoopbackRequest };
 
 /* The configured shared secret, or undefined when unset/empty. */
 export function getLanAuthToken(): string | undefined {
@@ -99,14 +104,6 @@ export function ensureLanAuthToken(
       `next boot (paired devices would need to re-pair).`,
   );
   return fallback;
-}
-
-const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-
-/* Assumes a direct (un-proxied) bind — `req.ip` is the real remote address. */
-export function isLoopbackRequest(req: Request): boolean {
-  const ip = req.ip ?? req.socket?.remoteAddress ?? '';
-  return LOOPBACK.has(ip);
 }
 
 /* The one shipped friendly hostname (plan 239 mDNS name + its :443 forwarder).

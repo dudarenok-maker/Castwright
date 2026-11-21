@@ -156,6 +156,7 @@ function bookOpWaiters(): number {
  *  with the job already registered — only a check made INSIDE `withBookOp` sees it. */
 async function raceJobAheadOfRoute(
   route: () => PromiseLike<request.Response>,
+  kind: BookJobKind = 'render',
 ): Promise<{ res: request.Response; finishJob: () => Promise<void> }> {
   let release!: () => void;
   const open = new Promise<void>((r) => (release = r));
@@ -168,8 +169,8 @@ async function raceJobAheadOfRoute(
   await held;
   let openJob!: () => void;
   const jobGate = new Promise<void>((r) => (openJob = r));
-  const jobP = bookJobs.runBookJob(bookId, 'render', () => jobGate);
-  await waitUntil(() => bookOpWaiters() >= 1, 'the render job to queue on book-op');
+  const jobP = bookJobs.runBookJob(bookId, kind, () => jobGate);
+  await waitUntil(() => bookOpWaiters() >= 1, `the ${kind} job to queue on book-op`);
   const routeP = Promise.resolve(route());
   await waitUntil(() => bookOpWaiters() >= 2, 'the route to queue on book-op behind the job');
   release();
@@ -408,5 +409,57 @@ describe('#3774 — single-chapter exclude refuses with 409 book_busy while a lo
     expect(res.status).toBe(200);
     expect(res.body.excluded).toBe(true);
     expect(existsSync(audioFile('01-chapter-one'))).toBe(false);
+  });
+});
+
+describe('#3436 — an include is refused while an analysis runs', () => {
+  const exclude = (id: number, excluded: boolean) =>
+    request(app).post(`/api/books/${bookId}/chapters/${id}/exclude`).send({ excluded });
+
+  it('(a) analysis registered → 409 book_busy, state untouched, chapter still excluded, job still registered', async () => {
+    expect((await exclude(1, true)).status).toBe(200);
+    const before = snapshot();
+    const job = await holdJob('analysis');
+    try {
+      const res = await exclude(1, false);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(res.body.error).toMatch(/analysing/);
+      expect(res.body.error).toMatch(/Chapters cannot be added back while it is analysing/);
+      expect(res.text).not.toContain(workspaceRoot);
+      expect(res.text).not.toContain(JSON.stringify(workspaceRoot).slice(1, -1));
+      expect(snapshot()).toBe(before);
+      const ch = JSON.parse(readFileSync(statePath(), 'utf8')).chapters.find((c: { id: number }) => c.id === 1);
+      expect(ch.excluded).toBe(true);
+      expect(bookOp.bookJobKinds(bookId)).toEqual(['analysis']);
+    } finally {
+      await job.finish();
+    }
+  });
+
+  it('(b) race — an include queued BEHIND an analysis that registers while it waits → 409, nothing written', async () => {
+    expect((await exclude(1, true)).status).toBe(200);
+    const before = snapshot();
+    const { res, finishJob } = await raceJobAheadOfRoute(() => exclude(1, false), 'analysis');
+    try {
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(snapshot()).toBe(before);
+      expect(bookOp.bookJobKinds(bookId)).toEqual(['analysis']);
+    } finally {
+      await finishJob();
+    }
+  });
+
+  it('(c) control — once the analysis is released, the same include returns 200 and the chapter is included', async () => {
+    expect((await exclude(1, true)).status).toBe(200);
+    const job = await holdJob('analysis');
+    expect((await exclude(1, false)).status).toBe(409);
+    await job.finish();
+    expect(bookOp.bookJobKinds(bookId)).toEqual([]);
+    const res = await exclude(1, false);
+    expect(res.status).toBe(200);
+    const ch = JSON.parse(readFileSync(statePath(), 'utf8')).chapters.find((c: { id: number }) => c.id === 1);
+    expect(ch.excluded).toBeFalsy();
   });
 });

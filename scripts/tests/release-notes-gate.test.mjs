@@ -279,6 +279,20 @@ test('the committed RELEASE_NOTES.md has no leading UTF-8 BOM', () => {
   assert.notDeepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
 });
 
+// #4446 review: a `\b` in a path example (`D:\books`) was turned into a literal
+// backspace byte, which renders as `D:ooks`. Tab (0x09), LF (0x0a) and CR
+// (0x0d) are legitimate; every other C0 control character is not.
+for (const file of ['docs/release-notes-next.md', 'RELEASE_NOTES.md']) {
+  test(`the committed ${file} has no stray control characters`, () => {
+    const text = readFileSync(resolve(repoRoot, file), 'utf8');
+    const hits = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(line)) hits.push(i + 1);
+    });
+    assert.deepEqual(hits, [], `control character(s) at line(s) ${hits.join(', ')}`);
+  });
+}
+
 // #1973 follow-up: the suggested allowlist literal must be the full token, not just the core
 test('checkMojibake suggests the full whitespace-delimited token, not just the mojibake core', () => {
   // CAFE = 'CAFÉ™', chunk detected = 'É™', core length = 2, so core = 'É™'

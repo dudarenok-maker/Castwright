@@ -563,6 +563,10 @@ export const chaptersSlice = createSlice({
           }
           return;
         }
+        /* #3436 -- a `book-busy` refusal is not a failure: nothing ran. The row is left as the claim
+           set it and the dispatcher hands back the pre-claim row (`restoreChapterRow`), so a rendered
+           chapter never reads as failed and carries no busy sentence. */
+        if (ev.errorCode === 'book-busy') return;
         const ch = s.chapters.find((c) => c.id === ev.chapterId);
         if (ch) {
           ch.state = 'failed';
@@ -774,6 +778,16 @@ export const chaptersSlice = createSlice({
         s.lastError = null;
         s.generationStartedAt = null;
       }
+    },
+
+    /** #3436 -- put one row back exactly as it was before a queue claim flipped it (the server
+        refused the render 409 `book_busy`, so nothing ran) -- and the "Generation halted" banner the
+        claim cleared, unless something has set the slot since (two claims landing in one tick: the
+        second saved copy is already null). */
+    restoreChapterRow: (s, a: PayloadAction<{ row: Chapter; lastError: string | null }>) => {
+      const i = s.chapters.findIndex((c) => c.id === a.payload.row.id);
+      if (i >= 0) s.chapters[i] = a.payload.row;
+      if (s.lastError === null) s.lastError = a.payload.lastError;
     },
 
     /* Bulk regenerate — re-queue an explicit, possibly non-contiguous list

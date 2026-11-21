@@ -25,7 +25,7 @@
 // release.yml (previously near-identical, with executable lines identical and comments reflowed) into the composite
 // action .github/actions/install-ffmpeg-windows/action.yml, so there is now
 // exactly one copy of the script to pin. The tests below exercise it there;
-// a separate check at the bottom of this file confirms both workflows still
+// a separate check at the bottom of this file confirms every workflow that installs ffmpeg on Windows still
 // reference the composite action, so a future edit can't quietly reintroduce
 // an inline duplicate.
 //
@@ -70,7 +70,46 @@ const WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'release.yml'),
 ];
 
+// quarantine-health.yml and verify.yml have no `cross-os-verify` job, so they join only the
+// Windows-ffmpeg delegation loop, not the job-timeout loop (#4244).
+const WINDOWS_FFMPEG_WORKFLOWS = [
+  ...WORKFLOWS,
+  resolve(repoRoot, '.github', 'workflows', 'quarantine-health.yml'),
+  resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
+];
+
+// Every workflow that calls the composite action. A superset of WORKFLOWS:
+// verify.yml's windows-tests leg (a required check) also installs ffmpeg through
+// it, but has no cross-os-verify job, so it cannot join WORKFLOWS (the #3696
+// timeout loop below iterates that one).
+const COMPOSITE_CALLERS = [
+  resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
+  ...WORKFLOWS,
+];
+
 const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
+
+// #4573: Windows CI deliberately runs the newest ffmpeg (9.1.0 at time of
+// writing) so the encoder-delay / tag-CRC fix is exercised against it. A
+// version pin on either install path would silently drop that coverage.
+test('the Windows ffmpeg composite action stays unpinned (#4573)', () => {
+  // Comment lines are skipped (the header names `winget install` in prose), and
+  // a backtick-continued PowerShell command is joined into one statement so a
+  // pin on a later line is still seen.
+  const statements = readNormalized(ACTION_FILE)
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('#'))
+    .join('\n')
+    .replace(/\x60[ \t]*\n/g, ' ') // \x60 = backtick; a bare one trips the spawn-windows-hide scanner
+    .split('\n');
+  const choco = statements.filter((l) => /\bchoco\s+install\b/.test(l));
+  const winget = statements.filter((l) => /\bwinget\s+install\b/.test(l));
+  assert.ok(choco.length > 0, 'expected a real choco install line');
+  assert.ok(winget.length > 0, 'expected a real winget install line');
+  for (const line of [...choco, ...winget]) {
+    assert.doesNotMatch(line, /(^|\s)(--?|\/)version\b|\s-v\s/, `install line is pinned: ${line.trim()}`);
+  }
+});
 
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
 // the next step at the same (6-space) indentation, a shallower-indented key
@@ -654,7 +693,9 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
 // inline (reintroducing the #2480 duplication) must not go unnoticed. Each
 // workflow's "Install ffmpeg (Windows)" step must reference the composite
 // action rather than embed its own `run: |` block.
-for (const path of WORKFLOWS) {
+// COMPOSITE_CALLERS (verify.yml + WORKFLOWS) and WINDOWS_FFMPEG_WORKFLOWS (adds
+// quarantine-health.yml) overlap; iterate their union so no caller loses coverage.
+for (const path of new Set([...COMPOSITE_CALLERS, ...WINDOWS_FFMPEG_WORKFLOWS])) {
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {
@@ -671,6 +712,12 @@ for (const path of WORKFLOWS) {
       block,
       /choco install ffmpeg/,
       'step embeds its own choco install call -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
+
+    assert.doesNotMatch(
+      block,
+      /winget install[^\n]*ffmpeg/i,
+      'step embeds its own winget ffmpeg install -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
     );
 
     // Guard against a second/different inline `choco install ffmpeg` elsewhere

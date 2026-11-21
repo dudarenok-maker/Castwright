@@ -66,6 +66,10 @@ export interface QuietPollState {
   sawRepair: boolean;
   idleSince: number | null;
   epoch: number | null;
+  /** #4533 — the models the lever kept for a live design (`m06`) or mint (`m17`) that the
+      base keep set would have freed. A re-ask frees only those, never again what the first
+      ask already freed (a live mint reloads its 0.6B in its own phases). */
+  heldBack?: { m06: boolean; m17: boolean };
 }
 
 let provider: (() => string[]) | null = null;
@@ -166,6 +170,13 @@ export function isAnyGenerationActive(): boolean {
 /** #4445 — true when a voice design or a variant mint is in flight on any book. */
 export function isDesignOrMintActive(): boolean {
   return (designCounter?.() ?? 0) > 0 || (mintCounter?.() ?? 0) > 0;
+}
+
+/** #4533 — the in-flight voice-design and variant-mint counts. `evictIdleQwenBase` subtracts
+    the CALLER's own (design-voice-core increments before it asks the lever) to learn what
+    ANOTHER op is using. Unregistered counts as zero, like the counters above. */
+export function inFlightDesignMintCounts(): { design: number; mint: number } {
+  return { design: designCounter?.() ?? 0, mint: mintCounter?.() ?? 0 };
 }
 
 /** #4445 — true when a render on a book OTHER than `bookId`, or any splice / QA repair or

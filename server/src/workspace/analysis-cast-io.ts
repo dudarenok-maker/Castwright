@@ -17,6 +17,10 @@
    released (`cast` -> `cast-id-history` is allowed, but the history write is
    deliberately outside the cast span, as it always was).
 
+   These writers drop a superseded run's write (#3437): each captures the run-epoch fence at
+   entry and, as the first statement inside the cast lock, throws `StaleRunEpochError` when a
+   newer analysis run has registered for the manuscript - before reading or writing anything.
+
    A `LockAcquisitionTimeoutError` from the cast lock propagates untouched; the
    caller parks it and finishes its other writes before surfacing it.
 
@@ -29,6 +33,8 @@ import { randomBytes } from 'node:crypto';
 import { NARRATOR_CHARACTER_IDS } from '../analyzer/narrator-identity.js';
 import { FEMALE_BUCKET_ID, MALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+import { StaleRunEpochError } from '../analyzer/errors.js';
+import { currentRunEpochFence, staleRunWriteDropped } from '../store/analysis-run-epoch.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { writeJsonAtomicOrdered } from './ordered-write.js';
 import { withCastLock } from './cast-lock.js';
@@ -310,7 +316,9 @@ export async function materialisePriorAtRunStart(a: {
   source: CastSource;
   ledger: RunAddedLedger;
 }> {
+  const fence = currentRunEpochFence(); // #3437: captured synchronously, before the lock
   return withCastLock(a.bookDir, async () => {
+    if (staleRunWriteDropped(fence, 'run-start heal cast.json')) throw new StaleRunEpochError();
     const snap = await readPriorCastLockFree(a.bookDir);
     const before = snap.rows;
     let rows: Rows = JSON.parse(JSON.stringify(before));
@@ -360,7 +368,9 @@ export async function writePlanSnapshot<C extends { id: string }>(a: {
   idMap: Record<string, string>;
   addedPairs: Array<[string, string]>;
 }> {
+  const fence = currentRunEpochFence(); // #3437: captured synchronously, before the lock
   return withCastLock(a.bookDir, async () => {
+    if (staleRunWriteDropped(fence, 'plan snapshot cast.json')) throw new StaleRunEpochError();
     const current = await readCurrentCast(a.bookDir);
     const historyRead = await loadCastIdHistoryWithStatus(a.bookDir);
     const history = toMatchHistory(historyRead);
@@ -474,7 +484,14 @@ export async function persistPlannedCast(a: {
   driftRefused: boolean;
   mainLedger?: RunAddedLedger;
 }): Promise<PersistOutcome> {
+  const fence = currentRunEpochFence(); // #3437: captured synchronously, before the lock
   return withCastLock(a.bookDir, async () => {
+    /* This ONE check also covers the manuscript-edits.json write nested below, with no check of
+       its own: Start fresh takes the cast lock (`readPriorCastForMerge`) BEFORE its book-locked
+       `rm` of that file, so once this run is inside the cast lock past this check, Start fresh's
+       rm cannot land between the check and the edits write. Moving Start fresh's rm ahead of its
+       cast-lock read would void this: the edits write would then need its own check. */
+    if (staleRunWriteDropped(fence, 'persist cast.json')) throw new StaleRunEpochError();
     const current = await readCurrentCast(a.bookDir);
     const historyRead = await loadCastIdHistoryWithStatus(a.bookDir);
     const history = toMatchHistory(historyRead);

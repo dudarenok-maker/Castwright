@@ -16,6 +16,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { pathForClient } from '../lan-paths.js';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { existsSync } from 'node:fs';
@@ -524,9 +525,9 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       uploadedAt: now,
       sourceText: entry.sourceText,
       paths: {
-        bookDir,
-        manuscript: manuscriptPath,
-        dotAudiobook: dotAudiobook(bookDir),
+        bookDir: pathForClient(req, bookDir),
+        manuscript: pathForClient(req, manuscriptPath),
+        dotAudiobook: pathForClient(req, dotAudiobook(bookDir)),
       },
     });
   } catch (e) {

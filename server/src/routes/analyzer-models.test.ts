@@ -3,6 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { FS_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { AnalysisAbortedError, AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from '../analyzer/errors.js';
 
 const h = vi.hoisted(() => ({
@@ -187,6 +188,22 @@ describe('POST /api/analyzer/models/test', () => {
     expect(res.status).toBe(502);
     expect(res.body.error).toContain('[redacted]');
     expect(res.body.error).not.toContain('sk-stored');
+  });
+
+  it('a node fs failure writing the capability record (the settings file write) answers the curated sentence (#3702)', async () => {
+    h.modelTestDepsFor.mockReturnValue({});
+    const fsErr = Object.assign(
+      new Error("EPERM: operation not permitted, rename 'C:\\Users\\someone\\castwright-workspace\\x' -> 'y'"),
+      { code: 'EPERM', syscall: 'rename', path: 'C:\\Users\\someone\\castwright-workspace\\x' },
+    );
+    h.runModelTest.mockResolvedValue(RECORD);
+    h.writeAnalyzerCapabilityRecord.mockRejectedValueOnce(fsErr);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    quiet.mockRestore();
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe(FS_FAILURE_REQUEST_ERROR);
+    expect(JSON.stringify(res.body)).not.toContain('someone');
   });
 
   it('a client that disconnects aborts the running test, and nothing is written', async () => {

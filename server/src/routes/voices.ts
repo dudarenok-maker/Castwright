@@ -29,6 +29,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { pathForClient } from '../lan-paths.js';
 import {
   BOOKS_ROOT,
   castJsonPath,
@@ -82,6 +83,12 @@ import {
 const QWEN_SAMPLE_MODEL_KEYS = ['qwen3-tts-0.6b', 'qwen3-tts-1.7b'] as const;
 
 export const voicesRouter = Router();
+
+/* #4446 — `skipped[].bookDir` is an absolute book folder the client only counts;
+   collapse the home dir for LAN clients. Response copy only. */
+export function skippedForWire<T extends { bookDir: string }>(req: Request, skipped: T[]): T[] {
+  return skipped.map((s) => ({ ...s, bookDir: pathForClient(req, s.bookDir) }));
+}
 
 interface DerivedVoice {
   id: string;
@@ -841,6 +848,8 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
           : 'in any confirmed cast';
         return { status: 404, body: { error: `No character with voiceId "${voiceId}" found ${where}.` } };
       }
+      /* #4446 — response-only copy: the absolute book dir collapses for LAN clients. */
+      const skippedForClient = skippedForWire(req, skipped);
       if (updated === 0 && skipped.length > 0) {
         return {
           status: 409,
@@ -848,11 +857,11 @@ voicesRouter.put('/:voiceId/override', async (req: Request, res: Response) => {
             error:
               `Voice "${voiceId}" has a consented cloned voice on a linked character — ` +
               `propagation refused. Reassign that character directly instead.`,
-            skipped,
+            skipped: skippedForClient,
           },
         };
       }
-      if (skipped.length > 0) return { status: 200, body: { updated, skipped } };
+      if (skipped.length > 0) return { status: 200, body: { updated, skipped: skippedForClient } };
       return { status: 204 };
     };
     const respond = (out: { status: number; body?: unknown }) =>

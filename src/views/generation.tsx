@@ -71,6 +71,7 @@ function useIncludeRollbackPending(bookId: string | null | undefined): boolean {
 /* #3774 — `BookJobKind` -> the phrase the Include tooltip names. */
 const BUSY_KIND_LABELS: Record<string, string> = {
   render: 'rendering audio',
+  'audio-fix': 'fixing audio',
   scoring: 'scoring',
   analysis: 'analysing',
   design: 'designing voices',
@@ -92,6 +93,10 @@ const INCLUDE_RUN_LIVE_REASON =
    and the include's Cancel rollback (re-exclude) would be refused. */
 const JOB_START_BLOCKED_REASON =
   'A chapter is being included and analysed. Wait for it to finish, or cancel it, before starting generation.';
+/* #3436 — the server refuses generation, a re-record and a QA repair while the book is analysing
+   (a render and an analysis on one book exclude each other), so every control that starts one is
+   off for the run's length. */
+const ANALYSIS_RUN_LIVE_REASON = 'Analysing this book. Available when it finishes.';
 /* #3774 — another Include click's busy read is still in flight (nothing is being
    analysed yet): a second click in that window is a double click or another chapter. */
 const INCLUDE_CHECK_PENDING_REASON =
@@ -125,7 +130,11 @@ import { useAppDispatch, useAppSelector } from '../store';
 import type { RootState } from '../store';
 import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectBookEditsLocked } from '../store/restructure-lock';
 import { notificationsActions } from '../store/notifications-slice';
-import { selectAnalysisBusyForBook, analysisBusyMessage } from '../store/analysis-substage-selectors';
+import {
+  selectAnalysisBusyForBook,
+  selectAnalysisRunningForBook,
+  analysisBusyMessage,
+} from '../store/analysis-substage-selectors';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions, selectCharacterNamesById } from '../store/cast-slice';
@@ -486,7 +495,15 @@ export function GenerationView({
     includeRunInStore ||
     includeRollbackInFlight ||
     Object.values(subsetByChapter).some((e) => e.origin === 'include' && isSubsetRunning(e));
-  const jobStartBlockedReason = includeRunLive ? JOB_START_BLOCKED_REASON : undefined;
+  /* #3436 — ANY analysis run of this book (main or subset, an include or a Re-analyse), read from
+     the store snapshot so it outlives the view, or from this instance's own subset runs. */
+  const analysisRunLive =
+    useAppSelector((s) => selectAnalysisRunningForBook(s, bookId)) || subsetRunning;
+  const jobStartBlockedReason = includeRunLive
+    ? JOB_START_BLOCKED_REASON
+    : analysisRunLive
+      ? ANALYSIS_RUN_LIVE_REASON
+      : undefined;
   /* Only a row that can show Include / Retry / Accept smaller cast reads these:
      an excluded chapter, or a chapter with a subset run (error) row. */
   const hasIncludeSurface = chapters.some((c) => c.excluded) || Object.keys(subsetByChapter).length > 0;
@@ -917,7 +934,12 @@ export function GenerationView({
         e instanceof AnalysisError &&
         (e.code === 'subset_in_progress' ||
           e.code === 'main_analysis_running' ||
-          e.code === 'chapters_restructuring');
+          e.code === 'chapters_restructuring' ||
+          e.code === 'book_busy');
+      /* #3436 — `book_busy`: the include POST itself was refused (409) because
+         an analysis is registered for the book. Nothing was started or flipped,
+         so it is handled the same way (restore, refusal message on the row). */
+      const isIncludeBookBusy = !includePosted && (e as { code?: unknown })?.code === 'book_busy';
       /* #3435 — `resume_required`: the server attributed the chapter (an
          Include target is attributed whenever the roster is final), but the
          book is not finished, so nothing was persisted as final. No rollback;
@@ -968,10 +990,11 @@ export function GenerationView({
         });
         return;
       }
-      if (isSubsetInProgress) {
-        /* A different subset request is already running; this request never
-           started a job, so restore the prior snapshot (B2 regression guard:
-           the pre-POST clobber must not persist on rejection) and surface the
+      if (isSubsetInProgress || isIncludeBookBusy) {
+        /* A different subset request is already running (or the include POST
+           was refused with book_busy, #3436); this request never started a
+           job, so restore the prior snapshot (B2 regression guard: the
+           pre-POST clobber must not persist on rejection) and surface the
            server's message instead. */
         if (ownsSnapshot()) {
           if (priorSnapshot) {
@@ -980,7 +1003,7 @@ export function GenerationView({
             dispatch(analysisActions.clearActiveStream());
           }
         }
-        patchSubset(chapterId, { error: e.message, refused: true });
+        patchSubset(chapterId, { error: (e as Error).message, refused: true });
         return;
       }
       /* Drop the snapshot on terminal failure — the server-side job
@@ -1247,10 +1270,14 @@ export function GenerationView({
          other job's snapshot overwritten by this one's. Surface the
          server's message instead of the generic fallback text. */
       /* #3435 — `main_analysis_running` (the main run is live or finishing)
-         never started a job either: same handling. */
+         never started a job either: same handling. #3436 — so does `book_busy` (the book is
+         rendering audio): nothing ran, so no "Re-analysis failed" and no gap on the row. */
       if (
         e instanceof AnalysisError &&
-        (e.code === 'subset_in_progress' || e.code === 'main_analysis_running' || e.code === 'chapters_restructuring')
+        (e.code === 'subset_in_progress' ||
+          e.code === 'main_analysis_running' ||
+          e.code === 'chapters_restructuring' ||
+          e.code === 'book_busy')
       ) {
         if (ownsSnapshot()) {
           if (priorSnapshot) {
@@ -1703,7 +1730,7 @@ export function GenerationView({
             <button
               type="button"
               onClick={() => dispatch(startGenerationFlow())}
-              disabled={startGenerationPending || includeRunLive}
+              disabled={startGenerationPending || jobStartBlockedReason != null}
               title={jobStartBlockedReason}
               data-testid="generation-view-resume"
               data-tour-id="generate-resume-btn"
@@ -1715,7 +1742,7 @@ export function GenerationView({
           {allComplete && (
             <button
               onClick={onRegenerateBook}
-              disabled={analysisBusy || includeRunLive}
+              disabled={analysisBusy || jobStartBlockedReason != null}
               title={jobStartBlockedReason}
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2 disabled:opacity-40 disabled:pointer-events-none"
             >
@@ -1725,13 +1752,13 @@ export function GenerationView({
         </div>
       </div>
 
-      {includeRunLive && (
+      {jobStartBlockedReason && (
         /* #3774 — visible (not title-only) so touch users see why the controls are off. */
         <p
           data-testid="generation-job-start-blocked"
           className="mb-6 rounded-2xl border border-amber-200 bg-amber-50/70 px-5 py-3 text-sm text-amber-900"
         >
-          {JOB_START_BLOCKED_REASON}
+          {jobStartBlockedReason}
         </p>
       )}
 
@@ -1789,7 +1816,7 @@ export function GenerationView({
           <button
             type="button"
             onClick={() => setBulkRegenOpen(true)}
-            disabled={analysisBusy || includeRunLive}
+            disabled={analysisBusy || jobStartBlockedReason != null}
             title={jobStartBlockedReason}
             className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-full bg-amber-900/90 text-white text-xs font-semibold hover:bg-amber-900 transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >

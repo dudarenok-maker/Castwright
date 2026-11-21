@@ -46,7 +46,15 @@ export default defineConfig({
      advanced-settings flake). Two workers halves peak memory and tames the herd
      while keeping the suite well under the navigation budget. */
   workers: process.env.CI ? 1 : 2,
-  reporter: process.env.CI ? [['github'], ['list']] : 'list',
+  /* PW_JSON_REPORT adds a JSON report so a workflow step can assert the run's
+     outcome (scripts/assert-playwright-ran.mjs, #4203). */
+  reporter: [
+    ...(process.env.CI ? ([['github']] as const) : []),
+    ['list'],
+    ...(process.env.PW_JSON_REPORT
+      ? ([['json', { outputFile: process.env.PW_JSON_REPORT }]] as const)
+      : []),
+  ],
   /* Per-platform AND per-project visual-regression baselines. {platform}
      resolves to 'win32' | 'linux' | 'darwin' under Node's process.platform.
      {projectName} resolves to 'chromium' | 'mobile-chrome' | 'tablet-chrome'.

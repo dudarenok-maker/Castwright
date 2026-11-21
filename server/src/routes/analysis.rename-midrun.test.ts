@@ -751,6 +751,11 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
         await expect(assertWriteTargetStable(seed.job, writeDir)).rejects.toBeInstanceOf(
           BookDirUnresolvedError,
         );
+        /* #4446 — the message reaches LAN clients (SSE error / haltReason): no host paths. */
+        const err = await assertWriteTargetStable(seed.job, writeDir).catch((e: Error) => e);
+        expect((err as Error).message).toContain('book folder moved mid-persist');
+        expect((err as Error).message).not.toContain(seed.oldDir);
+        expect((err as Error).message).not.toContain(seed.newDir);
       } finally {
         removeManuscript(seed.manuscriptId);
       }

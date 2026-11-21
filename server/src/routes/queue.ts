@@ -284,11 +284,13 @@ queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
    Idempotent for a missing id (the snapshot already caught up). */
 queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
   const { entryId } = req.params;
-  /* Body `{ outcome: 'done' | 'failed', errorReason? }`. Default `done` for
+  /* Body `{ outcome: 'done' | 'failed' | 'requeued', errorReason? }`. Default `done` for
      back-compat (the dispatcher's success path sends no body). `failed` marks
-     the entry `failed` (it LINGERS for retry) instead of done-pruning it. */
+     the entry `failed` (it LINGERS for retry) instead of done-pruning it.
+     `requeued` (#3436) flips an in_progress entry straight back to `queued`. */
   const body = (req.body ?? {}) as { outcome?: unknown; errorReason?: unknown };
-  const outcome = body.outcome === 'failed' ? 'failed' : 'done';
+  const outcome =
+    body.outcome === 'failed' ? 'failed' : body.outcome === 'requeued' ? 'requeued' : 'done';
   const errorReason = typeof body.errorReason === 'string' ? body.errorReason : undefined;
   await retryUnreadableGate();
   await serializeQueueMutation(async () => {

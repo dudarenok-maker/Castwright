@@ -1808,3 +1808,28 @@ describe('GET /api/sidecar/health — kokoro/qwen/whisper importOk forwarding (#
     expect(res.body.whisperPackageInstalled).toBe(true);
   });
 });
+
+/* #3702 / #4506 — the /load and /unload proxies wrap their friendly message in the
+   seam, but their only producer is an undici fetch rejection (`TypeError: fetch failed`,
+   no `code`/`syscall`; the real reason rides on `cause`), which the seam never curates.
+   So the wrap is inert by construction: pin that the message passes through unchanged. */
+describe('sidecar proxy 503 bodies pass a real undici rejection through unchanged (#3702)', () => {
+  const undiciRejection = () =>
+    Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9000'), {
+        code: 'ECONNREFUSED',
+        syscall: 'connect',
+      }),
+    });
+
+  for (const route of ['load', 'unload'] as const) {
+    it(`POST /${route}: the friendly unreachable message is unchanged`, async () => {
+      fetchMock.mockRejectedValue(undiciRejection());
+      const res = await request(makeApp()).post(`/api/sidecar/${route}`).send({});
+      expect(res.status).toBe(503);
+      expect(res.body.error).toBe(
+        "Couldn't reach the voice engine — it may still be starting up, or it isn't running yet. Try again in a moment. (ECONNREFUSED)",
+      );
+    });
+  }
+});
