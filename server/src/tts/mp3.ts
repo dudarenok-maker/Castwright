@@ -566,8 +566,8 @@ function parseWrongLameTag(head: Buffer): LameTag | null {
   if (bitrateIdx === 0 || bitrateIdx === 15) return null;
   const mono = ((head[frameStart + 3] >> 6) & 3) === 3;
   const sideInfo = version === 3 ? (mono ? 17 : 32) : mono ? 9 : 17;
-  const crcBytes = b1 & 1 ? 0 : 2;
-  const tag = frameStart + 4 + crcBytes + sideInfo;
+  // LAME and ffmpeg's demuxer both place the tag at 4 + side info, even on a CRC-protected frame.
+  const tag = frameStart + 4 + sideInfo;
   if (tag + 8 > head.length) return null;
   const kind = head.toString('latin1', tag, tag + 4);
   if (kind !== 'Xing' && kind !== 'Info') return null;

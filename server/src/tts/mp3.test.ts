@@ -320,6 +320,14 @@ describe('mp3StartPadShortfall (#4573)', () => {
     expect(mp3StartPadShortfall(trimmed)).toBe(529);
   });
 
+  it('finds the tag on a CRC-protected frame at the same offset (LAME and ffmpeg write it unshifted)', () => {
+    const protectedHead = Buffer.from(HEAD_9_1_XING);
+    protectedHead[45 + 1] &= 0xfe; // protection bit 0 = a CRC word follows the header
+    expect(protectedHead.toString('latin1', 45 + 4 + 9, 45 + 4 + 9 + 4)).toBe('Xing');
+    expect(mp3StartPadShortfall(protectedHead)).toBe(529);
+    expect(delayAt(fixLameEncoderDelay(protectedHead)!, ENC_24K_MONO)).toBe(576);
+  });
+
   it('reads 0 for a head with no Xing/Info tag, a foreign encoder string, or a truncated head', () => {
     expect(mp3StartPadShortfall(Buffer.from('RIFF....WAVEfmt ', 'latin1'))).toBe(0);
     const foreign = Buffer.from(HEAD_9_1_XING);
