@@ -255,10 +255,11 @@ const HEAD_9_1_REMUX = Buffer.from(
 const ENC_24K_MONO = 45 + 4 + 9 + 8 + 112;
 const delayAt = (b: Buffer, enc: number): number => (b[enc + 21] << 4) | (b[enc + 22] >> 4);
 const storedCrcAt = (b: Buffer, enc: number): number => b.readUInt16BE(enc + 34);
-/* The tag CRC both LAME and ffmpeg's muxer write: CRC-16 (poly 0x8005
-   reflected, init 0) over the first 190 bytes of the tag frame, its own two
-   bytes (34 past the encoder string) and anything past a shorter frame's end
-   read as zero. The frame length comes from the MPEG-2/2.5 header (72 * kbit/s
+/* The tag CRC in ffmpeg's muxer convention (NOT LAME's own reference CRC,
+   which spans only the sync up to the CRC field and never matches an LSF tag):
+   CRC-16 (poly 0x8005 reflected, init 0) over the first 190 bytes of the tag
+   frame, its own two bytes (34 past the encoder string) and anything past a
+   shorter frame's end read as zero. The frame length comes from the MPEG-2/2.5 header (72 * kbit/s
    / rate) that every 24 kHz and lower file in this suite carries. */
 function tagCrc(b: Buffer, frameStart: number, enc: number): number {
   const kbps = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160][b[frameStart + 2] >> 4];

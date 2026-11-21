@@ -601,7 +601,10 @@ export function mp3StartPadShortfall(head: Buffer): number {
 /* The tag's CRC: CRC-16 (poly 0x8005 reflected, init 0) over the first 190
    bytes of the tag frame, with the CRC field itself (34 bytes after the
    encoder string) and anything past the end of a shorter frame read as zero.
-   Matches what both LAME and ffmpeg's muxer write. */
+   This is ffmpeg's muxer convention, the right target since ffmpeg muxed every
+   file patched here. It is NOT LAME's own reference CRC (sync up to the CRC
+   field), which differs for every LSF tag - don't use this to validate a
+   LAME-CLI file. */
 const LAME_TAG_CRC_SPAN = 190;
 function lameTagCrc(b: Buffer, tag: LameTag): number {
   const crcAt = tag.enc + 34;
