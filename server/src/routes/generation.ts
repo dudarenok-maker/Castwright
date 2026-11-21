@@ -84,6 +84,7 @@ import {
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 import { computeRunQwenNeeds, type RunQwenNeedsInput } from '../tts/qwen-run-needs.js';
+import { loadRunNeedsCastIdHistory } from '../tts/qwen-run-needs-history.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import {
@@ -1300,7 +1301,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   if (qwenInUse) {
     try {
       const queueEntries = (await readQueueFile(queueJsonPath())).entries;
-      postScoreCastIdHistory = await loadCastIdHistory(bookDir);
+      postScoreCastIdHistory = await loadRunNeedsCastIdHistory(bookDir);
       runNeeds = computeRunQwenNeeds({
         bookId,
         targetChapterIds: targetChapters.map((c) => c.id),
