@@ -42,6 +42,7 @@ import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson } from '../workspace/state-io.js';
 import { LOCK_CONTENTION_REQUEST_ERROR, isLockAcquisitionTimeout, withStateJsonLock } from '../workspace/file-lock.js';
 import { BOOK_GONE } from '../workspace/book-op-lock.js';
+import { busySentence } from './book-state.js';
 import { runBookJob } from '../workspace/book-jobs.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
@@ -868,7 +869,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
 
   const send = (payload: unknown) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -912,6 +912,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   let registered;
   try {
     registered = await runBookJob(bookId, 'render', async (lease) => {
+  res.flushHeaders();
   const { bookDir, state } = lease;
 
   /* Cast must be confirmed for synthesis to know which voice each character
@@ -2575,7 +2576,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        throws after pushing a child still waits for it. */
     await drainChildren(job);
   }
-    });
+    }, { refuseIfLive: 'analysis' });
   } catch (e) {
     console.error('[generation] job registration failed', e);
     send({
@@ -2589,6 +2590,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     send({ type: 'chapter_failed', errorReason: 'Book not found.' });
     send({ type: 'idle' });
     return res.end();
+  }
+  /* #3436 -- refused while an analysis is registered: the rebuild of the analysis cache mid-run
+     races its persist. The check is atomic with the token add (inside book-op) and nothing has
+     flushed yet (the job's first statement does), so this is a plain JSON 409 -- the
+     `Content-Type` pre-set to SSE for the pre-registration frames is dropped first. */
+  if ('busy' in registered) {
+    res.removeHeader('Content-Type');
+    return res
+      .status(409)
+      .json({ error: busySentence(registered.busy, 'render'), code: 'book_busy' });
   }
   try {
     await registered.done;

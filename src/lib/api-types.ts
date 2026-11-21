@@ -967,7 +967,7 @@ export interface paths {
         };
         /**
          * Which long jobs are registered for the book right now
-         * @description Returns `{ kinds }`, the `BookJobKind`s (render, scoring, analysis,
+         * @description Returns `{ kinds }`, the `BookJobKind`s (render, audio-fix, scoring, analysis,
          *     design, script-review, export) currently registered for the book
          *     (#3774). Lock-free read of the in-memory busy registry; an unknown book
          *     is simply not busy (`kinds: []`, never a 404). The Generate view
@@ -1623,6 +1623,11 @@ export interface paths {
          *
          *     Gated like `/start` (#4029): an entry for a repaired bookId needs the
          *     current `X-Repair-Epoch`.
+         *
+         *     Body `outcome` (default `done`): `failed` keeps the entry as `failed` with `errorReason`.
+         *     `requeued` (#3436) flips an `in_progress` entry straight back to `queued` in one step and
+         *     writes no `failed` state, for a render the server refused 409 `book_busy` because its book is
+         *     analysing (nothing ran). A no-op for a missing or non-`in_progress` entry.
          */
         post: operations["completeQueueEntry"];
         delete?: never;
@@ -3803,7 +3808,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description 409 body of the chapter-restructure routes (merge, split, reorder, bulk exclude, rename, refresh-titles). `analysis_running`: an analysis job holds the book (or a restructure already claimed it). `book_busy` (#3774): ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book. `hints_out_of_sync` (#3791, #3837): the manuscript hints do not pair with state.json. Merge, split and reorder refuse a different chapter count or ids. For hints from a fresh parse, every restructure (merge, split, reorder, rename, refresh-titles) also refuses a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). Rename and refresh-titles do not check count or ids. Bulk exclude refuses only a prune (an empty chapter dropped, changing the count) on a parse-fallback book that does not pair, count and ids included; a pure toggle is never refused. Re-parse the book first. `error` is a curated sentence with no filesystem path. */
+        /** @description 409 body of the chapter-restructure routes (merge, split, reorder, bulk exclude, rename, refresh-titles). `analysis_running`: an analysis job holds the book (or a restructure already claimed it). `book_busy` (#3774): ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book. `hints_out_of_sync` (#3791, #3837): the manuscript hints do not pair with state.json. Merge, split and reorder refuse a different chapter count or ids. For hints from a fresh parse, every restructure (merge, split, reorder, rename, refresh-titles) also refuses a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). Rename and refresh-titles do not check count or ids. Bulk exclude refuses only a prune (an empty chapter dropped, changing the count) on a parse-fallback book that does not pair, count and ids included; a pure toggle is never refused. Re-parse the book first. `error` is a curated sentence with no filesystem path. */
         RestructureConflictError: {
             error: string;
             /** @enum {string} */
@@ -8610,7 +8615,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Snapshot is corrupt / unparseable (`{ error }`). Also `{ error, code: book_busy }` (PR #3966) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: a curated sentence naming what is running; stop it or wait for it to finish, then restore the backup. Checked first, before the snapshot is read; nothing was written. */
+            /** @description Snapshot is corrupt / unparseable (`{ error }`). Also `{ error, code: book_busy }` (PR #3966) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: a curated sentence naming what is running; stop it or wait for it to finish, then restore the backup. Checked first, before the snapshot is read; nothing was written. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9005,6 +9010,17 @@ export interface operations {
              *     This code is a 409 only; it never arrives as an SSE event. The other
              *     refusal codes above can also arrive as a terminal SSE `error` event
              *     when the conflict appears after the stream opened.
+             *     `book_busy` (#3436): the book has a RENDER job registered (generation,
+             *     a chapter re-record, or an audio-QA repair that writes — the renders that
+             *     rebuild the analysis cache), so the analysis was not started — those renders
+             *     and analysis on one book are mutually exclusive. A splice `remix` (loudness
+             *     fix) and a dry-run QA scan register as `audio-fix`, never refuse an analysis
+             *     start, and are never refused by one.
+             *     Body `{ error: <curated sentence>, code: book_busy }`. When a render
+             *     registers after the stream opened, it arrives instead as a terminal SSE
+             *     `error` event with `code: book_busy` and the sentence in `message`. A
+             *     request that joins a running analysis is never refused. Wait for the
+             *     render to finish, then try again.
              */
             409: {
                 headers: {
@@ -9014,10 +9030,10 @@ export interface operations {
                     "application/json": {
                         error: string;
                         /**
-                         * @description Present only on `hints_out_of_sync` (#3829); then `error` holds the curated sentence rather than a code.
+                         * @description Present only on `hints_out_of_sync` (#3829) and `book_busy` (#3436); then `error` holds the curated sentence rather than a code.
                          * @enum {string}
                          */
-                        code?: "hints_out_of_sync";
+                        code?: "hints_out_of_sync" | "book_busy";
                         /** @description User-facing reason (both #3435 refusals). */
                         message?: string;
                         /** @description Present on `main_analysis_running`: always true here. */
@@ -9086,7 +9102,12 @@ export interface operations {
              *     change that splits its plain text into a different number of
              *     chapters), or, at the same count, a chapter whose saved analysis
              *     sentences do not match its position; body `{ error: <curated sentence>, code }`
-             *     and nothing was written.
+             *     and nothing was written. `book_busy` (#3436): the book has a RENDER job
+             *     registered (generation, a chapter re-record or a QA repair that writes; not a
+             *     splice remix or a dry-run scan), so the run was not started (body `{ error: <curated sentence>,
+             *     code: book_busy }`; arrives as a terminal SSE `error` event with
+             *     `code: book_busy` and the sentence in `message` when the render registered
+             *     after the stream opened). Nothing was written.
              */
             409: {
                 headers: {
@@ -9103,7 +9124,7 @@ export interface operations {
                         /** @description Curated sentence: re-parse the book from its Library menu. */
                         error: string;
                         /** @enum {string} */
-                        code: "hints_out_of_sync";
+                        code: "hints_out_of_sync" | "book_busy";
                     };
                 };
             };
@@ -9148,7 +9169,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Only when `excluded` is true: a long job (render, analysis, scoring, voice design, script review or export) is registered for the book (#3774). Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written and no audio was deleted. Including a chapter (`excluded: false`) deletes no audio and is never refused for this reason. */
+            /** @description Body `{ error, code: book_busy }` is a curated sentence naming what is running; stop it or wait for it to finish. Nothing was written in either case and no audio was deleted. An exclude (`excluded: true`) is refused while ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book (#3774). An include (`excluded: false`) is refused only while an ANALYSIS job (main or subset, live or still stopping) is registered (#3436), because it rewrites the chapter hints that run reads; any other job kind still lets an include through. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9210,7 +9231,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) on a book whose manuscript hints came from a fresh parse and either the saved analysis sentences of a chapter do not match its position, or a chapter with no analysed sentences has a title that disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). A different chapter count or ids does not refuse this operation. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) on a book whose manuscript hints came from a fresh parse and either the saved analysis sentences of a chapter do not match its position, or a chapter with no analysed sentences has a title that disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). A different chapter count or ids does not refuse this operation. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9264,7 +9285,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9319,7 +9340,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9371,7 +9392,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) when the manuscript hints do not pair with state.json: a different chapter count or ids; or, for hints from a fresh parse, a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9423,7 +9444,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3837) when the manuscript hints of the book came from a fresh parse and the pass would prune an empty chapter (changing the chapter count) while the hints do not pair with state.json: a different chapter count or ids; or a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). A pure exclude/include toggle is never refused. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3837) when the manuscript hints of the book came from a fresh parse and the pass would prune an empty chapter (changing the chapter count) while the hints do not pair with state.json: a different chapter count or ids; or a chapter whose saved analysis sentences do not match its position, or a chapter with no analysed sentences whose title disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). A pure exclude/include toggle is never refused. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9468,7 +9489,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) on a book whose manuscript hints came from a fresh parse and either the saved analysis sentences of a chapter do not match its position, or a chapter with no analysed sentences has a title that disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). A different chapter count or ids does not refuse this operation. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. Also `{ error, code: book_busy }` (#3774) when ANY long job (render, audio fix, analysis, scoring, voice design, script review or export) is registered for the book: stop it or wait for it to finish, then change the chapters. Checked first, ahead of any other check or write. Also `{ error, code: hints_out_of_sync }` (#3791, #3837) on a book whose manuscript hints came from a fresh parse and either the saved analysis sentences of a chapter do not match its position, or a chapter with no analysed sentences has a title that disagrees with its position (or, where the sentence check cannot run, a title that disagrees with its position). A different chapter count or ids does not refuse this operation. The message says to re-parse the book from its Library menu, which discards its analysis, cast and audio; nothing was written or deleted. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9743,7 +9764,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        kinds: ("render" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
+                        kinds: ("render" | "audio-fix" | "scoring" | "analysis" | "design" | "script-review" | "export")[];
                     };
                 };
             };
@@ -10785,7 +10806,15 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    outcome?: "done" | "failed" | "requeued";
+                    errorReason?: string;
+                };
+            };
+        };
         responses: {
             /** @description Resulting queue snapshot */
             200: {
@@ -10979,6 +11008,25 @@ export interface operations {
                     };
                 };
             };
+            /**
+             * @description An ANALYSIS job is registered for the book (#3436), so the render was not started.
+             *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+             *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+             *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+             *     analysis's own persist. Any other job kind on the book does not refuse this.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "book_busy";
+                    };
+                };
+            };
         };
     };
     spliceChapter: {
@@ -11053,8 +11101,15 @@ export interface operations {
                 };
             };
             /**
-             * @description The book has no language set. Set the book language before
-             *     requesting a splice.
+             * @description Either the book has no language set (`{ error: language_unset }`; set it
+             *     before requesting a splice), or:
+             *     A `rerecord` splice only (a `remix` never rebuilds the analysis cache and is
+             *     never refused for this): an ANALYSIS job is registered for the book (#3436), so
+             *     the splice was not started.
+             *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+             *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+             *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+             *     analysis's own persist. Any other job kind on the book does not refuse this.
              */
             409: {
                 headers: {
@@ -11063,6 +11118,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @enum {string} */
+                        code?: "book_busy";
                     };
                 };
             };
@@ -11146,8 +11203,15 @@ export interface operations {
                 };
             };
             /**
-             * @description The book has no language set. Set the book language before
-             *     requesting audio QA repair.
+             * @description Either the book has no language set (`{ error: language_unset }`; set it
+             *     before requesting audio QA repair), or:
+             *     A repair that writes (`dryRun: false`; a dry-run scan never rebuilds the analysis
+             *     cache and is never refused for this): an ANALYSIS job is registered for the book
+             *     (#3436), so the repair was not started.
+             *     Body `{ error, code: book_busy }`; `error` is a curated sentence to show as is.
+             *     Plain JSON, sent before any SSE header. Wait for the analysis to finish, then
+             *     try again. Rendering audio rebuilds the analysis cache mid-run, which races the
+             *     analysis's own persist. Any other job kind on the book does not refuse this.
              */
             409: {
                 headers: {
@@ -11156,6 +11220,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @enum {string} */
+                        code?: "book_busy";
                     };
                 };
             };
@@ -13359,7 +13425,7 @@ export interface operations {
              *     finished book (#3711); it is not refused.
              *
              *     A refusal of a folder move (#3711) carries `{ error, code }` with
-             *     `code` one of: `book_busy` (a long job — render, analysis, voice
+             *     `code` one of: `book_busy` (a long job — render, audio fix, analysis, voice
              *     design, review or export — holds the book; stop it or wait),
              *     `book_path_taken` (the new Author/Series/Title path already holds a
              *     book), or `book_folder_in_use` (the folder is open in another
@@ -13490,7 +13556,7 @@ export interface operations {
              *     manuscript changed while it was being prepared; retry), `book_moved`
              *     (the book was moved outside the app while it was being re-parsed;
              *     an in-app rename waits for the re-parse instead; reload and retry),
-             *     `book_busy` (a long job — render, analysis, scoring, voice design,
+             *     `book_busy` (a long job — render, audio fix, analysis, scoring, voice design,
              *     script review or export — holds the book; stop it or wait for it
              *     to finish), or absent (the manuscript file is missing on disk).
              */
@@ -13567,7 +13633,7 @@ export interface operations {
              * @description Refused (nothing was written). `code` is `book_moved` (the book was
              *     moved outside the app while it was being re-parsed; an in-app
              *     rename waits for the replace instead; reload and retry), or
-             *     `book_busy` (a long job — render, analysis, scoring, voice design,
+             *     `book_busy` (a long job — render, audio fix, analysis, scoring, voice design,
              *     script review or export — holds the book; stop it or wait for it
              *     to finish).
              */

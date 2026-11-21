@@ -1864,6 +1864,7 @@ describe('AnalysingView — failed-chapter retry', () => {
   it.each([
     ['main_analysis_running', 'The analysis on this book is still stopping. Try again in a moment.'],
     ['chapters_restructuring', 'The chapters of this book are being changed. Try again in a moment.'],
+    ['book_busy', 'This book is busy (rendering audio). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.'],
   ])(
     'a 409 %s keeps the row, shows the server message on it and restores the prior snapshot',
     async (code, message) => {
@@ -1971,6 +1972,35 @@ describe('AnalysingView — failed-chapter retry', () => {
     });
     expect(await screen.findByTestId('analysis-needs-action-line')).toHaveTextContent(message);
     expect(store.getState().analysis.activeStream).toBeNull();
+    expect(screen.getByRole('button', { name: /(start|resume) analysis/i })).not.toBeDisabled();
+  });
+
+  it('#3436: a main POST refused with book_busy (the book is rendering) is a quiet try-again: no halted snapshot, no Analysis failed', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    const message = 'This book is busy (rendering audio). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.';
+    analyseManuscriptRejection = new AnalysisError(message, 'book_busy');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    expect(await screen.findByTestId('analysis-needs-action-line')).toHaveTextContent(message);
+    expect(store.getState().analysis.activeStream).toBeNull();
+    expect(screen.queryByText(/^Analysis failed$/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /(start|resume) analysis/i })).not.toBeDisabled();
   });
 

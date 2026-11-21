@@ -3247,7 +3247,10 @@ function analysisRefusalFromBody(status: number, body: string, codes: readonly s
   }
   const { error, message, code } = (parsed ?? {}) as { error?: unknown; message?: unknown; code?: unknown };
   /* #3829 - the restructure routes' shape: the curated sentence is in `error`, the code in `code`. */
-  if (code === 'hints_out_of_sync' && typeof error === 'string' && error) return new AnalysisError(error, code);
+  /* #3436 - `book_busy` (the book is rendering) carries the same shape. */
+  if ((code === 'hints_out_of_sync' || code === 'book_busy') && typeof error === 'string' && error) {
+    return new AnalysisError(error, code);
+  }
   if (typeof error !== 'string' || !codes.includes(error)) return null;
   const refusal = new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
   if (typeof (parsed as { draining?: unknown }).draining === 'boolean') refusal.draining = (parsed as { draining: boolean }).draining;
@@ -6415,6 +6418,8 @@ function realStreamGeneration({
      reason to report. Left unset for the "no idle after repeated reconnects"
      exhaustion exit (shape D), which gets its own stable default there. */
   let failureReason: string | undefined;
+  /* #3436 -- set with `failureReason` when the start was refused with the server's 409 `book_busy`. */
+  let failureCode: 'book-busy' | undefined;
   /* Track whether the controller has aborted so the inner catch can
      distinguish "user clicked stop" (AbortError) from "fetch died mid-stream
      and we want to reconnect". */
@@ -6442,7 +6447,9 @@ function realStreamGeneration({
         /* Recorded, not emitted here — the terminal-handling block after the
            reconnect loop (below) delivers the chapter_failed + idle pair once,
            whichever shape produced it. */
-        failureReason = `Generation stream failed (${res.status}): ${detail || res.statusText}`;
+        const busy = bookBusySentence(res.status, detail);
+        failureReason = busy ?? `Generation stream failed (${res.status}): ${detail || res.statusText}`;
+        failureCode = busy != null ? 'book-busy' : undefined;
         return { shouldReconnect: false };
       }
 
@@ -6525,6 +6532,7 @@ function realStreamGeneration({
         type: 'chapter_failed',
         ...(chapterIds?.length === 1 ? { chapterId: chapterIds[0] } : {}),
         errorReason: failureReason ?? 'Generation stream ended without completing.',
+        ...(failureCode ? { errorCode: failureCode } : {}),
       });
       onTick({ type: 'idle' });
     }
@@ -6594,7 +6602,8 @@ async function realStreamSplice({
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Splice failed (${res.status}): ${body || res.statusText}`,
+        errorReason:
+          bookBusySentence(res.status, body) ?? `Splice failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
@@ -6672,7 +6681,9 @@ async function realStreamQaRepair({
       onTick({
         type: 'chapter_failed',
         chapterId,
-        errorReason: `Audio repair failed (${res.status}): ${body || res.statusText}`,
+        errorReason:
+          bookBusySentence(res.status, body) ??
+          `Audio repair failed (${res.status}): ${body || res.statusText}`,
       });
       return;
     }
@@ -6706,6 +6717,19 @@ async function realStreamQaRepair({
       chapterId,
       errorReason: (e as Error).message ?? 'Audio repair failed.',
     });
+  }
+}
+
+/* #3436 — generation / splice / audio-QA repair answer 409 `book_busy` (a JSON body whose
+   `error` is the sentence to show) while an analysis is live for the book. Returns that
+   sentence, or null for any other failure so the caller keeps its status-prefixed reason. */
+function bookBusySentence(status: number, body: string): string | null {
+  if (status !== 409) return null;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; code?: unknown };
+    return parsed.code === 'book_busy' && typeof parsed.error === 'string' ? parsed.error : null;
+  } catch {
+    return null;
   }
 }
 
