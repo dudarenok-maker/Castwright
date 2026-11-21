@@ -19,11 +19,13 @@ module.exports = {
     //    the LAN-HTTPS default (phone/tablet listening + pairing) can auto-provision
     //    certs in step 7 — Pinokio runs `node dist/index.js` directly and never goes
     //    through start-app-prod.mjs's boot auto-provision, so the install must do it.
-    //    `nodejs=24` pins every later `node`/`npm` step (this file + update.js) to the
+    //    `"nodejs>=24.16.0,<25"` pins every later `node`/`npm` step (this file + update.js) to the
     //    Node major this repo actually tests on (.nvmrc, every CI workflow), instead of
     //    whatever unpinned/unverifiable Node Pinokio's own kernel happens to bundle —
-    //    which could sit below the `>=22.22.0` engines floor react-router 8 raised in
-    //    #1859. The conda env's Node shadows Pinokio's bundled one on PATH for every
+    //    which could sit below the `>=24.16.0` engines floor. That floor excludes the
+    //    Node releases carrying the Windows loopback-connect crash (#4443, 0xC0000409);
+    //    a bare `nodejs=24` would let conda resolve those affected 24.3-24.14 builds.
+    //    The conda env's Node shadows Pinokio's bundled one on PATH for every
     //    step below (conda envs prepend to PATH). See docs/testing/onbox-acceptance-register.md
     //    (E1) for what's still owed on-box.
     //
@@ -40,7 +42,7 @@ module.exports = {
       params: {
         path: APP_ROOT,
         conda: CONDA,
-        message: 'conda install -y -c conda-forge "ffmpeg>=6" mkcert nodejs=24',
+        message: 'conda install -y -c conda-forge "ffmpeg>=6" mkcert "nodejs>=24.16.0,<25"',
       },
     },
     // 2. Fetch + resolve + checkout the latest published release (detached HEAD),

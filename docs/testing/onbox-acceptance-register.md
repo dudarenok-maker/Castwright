@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 17 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 18 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**90 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**91 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-21 (#4533), 89 → 90.** Row **A133** (the capacity-denied eviction lever keeps the Qwen models another live voice design or variant mint is using: a Coqui preview denied capacity during a mint leaves the 1.7B, and during a design leaves the 0.6B and VoiceDesign) added. Group A 53 → 54. `next-id` bumped A133 → A134 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-21 (#4443, PR #4535), 90 → 91.** Row **E117** (the Windows Node loopback-crash guard: the refusal on an affected Node, the Pinokio "run Update again" message, two-Update convergence, and the in-app upgrade's held-back card plus `logs/upgrade-restart.log`) added. Group E 17 → 18. `next-id` bumped E117 → E118 in the same change. Row **E1** amended: the Pinokio pin is now `nodejs>=24.16.0,<25` and the expected Node after the second Update is 24.16.0 or newer below 25. Row is owed; not run here.
+>
+> **Previous change: 2026-11-21 (#4533), 89 → 90.** Row **A133** (the capacity-denied eviction lever keeps the Qwen models another live voice design or variant mint is using: a Coqui preview denied capacity during a mint leaves the 1.7B, and during a design leaves the 0.6B and VoiceDesign) added. Group A 53 → 54. `next-id` bumped A133 → A134 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-20 (#4445), 88 → 89.** Row **A132** (the generation path's Qwen tier reconciles skip their eviction while other GPU work is active: a repair on a Quality book keeps its 1.7B while another book's render finishes a chapter) added. Group A 52 → 53. `next-id` bumped A132 → A133 in the same change. Row is owed; not run here.
 >
@@ -7380,7 +7382,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E117 -->
+<!-- next-id: E118 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7404,7 +7406,9 @@ sidecar**, and **confirming the pinned Node is the one actually used**.
 > **Escalated 2026-07-27 by [#1859](https://github.com/dudarenok-maker/Castwright/issues/1859);
 > the pin landed in a follow-up chore.** The Node question used to be "which Node does
 > Pinokio's bundled kernel ship, and is it ≥ 22.22" — that's now moot: `install.js`
-> step 1 conda-installs `nodejs=24` (matching `.nvmrc`/CI), and `update.js` re-asserts
+> step 1 conda-installs `nodejs>=24.16.0,<25` (matching `.nvmrc`/CI; it was `nodejs=24`
+> until plan 294 raised the floor past the Windows loopback-crash builds, and the refusal
+> that floor backs is row E117), and `update.js` re-asserts
 > the same pin so a pre-existing install picks it up on its next Update rather than
 > staying on whatever Node it started with. `pinokio-scripts/lib/node-pin.test.js`
 > pins both the pin itself and that it satisfies `package.json`'s `engines.node` floor
@@ -7413,7 +7417,7 @@ sidecar**, and **confirming the pinned Node is the one actually used**.
 >
 > **What to observe, concretely:** on a machine with Pinokio installed, run a fresh
 > Install, then from a `shell.run` step (or the Pinokio terminal, once the conda env is
-> active) run `node --version` and confirm it reports **24.x**, not whatever Pinokio's
+> active) run `node --version` and confirm it reports **24.16.0 or newer, below 25**, not whatever Pinokio's
 > kernel bundles — conda envs prepend to PATH, so the pinned Node should shadow the
 > bundled one, but that shadowing is unverified outside this repo's reasoning. Then
 > confirm Install → Start still completes end to end (this pin adds a package to the
@@ -7429,7 +7433,7 @@ sidecar**, and **confirming the pinned Node is the one actually used**.
 >
 > Concretely: take an install from a pre-pin release, Update once, and check
 > `node --version` — reporting the **bundled** version here is the correct result, not a
-> failure. Update a second time and it should report **24.x**. A tester who sees the
+> failure. Update a second time and it should report **24.16.0 or newer, below 25**. A tester who sees the
 > first result and files "the pin doesn't work" has found the documented behaviour, not
 > a defect. What genuinely wants confirming is that the second Update converges, and
 > that `node_modules` still works across that Node-major swap (native-module ABI is the
@@ -8134,6 +8138,17 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 >   - **The loser's queue, backups and exports.**
 >   - **The unlistable directory** (the sweep logging `a directory is unlistable` and changing nothing).
 >   - **The pre-upgrade tab (a browser item) and "nothing a client does ends the gate early"** (see the gate-never-expires bullet above).
+
+### E117 · Windows Node loopback-crash guard: the refusal, the Pinokio "run Update again" message, two-Update convergence and `logs/node-refused.log` ([#4443](https://github.com/dudarenok-maker/Castwright/issues/4443), PR [#4535](https://github.com/dudarenok-maker/Castwright/pull/4535)) · **a Windows box; no GPU needed**
+
+The automated tests pin the range list, the message text and the log write against injected versions and paths. They cannot start a real affected Node, see Pinokio's conda environment shadow PATH, or see the in-app upgrade's hidden restart. Plan [`294-node-loopback-crash-guard.md`](../features/294-node-loopback-crash-guard.md) holds the affected-release table. The Pinokio pin itself is E1's job; this row is the refusal.
+
+- **The refusal on an affected Node.** On Windows with an affected Node on PATH (24.15.0 is the plan's example; nodejs.org keeps the older installers), run `npm run start:prod` (the launcher refuses first, on the console) and `npm start` (the server's own guard refuses; its message lands in `logs/server.err.log`). Each exits non-zero and names the running Node and a Node v24.16.0 or newer to install from nodejs.org. Neither dies with the `0xC0000409` crash. Repeat on 24.16.0 or newer: it starts as before.
+- **The conda-environment message.** On a Pinokio install whose conda env holds an affected Node, press Start. The message says the Node comes from Pinokio's environment and tells you to run Update in Pinokio again. It does not point at nodejs.org.
+- **Two-Update convergence.** From a pre-pin release on an affected conda Node, run Update once and then Start: expect the refusal above (the first Update runs the old `update.js`; see E1). Run Update a second time: `node --version` in a Pinokio shell reports 24.16.0 or newer below 25, and Start now works. Record the Node version after each Update.
+- **A held-back in-app upgrade, and where a refusal is logged.** From an install on an affected Node, use "Upgrade & restart" in the app to move to a release carrying the guard. The new release's restarter checks your Node before it launches, so the app must come back on the PREVIOUS release rather than staying on the "app is restarting" page: `.current-version` names the previous release again, and the app's upgrade card shows "Upgrade to vX was held back and you are still running vY" with the Node to install. The reason is shown only in the browser tab that was left on the "app is restarting" screen, so keep the upgrading tab open and read it there; a tab you reload (or a new one) just shows the previous version, with no reason. No `node-refused.log` is expected on this path (the restarter intercepts first; a direct `npm run start:prod` on the new release still writes `logs/node-refused.log` in the install root's `logs` folder, or under `APP_LOG_DIR` when set). Then install Node v24.16.0 or newer and upgrade again: it switches and starts the new release. To walk the second attempt, with a further release available while the held-back one is still on disk, press Upgrade again on the same Node: it must roll back to the original release, never to the held-back one. Prove the file separately with a manual `npm run start:prod` on the affected Node, including once with `logs/` absent.
+
+*Needs:* a Windows box with an affected Node (and, for the second and third bullets, Pinokio with a pre-pin install); no GPU. *Criteria:* the bullets above; plan [`294-node-loopback-crash-guard.md`](../features/294-node-loopback-crash-guard.md), "Manual acceptance walkthrough". Clears when each bullet is recorded.
 
 ## Group G — GitHub Actions itself
 

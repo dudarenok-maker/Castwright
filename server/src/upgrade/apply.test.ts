@@ -4,9 +4,11 @@
    - a pre-flip failure does NOT flip the pointer and clears the partial dir. */
 
 import { describe, it, expect, vi } from 'vitest';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FS_FAILURE_REQUEST_ERROR, FS_PERMANENT_FAILURE_REQUEST_ERROR } from '../workspace/file-lock.js';
-import { applyUpgrade, type ApplySteps, type ApplyContext } from './apply.js';
+import { applyUpgrade, createApplySteps, type ApplySteps, type ApplyContext } from './apply.js';
 
 function ctx(over: Partial<ApplyContext> = {}): ApplyContext {
   return {
@@ -246,5 +248,21 @@ describe('applyUpgrade', () => {
       expect(res.errorLan).toBe(res.error);
       expect(res.errorLan).toMatch(/reinstall/i);
     });
+  });
+});
+
+describe('flipPointer (real, #4443 P5-1)', () => {
+  it('replaces a read-only .current-version without deleting it first', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'castwright-flip-'));
+    try {
+      const pointer = join(root, '.current-version');
+      writeFileSync(pointer, '1.15.0');
+      chmodSync(pointer, 0o444); // EPERM on win32 for a bare rename over it
+      const steps = createApplySteps({ venvDir: join(root, 'venv'), log: () => {} });
+      await steps.flipPointer(root, '1.16.0');
+      expect(readFileSync(pointer, 'utf8')).toBe('1.16.0');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

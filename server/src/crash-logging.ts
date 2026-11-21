@@ -262,7 +262,7 @@ const REPORT_EXCLUSION_FLAGS = ['--report-exclude-env', '--report-exclude-networ
  *  (the machine name) and the socket addresses in `libuv[]` are still in it.
  *  Never throws. */
 export function enableFatalErrorReports(dir: string, hooks: FatalErrorReportHooks = {}): boolean {
-  // `excludeNetwork` exists in Node >= 22.0 (engines is >= 22.22.0) but is missing from @types/node.
+  // `excludeNetwork` exists in Node >= 22.0 (engines is >= 24.16.0) but is missing from @types/node.
   const report = hooks.report ?? (process.report as unknown as NonNullable<FatalErrorReportHooks['report']>);
   const mkdir = hooks.mkdir ?? ((d: string) => void fs.mkdirSync(d, { recursive: true }));
   const log = hooks.log ?? ((msg: string) => console.log(msg));
