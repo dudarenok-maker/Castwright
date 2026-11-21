@@ -33,11 +33,12 @@ import { BIN_COUNT } from '../audio/compute-peaks.js';
 
 /* Pass-through spy on node:fs/promises.writeFile so a test can inject a
    part-way write failure (#4218); every other test sees the real function. */
-const fsMock = vi.hoisted(() => ({ writeFile: vi.fn() }));
+const fsMock = vi.hoisted(() => ({ writeFile: vi.fn(), readFile: vi.fn() }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   fsMock.writeFile.mockImplementation(actual.writeFile as never);
-  return { ...actual, writeFile: fsMock.writeFile };
+  fsMock.readFile.mockImplementation(actual.readFile as never);
+  return { ...actual, writeFile: fsMock.writeFile, readFile: fsMock.readFile };
 });
 
 /* Make the next `.tmp-*` write create a partial file and then fail with ENOSPC;
@@ -377,6 +378,25 @@ describe('fixLameEncoderDelay (#4573)', () => {
     expect(fixLameEncoderDelay(HEAD_8_1_XING)).toBeNull();
     expect(fixLameEncoderDelay(HEAD_SHINE)).toBeNull();
     expect(fixLameEncoderDelay(Buffer.from('RIFF....WAVEfmt ', 'latin1'))).toBeNull();
+  });
+});
+
+describeIfFfmpeg('encodePcmToAudio fixes the tag on the encode path (#4573)', () => {
+  /* Version-independent: the readback of the temp file is swapped for the
+     committed ffmpeg 9.1 bytes (delay 47), so deleting the call site in
+     encodePcmToAudio fails this on an 8.x ffmpeg too. */
+  it('returns delay 576 and a valid tag CRC when the encoder wrote 9.1\'s delay 47', async () => {
+    const wrong = readFileSync(toneFixture(24));
+    expect(delayAt(wrong, ENC_24K_MONO)).toBe(47);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    fsMock.readFile.mockImplementationOnce((async (p: string, ...rest: unknown[]) => {
+      await (actual.readFile as (...a: unknown[]) => Promise<Buffer>)(p, ...rest);
+      return Buffer.from(wrong);
+    }) as never);
+    const out = await encodePcmToAudio(sinePcm(24_000, 0.5), 24_000, { quality: 2 });
+    expect(delayAt(out, ENC_24K_MONO)).toBe(576);
+    expect(mp3StartPadShortfall(out)).toBe(0);
+    expect(storedCrcAt(out, ENC_24K_MONO)).toBe(tagCrc(out, 45, ENC_24K_MONO));
   });
 });
 
