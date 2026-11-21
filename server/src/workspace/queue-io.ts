@@ -43,7 +43,9 @@ export interface QueueEntry {
   scope: QueueScope;
   characterId?: string;
   /* Optional per-entry TTS model override (e.g. a regenerate requested at the
-     Qwen 1.7B quality tier). Absent → the dispatcher uses the session default
+     Qwen 1.7B quality tier). The frontend stamps entries at enqueue once the
+     session model is trustworthy; an absent `modelKey` (legacy, boot window, an
+     older server, or a non-UI caller) still dispatches at the session model
      `ui.ttsModelKey`. Mirrored in openapi.yaml's QueueEntry. */
   modelKey?: TtsModelKey;
   addedAt: string; // ISO 8601
@@ -100,7 +102,9 @@ export interface EnqueueInput {
   chapterId: number;
   scope: QueueScope;
   characterId?: string;
-  /* Optional per-entry TTS model override (regenerate at a chosen quality tier). */
+  /* Optional per-entry TTS model override (regenerate at a chosen quality tier).
+     Stamped by the frontend at enqueue once the session model is trustworthy;
+     absent (legacy, boot window, older server, non-UI caller) → session model. */
   modelKey?: TtsModelKey;
   addedAt?: string; // optional — defaults to now()
   /* Plan 108 Wave 3 — engine set stamped by the route from the chapter's

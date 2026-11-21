@@ -27,11 +27,15 @@
    fail-open would be evicting a model out from under a live render. Do NOT
    "simplify" the unregistered default to `false`.
 
-   KNOWN RESIDUAL WINDOW (#1839 finding 2, left open on purpose — see
-   gpu/evict-idle-tts.ts's file header for the full writeup). This accessor
+   KNOWN RESIDUAL WINDOW (#1839 finding 2, NARROWED by #1393 but not closed —
+   see gpu/evict-idle-tts.ts's file header for the full writeup). This accessor
    only reflects `routes/generation.ts`'s `registerJob` — a render that has
-   started but not yet reached `registerJob` (it calls its own run-start
-   `reconcileResidentQwenTiers` well before that point) is invisible here, so
+   started but not yet reached `registerJob` is invisible here (since #1393 it
+   runs its own run-start `reconcileResidentQwenTiers` AFTER `registerJob`, so
+   that reconcile's round trip is no longer part of the window, but everything
+   the POST awaits before `registerJob` still is: the cast read, voice
+   hydration, the edits/analysis loads, mkdir, the disk guard and the queue and
+   cast-history reads), so
    `isAnyGenerationActive()` can report `false` for a render that is, in
    fact, mid-startup. A blocked op's `evictIdleQwenBase` racing that window
    is a narrow gap. Its worst case is no longer just a lazy cold-reload on the

@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 54 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 55 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**91 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-21 (#4443, PR #4535), 90 → 91.** Row **E117** (the Windows Node loopback-crash guard: the refusal on an affected Node, the Pinokio "run Update again" message, two-Update convergence, and the in-app upgrade's held-back card plus `logs/upgrade-restart.log`) added. Group E 17 → 18. `next-id` bumped E117 → E118 in the same change. Row **E1** amended: the Pinokio pin is now `nodejs>=24.16.0,<25` and the expected Node after the second Update is 24.16.0 or newer below 25. Row is owed; not run here.
+> **Last change: 2026-11-21 (#1393), 91 → 92.** Row **A134** (the generation path keeps only the Qwen tiers a book's unfinished chapters will use: a pure-1.7B run drops a silent 0.6B character's tier, a mixed-tier book unloads neither early, and the missing-artifact co-residency outcome is recorded) added. Group A 54 → 55. `next-id` bumped A134 → A135 in the same change (relative to `main`, whose `next-id` for group A is A134 after #4533 and #4535). Row is owed; not run here.
+>
+> **Previous change: 2026-11-21 (#4443, PR #4535), 90 → 91.** Row **E117** (the Windows Node loopback-crash guard: the refusal on an affected Node, the Pinokio "run Update again" message, two-Update convergence, and the in-app upgrade's held-back card plus `logs/upgrade-restart.log`) added. Group E 17 → 18. `next-id` bumped E117 → E118 in the same change. Row **E1** amended: the Pinokio pin is now `nodejs>=24.16.0,<25` and the expected Node after the second Update is 24.16.0 or newer below 25. Row is owed; not run here.
 >
 > **Previous change: 2026-11-21 (#4533), 89 → 90.** Row **A133** (the capacity-denied eviction lever keeps the Qwen models another live voice design or variant mint is using: a Coqui preview denied capacity during a mint leaves the 1.7B, and during a design leaves the 0.6B and VoiceDesign) added. Group A 53 → 54. `next-id` bumped A133 → A134 in the same change. Row is owed; not run here.
 >
@@ -1966,7 +1968,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A134 -->
+<!-- next-id: A135 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6752,6 +6754,16 @@ The automated tests prove the skip decision with fakes: the post-audition reconc
 - **Record the co-residency outcome.** Record whether the 0.6B and the 1.7B were resident together (`GET /health`: `qwen_loaded` and `qwen_base17_loaded`) and whether anything ran out of memory. Record the outcome either way; an OOM alone does not fail the row.
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and two books (Quality and Standard). *Criteria:* #4445 and this row. Clears when each bullet is recorded with the log line it produced.
+
+### A134 · The generation path keeps only the Qwen tiers a book's unfinished chapters will use ([#1393](https://github.com/dudarenok-maker/Castwright/issues/1393)) · **single 8 GB card, real Qwen sidecar with the 0.6B and 1.7B-Base installed**
+
+The automated tests prove the keep set with fakes: `chapterQwenTierNeeds` is pinned to the synth calls the real `synthesiseChapter` makes, the keep is the speakers of the book's unfinished chapters (fallback-aware) unioned with its pending queue entries and its live same-book jobs, the run-start reconcile runs after the job registers and reads the keep after the sidecar health probe, and the post-score reconcile recomputes the book's needs when it runs. They cannot show what the real sidecar does with the 0.6B and the 1.7B on a real 8 GB card. The sidecar's own log is `logs/tts.err.log` (stderr, the loads); `logs/tts.log` holds only uvicorn's access lines, which carry no request body and cannot say which tier an `/unload` named, so do not judge this row from it. The server log is `logs/server.log`: look for `[generation] VRAM reconcile: evicting unused Qwen tier(s) [...]` and the run-start skip line `[generation] run-start tier reconcile skipped: other GPU work is active`. Plan 293 section 5.8 is the criteria; no separate run sheet is needed (A132 has none).
+
+- **A run whose speakers are all Quality drops a silent Standard character's tier.** Set the session model to **Standard (0.6B)**, so an unpinned character rides the 0.6B. Pin every character who speaks in the chapters to render to Quality (1.7B Base), **the narrator included** (the title beat always speaks it), and leave one silent character unpinned (a cast member who speaks in none of those chapters). Under a Quality session model this row proves nothing: tiers only elevate, so no character resolves to the 0.6B and main's full-cast keep is already 1.7B only. Start with the 0.6B resident (render one Standard line first), then start the run. Observe on this PR: `logs/server.log` has `[generation] VRAM reconcile: evicting unused Qwen tier(s) [0.6B]` at run start and no 1.7B eviction; `GET /health` then reports `qwen_loaded: false` with `qwen_base17_loaded: true`; and the sidecar was told to unload the 0.6B only. On main the silent unpinned character pins the 0.6B, so there is no `evicting unused` line and `qwen_loaded` stays `true`: a run that matches the main reading fails this bullet.
+- **A mixed-tier book unloads neither tier until its last user, then frees the unused one.** Use a book with a chapter order where one tier has a last user before the final chapter: chapters 1 and 2 are spoken by a Quality-pinned character plus a Standard narrator (so both tiers are kept), and chapter 3 is spoken only by Standard characters, with no Quality-pinned speaker. Set the session model to **Standard (0.6B)** (a "Standard narrator" and "Standard characters" exist only under it; under Quality every character renders on the 1.7B, chapter 3 needs it and nothing is evicted). Use **one generation worker with render-integrity QA off** (both are the shipped defaults, but a saved override or an exported env var counts as set, so check the box). The worker count resolves `GEN_WORKERS`, then the `tts.gen.workers` override, then the legacy `generationWorkers` user setting; the knob you see is **Generation workers** (Admin → Model Manager → Server configuration, and the account model settings), which applies on a server restart, so set it to 1 and restart. QA is **Render-integrity QA (voice match)** there (`qa.speaker.enabled` / `SEG_SPK_ENABLED`): set it off. With 2+ workers chapter 3's POST overlaps chapter 2, whose job keeps the 1.7B, and with QA on a long chapter-1 score pass can make the single-flight scorer drop later triggers and chapter 3's POST takes the full-cast fall-back, so no eviction line appears either way; with QA off nothing reconciles after chapter 2 ends. Render it through the queue, so each chapter is its own POST (a single POST of all three keeps both tiers throughout and cannot discriminate). Observe: no `evicting unused` line and no `/unload` at chapters 1 and 2; at chapter 3's POST `logs/server.log` has `[generation] VRAM reconcile: evicting unused Qwen tier(s) [1.7B]` and `GET /health` then reports `qwen_base17_loaded: false` with `qwen_loaded: true`. On main no chapter's POST unloads either tier on this book (the full-cast keep holds both), so the 1.7B stays resident: a run with no eviction line at chapter 3 fails this bullet.
+- **Record, do not pass or fail: a missing voice artifact on a book whose keep has no 0.6B.** On a book whose keep has `keep06` false, remove one speaker's voice artifact and render a chapter. Record `qwen_loaded` and `qwen_base17_loaded` from `GET /health` after the run-start reconcile, during the chapter, and after the next chapter's POST, and whether anything ran out of memory. The expected reading is both true during the chapter (plan 293 section 3.5); the row records what was seen. An out-of-memory alone does not fail it.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights (0.6B and 1.7B-Base installed), and books with a Quality-only, a mixed and a Standard cast. *Criteria:* plan 293 section 5.8 and this row. Clears when each bullet is recorded with the log line it produced.
 
 ### A133 · The eviction lever keeps the Qwen models another live design or mint is using ([#4533](https://github.com/dudarenok-maker/Castwright/issues/4533)) · **single 8 GB card, real Qwen sidecar with the 0.6B and 1.7B-Base installed**
 

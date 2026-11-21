@@ -28,6 +28,18 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+/* #4560 — S1-S4 use a REAL `.queue.json`: point the workspace at a temp dir BEFORE any module
+   (paths.ts reads WORKSPACE_DIR at import) loads. */
+vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const os = require('node:os') as typeof import('node:os');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('node:path') as typeof import('node:path');
+  process.env.WORKSPACE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'spk-4560-'));
+});
+
 const leaseDirs = vi.hoisted(
   () =>
     new Map<string, string>([
@@ -50,6 +62,17 @@ const leaseDirs = vi.hoisted(
       ['skip-f', '/skip-f'],
       ['stale-keep', '/stale-keep'],
       ['stale-keep-ctl', '/stale-keep-ctl'],
+      ['recon-s1', '/recon-s1'],
+      ['recon-s2', '/recon-s2'],
+      ['recon-s3', '/recon-s3'],
+      ['recon-s4', '/recon-s4'],
+      ['recon-s5', '/recon-s5'],
+      ['recon-s6', '/recon-s6'],
+      ['recon-s7', '/recon-s7'],
+      ['recon-s8', '/recon-s8'],
+      ['recon-s9', '/recon-s9'],
+      ['recon-s10', '/recon-s10'],
+      ['recon-s11', '/recon-s11'],
     ]),
 );
 vi.mock('../workspace/book-jobs.js', async () => {
@@ -87,7 +110,17 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { writeAttempted } from '../audio/render-integrity/verdicts-io.js';
 import { reconcileResidentQwenTiers } from '../tts/ensure-sidecar-loaded.js';
-import { afterChapterFinalized, triggerScoring, __awaitScoringSettled, __registerFakeJobForTest } from './generation.js';
+import {
+  afterChapterFinalized,
+  triggerScoring,
+  __awaitScoringSettled,
+  __registerFakeJobForTest,
+  makePostScoreKeepRecompute,
+} from './generation.js';
+import { writeQueueFile } from '../workspace/queue-migrate.js';
+import { queueJsonPath } from '../workspace/paths.js';
+import type { QueueEntry } from '../workspace/queue-io.js';
+import { chr, sent, T06, T17 } from '../tts/qwen-tier-needs.fixtures.js';
 import * as cfg from '../config/resolver.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { setInFlightDesignCounter, setInFlightMintCounter } from '../gpu/active-generation-gate.js';
@@ -381,5 +414,243 @@ describe('afterChapterFinalized — forwards the run model key to scoring (#3524
     await triggerScoring({ bookId: 'b-resume', bookDir: '/b-resume', chapters: [CH1], justFinalizedSlugs: [] });
     await vi.waitFor(() => expect(scoreBook).toHaveBeenCalledTimes(1));
     expect(vi.mocked(scoreBook).mock.calls[0][3]?.runModelKey).toBeUndefined();
+  });
+});
+
+/* #1393 / #4560 (plan 293 §2.7, S1-S5) — the post-score reconcile re-reads the book's needs when
+   it runs: a fresh `.queue.json` read (the finished job's own entry left out) unioned, at the moment the
+   keep function is called, with this book's live non-aborted jobs' `tierNeeds`. The reconcile is
+   mocked, so the keep function it was handed is called here to read the resolved keep. */
+describe('post-score reconcile recomputes its keep when it runs (#4560)', () => {
+  type Keep = { keep06: boolean; keep17: boolean };
+  const BOTH: Keep = { keep06: true, keep17: true };
+  const entry = (
+    bookId: string,
+    chapterId: number,
+    status: QueueEntry['status'],
+    modelKey?: QueueEntry['modelKey'],
+  ): QueueEntry => ({
+    id: `${bookId}-${chapterId}`,
+    bookId,
+    chapterId,
+    scope: 'this',
+    addedAt: '2026-11-21T00:00:00.000Z',
+    status,
+    order: chapterId,
+    ...(modelKey ? { modelKey } : {}),
+  });
+  const writeQueue = (entries: QueueEntry[]) =>
+    writeQueueFile(queueJsonPath(), { entries, paused: false });
+  /* Request key 0.6B; the narrator (title beat, always spoken) is raised to the 1.7B, `wren` too;
+     `pip` rides the 0.6B; `ghost` is a 0.6B cast member who speaks nowhere. */
+  const cast = [
+    chr('narrator', { ttsModelKey: T17 }),
+    chr('wren', { ttsModelKey: T17 }),
+    chr('pip'),
+    chr('ghost'),
+  ];
+
+  async function postScoreKeep(
+    bookId: string,
+    o: {
+      queue: QueueEntry[];
+      analysis: Record<number, ReturnType<typeof sent>[]>;
+      fullCastKeep?: Keep;
+      captured?: Keep;
+      /** The finished job's own queue entry id (null: chapter + status fallback). */
+      finishedQueueEntryId?: string | null;
+      /** Runs while `scoreBook` is held open (a chapter queued, a sibling registered). */
+      during?: () => Promise<void> | void;
+      /** Runs inside the reconcile call, after the busy check and before the keep function is read. */
+      beforeResolve?: () => void;
+    },
+  ): Promise<Keep | null> {
+    vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    vi.mocked(reconcileResidentQwenTiers).mockClear();
+    await writeQueue(o.queue);
+    let release!: (v: { usedQwenTiers: Keep; mismatchCount: number }) => void;
+    vi.mocked(scoreBook).mockImplementationOnce(
+      () => new Promise((r) => { release = r; }),
+    );
+    const captured = o.captured ?? { keep06: false, keep17: true };
+    /* Resolve the keep INSIDE the reconcile call, as production does (right after /health, while
+       this book's own score pass is still registered), not after the pass has settled. */
+    let resolved: Keep | null | undefined;
+    vi.mocked(reconcileResidentQwenTiers).mockImplementationOnce(async (arg) => {
+      o.beforeResolve?.();
+      resolved = typeof arg === 'function' ? arg() : arg;
+      return true;
+    });
+    await afterChapterFinalized({
+      bookId,
+      bookDir: `/${bookId}`,
+      chapters: [CH1],
+      justFinalized: CH1,
+      keep: captured,
+      fullCastKeep: o.fullCastKeep ?? BOTH,
+      recomputeKeep: makePostScoreKeepRecompute({
+        bookId,
+        finishedChapterId: CH1.id,
+        finishedQueueEntryId: o.finishedQueueEntryId ?? null,
+        analysisChapters: o.analysis,
+        cast,
+        defaultEngine: 'qwen',
+        requestQwenModelKey: T06,
+        qwenUnavailable: false,
+        fullCastKeep: o.fullCastKeep ?? BOTH,
+      }),
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await o.during?.();
+    release({ usedQwenTiers: NO_QWEN, mismatchCount: 0 });
+    await __awaitScoringSettled(bookId);
+    expect(reconcileResidentQwenTiers).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reconcileResidentQwenTiers).mock.calls[0][0]).toBeTypeOf('function');
+    return resolved as Keep | null;
+  }
+
+  it('S1: a same-book chapter queued while the pass ran is kept (not the POST-time capture)', async () => {
+    const bookId = 'recon-s1';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')], 2: [sent('pip')] },
+      during: () => writeQueue([entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')]),
+    });
+    expect(resolved).toEqual(BOTH);
+  });
+
+  it('S2: a same-book job registered with declared tierNeeds is unioned in at call time', async () => {
+    const bookId = 'recon-s2';
+    let cleanup: (() => void) | undefined;
+    try {
+      const resolved = await postScoreKeep(bookId, {
+        queue: [entry(bookId, 1, 'in_progress')],
+        analysis: { 1: [sent('wren')] },
+        during: () => {
+          cleanup = __registerFakeJobForTest(bookId, [], false, BOTH);
+        },
+      });
+      expect(resolved).toEqual(BOTH);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  it('S3: a strict subset — the silent 0.6B cast member is NOT kept; only the 1.7B speaker remains', async () => {
+    const bookId = 'recon-s3';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')],
+      analysis: { 1: [sent('wren')], 2: [sent('wren')] },
+      fullCastKeep: BOTH,
+    });
+    expect(resolved).toEqual({ keep06: false, keep17: true });
+  });
+
+  it('S4: the just-finished chapter (still in_progress in the file) is excluded from the needs', async () => {
+    const bookId = 'recon-s4';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')],
+      analysis: { 1: [sent('pip')], 2: [sent('wren')] },
+    });
+    expect(resolved).toEqual({ keep06: false, keep17: true });
+  });
+
+  /* Owner decision on #1393 (2026-11-22): after the book's LAST chapter the recomputed union is
+     empty; the post-score reconcile then falls back to the keep computed at this run's start
+     (`ctx.keep`) instead of skipping, so a 0.6B only the audition pulled is still evicted. */
+  it('S5: the last chapter (nothing pending) falls back to the run-start keep: the audition-only 0.6B is evicted', async () => {
+    const bookId = 'recon-s5';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')] },
+      captured: { keep06: false, keep17: true },
+      fullCastKeep: BOTH,
+    });
+    expect(resolved).toEqual({ keep06: false, keep17: true });
+  });
+
+  it('S9: a re-queue of the finished chapter itself (queued) counts at its stamp; only its in_progress entry is excluded', async () => {
+    const bookId = 'recon-s9';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [
+        entry(bookId, 1, 'in_progress'),
+        { ...entry(bookId, 1, 'queued', T06), id: `${bookId}-1-requeue` },
+      ],
+      analysis: { 1: [sent('pip')] },
+      captured: { keep06: false, keep17: true },
+    });
+    expect(resolved).toEqual(BOTH);
+  });
+
+  it('S11: a claimed (in_progress) re-queue of the finished chapter counts when the finished entry is skipped by id', async () => {
+    const bookId = 'recon-s11';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [
+        entry(bookId, 1, 'done'),
+        { ...entry(bookId, 1, 'in_progress', T06), id: `${bookId}-1-requeue` },
+      ],
+      finishedQueueEntryId: `${bookId}-1`,
+      analysis: { 1: [sent('pip')] },
+      captured: { keep06: false, keep17: true },
+    });
+    expect(resolved).toEqual(BOTH);
+  });
+
+  it('S10 (D3): an empty run-start keep and an empty union resolve to null, never both tiers evicted', async () => {
+    const bookId = 'recon-s10';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')] },
+      captured: NO_QWEN,
+    });
+    expect(resolved).toBeNull();
+  });
+
+  it('S6: the last chapter keeps every tier the run used (run-start keep with both tiers)', async () => {
+    const bookId = 'recon-s6';
+    const resolved = await postScoreKeep(bookId, {
+      queue: [entry(bookId, 1, 'in_progress')],
+      analysis: { 1: [sent('wren')] },
+      captured: BOTH,
+    });
+    expect(resolved).toEqual(BOTH);
+  });
+
+  /* The post-score keep shares its same-book union and its post-/health re-check with the run-start
+     keep; these two pin the post-score call site (twins of F4 and R7). */
+  it('S7 (F4 twin): other-book work registering after the busy check resolves to null (skipped)', async () => {
+    const bookId = 'recon-s7';
+    let cleanup: (() => void) | undefined;
+    try {
+      const resolved = await postScoreKeep(bookId, {
+        queue: [entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')],
+        analysis: { 1: [sent('wren')], 2: [sent('wren')] },
+        beforeResolve: () => {
+          cleanup = __registerFakeJobForTest('other-book', [], false, BOTH);
+        },
+      });
+      expect(resolved).toBeNull();
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  it('S8 (R7 twin): an ABORTED same-book sibling contributes nothing', async () => {
+    const bookId = 'recon-s8';
+    let cleanup: (() => void) | undefined;
+    try {
+      const resolved = await postScoreKeep(bookId, {
+        queue: [entry(bookId, 1, 'in_progress'), entry(bookId, 2, 'queued')],
+        analysis: { 1: [sent('wren')], 2: [sent('wren')] },
+        beforeResolve: () => {
+          const fake = __registerFakeJobForTest(bookId, [], false, { keep06: true, keep17: false });
+          cleanup = fake;
+          fake.abort();
+        },
+      });
+      expect(resolved).toEqual({ keep06: false, keep17: true });
+    } finally {
+      cleanup?.();
+    }
   });
 });

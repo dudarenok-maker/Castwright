@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-11-21
 owner: null
 issue: 1393
 refs: [1388, 1395, 1839, 4066, 4075, 4079, 4235, 4445, 4497]
@@ -9,7 +9,7 @@ date: 2026-11-20
 
 # Plan 293: Qwen tier keep set for the generation-path reconcile (#1393)
 
-> Status: active (Stage 1 only; Stage 2 not planned, see D1)
+> Status: stable (Stage 1 shipped on branch `fix/server-1393-qwen-keep-set`; Stage 2 not planned, see D1)
 > Key files: `server/src/routes/generation.ts`, `server/src/tts/qwen-tier-needs.ts` (new), `server/src/tts/ensure-sidecar-loaded.ts`, `server/src/tts/synthesise-chapter.ts`, `src/store/queue-thunks.ts`
 > URL surface: indirect (server-side GPU residency; the queue stamp is client-visible)
 > OpenAPI ops: none (`modelKey` on a queue entry is already accepted, `routes/queue.ts:126`)
@@ -196,8 +196,10 @@ call at `:1033-1035` as the normal answer:
 
 ```
 P = targetChapters
-  ∪ { chapters of THIS book, not already in targetChapters, with a queue
-      entry whose status is queued | in_progress | paused | awaiting_confirm }
+  ∪ { chapters of THIS book with a queue entry whose status is queued |
+      in_progress | paused | awaiting_confirm, other than this POST's OWN
+      entry (skipped by id; with no entry id, a target chapter's
+      in_progress entry stands in for it) }
 runNeeds = OR over P of chapterQwenTierNeeds(analysis.chapters[id], …,
                                              includesTitleBeat: true)
 ```
@@ -329,11 +331,15 @@ moment it is called.
 
 Two differences from the run-start computation:
 
-- **The just-finished chapter is not in `P`.** At post-score time the
-  chapter that triggered the pass is rendered, so by constraint 2 it needs
-  no tier. The recompute's `P` is the book's still-pending queue entries
-  only (the finished chapter's own entry is excluded even if the queue file
-  still shows it `in_progress`), plus whatever live same-book jobs declare.
+- **The just-finished job's own entry is not in `P`.** At post-score time
+  the chapter that triggered the pass is rendered, so by constraint 2 that
+  render needs no tier. The recompute's `P` is the book's still-pending
+  queue entries with only the finished job's own entry left out, by entry id
+  (`job.queueEntryId`; for a back-compat job with none, the finished
+  chapter's `in_progress` entries, even if the queue file still shows it
+  `in_progress`), plus whatever live same-book jobs declare. A re-queue of
+  the finished chapter, even a claimed `in_progress` one, is in `P` at its
+  stamp.
 - **§2.2's own-score-pass fall-back does not apply here.** This reconcile
   runs *inside* this book's score pass (`routes/generation.ts:179-245`:
   the pass is in `scoringInFlight` until its `finally`), so that condition
@@ -446,6 +452,18 @@ the tier this run is about to keep.
   a designed or cloned Qwen voice", is true of nearly every Qwen book and
   would pin `keep06` permanently. The re-derive fires once per missing
   artifact, then the artifact exists. On-box row (c) records it (§5.8).
+- **The non-English engine forcing is applied once, at the request's engine
+  (accepted, pre-existing).** `generation.ts` forces each character's
+  `ttsEngine` with the POST's engine (`resolveClonedRetargetEngine`), and
+  `computeRunQwenNeeds` reuses that forced cast for every pending entry. A
+  character cloned on both Qwen and Coqui keeps the request's engine there, so
+  under a Coqui request a Qwen-stamped pending chapter whose speakers are all
+  such characters predicts no Qwen tier, while that chapter's own POST retargets
+  them to Qwen. `main`'s full-cast keep reads the same forced cast and evicts
+  the same tier, so this is not a regression; each hit costs one reload. Not
+  fixed: re-forcing the cast per stamp engine means passing the book's eligible
+  engines into the helper and choosing what a Kokoro or unstamped entry
+  retargets to, which is a behaviour choice, not a one-line change.
 - **The inter-chapter gap.** Another book's reconcile in the gap evicts this
   book's tier. One reload per hit. D2 (accepted).
 - **An unstamped pending entry's tier is an estimate** (§2.6).
@@ -656,11 +674,30 @@ id when the implementing PR is written, read from the register's `next-id`
 marker on the then-current `main` — not A132, which PR #4497 already uses). It carries the register row, the live view
 and `register:build`:
 
-- (a) A pure-1.7B run whose cast has a silent 0.6B character, started with
-  the 0.6B resident: `/unload` for the 0.6B at run start, then
-  `qwen_loaded: false`.
-- (b) A mixed-tier book: no `/unload` for either tier until its last chapter
-  using that tier has finished.
+- (a) Session model **Standard (0.6B)**, every speaker of the chapters to
+  render pinned to Quality (1.7B), **the narrator included** (the title beat
+  always speaks), and one silent character left unpinned, with the 0.6B
+  resident. On this PR: `evicting unused Qwen tier(s) [0.6B]` at run start,
+  then `qwen_loaded: false`. On main the silent unpinned character pins the
+  0.6B (no eviction line). Under a Quality session model it proves nothing:
+  tiers only elevate, so main's full-cast keep is already 1.7B only.
+- (b) A chapter order where one tier has a last user before the final
+  chapter (chapters 1 and 2: a Quality-pinned speaker plus a Standard
+  narrator; chapter 3: Standard speakers only), under a Standard (0.6B)
+  session model (a Standard narrator exists only there), with one generation
+  worker and render-integrity QA off (the shipped defaults; a saved override
+  or an exported env var counts as set. The worker count resolves
+  `GEN_WORKERS`, then the `tts.gen.workers` override, then the legacy
+  `generationWorkers` user setting; the knob is **Generation workers**, and it
+  applies on a server restart. QA is **Render-integrity QA (voice match)**,
+  `qa.speaker.enabled` / `SEG_SPK_ENABLED`. With 2+ workers chapter 3's POST
+  overlaps chapter 2, whose job keeps the 1.7B; with QA on, a long chapter-1
+  score pass can make single-flight drop later triggers, so no eviction line
+  appears either way; with QA off nothing reconciles after chapter 2 ends),
+  rendered through the queue so
+  each chapter is its own POST. No `/unload` at chapters 1 and 2; at chapter
+  3's POST `evicting unused Qwen tier(s) [1.7B]` and `qwen_base17_loaded:
+  false`. On main neither tier is ever unloaded on this book.
 - (c) **Record, do not pass/fail:** on a book whose keep has `keep06` false,
   remove one speaker's voice artifact and render a chapter. Record
   `qwen_loaded` and `qwen_base17_loaded` from `GET /health` after the
@@ -778,6 +815,12 @@ Recorded; not reopened.
   costs one reload per hit; no per-book linger.
 - **D3. Decided 2026-11-20: accepted as recommended.** A run that needs no Qwen
   tier skips the reconcile.
+  **Amended 2026-11-22 (owner decision on the #4580 review, #1393): the
+  post-score reconcile does not skip when the recomputed keep is empty (the
+  book's last chapter just finished).** It falls back to the keep computed at
+  THIS run's start, so a tier only the scoring audition pulled in (a 0.6B on a
+  legacy-segments fall-back) is evicted as on main, and the tiers the run used
+  stay. A run-start keep that is itself empty still skips.
 - **D4. Decided 2026-11-20: accepted as recommended.** The lease and the Kokoro
   drop follow the narrower `keep17` (one variable).
 - **D5. Decided 2026-11-20: accepted as recommended.** Paused and parked
@@ -796,3 +839,26 @@ Recorded; not reopened.
 - **D8. Decided 2026-11-20: accepted as recommended.** An unstamped pending entry
   is evaluated at the request's model key (section 2.6); an occasional wrong
   estimate costs one reload.
+
+## Ship notes
+
+Shipped 2026-11-21 (Stage 1 only; Stage 2 is not planned, see D1). Branch `fix/server-1393-qwen-keep-set`; the PR is #4580 (opened by the verify child #4579 after #4562 failed on the #2128 guard).
+
+Commits, in order:
+
+- `a05242a0` pure Qwen tier-needs helper (`chapterQwenTierNeeds`)
+- `b75d6543` parity test pinning it to the real `synthesiseChapter` synth calls
+- `7224d839` frontend stamps the session TTS model on queue entries at enqueue
+- `5529d7e8`, `4b58d736`, `788c6fd7` transport guards G1/G2 on designs and mints
+- `9d30452f` the reconcile keeps only the tiers the book's unfinished chapters will use
+- `c312d7d9` unions live same-book jobs' tier needs into the keep
+- `5bf6a958` run-start reconcile runs after the job registers
+- `119b488d` run-start keep is read after the sidecar health probe
+- `ef0bbe7a` post-score reconcile recomputes the keep when it runs
+- `33f77c02` the handler reads the cast id history once (the #2128 guard)
+- `2365c46b` a pending entry is evaluated at its own stamp's engine and every pending entry of a chapter counts
+- `cfa1df7a` the post-score keep falls back to the run-start keep when empty; one shared same-book union
+- Review pass 3 fixes: the skip is by entry id (the POST's own at run start, the finished job's at post-score; chapter plus status only when the id is null), so a claimed re-queue of the same chapter counts; four stale descriptions corrected; A134 (b) names where the worker count and QA settings live and requires QA off.
+- Review pass 2 fixes: only the `in_progress` entry of a target or just-finished chapter is skipped, so a re-queue of that chapter counts at its stamp (`bcc95469`); the spread order and empty-to-null of `keepAfterHealth` are pinned at both call sites (`b22ed74c`); two stale comment copies corrected (`da184b96`); on-box row A134 (b) gains the Standard session model and one-worker, QA-off preconditions (`0021ac42`); the non-English engine forcing is recorded in section 3.5 as an accepted residual
+
+On-box row: **A134** in `docs/testing/onbox-acceptance-register.md` (plan section 5.8, owed, not run here; no separate run sheet). Release notes: D7 (i) and (ii) stated in `docs/release-notes-next.md` and `RELEASE_NOTES.md`; D7 (iii) is mentioned in the technical entry only. No behaviour delta against the plan was found while writing these notes.

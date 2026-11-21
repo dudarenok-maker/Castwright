@@ -36,6 +36,12 @@
      here. That is the safe direction for a guard to be wrong in: a rename
      needs this guard's `castHistorySeq:` check literal updated by hand
      alongside it, never silently.
+   - `tts/qwen-run-needs-history.ts` (`loadRunNeedsCastIdHistory`) is a SECOND reader of the
+     history, called from this handler for the Qwen run-needs keep. The `loadCastIdHistory(`
+     count stays at 1 only because that read lives in a separate file this guard does not scan,
+     so the handler really reads the history twice. That is safe: the render's `castHistorySeq`
+     stamp (`castHistorySeq: castIdHistory.seq`) still comes from the one `castIdHistory`, and the
+     keep's read is only a tier estimate, never stamped.
    - Comment/string text is stripped before matching (`blankOutOpaque`, the shared token-family blanker in
      `test-utils/guard-scan.ts`), so a call quoted inside a doc comment neither fires nor masks a real one.
    - FAIL-OPEN GUARD: `extractRouteHandlerBody` THROWS (never returns an

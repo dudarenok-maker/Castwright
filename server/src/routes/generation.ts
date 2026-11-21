@@ -84,6 +84,8 @@ import {
 } from '../tts/synthesise-chapter.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { computeRunQwenNeeds, type RunQwenNeedsInput } from '../tts/qwen-run-needs.js';
+import { loadRunNeedsCastIdHistory } from '../tts/qwen-run-needs-history.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import {
@@ -142,15 +144,88 @@ function otherTierWorkActive(bookId: string): boolean {
 /** #4445 — a generation-path reconcile never drops the 1.7B while any Quality render is live.
     `ctx.keep` is computed per chapter POST, so after a mid-run tier change it can be stale
     (keep17:false) while a same-book sibling renders on the 1.7B, and `otherTierWorkActive` leaves
-    that sibling out. The 0.6B half is NOT guarded the same way (no per-job tracker), so a 0.6B a
-    sibling uses can still be evicted by two paths, each costing a reload and retry — accepted:
-    (1) run start with 2+ workers, when a character is RAISED to Quality (the new POST's keep is
-    keep06:false while a sibling still renders on the 0.6B); (2) the score pass with one worker
-    and qa.speaker.enabled, when a character is LOWERED (ch5's keep is {keep06:false,
-    keep17:true}, ch6 renders that character on the 0.6B, ch5's job has already deregistered, and
-    its score-pass reconcile unloads the 0.6B). */
+    that sibling out. The 0.6B half is not guarded here: it is covered by the same-book union
+    (`sameBookTierUnion`: a live sibling's `RunningJob.tierNeeds`, so a character RAISED to Quality
+    at run start with 2+ workers keeps the 0.6B a sibling still renders on) and by the post-score
+    keep re-read from the queue. What stays accepted is a character LOWERED after the sibling
+    deregistered (the next chapter renders it on the 0.6B, nothing declared it yet): one reload
+    and retry. */
 function keepQualityResident<K extends { keep17: boolean }>(keep: K): K {
   return isQualityRenderKnownActive() && !keep.keep17 ? { ...keep, keep17: true } : keep;
+}
+
+/** #4557 / #4560 — a book's tier keep: `base` (a run's own needs) ∪ the `tierNeeds` of this
+    book's registered, NON-aborted jobs. `fullCast` stands in when a live job declared no
+    `tierNeeds` (an unknown never narrows) and, only when `ownScorePassFallsBack`, when this
+    book's own score pass is in flight (its audition renders on tiers of RENDERED chapters, which
+    a run's needs exclude; the post-score reconcile runs INSIDE that pass, so it never sets the
+    flag). Shared by the run-start and the post-score reconcile. */
+function sameBookTierUnion(
+  bookId: string,
+  base: { keep06: boolean; keep17: boolean },
+  fullCast: { keep06: boolean; keep17: boolean },
+  ownScorePassFallsBack: boolean,
+): { keep06: boolean; keep17: boolean } {
+  const live = [...(inFlightByBook.get(bookId) ?? [])].filter((j) => !j.controller.signal.aborted);
+  if ((ownScorePassFallsBack && scoringInFlight.has(bookId)) || live.some((j) => !j.tierNeeds)) {
+    return fullCast;
+  }
+  return {
+    keep06: base.keep06 || live.some((j) => j.tierNeeds?.keep06),
+    keep17: base.keep17 || live.some((j) => j.tierNeeds?.keep17),
+  };
+}
+
+/** The keep a generation-path reconcile resolves right after its `GET /health` round trip
+    (`reconcileResidentQwenTiers` calls this): null (skip) when work other than this book's own
+    registered in that round trip. An empty `union` (nothing left to render) falls to `whenEmpty`
+    (the run-start keep, for the post-score reconcile; null = skip). A resolved keep that is
+    still empty is null too, never both tiers evicted on a computed-empty keep (D3). */
+function keepAfterHealth<E extends object>(
+  bookId: string,
+  union: { keep06: boolean; keep17: boolean },
+  whenEmpty: { keep06: boolean; keep17: boolean } | null,
+  extra?: E,
+): ({ keep06: boolean; keep17: boolean } & E) | null {
+  if (otherTierWorkActive(bookId)) return null;
+  const base = union.keep06 || union.keep17 ? union : (whenEmpty ?? union);
+  const keep = keepQualityResident({ ...extra, ...base } as { keep06: boolean; keep17: boolean } & E);
+  return keep.keep06 || keep.keep17 ? keep : null;
+}
+
+/** #4560 — builds the post-score reconcile's `recomputeKeep`: the book's needs read when the
+    reconcile runs, from a FRESH `.queue.json` read (plain read, no lock) and the POST's cast,
+    analysis and cast-id history. P is this book's still-pending entries with no target term; only
+    the finished job's OWN entry is left out (by `finishedQueueEntryId`, else, for a back-compat job
+    with no entry, the finished chapter's `in_progress` entries), so a re-queue of the finished
+    chapter, even a claimed one, counts at its stamp (plan 293 §2.7). A queue
+    read or helper throw falls back to the full cast (`fullCastKeep`): an unknown never narrows. */
+export function makePostScoreKeepRecompute(
+  input: Omit<RunQwenNeedsInput, 'targetChapterIds' | 'queueEntries'> & {
+    finishedChapterId: number;
+    /** The finished job's own queue entry id; null for a back-compat job (chapter + status match). */
+    finishedQueueEntryId: string | null;
+    fullCastKeep: { keep06: boolean; keep17: boolean };
+  },
+): () => Promise<{ keep06: boolean; keep17: boolean }> {
+  const { finishedChapterId, finishedQueueEntryId, fullCastKeep, ...needsInput } = input;
+  return async () => {
+    try {
+      const queueEntries = (await readQueueFile(queueJsonPath())).entries.filter(
+        (e) =>
+          finishedQueueEntryId != null
+            ? e.id !== finishedQueueEntryId
+            : !(e.bookId === input.bookId && e.chapterId === finishedChapterId && e.status === 'in_progress'),
+      );
+      return computeRunQwenNeeds({ ...needsInput, targetChapterIds: [], queueEntries });
+    } catch (e) {
+      console.warn(
+        '[generation] post-score tier recompute failed; keeping the full cast tiers:',
+        (e as Error).message,
+      );
+      return fullCastKeep;
+    }
+  };
 }
 
 export async function triggerScoring(ctx: {
@@ -158,9 +233,19 @@ export async function triggerScoring(ctx: {
   bookDir: string;
   chapters: { id: number; slug: string }[];
   justFinalizedSlugs: Iterable<string>;
-  /** Full-cast-superset tier set, supplied by the chapter-finalize path
-      protects an in-flight sibling chapter's tier, see the reconcile comment below;
-      the reconcile is also skipped while other work is active, #4445). Omitted by the resume route, which
+  /** #4560 — when present (the chapter-finalize path), the post-score reconcile does NOT use
+      `keep` verbatim: it calls this when the pass finishes and reconciles against a keep
+      FUNCTION (this result ∪ this book's live non-aborted jobs' `tierNeeds`). Absent → today's
+      path with `keep` as a plain object. */
+  recomputeKeep?: () => Promise<{ keep06: boolean; keep17: boolean }>;
+  /** #4560 — the full cast's tiers: the union's fall-back when a live same-book job declared no
+      `tierNeeds`. Defaults to `keep`. */
+  fullCastKeep?: { keep06: boolean; keep17: boolean };
+  /** The tier set the chapter-finalize path supplies: this run's keep at its start (the book's
+      unfinished chapters' needs, K(book), #1393). Used verbatim when `recomputeKeep` is absent
+      (it protects an in-flight sibling chapter's tier, see the reconcile comment below; the
+      reconcile is also skipped while other work is active, #4445), and as the post-score
+      fall-back when the recomputed needs are empty. Omitted by the resume route, which
       has no live run to derive a superset from and instead reconciles
       against scoreBook's own precise usedQwenTiers, and only while no render,
       splice or QA repair, or another book's score pass, is active anywhere (#4235) — the reconcile acts on the
@@ -237,10 +322,19 @@ export async function triggerScoring(ctx: {
        Option-B audition can transiently pull a base tier the render doesn't
        use (a legacy segments file with no stamped modelKey → the 0.6B audition
        fallback), which would then linger co-resident with the 1.7B synth (the
-       8GB-card OOM). Reconcile against the run's FULL-cast tier set (`ctx.keep`,
-       the same target the run-start reconcile used) when supplied — NOT the
-       finalized-chapters view scoreBook sees, which misses an in-flight
-       sibling chapter's tier and would evict it mid-render (Finding 2). The
+       8GB-card OOM). On the generation path the keep is NOT the capture from the
+       chapter's POST (minutes stale by now, #1393): `ctx.recomputeKeep` re-reads the
+       book's needs from a fresh `.queue.json` (this book's still-pending entries, only the
+       just-finished job's own entry left out), and the reconcile gets a keep FUNCTION that
+       unions that with this book's live non-aborted jobs' `tierNeeds` when it is
+       called, right after `/health` (#4559). A live same-book job with no `tierNeeds`
+       falls back to the full cast; the run-start own-score-pass fall-back is NOT
+       applied (this IS that pass). A back-compat `*` job rendering several chapters is
+       still registered here and its `tierNeeds` includes the finished chapter: a
+       safe-direction over-keep, deliberately not excluded. Without `ctx.recomputeKeep`
+       the run's `ctx.keep` is used verbatim — NOT the finalized-chapters view scoreBook
+       sees, which misses an in-flight sibling chapter's tier and would evict it
+       mid-render (Finding 2). The
        resume route has no such superset to protect, so it falls back to
        scoreBook's own precise usedQwenTiers. reconcile only evicts tiers NOT
        in the target set, so the in-use tier stays warm and a mixed-tier book
@@ -253,16 +347,18 @@ export async function triggerScoring(ctx: {
        voice design or variant mint (`isDesignOrMintActive`): the reconcile's `/unload`
        nulls the VoiceDesign model and the 1.7B Base under it (#4445). The
        generation path (`ctx.keep`) skips on the same rule except that this book's own
-       render is excluded (`otherTierWorkActive`): `ctx.keep` is the run's full-cast tier
-       superset, so its own chapters are already protected (#4445) — except after a mid-run tier
-       change, when a sibling's keep can differ: `keepQualityResident` therefore never drops the
-       1.7B while a Quality render is live. A 0.6B can still be evicted under a sibling when a
-       character is lowered to Standard (this score pass, one worker, qa.speaker.enabled: the next
-       chapter renders it on the 0.6B after this job deregistered) or raised to Quality at run
-       start with 2+ workers; each costs a reload and retry and is accepted.
+       render is excluded (`otherTierWorkActive`): `ctx.keep` is K(book) at the run's start, and
+       the keep resolved here is the book's needs re-read now, unioned with every live same-book
+       job's `tierNeeds` (`sameBookTierUnion`), so a sibling's tiers are protected (#4445) even
+       after a mid-run tier change; `keepQualityResident` additionally never drops the
+       1.7B while a Quality render is live. A 0.6B can still be evicted when a character is
+       lowered to Standard (this score pass, one worker, qa.speaker.enabled: the next
+       chapter renders it on the 0.6B after this job deregistered, so nothing declared it yet);
+       that costs a reload and retry and is accepted.
        Two residual windows remain, each costing at most one cold reload: (a) after this
        synchronous read the reconcile awaits `GET /health` (`ensure-sidecar-loaded.ts`)
-       before it posts `/unload`, so a job registering in that round trip loses its tier;
+       before it posts `/unload`, so a job registering in that round trip loses its tier
+       (narrowed on the generation path by the keep function's post-`/health` re-read);
        (b) between a Fix-audio batch's per-chapter splice POSTs nothing is registered, so a
        pass finishing in that gap drops the tier at the chapter boundary. */
     const keep = ctx.keep ?? result.usedQwenTiers;
@@ -270,6 +366,21 @@ export async function triggerScoring(ctx: {
       ? otherTierWorkActive(ctx.bookId)
       : isAnyGenerationActive() || otherBookScoringInFlight(ctx.bookId) || isDesignOrMintActive();
     if (busy) return;
+    if (ctx.recomputeKeep && ctx.keep) {
+      /* #4560 — re-read the book's needs NOW (not the capture from the chapter's POST), then
+         resolve the keep again right after `/health` (#4559). No own-score-pass fall-back here:
+         this reconcile runs inside this book's own score pass, so it would always fire. */
+      const needs = await ctx.recomputeKeep();
+      const runStartKeep = ctx.keep;
+      const fullCast = ctx.fullCastKeep ?? runStartKeep;
+      /* After the book's last chapter the union is empty: fall back to the keep computed at this
+         run's start (`ctx.keep`; owner decision on #1393), so a tier only the audition pulled is
+         still evicted and the tiers the run used stay. */
+      await reconcileResidentQwenTiers(() =>
+        keepAfterHealth(ctx.bookId, sameBookTierUnion(ctx.bookId, needs, fullCast, false), runStartKeep),
+      );
+      return;
+    }
     if (keep.keep06 || keep.keep17) await reconcileResidentQwenTiers(keepQualityResident(keep));
   });
   const run = registration
@@ -319,12 +430,16 @@ export async function afterChapterFinalized(ctx: {
       `scoringInFlight`). See the write below and `scoreBook` in
       aggregate.ts for the full rationale. */
   justFinalized: { id: number; slug: string };
-  /** The Qwen base tier(s) this run's FULL cast uses (elevate-only, same as
-      routeFor) — computed once at run start and threaded here so the post-
-      audition reconcile evicts only tiers NO chapter of this book will use.
+  /** The Qwen base tier(s) this book's unfinished chapters use at this run's start (K(book):
+      elevate-only like routeFor, narrowed to the chapters still to render, #1393) — computed once
+      and threaded here so the post-audition reconcile evicts only tiers NO chapter of this book
+      will use.
       NOT derived from the finalized-chapters-only score pass, which can't see
       an in-flight sibling chapter's tier (the Finding-2 race). */
   keep: { keep06: boolean; keep17: boolean };
+  /** #4560 — forwarded to `triggerScoring` (see there). */
+  recomputeKeep?: () => Promise<{ keep06: boolean; keep17: boolean }>;
+  fullCastKeep?: { keep06: boolean; keep17: boolean };
   /** #3524 — the run's model key, forwarded to `triggerScoring`. */
   runModelKey?: TtsModelKey;
 }) {
@@ -351,7 +466,14 @@ export async function afterChapterFinalized(ctx: {
      own attempted stamp entirely if its trigger is coalesced away. */
   await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
 
-  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep, runModelKey: ctx.runModelKey });
+  await triggerScoring({
+    ...ctx,
+    justFinalizedSlugs: [ctx.justFinalized.slug],
+    keep: ctx.keep,
+    recomputeKeep: ctx.recomputeKeep,
+    fullCastKeep: ctx.fullCastKeep,
+    runModelKey: ctx.runModelKey,
+  });
 }
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
@@ -527,6 +649,11 @@ interface RunningJob {
       active-generation gate by the render lease, which only holds a tier a
       Quality render uses. Absent/false for a Kokoro-only or standard run. */
   usesQuality17?: boolean;
+  /** #4557 — the Qwen tiers THIS job's own run needs (`runNeeds`, not the
+      book-wide union `K`, so the union does not feed on itself). Read by a later
+      same-book run's reconcile keep. Absent = unknown, which makes that run fall
+      back to the full cast. */
+  tierNeeds?: { keep06: boolean; keep17: boolean };
   /** Chapter ids the loop has reported chapter_complete for in this
       run. The frontend reads `runDone` as `runDoneBase + this.size`. */
   completedThisRun: Set<number>;
@@ -688,10 +815,12 @@ export function __registerFakeJobForTest(
   bookId: string,
   subscribers: { send: (ev: unknown) => void; res: Response }[],
   usesQuality17 = false,
-): () => void {
+  tierNeeds?: { keep06: boolean; keep17: boolean },
+): (() => void) & { abort: () => void } {
   const key = `${bookId}::test-${Math.random().toString(36).slice(2)}`;
   const job: RunningJob = {
     usesQuality17,
+    tierNeeds,
     controller: new AbortController(),
     subscribers: new Set(subscribers),
     bookId,
@@ -709,7 +838,7 @@ export function __registerFakeJobForTest(
     children: [],
   };
   registerJob(key, job);
-  return () => deregisterJob(key, job);
+  return Object.assign(() => deregisterJob(key, job), { abort: () => job.controller.abort() });
 }
 
 /** True when any generation job is currently in flight for the book. Exposed
@@ -1056,26 +1185,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const qwenInUse = requiredEngines.has('qwen');
   const qwenState = getLastKnownQwenInstallState();
   const qwenUnavailable = qwenInUse && qwenState !== 'ready' && qwenState !== 'loaded';
-  /* The Qwen base tier(s) this WHOLE run will use, resolved from the FULL cast
-     with the elevate-only precedence routeFor uses (a per-character ttsModelKey
-     can only raise a character above the run default). Invariant for the run —
-     the cast is fixed — so it's computed ONCE and reused for BOTH the run-start
-     VRAM reconcile AND the post-audition reconcile after each chapter's score
-     pass. The latter must reconcile against THIS full-cast set, never a
-     finalized-chapters-only view: a sibling chapter of this same book can be
-     mid-render on a tier no finished chapter used yet, and evicting it out from
-     under that in-flight render is exactly the srv-36 race (Finding 2).
-
-     Known tradeoff (shared with this same run-start reconcile): the full cast is
-     a SUPERSET of the tiers actually rendered — a declared-but-silent Qwen cast
-     member (or one that fell back to Kokoro) still pins its tier here, so a
-     stray same-tier base (a legacy-segments audition pull, or a prior book's
-     leftover) won't be evicted. Precisely evicting only truly-unused tiers needs
-     the actual in-flight+rendered tier set, i.e. the active-generation tier
-     registry tracked in #1393 (same infra as the cross-book fix). */
-  const usedQwenTiers = qwenInUse
-    ? computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey)
-    : { keep06: false, keep17: false };
+  /* (`usedQwenTiers`, the Qwen base tier(s) this run needs, is computed below,
+     once `targetChapters` is known — see "Run needs".) */
   /* NEVER silently downgrade a Qwen book to Kokoro. When the whole cast's Qwen
      characters are about to render in the wrong engine (wrong voices) because
      Qwen reads unavailable, say so loudly — server log + a UI warning toast
@@ -1205,6 +1316,65 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   });
   const targetIdSet = new Set(targetChapters.map((c) => c.id));
 
+  /* Run needs (#1393, plan 293 §2.2): the Qwen base tier(s) this run will
+     actually use — the speakers of the chapters still to render (this POST's
+     targets plus this book's pending queue entries), with the render's Kokoro
+     fallback taken into account (`computeRunQwenNeeds`). A tier only a finished
+     chapter, a silent cast member or a Kokoro-fallback character used is NOT
+     kept, so a stray same-tier base can be evicted. A run that needs no tier
+     does not reconcile at all (D3).
+
+     Read for BOTH the run-start VRAM reconcile and `usesQuality17` (the render
+     lease). The post-score reconcile passes this as `keep` too, but re-reads the
+     needs when it runs (`recomputeKeep`, #4560).
+
+     Fall-back: if the queue file cannot be read (a MISSING file is an empty
+     queue, i.e. no pending entries; only a corrupt / unreadable file throws) or
+     the helper throws, keep the full cast's tiers exactly as before — an
+     unknown must never narrow the keep.
+
+     Accepted residuals (plan 293): the Qwen 0.6B pre-pass re-derive (§3.5) and
+     the gap between one chapter finishing and the next being queued (D2) can
+     still cost a reload. The same-book job union is below (#4557). */
+  const fullCastQwenTiers = () =>
+    computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey);
+  /* This run's own needs (#4556). `usedQwenTiers` below widens it to K(book). */
+  let runNeeds: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
+  let postScoreCastIdHistory: RunQwenNeedsInput['castIdHistory'];
+  if (qwenInUse) {
+    try {
+      const queueEntries = (await readQueueFile(queueJsonPath())).entries;
+      postScoreCastIdHistory = await loadRunNeedsCastIdHistory(bookDir);
+      runNeeds = computeRunQwenNeeds({
+        bookId,
+        targetChapterIds: targetChapters.map((c) => c.id),
+        ownQueueEntryId: queueEntryId,
+        queueEntries,
+        analysisChapters: analysis.chapters,
+        cast: cast.characters,
+        castIdHistory: postScoreCastIdHistory,
+        defaultEngine: engine,
+        requestQwenModelKey: resolveForEngine('qwen').modelKey,
+        qwenUnavailable,
+      });
+    } catch (e) {
+      console.warn(
+        '[generation] run-needs tier computation failed; keeping the full cast tiers:',
+        (e as Error).message,
+      );
+      runNeeds = fullCastQwenTiers();
+    }
+  }
+  /* #4557 — K(book) = runNeeds ∪ the tierNeeds of this book's registered, NON-aborted
+     jobs. Unknown terms fall back to the full cast (today's behaviour): a same-book
+     job that declared no `tierNeeds`, or this book's own score pass in flight (its
+     audition renders on tiers of RENDERED chapters, which runNeeds excludes). The
+     union is correct whether or not this run's own job is already registered. */
+  const bookTierKeep = (): { keep06: boolean; keep17: boolean } =>
+    sameBookTierUnion(bookId, runNeeds, fullCastQwenTiers(), true);
+  let usedQwenTiers = runNeeds;
+  if (qwenInUse) usedQwenTiers = bookTierKeep();
+
   /* srv-28 — pre-flight disk-space guard. Estimate this run's footprint
      (target chapters × AVG_CHAPTER_BYTES) and compare against the free space on
      the audio volume. Default mode WARN rides the existing toast path; BLOCK
@@ -1241,55 +1411,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       }
     } catch (e) {
       console.warn('[generation] disk guard probe failed (continuing):', (e as Error).message);
-    }
-  }
-
-  /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
-     use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
-     vice-versa. Runs before this POST's chapter synth (the queue dispatcher
-     sends one POST per chapter, so it re-runs per chapter; the tier target is
-     the same each time, so the in-use tier stays warm across the book — load
-     price paid on chapter 1 only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
-     against the run default with the SAME elevate-only precedence
-     synthesise-chapter's routeFor uses, so a character whose stored tier is
-     stale/lower than the run default can't make this precompute evict the tier
-     routeFor is about to request (which forced a cold mid-run load on chapter 1,
-     defeating the whole point of this precompute). A genuinely mixed-tier book
-     still keeps both. Best-effort; a down / recycling sidecar skips. */
-  if (qwenInUse && targetChapters.length > 0) {
-    /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
-       Kokoro here (owner decision); a run with no 1.7B is unchanged. This
-       POST has not registered its own job yet (registerJob is below), so
-       the gate sees only OTHER work: generation jobs plus an in-flight splice
-       or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
-       therefore applies to the first chapter POST of a run, and is skipped
-       while anything else is live — but two first POSTs arriving together can
-       both see nothing and both drop. Bounded cost, not a no-op: the second
-       drop can unload a Kokoro the first job just reloaded for a fallback
-       line; that line then fails and goes through the transient retry. A later
-       chapter's POST (one per chapter, sibling chapters are live) and the
-       post-score re-assert in triggerScoring must not unload a Kokoro a
-       sibling chapter's fallback line may be using.
-       #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
-       work OTHER than this book's own is active (`otherTierWorkActive`: a render
-       on another book, any splice or QA repair, any voice design or variant mint, another
-       book's score pass): the
-       reconcile can unload a Qwen tier that work is using. Same-book sibling
-       chapters are excluded from that check, so they still reconcile with Kokoro
-       kept, as above. The 1.7B is additionally never dropped while a Quality render is
-       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
-       0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
-       in the score pass (one worker) — it costs a reload and retry. */
-    if (otherTierWorkActive(bookId)) {
-      console.info(
-        '[generation] run-start tier reconcile skipped: other GPU work is active',
-      );
-    } else {
-      await keepForRunStart(usedQwenTiers, isAnyGenerationActive())
-        .then((target) => reconcileResidentQwenTiers(keepQualityResident(target)))
-        .catch((e) =>
-          console.warn('[generation] tier reconcile skipped:', (e as Error).message),
-        );
     }
   }
 
@@ -1481,8 +1602,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     runInProgress: new Set(),
     hadSibling: false,
     usesQuality17: usedQwenTiers.keep17,
+    tierNeeds: runNeeds,
     children: [],
   };
+  /* #1393 — read BEFORE registerJob: once registered, `isAnyGenerationActive()` counts this
+     run's own job. The run-start reconcile (just before the chapter loop) reuses this value. */
+  const anotherGenerationActiveAtStart = isAnyGenerationActive();
   registerJob(key, job);
   /* #3711 — from here on the job can own children, so the wait for them lives in the
      `finally` that closes this `try` (an early return above has no job to drain). */
@@ -2140,6 +2265,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
           justFinalized: { id: chapter.id, slug: chapter.slug },
           keep: usedQwenTiers,
+          ...(qwenInUse
+            ? {
+                recomputeKeep: makePostScoreKeepRecompute({
+                  bookId,
+                  finishedChapterId: chapter.id,
+                  finishedQueueEntryId: job.queueEntryId,
+                  analysisChapters: analysis.chapters,
+                  cast: cast.characters,
+                  castIdHistory: postScoreCastIdHistory,
+                  defaultEngine: engine,
+                  requestQwenModelKey: resolveForEngine('qwen').modelKey,
+                  qwenUnavailable,
+                  fullCastKeep: fullCastQwenTiers(),
+                }),
+                fullCastKeep: fullCastQwenTiers(),
+              }
+            : {}),
           runModelKey: modelKey,
         }),
       );
@@ -2518,6 +2660,68 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       controller.signal.removeEventListener('abort', onParentAbort);
     }
   };
+
+  /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
+     use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
+     vice-versa. Runs before this POST's chapter synth (the queue dispatcher
+     sends one POST per chapter, so it re-runs per chapter; each POST's target is
+     K(book), the tiers the book's unfinished chapters will use (`computeRunQwenNeeds`),
+     so a tier stays warm until the last chapter that uses it has rendered and is then
+     freed at a later POST). The needs go through `chapterQwenTierNeeds`, which resolves
+     the cast's per-character ttsModelKey against the run default with the SAME
+     elevate-only precedence synthesise-chapter's routeFor uses, so a character whose
+     stored tier is stale/lower than the run default can't make this precompute evict
+     the tier routeFor is about to request (which forced a cold mid-run load on chapter 1,
+     defeating the whole point of this precompute). `computeUsedQwenTiers` (the whole
+     cast) is only the fall-back when the queue or the helper can't be read. A genuinely
+     mixed-tier book still keeps both. Best-effort; a down / recycling sidecar skips. */
+  if (qwenInUse && targetChapters.length > 0 && (usedQwenTiers.keep06 || usedQwenTiers.keep17)) {
+    /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
+       Kokoro here (owner decision); a run with no 1.7B is unchanged. #1393 —
+       this POST has registered its own job by now (the reconcile runs just
+       before the chapter loop), so the starting run is visible to every other
+       evictor for the reconcile's own round trip. "Another generation active"
+       is therefore `anotherGenerationActiveAtStart`, captured BEFORE
+       registerJob: read here, `isAnyGenerationActive()` would count this run's
+       own job and Kokoro would never drop. The gate sees only
+       OTHER work: generation jobs plus an in-flight splice
+       or QA repair (which `activeGenerationBooks()` alone cannot see). The drop
+       therefore applies to the first chapter POST of a run, and is skipped
+       while anything else is live — but two first POSTs arriving together can
+       both see nothing and both drop. Bounded cost, not a no-op: the second
+       drop can unload a Kokoro the first job just reloaded for a fallback
+       line; that line then fails and goes through the transient retry. A later
+       chapter's POST (one per chapter, sibling chapters are live) and the
+       post-score re-assert in triggerScoring must not unload a Kokoro a
+       sibling chapter's fallback line may be using.
+       #4445 — the whole reconcile (not just the Kokoro drop) is skipped while
+       work OTHER than this book's own is active (`otherTierWorkActive`: a render
+       on another book, any splice or QA repair, any voice design or variant mint, another
+       book's score pass): the
+       reconcile can unload a Qwen tier that work is using. Same-book sibling
+       chapters are excluded from that check, so they still reconcile with Kokoro
+       kept, as above. The 1.7B is additionally never dropped while a Quality render is
+       live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); a
+       sibling's 0.6B is covered by `sameBookTierUnion` (its `tierNeeds`, also when a character
+       was RAISED to Quality with 2+ workers). Only a character LOWERED in the score pass (one
+       worker) stays accepted — it costs a reload and retry.
+       The reconcile awaits `GET /health` before it posts `/unload`, so it is handed a
+       function: after the health probe it re-reads `otherTierWorkActive` and K(book) and
+       returns null (skip) when other work registered in that round trip. */
+    if (otherTierWorkActive(bookId)) {
+      console.info(
+        '[generation] run-start tier reconcile skipped: other GPU work is active',
+      );
+    } else {
+      await keepForRunStart(usedQwenTiers, anotherGenerationActiveAtStart)
+        .then((target) =>
+          reconcileResidentQwenTiers(() => keepAfterHealth(bookId, bookTierKeep(), null, target)),
+        )
+        .catch((e) =>
+          console.warn('[generation] tier reconcile skipped:', (e as Error).message),
+        );
+    }
+  }
 
   /* One queue worker = one chapter. The dispatcher fires a separate POST per
      chapter (chapterIds:[id], force:true), so the queue's N workers ARE the

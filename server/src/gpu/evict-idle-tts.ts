@@ -44,15 +44,20 @@
      checks repeated immediately before the unload. The
      streak is per admission (`QuietPollState`), never module-global.
 
-     KNOWN RESIDUAL WINDOW (#1839 finding 2, investigated and left open on
-     purpose): "the render path already reconciles at run start, so the lever
+     KNOWN RESIDUAL WINDOW (#1839 finding 2, NARROWED by #1393, NOT closed):
+     "the render path already reconciles at run start, so the lever
      is inert on the hot path by construction" is not quite true for the
-     first ~190 lines of a render's startup. `routes/generation.ts` calls its
-     run-start `reconcileResidentQwenTiers` well BEFORE it calls `registerJob`
-     — the point at which `activeGenerationBooks()` (and so
-     `isAnyGenerationActive()` above) actually sees the book. In that window a
+     first part of a render's startup. `routes/generation.ts` calls
+     `registerJob` — the point at which `activeGenerationBooks()` (and so
+     `isAnyGenerationActive()` above) actually sees the book — and only then
+     its run-start `reconcileResidentQwenTiers` (#1393 moved it after
+     `registerJob`, so the reconcile's own round trip is visible). A starting
+     render is still invisible for everything it awaits BEFORE `registerJob`:
+     the cast read, `hydrateCastReusedVoices`, `clearMismatchedDesignedVoices`,
+     the edits snapshot and cache refresh, `loadAnalysisCache`, `mkdir`, the
+     disk guard, and the `.queue.json` and `castIdHistory` reads. In that window a
      DIFFERENT blocked op's `evictIdleQwenBase` can see "no render in flight"
-     and race the starting render's own run-start reconcile: if this lever's
+     and race the starting render's run-start reconcile: if this lever's
      `/unload` lands after the render decided to keep a tier, the render's
      first chapter synth hits a tier that was just evicted out from under it.
      Closing this properly means making the starting render visible to the

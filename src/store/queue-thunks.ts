@@ -51,7 +51,10 @@ export interface EnqueueInput {
   /** Required when scope === 'character'. */
   characterId?: string;
   /** Optional per-entry TTS model override (regenerate at a chosen quality
-      tier, e.g. Qwen 1.7B). Absent → the dispatcher uses `ui.ttsModelKey`. */
+      tier, e.g. Qwen 1.7B). Always posted as given. When absent,
+      `enqueueQueueEntries` stamps the session `ui.ttsModelKey` once that model is
+      trustworthy (see `sessionModelKeyForStamp`); in the boot window it posts no
+      `modelKey`, and the dispatcher then uses `ui.ttsModelKey` at claim time. */
   modelKey?: TtsModelKey;
   addedAt?: string;
   /** fe-46 — set on every fresh entry from a "Proceed anyway" run so the
@@ -98,6 +101,22 @@ export function loadQueue() {
   };
 }
 
+/** The session TTS model, only when it is trustworthy enough to stamp on an
+    entry: the `ui` slice has rehydrated (redux-persist's `_persist.rehydrated`;
+    there is no PersistGate) AND the user picked the model (`ttsModelKeyExplicit`)
+    or the account settings have hydrated. Before that `ui.ttsModelKey` is just
+    `DEFAULT_TTS_MODEL`, and a stamp taken then would be permanently wrong; a
+    missing stamp is not. Read defensively: hand-built stores may lack either slice. */
+function sessionModelKeyForStamp(state: RootState): TtsModelKey | undefined {
+  const ui = state.ui as
+    | (RootState['ui'] & { _persist?: { rehydrated?: boolean } })
+    | undefined;
+  if (!ui || ui._persist?.rehydrated !== true) return undefined;
+  const account = (state as { account?: { hydrated?: boolean } }).account;
+  if (ui.ttsModelKeyExplicit === true || account?.hydrated === true) return ui.ttsModelKey;
+  return undefined;
+}
+
 /** POST /api/queue/enqueue — append one or more entries. The regenerate
     trigger sites funnel through here and pop a toast with the new count + a
     "View queue" CTA. Pass `{ silent: true }` (plan 111 enqueue-on-work) to
@@ -126,10 +145,16 @@ export function enqueueQueueEntries(entries: EnqueueInput[], opts: { silent?: bo
        so when every entry is gated we early-return the current snapshot without
        a network call rather than posting an empty array. */
     if (allowed.length === 0) return snapshotFromState(getState());
+    /* An override is ALWAYS posted as given. Otherwise stamp the session model when
+       trustworthy; in every other state post no `modelKey` key at all. */
+    const sessionKey = sessionModelKeyForStamp(state);
+    const stamped = allowed.map((e) =>
+      e.modelKey || !sessionKey ? e : { ...e, modelKey: sessionKey },
+    );
     const res = await queueRequest('/api/queue/enqueue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: allowed }),
+      body: JSON.stringify({ entries: stamped }),
     });
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));

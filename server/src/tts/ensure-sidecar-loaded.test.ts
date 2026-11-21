@@ -252,6 +252,28 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     expect(m.unloads()).toEqual([{ engine: 'qwen', model: '1.7b' }]); // 1.7B only
   });
 
+  it('F1 (#1393): a keep function is read AFTER /health resolves — a keep that changes during the probe is honoured', async () => {
+    let keep17 = false;
+    const unloads: Array<Record<string, unknown>> = [];
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/health')) {
+        keep17 = true; // another job registers while the health probe is in flight
+        return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true }) };
+      }
+      unloads.push(JSON.parse((init?.body as string) ?? '{}'));
+      return { ok: true, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    await reconcileResidentQwenTiers(() => ({ keep06: true, keep17 }));
+    expect(unloads).toEqual([]); // the 1.7B is now kept, so it is not unloaded
+  });
+
+  it('F2 (#1393): a keep function returning null issues no /unload and reports false', async () => {
+    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    global.fetch = m.fetch as unknown as typeof fetch;
+    await expect(reconcileResidentQwenTiers(() => null)).resolves.toBe(false);
+    expect(m.unloads()).toEqual([]);
+  });
+
   it('#4066 — keepKokoro:false also unloads a resident Kokoro, reports true', async () => {
     const m = mockSidecar({ qwen_loaded: true, kokoro_loaded: true });
     global.fetch = m.fetch as unknown as typeof fetch;
