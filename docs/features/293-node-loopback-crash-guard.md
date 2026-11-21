@@ -108,6 +108,7 @@ Owned by the later steps: #4492 (a version-range unit test with a mutation) and 
 
 1. On a Windows box running Node 24.15.0, `npm start` in `server/` refuses with the version message (after #4492).
 2. On Node 24.16.0 or newer it starts.
+3. The Pinokio "run Update again" message, two-Update convergence and `logs/node-refused.log` after an in-app upgrade can only be proven on a real Windows box: on-box register row E117 owns them. Not run at PR time.
 
 ## Pending steps
 
