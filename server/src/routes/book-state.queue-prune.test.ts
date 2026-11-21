@@ -12,7 +12,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
-import { quarantinedIt } from '../test-utils/quarantine.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -213,8 +212,8 @@ async function stopAttempt(attempt: PruneAttempt): Promise<void> {
   await attempt.inFlight.catch(() => undefined);
 }
 
-/* The loop and the onTestFinished registration, shared by the quarantined case and the gating A/B pair, so
-   deleting either line of the stop/drain wiring is visible to a non-quarantined run. */
+/* The loop and the onTestFinished registration, shared by the same-tick case and the gating A/B pair, so
+   deleting either line of the stop/drain wiring is visible to both. */
 function runPruneAttempt(rounds: number): { attempt: PruneAttempt; done: Promise<void> } {
   const attempt: PruneAttempt = { stopped: false, inFlight: Promise.resolve(), roundsStarted: 0 };
   onTestFinished(() => stopAttempt(attempt));
@@ -231,7 +230,7 @@ function runPruneAttempt(rounds: number): { attempt: PruneAttempt; done: Promise
    its read above the span would let a same-tick queue write land between that read and the prune's write and be
    erased by it. */
 describe('DELETE /api/books/:bookId prune is serialised against other queue writes (#4034)', () => {
-  quarantinedIt('a same-tick /start, /pause and enqueue all survive the prune', async () => {
+  it('a same-tick /start, /pause and enqueue all survive the prune', async () => {
     await runPruneAttempt(10).done;
   });
 
