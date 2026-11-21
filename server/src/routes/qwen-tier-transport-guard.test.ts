@@ -152,7 +152,14 @@ beforeAll(async () => {
 
   genBookId = makeBookId(AUTHOR, SERIES, GEN_TITLE);
   writeBook(join(workspaceRoot, 'books', AUTHOR, SERIES, GEN_TITLE), genBookId, GEN_TITLE, SERIES, [
-    { id: 'wren', name: 'Wren', ttsEngine: 'qwen' },
+    /* #4556: a real (designed) Qwen speaker, so the run needs a tier and the reconcile is reached. */
+    {
+      id: 'wren',
+      name: 'Wren',
+      ttsEngine: 'qwen',
+      voiceId: 'v_wren',
+      overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
+    },
   ]);
   await cacheModule.saveAnalysisCache(`m_${genBookId}`, {
     chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Hello.' }] },

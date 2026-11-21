@@ -190,6 +190,29 @@ afterAll(async () => {
 
 const ENTRY_ID = 'gate-entry-1';
 
+/* #4556 — run needs keep only the tiers real Qwen speakers use. Wren (the shared
+   fixture) is deliberately UNDESIGNED for the park tests; the reconcile suites below give her a
+   designed Qwen voice so she is a real Qwen speaker, and restore the file after. */
+const DESIGNED_WREN = {
+  id: 'wren',
+  name: 'Wren',
+  ttsEngine: 'qwen',
+  voiceId: 'v_wren',
+  overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
+};
+function useDesignedWren() {
+  let original = '';
+  const castPath = () => join(bookDir, '.audiobook', 'cast.json');
+  beforeEach(async () => {
+    const { readFileSync } = await import('node:fs');
+    original = readFileSync(castPath(), 'utf8');
+    writeFileSync(castPath(), JSON.stringify({ characters: [DESIGNED_WREN] }));
+  });
+  afterEach(() => {
+    writeFileSync(castPath(), original);
+  });
+}
+
 beforeEach(async () => {
   synthCalled = false;
   lastSynthArgs = null;
@@ -304,6 +327,7 @@ describe('per-chapter loud Qwen→Kokoro fallback gate', () => {
 });
 
 describe('#4066 run-start reconcile on a Quality chapter render', () => {
+  useDesignedWren();
   beforeEach(async () => {
     reconcileCalls.length = 0;
     const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
@@ -444,7 +468,7 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
     writeFileSync(
       castPath,
       JSON.stringify({
-        characters: [{ id: 'wren', name: 'Wren', ttsEngine: 'qwen', ttsModelKey: 'qwen3-tts-1.7b' }],
+        characters: [{ ...DESIGNED_WREN, ttsModelKey: 'qwen3-tts-1.7b' }],
       }),
     );
     try {
@@ -464,6 +488,7 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
 });
 
 describe('#4079 a real chapter render feeds the render-lease gate only when it uses the Quality tier', () => {
+  useDesignedWren();
   /* Runs one POST that parks inside synth, samples the gate while the job is
      registered, then lets it finish and samples again. */
   async function qualityActiveWhileRendering(modelKey: string): Promise<[boolean, boolean]> {
@@ -881,5 +906,186 @@ describe('fs-60 force-engine loop honors an eligible manual Coqui assignment', (
     const sofiya = lastSynthArgs?.cast?.find((c) => c.id === 'sofiya');
     expect(oleg?.ttsEngine).toBe('coqui');
     expect(sofiya?.ttsEngine).toBe('qwen');
+  }, 10_000);
+});
+
+/* #4556 / #1393 — the run-start reconcile keeps only the Qwen tiers the run NEEDS: the speakers of
+   this POST's target chapters plus this book's pending queue entries (plan 293 §2.2). Real POST,
+   real `.queue.json`. Request 0.6B unless a case says otherwise; a character's own pin can only
+   RAISE it, so `d17` (pinned 1.7B) is the only 1.7B speaker under a Standard request. */
+describe('#4556 run needs: the reconcile keeps only the tiers the unfinished chapters use', () => {
+  const NEEDS_TITLE = 'Run Needs Test';
+  const NEEDS_MANUSCRIPT = 'm_run_needs_test';
+  const OWN_ENTRY = 'needs-own-entry';
+  let needsBookId: string;
+  let needsDir: string;
+
+  const designed = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: id,
+    ttsEngine: 'qwen',
+    voiceId: `v_${id}`,
+    overrideTtsVoices: { qwen: { name: `qwen-v_${id}` } },
+    ...extra,
+  });
+  const entry = (over: Record<string, unknown>) => ({
+    id: 'e-x',
+    bookId: needsBookId,
+    chapterId: 1,
+    scope: 'this',
+    addedAt: '2026-11-20T00:00:00.000Z',
+    status: 'queued',
+    order: 1,
+    ...over,
+  });
+  async function writeQueue(entries: Array<Record<string, unknown>>) {
+    await writeQueueFile(queuePath, {
+      entries: entries as unknown as import('../workspace/queue-io.js').QueueEntry[],
+      paused: false,
+    });
+  }
+  async function postTo(id: string, body: Record<string, unknown>) {
+    const res = await fetch(`${baseUrl}/api/books/${id}/generation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true, fallbackConfirmed: true, ...body }),
+    });
+    const reader = res.body!.getReader();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  }
+  const post = (chapterId: number, extra: Record<string, unknown> = {}) =>
+    postTo(needsBookId, { modelKey: 'qwen3-tts-0.6b', chapterIds: [chapterId], ...extra });
+  const lastKeep = () => {
+    const a = reconcileCalls[0]![0] as { keep06: boolean; keep17: boolean };
+    return { keep06: a.keep06, keep17: a.keep17 };
+  };
+
+  beforeAll(async () => {
+    const [{ makeBookId }, cacheModule] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../store/analysis-cache.js'),
+    ]);
+    needsBookId = makeBookId(AUTHOR, SERIES, NEEDS_TITLE);
+    needsDir = join(workspaceRoot, 'books', AUTHOR, SERIES, NEEDS_TITLE);
+    mkdirSync(join(needsDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(needsDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(needsDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: needsBookId,
+        manuscriptId: NEEDS_MANUSCRIPT,
+        author: AUTHOR,
+        title: NEEDS_TITLE,
+        series: SERIES,
+        updatedAt: '2026-11-20T00:00:00.000Z',
+        schema: 1,
+        language: 'en',
+        chapters: [1, 2, 3, 4].map((id) => ({ id, title: `Chapter ${id}`, slug: `chapter-${id}` })),
+      }),
+    );
+    /* d17: designed, pinned 1.7B. d06: designed, unpinned (rides the request key).
+       silent: Qwen but UNDESIGNED and the speaker of ch4 only (a Kokoro-fallback character).
+       ch1 -> d17, ch2 -> d06, ch3 -> d06, ch4 -> silent only. */
+    writeFileSync(
+      join(needsDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          designed('d17', { ttsModelKey: 'qwen3-tts-1.7b' }),
+          designed('d06'),
+          { id: 'silent', name: 'Silent', ttsEngine: 'qwen' },
+        ],
+      }),
+    );
+    const line = (id: number, who: string) => [
+      { id: id * 10, chapterId: id, characterId: who, text: 'Hello.' },
+    ];
+    await cacheModule.saveAnalysisCache(NEEDS_MANUSCRIPT, {
+      chapters: { 1: line(1, 'd17'), 2: line(2, 'd06'), 3: line(3, 'd06'), 4: line(4, 'silent') },
+    });
+  });
+
+  beforeEach(async () => {
+    reconcileCalls.length = 0;
+    synthesiseImpl = async () => ({
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 1,
+      segments: [],
+    });
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(async () => ({ kokoroLoaded: false, devices: {} }));
+    await writeQueue([]);
+  });
+  afterEach(async () => {
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(null);
+  });
+
+  it('R1: a silent unpinned Qwen character and a lone 1.7B speaker keep only 1.7B (not the full cast)', async () => {
+    await post(1);
+    expect(lastKeep()).toEqual({ keep06: false, keep17: true });
+  }, 10_000);
+
+  it('R2: a queued same-book entry that speaks 0.6B keeps both tiers', async () => {
+    await writeQueue([entry({ id: 'q2', chapterId: 2, status: 'queued' })]);
+    await post(1);
+    expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+  }, 10_000);
+
+  it.each([
+    ['done', { status: 'done' }],
+    ['failed', { status: 'failed' }],
+    ['queued, ANOTHER book', { status: 'queued', bookId: 'some-other-book' }],
+  ])('R3: a %s entry contributes nothing', async (_label, over) => {
+    await writeQueue([entry({ id: 'q3', chapterId: 2, ...over })]);
+    await post(1);
+    expect(lastKeep()).toEqual({ keep06: false, keep17: true });
+  }, 10_000);
+
+  it('R4: a rendered, non-target, non-queued 1.7B chapter is not kept', async () => {
+    await post(2);
+    expect(lastKeep()).toEqual({ keep06: true, keep17: false });
+  }, 10_000);
+
+  it('R5: an unreadable (corrupt) queue file falls back to the full-cast value', async () => {
+    const { queueJsonPath } = await import('../workspace/paths.js');
+    writeFileSync(queueJsonPath(), '{ not json');
+    await post(1);
+    /* Full cast under a 0.6B request: d06 + silent ride 0.6B, d17 is pinned 1.7B. */
+    expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+  }, 10_000);
+
+  it('R10: every speaker falls back to Kokoro -> the reconcile is NOT called (D3)', async () => {
+    await post(4);
+    expect(reconcileCalls.length).toBe(0);
+  }, 10_000);
+
+  it('R10 (the old undesigned fixture): a lone undesigned Qwen speaker does not reconcile', async () => {
+    /* The shared book's wren is undesigned (her cast.json is only rewritten inside the suites above). */
+    await postTo(bookId, { modelKey: 'qwen3-tts-1.7b', chapterIds: [1] });
+    expect(reconcileCalls.length).toBe(0);
+  }, 10_000);
+
+  it('R11: a pending entry stamped 1.7B is kept at its stamp although the request is 0.6B', async () => {
+    await writeQueue([entry({ id: 'q11', chapterId: 3, status: 'queued', modelKey: 'qwen3-tts-1.7b' })]);
+    await post(4); // target speaks only a Kokoro-fallback character -> only the stamped entry counts
+    expect(lastKeep()).toEqual({ keep06: false, keep17: true });
+  }, 10_000);
+
+  it('R12: an UNSTAMPED awaiting_confirm entry counts, at the request key (1.7B)', async () => {
+    await writeQueue([entry({ id: 'q12', chapterId: 3, status: 'awaiting_confirm' })]);
+    await post(4, { modelKey: 'qwen3-tts-1.7b' });
+    expect(lastKeep()).toEqual({ keep06: false, keep17: true });
+  }, 10_000);
+
+  it("R13: the POST's own in_progress entry is never consulted for its target", async () => {
+    await writeQueue([
+      entry({ id: OWN_ENTRY, chapterId: 2, status: 'in_progress', modelKey: 'qwen3-tts-0.6b' }),
+    ]);
+    await post(2, { modelKey: 'qwen3-tts-1.7b', queueEntryId: OWN_ENTRY });
+    expect(lastKeep()).toEqual({ keep06: false, keep17: true });
   }, 10_000);
 });

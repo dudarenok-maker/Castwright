@@ -83,6 +83,7 @@ import {
 } from '../tts/synthesise-chapter.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { computeRunQwenNeeds } from '../tts/qwen-run-needs.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import {
@@ -1055,26 +1056,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const qwenInUse = requiredEngines.has('qwen');
   const qwenState = getLastKnownQwenInstallState();
   const qwenUnavailable = qwenInUse && qwenState !== 'ready' && qwenState !== 'loaded';
-  /* The Qwen base tier(s) this WHOLE run will use, resolved from the FULL cast
-     with the elevate-only precedence routeFor uses (a per-character ttsModelKey
-     can only raise a character above the run default). Invariant for the run —
-     the cast is fixed — so it's computed ONCE and reused for BOTH the run-start
-     VRAM reconcile AND the post-audition reconcile after each chapter's score
-     pass. The latter must reconcile against THIS full-cast set, never a
-     finalized-chapters-only view: a sibling chapter of this same book can be
-     mid-render on a tier no finished chapter used yet, and evicting it out from
-     under that in-flight render is exactly the srv-36 race (Finding 2).
-
-     Known tradeoff (shared with this same run-start reconcile): the full cast is
-     a SUPERSET of the tiers actually rendered — a declared-but-silent Qwen cast
-     member (or one that fell back to Kokoro) still pins its tier here, so a
-     stray same-tier base (a legacy-segments audition pull, or a prior book's
-     leftover) won't be evicted. Precisely evicting only truly-unused tiers needs
-     the actual in-flight+rendered tier set, i.e. the active-generation tier
-     registry tracked in #1393 (same infra as the cross-book fix). */
-  const usedQwenTiers = qwenInUse
-    ? computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey)
-    : { keep06: false, keep17: false };
+  /* (`usedQwenTiers`, the Qwen base tier(s) this run needs, is computed below,
+     once `targetChapters` is known — see "Run needs".) */
   /* NEVER silently downgrade a Qwen book to Kokoro. When the whole cast's Qwen
      characters are about to render in the wrong engine (wrong voices) because
      Qwen reads unavailable, say so loudly — server log + a UI warning toast
@@ -1204,6 +1187,52 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   });
   const targetIdSet = new Set(targetChapters.map((c) => c.id));
 
+  /* Run needs (#1393, plan 293 §2.2): the Qwen base tier(s) this run will
+     actually use — the speakers of the chapters still to render (this POST's
+     targets plus this book's pending queue entries), with the render's Kokoro
+     fallback taken into account (`computeRunQwenNeeds`). A tier only a finished
+     chapter, a silent cast member or a Kokoro-fallback character used is NOT
+     kept, so a stray same-tier base can be evicted. A run that needs no tier
+     does not reconcile at all (D3).
+
+     Read for BOTH the run-start VRAM reconcile and `usesQuality17` (the render
+     lease). The post-score reconcile still passes this same value as `keep`
+     (#4560 narrows that path).
+
+     Fall-back: if the queue file cannot be read (a MISSING file is an empty
+     queue, i.e. no pending entries; only a corrupt / unreadable file throws) or
+     the helper throws, keep the full cast's tiers exactly as before — an
+     unknown must never narrow the keep.
+
+     Accepted residuals (plan 293): the Qwen 0.6B pre-pass re-derive (§3.5) and
+     the gap between one chapter finishing and the next being queued (D2) can
+     still cost a reload. The same-book job union is #4557. */
+  const fullCastQwenTiers = () =>
+    computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey);
+  let usedQwenTiers: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
+  if (qwenInUse) {
+    try {
+      const queueEntries = (await readQueueFile(queueJsonPath())).entries;
+      usedQwenTiers = computeRunQwenNeeds({
+        bookId,
+        targetChapterIds: targetChapters.map((c) => c.id),
+        queueEntries,
+        analysisChapters: analysis.chapters,
+        cast: cast.characters,
+        castIdHistory: await loadCastIdHistory(bookDir),
+        defaultEngine: engine,
+        requestQwenModelKey: resolveForEngine('qwen').modelKey,
+        qwenUnavailable,
+      });
+    } catch (e) {
+      console.warn(
+        '[generation] run-needs tier computation failed; keeping the full cast tiers:',
+        (e as Error).message,
+      );
+      usedQwenTiers = fullCastQwenTiers();
+    }
+  }
+
   /* srv-28 — pre-flight disk-space guard. Estimate this run's footprint
      (target chapters × AVG_CHAPTER_BYTES) and compare against the free space on
      the audio volume. Default mode WARN rides the existing toast path; BLOCK
@@ -1255,7 +1284,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      routeFor is about to request (which forced a cold mid-run load on chapter 1,
      defeating the whole point of this precompute). A genuinely mixed-tier book
      still keeps both. Best-effort; a down / recycling sidecar skips. */
-  if (qwenInUse && targetChapters.length > 0) {
+  if (qwenInUse && targetChapters.length > 0 && (usedQwenTiers.keep06 || usedQwenTiers.keep17)) {
     /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
        Kokoro here (owner decision); a run with no 1.7B is unchanged. This
        POST has not registered its own job yet (registerJob is below), so
