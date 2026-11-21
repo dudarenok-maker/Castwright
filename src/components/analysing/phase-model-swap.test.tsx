@@ -251,4 +251,44 @@ describe('PhaseModelSwap', () => {
     await act(async () => {});
     expect(store.getState().ui.analyzerPhasePicks.m1).toBeUndefined();
   });
+
+  /* #4203 — a long local tag (e.g. an hf.co/...:Q4_K_M ref) must be able to
+     shrink inside the phase card; without min-w-0 / max-w-full on the select
+     (and its wrapper) it sizes to its longest option and spills off a phone.
+     jsdom does no layout, so pin the classes that carry the constraint. */
+  it('keeps the select shrinkable when a long local model tag is present', () => {
+    const longTag = 'hf.co/some-org/some-very-long-model-name-GGUF:Q4_K_M';
+    const store = mountStore({
+      analyzerPhase0Model: longTag,
+      localAnalyzerModels: [{ name: longTag }],
+    });
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0');
+    expect(screen.getByRole('option', { name: longTag })).toBeInTheDocument();
+    expect(select).toHaveClass('min-w-0', 'max-w-full');
+    expect(select.parentElement).toHaveClass('min-w-0', 'max-w-full');
+  });
+
+  it('keeps the disabled override select shrinkable too', () => {
+    const store = mountStore(
+      { analyzerPhase0Model: null },
+      {
+        selectedModel: 'hf.co/some-org/some-very-long-model-name-GGUF:Q4_K_M',
+        selectedModelExplicit: true,
+      },
+    );
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0');
+    expect(select).toBeDisabled();
+    expect(select).toHaveClass('min-w-0', 'max-w-full');
+    expect(select.parentElement).toHaveClass('min-w-0', 'max-w-full');
+  });
 });

@@ -108,6 +108,9 @@ interface OpenHandle {
      event with the full list — keeps the activity feed from drowning in
      per-chapter audit rows on long runs. */
   completedChapterIds: number[];
+  /** #3436 -- the "generation started" log line is held until the server accepts the stream (its first
+      tick), so a 409 `book_busy` refusal, which ran nothing, leaves no line. */
+  startedPending: boolean;
 }
 
 export interface StreamRunner {
@@ -237,8 +240,9 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     const handle = handles.get(key);
     if (!handle) return;
     /* Flush the per-run rollup before tearing down. Empty runs (pause before
-       any chapter finished, queue drained immediately) write nothing — there
-       was already a generation_started anchor for those. */
+       any chapter finished, queue drained immediately) write nothing. A run closed
+       before its first tick (a pause while the POST is in flight) has no
+       generation_started anchor either: that line waits for the first tick. */
     if (handle.completedChapterIds.length > 0) {
       dispatch(
         changeLogActions.appendLogEvent(
@@ -287,8 +291,6 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
               .filter((c) => c.state === 'in_progress' || c.state === 'queued')
               .map((c) => c.id)
           : [];
-    dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: ids })));
-
     const chapterId = opts.chapterId ?? null;
 
     /* Seed this stream's snapshot, keyed by the composite stream key so two
@@ -337,6 +339,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       modelKey,
       chapterIds: ids,
       completedChapterIds: [],
+      startedPending: true,
       queueEntryId: opts.queueEntryId ?? null,
     });
   };
@@ -350,6 +353,13 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     if (!ev) return;
     const handle = handles.get(key);
     if (!handle) return;
+    if (handle.startedPending) {
+      handle.startedPending = false;
+      /* #3436 -- a `book_busy` refusal ran nothing: no "started" line, and no "failed" one either. */
+      if (!(ev.type === 'chapter_failed' && ev.errorCode === 'book-busy')) {
+        dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: handle.chapterIds })));
+      }
+    }
     if (store.getState().chapters.currentBookId === handle.bookId) {
       dispatch(chaptersActions.applyGenerationTick(ev));
     }
@@ -418,7 +428,9 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         reason: ev.errorReason ?? 'Synthesis failed.',
         errorCode: ev.errorCode,
       });
-      if (sliceMatchesHandle) {
+      /* #3436 -- a `book-busy` refusal ran nothing, so it has no "Chapter N failed" line (and the
+         dispatcher requeues the entry, so it would repeat every hold-off). */
+      if (sliceMatchesHandle && ev.errorCode !== 'book-busy') {
         const ch = after.chapters.chapters.find((c) => c.id === ev.chapterId);
         if (ch) {
           dispatch(

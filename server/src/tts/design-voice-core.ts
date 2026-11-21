@@ -200,6 +200,7 @@ export async function postDesignAndCacheAudition(
           }) as unknown as Promise<Response>,
         {
           engine: 'qwen',
+          purpose,
           signal: controller.signal,
           /* Same eviction lever the /synthesize path gets (tts/sidecar.ts) —
              free an idle Qwen base this design doesn't need instead of polling

@@ -2525,7 +2525,7 @@ qwenVoiceRouter.post(
     try {
       persona = await resolveVariantPersona(character, characterId, personaFromBody, emotion);
     } catch (e) {
-      if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
+      if (e instanceof RetryableForkError) return res.status(500).json({ error: requestFailureMessageFs(e, e.message) });
       throw e;
     }
     if (!persona) {
@@ -2672,7 +2672,7 @@ qwenVoiceRouter.post(
       /* A fixed, path-free sentence that says a retry can work (a book that was
          unreadable or changed during a separation): the user is told so instead of
          the generic message. */
-      if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
+      if (e instanceof RetryableForkError) return res.status(500).json({ error: requestFailureMessageFs(e, e.message) });
       /* The core throws a user-facing message for sidecar/encode/timeout
          failures. Map the sidecar's OWN status through (#1801) — a 503 is the
          retryable "no GPU capacity, free VRAM and retry" signal, and flattening
@@ -2907,7 +2907,7 @@ qwenVoiceRouter.post(
         });
         if (carried) body.previewVoiceId = carried;
       } catch (e) {
-        if (e instanceof RetryableForkError) return res.status(500).json({ error: e.message });
+        if (e instanceof RetryableForkError) return res.status(500).json({ error: requestFailureMessageFs(e, e.message) });
         if (e instanceof CharacterGoneError) return res.status(404).json({ error: e.message });
         throw e;
       }

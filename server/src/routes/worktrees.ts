@@ -11,6 +11,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import net from 'node:net';
+import { pathForClient, textForClient } from '../lan-paths.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 const PORT_VARS = ['VITE_PORT', 'PORT', 'LOCAL_TTS_PORT', 'PLAYWRIGHT_PORT'] as const;
 
@@ -75,9 +78,14 @@ function probePort(port: number, timeoutMs = 500): Promise<boolean> {
   });
 }
 
+/* #4446 — collapse the home dir in each row's path for LAN clients. */
+export function worktreesForWire(req: Request, rows: WorktreeRow[]): WorktreeRow[] {
+  return rows.map((w) => ({ ...w, path: pathForClient(req, w.path) }));
+}
+
 export const worktreesRouter = Router();
 
-worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
+worktreesRouter.get('/worktrees', async (req: Request, res: Response) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(404).end();
   }
@@ -87,9 +95,17 @@ worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
       windowsHide: true,
     });
     if (porcelain.status !== 0) {
-      return res
-        .status(500)
-        .json({ error: `git worktree list failed: ${porcelain.stderr || porcelain.stdout}` });
+      /* git's stderr names the repo path (#3702); a non-zero exit is not an fs error, so
+         the seam cannot fire here -- scrub instead. A spawn failure (git not on PATH) leaves
+         stderr/stdout null and the cause on `error`, whose message can name a path too. */
+      return res.status(500).json({
+        error: textForClient(
+          req,
+          scrubChildOutput(
+            `git worktree list failed: ${porcelain.stderr || porcelain.stdout || porcelain.error?.message}`,
+          ),
+        ),
+      });
     }
     const trees = parseWorktreePorcelain(porcelain.stdout);
     const enriched: WorktreeRow[] = await Promise.all(
@@ -108,9 +124,14 @@ worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
         };
       }),
     );
-    res.json({ worktrees: enriched });
+    res.json({ worktrees: worktreesForWire(req, enriched) });
   } catch (e) {
     console.error('[worktrees] GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to list worktrees.' });
+    res.status(500).json({
+      error: textForClient(
+        req,
+        requestFailureMessageFs(e, (e as Error).message || 'Failed to list worktrees.'),
+      ),
+    });
   }
 });

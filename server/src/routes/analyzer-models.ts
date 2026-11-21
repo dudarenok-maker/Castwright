@@ -18,6 +18,7 @@ import { readUserSettings, writeAnalyzerCapabilityRecord, type UserSettings } fr
 /* Known secrets come through 3b's leaf gate, never from user-settings.ts (A9). */
 import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 import { redactKnownSecrets } from '../analyzer/redact.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 
 export const analyzerModelsRouter = Router();
@@ -79,7 +80,7 @@ analyzerModelsRouter.post('/models/test', async (req: Request, res: Response) =>
       /* P7: a failed control or an inconclusive step writes nothing, so a previous record stays. */
       const outcome = err instanceof ModelTestControlFailedError ? 'failed' : 'inconclusive';
       console.warn(`[analyzer-models] test of ${modelId} ${outcome}: ${(err as Error).name}`);
-      const message = redactKnownSecrets((err as Error).message ?? 'Model test failed.', secretsFor(settings));
+      const message = requestFailureMessageFs(err, redactKnownSecrets((err as Error).message ?? 'Model test failed.', secretsFor(settings)));
       return res.status(502).json({ error: message.slice(0, 800), outcome });
     }
   } finally {

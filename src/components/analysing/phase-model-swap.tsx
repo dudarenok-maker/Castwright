@@ -75,13 +75,13 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
   if (overrideActive) {
     const overrideLabel = modelLabel(overrideModelId, analyzerCatalog);
     return (
-      <span className="inline-flex items-center gap-2">
+      <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
         <select
           value="__override__"
           disabled
           data-testid={`phase-model-swap-${phaseId}`}
           title="Per-run override active — reset it to default to edit the per-phase model."
-          className="px-2.5 py-1 rounded-full border border-ink/10 bg-ink/5 text-[11px] font-medium text-ink/50 cursor-not-allowed"
+          className="min-w-0 max-w-full px-2.5 py-1 rounded-full border border-ink/10 bg-ink/5 text-[11px] font-medium text-ink/50 cursor-not-allowed"
           aria-label={`Phase ${phaseId} model (per-run override active)`}
           onChange={() => {}}
         >
@@ -92,7 +92,7 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
       <select
         value={rawValue ?? ''}
         disabled={disabled}
@@ -104,7 +104,7 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
             ? 'A run is in progress — pick a model for the next run started from this view.'
             : `Choose the Phase ${phaseId} model for the next run started from this view. Does not change your saved settings.`
         }
-        className={`px-2.5 py-1 rounded-full border text-[11px] font-medium focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ${
+        className={`min-w-0 max-w-full px-2.5 py-1 rounded-full border text-[11px] font-medium focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ${
           disabled
             ? 'border-ink/10 bg-ink/5 text-ink/50 cursor-not-allowed'
             : 'border-ink/15 bg-white text-ink'

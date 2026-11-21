@@ -24,6 +24,7 @@
 
 import { spawn } from 'node:child_process';
 import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
+import { fixLameEncoderDelayInFile } from '../tts/mp3.js';
 
 export interface Id3Tags {
   title: string;
@@ -113,4 +114,9 @@ export async function applyId3v24Tags(
       reject(ffmpegFailure('ffmpeg', code, stderr));
     });
   });
+
+  /* The remux regenerates the Xing/LAME tag but carries the encoder delay over
+     as-is, so a chapter rendered before #4573's encode-side fix would export
+     with ffmpeg 9.1's wrong delay (47). Correct it on the written file. */
+  await fixLameEncoderDelayInFile(destPath);
 }

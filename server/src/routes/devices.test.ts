@@ -190,6 +190,30 @@ describe('devices route (srv-33)', () => {
     expect(res.body.error.length).toBeGreaterThan(0);
   });
 
+  // #3702 -- the degraded error is a REAL one (corrupt file on disk), unmodified:
+  // its message must not carry the absolute workspace path to the LAN client.
+  it('GET/POST/DELETE 503 bodies carry no absolute workspace path when the store is degraded (#3702)', async () => {
+    await writeFile(join(workspaceRoot, 'device-tokens.json'), '{ this is not json', 'utf8');
+    deviceTokens._resetDeviceTokenCacheForTests();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const responses = [
+      await request(app).get('/api/devices'),
+      await request(app).post('/api/devices').send({ label: 'Phone' }),
+      await request(app).delete('/api/devices/any-id'),
+    ];
+    warn.mockRestore();
+
+    for (const res of responses) {
+      expect(res.status).toBe(503);
+      // res.body.error, not res.text: the JSON text doubles Windows backslashes, so a
+      // single-backslash workspaceRoot could never match it.
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.error).not.toContain(workspaceRoot);
+      expect(res.body.error).not.toContain('device-tokens.json');
+    }
+  });
+
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
     const { token } = await deviceTokens.createDevice('Phone', 30);
     let passed = false;

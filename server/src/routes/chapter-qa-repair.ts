@@ -73,6 +73,7 @@ import {
 } from '../audio/build-synth-replacement.js';
 import { finalizeChapterAudioWrite, type ChapterSegmentsFile } from '../audio/finalize-chapter-write.js';
 import { abortInFlightChapterJob } from './generation.js';
+import { busySentence } from './book-state.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { readFile } from 'node:fs/promises';
 import { configValue } from '../config/resolver.js';
@@ -126,7 +127,6 @@ chapterQaRepairRouter.post(
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
     const send = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
     const fail = (errorReason: string) => {
       send({ type: 'chapter_failed', chapterId, errorReason });
@@ -137,13 +137,16 @@ chapterQaRepairRouter.post(
 
     if (!located) return fail(`No book found for id "${bookId}".`);
 
-    /* #3711 — the repair is a registered `render` job (it re-records and rewrites the
-       chapter audio): a folder move/delete is refused while it runs. The book and its
+    /* #3711 — the repair is a registered job (it re-records and rewrites the
+       chapter audio): a folder move/delete is refused while it runs. #3436: a repair that writes
+       registers as `render` (an analysis start is refused meanwhile); a dry-run scan registers as
+       `audio-fix`, which an analysis start ignores. The book and its
        CURRENT folder come from the lease, resolved under book-op. Headers are already
        flushed, so a registration failure is the route's own `chapter_failed` frame. */
     let registered;
     try {
-      registered = await runBookJob(bookId, 'render', async (lease) => {
+      registered = await runBookJob(bookId, dryRun ? 'audio-fix' : 'render', async (lease) => {
+    res.flushHeaders();
     const { bookDir, state } = lease;
 
     const chapter = state.chapters.find((c) => c.id === chapterId);
@@ -929,12 +932,20 @@ chapterQaRepairRouter.post(
     } finally {
       releaseSlot?.();
     }
-      });
+      }, { refuseIfLive: dryRun ? undefined : 'analysis' });
     } catch (e) {
       console.error('[qa-repair] job registration failed', e);
       return fail(isLockAcquisitionTimeout(e) ? LOCK_CONTENTION_REQUEST_ERROR : 'Could not start the audio-QA repair.');
     }
     if (registered === BOOK_GONE) return fail('Book not found.');
+    /* #3436 -- see the splice route: a repair that writes (`!dryRun`, the only one that rebuilds the
+       analysis cache) is refused (409 JSON) while an analysis is registered. */
+    if ('busy' in registered) {
+      res.removeHeader('Content-Type');
+      return res
+        .status(409)
+        .json({ error: busySentence(registered.busy, 'render'), code: 'book_busy' });
+    }
     await registered.done;
   },
 );

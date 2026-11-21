@@ -10,6 +10,7 @@
    middleware in Phase 5. A `'revisions'` slice is refused (400
    `revisions_server_owned`) — the server owns revisions.json (plan 286). */
 
+import { busySentence } from '../workspace/busy-sentence.js';
 import { assertSlugBinding, SlugBoundError, SLUG_BOUND_SENTENCE } from '../workspace/put-slug-binding.js';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -86,7 +87,6 @@ import {
   removeBookFolder,
   withBookOp,
   withBookPathClaim,
-  type BookJobKind,
 } from '../workspace/book-op-lock.js';
 import { forgetRepairedBook } from '../workspace/repaired-book-gate.js';
 import {
@@ -1098,60 +1098,7 @@ const manuscriptPatchSchema = z
   })
   .strict();
 
-/* #3711 — the sentence for a `BookBusyError`, by job kind. Analysis alone keeps
-   the verbatim #2165 sentence; every other mix names what is running. */
-const BUSY_PHRASE: Record<BookJobKind, string> = {
-  render: 'rendering audio',
-  scoring: 'scoring audio',
-  analysis: 'analysing',
-  design: 'designing voices',
-  'script-review': 'reviewing the script',
-  export: 'exporting',
-  'unaddressed-sweep': 'a startup check of this folder',
-};
-
-export function busySentence(
-  kinds: BookJobKind[],
-  action: 'rename' | 'delete' | 'reparse' | 'replace' | 'restructure' | 'exclude' | 'restore' | 'cast-save' | 'manuscript-save',
-): string {
-  if (action === 'rename' && kinds.every((k) => k === 'analysis')) {
-    return 'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.';
-  }
-  const what = [...new Set(kinds.map((k) => BUSY_PHRASE[k]))].join(', ');
-  if (action === 'rename') {
-    return `This book is busy (${what}). Wait for it to finish before renaming it — a rename now would split the book across two folders.`;
-  }
-  if (action === 'delete') {
-    return `This book is busy (${what}). Stop it or wait for it to finish, then delete it.`;
-  }
-  /* #3774 — chapter restructure / exclude rewrite or delete chapter audio under
-     a job that may still be writing it (a render finalizing a take to a stale
-     slug, or resurrecting audio that was just excluded). */
-  if (action === 'restructure') {
-    return `This book is busy (${what}). Stop it or wait for it to finish, then change the chapters.`;
-  }
-  if (action === 'exclude') {
-    return `This book is busy (${what}). Stop it or wait for it to finish, then exclude chapters.`;
-  }
-  /* PR #3966 review pass 2 -- a backup restore rewrites state.json and can clear
-     the analysis cache under a job that may still be saving it. */
-  if (action === 'restore') {
-    return `This book is busy (${what}). Stop it or wait for it to finish, then restore the backup.`;
-  }
-  /* #4031 — a whole-slice cast PUT is refused while an analysis runs. */
-  if (action === 'cast-save') {
-    return `This book is busy (${what}). Its cast is read-only until the analysis finishes, so this change was not saved.`;
-  }
-  /* #4098 — a manuscript PUT is refused while an analysis runs: the job rewrites manuscript-edits.json wholesale at its persist. */
-  if (action === 'manuscript-save') {
-    return `This book is busy (${what}). Its manuscript is read-only until the analysis finishes, so this change was not saved.`;
-  }
-  /* #3717 — reparse / replace-manuscript are refused like the movers: both
-     delete cast.json and the audio/ directory under a job still writing them. */
-  return action === 'reparse'
-    ? `This book is busy (${what}). Stop it or wait for it to finish, then re-parse it.`
-    : `This book is busy (${what}). Stop it or wait for it to finish, then replace its manuscript.`;
-}
+export { busySentence };
 
 /* R55 (PR #4103 pass 5, owner ruling 2026-11-12) — a cast-identity write (one that changes
    the roster's id set, or writes merge / `supersededBy` history) is refused while an analysis
@@ -2377,6 +2324,10 @@ bookStateRouter.post(
      reconciles immediately and a future un-exclude can re-synthesize
      cleanly.
 
+   Refusals (409 book_busy): an exclude while ANY long job is registered (#3774);
+   an include while an ANALYSIS job is registered (#3436). Any other job kind
+   still lets an include through.
+
    Idempotent — calling with the same value twice is a no-op (still
    returns 200 with the current chapter entry). */
 bookStateRouter.post(
@@ -2402,12 +2353,18 @@ bookStateRouter.post(
         /* #3774 — refuse an EXCLUDE while ANY long job is registered for the book,
            FIRST: excluding deletes the chapter's audio + segments, and a render that
            is still exporting would write the take back (resurrecting excluded
-           audio). Including deletes nothing, so it is not refused. `runBookJob`
-           registers its token inside `withBookOp`, so this check cannot race a
-           registration. */
+           audio). Including deletes nothing, so a render does not refuse it; but an
+           ANALYSIS does (#3436, below). `runBookJob` registers its token inside
+           `withBookOp`, so these checks cannot race a registration. */
         const kinds = bookJobKinds(book.bookId);
         if (excluded && kinds.length > 0) {
           return { status: 409, body: { error: busySentence(kinds, 'exclude'), code: 'book_busy' } };
+        }
+        /* #3436 — refuse an INCLUDE while an analysis job (main or subset, live or
+           draining) is registered: it rewrites state.json and the live
+           ManuscriptRecord.chapterHints the run reads. Only an analysis refuses it. */
+        if (!excluded && kinds.includes('analysis')) {
+          return { status: 409, body: { error: busySentence(kinds, 'include'), code: 'book_busy' } };
         }
 
         const idx = state.chapters.findIndex((c) => c.id === chapterId);

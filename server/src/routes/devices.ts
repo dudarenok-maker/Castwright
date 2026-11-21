@@ -14,6 +14,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { textForClient } from '../lan-paths.js';
 import {
   createDevice,
   listDevices,
@@ -32,25 +33,26 @@ import {
 import { enumerateLanUrls } from './export-lan.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { configValue } from '../config/resolver.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const devicesRouter = Router();
 
 // #2204 review (F2/F7) — a degraded store must answer 503 with the reason,
 // not the shape of a genuine result: 200/{devices:[]} (list), 404 "Unknown
 // device." (revoke), or an opaque 500 (mint) all lie about what happened.
-function respondIfDegraded(res: Response, err: unknown): boolean {
+function respondIfDegraded(req: Request, res: Response, err: unknown): boolean {
   if (err instanceof DeviceStoreDegradedError) {
-    res.status(503).json({ error: err.message });
+    res.status(503).json({ error: textForClient(req, requestFailureMessageFs(err, err.message)) });
     return true;
   }
   return false;
 }
 
-devicesRouter.get('/devices', (_req: Request, res: Response) => {
+devicesRouter.get('/devices', (req: Request, res: Response) => {
   try {
     res.json({ devices: listDevices() });
   } catch (err) {
-    if (!respondIfDegraded(res, err)) throw err;
+    if (!respondIfDegraded(req, res, err)) throw err;
   }
 });
 
@@ -70,7 +72,7 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
     // The raw token is shown exactly once — only its hash is persisted.
     res.status(201).json({ ...device, token });
   } catch (err) {
-    if (!respondIfDegraded(res, err)) throw err;
+    if (!respondIfDegraded(req, res, err)) throw err;
   }
 });
 
@@ -142,6 +144,6 @@ devicesRouter.delete('/devices/:id', async (req: Request, res: Response) => {
     }
     res.json({ ok: true });
   } catch (err) {
-    if (!respondIfDegraded(res, err)) throw err;
+    if (!respondIfDegraded(req, res, err)) throw err;
   }
 });

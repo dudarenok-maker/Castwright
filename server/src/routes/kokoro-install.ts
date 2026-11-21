@@ -13,6 +13,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { jobForClient } from '../lan-paths.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KokoroInstallBootstrap } from '../tts/kokoro-install-bootstrap.js';
@@ -37,9 +38,9 @@ kokoroInstallRouter.get('/detect', async (_req: Request, res: Response) => {
   return res.json(await bootstrap.detect());
 });
 
-kokoroInstallRouter.post('/install', (_req: Request, res: Response) => {
+kokoroInstallRouter.post('/install', (req: Request, res: Response) => {
   const job = bootstrap.start();
-  return res.status(202).json(job);
+  return res.status(202).json(jobForClient(req, job));
 });
 
 kokoroInstallRouter.get('/install/:id', (req: Request, res: Response) => {
@@ -47,7 +48,7 @@ kokoroInstallRouter.get('/install/:id', (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: `No Kokoro install job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });
 
 kokoroInstallRouter.post('/install/:id/recheck', async (req: Request, res: Response) => {
@@ -55,5 +56,5 @@ kokoroInstallRouter.post('/install/:id/recheck', async (req: Request, res: Respo
   if (!job) {
     return res.status(404).json({ error: `No Kokoro install job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });

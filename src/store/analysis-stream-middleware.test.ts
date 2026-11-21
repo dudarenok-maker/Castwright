@@ -1256,6 +1256,19 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
 
+  it('#3436 a book_busy refusal (the book is rendering) is quiet: no halt, no toast, the stale snapshot is cleared, no run is live', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockRejectedValueOnce(new Error('read failed'));
+    lastCall().reject(new AnalysisError('This book is busy (rendering audio). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.', 'book_busy'));
+    await settle();
+    expect(captured[0]?.signal.aborted).toBe(true);
+    expect(store.getState().analysis.activeStream).toBeNull();
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+    expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+  });
+
   it('a snapshot dispatched while the refusal re-read is pending is not overwritten by the server one', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));

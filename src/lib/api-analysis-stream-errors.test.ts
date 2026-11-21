@@ -269,6 +269,45 @@ describe('#3435 refusal codes map to AnalysisError(message, code)', () => {
     }
   });
 
+  /* #3436 - a start while the book is rendering is a 409 `{ error: <curated sentence>, code:
+     'book_busy' }` before the stream opens, or a terminal SSE `error` frame (code `book_busy`,
+     the sentence in `message`) when a render registered ahead of it. Either way the user must see
+     the server's sentence, not "failed (409)". */
+  it('maps a book_busy refusal (409 body and SSE frame) to AnalysisError(server sentence, book_busy) on both readers', async () => {
+    const { api, AnalysisError } = await import('./api');
+    const BUSY = {
+      error:
+        'This book is busy (rendering audio). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.',
+      code: 'book_busy',
+    };
+    const starts = [
+      () => api.analyseManuscript('mns-1', {}),
+      () => api.runAnalysisForChapters('mns-1', [4], {}),
+    ];
+    for (const start of starts) {
+      fetchMock.mockResolvedValueOnce(refusedResponse(BUSY));
+      const err = await start().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(AnalysisError);
+      expect((err as InstanceType<typeof AnalysisError>).code).toBe('book_busy');
+      expect((err as Error).message).toBe(BUSY.error);
+    }
+    for (const start of starts) {
+      fetchMock.mockResolvedValueOnce(
+        sseResponse([JSON.stringify({ kind: 'error', code: BUSY.code, message: BUSY.error })]),
+      );
+      const err = await start().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(AnalysisError);
+      expect((err as InstanceType<typeof AnalysisError>).code).toBe('book_busy');
+      expect((err as Error).message).toBe(BUSY.error);
+    }
+  });
+
   /* #3400 pass 8 - the server refuses an analysis start while the book is being
      restructured. Same quiet "try again" outcome as the #3435 refusals, on every
      reader and both wire forms; never a generic `stream_failed`. */

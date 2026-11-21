@@ -135,7 +135,8 @@ export function mockQueueRequest(
 
   /* `${entryId}/complete` — resolve a finished entry. Body `{ outcome }`:
      `done` (default) done-prunes it; `failed` marks it `failed` so it lingers
-     for retry (mirrors completeEntry server-side). */
+     for retry; `requeued` puts an in_progress entry back to `queued` (#3436); both mirror
+     completeEntry server-side. */
   if (method === 'POST' && rest.endsWith('/complete')) {
     const id = decodeURIComponent(rest.replace(/^\//, '').replace(/\/complete$/, ''));
     const body = init?.body
@@ -145,6 +146,14 @@ export function mockQueueRequest(
       state.entries = renumber(
         state.entries.map((e) =>
           e.id === id ? { ...e, status: 'failed', errorReason: body.errorReason ?? null } : e,
+        ),
+      );
+    } else if (body.outcome === 'requeued') {
+      state.entries = renumber(
+        state.entries.map((e) =>
+          e.id === id && e.status === 'in_progress'
+            ? { ...e, status: 'queued', errorReason: null, progress: undefined }
+            : e,
         ),
       );
     } else {

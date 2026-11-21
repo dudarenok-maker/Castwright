@@ -35,6 +35,7 @@ import { runBookJob } from '../workspace/book-jobs.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { pathForClient } from '../lan-paths.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -123,7 +124,7 @@ portableImportRouter.post(
 
     try {
       const result = await importPortableBundle(req.file.buffer, { onConflict });
-      return res.status(201).json(result);
+      return res.status(201).json({ ...result, targetPath: pathForClient(req, result.targetPath) });
     } catch (e) {
       if (e instanceof BundleConflictError) {
         /* Fixed sentence: the error's own message and `existingPath` name the

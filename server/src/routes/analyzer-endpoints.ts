@@ -61,7 +61,7 @@ function fail(res: Response, what: string, err: unknown, extraSecrets: readonly 
 analyzerEndpointsRouter.post('/', async (req: Request, res: Response) => {
   try {
     const updated = await mutateUserSettings((current) => applyCreate(stateOf(current), req.body));
-    res.status(201).json(envDerived(updated));
+    res.status(201).json(envDerived(updated, req));
   } catch (err) {
     if (!sendRefusal(res, err)) fail(res, 'save the analyzer endpoint', err);
   }
@@ -123,7 +123,7 @@ analyzerEndpointsRouter.put('/:endpointId', async (req: Request, res: Response) 
     const updated = await mutateUserSettings((current) =>
       applyUpdate(stateOf(current), req.params.endpointId, req.body),
     );
-    res.json(envDerived(updated));
+    res.json(envDerived(updated, req));
   } catch (err) {
     if (!sendRefusal(res, err)) fail(res, 'update the analyzer endpoint', err);
   }
@@ -134,7 +134,7 @@ analyzerEndpointsRouter.delete('/:endpointId', async (req: Request, res: Respons
     const updated = await mutateUserSettings((current) =>
       applyDelete(stateOf(current), current, req.params.endpointId),
     );
-    res.json(envDerived(updated));
+    res.json(envDerived(updated, req));
   } catch (err) {
     if (!sendRefusal(res, err)) fail(res, 'delete the analyzer endpoint', err);
   }
@@ -160,7 +160,7 @@ analyzerEndpointsRouter.put('/:endpointId/key', async (req: Request, res: Respon
     const updated = await mutateUserSettings((current) =>
       applyKey(stateOf(current), req.params.endpointId, parsed.data.key),
     );
-    res.json(envDerived(updated));
+    res.json(envDerived(updated, req));
   } catch (err) {
     if (!sendRefusal(res, err)) fail(res, 'save the analyzer endpoint key', err, parsed.data.key ? [parsed.data.key] : []);
   }

@@ -2766,8 +2766,41 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
-  /* #3774 — an include POST that FAILED (a 500 here; the server no longer
-     refuses an include with `book_busy`) started no job of ours, so the
+  /* #3436 — the server refuses an include with 409 `book_busy` while an analysis
+     is registered for the book. Nothing was started or flipped, so the row shows
+     the server's sentence as a refusal, the prior snapshot is restored, and no
+     analysis-gap note is set. */
+  it('#3436 — Include flow: a book_busy refusal of the include POST shows on the row and restores the snapshot', async () => {
+    const store = makeIncludeStore();
+    const otherJobSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 40,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [5],
+    };
+    store.dispatch(analysisActions.setActiveStream(otherJobSnapshot));
+    const sentence =
+      'This book is busy (analysing). Chapters cannot be added back while it is analysing, so this chapter was not included. Wait for the analysis to finish, then include it.';
+    setChapterExcludedSpy.mockRejectedValueOnce(Object.assign(new Error(sentence), { code: 'book_busy' }));
+    renderInclude(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+
+    await screen.findByText(sentence);
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+    expect(store.getState().chapters.analysisGapById?.[3]).toBeUndefined();
+    expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
+  });
+
+  /* #3774 — an include POST that FAILED (a 500 here; the server refuses an
+     include with `book_busy` only while an analysis is registered, #3436, the test above) started no job of ours, so the
      snapshot of another chapter's still-running subset job, which this click
      took over, is put back. */
   it('#3774 — Include flow: a failed include POST restores the other job\'s snapshot', async () => {
@@ -2831,6 +2864,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   describe('#3774 — Include is disabled while a long job holds the book', () => {
     it.each([
       ['a render', ['render'], 'rendering audio'],
+      ['a loudness fix or QA scan', ['audio-fix'], 'fixing audio'],
       ['an export', ['export'], 'exporting'],
       ['another chapter\'s subset analysis', ['analysis'], 'analysing'],
       ['two jobs at once', ['render', 'scoring'], 'rendering audio, scoring'],
@@ -3071,13 +3105,60 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
     });
 
-    it('a re-analyse run does not disable them (only an include run strands a chapter)', async () => {
-      await startRun(mixed, null);
+    /* #3436 (owner decision 2026-11-21) -- the server refuses a render while the book is
+       analysing, so ANY analysis run of the book (a Re-analyse, not just an include) disables the
+       same controls, with its own reason. Seeded as the run's store snapshot, which is what
+       outlives the view. */
+    const reanalyseSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Attributing',
+      phaseProgress: 10,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [1],
+      subsetOrigin: 'reanalyse',
+    };
+    it.each(cases)('%s is disabled with the analysing reason while the book is being analysed, and enabled again when it ends', async (_label, chapters, expand, find) => {
+      const store = makeIncludeStore({ chapters });
+      renderInclude(store, chapters);
+      if (expand) fireEvent.click(screen.getByText(expand));
+      expect(find()).toBeEnabled();
+      act(() => {
+        store.dispatch(analysisActions.setActiveStream(reanalyseSnapshot));
+      });
+      expect(find()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toHaveTextContent(
+        /Analysing.*available when it finishes/i,
+      );
+      expect(find()).toHaveAttribute('title', expect.stringMatching(/available when it finishes/i));
+      act(() => {
+        store.dispatch(analysisActions.clearActiveStream());
+      });
+      expect(find()).toBeEnabled();
+      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+    });
+
+    it('a Re-analyse started from the view disables Resume until it ends', async () => {
+      let failRun!: (e: Error) => void;
+      runAnalysisForChaptersSpy.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            failRun = reject;
+          }),
+      );
+      const store = makeIncludeStore({ chapters: mixed });
+      renderInclude(store, mixed);
+      expect(screen.getByTestId('generation-view-resume')).toBeEnabled();
       fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
       fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
       await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
-      expect(screen.getByTestId('generation-view-resume')).toBeEnabled();
-      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+      expect(screen.getByTestId('generation-view-resume')).toBeDisabled();
+      failRun(new Error('boom'));
+      await waitFor(() => expect(screen.getByTestId('generation-view-resume')).toBeEnabled());
     });
   });
 
@@ -3104,7 +3185,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
     });
 
-    it('H: a remount while a RE-ANALYSE run is live does not block Resume', async () => {
+    it('H: a remount while a RE-ANALYSE run is live still blocks Resume (the server refuses a render while analysing, #3436)', async () => {
       const store = makeIncludeStore({ chapters: rows });
       const first = renderInclude(store, rows);
       fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
@@ -3113,8 +3194,8 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       first.unmount();
       expect(store.getState().analysis.activeStream).toMatchObject({ kind: 'subset', state: 'running' });
       renderInclude(store, rows);
-      expect(resume()).toBeEnabled();
-      expect(screen.queryByTestId('generation-job-start-blocked')).toBeNull();
+      expect(resume()).toBeDisabled();
+      expect(screen.getByTestId('generation-job-start-blocked')).toBeInTheDocument();
     });
 
     it('H: leaving the view during the click-time busy read starts nothing', async () => {
@@ -3629,6 +3710,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   it.each([
     ['main_analysis_running', 'The analysis on this book is still stopping. Try again in a moment.'],
     ['chapters_restructuring', 'The chapters of this book are being changed. Try again in a moment.'],
+    ['book_busy', 'This book is busy (rendering audio). Analysis is refused while it is rendering audio, so it was not started. Wait for the render to finish, then try again.'],
   ])('a 409 %s on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async (code, message) => {
     /* The paused main run is still stopping (the server's draining 409): the
        refusal restores the prior snapshot, as subset_in_progress does, rather
@@ -3663,6 +3745,9 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(store2.getState().analysis.activeStream).toEqual(pausedMain);
+    /* A refusal wrote nothing: not a failed re-analysis, and no gap on the row. */
+    expect(screen.queryByText(/Re-analysis failed/)).not.toBeInTheDocument();
+    expect(store2.getState().chapters.analysisGapById?.[1]).toBeUndefined();
   });
 
   /* #3435 - `cast_incomplete` is a soft stop (a chapter outside this batch, or

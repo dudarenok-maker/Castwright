@@ -1904,9 +1904,30 @@ test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead o
   }
 });
 
-test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', () => {
-  const bash = spawnSync('bash', ['-c', 'true'], { windowsHide: true });
-  if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
+// The install step is an ubuntu-only `run:` block (`timeout`, `sudo`, `apt-get`). The two
+// behavioural cases below run it under bash with ALL THREE stubbed on PATH, so they depend on
+// neither GNU `timeout` (absent on macOS runners, #4569) nor a real apt. PATH is set inside the
+// script text, because Git for Windows' `bin\bash.exe` launcher reorders an inherited PATH and
+// would put the real `sleep`/`timeout` ahead of the stubs. Without bash (a bare Windows
+// PowerShell box) they SKIP with a message rather than passing silently.
+const HAS_BASH = spawnSync('bash', ['-c', 'true'], { windowsHide: true }).status === 0;
+const NO_BASH_SKIP = HAS_BASH ? false : 'no bash on PATH; the static ffmpeg-floor pins still run';
+let behaviouralCasesRun = 0;
+
+// Prepends the stub dir to PATH inside the script itself (cygpath converts it under Git Bash).
+function withStubPath(script) {
+  return 'PATH="$(cygpath -u "$STUB_BIN" 2>/dev/null || printf %s "$STUB_BIN"):$PATH"\n' + script;
+}
+
+// `timeout -k 10 120 CMD...` -> run CMD directly (drops the three leading args).
+function writeFfmpegFloorStubs(bin, sudoBody) {
+  writeFileSync(join(bin, 'sudo'), sudoBody, { mode: 0o755 });
+  writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'timeout'), '#!/bin/sh\nshift 3\nexec "$@"\n', { mode: 0o755 });
+}
+
+test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', { skip: NO_BASH_SKIP }, () => {
+  behaviouralCasesRun++;
   const install = ffmpegFloorInstallStep();
   const run = install.split(/^ {8}run: \|\n/m)[1];
   assert.ok(run, 'install step has no `run: |` block');
@@ -1915,16 +1936,15 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
   try {
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\nexit 100\n', { mode: 0o755 });
-    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFfmpegFloorStubs(bin, '#!/bin/sh\nexit 100\n');
     const out = join(dir, 'output');
     const summary = join(dir, 'summary');
     writeFileSync(out, '');
     writeFileSync(summary, '');
-    const r = spawnSync('bash', ['-c', script], {
+    const r = spawnSync('bash', ['-c', withStubPath(script)], {
       encoding: 'utf8',
       windowsHide: true,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, STUB_BIN: bin, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed on an apt stall (exit ${r.status}): ${r.stdout}${r.stderr}`);
     assert.ok(r.stdout.includes(FFMPEG_FLOOR_WARNING), `no ::warning:: on stdout: ${r.stdout}`);
@@ -1935,9 +1955,8 @@ test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning
   }
 });
 
-test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', () => {
-  const bash = spawnSync('bash', ['-c', 'true'], { windowsHide: true });
-  if (bash.status !== 0) return; // no bash on this box; the static pins above still hold
+test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', { skip: NO_BASH_SKIP }, () => {
+  behaviouralCasesRun++;
   const install = ffmpegFloorInstallStep();
   assert.doesNotMatch(install, /\\n/, 'install step contains a literal backslash-n; bash passes it to apt-get as a stray argument');
   const run = install.split(/^ {8}run: \|\n/m)[1];
@@ -1948,22 +1967,30 @@ test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no wa
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     // Like real apt: `update` takes no arguments, so a stray one fails the command.
-    writeFileSync(join(bin, 'sudo'), '#!/bin/sh\n[ "$2" = update ] && [ "$#" -gt 2 ] && exit 100\nexit 0\n', { mode: 0o755 });
-    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFfmpegFloorStubs(bin, '#!/bin/sh\n[ "$2" = update ] && [ "$#" -gt 2 ] && exit 100\nexit 0\n');
     const out = join(dir, 'output');
     const summary = join(dir, 'summary');
     writeFileSync(out, '');
     writeFileSync(summary, '');
-    const r = spawnSync('bash', ['-c', script], {
+    const r = spawnSync('bash', ['-c', withStubPath(script)], {
       encoding: 'utf8',
       windowsHide: true,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+      env: { ...process.env, STUB_BIN: bin, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
     });
     assert.equal(r.status, 0, `install step failed (exit ${r.status}): ${r.stdout}${r.stderr}`);
-    assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}`);
+    assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}${r.stderr}`);
     assert.match(readFileSync(out, 'utf8'), /^installed=true$/m, 'GITHUB_OUTPUT lacks installed=true when apt works');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ffmpeg floor leg (#4461): both behavioural cases actually ran on a bash platform (#4569)', () => {
+  if (process.platform !== 'win32') {
+    assert.ok(HAS_BASH, 'bash is missing on a POSIX runner; the two ffmpeg-floor behavioural cases would silently skip');
+  }
+  if (HAS_BASH) {
+    assert.equal(behaviouralCasesRun, 2, 'an ffmpeg-floor behavioural case was skipped although bash is present');
   }
 });
 
@@ -1978,6 +2005,7 @@ test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeou
   const bound = Math.max(...bounds.map((b) => Number(b[2])));
   const kill = Math.max(...bounds.map((b) => Number(b[1])));
   const sleep = Number(sleeps[0][1]);
+  assert.ok(bounds.every((b) => Number(b[1]) > 0 && Number(b[2]) > 0), 'a 0 bound disables GNU timeout');
   assert.equal(attempts, 3, 'retry loop is no longer 3 attempts');
   // attempts x (2 apt commands x bound + inter-attempt sleep) must fit the step
   // timeout, else the runner kills the step before the warning can be emitted.
