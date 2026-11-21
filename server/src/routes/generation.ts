@@ -1245,20 +1245,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      job that declared no `tierNeeds`, or this book's own score pass in flight (its
      audition renders on tiers of RENDERED chapters, which runNeeds excludes). The
      union is correct whether or not this run's own job is already registered. */
-  let usedQwenTiers = runNeeds;
-  if (qwenInUse) {
+  const bookTierKeep = (): { keep06: boolean; keep17: boolean } => {
     const liveSameBook = [...(inFlightByBook.get(bookId) ?? [])].filter(
       (j) => !j.controller.signal.aborted,
     );
     if (scoringInFlight.has(bookId) || liveSameBook.some((j) => !j.tierNeeds)) {
-      usedQwenTiers = fullCastQwenTiers();
-    } else {
-      usedQwenTiers = {
-        keep06: runNeeds.keep06 || liveSameBook.some((j) => j.tierNeeds?.keep06),
-        keep17: runNeeds.keep17 || liveSameBook.some((j) => j.tierNeeds?.keep17),
-      };
+      return fullCastQwenTiers();
     }
-  }
+    return {
+      keep06: runNeeds.keep06 || liveSameBook.some((j) => j.tierNeeds?.keep06),
+      keep17: runNeeds.keep17 || liveSameBook.some((j) => j.tierNeeds?.keep17),
+    };
+  };
+  let usedQwenTiers = runNeeds;
+  if (qwenInUse) usedQwenTiers = bookTierKeep();
 
   /* srv-28 — pre-flight disk-space guard. Estimate this run's footprint
      (target chapters × AVG_CHAPTER_BYTES) and compare against the free space on
@@ -2569,14 +2569,24 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
        kept, as above. The 1.7B is additionally never dropped while a Quality render is
        live (`keepQualityResident`: a stale own-book keep after a mid-run tier change); the
        0.6B case is accepted — a character RAISED to Quality with 2+ workers (here), or LOWERED
-       in the score pass (one worker) — it costs a reload and retry. */
+       in the score pass (one worker) — it costs a reload and retry.
+       The reconcile awaits `GET /health` before it posts `/unload`, so it is handed a
+       function: after the health probe it re-reads `otherTierWorkActive` and K(book) and
+       returns null (skip) when other work registered in that round trip. */
     if (otherTierWorkActive(bookId)) {
       console.info(
         '[generation] run-start tier reconcile skipped: other GPU work is active',
       );
     } else {
       await keepForRunStart(usedQwenTiers, anotherGenerationActiveAtStart)
-        .then((target) => reconcileResidentQwenTiers(keepQualityResident(target)))
+        .then((target) =>
+          reconcileResidentQwenTiers(() => {
+            if (otherTierWorkActive(bookId)) return null;
+            const fresh = keepQualityResident({ ...target, ...bookTierKeep() });
+            // empty-keep guard (D3): never evict both tiers on a computed-empty keep
+            return fresh.keep06 || fresh.keep17 ? fresh : null;
+          }),
+        )
         .catch((e) =>
           console.warn('[generation] tier reconcile skipped:', (e as Error).message),
         );

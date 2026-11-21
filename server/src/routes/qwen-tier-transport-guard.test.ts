@@ -58,7 +58,8 @@ const reconcileCalls: unknown[][] = [];
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
   reconcileResidentQwenTiers: async (...args: unknown[]) => {
-    reconcileCalls.push(args);
+    /* #1393 — mirror the real reconciler: resolve a function keep, record the resolved keep. */
+    reconcileCalls.push([typeof args[0] === 'function' ? (args[0] as () => unknown)() : args[0], ...args.slice(1)]);
     return undefined;
   },
   SIDECAR_ENGINES: new Set(),

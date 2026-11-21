@@ -76,8 +76,11 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
   reconcileResidentQwenTiers: async (...args: unknown[]) => {
-    reconcileCalls.push(args);
     reconcileHook?.();
+    /* #1393 — mirror the real reconciler: a function keep is resolved here (after the hook,
+       standing in for the /health round trip) and the RESOLVED keep (null = skipped) is recorded. */
+    const resolved = typeof args[0] === 'function' ? (args[0] as () => unknown)() : args[0];
+    reconcileCalls.push([resolved, ...args.slice(1)]);
     return undefined;
   },
   /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
@@ -501,6 +504,24 @@ describe('#4066 run-start reconcile on a Quality chapter render', () => {
       reconcileHook = null;
     }
     expect(seen).toEqual([true]);
+  }, 10_000);
+
+  it('F4 (#1393): other-book work that registers after the run-start pre-check but before the keep function is read resolves to null (skipped)', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const releases: Array<() => void> = [];
+    reconcileHook = () => {
+      /* The pre-check already passed (we are inside the reconcile); a render on another book
+         registers during the "/health round trip", before the function is read. */
+      releases.push(__registerFakeJobForTest('other-book-f4', []));
+    };
+    try {
+      await runStream({ modelKey: 'qwen3-tts-1.7b', fallbackConfirmed: true });
+    } finally {
+      reconcileHook = null;
+      releases.forEach((r) => r());
+    }
+    expect(reconcileCalls.length).toBe(1);
+    expect(reconcileCalls[0]![0]).toBeNull();
   }, 10_000);
 
   it('O2 (#1393): a bare-resume POST while a job is live for the book makes NO reconcile call', async () => {

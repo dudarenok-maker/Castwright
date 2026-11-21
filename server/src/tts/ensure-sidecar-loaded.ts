@@ -233,8 +233,14 @@ export const UNLOAD_DISPATCHER = new Agent({
 });
 const UNLOAD_ABSOLUTE_MAX_MS = 600_000;
 
+/* #1393 — `keep` is either a plain object (read now) or a function read
+   synchronously right after `GET /health` resolves, immediately before the
+   evictions are built. A job that registers during the health round trip is
+   invisible to a keep computed before it; the function narrows that window to
+   the unload's own flight (narrowed, not closed). A function returning `null`
+   means "skip": no `/unload`, and the reconcile returns `false`. */
 export async function reconcileResidentQwenTiers(
-  keep: ResidentTtsKeep,
+  keepArg: ResidentTtsKeep | (() => ResidentTtsKeep | null),
   signal?: AbortSignal,
   freedOut?: string[],
 ): Promise<boolean> {
@@ -247,6 +253,8 @@ export async function reconcileResidentQwenTiers(
     return false; // sidecar unreachable — nothing to reconcile
   }
   if (!h || h.recycle_pending === true) return false;
+  const keep = typeof keepArg === 'function' ? keepArg() : keepArg;
+  if (keep === null) return false; // the caller's post-/health re-check says skip
 
   const budget = AbortSignal.timeout(UNLOAD_ABSOLUTE_MAX_MS);
   const bounded = signal ? AbortSignal.any([budget, signal]) : budget;
