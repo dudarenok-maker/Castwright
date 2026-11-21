@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url';
    us require the LAN block RAN rather than was skipped); on a host with no LAN
    IPv4 that block is skipped by design, so this test skips with it. */
 
-const stripAnsi = (s: string) => s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 const hasLanIp = Object.values(networkInterfaces())
   .flat()
   .some((i) => i && i.family === 'IPv4' && !i.internal);
@@ -50,17 +49,35 @@ describe('LAN-address suites are hermetic against the host env (#4576)', () => {
         ],
         { cwd, env, encoding: 'utf8', timeout: 100_000, windowsHide: true },
       );
-      const out = stripAnsi(res.stdout + res.stderr);
-      expect(out).not.toMatch(/expected 401 to be 200/);
+      const tail = (s: string | null) => (s ?? '').slice(-1500);
+      // a spawn failure / timeout must say so, not surface as a missing report
+      expect(
+        res.error,
+        `child vitest did not finish (${res.error?.message}; signal ${res.signal}); stdout: ${tail(res.stdout)} stderr: ${tail(res.stderr)}`,
+      ).toBeUndefined();
+      if (!existsSync(reportFile)) {
+        expect.fail(
+          `child vitest wrote no report (status ${res.status}); stdout: ${tail(res.stdout)} stderr: ${tail(res.stderr)}`,
+        );
+      }
       const report = JSON.parse(readFileSync(reportFile, 'utf8')) as {
-        testResults: { assertionResults: { ancestorTitles: string[]; status: string }[] }[];
+        testResults: {
+          message?: string;
+          assertionResults: { title: string; ancestorTitles: string[]; status: string; failureMessages: string[] }[];
+        }[];
       };
       const lan = report.testResults
         .flatMap((f) => f.assertionResults)
         .filter((a) => a.ancestorTitles.some((t) => t.startsWith('from a LAN address')));
       // the LAN block must have RAN and passed, not been skipped
-      expect(lan.length).toBeGreaterThan(0);
-      expect(lan.every((a) => a.status === 'passed')).toBe(true);
+      expect(
+        lan.length,
+        `no LAN-address test ran; file-level: ${report.testResults.map((f) => f.message).join('|')}`,
+      ).toBeGreaterThan(0);
+      const failing = lan
+        .filter((a) => a.status !== 'passed')
+        .map((a) => `${a.title} [${a.status}]: ${a.failureMessages[0] ?? ''}`);
+      expect(failing).toEqual([]);
       expect(res.status).toBe(0);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
