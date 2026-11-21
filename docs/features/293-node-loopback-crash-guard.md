@@ -98,6 +98,8 @@ Source: `https://api.anaconda.org/package/conda-forge/nodejs`, files with `attrs
 2. The guard runs on Windows only. Linux and macOS start as before.
 3. A refusal names the running Node version and one minimum Node that works: the `engines` floor (24.16.0), read from `package.json`, never the matched range's upper bound (that bound can itself be a refused version, e.g. 23.0.0 or 26.1.0 is not the answer for 22.x or 25.x).
 
+4. The in-app "Upgrade & restart" path (owner decision, #4443): `scripts/restart-after-upgrade.mjs` ships in the new release and runs the same guard against it before launching. A Node the new release would refuse (or a failing check) puts `.current-version` back on the previous release, relaunches it, and writes `{ phase: 'error', error }` to `<install>/.upgrade-staging/state.json`, which the app already serves at `/api/upgrade/state`. If no other release exists it still launches the new one.
+
 ## Test plan
 
 ### Automated coverage
@@ -108,7 +110,7 @@ Owned by the later steps: #4492 (a version-range unit test with a mutation) and 
 
 1. On a Windows box running Node 24.15.0, `npm start` in `server/` refuses with the version message (after #4492).
 2. On Node 24.16.0 or newer it starts.
-3. The Pinokio "run Update again" message, two-Update convergence and `logs/node-refused.log` after an in-app upgrade can only be proven on a real Windows box: on-box register row E117 owns them. Not run at PR time.
+3. The Pinokio "run Update again" message, two-Update convergence, the in-app upgrade being held back (the previous release relaunched, the reason shown on the upgrade card) and `logs/node-refused.log` can only be proven on a real Windows box: on-box register row E117 owns them. Not run at PR time.
 
 ## Pending steps
 
