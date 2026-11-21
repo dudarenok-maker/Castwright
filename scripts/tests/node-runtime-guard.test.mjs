@@ -5,7 +5,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -39,11 +39,52 @@ test('a fixed Node, or any non-Windows platform, starts', () => {
   assert.deepEqual(run({ version: 'v24.15.0', platform: 'linux' }).exits, []);
 });
 
-test('an unreadable range list warns and continues', () => {
+test('a guard that throws while checking warns and continues', () => {
   const o = run({ version: 'v24.15.0', platform: 'win32', env: null });
   assert.deepEqual(o.exits, []);
   assert.equal(o.warns.length, 1);
 });
+
+// The guard resolves package.json from its own location (REPO_ROOT), so a copy
+// of the file in a scratch tree reads that tree's package.json instead.
+async function guardInTree(packageJson) {
+  const root = mkdtempSync(join(tmpdir(), 'nrg-tree-'));
+  const dir = join(root, 'scripts', 'lib');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(fileURLToPath(new URL('../lib/node-runtime-guard.mjs', import.meta.url)), join(dir, 'guard.mjs'));
+  if (packageJson !== null) writeFileSync(join(root, 'package.json'), packageJson);
+  const mod = await import(pathToFileURL(join(dir, 'guard.mjs')).href);
+  return { root, enforce: mod.enforceNodeRuntime };
+}
+
+for (const [name, packageJson, detail] of [
+  ['a missing package.json', null, /ENOENT/],
+  ['a malformed package.json', '{ not json', /JSON/],
+  ['a package.json without the range list', JSON.stringify({ engines: { node: '>=24.16.0' } }), /windowsLoopbackCrash missing/],
+]) {
+  test(`${name} warns and continues`, async () => {
+    const { root, enforce } = await guardInTree(packageJson);
+    try {
+      const o = { stderr: [], exits: [], warns: [] };
+      enforce({
+        version: 'v24.15.0',
+        platform: 'win32',
+        env: {},
+        logDir: join(root, 'logs'),
+        stderr: (t) => o.stderr.push(t),
+        exit: (c) => o.exits.push(c),
+        warn: (t) => o.warns.push(t),
+      });
+      assert.deepEqual(o.exits, []);
+      assert.deepEqual(o.stderr, []);
+      assert.equal(o.warns.length, 1);
+      assert.match(o.warns[0], detail);
+      assert.equal(existsSync(join(root, 'logs')), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 // The in-app Upgrade & restart path (restart-after-upgrade.mjs -> launch.mjs ->
 // start-app-prod.mjs) runs the launcher with stdio ignored, so the stderr line
