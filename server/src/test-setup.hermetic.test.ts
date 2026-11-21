@@ -20,7 +20,10 @@ const hasLanIp = Object.values(networkInterfaces())
   .some((i) => i && i.family === 'IPv4' && !i.internal);
 
 const serverRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const vitestBin = join(dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
+const vitestBin = join(
+  dirname(createRequire(import.meta.url).resolve('vitest/package.json')),
+  'vitest.mjs',
+);
 
 describe('LAN-address suites are hermetic against the host env (#4576)', () => {
   it('app.health-loopback passes with LAN_HTTPS=1 + LAN_AUTH_TOKEN in the env and in the CWD .env', (ctx) => {
@@ -63,7 +66,12 @@ describe('LAN-address suites are hermetic against the host env (#4576)', () => {
       const report = JSON.parse(readFileSync(reportFile, 'utf8')) as {
         testResults: {
           message?: string;
-          assertionResults: { title: string; ancestorTitles: string[]; status: string; failureMessages: string[] }[];
+          assertionResults: {
+            title: string;
+            ancestorTitles: string[];
+            status: string;
+            failureMessages: string[];
+          }[];
         }[];
       };
       const lan = report.testResults
