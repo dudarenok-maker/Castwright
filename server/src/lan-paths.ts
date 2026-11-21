@@ -43,8 +43,8 @@ function resolveExisting(p: string): string {
 const normKey = (p: string) => p.split(/[\\/]+/).filter(Boolean).join('/').toLowerCase();
 
 /* Other spellings of the home dir, each a WHOLE path: the resolved (real) home, and every
-   hint prefix (`os.tmpdir()`, TEMP, ... which the OS writes in short form) whose first
-   `segCount` segments resolve to it. Windows' short-name algorithm is not modelled
+   hint prefix (`os.tmpdir()`, TEMP, ... which the OS writes in short form) that resolves
+   to it, cut at the depth the RESOLVED hint sits below the resolved home. Windows' short-name algorithm is not modelled
    (non-ASCII letters, hash forms and `~N` collisions all break a model); the filesystem
    is asked instead. The comparison is against the RESOLVED home, not the string
    `os.homedir()` returned, so a relocated profile (junctioned `C:\Users`, a junctioned
@@ -57,7 +57,6 @@ const spellingCache = new Map<string, string[]>();
 
 function homeSpellings(
   home: string,
-  segCount: number,
   hints: string[],
   resolve?: (p: string) => string,
 ): string[] {
@@ -74,13 +73,18 @@ function homeSpellings(
       out.push(realHome);
       seen.add(realKey);
     }
+    const segs = (p: string) => p.split(/[\\/]+/).length;
     for (const hint of hints) {
       const hs = hint.split(/[\\/]+/);
-      if (hs.length < segCount) continue;
-      const prefix = hs.slice(0, segCount).join('\\');
-      const key = normKey(prefix);
-      if (seen.has(key)) continue;
+      while (hs.length > 1 && hs[hs.length - 1] === '') hs.pop();
       try {
+        /* the cut is how many segments the hint has beyond home once both are resolved,
+           so a junction that changes the depth (`C:\Users` -> `D:\Profiles`) is followed */
+        const cut = hs.length - (segs(res(hs.join('\\'))) - segs(realHome));
+        if (cut < 1 || cut > hs.length) continue;
+        const prefix = hs.slice(0, cut).join('\\');
+        const key = normKey(prefix);
+        if (seen.has(key)) continue;
         if (normKey(res(prefix)) === realKey) {
           out.push(prefix);
           seen.add(key);
@@ -110,7 +114,7 @@ function homeRegexSource(home: string, win: boolean, shortPaths?: string[], reso
   const sepRe = win ? '[\\\\/]+' : '/+';
   const split = win ? /[\\/]+/ : /\/+/;
   const spell = (p: string) => p.split(split).map(escRe).join(sepRe);
-  const alts = win ? homeSpellings(home, home.split(split).length, shortPaths ?? defaultShortPaths(), resolve) : [];
+  const alts = win ? homeSpellings(home, shortPaths ?? defaultShortPaths(), resolve) : [];
   return `(?:${[home, ...alts].map(spell).join('|')})`;
 }
 

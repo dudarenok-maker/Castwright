@@ -180,7 +180,15 @@ describe('separator-insensitive home matching (#4446 review)', () => {
   const fakeFs = (table: Record<string, string>) => {
     const key = (p: string) => p.split(/[\\/]+/).join('\\').toLowerCase();
     const map = new Map(Object.entries(table).map(([k, v]) => [key(k), v]));
-    return (p: string) => map.get(key(p)) ?? p;
+    /* like the real resolver, the longest prefix in the table is rewritten and the rest kept */
+    return (p: string) => {
+      const parts = p.split(/[\\/]+/);
+      for (let n = parts.length; n > 0; n--) {
+        const hit = map.get(key(parts.slice(0, n).join('\\')));
+        if (hit !== undefined) return [hit, ...parts.slice(n)].join('\\');
+      }
+      return p;
+    };
   };
   describe('8.3 short spelling of a home segment (win32)', () => {
     const at = (home: string, hint: string, table: Record<string, string>) => ({
@@ -276,6 +284,18 @@ describe('separator-insensitive home matching (#4446 review)', () => {
         expect(collapseHomePath('C:\\LONGPA~1\\JOSGAR~1\\x', o)).toBe('~\\x');
         expect(collapseHomePath('C:\\LONGPA~1\\José García\\x', o)).toBe('~\\x');
         expect(collapseHomePath(`${longReal}\\x`, o)).toBe('~\\x');
+      });
+      it.each([
+        ['shallower', 'D:\\Michael Dudarenok', 'D:\\MICHAE~1', 'D:\\MICHAE~2'],
+        ['deeper', 'D:\\a\\b\\Michael Dudarenok', 'D:\\a\\b\\MICHAE~1', 'D:\\a\\b\\MICHAE~2'],
+      ])('collapses the alias when the junction target is %s than C:\\Users', (_n, rHome, alias, sibling) => {
+        const home = 'C:\\Users\\Michael Dudarenok';
+        const hint = `${alias}${temp}`;
+        const o = at(home, hint, { [home]: rHome, [alias]: rHome });
+        expect(collapseHomePath(`${alias}${temp}\\OllamaSetup.exe`, o)).toBe(`~${temp}\\OllamaSetup.exe`);
+        expect(collapseHomePath(`${rHome}\\x`, o)).toBe('~\\x');
+        expect(collapseHomePath(`${sibling}\\x`, o)).toBe(`${sibling}\\x`);
+        expect(collapseHomePath(`${alias}0\\x`, o)).toBe(`${alias}0\\x`);
       });
       it('does not mix spellings: a junction elsewhere into home never collapses a lookalike', () => {
         const home = 'C:\\DD\\Users\\mike';
