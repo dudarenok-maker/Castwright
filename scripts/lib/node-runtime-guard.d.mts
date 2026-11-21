@@ -31,6 +31,7 @@ export function enforceNodeRuntime(deps?: {
   platform?: string;
   env?: Env;
   execPath?: string;
+  logDir?: string;
   stderr?: (text: string) => void;
   exit?: (code: number) => void;
   warn?: (text: string) => void;

@@ -472,7 +472,8 @@ async function main() {
   // #4443 — first, before anything below can open a loopback socket (probePort
   // is the 127.0.0.1 connect that crashes an affected Windows Node). The
   // server's own guard writes to logs/server.err.log, which a launcher user
-  // never sees; this one lands on the console.
+  // never sees; this one lands on the console and in logs/node-refused.log
+  // (the in-app upgrade restarts this launcher with stdio ignored).
   enforceNodeRuntime();
   mkdirSync(runDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });

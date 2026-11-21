@@ -10,7 +10,7 @@
    Unknown is not refused: an unparseable version or a non-Windows platform
    always starts. Types: node-runtime-guard.d.mts. */
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -96,7 +96,11 @@ export function loadNodeMinimum() {
   return m[1];
 }
 
-/** Refuses a known-bad Node: writes the message to stderr and exits 1. A
+/** Refuses a known-bad Node: writes the message to stderr AND to
+ *  <logDir>/node-refused.log, then exits 1. The file is for the in-app
+ *  "Upgrade & restart" path, whose restarter and launcher run with stdio
+ *  ignored, so stderr reaches nobody; logDir honours APP_LOG_DIR like the
+ *  launcher's own. A file that cannot be written never stops the refusal. A
  *  missing or unreadable package.json must never stop the app, so a load
  *  failure only warns and the caller continues. No override switch (owner
  *  decision 2026-11-20). Every dependency is injectable for tests. */
@@ -105,6 +109,7 @@ export function enforceNodeRuntime({
   platform = process.platform,
   env = process.env,
   execPath = process.execPath,
+  logDir = env?.APP_LOG_DIR ? resolve(env.APP_LOG_DIR) : join(REPO_ROOT, 'logs'),
   stderr = (text) => process.stderr.write(text),
   exit = (code) => process.exit(code),
   warn = (text) => console.warn(text),
@@ -112,6 +117,12 @@ export function enforceNodeRuntime({
   try {
     const message = nodeRuntimeRefusal(version, platform, loadCrashRanges(), loadNodeMinimum(), env, execPath);
     if (message) {
+      try {
+        mkdirSync(logDir, { recursive: true });
+        writeFileSync(join(logDir, 'node-refused.log'), `${new Date().toISOString()} ${message}\n`);
+      } catch {
+        /* best effort: the refusal itself must still happen */
+      }
       stderr(`${message}\n`);
       exit(1);
     }
