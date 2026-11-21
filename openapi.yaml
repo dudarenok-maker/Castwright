@@ -10650,9 +10650,15 @@ components:
             linesFlaggedDrift: { type: integer }
         voiceDrift:
           type: object
-          required: [attribution, chaptersEligible, chaptersScored, chaptersEmbedFailed, charactersOnRoster, charactersChecked, charactersPending, charactersNeedingRerender, mismatches, inconclusiveCount, uncheckedCharacterIds]
+          required: [attribution, speakerCheckEnabled, chaptersEligible, chaptersScored, chaptersEmbedFailed, chaptersWithVerdicts, charactersOnRoster, charactersChecked, charactersPending, charactersNeedingRerender, mismatches, inconclusiveCount, uncheckedCharacterIds]
           properties:
             attribution: { type: string, enum: [full, legacy-unattributed] }
+            speakerCheckEnabled:
+              type: boolean
+              description: >-
+                The live qa.speaker.enabled gate at report time. When false,
+                no scoring pass runs, so the client must not offer Resume
+                scoring.
             chaptersEligible: { type: integer }
             chaptersScored: { type: integer }
             chaptersEmbedFailed:
@@ -10666,6 +10672,19 @@ components:
                 0) — the two are otherwise indistinguishable from
                 chaptersScored alone. Stays 0 only when the gate was never
                 attempted on any eligible chapter ("gate off").
+            chaptersWithVerdicts:
+              type: integer
+              description: >-
+                How many eligible chapters have a verdict file (at the
+                chapter's current slug) holding at least one voice-match
+                verdict row. A chapter restructure deletes that file with the
+                chapter, but a plain re-render with the check off does not;
+                the attempted marker is what flags such a chapter as
+                couldn't-be-embedded. Unlike
+                charactersChecked (the roster minus too-short verdicts, so a
+                never-scored book reports it whole) and charactersPending
+                (read from the book-level centroids file, which outlives a
+                restructure). #4454.
             charactersOnRoster: { type: integer }
             charactersChecked: { type: integer }
             charactersPending:

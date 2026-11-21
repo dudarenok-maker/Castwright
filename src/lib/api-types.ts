@@ -7590,10 +7590,14 @@ export interface components {
             voiceDrift: {
                 /** @enum {string} */
                 attribution: "full" | "legacy-unattributed";
+                /** @description The live qa.speaker.enabled gate at report time. When false, no scoring pass runs, so the client must not offer Resume scoring. */
+                speakerCheckEnabled: boolean;
                 chaptersEligible: number;
                 chaptersScored: number;
                 /** @description Eligible chapters the voice-drift gate attempted but never produced a verdict for (an embedding failure). Nonzero for both an isolated failure (some chapters scored, this one didn't) and a fleet-wide failure (every eligible chapter was attempted but ALL of them failed, so chaptersScored is also 0) — the two are otherwise indistinguishable from chaptersScored alone. Stays 0 only when the gate was never attempted on any eligible chapter ("gate off"). */
                 chaptersEmbedFailed: number;
+                /** @description How many eligible chapters have a verdict file (at the chapter's current slug) holding at least one voice-match verdict row. A chapter restructure deletes that file with the chapter, but a plain re-render with the check off does not; the attempted marker is what flags such a chapter as couldn't-be-embedded. Unlike charactersChecked (the roster minus too-short verdicts, so a never-scored book reports it whole) and charactersPending (read from the book-level centroids file, which outlives a restructure). #4454. */
+                chaptersWithVerdicts: number;
                 charactersOnRoster: number;
                 charactersChecked: number;
                 /** @description srv-36 hardening — stochastic characters with no row in centroids.json yet (never attempted, or mid-retry-cycle under the transient-failure cap), plus those whose row is a STALE no-current-voice marker (#3680: the cast no longer supports it, so a score-only pass clears it). Drives the frontend's Resume-scoring affordance — narrower than "charactersChecked < charactersOnRoster", which also stays true forever for a terminally too-short character (nothing left to resume for those). Frozen snapshot keys. */
