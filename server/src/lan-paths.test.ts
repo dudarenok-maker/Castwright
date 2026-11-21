@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collapseHomePath, expandHomePath, textForClient } from './lan-paths.js';
@@ -257,11 +257,31 @@ describe('separator-insensitive home matching (#4446 review)', () => {
       expect(collapseHomePath('C:\\Users\\MLLER~1\\x', o)).toBe('C:\\Users\\MLLER~1\\x');
       expect(collapseHomePath('C:\\Users\\Müller\\x', o)).toBe('~\\x');
     });
-    it('resolves a hint whose tail does not exist through its existing prefix', () => {
-      const home = process.cwd();
-      const o = { home, platform: 'win32' as const, shortPaths: [`${home}\\no-such-dir\\Temp`] };
-      expect(collapseHomePath(`${home}\\x`, o)).toBe('~\\x');
-    });
+    it.skipIf(process.platform !== 'win32')(
+      'follows a depth-changing junction to a hint whose tail does not exist (real fs)',
+      (ctx) => {
+        const parent = mkdtempSync(join(tmpdir(), 'lanp-'));
+        try {
+          const realUsers = join(parent, 'R');
+          const longHome = join(realUsers, 'Long Home Name');
+          mkdirSync(longHome, { recursive: true });
+          mkdirSync(join(parent, 'C'));
+          symlinkSync(realUsers, join(parent, 'C', 'Users'), 'junction'); // one level shallower
+          const dir = execFileSync('cmd', ['/u', '/c', 'dir', '/x', '/ad', realUsers], { encoding: 'utf16le', windowsHide: true });
+          const m = /(\S+~\d+\S*)\s+Long Home Name/i.exec(dir);
+          if (!m) return ctx.skip('8.3 name generation is disabled on this volume');
+          const home = join(parent, 'C', 'Users', 'Long Home Name');
+          // the hint is spelled through the junction and its tail does not exist, so its depth
+          // below home is only known once the existing prefix is resolved
+          const alias = join(parent, 'C', 'Users', m[1]);
+          const o = { home, platform: 'win32' as const, shortPaths: [join(alias, 'no-such', 'Temp')] };
+          expect(collapseHomePath(join(alias, 'x'), o)).toBe('~\\x');
+          expect(collapseHomePath(`${alias}0\\x`, o)).not.toMatch(/^~/);
+        } finally {
+          rmSync(parent, { recursive: true, force: true });
+        }
+      },
+    );
     describe('a relocated profile (the alias is checked against the RESOLVED home)', () => {
       const realHome = 'D:\\Profiles\\Michael Dudarenok';
       it('collapses the alias when C:\\Users is a junction to another folder', () => {
